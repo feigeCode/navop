@@ -36,7 +36,6 @@ pub(crate) struct GithubReleaseAsset {
 #[derive(Debug, Deserialize)]
 pub(crate) struct GithubRelease {
     pub(crate) tag_name: String,
-    pub(crate) body: Option<String>,
     pub(crate) assets: Vec<GithubReleaseAsset>,
 }
 
@@ -96,7 +95,6 @@ pub(crate) fn github_release_to_dialog_info(
         current_version: current_version.to_string(),
         latest_version: release.tag_name.clone(),
         download_url: Some(asset.browser_download_url.clone()),
-        release_notes: release.body.clone(),
     })
 }
 
@@ -139,7 +137,6 @@ mod tests {
     fn github_release_to_dialog_info_uses_matching_asset() {
         let release = GithubRelease {
             tag_name: "v1.2.3".to_string(),
-            body: Some("notes".to_string()),
             assets: vec![
                 GithubReleaseAsset {
                     name: "sha256sums.txt".to_string(),
@@ -160,7 +157,6 @@ mod tests {
             info.download_url.as_deref(),
             Some("https://example.com/update")
         );
-        assert_eq!(info.release_notes.as_deref(), Some("notes"));
     }
 
     #[tokio::test]

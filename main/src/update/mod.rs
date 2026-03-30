@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use gpui::{App, AppContext, Window};
 use gpui_component::WindowExt;
+use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
 
 use crate::setting_tab::AppSettings;
@@ -31,12 +32,18 @@ enum UpdateCheckTrigger {
     Manual,
 }
 
+enum UpdateCheckOutcome {
+    ShowDialog(UpdateDialogInfo),
+    NotifyNoUpdate,
+    NotifyFailure(String),
+    Silent,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct UpdateDialogInfo {
     current_version: String,
     latest_version: String,
     download_url: Option<String>,
-    release_notes: Option<String>,
 }
 
 pub fn handle_update_command() -> bool {
@@ -86,39 +93,63 @@ fn run_update_check(window: &mut Window, cx: &mut App, trigger: UpdateCheckTrigg
     let config = UpdateConfig::get();
     let http_client = cx.http_client();
     let current_version = CURRENT_VERSION.to_string();
+    let update_task = Tokio::spawn(cx, async move {
+        perform_update_check(config, http_client, current_version, trigger).await
+    });
 
     window
         .spawn(cx, async move |cx| {
-            if let Err(err) = check_network_connectivity(http_client.clone()).await {
-                tracing::warn!("{}: {}", t!("Update.network_check_failed"), err);
-                notify_failure_if_needed(trigger, err, cx);
-                return;
-            }
-
-            match fetch_github_dialog_info(http_client.clone(), &current_version).await {
-                Ok(Some(info)) => {
-                    show_update_dialog_on_active_window(info, cx);
+            let outcome = match update_task.await {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    let message = format!("更新检查任务执行失败: {}", err);
+                    tracing::warn!("{}", message);
+                    notify_failure_if_needed(trigger, message, cx);
                     return;
                 }
-                Ok(None) => {
-                    notify_no_update_if_needed(trigger, cx);
-                    return;
-                }
-                Err(err) => {
-                    tracing::warn!("GitHub Release 检查失败: {}", err);
-                }
-            }
+            };
 
-            match fetch_custom_dialog_info(&config, http_client, &current_version).await {
-                Ok(Some(info)) => show_update_dialog_on_active_window(info, cx),
-                Ok(None) => notify_no_update_if_needed(trigger, cx),
-                Err(err) => {
-                    tracing::warn!("自定义更新检查失败: {}", err);
-                    notify_failure_if_needed(trigger, err, cx);
+            match outcome {
+                UpdateCheckOutcome::ShowDialog(info) => {
+                    show_update_dialog_on_active_window(info, cx)
                 }
+                UpdateCheckOutcome::NotifyNoUpdate => notify_no_update_if_needed(trigger, cx),
+                UpdateCheckOutcome::NotifyFailure(err) => {
+                    notify_failure_if_needed(trigger, err, cx)
+                }
+                UpdateCheckOutcome::Silent => {}
             }
         })
         .detach();
+}
+
+async fn perform_update_check(
+    config: UpdateConfig,
+    http_client: std::sync::Arc<dyn gpui::http_client::HttpClient>,
+    current_version: String,
+    trigger: UpdateCheckTrigger,
+) -> UpdateCheckOutcome {
+    if let Err(err) = check_network_connectivity(http_client.clone()).await {
+        tracing::warn!("{}: {}", t!("Update.network_check_failed"), err);
+        return failure_outcome(trigger, err);
+    }
+
+    match fetch_github_dialog_info(http_client.clone(), &current_version).await {
+        Ok(Some(info)) => return UpdateCheckOutcome::ShowDialog(info),
+        Ok(None) => return no_update_outcome(trigger),
+        Err(err) => {
+            tracing::warn!("GitHub Release 检查失败: {}", err);
+        }
+    }
+
+    match fetch_custom_dialog_info(&config, http_client, &current_version).await {
+        Ok(Some(info)) => UpdateCheckOutcome::ShowDialog(info),
+        Ok(None) => no_update_outcome(trigger),
+        Err(err) => {
+            tracing::warn!("自定义更新检查失败: {}", err);
+            failure_outcome(trigger, err)
+        }
+    }
 }
 
 fn should_run_update_check(trigger: UpdateCheckTrigger, auto_update_enabled: bool) -> bool {
@@ -134,6 +165,22 @@ fn notify_no_update_if_needed(trigger: UpdateCheckTrigger, cx: &mut gpui::AsyncA
 fn notify_failure_if_needed(trigger: UpdateCheckTrigger, err: String, cx: &mut gpui::AsyncApp) {
     if trigger == UpdateCheckTrigger::Manual {
         push_notification_on_active_window(format!("{}: {}", t!("Update.check_failed"), err), cx);
+    }
+}
+
+fn no_update_outcome(trigger: UpdateCheckTrigger) -> UpdateCheckOutcome {
+    if trigger == UpdateCheckTrigger::Manual {
+        UpdateCheckOutcome::NotifyNoUpdate
+    } else {
+        UpdateCheckOutcome::Silent
+    }
+}
+
+fn failure_outcome(trigger: UpdateCheckTrigger, err: String) -> UpdateCheckOutcome {
+    if trigger == UpdateCheckTrigger::Manual {
+        UpdateCheckOutcome::NotifyFailure(err)
+    } else {
+        UpdateCheckOutcome::Silent
     }
 }
 
@@ -179,17 +226,12 @@ async fn fetch_custom_dialog_info(
         current_version: current_version.to_string(),
         latest_version: response.version.clone(),
         download_url: select_download_url(&response, config.download_url.clone()),
-        release_notes: response.release_notes.clone(),
     }))
 }
 
 fn show_update_dialog_on_active_window(info: UpdateDialogInfo, cx: &mut gpui::AsyncApp) {
     let _ = cx.update(|cx| {
-        if let Some(window_id) = cx.active_window() {
-            let _ = cx.update_window(window_id, |_, window, cx| {
-                show_update_dialog(window, info.clone(), cx);
-            });
-        }
+        show_update_dialog(info.clone(), cx);
     });
 }
 
