@@ -30,6 +30,7 @@ use crate::encourage::render_encourage_section;
 use crate::license::{get_license_service, offline_license_public_key};
 use crate::onetcli_app::GlobalHomePage;
 use crate::settings::llm_providers_view::LlmProvidersView;
+use crate::update;
 
 // ============================================================================
 // 全局用户状态
@@ -607,6 +608,28 @@ impl SettingsPanel {
                                 t!("Settings.General.Database.auto_save_interval_desc").to_string(),
                             ),
                         ]),
+                    SettingGroup::new()
+                        .title(t!("Settings.General.Update.group_title"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("Settings.General.Update.auto_update"),
+                                SettingField::switch(
+                                    |cx: &App| AppSettings::global(cx).auto_update,
+                                    |val: bool, cx: &mut App| {
+                                        let settings = AppSettings::global_mut(cx);
+                                        settings.auto_update = val;
+                                        settings.save();
+                                    },
+                                )
+                                .default_value(default_settings.auto_update),
+                            )
+                            .description(
+                                t!("Settings.General.Update.auto_update_desc").to_string(),
+                            ),
+                            SettingItem::render(move |_options, _window, cx| {
+                                render_manual_update_check_item(cx)
+                            }),
+                        ]),
                 ]),
             // 快捷键页面
             SettingPage::new(t!("Settings.Shortcuts.title")).group(SettingGroup::new().item(
@@ -678,6 +701,39 @@ impl Render for SettingsPanel {
                 .pages(self.setting_pages(window, cx)),
         )
     }
+}
+
+fn render_manual_update_check_item(cx: &mut App) -> gpui::AnyElement {
+    h_flex()
+        .w_full()
+        .justify_between()
+        .items_center()
+        .gap_3()
+        .child(
+            v_flex()
+                .gap_1()
+                .flex_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .child(t!("Settings.General.Update.check_now").to_string()),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("Settings.General.Update.check_now_desc").to_string()),
+                ),
+        )
+        .child(
+            Button::new("settings-check-update")
+                .icon(IconName::Refresh)
+                .label(t!("Settings.General.Update.check_now"))
+                .on_click(|_, window, cx| {
+                    update::check_for_updates_manually(window, cx);
+                }),
+        )
+        .into_any_element()
 }
 
 /// 渲染账户设置区域

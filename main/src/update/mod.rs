@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use gpui::{App, AppContext, Window};
+use gpui_component::WindowExt;
 use rust_i18n::t;
 
 use crate::setting_tab::AppSettings;
@@ -23,6 +24,12 @@ use util::parse_version;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APPLY_UPDATE_FLAG: &str = "--apply-update";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateCheckTrigger {
+    Automatic,
+    Manual,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct UpdateDialogInfo {
@@ -61,10 +68,21 @@ pub fn handle_update_command() -> bool {
 }
 
 pub fn schedule_update_check(window: &mut Window, cx: &mut App) {
-    if !AppSettings::global(cx).auto_update {
+    if !should_run_update_check(
+        UpdateCheckTrigger::Automatic,
+        AppSettings::global(cx).auto_update,
+    ) {
         return;
     }
 
+    run_update_check(window, cx, UpdateCheckTrigger::Automatic);
+}
+
+pub fn check_for_updates_manually(window: &mut Window, cx: &mut App) {
+    run_update_check(window, cx, UpdateCheckTrigger::Manual);
+}
+
+fn run_update_check(window: &mut Window, cx: &mut App, trigger: UpdateCheckTrigger) {
     let config = UpdateConfig::get();
     let http_client = cx.http_client();
     let current_version = CURRENT_VERSION.to_string();
@@ -73,6 +91,7 @@ pub fn schedule_update_check(window: &mut Window, cx: &mut App) {
         .spawn(cx, async move |cx| {
             if let Err(err) = check_network_connectivity(http_client.clone()).await {
                 tracing::warn!("{}: {}", t!("Update.network_check_failed"), err);
+                notify_failure_if_needed(trigger, err, cx);
                 return;
             }
 
@@ -81,7 +100,10 @@ pub fn schedule_update_check(window: &mut Window, cx: &mut App) {
                     show_update_dialog_on_active_window(info, cx);
                     return;
                 }
-                Ok(None) => return,
+                Ok(None) => {
+                    notify_no_update_if_needed(trigger, cx);
+                    return;
+                }
                 Err(err) => {
                     tracing::warn!("GitHub Release 检查失败: {}", err);
                 }
@@ -89,13 +111,30 @@ pub fn schedule_update_check(window: &mut Window, cx: &mut App) {
 
             match fetch_custom_dialog_info(&config, http_client, &current_version).await {
                 Ok(Some(info)) => show_update_dialog_on_active_window(info, cx),
-                Ok(None) => {}
+                Ok(None) => notify_no_update_if_needed(trigger, cx),
                 Err(err) => {
                     tracing::warn!("自定义更新检查失败: {}", err);
+                    notify_failure_if_needed(trigger, err, cx);
                 }
             }
         })
         .detach();
+}
+
+fn should_run_update_check(trigger: UpdateCheckTrigger, auto_update_enabled: bool) -> bool {
+    matches!(trigger, UpdateCheckTrigger::Manual) || auto_update_enabled
+}
+
+fn notify_no_update_if_needed(trigger: UpdateCheckTrigger, cx: &mut gpui::AsyncApp) {
+    if trigger == UpdateCheckTrigger::Manual {
+        push_notification_on_active_window(t!("Update.already_up_to_date").to_string(), cx);
+    }
+}
+
+fn notify_failure_if_needed(trigger: UpdateCheckTrigger, err: String, cx: &mut gpui::AsyncApp) {
+    if trigger == UpdateCheckTrigger::Manual {
+        push_notification_on_active_window(format!("{}: {}", t!("Update.check_failed"), err), cx);
+    }
 }
 
 async fn fetch_github_dialog_info(
@@ -149,6 +188,16 @@ fn show_update_dialog_on_active_window(info: UpdateDialogInfo, cx: &mut gpui::As
         if let Some(window_id) = cx.active_window() {
             let _ = cx.update_window(window_id, |_, window, cx| {
                 show_update_dialog(window, info.clone(), cx);
+            });
+        }
+    });
+}
+
+fn push_notification_on_active_window(message: String, cx: &mut gpui::AsyncApp) {
+    let _ = cx.update(|cx| {
+        if let Some(window_id) = cx.active_window() {
+            let _ = cx.update_window(window_id, |_, window, cx| {
+                window.push_notification(message.clone(), cx);
             });
         }
     });
@@ -234,5 +283,24 @@ pub(crate) mod test_support {
 
             async move { result }.boxed()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{UpdateCheckTrigger, should_run_update_check};
+
+    #[test]
+    fn manual_check_bypasses_auto_update_switch() {
+        assert!(should_run_update_check(UpdateCheckTrigger::Manual, false));
+    }
+
+    #[test]
+    fn automatic_check_still_respects_auto_update_switch() {
+        assert!(!should_run_update_check(
+            UpdateCheckTrigger::Automatic,
+            false
+        ));
+        assert!(should_run_update_check(UpdateCheckTrigger::Automatic, true));
     }
 }

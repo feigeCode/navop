@@ -705,6 +705,28 @@ Settings:
         zh-CN: 设置自动保存的时间间隔（1-60秒）
         zh-HK: 設置自動保存的時間間隔（1-60秒）
 
+    Update:
+      group_title:
+        en: Update
+        zh-CN: 更新
+        zh-HK: 更新
+      auto_update:
+        en: Auto Update Check
+        zh-CN: 自动检查更新
+        zh-HK: 自動檢查更新
+      auto_update_desc:
+        en: Automatically check for updates when the application starts
+        zh-CN: 应用启动时自动检查新版本
+        zh-HK: 應用啟動時自動檢查新版本
+      check_now:
+        en: Check for Updates
+        zh-CN: 检查更新
+        zh-HK: 檢查更新
+      check_now_desc:
+        en: Manually check
+        zh-CN: 立即手动检查
+        zh-HK: 立即手動檢查
+
   # 快捷键
   Shortcuts:
     title:
@@ -983,6 +1005,14 @@ Update:
     en: GitHub service is temporarily unavailable, please try again later.
     zh-CN: GitHub 服务暂时不可用，请稍后重试。
     zh-HK: GitHub 服務暫時不可用，請稍後重試。
+  already_up_to_date:
+    en: You are already on the latest version.
+    zh-CN: 当前已经是最新版本。
+    zh-HK: 當前已經是最新版本。
+  check_failed:
+    en: Update check failed
+    zh-CN: 检查更新失败
+    zh-HK: 檢查更新失敗
 
 
 # LLM 提供商
