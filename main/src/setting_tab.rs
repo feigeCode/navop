@@ -1,26 +1,38 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
     FontWeight, InteractiveElement, IntoElement, Keystroke, ParentElement, PathPromptOptions,
-    Render, SharedString, Styled, Window, div,
+    Render, SharedString, Styled, WeakEntity, Window, div,
 };
+use gpui::http_client::{AsyncBody, Method, Request, Url};
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, Size, Theme, ThemeMode, WindowExt,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, Theme, ThemeMode, TitleBar,
+    WindowExt,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     group_box::GroupBoxVariant,
     h_flex,
+    input::{Input, InputState},
     kbd::Kbd,
+    IndexPath,
+    scroll::ScrollableElement,
+    select::{Select, SelectItem, SelectState},
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
+    switch::Switch,
     v_flex,
 };
 use one_core::cloud_sync::GlobalCloudUser;
 use one_core::cloud_sync::UserInfo;
+use one_core::gpui_tokio::Tokio;
+use one_core::llm::manager::GlobalProviderState;
+use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
+use reqwest_client::ReqwestClient;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
@@ -100,6 +112,108 @@ impl DatabaseOpenMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyType {
+    Http,
+    Https,
+    #[default]
+    Socks5,
+}
+
+impl ProxyType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProxyType::Http => "http",
+            ProxyType::Https => "https",
+            ProxyType::Socks5 => "socks5",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GlobalProxySettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub proxy_type: ProxyType,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default = "default_proxy_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+}
+
+fn default_proxy_port() -> u16 {
+    1080
+}
+
+impl Default for GlobalProxySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            proxy_type: ProxyType::default(),
+            host: String::new(),
+            port: default_proxy_port(),
+            username: String::new(),
+            password: String::new(),
+        }
+    }
+}
+
+impl GlobalProxySettings {
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        if self.host.trim().is_empty() {
+            return Err("代理主机不能为空".to_string());
+        }
+
+        if self.port == 0 {
+            return Err("代理端口不能为空".to_string());
+        }
+
+        if self.username.trim().is_empty() && !self.password.is_empty() {
+            return Err("填写代理密码时必须同时填写用户名".to_string());
+        }
+
+        Ok(())
+    }
+
+    pub fn to_proxy_url(&self) -> Result<Option<Url>, String> {
+        if !self.enabled {
+            return Ok(None);
+        }
+
+        self.validate()?;
+
+        let base = format!(
+            "{}://{}:{}",
+            self.proxy_type.as_str(),
+            self.host.trim(),
+            self.port
+        );
+        let mut url = Url::parse(&base).map_err(|err| format!("代理地址格式不正确: {}", err))?;
+
+        if !self.username.trim().is_empty() {
+            url.set_username(self.username.trim())
+                .map_err(|_| "代理用户名格式不正确".to_string())?;
+        }
+
+        if !self.password.is_empty() {
+            url.set_password(Some(&self.password))
+                .map_err(|_| "代理密码格式不正确".to_string())?;
+        }
+
+        Ok(Some(url))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
@@ -130,6 +244,8 @@ pub struct AppSettings {
     pub terminal_confirm_high_risk_command: bool,
     #[serde(default = "default_true")]
     pub auto_update: bool,
+    #[serde(default)]
+    pub global_proxy: GlobalProxySettings,
     #[serde(default)]
     pub database_open_mode: DatabaseOpenMode,
     /// 是否启用SQL查询的自动保存功能
@@ -181,6 +297,7 @@ impl Default for AppSettings {
             terminal_confirm_multiline_paste: default_true(),
             terminal_confirm_high_risk_command: default_true(),
             auto_update: true,
+            global_proxy: GlobalProxySettings::default(),
             database_open_mode: DatabaseOpenMode::default(),
             enable_sql_auto_save: true,
             sql_auto_save_interval: default_auto_save_interval(),
@@ -295,6 +412,15 @@ pub fn init_settings(cx: &mut App) {
     ));
     settings.apply(cx);
     cx.set_global(settings);
+}
+
+pub(crate) fn build_app_http_client(
+    proxy: &GlobalProxySettings,
+) -> Result<Arc<ReqwestClient>, String> {
+    let proxy_url = proxy.to_proxy_url()?;
+    ReqwestClient::proxy_and_user_agent(proxy_url, "one-hub")
+        .map(Arc::new)
+        .map_err(|err| format!("HTTP 客户端初始化失败: {}", err))
 }
 
 fn sync_terminal_settings_to_all(settings: AppSettings, cx: &mut App) {
@@ -630,6 +756,11 @@ impl SettingsPanel {
                                 render_manual_update_check_item(cx)
                             }),
                         ]),
+                    SettingGroup::new()
+                        .title(t!("Settings.General.Proxy.group_title"))
+                        .item(SettingItem::render(move |_options, _window, cx| {
+                            render_global_proxy_settings_item(cx)
+                        })),
                 ]),
             // 快捷键页面
             SettingPage::new(t!("Settings.Shortcuts.title")).group(SettingGroup::new().item(
@@ -734,6 +865,458 @@ fn render_manual_update_check_item(cx: &mut App) -> gpui::AnyElement {
                 }),
         )
         .into_any_element()
+}
+
+fn render_global_proxy_settings_item(cx: &mut App) -> gpui::AnyElement {
+    h_flex()
+        .w_full()
+        .justify_between()
+        .items_center()
+        .gap_3()
+        .child(
+            v_flex()
+                .gap_1()
+                .flex_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .child(t!("Settings.General.Proxy.title").to_string()),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("Settings.General.Proxy.description").to_string()),
+                ),
+        )
+        .child(
+            Button::new("settings-global-proxy")
+                .icon(IconName::Globe)
+                .label(t!("Settings.General.Proxy.open").to_string())
+                .on_click(|_, _window, cx| {
+                    show_global_proxy_settings_window(cx);
+                }),
+        )
+        .into_any_element()
+}
+
+#[derive(Clone, PartialEq)]
+struct ProxyTypeOption {
+    value: ProxyType,
+    label: SharedString,
+}
+
+impl SelectItem for ProxyTypeOption {
+    type Value = ProxyType;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+}
+
+struct GlobalProxySettingsView {
+    focus_handle: FocusHandle,
+    enabled: bool,
+    proxy_type_select: Entity<SelectState<Vec<ProxyTypeOption>>>,
+    host_input: Entity<InputState>,
+    port_input: Entity<InputState>,
+    username_input: Entity<InputState>,
+    password_input: Entity<InputState>,
+    testing: bool,
+    status_message: Option<(bool, String)>,
+}
+
+impl GlobalProxySettingsView {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let current = AppSettings::global(cx).global_proxy.clone();
+        let proxy_types = vec![
+            ProxyTypeOption {
+                value: ProxyType::Http,
+                label: "HTTP".into(),
+            },
+            ProxyTypeOption {
+                value: ProxyType::Https,
+                label: "HTTPS".into(),
+            },
+            ProxyTypeOption {
+                value: ProxyType::Socks5,
+                label: "SOCKS5".into(),
+            },
+        ];
+        let selected_index = match current.proxy_type {
+            ProxyType::Http => 0,
+            ProxyType::Https => 1,
+            ProxyType::Socks5 => 2,
+        };
+        let proxy_type_select = cx.new(|cx| {
+            SelectState::new(proxy_types, Some(IndexPath::new(selected_index)), window, cx)
+        });
+        let host_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("127.0.0.1");
+            if !current.host.is_empty() {
+                state.set_value(current.host.clone(), window, cx);
+            }
+            state
+        });
+        let port_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("1080");
+            state.set_value(current.port.to_string(), window, cx);
+            state
+        });
+        let username_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .placeholder(t!("Settings.General.Proxy.username_placeholder"));
+            if !current.username.is_empty() {
+                state.set_value(current.username.clone(), window, cx);
+            }
+            state
+        });
+        let password_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .placeholder(t!("Settings.General.Proxy.password_placeholder"));
+            if !current.password.is_empty() {
+                state.set_value(current.password.clone(), window, cx);
+            }
+            state
+        });
+
+        Self {
+            focus_handle: cx.focus_handle(),
+            enabled: current.enabled,
+            proxy_type_select,
+            host_input,
+            port_input,
+            username_input,
+            password_input,
+            testing: false,
+            status_message: None,
+        }
+    }
+
+    fn build_proxy_settings(&self, cx: &App) -> GlobalProxySettings {
+        GlobalProxySettings {
+            enabled: self.enabled,
+            proxy_type: self
+                .proxy_type_select
+                .read(cx)
+                .selected_value()
+                .copied()
+                .unwrap_or_default(),
+            host: self.host_input.read(cx).text().to_string().trim().to_string(),
+            port: self
+                .port_input
+                .read(cx)
+                .text()
+                .to_string()
+                .trim()
+                .parse::<u16>()
+                .unwrap_or(0),
+            username: self
+                .username_input
+                .read(cx)
+                .text()
+                .to_string()
+                .trim()
+                .to_string(),
+            password: self.password_input.read(cx).text().to_string(),
+        }
+    }
+
+    fn render_form_row(
+        &self,
+        label: String,
+        child: impl IntoElement,
+        disabled: bool,
+        cx: &App,
+    ) -> gpui::AnyElement {
+        h_flex()
+            .gap_3()
+            .items_center()
+            .child(
+                div()
+                    .w(gpui::px(120.0))
+                    .text_sm()
+                    .text_color(cx.theme().foreground)
+                    .child(label),
+            )
+            .child(div().flex_1().child(child).when(disabled, |this| this.opacity(0.55)))
+            .into_any_element()
+    }
+
+    fn on_test(&mut self, cx: &mut Context<Self>) {
+        if self.testing || !self.enabled {
+            return;
+        }
+
+        let proxy_settings = self.build_proxy_settings(cx);
+        let client = match build_app_http_client(&proxy_settings) {
+            Ok(client) => client,
+            Err(err) => {
+                self.status_message = Some((false, err));
+                cx.notify();
+                return;
+            }
+        };
+
+        self.testing = true;
+        self.status_message = None;
+        cx.notify();
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let test_task = Tokio::spawn(cx, async move {
+                let http_client: Arc<dyn gpui::http_client::HttpClient> = client;
+                test_proxy_connectivity(http_client).await
+            });
+
+            let result = match test_task.await {
+                Ok(result) => result,
+                Err(err) => Err(format!("代理测试任务执行失败: {}", err)),
+            };
+
+            let _ = this.update(cx, |view, cx| {
+                view.testing = false;
+                view.status_message = Some(match result {
+                    Ok(()) => (true, t!("Settings.General.Proxy.test_success").to_string()),
+                    Err(err) => (false, err),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn on_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.testing {
+            return;
+        }
+
+        let proxy_settings = self.build_proxy_settings(cx);
+        let new_client = match build_app_http_client(&proxy_settings) {
+            Ok(client) => client,
+            Err(err) => {
+                self.status_message = Some((false, err));
+                cx.notify();
+                return;
+            }
+        };
+
+        let proxy_settings_for_apply = proxy_settings.clone();
+        let new_client_for_apply = new_client.clone();
+        cx.defer(move |cx| {
+            let settings = AppSettings::global_mut(cx);
+            settings.global_proxy = proxy_settings_for_apply;
+            settings.save();
+            apply_global_http_client(new_client_for_apply, cx);
+        });
+
+        window.push_notification(t!("Settings.General.Proxy.save_success").to_string(), cx);
+        window.remove_window();
+    }
+
+    fn on_cancel(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+        if self.testing {
+            return;
+        }
+        window.remove_window();
+    }
+}
+
+impl Focusable for GlobalProxySettingsView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for GlobalProxySettingsView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let disabled = !self.enabled;
+
+        v_flex()
+            .size_full()
+            .bg(cx.theme().background)
+            .child(
+                TitleBar::new().child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .flex_1()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(t!("Settings.General.Proxy.dialog_title").to_string()),
+                ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .p_4()
+                    .child(
+                    v_flex()
+                        .gap_4()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("Settings.General.Proxy.dialog_desc").to_string()),
+                        )
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(t!("Settings.General.Proxy.enable").to_string()),
+                                )
+                                .child(
+                                    Switch::new("global-proxy-enabled")
+                                        .checked(self.enabled)
+                                        .on_click(cx.listener(|view, checked, _, cx| {
+                                            view.enabled = *checked;
+                                            view.status_message = None;
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                        .child(self.render_form_row(
+                            t!("Settings.General.Proxy.type").to_string(),
+                            Select::new(&self.proxy_type_select).disabled(disabled),
+                            disabled,
+                            cx,
+                        ))
+                        .child(self.render_form_row(
+                            t!("Settings.General.Proxy.host").to_string(),
+                            Input::new(&self.host_input).disabled(disabled),
+                            disabled,
+                            cx,
+                        ))
+                        .child(self.render_form_row(
+                            t!("Settings.General.Proxy.port").to_string(),
+                            Input::new(&self.port_input).disabled(disabled),
+                            disabled,
+                            cx,
+                        ))
+                        .child(self.render_form_row(
+                            t!("Settings.General.Proxy.username").to_string(),
+                            Input::new(&self.username_input).disabled(disabled),
+                            disabled,
+                            cx,
+                        ))
+                        .child(self.render_form_row(
+                            t!("Settings.General.Proxy.password").to_string(),
+                            Input::new(&self.password_input)
+                                .mask_toggle()
+                                .disabled(disabled),
+                            disabled,
+                            cx,
+                        ))
+                        .when_some(self.status_message.clone(), |this, (success, message)| {
+                            this.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(if success {
+                                        cx.theme().muted_foreground
+                                    } else {
+                                        cx.theme().danger
+                                    })
+                                    .child(message),
+                            )
+                        }),
+                ),
+            )
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .justify_end()
+                    .gap_2()
+                    .p_4()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Button::new("proxy-test")
+                            .small()
+                            .label(if self.testing {
+                                t!("Settings.General.Proxy.testing").to_string()
+                            } else {
+                                t!("Settings.General.Proxy.test").to_string()
+                            })
+                            .disabled(self.testing || !self.enabled)
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.on_test(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("proxy-cancel")
+                            .small()
+                            .label(t!("Common.cancel").to_string())
+                            .disabled(self.testing)
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.on_cancel(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("proxy-save")
+                            .small()
+                            .primary()
+                            .label(t!("Common.save").to_string())
+                            .disabled(self.testing)
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.on_save(window, cx);
+                            })),
+                    ),
+            )
+    }
+}
+
+fn show_global_proxy_settings_window(cx: &mut App) {
+    open_popup_window(
+        PopupWindowOptions::new(t!("Settings.General.Proxy.dialog_title").to_string())
+            .size(560.0, 460.0),
+        move |window, cx| cx.new(|cx| GlobalProxySettingsView::new(window, cx)),
+        cx,
+    );
+}
+
+fn apply_global_http_client(http_client: Arc<ReqwestClient>, cx: &mut App) {
+    let auth_service = get_auth_service(cx);
+    let http_for_auth: Arc<dyn gpui::http_client::HttpClient> = http_client.clone();
+    auth_service.replace_http_client(http_for_auth);
+
+    if let Some(provider_state) = cx.try_global::<GlobalProviderState>() {
+        provider_state.set_cloud_client(auth_service.cloud_client());
+        provider_state.manager().clear_cache();
+    }
+
+    cx.set_http_client(http_client);
+}
+
+async fn test_proxy_connectivity(
+    http_client: Arc<dyn gpui::http_client::HttpClient>,
+) -> Result<(), String> {
+    let request = Request::builder()
+        .method(Method::HEAD)
+        .uri("https://api.github.com/")
+        .header("User-Agent", "onetcli-updater")
+        .body(AsyncBody::empty())
+        .map_err(|err| format!("构建代理测试请求失败: {}", err))?;
+
+    let response = http_client
+        .send(request)
+        .await
+        .map_err(|err| format!("代理连接测试失败: {}", err))?;
+
+    if !response.status().is_success() {
+        return Err(format!("代理测试返回异常状态码: {}", response.status()));
+    }
+
+    Ok(())
 }
 
 /// 渲染账户设置区域
@@ -1059,6 +1642,84 @@ fn render_shortcuts_section(cx: &App) -> gpui::AnyElement {
     }
 
     container.into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GlobalProxySettings, ProxyType};
+
+    #[test]
+    fn global_proxy_settings_build_proxy_url_without_auth() {
+        let settings = GlobalProxySettings {
+            enabled: true,
+            proxy_type: ProxyType::Socks5,
+            host: "127.0.0.1".to_string(),
+            port: 7890,
+            username: String::new(),
+            password: String::new(),
+        };
+
+        let proxy_url = settings
+            .to_proxy_url()
+            .expect("代理 URL 应构建成功")
+            .expect("启用代理时应返回 URL");
+
+        assert_eq!(proxy_url.as_str(), "socks5://127.0.0.1:7890");
+    }
+
+    #[test]
+    fn global_proxy_settings_build_proxy_url_with_auth() {
+        let settings = GlobalProxySettings {
+            enabled: true,
+            proxy_type: ProxyType::Http,
+            host: "proxy.example.com".to_string(),
+            port: 8080,
+            username: "demo-user".to_string(),
+            password: "demo-pass".to_string(),
+        };
+
+        let proxy_url = settings
+            .to_proxy_url()
+            .expect("代理 URL 应构建成功")
+            .expect("启用代理时应返回 URL");
+
+        assert_eq!(
+            proxy_url.as_str(),
+            "http://demo-user:demo-pass@proxy.example.com:8080/"
+        );
+    }
+
+    #[test]
+    fn disabled_global_proxy_settings_return_none() {
+        let settings = GlobalProxySettings {
+            enabled: false,
+            ..GlobalProxySettings::default()
+        };
+
+        let proxy_url = settings
+            .to_proxy_url()
+            .expect("禁用代理时不应返回错误");
+
+        assert!(proxy_url.is_none());
+    }
+
+    #[test]
+    fn global_proxy_settings_validate_required_fields() {
+        let settings = GlobalProxySettings {
+            enabled: true,
+            proxy_type: ProxyType::Https,
+            host: String::new(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+        };
+
+        let err = settings
+            .validate()
+            .expect_err("缺少主机和端口时应校验失败");
+
+        assert!(err.contains("主机"));
+    }
 }
 
 /// GitHub 开源地址

@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::RwLock;
 
 use gpui::http_client::HttpClient;
 use gpui::prelude::FluentBuilder;
@@ -74,28 +75,17 @@ pub fn check_and_reset_session_expired() -> bool {
 
 /// 认证服务，管理 Supabase 客户端和用户状态
 pub struct AuthService {
-    client: Arc<SupabaseClient>,
+    config: SupabaseConfig,
+    client: RwLock<Arc<SupabaseClient>>,
 }
 
 impl AuthService {
-    /// 获取云端 API 客户端
-    ///
-    /// 用于访问云端数据同步功能（如 list_connections）。
-    pub fn cloud_client(&self) -> Arc<SupabaseClient> {
-        self.client.clone()
-    }
-
-    /// 使用配置和 HttpClient 创建认证服务
-    fn new_with_http(config: SupabaseConfig, http: Arc<dyn HttpClient>, _cx: &App) -> Self {
-        let client = Arc::new(SupabaseClient::new(config, http));
-
-        // 设置会话过期回调：刷新 token 失败时通过静态标志通知 UI
+    fn configure_client(client: &Arc<SupabaseClient>) {
         let callback: SessionExpiredCallback = Arc::new(|| {
             tracing::warn!("会话已过期，需要重新登录");
             SESSION_EXPIRED.store(true, Ordering::SeqCst);
         });
         client.set_session_expired_callback(callback);
-        // 设置 token 刷新回调：确保自动刷新后的最新 refresh token 能落盘持久化
         client.set_token_refreshed_callback(Arc::new(|auth_resp| {
             save_auth_data(
                 &auth_resp.access_token,
@@ -108,8 +98,61 @@ impl AuthService {
                 auth_resp.user_id, auth_resp.expires_at
             );
         }));
+    }
 
-        Self { client }
+    fn current_client(&self) -> Arc<SupabaseClient> {
+        self.client
+            .read()
+            .expect("AuthService client lock poisoned")
+            .clone()
+    }
+
+    /// 获取云端 API 客户端
+    ///
+    /// 用于访问云端数据同步功能（如 list_connections）。
+    pub fn cloud_client(&self) -> Arc<SupabaseClient> {
+        self.current_client()
+    }
+
+    /// 使用配置和 HttpClient 创建认证服务
+    fn new_with_http(config: SupabaseConfig, http: Arc<dyn HttpClient>, _cx: &App) -> Self {
+        let client = Arc::new(SupabaseClient::new(config.clone(), http));
+        Self::configure_client(&client);
+
+        Self {
+            config,
+            client: RwLock::new(client),
+        }
+    }
+
+    pub fn replace_http_client(&self, http: Arc<dyn HttpClient>) {
+        let previous_client = self.current_client();
+        let next_client = Arc::new(SupabaseClient::new(self.config.clone(), http));
+        Self::configure_client(&next_client);
+
+        let persisted_auth = load_auth_data();
+        let access_token = previous_client
+            .access_token_for_rebuild()
+            .or_else(|| persisted_auth.as_ref().map(|(access, _, _, _)| access.clone()));
+        let refresh_token = previous_client
+            .refresh_token_for_rebuild()
+            .or_else(|| persisted_auth.as_ref().map(|(_, refresh, _, _)| refresh.clone()));
+        let user_id = previous_client
+            .user_id_for_rebuild()
+            .or_else(|| persisted_auth.as_ref().map(|(_, _, user_id, _)| user_id.clone()));
+        let expires_at = previous_client
+            .expires_at_for_rebuild()
+            .or_else(|| persisted_auth.as_ref().map(|(_, _, _, expires_at)| *expires_at));
+
+        if let (Some(access_token), Some(refresh_token), Some(user_id), Some(expires_at)) =
+            (access_token, refresh_token, user_id, expires_at)
+        {
+            next_client.set_auth_with_expiry(access_token, refresh_token, user_id, expires_at);
+        }
+
+        if let Ok(mut guard) = self.client.write() {
+            *guard = next_client;
+        }
     }
 
     /// 尝试恢复会话
@@ -146,7 +189,7 @@ impl AuthService {
             const MAX_RETRIES: u32 = 3;
             let mut last_error = None;
             for attempt in 1..=MAX_RETRIES {
-                match self.client.refresh_token(&refresh_token).await {
+                match self.current_client().refresh_token(&refresh_token).await {
                     Ok(auth_resp) => {
                         // refresh_token 内部已调用 set_auth_with_expiry 更新内存状态
                         save_auth_data(
@@ -193,7 +236,7 @@ impl AuthService {
             }
         } else {
             // 令牌未过期，先设置 auth state（含 expires_at）
-            self.client.set_auth_with_expiry(
+            self.current_client().set_auth_with_expiry(
                 access_token,
                 refresh_token.clone(),
                 user_id,
@@ -203,7 +246,7 @@ impl AuthService {
         }
 
         // 获取用户信息
-        match self.client.get_current_user().await {
+        match self.current_client().get_current_user().await {
             Ok(Some(user)) => {
                 info!("恢复会话成功: user_id={} email={}", user.id, user.email);
                 Some(user)
@@ -230,13 +273,13 @@ impl AuthService {
     /// 登出
     pub async fn sign_out(&self) {
         info!("用户登出");
-        let _ = self.client.sign_out().await;
+        let _ = self.current_client().sign_out().await;
         clear_auth_data();
     }
 
     /// 发送 OTP 验证码到邮箱
     pub async fn send_otp(&self, email: &str) -> Result<(), String> {
-        self.client
+        self.current_client()
             .sign_in_with_otp(email)
             .await
             .map_err(|e| e.to_string())
@@ -244,7 +287,7 @@ impl AuthService {
 
     /// 验证 OTP 验证码并登录
     pub async fn verify_otp(&self, email: &str, token: &str) -> Result<UserInfo, String> {
-        match self.client.verify_otp(email, token).await {
+        match self.current_client().verify_otp(email, token).await {
             Ok(auth_resp) => {
                 save_auth_data(
                     &auth_resp.access_token,
@@ -254,7 +297,7 @@ impl AuthService {
                 );
 
                 // 获取完整用户信息
-                match self.client.get_current_user().await {
+                match self.current_client().get_current_user().await {
                     Ok(Some(user)) => Ok(user),
                     Ok(None) => Ok(UserInfo {
                         id: auth_resp.user_id,

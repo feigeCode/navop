@@ -1,4 +1,5 @@
 use crate::home_tab::{HomePage, NewConnectionShortcut, OpenConnectionQuickOpen};
+use crate::setting_tab::{AppSettings, build_app_http_client};
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, KeyBinding, ParentElement, Render, Styled, Task,
     Window, actions, div,
@@ -47,7 +48,6 @@ use one_core::tab_container::{
     TabContainer, TabContainerEvent, TabContainerState, TabContentRegistry, TabItem,
 };
 use one_core::tab_persistence::{load_tabs, save_tab_state, schedule_save};
-use reqwest_client::ReqwestClient;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -124,8 +124,8 @@ pub fn init(cx: &mut App) {
         .with(tracing_subscriber::fmt::layer())
         .with(env_filter)
         .init();
-    let http_client =
-        std::sync::Arc::new(ReqwestClient::user_agent("one-hub").expect("HTTP 客户端初始化失败"));
+    let settings = AppSettings::load();
+    let http_client = build_app_http_client(&settings.global_proxy).expect("HTTP 客户端初始化失败");
     cx.set_http_client(http_client);
     gpui_component::init(cx);
     one_core::init(cx);

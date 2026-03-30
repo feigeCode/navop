@@ -189,6 +189,10 @@ impl SupabaseClient {
             .and_then(|state| state.access_token.clone())
     }
 
+    pub fn access_token_for_rebuild(&self) -> Option<String> {
+        self.get_access_token()
+    }
+
     /// 获取当前刷新令牌
     fn get_refresh_token(&self) -> Option<String> {
         self.auth_state
@@ -197,12 +201,24 @@ impl SupabaseClient {
             .and_then(|state| state.refresh_token.clone())
     }
 
+    pub fn refresh_token_for_rebuild(&self) -> Option<String> {
+        self.get_refresh_token()
+    }
+
     /// 获取当前用户 ID
     fn get_user_id(&self) -> Option<String> {
         self.auth_state
             .read()
             .ok()
             .and_then(|state| state.user_id.clone())
+    }
+
+    pub fn user_id_for_rebuild(&self) -> Option<String> {
+        self.get_user_id()
+    }
+
+    pub fn expires_at_for_rebuild(&self) -> Option<i64> {
+        self.auth_state.read().ok().map(|state| state.expires_at)
     }
 
     /// 构建 Auth API URL

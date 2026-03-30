@@ -727,6 +727,80 @@ Settings:
         zh-CN: 立即手动检查
         zh-HK: 立即手動檢查
 
+    Proxy:
+      group_title:
+        en: Proxy
+        zh-CN: 代理
+        zh-HK: 代理
+      title:
+        en: Global Proxy
+        zh-CN: 全局代理
+        zh-HK: 全局代理
+      description:
+        en: Configure a shared network proxy for HTTP requests across the app
+        zh-CN: 为应用内 HTTP 请求配置统一代理
+        zh-HK: 為應用內 HTTP 請求配置統一代理
+      open:
+        en: Configure
+        zh-CN: 配置
+        zh-HK: 配置
+      dialog_title:
+        en: Global Proxy Settings
+        zh-CN: 全局代理设置
+        zh-HK: 全局代理設置
+      dialog_desc:
+        en: Set one shared proxy endpoint for update checks, authentication, cloud sync, and other HTTP requests.
+        zh-CN: 为更新检查、认证、云同步及其他 HTTP 请求统一配置代理出口。
+        zh-HK: 為更新檢查、認證、雲同步及其他 HTTP 請求統一配置代理出口。
+      enable:
+        en: Enable Global Proxy
+        zh-CN: 启用全局代理
+        zh-HK: 啟用全局代理
+      type:
+        en: Proxy Type
+        zh-CN: 代理类型
+        zh-HK: 代理類型
+      host:
+        en: Host
+        zh-CN: 代理地址
+        zh-HK: 代理地址
+      port:
+        en: Port
+        zh-CN: 端口
+        zh-HK: 端口
+      username:
+        en: Username
+        zh-CN: 用户名（可选）
+        zh-HK: 用戶名（可選）
+      password:
+        en: Password
+        zh-CN: 密码（可选）
+        zh-HK: 密碼（可選）
+      username_placeholder:
+        en: proxy-user
+        zh-CN: proxy-user
+        zh-HK: proxy-user
+      password_placeholder:
+        en: proxy-password
+        zh-CN: proxy-password
+        zh-HK: proxy-password
+      test:
+        en: Test Connection
+        zh-CN: 测试连接
+        zh-HK: 測試連接
+      testing:
+        en: Testing...
+        zh-CN: 测试中...
+        zh-HK: 測試中...
+      test_success:
+        en: Proxy connection test passed
+        zh-CN: 代理连接测试成功
+        zh-HK: 代理連接測試成功
+      save_success:
+        en: Global proxy settings applied
+        zh-CN: 全局代理设置已生效
+        zh-HK: 全局代理設置已生效
+
   # 快捷键
   Shortcuts:
     title:
