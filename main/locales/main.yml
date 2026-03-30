@@ -971,6 +971,18 @@ Update:
     en: 正在下载更新，请稍后关闭。
     zh-CN: 正在下载更新，请稍后关闭。
     zh-HK: 正在下載更新，請稍後關閉。
+  network_check_failed:
+    en: Network check failed
+    zh-CN: 网络检查失败
+    zh-HK: 網絡檢查失敗
+  network_unreachable:
+    en: Unable to connect to the update server. Please check your network connection.
+    zh-CN: 无法连接到更新服务器，请检查网络连接。
+    zh-HK: 無法連接到更新伺服器，請檢查網絡連接。
+  github_service_unavailable:
+    en: GitHub service is temporarily unavailable, please try again later.
+    zh-CN: GitHub 服务暂时不可用，请稍后重试。
+    zh-HK: GitHub 服務暫時不可用，請稍後重試。
 
 
 # LLM 提供商
