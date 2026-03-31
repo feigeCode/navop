@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gpui::http_client::{AsyncBody, HttpClient, Method, Request};
 use rust_i18n::t;
 
-const GITHUB_CONNECTIVITY_URL: &str = "https://api.github.com/";
+const GITHUB_CONNECTIVITY_URL: &str = "https://www.gstatic.com/generate_204";
 const GITHUB_USER_AGENT: &str = "onetcli-updater";
 
 pub(crate) async fn check_network_connectivity(

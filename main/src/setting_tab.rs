@@ -1302,7 +1302,7 @@ async fn test_proxy_connectivity(
 ) -> Result<(), String> {
     let request = Request::builder()
         .method(Method::HEAD)
-        .uri("https://api.github.com/")
+        .uri("https://www.gstatic.com/generate_204")
         .header("User-Agent", "onetcli-updater")
         .body(AsyncBody::empty())
         .map_err(|err| format!("构建代理测试请求失败: {}", err))?;
