@@ -25,6 +25,7 @@ crates/**/target/
 *.swp
 *.swo
 *~
+.zed/
 
 # Cargo lock for libraries (keep for binaries)
 # Cargo.lock is already tracked, so commenting this out
