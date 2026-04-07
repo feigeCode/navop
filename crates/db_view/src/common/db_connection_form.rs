@@ -539,6 +539,16 @@ impl DbFormConfig {
                     .optional()
                     .placeholder("30")
                     .default("30"),
+                    FormField::new("charset", t!("ConnectionForm.charset"), FormFieldType::Text)
+                        .optional()
+                        .placeholder("gbk"),
+                    FormField::new(
+                        "collation",
+                        t!("ConnectionForm.collation"),
+                        FormFieldType::Text,
+                    )
+                    .optional()
+                    .placeholder("gbk_chinese_ci"),
                     FormField::new(
                         "read_timeout",
                         t!("ConnectionForm.read_timeout"),
@@ -2472,6 +2482,21 @@ mod tests {
                 "ssl_root_cert_path",
                 "tls_hostname_override"
             ]
+        );
+    }
+
+    #[test]
+    fn mysql_advanced_tab_exposes_charset_fields() {
+        let config = DbFormConfig::mysql();
+        let advanced_tab = config
+            .tab_groups
+            .iter()
+            .find(|group| group.name == "advanced")
+            .expect("MySQL should include the advanced tab");
+
+        assert_eq!(
+            field_names(advanced_tab),
+            vec!["connect_timeout", "charset", "collation", "read_timeout"]
         );
     }
 

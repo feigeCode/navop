@@ -243,6 +243,14 @@ ConnectionForm:
     en: Connect Timeout (seconds)
     zh-CN: 连接超时(秒)
     zh-HK: 連線逾時(秒)
+  charset:
+    en: Charset
+    zh-CN: 字符集
+    zh-HK: 字元集
+  collation:
+    en: Collation
+    zh-CN: 排序规则
+    zh-HK: 排序規則
   read_timeout:
     en: Idle Timeout (seconds)
     zh-CN: 空闲超时(秒)
