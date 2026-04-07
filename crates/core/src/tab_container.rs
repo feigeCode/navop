@@ -1524,6 +1524,7 @@ impl TabContainer {
         let is_macos = cfg!(target_os = "macos");
         let is_client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
         let show_window_controls = self.show_window_controls;
+        let enable_titlebar_interactions = show_window_controls || is_macos;
         let allow_tab_drag = !is_macos;
 
         // 使用状态管理窗口拖动
@@ -1537,8 +1538,8 @@ impl TabContainer {
             .items_center()
             .border_b_1()
             .border_color(border_color)
-            // 窗口拖动支持：仅在非 macOS 且启用窗口控件时生效
-            .when(show_window_controls, |this| {
+            // 标题栏交互支持：macOS 始终启用双击/拖动，其他平台跟随窗口控件开关
+            .when(enable_titlebar_interactions, |this| {
                 this.when(is_linux, |this| {
                     this.on_double_click(|_, window, _| window.zoom_window())
                 })
