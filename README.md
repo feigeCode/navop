@@ -76,7 +76,7 @@
 
 ## Installation
 
-Latest release: [v0.2.2](https://github.com/feigeCode/onetcli/releases/tag/v0.2.2)
+Latest release: [v0.2.3](https://github.com/feigeCode/onetcli/releases/tag/v0.2.3)
 
 ### Prerequisites
 

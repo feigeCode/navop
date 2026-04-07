@@ -76,7 +76,7 @@
 
 ## 安装
 
-最新版本下载：[v0.2.2](https://github.com/feigeCode/onetcli/releases/tag/v0.2.2)
+最新版本下载：[v0.2.3](https://github.com/feigeCode/onetcli/releases/tag/v0.2.3)
 
 ### 前置条件
 
