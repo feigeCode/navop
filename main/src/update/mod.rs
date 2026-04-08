@@ -26,6 +26,19 @@ use util::parse_version;
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const APPLY_UPDATE_FLAG: &str = "--apply-update";
 
+/// 当前使用的更新源。修改此常量即可切换更新渠道。
+const ACTIVE_UPDATE_SOURCE: UpdateSource = UpdateSource::GitHub;
+
+/// 更新源类型
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateSource {
+    /// 通过 GitHub Releases 检查更新
+    GitHub,
+    /// 通过自建 API 检查更新（需配置 ONETCLI_UPDATE_URL）
+    #[allow(dead_code)]
+    CustomApi,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UpdateCheckTrigger {
     Automatic,
@@ -44,6 +57,9 @@ pub(crate) struct UpdateDialogInfo {
     current_version: String,
     latest_version: String,
     download_url: Option<String>,
+    expected_sha256: Option<String>,
+    /// 发布页面 URL，方便用户手动下载
+    release_page_url: Option<String>,
 }
 
 pub fn handle_update_command() -> bool {
@@ -129,25 +145,38 @@ async fn perform_update_check(
     current_version: String,
     trigger: UpdateCheckTrigger,
 ) -> UpdateCheckOutcome {
-    if let Err(err) = check_network_connectivity(http_client.clone()).await {
+    let source = ACTIVE_UPDATE_SOURCE;
+
+    // 网络连通性检查：直接探测对应更新源，而非第三方地址
+    let connectivity_url = match source {
+        UpdateSource::GitHub => network::GITHUB_API_HOST,
+        UpdateSource::CustomApi => config.update_url.as_str(),
+    };
+    if let Err(err) = check_network_connectivity(http_client.clone(), connectivity_url).await {
         tracing::warn!("{}: {}", t!("Update.network_check_failed"), err);
         return failure_outcome(trigger, err);
     }
 
-    match fetch_github_dialog_info(http_client.clone(), &current_version).await {
-        Ok(Some(info)) => return UpdateCheckOutcome::ShowDialog(info),
-        Ok(None) => return no_update_outcome(trigger),
-        Err(err) => {
-            tracing::warn!("GitHub Release 检查失败: {}", err);
+    match source {
+        UpdateSource::GitHub => {
+            match fetch_github_dialog_info(http_client, &current_version).await {
+                Ok(Some(info)) => UpdateCheckOutcome::ShowDialog(info),
+                Ok(None) => no_update_outcome(trigger),
+                Err(err) => {
+                    tracing::warn!("GitHub Release 检查失败: {}", err);
+                    failure_outcome(trigger, err)
+                }
+            }
         }
-    }
-
-    match fetch_custom_dialog_info(&config, http_client, &current_version).await {
-        Ok(Some(info)) => UpdateCheckOutcome::ShowDialog(info),
-        Ok(None) => no_update_outcome(trigger),
-        Err(err) => {
-            tracing::warn!("自定义更新检查失败: {}", err);
-            failure_outcome(trigger, err)
+        UpdateSource::CustomApi => {
+            match fetch_custom_dialog_info(&config, http_client, &current_version).await {
+                Ok(Some(info)) => UpdateCheckOutcome::ShowDialog(info),
+                Ok(None) => no_update_outcome(trigger),
+                Err(err) => {
+                    tracing::warn!("自定义更新检查失败: {}", err);
+                    failure_outcome(trigger, err)
+                }
+            }
         }
     }
 }
@@ -226,6 +255,8 @@ async fn fetch_custom_dialog_info(
         current_version: current_version.to_string(),
         latest_version: response.version.clone(),
         download_url: select_download_url(&response, config.download_url.clone()),
+        expected_sha256: response.sha256.clone(),
+        release_page_url: None,
     }))
 }
 

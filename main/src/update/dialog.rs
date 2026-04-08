@@ -13,6 +13,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, Disableable, Sizable, TitleBar, WindowExt,
     button::{Button, ButtonVariants as _},
+    clipboard::Clipboard,
     h_flex,
     progress::Progress,
     v_flex,
@@ -22,7 +23,7 @@ use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use rust_i18n::t;
 
 use super::UpdateDialogInfo;
-use super::download::{build_download_path, download_update_file};
+use super::download::{build_download_path, download_update_file, verify_sha256};
 use super::install::start_install_update;
 use super::util::{UpdateInstallAction, format_bytes};
 
@@ -51,6 +52,7 @@ struct UpdateDialogView {
     downloaded_path: Option<PathBuf>,
     status_message: String,
     error_message: Option<String>,
+    expected_sha256: Option<String>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -61,6 +63,7 @@ struct DownloadProgressSnapshot {
 
 impl UpdateDialogView {
     fn new(info: UpdateDialogInfo, cx: &mut Context<Self>) -> Self {
+        let expected_sha256 = info.expected_sha256.clone();
         Self {
             focus_handle: cx.focus_handle(),
             info,
@@ -73,6 +76,7 @@ impl UpdateDialogView {
             downloaded_path: None,
             status_message: t!("Update.ready").to_string(),
             error_message: None,
+            expected_sha256,
         }
     }
 
@@ -138,6 +142,7 @@ impl UpdateDialogView {
         let progress_finished = Arc::new(AtomicBool::new(false));
         let progress_finished_for_watcher = Arc::clone(&progress_finished);
         let view = cx.entity().downgrade();
+        let expected_sha256 = self.expected_sha256.clone();
 
         cx.spawn(async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
@@ -178,6 +183,23 @@ impl UpdateDialogView {
 
             match download_result {
                 Ok(()) => {
+                    // SHA256 完整性校验
+                    if let Some(expected) = &expected_sha256 {
+                        if let Err(err) = verify_sha256(&download_path, expected) {
+                            let _ = std::fs::remove_file(&download_path);
+                            let _ = this.update(cx, |view, cx| {
+                                view.downloading = false;
+                                view.applying = false;
+                                view.downloaded_path = None;
+                                view.error_message = Some(err);
+                                view.status_message =
+                                    t!("Update.download_failed").to_string();
+                                cx.notify();
+                            });
+                            return;
+                        }
+                    }
+
                     let _ = this.update(cx, |view, cx| {
                         view.completed = true;
                         view.downloading = false;
@@ -326,6 +348,8 @@ impl Render for UpdateDialogView {
             t!("Update.action_download").to_string()
         };
 
+        let release_page_url = self.info.release_page_url.clone();
+
         v_flex()
             .gap_3()
             .size_full()
@@ -373,7 +397,47 @@ impl Render for UpdateDialogView {
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(status_message),
-                        ),
+                        )
+                        .when(release_page_url.is_some(), |this| {
+                            let url = release_page_url.clone().unwrap_or_default();
+                            let url_for_open = url.clone();
+                            this.child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(
+                                                t!("Update.open_release_page").to_string(),
+                                            ),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().link)
+                                                    .child(url.clone()),
+                                            )
+                                            .child(
+                                                Clipboard::new("release-url-copy")
+                                                    .value(url),
+                                            )
+                                            .child(
+                                                Button::new("release-url-open")
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .icon(gpui_component::IconName::ExternalLink)
+                                                    .on_click(move |_, _, cx| {
+                                                        cx.open_url(&url_for_open);
+                                                    }),
+                                            ),
+                                    ),
+                            )
+                        }),
                 ),
             )
             .child(

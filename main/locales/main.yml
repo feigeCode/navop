@@ -1099,6 +1099,10 @@ Update:
     en: Update check failed
     zh-CN: 检查更新失败
     zh-HK: 檢查更新失敗
+  open_release_page:
+    en: Open release page to download manually
+    zh-CN: 打开发布页面手动下载
+    zh-HK: 打開發布頁面手動下載
 
 
 # LLM 提供商

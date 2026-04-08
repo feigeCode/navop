@@ -24,6 +24,8 @@ pub(crate) struct UpdateResponse {
     download_url: Option<String>,
     #[serde(default)]
     downloads: Option<UpdateDownloads>,
+    #[serde(default)]
+    pub(crate) sha256: Option<String>,
 }
 
 pub(crate) async fn fetch_update_info(

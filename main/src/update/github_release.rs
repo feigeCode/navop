@@ -91,10 +91,17 @@ pub(crate) fn github_release_to_dialog_info(
     let asset = select_github_asset(release)
         .ok_or_else(|| format!("未找到当前平台的发布资产: {}", EXPECTED_ARCHIVE_NAME))?;
 
+    let release_page_url = format!(
+        "https://github.com/{}/{}/releases/latest",
+        GITHUB_OWNER, GITHUB_REPO
+    );
+
     Ok(UpdateDialogInfo {
         current_version: current_version.to_string(),
         latest_version: release.tag_name.clone(),
         download_url: Some(asset.browser_download_url.clone()),
+        expected_sha256: None,
+        release_page_url: Some(release_page_url),
     })
 }
 

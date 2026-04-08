@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use futures::AsyncReadExt;
 use gpui::http_client::{AsyncBody, HttpClient, Method, Request, http};
+use sha2::{Digest, Sha256};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -21,6 +22,18 @@ where
         fs::create_dir_all(parent)
             .await
             .map_err(|err| format!("创建下载目录失败: {}", err))?;
+
+        // 设置目录权限为仅当前用户可访问，防止 TOCTOU 攻击
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let permissions = std::fs::Permissions::from_mode(0o700);
+            std::fs::set_permissions(parent, permissions)
+                .map_err(|err| format!("设置下载目录权限失败: {}", err))?;
+        }
+
+        // 清理目录中超过 7 天的旧下载文件
+        cleanup_old_downloads(parent).await;
     }
 
     let request = Request::builder()
@@ -112,5 +125,46 @@ fn download_file_name(version: &str, download_url: &str) -> String {
         base_name
     } else {
         format!("{}.{}", base_name, extension)
+    }
+}
+
+/// 校验下载文件的 SHA256 哈希值。
+/// 使用同步文件读取——下载文件为本地文件且体积有限，无需异步。
+pub(crate) fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
+    let data = std::fs::read(path)
+        .map_err(|err| format!("读取下载文件失败: {}", err))?;
+
+    let hash = Sha256::digest(&data);
+    let actual = format!("{:x}", hash);
+    let expected_lower = expected.trim().to_lowercase();
+
+    if actual != expected_lower {
+        return Err(format!(
+            "SHA256 校验失败: 期望 {}，实际 {}",
+            expected_lower, actual
+        ));
+    }
+
+    Ok(())
+}
+
+async fn cleanup_old_downloads(dir: &Path) {
+    let Ok(mut entries) = fs::read_dir(dir).await else {
+        return;
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.is_file() {
+            if let Ok(metadata) = fs::metadata(&path).await {
+                if let Ok(modified) = metadata.modified() {
+                    if let Ok(age) = modified.elapsed() {
+                        if age > std::time::Duration::from_secs(7 * 24 * 3600) {
+                            let _ = fs::remove_file(&path).await;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
