@@ -9,6 +9,7 @@ pub mod database_tab;
 pub mod database_view_plugin;
 mod db_tree_event;
 pub mod db_tree_view;
+pub mod duckdb;
 mod import_export;
 pub mod mssql;
 pub mod mysql;

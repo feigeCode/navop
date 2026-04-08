@@ -1,8 +1,8 @@
 use crate::{ActiveTheme, Sizable, Size};
 use gpui::{
-    div, img, prelude::FluentBuilder as _, svg, AnyElement, App, AppContext, Context, Entity, Hsla,
-    IntoElement, ParentElement, Radians, Render, RenderOnce, SharedString, StyleRefinement, Styled,
-    Svg, Transformation, Window,
+    AnyElement, App, AppContext, Context, Entity, Hsla, IntoElement, ParentElement, Radians,
+    Render, RenderOnce, SharedString, StyleRefinement, Styled, Svg, Transformation, Window, div,
+    img, prelude::FluentBuilder as _, svg,
 };
 
 /// Types implementing this trait can automatically be converted to [`Icon`].
@@ -198,6 +198,8 @@ pub enum IconName {
     Home,
     SettingColor,
     SerialPort,
+    Monitor,
+    DuckDB,
 }
 
 impl IconName {
@@ -385,6 +387,8 @@ impl IconNamed for IconName {
             Self::Home => "icons/home.svg",
             Self::SettingColor => "icons/setting_color.svg",
             Self::SerialPort => "icons/serial_port.svg",
+            Self::Monitor => "icons/monitor.svg",
+            Self::DuckDB => "icons/duckdb.svg",
         }
         .into()
     }

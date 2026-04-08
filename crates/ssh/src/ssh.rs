@@ -647,17 +647,6 @@ mod tests {
         // 验证空候选列表时返回可读错误，而不是 panic
         // 这是 P0 修复的核心：authenticate_session 对 AutoPublicKey 会 unreachable!()，
         // authenticate_session_with_fallbacks 应正常返回错误
-        struct NoopHandler;
-        impl client::Handler for NoopHandler {
-            type Error = russh::Error;
-            async fn check_server_key(
-                &mut self,
-                _server_public_key: &ssh_key::PublicKey,
-            ) -> Result<bool, Self::Error> {
-                Ok(true)
-            }
-        }
-
         // 空候选列表 — 不依赖真实 SSH 服务，直接验证错误路径
         let candidates: Vec<SshAuth> = vec![];
         let messages = test_auth_failure_messages();
@@ -667,10 +656,7 @@ mod tests {
             .iter()
             .filter(|a| !matches!(a, SshAuth::AutoPublicKey))
             .collect();
-        assert!(
-            filtered.is_empty(),
-            "空候选列表过滤后应为空"
-        );
+        assert!(filtered.is_empty(), "空候选列表过滤后应为空");
 
         // 验证失败消息生成不 panic
         let msg = build_auto_publickey_failure_message(&messages, false, &[]);

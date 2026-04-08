@@ -50,6 +50,7 @@ use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_new_connection::NewConnectionDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
 use crate::home::home_workspace_filter::WorkspaceFilterDelegate;
+use crate::home::workspace_form_window::{WorkspaceFormWindow, WorkspaceFormWindowConfig};
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
 use crate::setting_tab::GlobalCurrentUser;
 use crate::user_avatar::render_user_avatar;
@@ -81,7 +82,6 @@ pub struct HomePage {
     search_query: Entity<String>,
     pub(crate) editing_connection_id: Option<i64>,
     selected_connection_id: Option<i64>,
-    editing_workspace_id: Option<i64>,
     pub(crate) filtered_workspace_ids: HashSet<i64>,
     pub(crate) workspace_filter_open: bool,
     workspace_filter_list: Option<Entity<ListState<WorkspaceFilterDelegate>>>,
@@ -147,7 +147,6 @@ impl HomePage {
             search_query,
             editing_connection_id: None,
             selected_connection_id: None,
-            editing_workspace_id: None,
             filtered_workspace_ids: HashSet::new(),
             workspace_filter_open: false,
             workspace_filter_list: None,
@@ -833,6 +832,67 @@ impl HomePage {
         }
     }
 
+    /// 复制连接，创建一个副本
+    fn duplicate_connection(
+        &mut self,
+        conn: StoredConnection,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let current_user = self.current_user.clone();
+
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let result: anyhow::Result<StoredConnection> = (|| {
+                let repo = storage
+                    .get::<ConnectionRepository>()
+                    .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
+
+                // 获取现有连接名称列表，用于生成唯一名称
+                let existing_names: std::collections::HashSet<String> = repo
+                    .list()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect();
+
+                // 生成新的唯一名称
+                let new_name = generate_duplicate_name(&conn.name, &existing_names);
+
+                // 克隆连接，清除 id 和云同步相关字段
+                let mut new_conn = conn.clone();
+                new_conn.id = None;
+                new_conn.cloud_id = None;
+                new_conn.last_synced_at = None;
+                new_conn.name = new_name;
+                new_conn.owner_id = current_user.map(|u| u.id);
+
+                // 保存新连接
+                repo.insert(&mut new_conn)?;
+                Ok(new_conn)
+            })();
+
+            match result {
+                Ok(saved_conn) => {
+                    // 发出 ConnectionCreated 事件，首页自动刷新
+                    _ = this.update(cx, |_this, cx| {
+                        if let Some(notifier) = get_notifier(cx) {
+                            notifier.update(cx, |_, cx| {
+                                cx.emit(ConnectionDataEvent::ConnectionCreated {
+                                    connection: saved_conn,
+                                });
+                            });
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("复制连接失败: {}", e);
+                }
+            }
+        })
+        .detach();
+    }
+
     fn confirm_delete_connection(
         &mut self,
         conn_id: i64,
@@ -959,59 +1019,31 @@ impl HomePage {
     pub(crate) fn show_workspace_form(
         &mut self,
         workspace_id: Option<i64>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let workspace_data =
             workspace_id.and_then(|id| self.workspaces.iter().find(|w| w.id == Some(id)).cloned());
-        self.editing_workspace_id = workspace_id;
-        let view = cx.entity().clone();
-        let is_editing = workspace_id.is_some();
-        let form = cx.new(|cx| {
-            let mut input_state =
-                InputState::new(window, cx).placeholder(t!("Workspace.name_placeholder"));
-            if let Some(ref workspace) = workspace_data {
-                input_state.set_value(workspace.name.clone(), window, cx);
-            }
-            input_state
-        });
+        let config = WorkspaceFormWindowConfig {
+            parent: cx.entity().clone(),
+            workspace_id,
+            initial_name: workspace_data
+                .map(|workspace| workspace.name)
+                .unwrap_or_default(),
+        };
 
-        window.open_dialog(cx, move |dialog, _window, _cx| {
-            let form_clone = form.clone();
-            let view_clone = view.clone();
-            let view_clone2 = view.clone();
-            dialog
-                .title(
-                    (if is_editing {
-                        t!("Workspace.edit")
-                    } else {
-                        t!("Workspace.new")
-                    })
-                    .to_string()
-                    .into_any_element(),
-                )
-                .w(px(400.0))
-                .child(Input::new(&form).size_full())
-                .content_center()
-                .confirm()
-                .on_ok(move |_, _window, cx| {
-                    let name = form_clone.read(cx).text().to_string();
-                    if !name.is_empty() {
-                        let _ = view_clone.update(cx, |this, cx| {
-                            this.handle_save_workspace(name, cx);
-                        });
-                        true
-                    } else {
-                        false
-                    }
-                })
-                .on_cancel(move |_, _, cx| {
-                    let _ = view_clone2.update(cx, |this, _| {
-                        this.editing_workspace_id = None;
-                    });
-                    true
-                })
-        });
+        open_popup_window(
+            PopupWindowOptions::new(if config.workspace_id.is_some() {
+                t!("Workspace.edit").to_string()
+            } else {
+                t!("Workspace.new").to_string()
+            })
+            .size(420.0, 200.0)
+            .min_width(420.0)
+            .min_height(200.0),
+            move |window, cx| cx.new(|cx| WorkspaceFormWindow::new(config, window, cx)),
+            cx,
+        );
     }
 
     pub(crate) fn show_connection_quick_open(
@@ -1108,9 +1140,14 @@ impl HomePage {
         cx.notify();
     }
 
-    fn handle_save_workspace(&mut self, name: String, cx: &mut Context<Self>) {
+    pub(crate) fn handle_save_workspace(
+        &mut self,
+        workspace_id: Option<i64>,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
         let storage = cx.global::<GlobalStorageState>().storage.clone();
-        let editing_id = self.editing_workspace_id;
+        let editing_id = workspace_id;
 
         let mut workspace = if let Some(id) = editing_id {
             // 编辑模式：从现有工作区更新
@@ -1164,7 +1201,6 @@ impl HomePage {
                             cx,
                         );
                     }
-                    this.editing_workspace_id = None;
                     // 兜底触发一次自动同步，避免当前页对自身工作区事件未回流时漏同步。
                     if this.current_user.is_some() && crypto::has_master_key() {
                         tracing::info!("本地工作区保存成功，自动触发云同步");
@@ -2505,6 +2541,7 @@ impl HomePage {
         let edit_conn = conn.clone();
         let edit_conn_type = conn.connection_type;
         let edit_conn_name = conn.name.clone();
+        let duplicate_conn = conn.clone();
         let delete_conn_id = conn.id;
         let delete_conn_name = conn.name.clone();
         let is_selected = selected_id == conn.id;
@@ -2605,6 +2642,22 @@ impl HomePage {
                     })
                     .when(can_edit, |this| {
                         this.child(
+                            Button::new(SharedString::from(format!(
+                                "duplicate-conn-{}",
+                                conn.id.unwrap_or(0)
+                            )))
+                            .icon(IconName::Copy)
+                            .with_size(Size::Small)
+                            .primary()
+                            .tooltip(t!("Home.duplicate_connection"))
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.duplicate_connection(duplicate_conn.clone(), window, cx);
+                                },
+                            )),
+                        )
+                        .child(
                             Button::new(SharedString::from(format!(
                                 "edit-conn-{}",
                                 conn.id.unwrap_or(0)
@@ -2760,8 +2813,10 @@ impl HomePage {
                             })
                             .when(conn.connection_type == ConnectionType::Database, |this| {
                                 if let Ok(params) = conn.to_db_connection() {
-                                    let conn_info = if params.database_type == DatabaseType::SQLite
-                                    {
+                                    let conn_info = if matches!(
+                                        params.database_type,
+                                        DatabaseType::SQLite | DatabaseType::DuckDB
+                                    ) {
                                         params.host.clone()
                                     } else {
                                         let database = match params.database {
@@ -2954,6 +3009,25 @@ impl HomePage {
 
         card.into_any_element()
     }
+}
+
+/// 生成复制连接的唯一名称
+fn generate_duplicate_name(original_name: &str, existing_names: &std::collections::HashSet<String>) -> String {
+    let base_name = format!("{} (副本)", original_name);
+
+    if !existing_names.contains(&base_name) {
+        return base_name;
+    }
+
+    // 如果基础名称已存在，添加数字序号
+    for i in 2..100 {
+        let name = format!("{} (副本 {})", original_name, i);
+        if !existing_names.contains(&name) {
+            return name;
+        }
+    }
+
+    base_name
 }
 
 impl Focusable for HomePage {

@@ -48,6 +48,16 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
+
+      - name: Free disk space (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          df -h
+          sudo rm -rf /usr/local/lib/node_modules
+          sudo rm -rf ~/.npm ~/.nvm ~/Library/Caches
+          sudo rm -rf /System/Library/Frameworks/Python.framework
+          df -h
+
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: script/bootstrap
@@ -66,11 +76,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
           key: build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             build-${{ matrix.target }}-
@@ -112,6 +120,15 @@ jobs:
           ONETCLI_PAYPAL_QR_URL: ${{ secrets.ONETCLI_PAYPAL_QR_URL }}
         run: cargo build --release -p main --target ${{ matrix.target }}
 
+
+      - name: Clean build artifacts (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          rm -rf target/debug
+          find target -name "incremental" -o -name "deps" -o -name "build" | xargs rm -rf || true
+          rm -rf ~/.cargo/registry/cache ~/.cargo/git/db
+          df -h
+
       - name: Create macOS app bundle
         if: runner.os == 'macOS'
         run: |
@@ -128,12 +145,12 @@ jobs:
           mkdir -p package/usr/share/applications
           mkdir -p package/usr/share/icons/hicolor/128x128/apps
           mkdir -p package/usr/share/icons/hicolor/256x256/apps
-          mkdir -p package/usr/share/icons/hicolor/512x512/apps
+          mkdir -p package/usr/share/icons/hicolor/512x515/apps
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} package/usr/bin/
           cp resources/linux/onetcli.desktop package/usr/share/applications/
           cp resources/linux/onetcli-128.png package/usr/share/icons/hicolor/128x128/apps/onetcli.png
           cp resources/linux/onetcli-256.png package/usr/share/icons/hicolor/256x256/apps/onetcli.png
-          cp resources/linux/onetcli-512.png package/usr/share/icons/hicolor/512x512/apps/onetcli.png
+          cp resources/linux/onetcli-512.png package/usr/share/icons/hicolor/512x515/apps/onetcli.png
           tar czf ${{ matrix.archive }} -C package .
 
       - name: Package (Windows)
@@ -153,7 +170,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: onetcli-${{ matrix.target }}.dmg
-          path: onetcli-${{ matrix.target }}.dmg
+          path: "*.dmg"
 
   release:
     name: Create Release

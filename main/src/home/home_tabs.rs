@@ -346,10 +346,8 @@ impl HomePage {
                         } else {
                             None
                         };
-                        let terminal_view = cx.new(|cx| {
-                            TerminalView::new_with_index(config, idx, window, cx)
-                                .expect("创建本地终端失败")
-                        });
+                        let terminal_view =
+                            cx.new(|cx| TerminalView::new_with_index(config, idx, window, cx));
                         this.setup_terminal_view(&terminal_view, window, cx);
                         tab_container.update(cx, |tc, cx| {
                             let tab = TabItem::new(tab_id, "terminal", terminal_view);
@@ -572,16 +570,15 @@ impl HomePage {
         let tab_container = self.tab_container.clone();
         let home = cx.entity();
         window.defer(cx, move |window, cx| {
-            let terminal_view = cx.new(|cx| {
-                TerminalView::new_with_index(LocalConfig::default(), tab_index, window, cx)
-                    .expect("Failed to create TerminalView")
-            });
             home.update(cx, |this, cx| {
+                let terminal_view = cx.new(|cx| {
+                    TerminalView::new_with_index(LocalConfig::default(), tab_index, window, cx)
+                });
                 this.setup_terminal_view(&terminal_view, window, cx);
-            });
-            tab_container.update(cx, |tc, cx| {
-                let tab = TabItem::new(tab_id, "home", terminal_view);
-                tc.add_and_activate_tab_with_focus(tab, window, cx);
+                tab_container.update(cx, |tc, cx| {
+                    let tab = TabItem::new(tab_id, "home", terminal_view);
+                    tc.add_and_activate_tab_with_focus(tab, window, cx);
+                });
             });
         });
     }

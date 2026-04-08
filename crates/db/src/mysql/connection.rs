@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use mysql_async::{prelude::*, Conn, Opts, OptsBuilder, SslOpts, Value};
+use mysql_async::{Conn, Opts, OptsBuilder, SslOpts, Value, prelude::*};
 use one_core::storage::DbConnectionConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{debug, error, info};
 
@@ -16,7 +16,7 @@ use crate::executor::{
 };
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::resolve_connection_target;
-use crate::{format_message, truncate_str, DatabasePlugin};
+use crate::{DatabasePlugin, format_message, truncate_str};
 use ssh::LocalPortForwardTunnel;
 
 pub struct MysqlDbConnection {
@@ -75,6 +75,49 @@ impl MysqlDbConnection {
         }
 
         Some(ssl_opts)
+    }
+
+    fn build_init_commands(config: &DbConnectionConfig) -> Result<Vec<String>, DbError> {
+        let charset = config
+            .get_param("charset")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty());
+        let collation = config
+            .get_param("collation")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty());
+
+        if charset.is_none() && collation.is_none() {
+            return Ok(Vec::new());
+        }
+
+        let charset = charset.ok_or_else(|| {
+            DbError::connection("collation requires charset for MySQL connection".to_string())
+        })?;
+
+        Self::validate_mysql_identifier("charset", charset)?;
+        let mut command = format!("SET NAMES {}", charset);
+
+        if let Some(collation) = collation {
+            Self::validate_mysql_identifier("collation", collation)?;
+            command.push_str(&format!(" COLLATE {}", collation));
+        }
+
+        Ok(vec![command])
+    }
+
+    fn validate_mysql_identifier(field_name: &str, value: &str) -> Result<(), DbError> {
+        if value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            return Ok(());
+        }
+
+        Err(DbError::connection(format!(
+            "invalid MySQL {}: only letters, numbers, and underscores are allowed",
+            field_name
+        )))
     }
 
     /// Extract value from mysql_async::Value
@@ -307,6 +350,12 @@ impl DbConnection for MysqlDbConnection {
         if let Some(ssl_opts) = Self::build_ssl_opts(config) {
             opts_builder = opts_builder.ssl_opts(ssl_opts);
             debug!("[MySQL] SSL/TLS enabled");
+        }
+
+        let init_commands = Self::build_init_commands(config)?;
+        if !init_commands.is_empty() {
+            debug!("[MySQL] Applying init commands: {:?}", init_commands);
+            opts_builder = opts_builder.init(init_commands);
         }
 
         // 获取连接超时，默认 30 秒
@@ -911,5 +960,48 @@ mod tests {
         assert!(ssl_opts.skip_domain_validation());
         assert_eq!(ssl_opts.root_certs().len(), 1);
         assert_eq!(ssl_opts.tls_hostname_override(), Some("db.internal"));
+    }
+
+    #[test]
+    fn build_init_commands_uses_charset_only_when_collation_absent() {
+        let config = build_config(&[("charset", "gbk")]);
+
+        let commands =
+            MysqlDbConnection::build_init_commands(&config).expect("charset should be valid");
+
+        assert_eq!(commands, vec!["SET NAMES gbk".to_string()]);
+    }
+
+    #[test]
+    fn build_init_commands_includes_collation_when_provided() {
+        let config = build_config(&[("charset", "gbk"), ("collation", "gbk_chinese_ci")]);
+
+        let commands =
+            MysqlDbConnection::build_init_commands(&config).expect("charset should be valid");
+
+        assert_eq!(
+            commands,
+            vec!["SET NAMES gbk COLLATE gbk_chinese_ci".to_string()]
+        );
+    }
+
+    #[test]
+    fn build_init_commands_rejects_collation_without_charset() {
+        let config = build_config(&[("collation", "gbk_chinese_ci")]);
+
+        let error = MysqlDbConnection::build_init_commands(&config)
+            .expect_err("collation alone should fail");
+
+        assert!(error.to_string().contains("collation requires charset"));
+    }
+
+    #[test]
+    fn build_init_commands_rejects_invalid_charset_identifier() {
+        let config = build_config(&[("charset", "gbk;drop")]);
+
+        let error = MysqlDbConnection::build_init_commands(&config)
+            .expect_err("invalid charset should fail");
+
+        assert!(error.to_string().contains("invalid MySQL charset"));
     }
 }

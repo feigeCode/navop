@@ -1,11 +1,14 @@
 use anyhow::Error;
-use db::{oracle, GlobalDbState};
+use std::time::Instant;
+
+use db::{GlobalDbState, oracle};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, prelude::*, px, App, AsyncApp, Axis, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, IntoElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, Window,
+    App, AsyncApp, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    ParentElement, PathPromptOptions, Render, SharedString, Styled, Window, div, prelude::*, px,
 };
 use gpui_component::{
+    ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     clipboard::Clipboard,
@@ -17,16 +20,17 @@ use gpui_component::{
     scroll::ScrollableElement,
     select::{Select, SelectEvent, SelectItem, SelectState},
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size,
+    v_flex,
 };
 use one_core::cloud_sync::{GlobalCloudUser, TeamOption};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    get_config_dir, ConnectionRepository, DatabaseType, DbConnectionConfig, GlobalStorageState,
-    StoredConnection, Workspace,
+    ConnectionRepository, DatabaseType, DbConnectionConfig, GlobalStorageState, StoredConnection,
+    Workspace, get_config_dir,
 };
 use rust_i18n::t;
+use tracing::info;
 
 /// Form select item for dropdown fields
 #[derive(Clone, Debug)]
@@ -467,23 +471,21 @@ impl DbFormConfig {
     }
 
     fn clickhouse_ssl_tab_group() -> TabGroup {
-        TabGroup::new("ssl", t!("ConnectionForm.ssl")).fields(vec![FormField::new(
-            "schema",
-            t!("ConnectionForm.schema"),
-            FormFieldType::Select,
-        )
-        .optional()
-        .default("http")
-        .options(vec![
-            (
-                "http".to_string(),
-                t!("ConnectionForm.schema_http").to_string(),
-            ),
-            (
-                "https".to_string(),
-                t!("ConnectionForm.schema_https").to_string(),
-            ),
-        ])])
+        TabGroup::new("ssl", t!("ConnectionForm.ssl")).fields(vec![
+            FormField::new("schema", t!("ConnectionForm.schema"), FormFieldType::Select)
+                .optional()
+                .default("http")
+                .options(vec![
+                    (
+                        "http".to_string(),
+                        t!("ConnectionForm.schema_http").to_string(),
+                    ),
+                    (
+                        "https".to_string(),
+                        t!("ConnectionForm.schema_https").to_string(),
+                    ),
+                ]),
+        ])
     }
 
     /// MySQL form configuration
@@ -537,6 +539,16 @@ impl DbFormConfig {
                     .optional()
                     .placeholder("30")
                     .default("30"),
+                    FormField::new("charset", t!("ConnectionForm.charset"), FormFieldType::Text)
+                        .optional()
+                        .placeholder("gbk"),
+                    FormField::new(
+                        "collation",
+                        t!("ConnectionForm.collation"),
+                        FormFieldType::Text,
+                    )
+                    .optional()
+                    .placeholder("gbk_chinese_ci"),
                     FormField::new(
                         "read_timeout",
                         t!("ConnectionForm.read_timeout"),
@@ -547,15 +559,17 @@ impl DbFormConfig {
                 ]),
                 Self::mysql_ssl_tab_group(),
                 Self::ssh_tab_group(),
-                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![FormField::new(
-                    "remark",
-                    t!("ConnectionForm.remark"),
-                    FormFieldType::TextArea,
-                )
-                .rows(14)
-                .optional()
-                .placeholder(t!("ConnectionForm.enter_remark"))
-                .default("")]),
+                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
+                    FormField::new(
+                        "remark",
+                        t!("ConnectionForm.remark"),
+                        FormFieldType::TextArea,
+                    )
+                    .rows(14)
+                    .optional()
+                    .placeholder(t!("ConnectionForm.enter_remark"))
+                    .default(""),
+                ]),
             ],
         }
     }
@@ -620,15 +634,17 @@ impl DbFormConfig {
                 ]),
                 Self::postgres_ssl_tab_group(),
                 Self::ssh_tab_group(),
-                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![FormField::new(
-                    "remark",
-                    t!("ConnectionForm.remark"),
-                    FormFieldType::TextArea,
-                )
-                .rows(14)
-                .optional()
-                .placeholder(t!("ConnectionForm.enter_remark"))
-                .default("")]),
+                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
+                    FormField::new(
+                        "remark",
+                        t!("ConnectionForm.remark"),
+                        FormFieldType::TextArea,
+                    )
+                    .rows(14)
+                    .optional()
+                    .placeholder(t!("ConnectionForm.enter_remark"))
+                    .default(""),
+                ]),
             ],
         }
     }
@@ -693,15 +709,17 @@ impl DbFormConfig {
                 ]),
                 Self::mssql_ssl_tab_group(),
                 Self::ssh_tab_group(),
-                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![FormField::new(
-                    "remark",
-                    t!("ConnectionForm.remark"),
-                    FormFieldType::TextArea,
-                )
-                .rows(14)
-                .optional()
-                .placeholder(t!("ConnectionForm.enter_remark"))
-                .default("")]),
+                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
+                    FormField::new(
+                        "remark",
+                        t!("ConnectionForm.remark"),
+                        FormFieldType::TextArea,
+                    )
+                    .rows(14)
+                    .optional()
+                    .placeholder(t!("ConnectionForm.enter_remark"))
+                    .default(""),
+                ]),
             ],
         }
     }
@@ -757,15 +775,17 @@ impl DbFormConfig {
                     .default("30"),
                 ]),
                 Self::ssh_tab_group(),
-                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![FormField::new(
-                    "remark",
-                    t!("ConnectionForm.remark"),
-                    FormFieldType::TextArea,
-                )
-                .rows(14)
-                .optional()
-                .placeholder(t!("ConnectionForm.enter_remark"))
-                .default("")]),
+                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
+                    FormField::new(
+                        "remark",
+                        t!("ConnectionForm.remark"),
+                        FormFieldType::TextArea,
+                    )
+                    .rows(14)
+                    .optional()
+                    .placeholder(t!("ConnectionForm.enter_remark"))
+                    .default(""),
+                ]),
             ],
         }
     }
@@ -834,15 +854,17 @@ impl DbFormConfig {
                 ]),
                 Self::clickhouse_ssl_tab_group(),
                 Self::ssh_tab_group(),
-                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![FormField::new(
-                    "remark",
-                    t!("ConnectionForm.remark"),
-                    FormFieldType::TextArea,
-                )
-                .rows(14)
-                .optional()
-                .placeholder(t!("ConnectionForm.enter_remark"))
-                .default("")]),
+                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
+                    FormField::new(
+                        "remark",
+                        t!("ConnectionForm.remark"),
+                        FormFieldType::TextArea,
+                    )
+                    .rows(14)
+                    .optional()
+                    .placeholder(t!("ConnectionForm.enter_remark"))
+                    .default(""),
+                ]),
             ],
         }
     }
@@ -873,15 +895,62 @@ impl DbFormConfig {
                     .placeholder("/path/to/database.db")
                     .default(default_db_path),
                 ]),
-                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![FormField::new(
-                    "remark",
-                    t!("ConnectionForm.remark"),
-                    FormFieldType::TextArea,
-                )
-                .rows(14)
-                .optional()
-                .placeholder(t!("ConnectionForm.enter_remark"))
-                .default("")]),
+                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
+                    FormField::new(
+                        "remark",
+                        t!("ConnectionForm.remark"),
+                        FormFieldType::TextArea,
+                    )
+                    .rows(14)
+                    .optional()
+                    .placeholder(t!("ConnectionForm.enter_remark"))
+                    .default(""),
+                ]),
+            ],
+        }
+    }
+
+    /// DuckDB form configuration
+    pub fn duckdb() -> Self {
+        let default_db_path = get_config_dir()
+            .map(|p| {
+                p.join("onetcli_default.duckdb")
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .unwrap_or_else(|_| "onetcli_default.duckdb".to_string());
+
+        Self {
+            db_type: DatabaseType::DuckDB,
+            title: format!("{} (DuckDB)", t!("Common.new")),
+            tab_groups: vec![
+                TabGroup::new("general", t!("ConnectionForm.general")).fields(vec![
+                    FormField::new(
+                        "name",
+                        t!("ConnectionForm.connection_name"),
+                        FormFieldType::Text,
+                    )
+                    .placeholder("My DuckDB Database")
+                    .default("Local DuckDB"),
+                    FormField::new(
+                        "host",
+                        t!("ConnectionForm.database_file_path"),
+                        FormFieldType::Text,
+                    )
+                    .placeholder("/path/to/database.duckdb")
+                    .default(default_db_path),
+                ]),
+                TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
+                    FormField::new(
+                        "remark",
+                        t!("ConnectionForm.remark"),
+                        FormFieldType::TextArea,
+                    )
+                    .rows(14)
+                    .optional()
+                    .placeholder(t!("ConnectionForm.enter_remark"))
+                    .default(""),
+                ]),
             ],
         }
     }
@@ -974,9 +1043,9 @@ pub struct DbConnectionForm {
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
     pending_file_path: Entity<Option<String>>,
     editing_connection: Option<StoredConnection>,
-    /// 是否启用云同步
+    /// Whether cloud sync is enabled.
     sync_enabled: Entity<bool>,
-    /// Oracle 客户端检测状态：Ok(版本) / Err(错误)
+    /// Oracle client detection status: Ok(version) / Err(error).
     oracle_client_status: Entity<Option<Result<String, String>>>,
     oracle_client_checking: Entity<bool>,
 }
@@ -1089,7 +1158,7 @@ impl DbConnectionForm {
 
         let pending_file_path = cx.new(|_| None);
 
-        // 默认启用云同步
+        // Enable cloud sync by default.
         let sync_enabled = cx.new(|_| true);
         let oracle_client_status = cx.new(|_| None);
         let oracle_client_checking = cx.new(|_| false);
@@ -1226,7 +1295,7 @@ impl DbConnectionForm {
         self.editing_connection = Some(connection.clone());
         self.set_field_value("name", &connection.name, window, cx);
 
-        // 加载同步状态
+        // Load the sync state.
         self.sync_enabled.update(cx, |sync, cx| {
             *sync = connection.sync_enabled;
             cx.notify();
@@ -1265,7 +1334,7 @@ impl DbConnectionForm {
             });
         }
 
-        // 加载团队归属
+        // Load team ownership.
         if let Some(ref team_id) = connection.team_id {
             self.team_select.update(cx, |select, cx| {
                 select.set_selected_value(&Some(team_id.clone()), window, cx);
@@ -1434,7 +1503,7 @@ impl DbConnectionForm {
             .map(|e| e.to_string())
             .unwrap_or_else(|| err.to_string());
 
-        // 去掉常见包装前缀，只保留最有价值的底层异常信息。
+        // Strip common wrapper prefixes and keep the most useful root-level message.
         let prefixes = [
             "connection error: ",
             "query error: ",
@@ -1490,9 +1559,47 @@ impl DbConnectionForm {
             let manager = global_state.db_manager;
 
             let test_result = Tokio::spawn_result(cx, async move {
+                let test_started = Instant::now();
                 let db_plugin = manager.get_plugin(&db_type)?;
-                let conn = db_plugin.create_connection(connection).await?;
-                conn.ping().await?;
+                let connect_started = Instant::now();
+                let conn = match db_plugin.create_connection(connection).await {
+                    Ok(conn) => conn,
+                    Err(error) => {
+                        info!(
+                            "[DB][Timing] test_connection failed stage=create_connection db_type={:?} elapsed={}ms error={}",
+                            db_type,
+                            test_started.elapsed().as_millis(),
+                            error
+                        );
+                        return Err(Error::new(error));
+                    }
+                };
+                info!(
+                    "[DB][Timing] test_connection create_connection db_type={:?} elapsed={}ms",
+                    db_type,
+                    connect_started.elapsed().as_millis()
+                );
+
+                let ping_started = Instant::now();
+                if let Err(error) = conn.ping().await {
+                    info!(
+                        "[DB][Timing] test_connection failed stage=ping db_type={:?} elapsed={}ms error={}",
+                        db_type,
+                        test_started.elapsed().as_millis(),
+                        error
+                    );
+                    return Err(Error::new(error));
+                }
+                info!(
+                    "[DB][Timing] test_connection ping db_type={:?} elapsed={}ms",
+                    db_type,
+                    ping_started.elapsed().as_millis()
+                );
+                info!(
+                    "[DB][Timing] test_connection total db_type={:?} elapsed={}ms",
+                    db_type,
+                    test_started.elapsed().as_millis()
+                );
                 Ok::<bool, Error>(true)
             })
             .await;
@@ -1542,13 +1649,19 @@ impl DbConnectionForm {
                 c.team_id = team_id;
                 c.params = serde_json::to_string(&connection)
                     .map_err(|e| format!("{}: {}", t!("ConnectionForm.serialize_failed"), e))?;
+                // Keep selected_databases aligned with the current database config.
+                c.selected_databases = if let Some(database) = &connection.database {
+                    Some(format!("[\"{}\"]", database))
+                } else {
+                    None
+                };
                 c
             }
             None => {
                 let mut c = StoredConnection::from_db_connection(connection);
                 c.sync_enabled = sync_enabled;
                 c.team_id = team_id;
-                // 新建时自动填充 owner_id
+                // Auto-fill owner_id for newly created connections.
                 c.owner_id = GlobalCloudUser::get_user(cx).map(|u| u.id);
                 c
             }
@@ -1573,7 +1686,7 @@ impl DbConnectionForm {
         *self.is_testing.read(cx)
     }
 
-    /// 返回测试连接结果的显示文字，无结果时返回 None
+    /// Returns the display string for the test-connection result, or None if absent.
     pub fn test_result_msg(&self, cx: &App) -> Option<String> {
         self.test_result.read(cx).as_ref().map(|r| match r {
             Ok(true) => format!("✓ {}", t!("ConnectionForm.test_success")),
@@ -1844,7 +1957,8 @@ impl DbConnectionForm {
             .label_width(px(100.))
             .children(current_tab_fields.iter().enumerate().map(|(i, field_info)| {
                 let input_idx = field_input_offset + i;
-                let is_sqlite_path = db_type == DatabaseType::SQLite && field_info.name == "host";
+                let is_sqlite_path = matches!(db_type, DatabaseType::SQLite | DatabaseType::DuckDB)
+                    && field_info.name == "host";
                 let is_textarea = field_info.field_type == FormFieldType::TextArea;
                 let is_select = field_info.field_type == FormFieldType::Select;
                 let is_password = field_info.field_type == FormFieldType::Password;
@@ -2357,7 +2471,7 @@ mod tests {
             .tab_groups
             .iter()
             .find(|group| group.name == "ssl")
-            .expect("MySQL 应包含 SSL 标签页");
+            .expect("MySQL should include the SSL tab");
 
         assert_eq!(
             field_names(ssl_tab),
@@ -2368,6 +2482,21 @@ mod tests {
                 "ssl_root_cert_path",
                 "tls_hostname_override"
             ]
+        );
+    }
+
+    #[test]
+    fn mysql_advanced_tab_exposes_charset_fields() {
+        let config = DbFormConfig::mysql();
+        let advanced_tab = config
+            .tab_groups
+            .iter()
+            .find(|group| group.name == "advanced")
+            .expect("MySQL should include the advanced tab");
+
+        assert_eq!(
+            field_names(advanced_tab),
+            vec!["connect_timeout", "charset", "collation", "read_timeout"]
         );
     }
 
@@ -2385,7 +2514,7 @@ mod tests {
             .tab_groups
             .iter()
             .find(|group| group.name == "ssh")
-            .expect("MySQL 应包含 SSH 标签页");
+            .expect("MySQL should include the SSH tab");
 
         assert_eq!(
             field_names(ssh_tab),

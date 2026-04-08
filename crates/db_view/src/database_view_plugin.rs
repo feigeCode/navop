@@ -10,6 +10,7 @@ use crate::common::db_connection_form::DbConnectionForm;
 use crate::common::{DatabaseEditorView, SchemaEditorView};
 use crate::database_objects_tab::DatabaseObjectsEvent;
 use crate::db_tree_view::DbTreeViewEvent;
+use crate::duckdb::duckdb_view_plugin::DuckDbDatabaseViewPlugin;
 use crate::mssql::mssql_view_plugin::MsSqlDatabaseViewPlugin;
 use crate::mysql::mysql_view_plugin::MySqlDatabaseViewPlugin;
 use crate::oracle::oracle_view_plugin::OracleDatabaseViewPlugin;
@@ -277,6 +278,7 @@ impl DatabaseViewPluginRegistry {
         registry.register(OracleDatabaseViewPlugin::new());
         registry.register(ClickHouseDatabaseViewPlugin::new());
         registry.register(SqliteDatabaseViewPlugin::new());
+        registry.register(DuckDbDatabaseViewPlugin::new());
 
         registry
     }

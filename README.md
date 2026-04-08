@@ -15,6 +15,7 @@
 <p align="center">
   <a href="README_CN.md">中文</a> ·
   <a href="#installation">Installation</a> ·
+  <a href="https://github.com/feigeCode/onetcli/releases">Releases</a> ·
   <a href="#features">Features</a> ·
   <a href="#screenshots">Screenshots</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -29,13 +30,13 @@
 
 ## Features
 
-**Database Management** — Connect to PostgreSQL, MySQL, SQLite, SQL Server, Oracle, and ClickHouse from a single interface.
+**Database Management** — Connect to PostgreSQL, MySQL, SQLite, SQL Server, Oracle, ClickHouse, and DuckDB from a single interface.
 
 **Redis** — Dedicated Redis viewer with key browsing, value inspection, and cluster support.
 
 **MongoDB** — MongoDB explorer with collection browsing, document viewing, and query support.
 
-**SSH & SFTP** — Integrated SSH terminal and SFTP file manager with key-based authentication.
+**SSH, SFTP & Serial** — Integrated SSH terminal, SFTP file manager, and serial connection support in one workspace.
 
 **Terminal** — Built-in local terminal with multi-tab workflows.
 
@@ -59,6 +60,12 @@
 |:-:|:-:|
 | ![MongoDB](mongodb.png) | ![AI Chat](chatdb.png) |
 
+**Built-in Simple Server Monitoring, Native Rendered Charts**
+![monitor.png](monitor.png)
+
+**The terminal comes with an SFTP sidebar that supports file drag-and-drop upload.**    
+![sftp_sidebar.png](sftp_sidebar.png)
+
 ## Platform Support
 
 | Platform | Architecture | Rendering |
@@ -68,6 +75,8 @@
 | Windows | x86_64 | — |
 
 ## Installation
+
+Latest release: [v0.2.3](https://github.com/feigeCode/onetcli/releases/tag/v0.2.3)
 
 ### Prerequisites
 
