@@ -18,6 +18,7 @@
   <a href="https://github.com/feigeCode/onetcli/releases">发布</a> ·
   <a href="#功能特性">功能特性</a> ·
   <a href="#应用截图">截图</a> ·
+  <a href="#支持作者">支持作者</a> ·
   <a href="CONTRIBUTING.md">参与贡献</a>
 </p>
 
@@ -27,6 +28,11 @@
 <p align="center">
   <img src="app.png" alt="OnetCli 概览" width="800" />
 </p>
+
+## 支持作者
+
+支持作者 [SPONSOR.md](SPONSOR.md)。
+
 
 ## 功能特性
 

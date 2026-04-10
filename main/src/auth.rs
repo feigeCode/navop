@@ -82,7 +82,7 @@ pub struct AuthService {
 impl AuthService {
     fn configure_client(client: &Arc<SupabaseClient>) {
         let callback: SessionExpiredCallback = Arc::new(|| {
-            tracing::warn!("会话已过期，需要重新登录");
+            warn!("会话已过期，需要重新登录");
             SESSION_EXPIRED.store(true, Ordering::SeqCst);
         });
         client.set_session_expired_callback(callback);

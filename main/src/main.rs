@@ -5,7 +5,6 @@ rust_i18n::i18n!("locales", fallback = "en");
 mod auth;
 
 mod app_init;
-mod encourage;
 mod home;
 mod home_tab;
 mod license;

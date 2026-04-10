@@ -1,159 +1,70 @@
-<p align="center">
-  <img src="logo.svg" alt="OnetCli" width="120" />
-</p>
+# Sponsor OnetCli 💖
 
-<h1 align="center">OnetCli</h1>
+OnetCli is maintained independently by a single developer for the long term. It is committed to providing efficient and easy-to-use tools for everyone, with all features completely free and open, no paid unlocks or restrictions.
 
-<p align="center">
-  <strong>O</strong>ne <strong>Net</strong> <strong>Cl</strong>ient — A cross-platform desktop client for databases, SSH, terminals & AI, all in one place.
-</p>
-
-<p align="center">
-  Built with <a href="https://gpui.rs">GPUI</a> · GPU-accelerated · Native performance
-</p>
-
-<p align="center">
-  <a href="README_CN.md">中文</a> ·
-  <a href="#installation">Installation</a> ·
-  <a href="https://github.com/feigeCode/onetcli/releases">Releases</a> ·
-  <a href="#features">Features</a> ·
-  <a href="#screenshots">Screenshots</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a>
-</p>
+If this project has saved you time or solved practical problems, you can support me in a casual way (e.g., treat me to a KFC meal or a cup of coffee). Even without sponsorship, it will not affect your use at all—your every use and feedback are the greatest encouragement.
 
 ---
 
-<!-- Replace with actual screenshot -->
-<p align="center">
-  <img src="app.png" alt="OnetCli Overview" width="800" />
-</p>
+## 🌍 Sponsorship Methods
+### Domestic Payment (China)
+- **WeChat Pay**：<br>![WeChat Pay](main/assets/encourage/wechat.png)
+- **Alipay**：<br>![Alipay](main/assets/encourage/alipay.png)
 
-## Features
+### International Payment
+- **PayPal**：<br>![PayPal](main/assets/encourage/paypal.png)
 
-**Database Management** — Connect to PostgreSQL, MySQL, SQLite, SQL Server, Oracle, ClickHouse, and DuckDB from a single interface.
+---
 
-**Redis** — Dedicated Redis viewer with key browsing, value inspection, and cluster support.
+## 🎯 Where Your Support Goes
+1. Costs of cloud services and infrastructure (servers, domains, dependent services, etc.)
+2. Research, development, testing and documentation improvement for new features
+3. Long-term maintenance (bug fixes, compatibility adaptation, community responses)
 
-**MongoDB** — MongoDB explorer with collection browsing, document viewing, and query support.
+---
 
-**SSH, SFTP & Serial** — Integrated SSH terminal, SFTP file manager, and serial connection support in one workspace.
+## 📌 Support Without Sponsorship
+If sponsorship is inconvenient for now, these methods can also help the project grow:
+- Star the project (GitHub: https://github.com/feigeCode/onetcli)
+- Submit suggestions, bug reports or usage experience
+- Recommend OnetCli to colleagues/friends and share usage scenarios
+- Participate in lightweight contributions such as document translation and use case supplementation
 
-**Terminal** — Built-in local terminal with multi-tab workflows.
+---
 
-**AI Assistant** — Chat with AI directly inside the app. Supports natural language to SQL, query explanation, BI-style data analysis, and chart generation — powered by streaming LLM integration.
+## 支持 OnetCli 发展 💖
+OnetCli 由个人独立长期维护，始终致力于为大家提供高效、易用的工具，且所有功能完全免费开放，无任何付费解锁/限制项。
 
-**Cloud Sync** — Sync connections and settings across devices with encrypted key storage (AES-GCM, Ed25519).
+如果这个项目帮你节省了时间、解决了实际问题，你可以选择以轻松的方式支持我（比如请吃一顿 KFC 或一杯咖啡）；即便不赞助，也完全不影响使用，你的每一次使用和反馈都是最大的鼓励。
 
-**Themes & i18n** — Light / dark mode. Supports English, Simplified Chinese, and Traditional Chinese.
+---
 
-## Screenshots
+## 🌍 赞助方式
+### 国内支付
+- **微信支付**：<br>![微信支付](main/assets/encourage/wechat.png)
+- **支付宝**：<br>![支付宝](main/assets/encourage/alipay.png)
 
-| Database | SSH |
-|:-:|:-:|
-| ![Database](database.png) | ![SSH](ssh.png) |
+### 国际支付
+- **PayPal**：<br>![PayPal](main/assets/encourage/paypal.png)
 
-| SFTP | Redis |
-|:-:|:-:|
-| ![SFTP](sftp.png) | ![Redis](redis.png) |
+---
 
-| MongoDB | AI Chat |
-|:-:|:-:|
-| ![MongoDB](mongodb.png) | ![AI Chat](chatdb.png) |
+## 🎯 赞助用途
+1. 云端服务与基础设施成本（服务器、域名、依赖服务等）
+2. 新功能研发与体验优化（调研、开发、测试、文档完善）
+3. 长期维护保障（问题修复、兼容性适配、社区响应）
 
-**Built-in Simple Server Monitoring, Native Rendered Charts**
-![monitor.png](monitor.png)
+---
 
-**The terminal comes with an SFTP sidebar that supports file drag-and-drop upload.**    
-![sftp_sidebar.png](sftp_sidebar.png)
+## 📌 无需赞助也能支持
+如果暂时不方便赞助，这些方式同样能帮助项目成长：
+- 给项目点个 ⭐ Star（GitHub：https://github.com/feigeCode/onetcli）
+- 提交建议、Bug 反馈或使用体验
+- 向同事/朋友推荐 OnetCli，分享使用场景
+- 参与文档翻译、用例补充等轻量贡献
 
-## Platform Support
+---
 
-| Platform | Architecture | Rendering |
-|----------|-------------|-----------|
-| macOS | aarch64, x86_64 | Metal |
-| Linux | x86_64 | Vulkan |
-| Windows | x86_64 | — |
-
-## Installation
-
-Latest release: [v0.2.3](https://github.com/feigeCode/onetcli/releases/tag/v0.2.3)
-
-### Prerequisites
-
-- Rust (2024 edition)
-- Platform-specific dependencies (see below)
-
-### System Dependencies
-
-**macOS / Linux:**
-
-```bash
-./script/bootstrap
-```
-
-**Windows (PowerShell):**
-
-```powershell
-.\script\install-window.ps1
-```
-
-### Build & Run
-
-```bash
-cargo run -p main
-```
-
-### macOS Troubleshooting
-
-If macOS blocks the app from opening after installing the DMG ("Apple cannot check it for malicious software"), run:
-
-```bash
-sudo xattr -rd com.apple.quarantine /Applications/OnetCli.app
-```
-
-### Oracle Support
-
-Oracle connections require [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html) (Basic package) to be installed on your system. Download the version matching your platform and ensure the libraries are in your library search path.
-
-## Development
-
-```bash
-# Build
-cargo build
-
-# Test
-cargo test --all
-
-# Lint
-cargo clippy -- --deny warnings
-
-# Format check
-cargo fmt --check
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
-
-## Tech Stack
-
-| Category | Technologies |
-|----------|-------------|
-| UI Framework | [GPUI](https://gpui.rs) (from Zed editor) |
-| Databases | tokio-postgres, mysql_async, rusqlite, tiberius, oracle, clickhouse, redis, mongodb |
-| SSH/SFTP | russh, russh-sftp |
-| Terminal | alacritty_terminal |
-| Text Editing | ropey, tree-sitter, sqlparser |
-| AI | llm-connector (streaming) |
-| Encryption | aes-gcm, sha2, ed25519 |
-| i18n | rust-i18n |
-
-## License
-
-Licensed under [Apache License 2.0](LICENSE-APACHE).
-
-The distribution and use of the OnetCli application are additionally subject to the [OnetCli Supplementary License](ONETCLI_LICENSE), which adds the following restrictions on top of Apache 2.0:
-
-- No redistribution, resale, or repackaging as a standalone product
-- No creating competing products or services based on this software
-- No hosting on unauthorized distribution platforms
-
-For licensing inquiries, contact xiaofei.hf@gmail.com.
+> Thanks to every friend who uses, feedbacks and supports OnetCli 🥳
+> 感谢每一位使用、反馈、支持 OnetCli 的朋友 🥳
+> Project URL / 项目地址：https://github.com/feigeCode/onetcli
