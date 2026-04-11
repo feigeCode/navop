@@ -15,11 +15,11 @@ use std::cell::{Cell as StdCell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::history_prompt::HistoryPromptState;
 use crate::addon::{
     register_default_addons, AddonManager, SearchAddon, TerminalAddonFrameContext,
     TerminalAddonMouseContext,
 };
+use crate::history_prompt::HistoryPromptState;
 use crate::sidebar::{SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
 use crate::terminal_element::{RenderCache, TerminalElement};
 use crate::theme::{TerminalTheme, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE};
@@ -811,11 +811,6 @@ impl TerminalView {
         true
     }
 
-    fn replace_shell_input_with_history(&mut self, command: &str, cx: &mut Context<Self>) {
-        self.write_to_pty(vec![0x15], cx);
-        self.write_to_pty(command.as_bytes().to_vec(), cx);
-    }
-
     fn try_navigate_history_prompt(&mut self, previous: bool, cx: &mut Context<Self>) -> bool {
         if !self.history_prompt_enabled(cx) {
             return false;
@@ -830,21 +825,18 @@ impl TerminalView {
         } else {
             self.history_prompt.navigate_next()
         };
-        let Some(command) = command else {
+        if command.is_none() {
             return false;
-        };
-
-        self.replace_shell_input_with_history(&command, cx);
+        }
+        cx.notify();
         true
     }
 
     fn select_history_prompt_match(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(command) = self.history_prompt.select_match(index) else {
+        let Some(_) = self.history_prompt.select_match(index) else {
             return;
         };
-        self.replace_shell_input_with_history(&command, cx);
-        self.dismiss_history_prompt_matches();
-        cx.notify();
+        let _ = self.try_accept_history_prompt(cx);
     }
 
     fn render_history_prompt_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1320,6 +1312,13 @@ impl TerminalView {
 
         let modifiers = event.keystroke.modifiers;
         let key = event.keystroke.key.as_str();
+
+        if modifiers.control && !modifiers.alt && !modifiers.platform {
+            match key {
+                "u" | "c" => self.clear_history_prompt(),
+                _ => self.invalidate_history_prompt(),
+            }
+        }
 
         if !modifiers.control && !modifiers.alt && !modifiers.platform {
             match key {
@@ -2211,6 +2210,8 @@ impl TerminalView {
             return;
         }
 
+        self.invalidate_history_prompt();
+
         let bounds = self.terminal_bounds;
 
         let point = self.pixel_to_point(event.position, bounds, cx);
@@ -2917,12 +2918,12 @@ impl Element for ResizeEventHandler {
 
 #[cfg(test)]
 mod tests {
-    use crate::history_prompt::HistoryPromptState;
     use super::{
         alt_screen_scroll_arrow, detect_unbracketed_paste_hazard, has_trailing_line_continuation,
         has_unterminated_shell_quote, multiline_non_empty_line_count,
         should_scroll_to_bottom_on_user_input, take_whole_scroll_lines, UnbracketedPasteHazard,
     };
+    use crate::history_prompt::HistoryPromptState;
     use std::cell::Cell as StdCell;
 
     #[test]

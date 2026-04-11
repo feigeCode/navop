@@ -1,20 +1,18 @@
 #[derive(Clone, Debug, Default)]
 pub struct HistoryPromptState {
     input: String,
-    valid: bool,
+    tracking: bool,
     matches: Vec<String>,
     selected: Option<usize>,
-    original_input: Option<String>,
 }
 
 impl HistoryPromptState {
     pub fn from_input(input: impl Into<String>) -> Self {
         Self {
             input: input.into(),
-            valid: true,
+            tracking: true,
             matches: Vec::new(),
             selected: None,
-            original_input: None,
         }
     }
 
@@ -23,7 +21,7 @@ impl HistoryPromptState {
     }
 
     pub fn query_input(&self) -> &str {
-        self.original_input.as_deref().unwrap_or(&self.input)
+        &self.input
     }
 
     pub fn matches(&self) -> &[String] {
@@ -31,49 +29,47 @@ impl HistoryPromptState {
     }
 
     pub fn is_valid(&self) -> bool {
-        self.valid
+        self.tracking
     }
 
     pub fn clear(&mut self) {
         self.input.clear();
-        self.valid = true;
+        self.tracking = true;
         self.matches.clear();
         self.selected = None;
-        self.original_input = None;
     }
 
     pub fn dismiss_matches(&mut self) {
         self.matches.clear();
         self.selected = None;
-        self.original_input = None;
     }
 
     pub fn invalidate(&mut self) {
-        self.valid = false;
+        self.tracking = false;
         self.matches.clear();
         self.selected = None;
-        self.original_input = None;
     }
 
     pub fn set_input(&mut self, input: String) {
         self.input = input;
-        self.valid = true;
+        self.tracking = true;
         self.selected = None;
-        self.original_input = None;
     }
 
     pub fn append_text(&mut self, text: &str) {
+        if !self.tracking {
+            return;
+        }
         self.input.push_str(text);
-        self.valid = true;
         self.selected = None;
-        self.original_input = None;
     }
 
     pub fn backspace(&mut self) {
+        if !self.tracking {
+            return;
+        }
         self.input.pop();
-        self.valid = true;
         self.selected = None;
-        self.original_input = None;
     }
 
     pub fn apply_paste(&mut self, text: &str) {
@@ -85,17 +81,15 @@ impl HistoryPromptState {
     }
 
     pub fn set_matches(&mut self, matches: Vec<String>) {
-        if !self.valid {
+        if !self.tracking {
             self.matches.clear();
             self.selected = None;
-            self.original_input = None;
             return;
         }
 
         self.matches = matches;
         if self.matches.is_empty() {
             self.selected = None;
-            self.original_input = None;
         } else if let Some(selected) = self.selected {
             self.selected = Some(selected.min(self.matches.len().saturating_sub(1)));
         }
@@ -118,28 +112,19 @@ impl HistoryPromptState {
             return None;
         }
         self.input = candidate;
-        self.selected = Some(self.selected.unwrap_or(0));
-        self.original_input = None;
+        self.selected = None;
         Some(suffix)
     }
 
     pub fn select_match(&mut self, index: usize) -> Option<String> {
         let candidate = self.matches.get(index)?.clone();
-        if self.original_input.is_none() {
-            self.original_input = Some(self.input.clone());
-        }
         self.selected = Some(index);
-        self.input = candidate.clone();
         Some(candidate)
     }
 
     pub fn navigate_previous(&mut self) -> Option<String> {
-        if !self.valid || self.matches.is_empty() {
+        if !self.tracking || self.matches.is_empty() {
             return None;
-        }
-
-        if self.original_input.is_none() {
-            self.original_input = Some(self.input.clone());
         }
 
         let next_index = match self.selected {
@@ -147,38 +132,70 @@ impl HistoryPromptState {
             None => 0,
         };
         self.selected = Some(next_index);
-        self.input = self.matches[next_index].clone();
-        Some(self.input.clone())
+        Some(self.matches[next_index].clone())
     }
 
     pub fn navigate_next(&mut self) -> Option<String> {
-        if !self.valid || self.matches.is_empty() {
+        if !self.tracking || self.matches.is_empty() {
             return None;
         }
 
         match self.selected {
             None => {
-                if self.original_input.is_none() {
-                    self.original_input = Some(self.input.clone());
-                }
                 self.selected = Some(0);
-                self.input = self.matches[0].clone();
-                Some(self.input.clone())
+                Some(self.matches[0].clone())
             }
             Some(index) if index > 0 => {
                 let next_index = index - 1;
                 self.selected = Some(next_index);
-                self.input = self.matches[next_index].clone();
-                Some(self.input.clone())
+                Some(self.matches[next_index].clone())
             }
             Some(0) => {
-                let original = self.original_input.clone().unwrap_or_default();
                 self.selected = None;
-                self.original_input = None;
-                self.input = original.clone();
-                Some(original)
+                Some(self.input.clone())
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HistoryPromptState;
+
+    #[test]
+    fn history_prompt_invalidate_suspends_tracking_until_clear() {
+        let mut state = HistoryPromptState::from_input("git");
+
+        state.invalidate();
+        state.append_text(" status");
+
+        assert!(!state.is_valid());
+        assert_eq!(state.input(), "git");
+        assert!(state.matches().is_empty());
+
+        state.clear();
+        state.append_text("cargo");
+
+        assert!(state.is_valid());
+        assert_eq!(state.input(), "cargo");
+    }
+
+    #[test]
+    fn history_prompt_navigation_does_not_overwrite_input_query() {
+        let mut state = HistoryPromptState::from_input("git s");
+        state.set_matches(vec![
+            "git status".to_string(),
+            "git stash".to_string(),
+            "git switch".to_string(),
+        ]);
+
+        assert_eq!(state.navigate_previous().as_deref(), Some("git status"));
+        assert_eq!(state.input(), "git s");
+        assert_eq!(state.query_input(), "git s");
+
+        assert_eq!(state.navigate_previous().as_deref(), Some("git stash"));
+        assert_eq!(state.input(), "git s");
+        assert_eq!(state.query_input(), "git s");
     }
 }
