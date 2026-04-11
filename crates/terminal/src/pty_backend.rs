@@ -28,6 +28,10 @@ pub enum TerminalEvent {
     ClipboardLoad(ClipboardType),
     /// 远程工作目录变更（OSC 7）
     WorkingDirChanged(String),
+    /// 命令执行完毕（OSC 133;D）
+    CommandFinished { exit_code: i32 },
+    /// 记录 shell 实际执行过的命令
+    CommandRecorded(String),
 }
 
 /// Commands from UI layer to PTY backend

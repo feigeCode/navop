@@ -15,6 +15,7 @@ use std::cell::{Cell as StdCell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::history_prompt::HistoryPromptState;
 use crate::addon::{
     register_default_addons, AddonManager, SearchAddon, TerminalAddonFrameContext,
     TerminalAddonMouseContext,
@@ -91,6 +92,7 @@ const TERMINAL_TOGGLE_VI_MODE_SHORTCUT: &str = "f7";
 const DEFAULT_CELL_WIDTH: Pixels = px(8.0);
 const DEFAULT_COLS: usize = 80;
 const DEFAULT_ROWS: usize = 24;
+const HISTORY_SUGGESTION_LIMIT: usize = 6;
 
 fn take_whole_scroll_lines(scroll_lines_accumulated: &mut f32) -> i32 {
     let lines = scroll_lines_accumulated.trunc() as i32;
@@ -303,6 +305,7 @@ pub struct TerminalView {
     terminal_bounds: Bounds<Pixels>,
 
     ime_state: Option<ImeState>,
+    history_prompt: HistoryPromptState,
 
     current_theme: TerminalTheme,
 
@@ -616,6 +619,7 @@ impl TerminalView {
             focus_handle,
             terminal_bounds: Bounds::default(),
             ime_state: None,
+            history_prompt: HistoryPromptState::default(),
             current_theme: default_theme,
             tab_index,
             cursor_blink_enabled: false,
@@ -743,6 +747,210 @@ impl TerminalView {
         cx.notify();
     }
 
+    fn history_prompt_enabled(&self, cx: &App) -> bool {
+        let terminal = self.terminal.read(cx);
+        let mode = terminal.mode();
+        let connection_kind = terminal.connection_kind();
+        matches!(
+            connection_kind,
+            TerminalConnectionKind::Local | TerminalConnectionKind::Ssh
+        ) && !mode.contains(TermMode::ALT_SCREEN)
+            && !mode.contains(TermMode::VI)
+    }
+
+    fn refresh_history_prompt_matches(&mut self, cx: &App) {
+        if !self.history_prompt_enabled(cx) || !self.history_prompt.is_valid() {
+            self.history_prompt.set_matches(Vec::new());
+            return;
+        }
+
+        let suggestions = self
+            .terminal
+            .read(cx)
+            .history_suggestions(self.history_prompt.query_input(), HISTORY_SUGGESTION_LIMIT);
+        self.history_prompt.set_matches(suggestions);
+    }
+
+    fn invalidate_history_prompt(&mut self) {
+        self.history_prompt.invalidate();
+    }
+
+    fn apply_inline_input_to_history_prompt(&mut self, text: &str, cx: &App) {
+        if !self.history_prompt_enabled(cx) {
+            self.invalidate_history_prompt();
+            return;
+        }
+        self.history_prompt.append_text(text);
+        self.refresh_history_prompt_matches(cx);
+    }
+
+    fn apply_paste_to_history_prompt(&mut self, text: &str, cx: &App) {
+        if !self.history_prompt_enabled(cx) {
+            self.invalidate_history_prompt();
+            return;
+        }
+        self.history_prompt.apply_paste(text);
+        self.refresh_history_prompt_matches(cx);
+    }
+
+    fn clear_history_prompt(&mut self) {
+        self.history_prompt.clear();
+    }
+
+    fn dismiss_history_prompt_matches(&mut self) {
+        self.history_prompt.dismiss_matches();
+    }
+
+    fn try_accept_history_prompt(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(suffix) = self.history_prompt.accept_selected_suggestion() else {
+            return false;
+        };
+        self.write_to_pty(suffix.into_bytes(), cx);
+        self.dismiss_history_prompt_matches();
+        cx.notify();
+        true
+    }
+
+    fn replace_shell_input_with_history(&mut self, command: &str, cx: &mut Context<Self>) {
+        self.write_to_pty(vec![0x15], cx);
+        self.write_to_pty(command.as_bytes().to_vec(), cx);
+    }
+
+    fn try_navigate_history_prompt(&mut self, previous: bool, cx: &mut Context<Self>) -> bool {
+        if !self.history_prompt_enabled(cx) {
+            return false;
+        }
+
+        if self.history_prompt.matches().is_empty() {
+            self.refresh_history_prompt_matches(cx);
+        }
+
+        let command = if previous {
+            self.history_prompt.navigate_previous()
+        } else {
+            self.history_prompt.navigate_next()
+        };
+        let Some(command) = command else {
+            return false;
+        };
+
+        self.replace_shell_input_with_history(&command, cx);
+        true
+    }
+
+    fn select_history_prompt_match(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(command) = self.history_prompt.select_match(index) else {
+            return;
+        };
+        self.replace_shell_input_with_history(&command, cx);
+        self.dismiss_history_prompt_matches();
+        cx.notify();
+    }
+
+    fn render_history_prompt_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.history_prompt_enabled(cx) || !self.history_prompt.is_valid() {
+            return None;
+        }
+
+        let selected = self.history_prompt.selected_match()?;
+        let ghost_suffix = selected
+            .strip_prefix(self.history_prompt.query_input())
+            .unwrap_or_default()
+            .to_string();
+        let matches = self.history_prompt.matches().to_vec();
+        if matches.is_empty() {
+            return None;
+        }
+
+        let (cursor_line, cursor_col) = {
+            let terminal = self.terminal.read(cx);
+            let term = terminal.term().lock();
+            let cursor = term.grid().cursor.point;
+            let display_offset = term.grid().display_offset() as i32;
+            (cursor.line.0 + display_offset, cursor.column.0)
+        };
+
+        if cursor_line < 0 {
+            return None;
+        }
+
+        let content_left = px(12.0);
+        let content_top = px(12.0);
+        let ghost_left = content_left + self.cell_width * cursor_col as f32;
+        let ghost_top = content_top + self.line_height * cursor_line as f32;
+        let dropdown_top = ghost_top + self.line_height + px(6.0);
+        let selected_index = self.history_prompt.selected_index();
+        let view = cx.entity().clone();
+
+        Some(
+            div()
+                .absolute()
+                .left(px(0.0))
+                .top(px(0.0))
+                .right(px(0.0))
+                .bottom(px(0.0))
+                .child(
+                    div()
+                        .absolute()
+                        .left(ghost_left)
+                        .top(ghost_top)
+                        .text_color(self.current_theme.foreground.opacity(0.35))
+                        .text_size(self.current_theme.font_size)
+                        .child(ghost_suffix),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(content_left)
+                        .top(dropdown_top)
+                        .min_w(px(260.0))
+                        .max_w(px(420.0))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .bg(self.current_theme.background.opacity(0.96))
+                        .border_1()
+                        .border_color(self.current_theme.foreground.opacity(0.18))
+                        .children(matches.into_iter().enumerate().map(|(index, command)| {
+                            let active = index == selected_index;
+                            div()
+                                .on_mouse_down(MouseButton::Left, {
+                                    let view = view.clone();
+                                    move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        view.update(cx, |this, cx| {
+                                            this.select_history_prompt_match(index, cx);
+                                        });
+                                    }
+                                })
+                                .cursor_pointer()
+                                .on_mouse_move(|_, _, cx| {
+                                    cx.stop_propagation();
+                                })
+                                .px_2()
+                                .py_1()
+                                .rounded_sm()
+                                .bg(if active {
+                                    self.current_theme.foreground.opacity(0.14)
+                                } else {
+                                    transparent_black()
+                                })
+                                .text_color(if active {
+                                    self.current_theme.foreground
+                                } else {
+                                    self.current_theme.foreground.opacity(0.8)
+                                })
+                                .text_size(px(12.0))
+                                .child(command)
+                        })),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn handle_terminal_event(
         &mut self,
         _terminal: Entity<Terminal>,
@@ -751,6 +959,7 @@ impl TerminalView {
     ) {
         match event {
             TerminalModelEvent::Wakeup => {
+                self.refresh_history_prompt_matches(cx);
                 cx.notify();
             }
             TerminalModelEvent::TitleChanged(_) => {
@@ -1030,6 +1239,7 @@ impl TerminalView {
 
     fn commit_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if !text.is_empty() {
+            self.apply_inline_input_to_history_prompt(text, cx);
             self.write_to_pty(text.as_bytes().to_vec(), cx);
         }
     }
@@ -1103,8 +1313,57 @@ impl TerminalView {
         let mode = self.terminal.read(cx).mode();
 
         if mode.contains(TermMode::VI) {
+            self.invalidate_history_prompt();
             self.handle_vi_key_event(event, cx);
             return;
+        }
+
+        let modifiers = event.keystroke.modifiers;
+        let key = event.keystroke.key.as_str();
+
+        if !modifiers.control && !modifiers.alt && !modifiers.platform {
+            match key {
+                "up" if self.try_navigate_history_prompt(false, cx) => return,
+                "down" if self.try_navigate_history_prompt(true, cx) => return,
+                "right" if self.try_accept_history_prompt(cx) => return,
+                "backspace" => {
+                    if self.history_prompt_enabled(cx) {
+                        self.history_prompt.backspace();
+                        self.refresh_history_prompt_matches(cx);
+                    }
+                }
+                "enter" => {
+                    if self.connection_kind(cx) == TerminalConnectionKind::Local
+                        && self.history_prompt.is_valid()
+                    {
+                        let command = self.history_prompt.input().to_string();
+                        self.terminal.update(cx, |terminal, cx| {
+                            terminal.record_command(&command, cx);
+                        });
+                    }
+                    self.clear_history_prompt();
+                }
+                "left" | "home" | "end" | "delete" | "pageup" | "pagedown" => {
+                    self.invalidate_history_prompt();
+                }
+                "escape" => {
+                    self.dismiss_history_prompt_matches();
+                }
+                "space" => {
+                    self.apply_inline_input_to_history_prompt(" ", cx);
+                }
+                _ => {
+                    if !modifiers.shift {
+                        if key.len() == 1 {
+                            self.apply_inline_input_to_history_prompt(key, cx);
+                        }
+                    } else if key.len() == 1 {
+                        self.apply_inline_input_to_history_prompt(key, cx);
+                    }
+                }
+            }
+        } else {
+            self.invalidate_history_prompt();
         }
 
         if let Some(esc_str) = crate::keys::to_esc_str(&event.keystroke, &mode, false) {
@@ -1322,6 +1581,7 @@ impl TerminalView {
         // 仅在应用请求 bracketed paste 模式时才包装，避免把控制序列
         // 原样送进不支持的程序（例如 Vim 未开启时可能导致光标/位置异常）。
         let mode = self.terminal.read(cx).mode();
+        self.apply_paste_to_history_prompt(text, cx);
         if mode.contains(TermMode::BRACKETED_PASTE) {
             let paste_text = format!("\x1b[200~{}\x1b[201~", text.replace('\x1b', ""));
             self.write_to_pty(paste_text.into_bytes(), cx);
@@ -2112,6 +2372,9 @@ impl TerminalView {
     }
 
     fn send_tab(&mut self, _: &SendTab, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.try_accept_history_prompt(cx) {
+            return;
+        }
         self.write_to_pty(b"\x09".to_vec(), cx);
     }
 
@@ -2383,6 +2646,9 @@ impl Render for TerminalView {
                                 )
                             })
                     })
+                    .when_some(self.render_history_prompt_overlay(cx), |this, overlay| {
+                        this.child(overlay)
+                    })
                     .when_some(tooltip.zip(mouse_pos), |this, (tooltip, pos)| {
                         let relative_x = pos.x - terminal_bounds.origin.x;
                         let relative_y = pos.y - terminal_bounds.origin.y;
@@ -2651,6 +2917,7 @@ impl Element for ResizeEventHandler {
 
 #[cfg(test)]
 mod tests {
+    use crate::history_prompt::HistoryPromptState;
     use super::{
         alt_screen_scroll_arrow, detect_unbracketed_paste_hazard, has_trailing_line_continuation,
         has_unterminated_shell_quote, multiline_non_empty_line_count,
@@ -2734,6 +3001,70 @@ mod tests {
         );
         assert!(!has_unterminated_shell_quote("printf '%s\\n' hello"));
         assert!(!has_trailing_line_continuation("echo hello\necho world"));
+    }
+
+    #[test]
+    fn history_prompt_accepts_selected_suggestion_suffix() {
+        let mut state = HistoryPromptState::from_input("git st");
+        state.set_matches(vec!["git status".to_string()]);
+
+        let accepted = state.accept_selected_suggestion();
+
+        assert_eq!(accepted.as_deref(), Some("atus"));
+        assert_eq!(state.input(), "git status");
+    }
+
+    #[test]
+    fn history_prompt_navigation_restores_original_input() {
+        let mut state = HistoryPromptState::from_input("git");
+        state.set_matches(vec![
+            "git status".to_string(),
+            "git stash".to_string(),
+            "git switch".to_string(),
+        ]);
+
+        assert_eq!(state.navigate_previous().as_deref(), Some("git status"));
+        assert_eq!(state.navigate_previous().as_deref(), Some("git stash"));
+        assert_eq!(state.navigate_next().as_deref(), Some("git status"));
+        assert_eq!(state.navigate_next().as_deref(), Some("git"));
+    }
+
+    #[test]
+    fn history_prompt_keeps_query_prefix_while_browsing_matches() {
+        let mut state = HistoryPromptState::from_input("git s");
+        state.set_matches(vec![
+            "git status".to_string(),
+            "git stash".to_string(),
+            "git switch".to_string(),
+        ]);
+
+        assert_eq!(state.query_input(), "git s");
+        assert_eq!(state.navigate_previous().as_deref(), Some("git status"));
+        assert_eq!(state.query_input(), "git s");
+        assert_eq!(state.navigate_previous().as_deref(), Some("git stash"));
+        assert_eq!(state.query_input(), "git s");
+    }
+
+    #[test]
+    fn history_prompt_invalidates_multiline_paste() {
+        let mut state = HistoryPromptState::from_input("git");
+
+        state.apply_paste("status\nlog");
+
+        assert!(!state.is_valid());
+        assert!(state.matches().is_empty());
+    }
+
+    #[test]
+    fn history_prompt_dismiss_keeps_current_input() {
+        let mut state = HistoryPromptState::from_input("git s");
+        state.set_matches(vec!["git status".to_string(), "git stash".to_string()]);
+
+        state.dismiss_matches();
+
+        assert_eq!(state.input(), "git s");
+        assert_eq!(state.query_input(), "git s");
+        assert!(state.matches().is_empty());
     }
 
     #[test]
