@@ -19,7 +19,7 @@ use crate::addon::{
     register_default_addons, AddonManager, SearchAddon, TerminalAddonFrameContext,
     TerminalAddonMouseContext,
 };
-use crate::history_prompt::HistoryPromptState;
+use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
 use crate::sidebar::{SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
 use crate::terminal_element::{RenderCache, TerminalElement};
 use crate::theme::{TerminalTheme, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE};
@@ -759,16 +759,25 @@ impl TerminalView {
     }
 
     fn refresh_history_prompt_matches(&mut self, cx: &App) {
-        if !self.history_prompt_enabled(cx) || !self.history_prompt.is_valid() {
+        if !self.history_prompt_enabled(cx) {
+            self.invalidate_history_prompt();
             self.history_prompt.set_matches(Vec::new());
             return;
         }
 
-        let suggestions = self
-            .terminal
-            .read(cx)
-            .history_suggestions(self.history_prompt.query_input(), HISTORY_SUGGESTION_LIMIT);
-        self.history_prompt.set_matches(suggestions);
+        if !self.history_prompt.is_valid() {
+            self.history_prompt.set_matches(Vec::new());
+            return;
+        }
+
+        let terminal = self.terminal.read(cx);
+        let matches = match self.history_prompt.mode() {
+            HistoryPromptMode::InlineSuggest => terminal
+                .history_suggestions(self.history_prompt.query_input(), HISTORY_SUGGESTION_LIMIT),
+            HistoryPromptMode::Search => terminal
+                .history_search_results(self.history_prompt.query_input(), HISTORY_SUGGESTION_LIMIT),
+        };
+        self.history_prompt.set_matches(matches);
     }
 
     fn invalidate_history_prompt(&mut self) {
@@ -797,15 +806,52 @@ impl TerminalView {
         self.history_prompt.clear();
     }
 
+    fn start_history_search(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.history_prompt_enabled(cx) || !self.history_prompt.is_valid() {
+            self.invalidate_history_prompt();
+            return false;
+        }
+
+        if self.history_prompt.mode() == HistoryPromptMode::Search {
+            return self.try_navigate_history_prompt(true, cx);
+        }
+
+        self.history_prompt.enter_search();
+        self.refresh_history_prompt_matches(cx);
+        cx.notify();
+        true
+    }
+
+    fn exit_history_search(&mut self, cx: &mut Context<Self>) {
+        if self.history_prompt.mode() != HistoryPromptMode::Search {
+            return;
+        }
+        self.history_prompt.exit_search();
+        self.refresh_history_prompt_matches(cx);
+        cx.notify();
+    }
+
     fn dismiss_history_prompt_matches(&mut self) {
         self.history_prompt.dismiss_matches();
     }
 
+    fn replace_history_prompt_line(&mut self, command: &str, cx: &mut Context<Self>) {
+        let mut bytes = Vec::with_capacity(command.len() + 1);
+        bytes.extend_from_slice(b"\x15");
+        bytes.extend_from_slice(command.as_bytes());
+        self.write_to_pty(bytes, cx);
+    }
+
     fn try_accept_history_prompt(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(suffix) = self.history_prompt.accept_selected_suggestion() else {
+        let Some(accepted) = self.history_prompt.accept_selected_suggestion() else {
             return false;
         };
-        self.write_to_pty(suffix.into_bytes(), cx);
+        match accepted {
+            HistoryPromptAccept::AppendSuffix(suffix) => self.write_to_pty(suffix.into_bytes(), cx),
+            HistoryPromptAccept::ReplaceLine(command) => {
+                self.replace_history_prompt_line(&command, cx);
+            }
+        }
         self.dismiss_history_prompt_matches();
         cx.notify();
         true
@@ -844,13 +890,9 @@ impl TerminalView {
             return None;
         }
 
-        let selected = self.history_prompt.selected_match()?;
-        let ghost_suffix = selected
-            .strip_prefix(self.history_prompt.query_input())
-            .unwrap_or_default()
-            .to_string();
+        let search_mode = self.history_prompt.mode() == HistoryPromptMode::Search;
         let matches = self.history_prompt.matches().to_vec();
-        if matches.is_empty() {
+        if !search_mode && matches.is_empty() {
             return None;
         }
 
@@ -872,7 +914,18 @@ impl TerminalView {
         let ghost_top = content_top + self.line_height * cursor_line as f32;
         let dropdown_top = ghost_top + self.line_height + px(6.0);
         let selected_index = self.history_prompt.selected_index();
+        let search_query = self.history_prompt.query_input().to_string();
         let view = cx.entity().clone();
+        let ghost_suffix = if search_mode {
+            None
+        } else {
+            self.history_prompt.selected_match().map(|selected| {
+                selected
+                    .strip_prefix(self.history_prompt.query_input())
+                    .unwrap_or_default()
+                    .to_string()
+            })
+        };
 
         Some(
             div()
@@ -881,15 +934,17 @@ impl TerminalView {
                 .top(px(0.0))
                 .right(px(0.0))
                 .bottom(px(0.0))
-                .child(
-                    div()
-                        .absolute()
-                        .left(ghost_left)
-                        .top(ghost_top)
-                        .text_color(self.current_theme.foreground.opacity(0.35))
-                        .text_size(self.current_theme.font_size)
-                        .child(ghost_suffix),
-                )
+                .when_some(ghost_suffix, |this, ghost_suffix| {
+                    this.child(
+                        div()
+                            .absolute()
+                            .left(ghost_left)
+                            .top(ghost_top)
+                            .text_color(self.current_theme.foreground.opacity(0.35))
+                            .text_size(self.current_theme.font_size)
+                            .child(ghost_suffix),
+                    )
+                })
                 .child(
                     div()
                         .absolute()
@@ -906,6 +961,16 @@ impl TerminalView {
                         .bg(self.current_theme.background.opacity(0.96))
                         .border_1()
                         .border_color(self.current_theme.foreground.opacity(0.18))
+                        .when(search_mode, |this| {
+                            this.child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .text_color(self.current_theme.foreground.opacity(0.7))
+                                    .text_size(px(11.0))
+                                    .child(format!("history search: {}", search_query)),
+                            )
+                        })
                         .children(matches.into_iter().enumerate().map(|(index, command)| {
                             let active = index == selected_index;
                             div()
@@ -1312,6 +1377,49 @@ impl TerminalView {
 
         let modifiers = event.keystroke.modifiers;
         let key = event.keystroke.key.as_str();
+
+        if modifiers.control && !modifiers.alt && !modifiers.platform && key == "r" {
+            if self.start_history_search(cx) {
+                return;
+            }
+        }
+
+        if self.history_prompt.mode() == HistoryPromptMode::Search {
+            if !modifiers.control && !modifiers.alt && !modifiers.platform {
+                match key {
+                    "up" if self.try_navigate_history_prompt(false, cx) => return,
+                    "down" if self.try_navigate_history_prompt(true, cx) => return,
+                    "right" | "enter" if self.try_accept_history_prompt(cx) => return,
+                    "backspace" => {
+                        self.history_prompt.backspace();
+                        self.refresh_history_prompt_matches(cx);
+                        cx.notify();
+                        return;
+                    }
+                    "escape" => {
+                        self.exit_history_search(cx);
+                        return;
+                    }
+                    "space" => {
+                        self.history_prompt.append_text(" ");
+                        self.refresh_history_prompt_matches(cx);
+                        cx.notify();
+                        return;
+                    }
+                    _ if key.len() == 1 => {
+                        self.history_prompt.append_text(key);
+                        self.refresh_history_prompt_matches(cx);
+                        cx.notify();
+                        return;
+                    }
+                    _ => {
+                        self.invalidate_history_prompt();
+                    }
+                }
+            } else {
+                self.invalidate_history_prompt();
+            }
+        }
 
         if modifiers.control && !modifiers.alt && !modifiers.platform {
             match key {
@@ -2923,7 +3031,7 @@ mod tests {
         has_unterminated_shell_quote, multiline_non_empty_line_count,
         should_scroll_to_bottom_on_user_input, take_whole_scroll_lines, UnbracketedPasteHazard,
     };
-    use crate::history_prompt::HistoryPromptState;
+    use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use std::cell::Cell as StdCell;
 
     #[test]
@@ -3011,7 +3119,7 @@ mod tests {
 
         let accepted = state.accept_selected_suggestion();
 
-        assert_eq!(accepted.as_deref(), Some("atus"));
+        assert_eq!(accepted, Some(HistoryPromptAccept::AppendSuffix("atus".to_string())));
         assert_eq!(state.input(), "git status");
     }
 

@@ -35,8 +35,8 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use crate::history::{
-    collect_history_suggestions, parse_shell_history, push_history_entry, ShellHistoryFormat,
-    PERSISTED_HISTORY_LIMIT, SESSION_HISTORY_LIMIT,
+    collect_history_search_results, collect_history_suggestions, parse_shell_history,
+    push_history_entry, ShellHistoryFormat, PERSISTED_HISTORY_LIMIT, SESSION_HISTORY_LIMIT,
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 
@@ -1070,6 +1070,10 @@ impl Terminal {
             prefix,
             limit,
         )
+    }
+
+    pub fn history_search_results(&self, query: &str, limit: usize) -> Vec<String> {
+        collect_history_search_results(&self.session_history, &self.persisted_history, query, limit)
     }
 
     pub fn record_command(&mut self, command: &str, cx: &mut Context<Self>) {
