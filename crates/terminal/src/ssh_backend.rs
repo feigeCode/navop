@@ -20,56 +20,108 @@ fn shell_double_quote(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShellIntegrationSetup {
+    home_dir: String,
+    session_dir: String,
+    login_shell: Option<String>,
+}
+
+fn remote_session_key(connection_id: Option<i64>) -> String {
+    connection_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "adhoc".to_string())
+}
+
+fn shell_basename(shell: &str) -> &str {
+    shell.rsplit('/').next().unwrap_or(shell)
+}
+
+fn extract_marker_value(output: &str, marker: &str) -> Option<String> {
+    output
+        .lines()
+        .find_map(|line| line.strip_prefix(marker).map(str::to_string))
+}
+
 fn build_shell_integration_setup_script(
     script: &str,
-    remote_path: &str,
-    rc_files: &[&str],
+    session_key: &str,
     success_marker: &str,
+    home_marker: &str,
+    session_marker: &str,
+    shell_marker: &str,
 ) -> String {
-    let marker = shell_single_quote("# onetcli shell integration");
     let script = shell_single_quote(script);
-    let setup_line =
-        shell_single_quote(&format!("[ -f \"{remote_path}\" ] && . \"{remote_path}\""));
+    let integration_source = format!("$HOME/.config/onetcli/sessions/{session_key}/shell_integration.sh");
+    let session_key = shell_double_quote(session_key);
     let success_marker = shell_single_quote(success_marker);
-    let remote_path = shell_double_quote(remote_path);
-    let rc_files = rc_files
-        .iter()
-        .map(|path| format!("\"{}\"", shell_double_quote(path)))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let home_marker = shell_single_quote(home_marker);
+    let session_marker = shell_single_quote(session_marker);
+    let shell_marker = shell_single_quote(shell_marker);
+    let zshenv = shell_single_quote(
+        "ZDOTDIR=\"${ONETCLI_ORIG_ZDOTDIR:-$HOME}\"\n\
+         [[ -f \"$ZDOTDIR/.zshenv\" ]] && . \"$ZDOTDIR/.zshenv\"\n",
+    );
+    let zshrc = shell_single_quote(
+        &format!(
+            "ZDOTDIR=\"${{ONETCLI_ORIG_ZDOTDIR:-$HOME}}\"\n\
+             [[ -f \"$ZDOTDIR/.zshrc\" ]] && . \"$ZDOTDIR/.zshrc\"\n\
+             . \"{integration_source}\"\n"
+        ),
+    );
+    let bashrc = shell_single_quote(
+        &format!(
+            "[ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"\n\
+             . \"{integration_source}\"\n"
+        ),
+    );
 
     format!(
         concat!(
             "set -e\n",
-            "remote_path=\"{remote_path}\"\n",
-            "mkdir -p \"$(dirname -- \"$remote_path\")\"\n",
-            "printf %s {script} > \"$remote_path\"\n",
-            "marker={marker}\n",
-            "setup_line={setup_line}\n",
-            "for rc_file in {rc_files}; do\n",
-            "    if ! grep -qF \"$marker\" \"$rc_file\" 2>/dev/null; then\n",
-            "        printf '\\n%s\\n%s\\n' \"$marker\" \"$setup_line\" >> \"$rc_file\"\n",
-            "    fi\n",
-            "done\n",
+            "session_dir=\"$HOME/.config/onetcli/sessions/{session_key}\"\n",
+            "integration_path=\"$session_dir/shell_integration.sh\"\n",
+            "zsh_dir=\"$session_dir/zsh\"\n",
+            "bash_dir=\"$session_dir/bash\"\n",
+            "mkdir -p \"$zsh_dir\" \"$bash_dir\"\n",
+            "printf %s {script} > \"$integration_path\"\n",
+            "printf %s {zshenv} > \"$zsh_dir/.zshenv\"\n",
+            "printf %s {zshrc} > \"$zsh_dir/.zshrc\"\n",
+            "printf %s {bashrc} > \"$bash_dir/.bashrc\"\n",
+            "printf '%s%s\\n' {home_marker} \"$HOME\"\n",
+            "printf '%s%s\\n' {session_marker} \"$session_dir\"\n",
+            "printf '%s%s\\n' {shell_marker} \"${{SHELL:-}}\"\n",
             "printf '%s\\n' {success_marker}\n"
         ),
-        remote_path = remote_path,
+        session_key = session_key,
         script = script,
-        marker = marker,
-        setup_line = setup_line,
-        rc_files = rc_files,
+        zshenv = zshenv,
+        zshrc = zshrc,
+        bashrc = bashrc,
         success_marker = success_marker,
+        home_marker = home_marker,
+        session_marker = session_marker,
+        shell_marker = shell_marker,
     )
 }
 
 fn build_shell_integration_setup_command(
     script: &str,
-    remote_path: &str,
-    rc_files: &[&str],
+    session_key: &str,
     success_marker: &str,
+    home_marker: &str,
+    session_marker: &str,
+    shell_marker: &str,
 ) -> String {
     let script =
-        build_shell_integration_setup_script(script, remote_path, rc_files, success_marker);
+        build_shell_integration_setup_script(
+            script,
+            session_key,
+            success_marker,
+            home_marker,
+            session_marker,
+            shell_marker,
+        );
     format!("sh -c {}", shell_single_quote(&script))
 }
 
@@ -87,6 +139,7 @@ impl SshBackend {
     pub async fn connect(
         config: SshConnectConfig,
         pty_config: PtyConfig,
+        connection_id: Option<i64>,
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
         event_proxy: GpuiEventProxy,
         event_tx: UnboundedSender<TerminalEvent>,
@@ -95,7 +148,7 @@ impl SshBackend {
         init_commands: Option<String>,
     ) -> anyhow::Result<Self> {
         let mut client = RusshClient::connect(config).await?;
-        let mut channel = Self::prepare_ssh_channel(&mut client, &pty_config).await?;
+        let mut channel = Self::prepare_ssh_channel(&mut client, &pty_config, connection_id).await?;
 
         // ③ init_commands 改为等 shell ready 后发送
         let pending_init = init_commands;
@@ -228,45 +281,46 @@ impl SshBackend {
     async fn prepare_ssh_channel<C: SshClient>(
         client: &mut C,
         pty_config: &PtyConfig,
+        connection_id: Option<i64>,
     ) -> anyhow::Result<C::Channel> {
         let mut setup_channel = client.open_channel().await?;
-        let setup_result = Self::run_shell_integration_setup(&mut setup_channel).await;
+        let setup_result =
+            Self::run_shell_integration_setup(&mut setup_channel, connection_id).await;
         let _ = setup_channel.close().await;
-        setup_result?;
+        let setup = setup_result?;
 
         let mut channel = client.open_channel().await?;
-        channel.request_pty(pty_config).await?;
-        channel.request_shell().await?;
+        Self::start_interactive_shell(&mut channel, pty_config, &setup).await?;
         Ok(channel)
     }
 
     /// 在 PTY 之前写入 integration 脚本。
-    async fn run_shell_integration_setup(channel: &mut dyn SshChannel) -> anyhow::Result<()> {
+    async fn run_shell_integration_setup(
+        channel: &mut dyn SshChannel,
+        connection_id: Option<i64>,
+    ) -> anyhow::Result<ShellIntegrationSetup> {
         const SCRIPT: &str = include_str!("shell_integration.sh");
-        const REMOTE_PATH: &str = "$HOME/.config/onetcli/shell_integration.sh";
         const SUCCESS_MARKER: &str = "__ONETCLI_SETUP_OK__";
+        const HOME_MARKER: &str = "__ONETCLI_HOME__=";
+        const SESSION_MARKER: &str = "__ONETCLI_SESSION_DIR__=";
+        const SHELL_MARKER: &str = "__ONETCLI_LOGIN_SHELL__=";
         let cmd = build_shell_integration_setup_command(
             SCRIPT,
-            REMOTE_PATH,
-            &["$HOME/.bashrc", "$HOME/.zshrc"],
+            &remote_session_key(connection_id),
             SUCCESS_MARKER,
+            HOME_MARKER,
+            SESSION_MARKER,
+            SHELL_MARKER,
         );
 
         channel.exec(&cmd).await?;
 
-        let mut setup_succeeded = false;
+        let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         loop {
             match channel.recv().await {
-                Some(ChannelEvent::Data(data)) => {
-                    if data
-                        .windows(SUCCESS_MARKER.len())
-                        .any(|w| w == SUCCESS_MARKER.as_bytes())
-                    {
-                        setup_succeeded = true;
-                    }
-                }
+                Some(ChannelEvent::Data(data)) => stdout.extend(data),
                 Some(ChannelEvent::ExtendedData { data, .. }) => {
                     stderr.extend(data);
                 }
@@ -276,23 +330,69 @@ impl SshBackend {
                         "shell integration setup failed with exit code {code}: {}",
                         String::from_utf8_lossy(&stderr).trim()
                     );
-                    anyhow::ensure!(
-                        setup_succeeded,
-                        "shell integration setup exited successfully but did not confirm completion"
-                    );
-                    return Ok(());
                 }
                 Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
+                    let output = String::from_utf8_lossy(&stdout);
                     anyhow::ensure!(
-                        setup_succeeded,
+                        output.contains(SUCCESS_MARKER),
                         "shell integration setup ended before confirming completion: {}",
                         String::from_utf8_lossy(&stderr).trim()
                     );
-                    return Ok(());
+                    let home_dir = extract_marker_value(&output, HOME_MARKER)
+                        .ok_or_else(|| anyhow::anyhow!("missing setup home directory marker"))?;
+                    let session_dir = extract_marker_value(&output, SESSION_MARKER)
+                        .ok_or_else(|| anyhow::anyhow!("missing setup session directory marker"))?;
+                    let login_shell = extract_marker_value(&output, SHELL_MARKER)
+                        .filter(|value| !value.trim().is_empty());
+                    return Ok(ShellIntegrationSetup {
+                        home_dir,
+                        session_dir,
+                        login_shell,
+                    });
                 }
                 _ => {}
             }
         }
+    }
+
+    async fn start_interactive_shell(
+        channel: &mut dyn SshChannel,
+        pty_config: &PtyConfig,
+        setup: &ShellIntegrationSetup,
+    ) -> anyhow::Result<()> {
+        channel
+            .set_env("ONETCLI_SHELL_INTEGRATION", "1")
+            .await?;
+        channel
+            .set_env("ONETCLI_ORIG_ZDOTDIR", &setup.home_dir)
+            .await?;
+
+        match setup.login_shell.as_deref().map(shell_basename) {
+            Some("zsh") => {
+                channel
+                    .set_env("ZDOTDIR", &format!("{}/zsh", setup.session_dir))
+                    .await?;
+                channel.request_pty(pty_config).await?;
+                channel.request_shell().await?;
+            }
+            Some("bash") => {
+                channel.request_pty(pty_config).await?;
+                let shell_path = setup.login_shell.as_deref().unwrap_or("bash");
+                let bash_rc = format!("{}/bash/.bashrc", setup.session_dir);
+                let command = format!(
+                    "exec {} --rcfile {} -i",
+                    shell_single_quote(shell_path),
+                    shell_single_quote(&bash_rc)
+                );
+                channel.exec(&command).await?;
+            }
+            _ => {
+                channel.request_pty(pty_config).await?;
+                channel.request_shell().await?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -310,6 +410,7 @@ mod tests {
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum ChannelOp {
         Exec,
+        SetEnv(String, String),
         RequestPty,
         RequestShell,
         Close,
@@ -374,6 +475,11 @@ mod tests {
         }
 
         async fn set_env(&mut self, _name: &str, _value: &str) -> Result<()> {
+            self.state
+                .lock()
+                .expect("mock channel state should lock")
+                .ops
+                .push(ChannelOp::SetEnv(_name.to_string(), _value.to_string()));
             Ok(())
         }
 
@@ -454,10 +560,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_ssh_channel_uses_dedicated_setup_channel() {
+    async fn prepare_ssh_channel_uses_dedicated_setup_channel_for_zsh() {
         let (setup_channel, setup_state) = MockChannel::new(
             [
-                ChannelEvent::Data(b"__ONETCLI_SETUP_OK__\n".to_vec()),
+                ChannelEvent::Data(
+                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli/sessions/42\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
+                        .to_vec(),
+                ),
                 ChannelEvent::ExitStatus(0),
             ],
             true,
@@ -465,7 +574,8 @@ mod tests {
         let (interactive_channel, interactive_state) = MockChannel::new([], false);
         let mut client = MockClient::new([setup_channel, interactive_channel]);
 
-        let result = SshBackend::prepare_ssh_channel(&mut client, &PtyConfig::default()).await;
+        let result =
+            SshBackend::prepare_ssh_channel(&mut client, &PtyConfig::default(), Some(42)).await;
 
         assert!(
             result.is_ok(),
@@ -477,15 +587,62 @@ mod tests {
         );
         assert_eq!(
             recorded_ops(&interactive_state),
-            vec![ChannelOp::RequestPty, ChannelOp::RequestShell]
+            vec![
+                ChannelOp::SetEnv("ONETCLI_SHELL_INTEGRATION".into(), "1".into()),
+                ChannelOp::SetEnv("ONETCLI_ORIG_ZDOTDIR".into(), "/tmp/home".into()),
+                ChannelOp::SetEnv(
+                    "ZDOTDIR".into(),
+                    "/tmp/home/.config/onetcli/sessions/42/zsh".into(),
+                ),
+                ChannelOp::RequestPty,
+                ChannelOp::RequestShell,
+            ]
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_ssh_channel_execs_bash_wrapper_after_pty() {
+        let (setup_channel, setup_state) = MockChannel::new(
+            [
+                ChannelEvent::Data(
+                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli/sessions/42\n__ONETCLI_LOGIN_SHELL__=/bin/bash\n__ONETCLI_SETUP_OK__\n"
+                        .to_vec(),
+                ),
+                ChannelEvent::ExitStatus(0),
+            ],
+            true,
+        );
+        let (interactive_channel, interactive_state) = MockChannel::new([], false);
+        let mut client = MockClient::new([setup_channel, interactive_channel]);
+
+        let result =
+            SshBackend::prepare_ssh_channel(&mut client, &PtyConfig::default(), Some(42)).await;
+
+        assert!(result.is_ok(), "bash shell wrapper 应通过独立交互 channel 启动");
+        assert_eq!(
+            recorded_ops(&setup_state),
+            vec![ChannelOp::Exec, ChannelOp::Close]
+        );
+        let interactive_ops = recorded_ops(&interactive_state);
+        assert_eq!(
+            interactive_ops[0..3],
+            [
+                ChannelOp::SetEnv("ONETCLI_SHELL_INTEGRATION".into(), "1".into()),
+                ChannelOp::SetEnv("ONETCLI_ORIG_ZDOTDIR".into(), "/tmp/home".into()),
+                ChannelOp::RequestPty,
+            ]
+        );
+        match interactive_ops.get(3) {
+            Some(ChannelOp::Exec) => {}
+            other => panic!("expected bash interactive channel to exec wrapper, got {other:?}"),
+        }
     }
 
     #[tokio::test]
     async fn run_shell_integration_setup_fails_without_success_signal() {
         let (mut channel, _) = MockChannel::new([ChannelEvent::Close], false);
 
-        let result = SshBackend::run_shell_integration_setup(&mut channel).await;
+        let result = SshBackend::run_shell_integration_setup(&mut channel, Some(42)).await;
 
         assert!(
             result.is_err(),
@@ -497,19 +654,22 @@ mod tests {
     async fn run_shell_integration_setup_accepts_success_marker_before_close() {
         let (mut channel, _) = MockChannel::new(
             [
-                ChannelEvent::Data(b"__ONETCLI_SETUP_OK__\n".to_vec()),
+                ChannelEvent::Data(
+                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli/sessions/42\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
+                        .to_vec(),
+                ),
                 ChannelEvent::Close,
             ],
             false,
         );
 
-        let result = SshBackend::run_shell_integration_setup(&mut channel).await;
+        let result = SshBackend::run_shell_integration_setup(&mut channel, Some(42)).await;
 
         assert!(result.is_ok(), "收到成功标记后应接受无 ExitStatus 的 Close");
     }
 
     #[test]
-    fn build_shell_integration_setup_command_handles_single_quotes_in_script() {
+    fn build_shell_integration_setup_command_writes_session_files_without_touching_user_rc() {
         let temp_dir = std::env::temp_dir().join(format!(
             "onetcli-shell-setup-{}-{}",
             std::process::id(),
@@ -520,19 +680,27 @@ mod tests {
         ));
         fs::create_dir_all(&temp_dir).expect("应创建临时目录");
 
-        let remote_path = temp_dir.join("shell_integration.sh");
-        let bashrc_path = temp_dir.join(".bashrc");
+        let home_dir = temp_dir.join("home");
+        fs::create_dir_all(&home_dir).expect("应创建 home 目录");
+        let bashrc_path = home_dir.join(".bashrc");
+        let zshrc_path = home_dir.join(".zshrc");
+        fs::write(&bashrc_path, "# user bashrc\n").expect("应写入用户 bashrc");
+        fs::write(&zshrc_path, "# user zshrc\n").expect("应写入用户 zshrc");
         let script = "echo 'quoted'\nPS1='prompt'\n";
         let command = build_shell_integration_setup_script(
             script,
-            &remote_path.to_string_lossy(),
-            &[&bashrc_path.to_string_lossy()],
+            "42",
             "__TEST_OK__",
+            "__HOME__=",
+            "__SESSION__=",
+            "__SHELL__=",
         );
 
         let output = Command::new("sh")
             .arg("-c")
             .arg(&command)
+            .env("HOME", &home_dir)
+            .env("SHELL", "/bin/zsh")
             .output()
             .expect("应能执行本地 shell setup 命令");
 
@@ -541,16 +709,39 @@ mod tests {
             "shell setup 命令应成功执行: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        let session_dir = home_dir.join(".config/onetcli/sessions/42");
+        let integration_path = session_dir.join("shell_integration.sh");
         assert_eq!(
-            fs::read_to_string(&remote_path).expect("应写入 integration 文件"),
+            fs::read_to_string(&integration_path).expect("应写入 integration 文件"),
             script
         );
-        let bashrc = fs::read_to_string(&bashrc_path).expect("应写入 rc 文件");
-        assert!(bashrc.contains("# onetcli shell integration"));
-        assert!(bashrc.contains(remote_path.to_string_lossy().as_ref()));
+        assert!(
+            session_dir.join("zsh/.zshenv").is_file(),
+            "应写入 zsh session wrapper"
+        );
+        assert!(
+            session_dir.join("zsh/.zshrc").is_file(),
+            "应写入 zshrc session wrapper"
+        );
+        assert!(
+            session_dir.join("bash/.bashrc").is_file(),
+            "应写入 bash session wrapper"
+        );
+        assert_eq!(
+            fs::read_to_string(&bashrc_path).expect("应保留用户 bashrc"),
+            "# user bashrc\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&zshrc_path).expect("应保留用户 zshrc"),
+            "# user zshrc\n"
+        );
         assert_eq!(
             String::from_utf8_lossy(&output.stdout).trim(),
-            "__TEST_OK__"
+            format!(
+                "__HOME__={}\n__SESSION__={}\n__SHELL__=/bin/zsh\n__TEST_OK__",
+                home_dir.display(),
+                session_dir.display()
+            )
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
