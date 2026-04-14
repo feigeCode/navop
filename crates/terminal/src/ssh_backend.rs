@@ -151,14 +151,20 @@ impl SshBackend {
                             Some(ChannelEvent::Data(data)) | Some(ChannelEvent::ExtendedData { data, .. }) => {
                                 // 解析所有 OSC 事件
                                 for osc_event in extract_osc_events(&data) {
+                                    tracing::debug!(
+                                        target: "terminal.history_prompt.osc",
+                                        event = ?osc_event,
+                                        "ssh backend observed osc event"
+                                    );
                                     match osc_event {
                                         OscEvent::WorkingDirChanged(path) => {
                                             let _ = event_tx.send(TerminalEvent::WorkingDirChanged(path));
                                         }
                                         OscEvent::PromptStart => {
-                                            // 133;A: shell 准备好显示 prompt
+                                            let _ = event_tx.send(TerminalEvent::PromptStart);
                                         }
                                         OscEvent::InputStart => {
+                                            let _ = event_tx.send(TerminalEvent::InputStart);
                                             // 133;B: prompt 渲染完，用户可以输入了
                                             // 第一次收到时发送 init_commands
                                             if !shell_ready {

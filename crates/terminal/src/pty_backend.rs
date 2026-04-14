@@ -16,6 +16,10 @@ use crate::{TerminalBackend, TerminalSize};
 pub enum TerminalEvent {
     /// 终端内容已更新，需要重新渲染
     Wakeup,
+    /// shell 开始渲染新的 prompt（OSC 133;A）
+    PromptStart,
+    /// shell prompt 已渲染完成，进入可输入状态（OSC 133;B）
+    InputStart,
     /// 终端标题已更改
     TitleChanged(String),
     /// 终端响铃

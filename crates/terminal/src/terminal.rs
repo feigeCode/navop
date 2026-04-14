@@ -52,6 +52,10 @@ pub use ssh::{
 pub enum TerminalModelEvent {
     /// 终端内容已更新，需要重新渲染
     Wakeup,
+    /// shell 开始渲染新的 prompt（OSC 133;A）
+    PromptStart,
+    /// shell prompt 已渲染完成，用户可以输入（OSC 133;B）
+    InputStart,
     /// 终端标题已更改
     TitleChanged(String),
     /// 终端响铃
@@ -1099,9 +1103,20 @@ impl Terminal {
     }
 
     fn handle_terminal_event(&mut self, event: TerminalEvent, cx: &mut Context<Self>) {
+        tracing::debug!(
+            target: "terminal.history_prompt.osc",
+            event = ?event,
+            "terminal model handling terminal event"
+        );
         match event {
             TerminalEvent::Wakeup => {
                 cx.emit(TerminalModelEvent::Wakeup);
+            }
+            TerminalEvent::PromptStart => {
+                cx.emit(TerminalModelEvent::PromptStart);
+            }
+            TerminalEvent::InputStart => {
+                cx.emit(TerminalModelEvent::InputStart);
             }
             TerminalEvent::TitleChanged(title) => {
                 self.title = title.clone();

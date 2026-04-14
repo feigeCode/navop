@@ -121,6 +121,14 @@ fn should_scroll_to_bottom_on_user_input(
     display_offset > 0
 }
 
+fn should_defer_inline_history_prompt_input_to_text_system(keystroke: &Keystroke) -> bool {
+    let modifiers = keystroke.modifiers;
+    !modifiers.control
+        && !modifiers.alt
+        && !modifiers.platform
+        && (keystroke.key == "space" || keystroke.key.chars().count() == 1)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UnbracketedPasteHazard {
     HereDoc,
@@ -213,6 +221,47 @@ fn shell_escape(s: &str) -> String {
     } else {
         format!("'{}'", s.replace('\'', "'\\''"))
     }
+}
+
+fn should_dismiss_history_prompt_for_keystroke(keystroke: &Keystroke) -> bool {
+    let modifiers = keystroke.modifiers;
+    let key = keystroke.key.as_str();
+
+    if modifiers.platform {
+        return true;
+    }
+
+    if modifiers.control && !modifiers.alt {
+        return !matches!(key, "r" | "u" | "c");
+    }
+
+    if modifiers.alt && !modifiers.control {
+        return key != "f";
+    }
+
+    if !modifiers.control && !modifiers.alt {
+        return matches!(
+            key,
+            "left" | "home" | "end" | "delete" | "pageup" | "pagedown" | "escape" | "tab"
+        );
+    }
+
+    true
+}
+
+fn should_dismiss_history_prompt_for_mouse(button: MouseButton) -> bool {
+    matches!(button, MouseButton::Left | MouseButton::Middle | MouseButton::Right)
+}
+
+fn should_dismiss_history_prompt_for_scroll(lines: i32) -> bool {
+    lines != 0
+}
+
+fn should_reset_history_prompt_for_terminal_event(event: &TerminalModelEvent) -> bool {
+    matches!(
+        event,
+        TerminalModelEvent::PromptStart | TerminalModelEvent::InputStart
+    )
 }
 
 /// 正在调整大小的面板
@@ -761,14 +810,35 @@ impl TerminalView {
             && !mode.contains(TermMode::VI)
     }
 
+    fn log_history_prompt_state(&self, reason: &str, detail: &str, cx: &App) {
+        let selected_match = self.history_prompt.selected_match().map(str::to_string);
+        tracing::debug!(
+            target: "terminal.history_prompt",
+            reason,
+            detail,
+            enabled = self.history_prompt_enabled(cx),
+            mode = ?self.history_prompt.mode(),
+            tracking = ?self.history_prompt.tracking_state(),
+            input = %self.history_prompt.input(),
+            query = %self.history_prompt.query_input(),
+            dropdown_visible = self.history_prompt.dropdown_visible(),
+            matches_len = self.history_prompt.matches().len(),
+            selected_index = self.history_prompt.selected_index(),
+            selected_match = ?selected_match,
+            "history prompt state"
+        );
+    }
+
     fn refresh_history_prompt_matches(&mut self, cx: &App) {
         if !self.history_prompt_enabled(cx) {
             self.hide_history_prompt_dropdown();
+            self.log_history_prompt_state("refresh_skipped", "history prompt disabled", cx);
             return;
         }
 
         if !self.history_prompt.is_active() {
             self.history_prompt.set_matches(Vec::new());
+            self.log_history_prompt_state("refresh_skipped", "tracking inactive", cx);
             return;
         }
 
@@ -781,7 +851,17 @@ impl TerminalView {
                 HISTORY_SUGGESTION_LIMIT,
             ),
         };
+        let first_match = matches.first().cloned().unwrap_or_default();
         self.history_prompt.set_matches(matches);
+        tracing::debug!(
+            target: "terminal.history_prompt",
+            reason = "refresh_matches",
+            mode = ?self.history_prompt.mode(),
+            query = %self.history_prompt.query_input(),
+            matches_len = self.history_prompt.matches().len(),
+            first_match = %first_match,
+            "history prompt refreshed"
+        );
     }
 
     fn dismiss_history_prompt(&mut self) {
@@ -795,10 +875,13 @@ impl TerminalView {
     fn apply_inline_input_to_history_prompt(&mut self, text: &str, cx: &mut Context<Self>) {
         if !self.history_prompt_enabled(cx) {
             self.hide_history_prompt_dropdown();
+            self.log_history_prompt_state("inline_input_skipped", "history prompt disabled", cx);
             return;
         }
         self.history_prompt.append_text(text);
         self.history_prompt.show_dropdown();
+        let detail = format!("text={text:?}");
+        self.log_history_prompt_state("inline_input", &detail, cx);
         self.schedule_debounced_refresh(cx);
     }
 
@@ -819,9 +902,16 @@ impl TerminalView {
     fn apply_paste_to_history_prompt(&mut self, text: &str, cx: &App) {
         if !self.history_prompt_enabled(cx) {
             self.hide_history_prompt_dropdown();
+            self.log_history_prompt_state("paste_skipped", "history prompt disabled", cx);
             return;
         }
         self.history_prompt.apply_paste(text);
+        let detail = format!(
+            "len={} multiline={}",
+            text.len(),
+            text.contains('\n') || text.contains('\r')
+        );
+        self.log_history_prompt_state("paste_input", &detail, cx);
         self.refresh_history_prompt_matches(cx);
     }
 
@@ -832,6 +922,7 @@ impl TerminalView {
     fn start_history_search(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.history_prompt_enabled(cx) || !self.history_prompt.is_active() {
             self.hide_history_prompt_dropdown();
+            self.log_history_prompt_state("search_skipped", "history prompt unavailable", cx);
             return false;
         }
 
@@ -840,6 +931,7 @@ impl TerminalView {
         }
 
         self.history_prompt.enter_search();
+        self.log_history_prompt_state("search_enter", "ctrl-r", cx);
         self.refresh_history_prompt_matches(cx);
         cx.notify();
         true
@@ -850,6 +942,7 @@ impl TerminalView {
             return;
         }
         self.history_prompt.exit_search();
+        self.log_history_prompt_state("search_exit", "escape", cx);
         self.refresh_history_prompt_matches(cx);
         cx.notify();
     }
@@ -859,6 +952,12 @@ impl TerminalView {
     }
 
     fn replace_history_prompt_line(&mut self, command: &str, cx: &mut Context<Self>) {
+        tracing::debug!(
+            target: "terminal.history_prompt",
+            reason = "replace_line",
+            command = %command,
+            "history prompt replacing terminal line"
+        );
         let mut bytes = Vec::with_capacity(command.len() + 1);
         bytes.extend_from_slice(b"\x15");
         bytes.extend_from_slice(command.as_bytes());
@@ -866,31 +965,86 @@ impl TerminalView {
     }
 
     fn try_accept_history_prompt(&mut self, cx: &mut Context<Self>) -> bool {
+        let selected_match = self.history_prompt.selected_match().map(str::to_string);
         let Some(accepted) = self.history_prompt.accept_selected_suggestion() else {
+            tracing::debug!(
+                target: "terminal.history_prompt",
+                reason = "accept_rejected",
+                mode = ?self.history_prompt.mode(),
+                query = %self.history_prompt.query_input(),
+                selected_match = ?selected_match,
+                "history prompt accept rejected"
+            );
             return false;
         };
         match accepted {
-            HistoryPromptAccept::AppendSuffix(suffix) => self.write_to_pty(suffix.into_bytes(), cx),
+            HistoryPromptAccept::AppendSuffix(suffix) => {
+                tracing::debug!(
+                    target: "terminal.history_prompt",
+                    reason = "accept_suffix",
+                    query = %self.history_prompt.query_input(),
+                    selected_match = ?selected_match,
+                    suffix = %suffix,
+                    "history prompt accepted suffix"
+                );
+                self.write_to_pty(suffix.into_bytes(), cx)
+            }
             HistoryPromptAccept::ReplaceLine(command) => {
+                tracing::debug!(
+                    target: "terminal.history_prompt",
+                    reason = "accept_replace_line",
+                    query = %self.history_prompt.query_input(),
+                    selected_match = ?selected_match,
+                    command = %command,
+                    "history prompt accepted line replacement"
+                );
                 self.replace_history_prompt_line(&command, cx);
             }
         }
         self.dismiss_history_prompt_matches();
+        self.log_history_prompt_state("accept_complete", "dismiss matches after accept", cx);
         cx.notify();
         true
     }
 
     /// 逐词接受建议（Ctrl+Right / Alt+F）
     fn try_accept_next_word_history_prompt(&mut self, cx: &mut Context<Self>) -> bool {
+        let selected_match = self.history_prompt.selected_match().map(str::to_string);
         let Some(accepted) = self.history_prompt.accept_next_word() else {
+            tracing::debug!(
+                target: "terminal.history_prompt",
+                reason = "accept_next_word_rejected",
+                query = %self.history_prompt.query_input(),
+                selected_match = ?selected_match,
+                "history prompt next-word accept rejected"
+            );
             return false;
         };
         match accepted {
-            HistoryPromptAccept::AppendSuffix(suffix) => self.write_to_pty(suffix.into_bytes(), cx),
+            HistoryPromptAccept::AppendSuffix(suffix) => {
+                tracing::debug!(
+                    target: "terminal.history_prompt",
+                    reason = "accept_next_word_suffix",
+                    query = %self.history_prompt.query_input(),
+                    selected_match = ?selected_match,
+                    suffix = %suffix,
+                    "history prompt accepted next word"
+                );
+                self.write_to_pty(suffix.into_bytes(), cx)
+            }
             HistoryPromptAccept::ReplaceLine(command) => {
+                tracing::debug!(
+                    target: "terminal.history_prompt",
+                    reason = "accept_next_word_replace_line",
+                    query = %self.history_prompt.query_input(),
+                    selected_match = ?selected_match,
+                    command = %command,
+                    "history prompt next-word triggered line replacement"
+                );
                 self.replace_history_prompt_line(&command, cx);
             }
         }
+        self.log_history_prompt_state("accept_next_word_complete", "after next-word accept", cx);
         cx.notify();
         true
     }
@@ -1083,9 +1237,24 @@ impl TerminalView {
         event: &TerminalModelEvent,
         cx: &mut Context<Self>,
     ) {
+        tracing::debug!(
+            target: "terminal.history_prompt",
+            reason = "terminal_event",
+            event = ?event,
+            reset = should_reset_history_prompt_for_terminal_event(event),
+            "terminal model event observed"
+        );
+        if should_reset_history_prompt_for_terminal_event(event) {
+            self.dismiss_history_prompt();
+            self.log_history_prompt_state("terminal_event_reset", "prompt lifecycle event", cx);
+        }
+
         match event {
             TerminalModelEvent::Wakeup => {
                 self.refresh_history_prompt_matches(cx);
+                cx.notify();
+            }
+            TerminalModelEvent::PromptStart | TerminalModelEvent::InputStart => {
                 cx.notify();
             }
             TerminalModelEvent::TitleChanged(_) => {
@@ -1446,6 +1615,14 @@ impl TerminalView {
 
         let modifiers = event.keystroke.modifiers;
         let key = event.keystroke.key.as_str();
+        tracing::debug!(
+            target: "terminal.history_prompt",
+            reason = "key_event",
+            key,
+            modifiers = ?modifiers,
+            shell_mode = ?mode,
+            "terminal key event"
+        );
 
         if modifiers.control && !modifiers.alt && !modifiers.platform && key == "r" {
             if self.start_history_search(cx) {
@@ -1496,6 +1673,9 @@ impl TerminalView {
                 "u" | "c" => self.clear_history_prompt(),
                 // Ctrl+Right: 逐词接受建议
                 "right" if self.try_accept_next_word_history_prompt(cx) => return,
+                _ if should_dismiss_history_prompt_for_keystroke(&event.keystroke) => {
+                    self.dismiss_history_prompt();
+                }
                 _ => self.hide_history_prompt_dropdown(),
             }
         }
@@ -1523,24 +1703,20 @@ impl TerminalView {
                     self.clear_history_prompt();
                 }
                 "left" | "home" | "end" | "delete" => {
-                    self.hide_history_prompt_dropdown();
+                    self.dismiss_history_prompt();
                 }
                 "pageup" | "pagedown" => {
-                    self.hide_history_prompt_dropdown();
+                    self.dismiss_history_prompt();
                 }
                 "escape" => {
-                    self.hide_history_prompt_dropdown();
-                }
-                "space" => {
-                    self.apply_inline_input_to_history_prompt(" ", cx);
+                    self.dismiss_history_prompt();
                 }
                 _ => {
-                    if !modifiers.shift {
-                        if key.len() == 1 {
-                            self.apply_inline_input_to_history_prompt(key, cx);
-                        }
-                    } else if key.len() == 1 {
-                        self.apply_inline_input_to_history_prompt(key, cx);
+                    if should_defer_inline_history_prompt_input_to_text_system(&event.keystroke) {
+                        // 普通文本输入统一走 EntityInputHandler::replace_text_in_range -> commit_text，
+                        // 避免 keydown 与文本系统各自追加一次，导致 history_prompt 双写。
+                    } else if should_dismiss_history_prompt_for_keystroke(&event.keystroke) {
+                        self.dismiss_history_prompt();
                     }
                 }
             }
@@ -1549,9 +1725,9 @@ impl TerminalView {
             if key == "f" && self.try_accept_next_word_history_prompt(cx) {
                 return;
             }
-            self.hide_history_prompt_dropdown();
+            self.dismiss_history_prompt();
         } else {
-            self.hide_history_prompt_dropdown();
+            self.dismiss_history_prompt();
         }
 
         if let Some(esc_str) = crate::keys::to_esc_str(&event.keystroke, &mode, false) {
@@ -2314,6 +2490,18 @@ impl TerminalView {
 
         let mode = self.terminal.read(cx).mode();
         let lines = take_whole_scroll_lines(&mut self.scroll_lines_accumulated);
+        tracing::debug!(
+            target: "terminal.history_prompt",
+            reason = "scroll_event",
+            lines,
+            shell_mode = ?mode,
+            "terminal scroll event"
+        );
+
+        if should_dismiss_history_prompt_for_scroll(lines) {
+            self.dismiss_history_prompt();
+            self.log_history_prompt_state("scroll_dismiss", "scroll moved terminal viewport", cx);
+        }
 
         if mode.contains(TermMode::ALT_SCREEN) {
             // ALT_SCREEN（vim、less 等）：累计到整行后再转为上下箭头，避免放大小幅滚轮输入
@@ -2394,12 +2582,22 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus_handle, cx);
+        tracing::debug!(
+            target: "terminal.history_prompt",
+            reason = "mouse_down",
+            button = ?event.button,
+            position = ?event.position,
+            "terminal mouse down"
+        );
+
+        if should_dismiss_history_prompt_for_mouse(event.button) {
+            self.dismiss_history_prompt();
+            self.log_history_prompt_state("mouse_dismiss", "mouse interaction", cx);
+        }
 
         if event.button != MouseButton::Left {
             return;
         }
-
-        self.hide_history_prompt_dropdown();
 
         let bounds = self.terminal_bounds;
 
@@ -3110,9 +3308,16 @@ mod tests {
     use super::{
         alt_screen_scroll_arrow, detect_unbracketed_paste_hazard, has_trailing_line_continuation,
         has_unterminated_shell_quote, multiline_non_empty_line_count,
-        should_scroll_to_bottom_on_user_input, take_whole_scroll_lines, UnbracketedPasteHazard,
+        should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
+        should_dismiss_history_prompt_for_scroll,
+        should_defer_inline_history_prompt_input_to_text_system,
+        should_reset_history_prompt_for_terminal_event,
+        should_scroll_to_bottom_on_user_input, take_whole_scroll_lines,
+        UnbracketedPasteHazard,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
+    use gpui::{Keystroke, MouseButton};
+    use terminal::terminal::TerminalModelEvent;
     use std::cell::Cell as StdCell;
 
     #[test]
@@ -3263,6 +3468,91 @@ mod tests {
         assert_eq!(state.input(), "git s");
         assert_eq!(state.query_input(), "git s");
         assert!(state.matches().is_empty());
+    }
+
+    #[test]
+    fn history_prompt_dismisses_on_non_linear_inline_keys() {
+        assert!(should_dismiss_history_prompt_for_keystroke(
+            &Keystroke::parse("left").unwrap()
+        ));
+        assert!(should_dismiss_history_prompt_for_keystroke(
+            &Keystroke::parse("ctrl-a").unwrap()
+        ));
+        assert!(should_dismiss_history_prompt_for_keystroke(
+            &Keystroke::parse("ctrl-e").unwrap()
+        ));
+        assert!(should_dismiss_history_prompt_for_keystroke(
+            &Keystroke::parse("alt-backspace").unwrap()
+        ));
+    }
+
+    #[test]
+    fn history_prompt_keeps_tracking_for_linear_typing_keys() {
+        assert!(!should_dismiss_history_prompt_for_keystroke(
+            &Keystroke::parse("a").unwrap()
+        ));
+        assert!(!should_dismiss_history_prompt_for_keystroke(
+            &Keystroke::parse("space").unwrap()
+        ));
+        assert!(!should_dismiss_history_prompt_for_keystroke(
+            &Keystroke::parse("backspace").unwrap()
+        ));
+        assert!(!should_dismiss_history_prompt_for_keystroke(
+            &Keystroke::parse("down").unwrap()
+        ));
+    }
+
+    #[test]
+    fn printable_inline_input_is_deferred_to_text_system() {
+        assert!(should_defer_inline_history_prompt_input_to_text_system(
+            &Keystroke::parse("a").unwrap()
+        ));
+        assert!(should_defer_inline_history_prompt_input_to_text_system(
+            &Keystroke::parse("shift-a").unwrap()
+        ));
+        assert!(should_defer_inline_history_prompt_input_to_text_system(
+            &Keystroke::parse("space").unwrap()
+        ));
+    }
+
+    #[test]
+    fn special_keys_still_bypass_text_system_defer() {
+        assert!(!should_defer_inline_history_prompt_input_to_text_system(
+            &Keystroke::parse("backspace").unwrap()
+        ));
+        assert!(!should_defer_inline_history_prompt_input_to_text_system(
+            &Keystroke::parse("left").unwrap()
+        ));
+        assert!(!should_defer_inline_history_prompt_input_to_text_system(
+            &Keystroke::parse("ctrl-a").unwrap()
+        ));
+    }
+
+    #[test]
+    fn history_prompt_dismisses_on_mouse_interaction() {
+        assert!(should_dismiss_history_prompt_for_mouse(MouseButton::Left));
+        assert!(should_dismiss_history_prompt_for_mouse(MouseButton::Middle));
+        assert!(should_dismiss_history_prompt_for_mouse(MouseButton::Right));
+    }
+
+    #[test]
+    fn history_prompt_dismisses_on_scroll_navigation() {
+        assert!(should_dismiss_history_prompt_for_scroll(1));
+        assert!(should_dismiss_history_prompt_for_scroll(-2));
+        assert!(!should_dismiss_history_prompt_for_scroll(0));
+    }
+
+    #[test]
+    fn history_prompt_resets_on_shell_input_start_event() {
+        assert!(should_reset_history_prompt_for_terminal_event(
+            &TerminalModelEvent::InputStart
+        ));
+        assert!(should_reset_history_prompt_for_terminal_event(
+            &TerminalModelEvent::PromptStart
+        ));
+        assert!(!should_reset_history_prompt_for_terminal_event(
+            &TerminalModelEvent::Wakeup
+        ));
     }
 
     #[test]

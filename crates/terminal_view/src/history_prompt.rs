@@ -260,12 +260,7 @@ impl HistoryPromptState {
                     self.selected = None;
                     return Some(HistoryPromptAccept::AppendSuffix(suffix));
                 }
-                // 非前缀匹配（token_prefix / substring）→ 整行替换
-                self.input = candidate.clone();
-                self.dropdown_visible = false;
-                self.matches.clear();
-                self.selected = None;
-                Some(HistoryPromptAccept::ReplaceLine(candidate))
+                None
             }
             HistoryPromptMode::Search => {
                 self.input = candidate.clone();
@@ -599,10 +594,7 @@ mod tests {
 
         let result = state.accept_selected_suggestion();
 
-        assert_eq!(
-            result,
-            Some(HistoryPromptAccept::ReplaceLine("cargo test".to_string()))
-        );
-        assert_eq!(state.input(), "cargo test");
+        assert_eq!(result, None);
+        assert_eq!(state.input(), "test");
     }
 }
