@@ -3,8 +3,8 @@
 //! 提供 Supabase 认证集成，包括登录、登出、会话持久化等功能。
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui::http_client::HttpClient;
 use gpui::prelude::FluentBuilder;
@@ -131,18 +131,26 @@ impl AuthService {
         Self::configure_client(&next_client);
 
         let persisted_auth = load_auth_data();
-        let access_token = previous_client
-            .access_token_for_rebuild()
-            .or_else(|| persisted_auth.as_ref().map(|(access, _, _, _)| access.clone()));
-        let refresh_token = previous_client
-            .refresh_token_for_rebuild()
-            .or_else(|| persisted_auth.as_ref().map(|(_, refresh, _, _)| refresh.clone()));
-        let user_id = previous_client
-            .user_id_for_rebuild()
-            .or_else(|| persisted_auth.as_ref().map(|(_, _, user_id, _)| user_id.clone()));
-        let expires_at = previous_client
-            .expires_at_for_rebuild()
-            .or_else(|| persisted_auth.as_ref().map(|(_, _, _, expires_at)| *expires_at));
+        let access_token = previous_client.access_token_for_rebuild().or_else(|| {
+            persisted_auth
+                .as_ref()
+                .map(|(access, _, _, _)| access.clone())
+        });
+        let refresh_token = previous_client.refresh_token_for_rebuild().or_else(|| {
+            persisted_auth
+                .as_ref()
+                .map(|(_, refresh, _, _)| refresh.clone())
+        });
+        let user_id = previous_client.user_id_for_rebuild().or_else(|| {
+            persisted_auth
+                .as_ref()
+                .map(|(_, _, user_id, _)| user_id.clone())
+        });
+        let expires_at = previous_client.expires_at_for_rebuild().or_else(|| {
+            persisted_auth
+                .as_ref()
+                .map(|(_, _, _, expires_at)| *expires_at)
+        });
 
         if let (Some(access_token), Some(refresh_token), Some(user_id), Some(expires_at)) =
             (access_token, refresh_token, user_id, expires_at)

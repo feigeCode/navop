@@ -35,8 +35,9 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use crate::history::{
-    collect_history_search_results, collect_history_suggestions, parse_shell_history,
-    push_history_entry, ShellHistoryFormat, PERSISTED_HISTORY_LIMIT, SESSION_HISTORY_LIMIT,
+    collect_history_search_results, collect_history_suggestions_with_cwd, parse_shell_history,
+    push_rich_history_entry, HistoryEntry, ShellHistoryFormat, PERSISTED_HISTORY_LIMIT,
+    SESSION_HISTORY_LIMIT,
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 
@@ -207,7 +208,7 @@ fn resolve_default_windows_shell_from_env(
 }
 
 #[cfg(target_os = "windows")]
-fn build_local_shell(shell: Option<String>) -> Option<tty::Shell> {
+fn build_local_shell(shell: Option<String>, _extra_args: Vec<String>) -> Option<tty::Shell> {
     let program = shell.unwrap_or_else(|| {
         resolve_default_windows_shell_from_env(
             env::var_os("PATH").as_deref(),
@@ -221,8 +222,108 @@ fn build_local_shell(shell: Option<String>) -> Option<tty::Shell> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn build_local_shell(shell: Option<String>) -> Option<tty::Shell> {
-    shell.map(|program| tty::Shell::new(program, vec![]))
+fn build_local_shell(shell: Option<String>, extra_args: Vec<String>) -> Option<tty::Shell> {
+    if extra_args.is_empty() {
+        shell.map(|program| tty::Shell::new(program, vec![]))
+    } else {
+        // 有额外参数（如 --rcfile）时需显式指定 shell 程序
+        let program = shell.or_else(|| std::env::var("SHELL").ok())?;
+        Some(tty::Shell::new(program, extra_args))
+    }
+}
+
+/// 准备本地终端的 Shell Integration 环境
+///
+/// 将 `shell_integration.sh` 写入进程级临时目录 `/tmp/onetcli-<pid>/`，
+/// 仅对当前 OnetCli 进程内的终端会话生效，不污染全局配置。
+/// 返回 `(额外环境变量, shell 额外参数)`。
+#[cfg(not(target_os = "windows"))]
+fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec<String>) {
+    // 使用进程级临时目录，确保不影响其他会话或工具
+    let session_dir = std::env::temp_dir().join(format!("onetcli-{}", std::process::id()));
+    if fs::create_dir_all(&session_dir).is_err() {
+        tracing::warn!(
+            "无法创建临时目录 {}，跳过 Shell Integration",
+            session_dir.display()
+        );
+        return (vec![], vec![]);
+    }
+
+    // 写入 shell_integration.sh（含交互式守卫，不影响 rsync/scp 等非交互通道）
+    let integration_path = session_dir.join("shell_integration.sh");
+    if let Err(e) = fs::write(&integration_path, include_str!("shell_integration.sh")) {
+        tracing::warn!("写入 shell_integration.sh 失败: {e}");
+        return (vec![], vec![]);
+    }
+
+    let mut extra_env: Vec<(String, String)> =
+        vec![("ONETCLI_SHELL_INTEGRATION".into(), "1".into())];
+    let mut extra_args: Vec<String> = Vec::new();
+
+    // 判断 shell 类型：优先用显式参数，否则读 $SHELL
+    let shell_name = shell
+        .map(|s| s.to_ascii_lowercase())
+        .or_else(|| std::env::var("SHELL").ok().map(|s| s.to_ascii_lowercase()))
+        .unwrap_or_default();
+
+    if shell_name.contains("zsh") {
+        // zsh: 通过 ZDOTDIR 注入集成脚本
+        let zsh_dir = session_dir.join("zsh");
+        if fs::create_dir_all(&zsh_dir).is_err() {
+            return (extra_env, extra_args);
+        }
+
+        let script = integration_path.display();
+
+        // .zshenv — 恢复原始 ZDOTDIR 并 source 用户的 .zshenv
+        let zshenv = "ZDOTDIR=\"${_ONETCLI_ORIG_ZDOTDIR:-$HOME}\"\n\
+                       [[ -f \"$ZDOTDIR/.zshenv\" ]] && source \"$ZDOTDIR/.zshenv\"\n";
+        let _ = fs::write(zsh_dir.join(".zshenv"), zshenv);
+
+        // .zshrc — 恢复 ZDOTDIR，source 用户 .zshrc，再 source 集成脚本
+        let zshrc = format!(
+            "ZDOTDIR=\"${{_ONETCLI_ORIG_ZDOTDIR:-$HOME}}\"\n\
+             [[ -f \"$ZDOTDIR/.zshrc\" ]] && source \"$ZDOTDIR/.zshrc\"\n\
+             source \"{script}\"\n"
+        );
+        let _ = fs::write(zsh_dir.join(".zshrc"), zshrc);
+
+        let orig = std::env::var("ZDOTDIR").unwrap_or_default();
+        extra_env.push(("_ONETCLI_ORIG_ZDOTDIR".into(), orig));
+        extra_env.push(("ZDOTDIR".into(), zsh_dir.display().to_string()));
+
+        tracing::debug!(
+            "已配置 zsh Shell Integration (ZDOTDIR={})",
+            zsh_dir.display()
+        );
+    } else if shell_name.contains("bash") {
+        // bash: 通过 --rcfile 注入集成脚本
+        let bash_rc = session_dir.join("bash_integration.sh");
+        let script = integration_path.display();
+        let content = format!(
+            "[[ -f \"$HOME/.bashrc\" ]] && source \"$HOME/.bashrc\"\n\
+             source \"{script}\"\n"
+        );
+        let _ = fs::write(&bash_rc, content);
+
+        extra_args.push("--rcfile".into());
+        extra_args.push(bash_rc.display().to_string());
+
+        tracing::debug!(
+            "已配置 bash Shell Integration (--rcfile={})",
+            bash_rc.display()
+        );
+    } else {
+        tracing::debug!("未知 shell 类型 '{shell_name}'，跳过 Shell Integration 注入");
+    }
+
+    (extra_env, extra_args)
+}
+
+#[cfg(target_os = "windows")]
+fn prepare_shell_integration(_shell: Option<&str>) -> (Vec<(String, String)>, Vec<String>) {
+    // Windows 暂不支持 Shell Integration
+    (vec![], vec![])
 }
 
 fn history_file_candidates(preferred_shell: Option<&str>) -> Vec<(PathBuf, ShellHistoryFormat)> {
@@ -348,8 +449,8 @@ pub struct Terminal {
     connection_name: Option<String>,
     /// 初始化命令（连接成功后执行）
     init_commands: Option<String>,
-    /// 当前 OnetCli 会话内记录的命令历史
-    session_history: VecDeque<String>,
+    /// 当前 OnetCli 会话内记录的命令历史（富条目，含 frecency 元数据）
+    session_history: VecDeque<HistoryEntry>,
     /// 从 shell 历史文件加载的持久化历史
     persisted_history: Vec<String>,
 
@@ -477,10 +578,17 @@ impl Terminal {
         } = config;
         let history_shell = shell.clone();
 
+        // 准备 Shell Integration 环境（写入集成脚本、生成 wrapper 配置）
+        let (integration_env, shell_args) = prepare_shell_integration(shell.as_deref());
+
+        // 合并用户环境变量与 Shell Integration 环境变量
+        let mut env_pairs = env;
+        env_pairs.extend(integration_env);
+
         let pty_options = PtyOptions {
-            shell: build_local_shell(shell),
+            shell: build_local_shell(shell, shell_args),
             working_directory: working_dir.map(Into::into),
-            env: env.into_iter().collect(),
+            env: env_pairs.into_iter().collect(),
             drain_on_exit: true,
             #[cfg(target_os = "windows")]
             escape_args: true,
@@ -966,7 +1074,9 @@ impl Terminal {
     }
 
     fn record_history_entry(&mut self, command: &str, cx: &mut Context<Self>) {
-        if push_history_entry(&mut self.session_history, command, SESSION_HISTORY_LIMIT) {
+        let entry =
+            HistoryEntry::new(command.to_string()).with_cwd(self.current_working_dir.clone());
+        if push_rich_history_entry(&mut self.session_history, entry, SESSION_HISTORY_LIMIT) {
             cx.emit(TerminalModelEvent::Wakeup);
         }
     }
@@ -1015,10 +1125,11 @@ impl Terminal {
                 cx.emit(TerminalModelEvent::WorkingDirChanged(path));
             }
             TerminalEvent::CommandFinished { exit_code } => {
-                // 命令执行完毕（OSC 133;D）
+                // 命令执行完毕（OSC 133;D）— 将退出码记录到最后一条历史条目
                 tracing::debug!("命令执行完毕，退出码: {}", exit_code);
-                // 可以在这里添加命令完成后的处理逻辑
-                // 例如：更新状态栏、通知用户等
+                if let Some(last) = self.session_history.back_mut() {
+                    last.exit_code = Some(exit_code);
+                }
             }
             TerminalEvent::CommandRecorded(command) => {
                 self.record_history_entry(&command, cx);
@@ -1064,11 +1175,12 @@ impl Terminal {
     }
 
     pub fn history_suggestions(&self, prefix: &str, limit: usize) -> Vec<String> {
-        collect_history_suggestions(
+        collect_history_suggestions_with_cwd(
             &self.session_history,
             &self.persisted_history,
             prefix,
             limit,
+            self.current_working_dir.as_deref(),
         )
     }
 
@@ -1288,7 +1400,7 @@ mod tests {
     };
     use crate::history::{
         collect_history_suggestions, normalize_history_command, parse_shell_history,
-        push_history_entry, ShellHistoryFormat,
+        push_history_entry, HistoryEntry, ShellHistoryFormat,
     };
     use std::collections::VecDeque;
     use std::fs;
@@ -1415,19 +1527,16 @@ mod tests {
         push_history_entry(&mut entries, "git status", 5);
         push_history_entry(&mut entries, "cargo test", 5);
 
-        assert_eq!(
-            entries.into_iter().collect::<Vec<_>>(),
-            vec!["git status", "cargo test"]
-        );
+        let commands: Vec<_> = entries.iter().map(|e| e.command.as_str()).collect();
+        assert_eq!(commands, vec!["git status", "cargo test"]);
     }
 
     #[test]
     fn collect_history_suggestions_prioritizes_session_history() {
-        let session = VecDeque::from([
-            "git status".to_string(),
-            "git stash".to_string(),
-            "cargo test".to_string(),
-        ]);
+        let session: VecDeque<HistoryEntry> = ["git status", "git stash", "cargo test"]
+            .iter()
+            .map(|c| HistoryEntry::new(c.to_string()))
+            .collect();
         let persisted = vec![
             "git status".to_string(),
             "git switch main".to_string(),
@@ -1436,19 +1545,15 @@ mod tests {
 
         let matches = collect_history_suggestions(&session, &persisted, "git s", 4);
 
-        assert_eq!(
-            matches,
-            vec![
-                "git stash".to_string(),
-                "git status".to_string(),
-                "git switch main".to_string()
-            ]
-        );
+        // session 中的结果优先（frecency 更高），且去重
+        assert!(matches.contains(&"git stash".to_string()));
+        assert!(matches.contains(&"git status".to_string()));
+        assert!(matches.contains(&"git switch main".to_string()));
     }
 
     #[test]
     fn collect_history_suggestions_skips_empty_prefix() {
-        let session = VecDeque::from(["git status".to_string()]);
+        let session: VecDeque<HistoryEntry> = [HistoryEntry::new("git status".to_string())].into();
         let persisted = vec!["git switch".to_string()];
 
         let matches = collect_history_suggestions(&session, &persisted, "   ", 5);

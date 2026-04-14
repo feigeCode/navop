@@ -1,4 +1,5 @@
 pub mod history;
+pub mod osc;
 pub mod pty_backend;
 pub mod serial_backend;
 pub mod ssh_backend;

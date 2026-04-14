@@ -3012,7 +3012,10 @@ impl HomePage {
 }
 
 /// 生成复制连接的唯一名称
-fn generate_duplicate_name(original_name: &str, existing_names: &std::collections::HashSet<String>) -> String {
+fn generate_duplicate_name(
+    original_name: &str,
+    existing_names: &std::collections::HashSet<String>,
+) -> String {
     let base_name = format!("{} (副本)", original_name);
 
     if !existing_names.contains(&base_name) {

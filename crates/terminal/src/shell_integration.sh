@@ -1,3 +1,5 @@
+# 仅在交互式 shell 中生效，避免污染 rsync/scp 等非交互通道
+[[ $- != *i* ]] && return
 [[ -n "${_ONETCLI_SHELL_INTEGRATED:-}" ]] && return
 export _ONETCLI_SHELL_INTEGRATED=1
 

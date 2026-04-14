@@ -5,106 +5,12 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::Engine;
 
 use ssh::{ChannelEvent, PtyConfig, RusshClient, SshChannel, SshClient, SshConnectConfig};
 
+use crate::osc::{extract_osc_events, OscEvent};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
 use crate::{TerminalBackend, TerminalSize};
-
-/// OSC 事件类型（基于 OSC 133 协议）
-#[derive(Debug)]
-enum OscEvent {
-    PromptStart,                       // 133;A
-    InputStart,                        // 133;B
-    CommandStart,                      // 133;C
-    CommandFinished { exit_code: i32 }, // 133;D;<code>
-    WorkingDirChanged(String),         // 7;file://host/path
-    CommandRecorded(String),           // 1337;Command=<base64>
-}
-
-/// 从字节流中提取所有 OSC 事件（一次 data 里可能含多个）
-fn extract_osc_events(data: &[u8]) -> Vec<OscEvent> {
-    let text = String::from_utf8_lossy(data);
-    let mut events = Vec::new();
-
-    // OSC 格式: ESC ] <payload> BEL  或  ESC ] <payload> ESC \
-    // 用简单的状态机扫描
-    let mut i = 0;
-    let chars: Vec<char> = text.chars().collect();
-
-    while i < chars.len() {
-        // 找 ESC ]
-        if chars[i] == '\x1b' && i + 1 < chars.len() && chars[i + 1] == ']' {
-            i += 2;
-            let start = i;
-
-            // 找结束符 BEL(\x07) 或 ST(ESC \)
-            while i < chars.len() {
-                if chars[i] == '\x07' {
-                    let payload: String = chars[start..i].iter().collect();
-                    if let Some(ev) = parse_osc_payload(&payload) {
-                        events.push(ev);
-                    }
-                    i += 1;
-                    break;
-                }
-                if chars[i] == '\x1b' && i + 1 < chars.len() && chars[i + 1] == '\\' {
-                    let payload: String = chars[start..i].iter().collect();
-                    if let Some(ev) = parse_osc_payload(&payload) {
-                        events.push(ev);
-                    }
-                    i += 2;
-                    break;
-                }
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    events
-}
-
-/// 解析 OSC payload 内容
-fn parse_osc_payload(payload: &str) -> Option<OscEvent> {
-    // OSC 133 协议：shell 集成标记
-    if let Some(rest) = payload.strip_prefix("133;") {
-        return match rest {
-            "A" => Some(OscEvent::PromptStart),
-            "B" => Some(OscEvent::InputStart),
-            "C" => Some(OscEvent::CommandStart),
-            d if d.starts_with("D;") => {
-                let code = d[2..].parse::<i32>().unwrap_or(-1);
-                Some(OscEvent::CommandFinished { exit_code: code })
-            }
-            _ => None,
-        };
-    }
-
-    // OSC 7：工作目录变更
-    if let Some(rest) = payload.strip_prefix("7;file://") {
-        // "hostname/path/to/dir" 或 "/path/to/dir"
-        let path = rest
-            .splitn(2, '/')
-            .nth(1)
-            .map(|p| format!("/{p}"))
-            .unwrap_or_default();
-        return Some(OscEvent::WorkingDirChanged(path));
-    }
-
-    if let Some(encoded) = payload.strip_prefix("1337;Command=") {
-        let command = BASE64_STANDARD
-            .decode(encoded)
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())?;
-        return Some(OscEvent::CommandRecorded(command));
-    }
-
-    None
-}
 
 fn shell_single_quote(input: &str) -> String {
     format!("'{}'", input.replace('\'', "'\"'\"'"))
@@ -122,9 +28,8 @@ fn build_shell_integration_setup_script(
 ) -> String {
     let marker = shell_single_quote("# onetcli shell integration");
     let script = shell_single_quote(script);
-    let setup_line = shell_single_quote(&format!(
-        "[ -f \"{remote_path}\" ] && . \"{remote_path}\""
-    ));
+    let setup_line =
+        shell_single_quote(&format!("[ -f \"{remote_path}\" ] && . \"{remote_path}\""));
     let success_marker = shell_single_quote(success_marker);
     let remote_path = shell_double_quote(remote_path);
     let rc_files = rc_files
@@ -163,7 +68,8 @@ fn build_shell_integration_setup_command(
     rc_files: &[&str],
     success_marker: &str,
 ) -> String {
-    let script = build_shell_integration_setup_script(script, remote_path, rc_files, success_marker);
+    let script =
+        build_shell_integration_setup_script(script, remote_path, rc_files, success_marker);
     format!("sh -c {}", shell_single_quote(&script))
 }
 
@@ -348,7 +254,10 @@ impl SshBackend {
         loop {
             match channel.recv().await {
                 Some(ChannelEvent::Data(data)) => {
-                    if data.windows(SUCCESS_MARKER.len()).any(|w| w == SUCCESS_MARKER.as_bytes()) {
+                    if data
+                        .windows(SUCCESS_MARKER.len())
+                        .any(|w| w == SUCCESS_MARKER.as_bytes())
+                    {
                         setup_succeeded = true;
                     }
                 }
@@ -384,10 +293,11 @@ impl SshBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::osc::parse_osc_payload;
     use anyhow::{anyhow, Result};
     use async_trait::async_trait;
-    use std::fs;
     use std::collections::VecDeque;
+    use std::fs;
     use std::process::Command;
     use std::sync::{Arc, Mutex};
 
@@ -450,7 +360,9 @@ mod tests {
             let mut state = self.state.lock().expect("mock channel state should lock");
             state.ops.push(ChannelOp::RequestShell);
             if state.exec_consumes_session {
-                return Err(anyhow!("cannot request shell after exec on the same session"));
+                return Err(anyhow!(
+                    "cannot request shell after exec on the same session"
+                ));
             }
             Ok(())
         }
@@ -553,7 +465,10 @@ mod tests {
             result.is_ok(),
             "安装 shell integration 不应占用交互 shell 的 channel"
         );
-        assert_eq!(recorded_ops(&setup_state), vec![ChannelOp::Exec, ChannelOp::Close]);
+        assert_eq!(
+            recorded_ops(&setup_state),
+            vec![ChannelOp::Exec, ChannelOp::Close]
+        );
         assert_eq!(
             recorded_ops(&interactive_state),
             vec![ChannelOp::RequestPty, ChannelOp::RequestShell]
@@ -627,7 +542,10 @@ mod tests {
         let bashrc = fs::read_to_string(&bashrc_path).expect("应写入 rc 文件");
         assert!(bashrc.contains("# onetcli shell integration"));
         assert!(bashrc.contains(remote_path.to_string_lossy().as_ref()));
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "__TEST_OK__");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "__TEST_OK__"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -662,7 +580,6 @@ mod tests {
         ));
     }
 }
-
 
 impl TerminalBackend for SshBackend {
     fn write(&self, data: Vec<u8>) {

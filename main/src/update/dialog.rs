@@ -192,8 +192,7 @@ impl UpdateDialogView {
                                 view.applying = false;
                                 view.downloaded_path = None;
                                 view.error_message = Some(err);
-                                view.status_message =
-                                    t!("Update.download_failed").to_string();
+                                view.status_message = t!("Update.download_failed").to_string();
                                 cx.notify();
                             });
                             return;
@@ -408,9 +407,7 @@ impl Render for UpdateDialogView {
                                         div()
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(
-                                                t!("Update.open_release_page").to_string(),
-                                            ),
+                                            .child(t!("Update.open_release_page").to_string()),
                                     )
                                     .child(
                                         h_flex()
@@ -422,10 +419,7 @@ impl Render for UpdateDialogView {
                                                     .text_color(cx.theme().link)
                                                     .child(url.clone()),
                                             )
-                                            .child(
-                                                Clipboard::new("release-url-copy")
-                                                    .value(url),
-                                            )
+                                            .child(Clipboard::new("release-url-copy").value(url))
                                             .child(
                                                 Button::new("release-url-open")
                                                     .xsmall()

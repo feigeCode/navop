@@ -1,3 +1,15 @@
+/// 历史提示跟踪状态
+///
+/// 两态设计：
+/// - `Active`: 正常跟踪输入，允许显示下拉
+/// - `Dismissed`: 已关闭，等待下一次可打印输入重新激活
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TrackingState {
+    #[default]
+    Active,
+    Dismissed,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HistoryPromptMode {
     #[default]
@@ -17,7 +29,8 @@ pub struct HistoryPromptState {
     input: String,
     search_query: String,
     search_base_input: String,
-    tracking: bool,
+    tracking_state: TrackingState,
+    dropdown_visible: bool,
     matches: Vec<String>,
     selected: Option<usize>,
 }
@@ -29,7 +42,8 @@ impl HistoryPromptState {
             input: input.into(),
             search_query: String::new(),
             search_base_input: String::new(),
-            tracking: true,
+            tracking_state: TrackingState::Active,
+            dropdown_visible: true,
             matches: Vec::new(),
             selected: None,
         }
@@ -54,34 +68,74 @@ impl HistoryPromptState {
         self.mode
     }
 
+    pub fn tracking_state(&self) -> TrackingState {
+        self.tracking_state
+    }
+
     pub fn is_valid(&self) -> bool {
-        self.tracking
+        self.tracking_state == TrackingState::Active
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.tracking_state == TrackingState::Active
+    }
+
+    pub fn dropdown_visible(&self) -> bool {
+        self.dropdown_visible
     }
 
     pub fn clear(&mut self) {
+        self.dismiss();
+    }
+
+    pub fn dismiss(&mut self) {
         self.mode = HistoryPromptMode::InlineSuggest;
         self.input.clear();
         self.search_query.clear();
         self.search_base_input.clear();
-        self.tracking = true;
+        self.tracking_state = TrackingState::Dismissed;
+        self.dropdown_visible = false;
         self.matches.clear();
         self.selected = None;
     }
 
     pub fn dismiss_matches(&mut self) {
+        self.dropdown_visible = false;
         self.matches.clear();
         self.selected = None;
     }
 
+    /// 兼容旧调用，行为等同于 dismiss。
     pub fn invalidate(&mut self) {
-        if self.mode == HistoryPromptMode::Search {
-            self.input = self.search_base_input.clone();
-            self.search_query.clear();
-            self.search_base_input.clear();
-            self.mode = HistoryPromptMode::InlineSuggest;
+        self.dismiss();
+    }
+
+    /// 隐藏下拉但保留跟踪状态和当前 input。
+    pub fn hide_dropdown(&mut self) {
+        if self.tracking_state == TrackingState::Active {
+            self.dropdown_visible = false;
+            self.selected = None;
         }
-        self.tracking = false;
-        self.matches.clear();
+    }
+
+    /// 兼容旧调用，行为等同于 hide_dropdown。
+    pub fn suspend(&mut self) {
+        self.hide_dropdown();
+    }
+
+    pub fn show_dropdown(&mut self) {
+        if self.query_input().is_empty() && self.mode == HistoryPromptMode::InlineSuggest {
+            return;
+        }
+        self.tracking_state = TrackingState::Active;
+        self.dropdown_visible = true;
+    }
+
+    /// 兼容旧调用：保留旧 input，并恢复显示状态。
+    pub fn resume_with_input(&mut self, input: String) {
+        self.tracking_state = TrackingState::Active;
+        self.input = input;
+        self.dropdown_visible = !self.input.is_empty();
         self.selected = None;
     }
 
@@ -90,17 +144,19 @@ impl HistoryPromptState {
         self.input = input;
         self.search_query.clear();
         self.search_base_input.clear();
-        self.tracking = true;
+        self.tracking_state = TrackingState::Active;
+        self.dropdown_visible = !self.input.is_empty();
         self.selected = None;
     }
 
     pub fn enter_search(&mut self) {
-        if !self.tracking {
+        if self.tracking_state != TrackingState::Active {
             return;
         }
         self.mode = HistoryPromptMode::Search;
         self.search_base_input = self.input.clone();
         self.search_query.clear();
+        self.dropdown_visible = true;
         self.matches.clear();
         self.selected = None;
     }
@@ -113,23 +169,25 @@ impl HistoryPromptState {
         self.search_query.clear();
         self.search_base_input.clear();
         self.mode = HistoryPromptMode::InlineSuggest;
+        self.dropdown_visible = !self.input.is_empty();
         self.matches.clear();
         self.selected = None;
     }
 
     pub fn append_text(&mut self, text: &str) {
-        if !self.tracking {
-            return;
+        if self.tracking_state == TrackingState::Dismissed {
+            self.tracking_state = TrackingState::Active;
         }
         match self.mode {
             HistoryPromptMode::InlineSuggest => self.input.push_str(text),
             HistoryPromptMode::Search => self.search_query.push_str(text),
         }
+        self.dropdown_visible = true;
         self.selected = None;
     }
 
     pub fn backspace(&mut self) {
-        if !self.tracking {
+        if self.tracking_state != TrackingState::Active {
             return;
         }
         match self.mode {
@@ -140,19 +198,26 @@ impl HistoryPromptState {
                 self.search_query.pop();
             }
         }
+        self.dropdown_visible = match self.mode {
+            HistoryPromptMode::InlineSuggest => !self.input.is_empty(),
+            HistoryPromptMode::Search => true,
+        };
+        if !self.dropdown_visible {
+            self.matches.clear();
+        }
         self.selected = None;
     }
 
     pub fn apply_paste(&mut self, text: &str) {
         if text.contains('\n') || text.contains('\r') {
-            self.invalidate();
+            self.dismiss();
             return;
         }
         self.append_text(text);
     }
 
     pub fn set_matches(&mut self, matches: Vec<String>) {
-        if !self.tracking {
+        if self.tracking_state != TrackingState::Active {
             self.matches.clear();
             self.selected = None;
             return;
@@ -182,19 +247,32 @@ impl HistoryPromptState {
         let candidate = self.selected_match()?.to_string();
         match self.mode {
             HistoryPromptMode::InlineSuggest => {
-                let suffix = candidate.strip_prefix(self.query_input())?.to_string();
-                if suffix.is_empty() {
-                    return None;
+                // 尝试前缀匹配的 AppendSuffix 路径
+                let query = self.query_input().to_string();
+                if let Some(suffix) = candidate.strip_prefix(&query) {
+                    if suffix.is_empty() {
+                        return None;
+                    }
+                    let suffix = suffix.to_string();
+                    self.input = candidate;
+                    self.dropdown_visible = false;
+                    self.matches.clear();
+                    self.selected = None;
+                    return Some(HistoryPromptAccept::AppendSuffix(suffix));
                 }
-                self.input = candidate;
+                // 非前缀匹配（token_prefix / substring）→ 整行替换
+                self.input = candidate.clone();
+                self.dropdown_visible = false;
+                self.matches.clear();
                 self.selected = None;
-                Some(HistoryPromptAccept::AppendSuffix(suffix))
+                Some(HistoryPromptAccept::ReplaceLine(candidate))
             }
             HistoryPromptMode::Search => {
                 self.input = candidate.clone();
                 self.search_query.clear();
                 self.search_base_input.clear();
                 self.mode = HistoryPromptMode::InlineSuggest;
+                self.dropdown_visible = false;
                 self.matches.clear();
                 self.selected = None;
                 Some(HistoryPromptAccept::ReplaceLine(candidate))
@@ -202,14 +280,54 @@ impl HistoryPromptState {
         }
     }
 
+    /// 逐词接受建议（Ctrl+Right / Alt+F）
+    ///
+    /// 只接受建议中的下一个"词"（到空格或路径分隔符为止），
+    /// 保持同一条建议继续部分接受。
+    pub fn accept_next_word(&mut self) -> Option<HistoryPromptAccept> {
+        let candidate = self.selected_match()?.to_string();
+        let suffix = candidate.strip_prefix(self.query_input())?;
+        if suffix.is_empty() {
+            return None;
+        }
+
+        // 找到下一个词边界
+        let trimmed = suffix.trim_start_matches(' ');
+        let leading_spaces = suffix.len() - trimmed.len();
+
+        let word_end = if trimmed.is_empty() {
+            suffix.len()
+        } else {
+            let boundary = trimmed
+                .find(|c: char| c.is_whitespace() || c == '/')
+                .map(|i| {
+                    // 如果边界是 '/'，包含它
+                    if trimmed.as_bytes().get(i) == Some(&b'/') {
+                        i + 1
+                    } else {
+                        i
+                    }
+                })
+                .unwrap_or(trimmed.len());
+            leading_spaces + boundary
+        };
+
+        let word = &suffix[..word_end];
+        self.input.push_str(word);
+        self.dropdown_visible = true;
+        // 不清除 selected，保持同一条建议继续部分接受
+        Some(HistoryPromptAccept::AppendSuffix(word.to_string()))
+    }
+
     pub fn select_match(&mut self, index: usize) -> Option<String> {
         let candidate = self.matches.get(index)?.clone();
         self.selected = Some(index);
+        self.dropdown_visible = true;
         Some(candidate)
     }
 
     pub fn navigate_previous(&mut self) -> Option<String> {
-        if !self.tracking || self.matches.is_empty() {
+        if self.tracking_state != TrackingState::Active || self.matches.is_empty() {
             return None;
         }
 
@@ -220,6 +338,7 @@ impl HistoryPromptState {
                     None => 0,
                 };
                 self.selected = Some(next_index);
+                self.dropdown_visible = true;
                 Some(self.matches[next_index].clone())
             }
             HistoryPromptMode::Search => {
@@ -228,13 +347,14 @@ impl HistoryPromptState {
                     None => 0,
                 };
                 self.selected = Some(next_index);
+                self.dropdown_visible = true;
                 Some(self.matches[next_index].clone())
             }
         }
     }
 
     pub fn navigate_next(&mut self) -> Option<String> {
-        if !self.tracking || self.matches.is_empty() {
+        if self.tracking_state != TrackingState::Active || self.matches.is_empty() {
             return None;
         }
 
@@ -242,15 +362,18 @@ impl HistoryPromptState {
             HistoryPromptMode::InlineSuggest => match self.selected {
                 None => {
                     self.selected = Some(0);
+                    self.dropdown_visible = true;
                     Some(self.matches[0].clone())
                 }
                 Some(index) if index > 0 => {
                     let next_index = index - 1;
                     self.selected = Some(next_index);
+                    self.dropdown_visible = true;
                     Some(self.matches[next_index].clone())
                 }
                 Some(0) => {
                     self.selected = None;
+                    self.dropdown_visible = true;
                     Some(self.input.clone())
                 }
                 _ => None,
@@ -258,6 +381,7 @@ impl HistoryPromptState {
             HistoryPromptMode::Search => {
                 let next_index = self.selected.unwrap_or(0).saturating_sub(1);
                 self.selected = Some(next_index);
+                self.dropdown_visible = true;
                 Some(self.matches[next_index].clone())
             }
         }
@@ -266,24 +390,25 @@ impl HistoryPromptState {
 
 #[cfg(test)]
 mod tests {
-    use super::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
+    use super::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState, TrackingState};
 
     #[test]
-    fn history_prompt_invalidate_suspends_tracking_until_clear() {
+    fn history_prompt_dismiss_resets_input_and_restarts_on_next_character() {
         let mut state = HistoryPromptState::from_input("git");
 
-        state.invalidate();
-        state.append_text(" status");
+        state.dismiss();
 
-        assert!(!state.is_valid());
-        assert_eq!(state.input(), "git");
+        assert!(!state.is_active());
+        assert_eq!(state.tracking_state(), TrackingState::Dismissed);
+        assert_eq!(state.input(), "");
+        assert!(!state.dropdown_visible());
         assert!(state.matches().is_empty());
 
-        state.clear();
-        state.append_text("cargo");
+        state.append_text("c");
 
-        assert!(state.is_valid());
-        assert_eq!(state.input(), "cargo");
+        assert!(state.is_active());
+        assert_eq!(state.input(), "c");
+        assert!(state.dropdown_visible());
     }
 
     #[test]
@@ -342,18 +467,142 @@ mod tests {
     }
 
     #[test]
-    fn history_prompt_invalidate_exits_search_and_restores_shell_input() {
+    fn history_prompt_dismiss_exits_search_and_clears_shell_input() {
         let mut state = HistoryPromptState::from_input("git st");
         state.enter_search();
         state.append_text("cargo");
         state.set_matches(vec!["cargo test".to_string()]);
 
-        state.invalidate();
+        state.dismiss();
 
         assert_eq!(state.mode(), HistoryPromptMode::InlineSuggest);
-        assert_eq!(state.input(), "git st");
-        assert_eq!(state.query_input(), "git st");
-        assert!(!state.is_valid());
+        assert_eq!(state.input(), "");
+        assert_eq!(state.query_input(), "");
+        assert!(!state.is_active());
+        assert!(!state.dropdown_visible());
         assert!(state.matches().is_empty());
+    }
+
+    // ---- 下拉隐藏态测试 ----
+
+    #[test]
+    fn hide_dropdown_keeps_tracking_active() {
+        let mut state = HistoryPromptState::from_input("git s");
+        state.set_matches(vec!["git status".to_string()]);
+
+        state.hide_dropdown();
+
+        assert_eq!(state.tracking_state(), TrackingState::Active);
+        assert!(state.is_valid());
+        assert_eq!(state.input(), "git s"); // input 保留
+        assert!(!state.dropdown_visible());
+    }
+
+    #[test]
+    fn next_character_after_hidden_dropdown_keeps_existing_input() {
+        let mut state = HistoryPromptState::from_input("git s");
+        state.set_matches(vec!["git status".to_string()]);
+
+        state.hide_dropdown();
+        state.append_text("t");
+
+        assert_eq!(state.tracking_state(), TrackingState::Active);
+        assert_eq!(state.input(), "git st");
+        assert!(state.dropdown_visible());
+    }
+
+    #[test]
+    fn hide_dropdown_does_not_reactivate_dismissed_state() {
+        let mut state = HistoryPromptState::from_input("git");
+
+        state.dismiss();
+        state.hide_dropdown();
+
+        assert_eq!(state.tracking_state(), TrackingState::Dismissed);
+    }
+
+    #[test]
+    fn hidden_dropdown_accepts_next_character() {
+        let mut state = HistoryPromptState::from_input("git");
+        state.hide_dropdown();
+
+        state.append_text(" status");
+
+        assert_eq!(state.input(), "git status");
+        assert!(state.dropdown_visible());
+    }
+
+    // ---- Task 7: 部分接受测试 ----
+
+    #[test]
+    fn accept_next_word_returns_first_word_of_suffix() {
+        let mut state = HistoryPromptState::from_input("git");
+        state.set_matches(vec!["git status --short".to_string()]);
+
+        let result = state.accept_next_word();
+
+        assert_eq!(
+            result,
+            Some(HistoryPromptAccept::AppendSuffix(" status".to_string()))
+        );
+        assert_eq!(state.input(), "git status");
+    }
+
+    #[test]
+    fn accept_next_word_updates_input() {
+        let mut state = HistoryPromptState::from_input("git");
+        state.set_matches(vec!["git status --short".to_string()]);
+
+        state.accept_next_word();
+
+        assert_eq!(state.input(), "git status");
+        // selected 应保持，以便继续部分接受
+        assert!(state.selected_match().is_some());
+    }
+
+    #[test]
+    fn accept_next_word_on_last_word_accepts_all() {
+        let mut state = HistoryPromptState::from_input("git status --");
+        state.set_matches(vec!["git status --short".to_string()]);
+
+        let result = state.accept_next_word();
+
+        assert_eq!(
+            result,
+            Some(HistoryPromptAccept::AppendSuffix("short".to_string()))
+        );
+        assert_eq!(state.input(), "git status --short");
+    }
+
+    #[test]
+    fn accept_next_word_handles_path_separator() {
+        let mut state = HistoryPromptState::from_input("cd ");
+        state.set_matches(vec!["cd /usr/local/bin".to_string()]);
+
+        let result = state.accept_next_word();
+
+        // 应包含 '/' 分隔符
+        assert_eq!(
+            result,
+            Some(HistoryPromptAccept::AppendSuffix("/".to_string()))
+        );
+        assert_eq!(state.input(), "cd /");
+    }
+
+    // ---- 非前缀匹配接受测试 ----
+
+    #[test]
+    fn accept_non_prefix_match_uses_replace_line() {
+        let mut state = HistoryPromptState::from_input("test");
+        // "cargo test" 是 token_prefix 匹配，不是前缀匹配
+        state.set_matches(vec!["cargo test".to_string()]);
+
+        let result = state.accept_selected_suggestion();
+
+        assert_eq!(
+            result,
+            Some(HistoryPromptAccept::ReplaceLine("cargo test".to_string()))
+        );
+        assert_eq!(state.input(), "cargo test");
     }
 }

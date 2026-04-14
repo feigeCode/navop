@@ -1,15 +1,15 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use gpui::http_client::{AsyncBody, Method, Request, Url};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
     FontWeight, InteractiveElement, IntoElement, Keystroke, ParentElement, PathPromptOptions,
     Render, SharedString, Styled, WeakEntity, Window, div,
 };
-use gpui::http_client::{AsyncBody, Method, Request, Url};
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, Theme, ThemeMode, TitleBar,
+    ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, Theme, ThemeMode, TitleBar,
     WindowExt,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
@@ -17,7 +17,6 @@ use gpui_component::{
     h_flex,
     input::{Input, InputState},
     kbd::Kbd,
-    IndexPath,
     scroll::ScrollableElement,
     select::{Select, SelectItem, SelectState},
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
@@ -1029,7 +1028,12 @@ impl GlobalProxySettingsView {
             ProxyType::Socks5 => 2,
         };
         let proxy_type_select = cx.new(|cx| {
-            SelectState::new(proxy_types, Some(IndexPath::new(selected_index)), window, cx)
+            SelectState::new(
+                proxy_types,
+                Some(IndexPath::new(selected_index)),
+                window,
+                cx,
+            )
         });
         let host_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx).placeholder("127.0.0.1");
@@ -1082,7 +1086,13 @@ impl GlobalProxySettingsView {
                 .selected_value()
                 .copied()
                 .unwrap_or_default(),
-            host: self.host_input.read(cx).text().to_string().trim().to_string(),
+            host: self
+                .host_input
+                .read(cx)
+                .text()
+                .to_string()
+                .trim()
+                .to_string(),
             port: self
                 .port_input
                 .read(cx)
@@ -1119,7 +1129,12 @@ impl GlobalProxySettingsView {
                     .text_color(cx.theme().foreground)
                     .child(label),
             )
-            .child(div().flex_1().child(child).when(disabled, |this| this.opacity(0.55)))
+            .child(
+                div()
+                    .flex_1()
+                    .child(child)
+                    .when(disabled, |this| this.opacity(0.55)),
+            )
             .into_any_element()
     }
 
@@ -1227,12 +1242,7 @@ impl Render for GlobalProxySettingsView {
                 ),
             )
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
-                    .child(
+                div().flex_1().min_h_0().overflow_y_scrollbar().p_4().child(
                     v_flex()
                         .gap_4()
                         .child(
@@ -1285,14 +1295,16 @@ impl Render for GlobalProxySettingsView {
                             disabled,
                             cx,
                         ))
-                        .child(self.render_form_row(
-                            t!("Settings.General.Proxy.password").to_string(),
-                            Input::new(&self.password_input)
-                                .mask_toggle()
-                                .disabled(disabled),
-                            disabled,
-                            cx,
-                        ))
+                        .child(
+                            self.render_form_row(
+                                t!("Settings.General.Proxy.password").to_string(),
+                                Input::new(&self.password_input)
+                                    .mask_toggle()
+                                    .disabled(disabled),
+                                disabled,
+                                cx,
+                            ),
+                        )
                         .when_some(self.status_message.clone(), |this, (success, message)| {
                             this.child(
                                 div()
@@ -1787,9 +1799,7 @@ mod tests {
             ..GlobalProxySettings::default()
         };
 
-        let proxy_url = settings
-            .to_proxy_url()
-            .expect("禁用代理时不应返回错误");
+        let proxy_url = settings.to_proxy_url().expect("禁用代理时不应返回错误");
 
         assert!(proxy_url.is_none());
     }
@@ -1805,9 +1815,7 @@ mod tests {
             password: String::new(),
         };
 
-        let err = settings
-            .validate()
-            .expect_err("缺少主机和端口时应校验失败");
+        let err = settings.validate().expect_err("缺少主机和端口时应校验失败");
 
         assert!(err.contains("主机"));
     }

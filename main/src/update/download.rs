@@ -131,8 +131,7 @@ fn download_file_name(version: &str, download_url: &str) -> String {
 /// 校验下载文件的 SHA256 哈希值。
 /// 使用同步文件读取——下载文件为本地文件且体积有限，无需异步。
 pub(crate) fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
-    let data = std::fs::read(path)
-        .map_err(|err| format!("读取下载文件失败: {}", err))?;
+    let data = std::fs::read(path).map_err(|err| format!("读取下载文件失败: {}", err))?;
 
     let hash = Sha256::digest(&data);
     let actual = format!("{:x}", hash);

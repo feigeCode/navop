@@ -596,15 +596,19 @@ impl DbConnection for PostgresDbConnection {
                             error
                         );
                         let retry_started = Instant::now();
-                        let client = Self::connect_without_tls(&pg_config)
-                            .await
-                            .map_err(|retry_error| {
-                                error!(
+                        let client =
+                            Self::connect_without_tls(&pg_config)
+                                .await
+                                .map_err(|retry_error| {
+                                    error!(
                                     "[PostgreSQL] Non-TLS retry after TLS failure also failed: {}",
                                     retry_error
                                 );
-                                DbError::connection_with_source("failed to connect", retry_error)
-                            })?;
+                                    DbError::connection_with_source(
+                                        "failed to connect",
+                                        retry_error,
+                                    )
+                                })?;
                         info!(
                             "[PostgreSQL][Timing] retry_without_tls={}ms ssl_mode=Prefer",
                             retry_started.elapsed().as_millis()
