@@ -4,13 +4,11 @@ use std::sync::{Arc, RwLock};
 use gpui::http_client::{AsyncBody, Method, Request, Url};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, InteractiveElement, IntoElement, Keystroke, ParentElement, PathPromptOptions,
-    Render, SharedString, Styled, WeakEntity, Window, div,
+    div, App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, FontWeight, InteractiveElement, IntoElement, Keystroke, ParentElement,
+    PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, Theme, ThemeMode, TitleBar,
-    WindowExt,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     group_box::GroupBoxVariant,
@@ -21,13 +19,14 @@ use gpui_component::{
     select::{Select, SelectItem, SelectState},
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     switch::Switch,
-    v_flex,
+    v_flex, ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, Theme, ThemeMode,
+    TitleBar, WindowExt,
 };
 use one_core::cloud_sync::GlobalCloudUser;
 use one_core::cloud_sync::UserInfo;
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::manager::GlobalProviderState;
-use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use one_core::popup_window::{open_popup_window, PopupWindowOptions};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -230,6 +229,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub terminal_auto_copy: bool,
     #[serde(default = "default_true")]
+    pub terminal_enable_autocomplete: bool,
+    #[serde(default = "default_true")]
     pub terminal_middle_click_paste: bool,
     #[serde(default)]
     pub terminal_sync_path_with_terminal: bool,
@@ -304,6 +305,7 @@ impl Default for AppSettings {
             font_size: default_font_size(),
             terminal_font_size: default_terminal_font_size(),
             terminal_auto_copy: default_true(),
+            terminal_enable_autocomplete: default_true(),
             terminal_middle_click_paste: default_true(),
             terminal_sync_path_with_terminal: false,
             terminal_theme: default_terminal_theme(),
@@ -496,37 +498,29 @@ impl SettingsPanel {
                 .groups(vec![
                     SettingGroup::new()
                         .title(t!("Settings.General.Language.group_title"))
-                        .items(vec![
-                            SettingItem::new(
-                                t!("Settings.General.Language.ui_language"),
-                                SettingField::dropdown(
-                                    vec![
-                                        (
-                                            "zh-CN".into(),
-                                            t!("Settings.General.Language.zh_cn").into(),
-                                        ),
-                                        (
-                                            "zh-HK".into(),
-                                            t!("Settings.General.Language.zh_hk").into(),
-                                        ),
-                                        ("en".into(), t!("Settings.General.Language.en").into()),
-                                    ],
-                                    |cx: &App| {
-                                        SharedString::from(AppSettings::global(cx).locale.clone())
-                                    },
-                                    |val: SharedString, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.locale = val.to_string();
-                                        gpui_component::set_locale(&settings.locale);
-                                        settings.save();
-                                    },
-                                )
-                                .default_value(SharedString::from(default_settings.locale)),
+                        .items(vec![SettingItem::new(
+                            t!("Settings.General.Language.ui_language"),
+                            SettingField::dropdown(
+                                vec![
+                                    ("zh-CN".into(), t!("Settings.General.Language.zh_cn").into()),
+                                    ("zh-HK".into(), t!("Settings.General.Language.zh_hk").into()),
+                                    ("en".into(), t!("Settings.General.Language.en").into()),
+                                ],
+                                |cx: &App| {
+                                    SharedString::from(AppSettings::global(cx).locale.clone())
+                                },
+                                |val: SharedString, cx: &mut App| {
+                                    let settings = AppSettings::global_mut(cx);
+                                    settings.locale = val.to_string();
+                                    gpui_component::set_locale(&settings.locale);
+                                    settings.save();
+                                },
                             )
-                            .description(
-                                t!("Settings.General.Language.ui_language_desc").to_string(),
-                            ),
-                        ]),
+                            .default_value(SharedString::from(default_settings.locale)),
+                        )
+                        .description(
+                            t!("Settings.General.Language.ui_language_desc").to_string(),
+                        )]),
                     SettingGroup::new()
                         .title(t!("Settings.General.Appearance.group_title"))
                         .items(vec![
@@ -662,6 +656,23 @@ impl SettingsPanel {
                             )
                             .description(
                                 t!("Settings.General.Terminal.auto_copy_desc").to_string(),
+                            ),
+                            SettingItem::new(
+                                t!("Settings.General.Terminal.autocomplete"),
+                                SettingField::switch(
+                                    |cx: &App| AppSettings::global(cx).terminal_enable_autocomplete,
+                                    |val: bool, cx: &mut App| {
+                                        let settings = AppSettings::global_mut(cx);
+                                        settings.terminal_enable_autocomplete = val;
+                                        settings.save();
+                                        let settings_snapshot = settings.clone();
+                                        sync_terminal_settings_to_all(settings_snapshot, cx);
+                                    },
+                                )
+                                .default_value(default_settings.terminal_enable_autocomplete),
+                            )
+                            .description(
+                                t!("Settings.General.Terminal.autocomplete_desc").to_string(),
                             ),
                             SettingItem::new(
                                 t!("Settings.General.Terminal.middle_click_paste"),
@@ -1749,7 +1760,7 @@ fn render_shortcuts_section(cx: &App) -> gpui::AnyElement {
 
 #[cfg(test)]
 mod tests {
-    use super::{GlobalProxySettings, ProxyType};
+    use super::{AppSettings, GlobalProxySettings, ProxyType};
 
     #[test]
     fn global_proxy_settings_build_proxy_url_without_auth() {
@@ -1818,6 +1829,13 @@ mod tests {
         let err = settings.validate().expect_err("缺少主机和端口时应校验失败");
 
         assert!(err.contains("主机"));
+    }
+
+    #[test]
+    fn app_settings_enable_terminal_autocomplete_by_default() {
+        let settings = AppSettings::default();
+
+        assert!(settings.terminal_enable_autocomplete);
     }
 }
 

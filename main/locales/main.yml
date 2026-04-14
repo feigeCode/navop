@@ -590,6 +590,14 @@ Settings:
         en: Automatically copy selected terminal text
         zh-CN: 选中文本后自动复制到剪贴板
         zh-HK: 選中文本後自動複製到剪貼簿
+      autocomplete:
+        en: Terminal autocomplete
+        zh-CN: 终端自动补全
+        zh-HK: 終端自動補全
+      autocomplete_desc:
+        en: Show history suggestions and search completion in supported terminals
+        zh-CN: 在支持的终端中显示历史建议和搜索补全
+        zh-HK: 在支援的終端中顯示歷史建議和搜尋補全
       middle_click_paste:
         en: Middle click paste
         zh-CN: 中键粘贴

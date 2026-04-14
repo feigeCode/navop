@@ -57,6 +57,7 @@ actions!(
 pub enum TerminalViewEvent {
     FontSizeChanged { size: f32 },
     AutoCopyChanged { enabled: bool },
+    AutocompleteChanged { enabled: bool },
     MiddleClickPasteChanged { enabled: bool },
     SyncPathChanged { enabled: bool },
     ThemeChanged { theme: TerminalTheme },
@@ -250,7 +251,10 @@ fn should_dismiss_history_prompt_for_keystroke(keystroke: &Keystroke) -> bool {
 }
 
 fn should_dismiss_history_prompt_for_mouse(button: MouseButton) -> bool {
-    matches!(button, MouseButton::Left | MouseButton::Middle | MouseButton::Right)
+    matches!(
+        button,
+        MouseButton::Left | MouseButton::Middle | MouseButton::Right
+    )
 }
 
 fn should_dismiss_history_prompt_for_scroll(lines: i32) -> bool {
@@ -262,6 +266,20 @@ fn should_reset_history_prompt_for_terminal_event(event: &TerminalModelEvent) ->
         event,
         TerminalModelEvent::PromptStart | TerminalModelEvent::InputStart
     )
+}
+
+fn history_prompt_available(
+    autocomplete_enabled: bool,
+    connection_kind: TerminalConnectionKind,
+    mode: TermMode,
+) -> bool {
+    autocomplete_enabled
+        && matches!(
+            connection_kind,
+            TerminalConnectionKind::Local | TerminalConnectionKind::Ssh
+        )
+        && !mode.contains(TermMode::ALT_SCREEN)
+        && !mode.contains(TermMode::VI)
 }
 
 /// 正在调整大小的面板
@@ -371,6 +389,8 @@ pub struct TerminalView {
     confirm_high_risk_command: bool,
     /// 选中自动复制
     auto_copy_on_select: bool,
+    /// 是否启用历史自动补全
+    autocomplete_enabled: bool,
     /// 中键粘贴
     middle_click_paste: bool,
 
@@ -678,6 +698,7 @@ impl TerminalView {
             confirm_multiline_paste: true,
             confirm_high_risk_command: true,
             auto_copy_on_select: true,
+            autocomplete_enabled: true,
             middle_click_paste: true,
             sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
             resizing: None,
@@ -753,6 +774,9 @@ impl TerminalView {
             TerminalSidebarEvent::AutoCopyChanged(enabled) => {
                 self.set_auto_copy(*enabled, cx);
             }
+            TerminalSidebarEvent::AutocompleteChanged(enabled) => {
+                self.set_autocomplete_enabled(*enabled, cx);
+            }
             TerminalSidebarEvent::MiddleClickPasteChanged(enabled) => {
                 self.set_middle_click_paste(*enabled, cx);
             }
@@ -803,11 +827,7 @@ impl TerminalView {
         let terminal = self.terminal.read(cx);
         let mode = terminal.mode();
         let connection_kind = terminal.connection_kind();
-        matches!(
-            connection_kind,
-            TerminalConnectionKind::Local | TerminalConnectionKind::Ssh
-        ) && !mode.contains(TermMode::ALT_SCREEN)
-            && !mode.contains(TermMode::VI)
+        history_prompt_available(self.autocomplete_enabled, connection_kind, mode)
     }
 
     fn log_history_prompt_state(&self, reason: &str, detail: &str, cx: &App) {
@@ -1336,6 +1356,7 @@ impl TerminalView {
         &mut self,
         font_size: f32,
         auto_copy: bool,
+        autocomplete_enabled: bool,
         middle_click_paste: bool,
         sync_path: bool,
         window: &mut Window,
@@ -1351,6 +1372,7 @@ impl TerminalView {
         }
 
         self.auto_copy_on_select = auto_copy;
+        self.apply_autocomplete_enabled(autocomplete_enabled, cx);
         self.middle_click_paste = middle_click_paste;
 
         self.terminal.update(cx, |terminal, _cx| {
@@ -1441,6 +1463,31 @@ impl TerminalView {
         });
         cx.emit(TerminalViewEvent::AutoCopyChanged { enabled });
         cx.notify();
+    }
+
+    pub fn apply_autocomplete_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.autocomplete_enabled == enabled {
+            return;
+        }
+        self.autocomplete_enabled = enabled;
+        if !enabled {
+            self.suggestion_debounce.take();
+            self.dismiss_history_prompt();
+            self.hide_history_prompt_dropdown();
+            self.dismiss_history_prompt_matches();
+        }
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_autocomplete_enabled(enabled, cx);
+        });
+        cx.notify();
+    }
+
+    pub fn set_autocomplete_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.autocomplete_enabled == enabled {
+            return;
+        }
+        self.apply_autocomplete_enabled(enabled, cx);
+        cx.emit(TerminalViewEvent::AutocompleteChanged { enabled });
     }
 
     pub fn set_middle_click_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -3307,18 +3354,17 @@ impl Element for ResizeEventHandler {
 mod tests {
     use super::{
         alt_screen_scroll_arrow, detect_unbracketed_paste_hazard, has_trailing_line_continuation,
-        has_unterminated_shell_quote, multiline_non_empty_line_count,
-        should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
-        should_dismiss_history_prompt_for_scroll,
+        has_unterminated_shell_quote, history_prompt_available, multiline_non_empty_line_count,
         should_defer_inline_history_prompt_input_to_text_system,
-        should_reset_history_prompt_for_terminal_event,
-        should_scroll_to_bottom_on_user_input, take_whole_scroll_lines,
-        UnbracketedPasteHazard,
+        should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
+        should_dismiss_history_prompt_for_scroll, should_reset_history_prompt_for_terminal_event,
+        should_scroll_to_bottom_on_user_input, take_whole_scroll_lines, UnbracketedPasteHazard,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
+    use alacritty_terminal::term::TermMode;
     use gpui::{Keystroke, MouseButton};
-    use terminal::terminal::TerminalModelEvent;
     use std::cell::Cell as StdCell;
+    use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
 
     #[test]
     fn take_whole_scroll_lines_preserves_fractional_remainder() {
@@ -3396,6 +3442,22 @@ mod tests {
         );
         assert!(!has_unterminated_shell_quote("printf '%s\\n' hello"));
         assert!(!has_trailing_line_continuation("echo hello\necho world"));
+    }
+
+    #[test]
+    fn history_prompt_requires_global_autocomplete_switch() {
+        let mode = TermMode::empty();
+
+        assert!(history_prompt_available(
+            true,
+            TerminalConnectionKind::Local,
+            mode,
+        ));
+        assert!(!history_prompt_available(
+            false,
+            TerminalConnectionKind::Local,
+            mode,
+        ));
     }
 
     #[test]

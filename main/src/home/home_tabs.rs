@@ -43,6 +43,7 @@ impl HomePage {
             let settings = AppSettings::global(cx);
             let font_size = settings.terminal_font_size as f32;
             let auto_copy = settings.terminal_auto_copy;
+            let autocomplete = settings.terminal_enable_autocomplete;
             let middle_click_paste = settings.terminal_middle_click_paste;
             let sync_path = settings.terminal_sync_path_with_terminal;
             let cursor_blink = settings.terminal_cursor_blink;
@@ -54,6 +55,7 @@ impl HomePage {
                 view.apply_terminal_settings(
                     font_size,
                     auto_copy,
+                    autocomplete,
                     middle_click_paste,
                     sync_path,
                     window,
@@ -88,6 +90,14 @@ impl HomePage {
                     TerminalViewEvent::AutoCopyChanged { enabled } => {
                         cx.update_global::<AppSettings, _>(|s, _| {
                             s.terminal_auto_copy = *enabled;
+                            s.save();
+                        });
+                        let settings = AppSettings::global(cx).clone();
+                        this.apply_terminal_settings_to_all(&settings, window, cx);
+                    }
+                    TerminalViewEvent::AutocompleteChanged { enabled } => {
+                        cx.update_global::<AppSettings, _>(|s, _| {
+                            s.terminal_enable_autocomplete = *enabled;
                             s.save();
                         });
                         let settings = AppSettings::global(cx).clone();
@@ -166,6 +176,7 @@ impl HomePage {
     ) {
         let font_size = settings.terminal_font_size as f32;
         let auto_copy = settings.terminal_auto_copy;
+        let autocomplete = settings.terminal_enable_autocomplete;
         let middle_click_paste = settings.terminal_middle_click_paste;
         let sync_path = settings.terminal_sync_path_with_terminal;
         self.terminal_views.retain(|weak| {
@@ -174,6 +185,7 @@ impl HomePage {
                     view.apply_terminal_settings(
                         font_size,
                         auto_copy,
+                        autocomplete,
                         middle_click_paste,
                         sync_path,
                         window,

@@ -343,6 +343,10 @@ Settings:
     en: Auto copy on select
     zh-CN: 选中自动复制
     zh-HK: 選中自動複製
+  autocomplete:
+    en: Terminal autocomplete
+    zh-CN: 终端自动补全
+    zh-HK: 終端自動補全
   middle_click_paste:
     en: Middle click paste
     zh-CN: 中键粘贴

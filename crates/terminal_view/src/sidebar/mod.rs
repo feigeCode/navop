@@ -110,6 +110,8 @@ pub enum TerminalSidebarEvent {
     ConfirmHighRiskCommandChanged(bool),
     /// 选中自动复制开关
     AutoCopyChanged(bool),
+    /// 自动补全开关
+    AutocompleteChanged(bool),
     /// 中键粘贴开关
     MiddleClickPasteChanged(bool),
     /// 路径与终端同步开关
@@ -161,6 +163,7 @@ impl TerminalSidebar {
             SettingsPanel::new(
                 initial_theme,
                 has_file_manager,
+                true,
                 true,
                 true,
                 sync_path_enabled,
@@ -248,6 +251,9 @@ impl TerminalSidebar {
                 }
                 settings_panel::SettingsPanelEvent::AutoCopyChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::AutoCopyChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::AutocompleteChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::AutocompleteChanged(*enabled));
                 }
                 settings_panel::SettingsPanelEvent::MiddleClickPasteChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::MiddleClickPasteChanged(*enabled));
@@ -393,6 +399,12 @@ impl TerminalSidebar {
     pub fn set_auto_copy(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_auto_copy(enabled, cx);
+        });
+    }
+
+    pub fn set_autocomplete_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_autocomplete_enabled(enabled, cx);
         });
     }
 
