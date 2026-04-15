@@ -55,6 +55,49 @@ impl MySqlPlugin {
     pub fn new() -> Self {
         Self
     }
+
+    fn column_change_reasons(
+        original: &ColumnDefinition,
+        new: &ColumnDefinition,
+    ) -> Vec<&'static str> {
+        let mut reasons = Vec::new();
+
+        if original.data_type.to_uppercase() != new.data_type.to_uppercase() {
+            reasons.push("data_type");
+        }
+        if original.length != new.length {
+            reasons.push("length");
+        }
+        if original.precision != new.precision {
+            reasons.push("precision");
+        }
+        if original.scale != new.scale {
+            reasons.push("scale");
+        }
+        if original.is_nullable != new.is_nullable {
+            reasons.push("is_nullable");
+        }
+        if original.is_auto_increment != new.is_auto_increment {
+            reasons.push("is_auto_increment");
+        }
+        if original.is_unsigned != new.is_unsigned {
+            reasons.push("is_unsigned");
+        }
+        if original.default_value != new.default_value {
+            reasons.push("default_value");
+        }
+        if original.comment != new.comment {
+            reasons.push("comment");
+        }
+        if original.charset != new.charset {
+            reasons.push("charset");
+        }
+        if original.collation != new.collation {
+            reasons.push("collation");
+        }
+
+        reasons
+    }
 }
 
 #[async_trait::async_trait]
@@ -1168,7 +1211,24 @@ impl DatabasePlugin for MySqlPlugin {
                     is_default: false,
                 },
             ],
-            "utf8mb3" | "utf8" => vec![
+            "utf8mb3" => vec![
+                CollationInfo {
+                    name: "utf8mb3_general_ci".into(),
+                    charset: "utf8mb3".into(),
+                    is_default: true,
+                },
+                CollationInfo {
+                    name: "utf8mb3_unicode_ci".into(),
+                    charset: "utf8mb3".into(),
+                    is_default: false,
+                },
+                CollationInfo {
+                    name: "utf8mb3_bin".into(),
+                    charset: "utf8mb3".into(),
+                    is_default: false,
+                },
+            ],
+            "utf8" => vec![
                 CollationInfo {
                     name: "utf8_general_ci".into(),
                     charset: "utf8".into(),
@@ -1636,6 +1696,16 @@ impl DatabasePlugin for MySqlPlugin {
             .map(|(idx, name)| (*name, idx))
             .collect();
 
+        if order_changed {
+            tracing::warn!(
+                target: "table_designer_diag",
+                table = %new.table_name,
+                ?original_existing,
+                ?new_existing,
+                "[table_designer_diag][mysql] detected existing-column order change"
+            );
+        }
+
         for name in original_cols.keys() {
             if !new_cols.contains_key(name) {
                 statements.push(format!(
@@ -1648,7 +1718,9 @@ impl DatabasePlugin for MySqlPlugin {
 
         for (idx, col) in new.columns.iter().enumerate() {
             if let Some(orig_col) = original_cols.get(col.name.as_str()) {
-                if self.column_changed(orig_col, col) {
+                let changed_fields = Self::column_change_reasons(orig_col, col);
+
+                if !changed_fields.is_empty() {
                     let col_def = self.build_column_def(col);
                     let position = if idx == 0 {
                         " FIRST".to_string()
@@ -1658,6 +1730,16 @@ impl DatabasePlugin for MySqlPlugin {
                             self.quote_identifier(&new.columns[idx - 1].name)
                         )
                     };
+                    tracing::warn!(
+                        target: "table_designer_diag",
+                        table = %new.table_name,
+                        column = %col.name,
+                        ?changed_fields,
+                        original = ?orig_col,
+                        current = ?col,
+                        position = %position,
+                        "[table_designer_diag][mysql] generating MODIFY COLUMN because column fields changed"
+                    );
                     statements.push(format!(
                         "ALTER TABLE {} MODIFY COLUMN {}{};",
                         table_name, col_def, position
@@ -1676,6 +1758,15 @@ impl DatabasePlugin for MySqlPlugin {
                                     self.quote_identifier(&new.columns[idx - 1].name)
                                 )
                             };
+                            tracing::warn!(
+                                target: "table_designer_diag",
+                                table = %new.table_name,
+                                column = %col.name,
+                                original_index = *original_idx,
+                                new_existing_index = *new_idx,
+                                position = %position,
+                                "[table_designer_diag][mysql] generating MODIFY COLUMN because existing-column order changed"
+                            );
                             statements.push(format!(
                                 "ALTER TABLE {} MODIFY COLUMN {}{};",
                                 table_name, col_def, position
@@ -2450,6 +2541,16 @@ mod tests {
         assert!(collations.iter().any(|c| c.name == "utf8mb4_general_ci"));
         assert!(collations.iter().any(|c| c.name == "utf8mb4_unicode_ci"));
         assert!(collations.iter().any(|c| c.name == "utf8mb4_bin"));
+    }
+
+    #[test]
+    fn test_get_collations_utf8mb3_uses_utf8mb3_names() {
+        let plugin = create_plugin();
+        let collations = plugin.get_collations("utf8mb3");
+
+        assert!(!collations.is_empty());
+        assert!(collations.iter().any(|c| c.name == "utf8mb3_general_ci"));
+        assert!(collations.iter().all(|c| c.charset == "utf8mb3"));
     }
 
     #[test]

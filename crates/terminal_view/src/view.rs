@@ -274,12 +274,67 @@ fn history_prompt_available(
     mode: TermMode,
 ) -> bool {
     autocomplete_enabled
-        && matches!(
-            connection_kind,
-            TerminalConnectionKind::Local | TerminalConnectionKind::Ssh
-        )
+        && connection_kind == TerminalConnectionKind::Ssh
         && !mode.contains(TermMode::ALT_SCREEN)
         && !mode.contains(TermMode::VI)
+}
+
+const HISTORY_PROMPT_DROPDOWN_MIN_WIDTH: f32 = 300.0;
+const HISTORY_PROMPT_DROPDOWN_MAX_WIDTH: f32 = 500.0;
+const HISTORY_PROMPT_DROPDOWN_GAP_Y: f32 = 6.0;
+const HISTORY_PROMPT_DROPDOWN_EDGE_PADDING: f32 = 8.0;
+const HISTORY_PROMPT_DROPDOWN_ROW_PADDING_Y: f32 = 12.0;
+const HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y: f32 = 16.0;
+const HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT: f32 = 20.0;
+
+fn estimate_history_prompt_dropdown_height(
+    line_height: Pixels,
+    match_count: usize,
+    search_mode: bool,
+) -> Pixels {
+    let row_count = match_count.max(1) as f32;
+    let rows_height = (line_height + px(HISTORY_PROMPT_DROPDOWN_ROW_PADDING_Y)) * row_count;
+    let header_height = if search_mode {
+        px(HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT)
+    } else {
+        px(0.0)
+    };
+
+    px(HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y) + header_height + rows_height
+}
+
+fn history_prompt_dropdown_origin(
+    terminal_bounds: Bounds<Pixels>,
+    cell_width: Pixels,
+    line_height: Pixels,
+    cursor_line: i32,
+    cursor_col: usize,
+    match_count: usize,
+    search_mode: bool,
+) -> Point<Pixels> {
+    let cursor_left = terminal_bounds.origin.x + cell_width * cursor_col as f32;
+    let cursor_top = terminal_bounds.origin.y + line_height * cursor_line as f32;
+    let dropdown_width = (terminal_bounds.size.width
+        - px(HISTORY_PROMPT_DROPDOWN_EDGE_PADDING * 2.0))
+    .min(px(HISTORY_PROMPT_DROPDOWN_MAX_WIDTH))
+    .max(px(HISTORY_PROMPT_DROPDOWN_MIN_WIDTH));
+    let dropdown_height =
+        estimate_history_prompt_dropdown_height(line_height, match_count, search_mode);
+    let min_left = terminal_bounds.origin.x;
+    let max_left = (terminal_bounds.right() - dropdown_width).max(min_left);
+    let left = cursor_left.min(max_left).max(min_left);
+    let below_top = cursor_top + line_height + px(HISTORY_PROMPT_DROPDOWN_GAP_Y);
+    let min_top = terminal_bounds.origin.y;
+    let max_top = (terminal_bounds.bottom() - dropdown_height).max(min_top);
+    let fits_below = below_top + dropdown_height <= terminal_bounds.bottom();
+    let preferred_above_top = cursor_top - dropdown_height - px(HISTORY_PROMPT_DROPDOWN_GAP_Y);
+    let top = if fits_below {
+        below_top.min(max_top)
+    } else {
+        preferred_above_top.max(min_top).min(max_top)
+    };
+
+    Point::new(left, top)
 }
 
 /// 正在调整大小的面板
@@ -1124,14 +1179,20 @@ impl TerminalView {
             return None;
         }
 
-        let content_left = px(12.0);
-        let content_top = px(12.0);
-        let ghost_left = content_left + self.cell_width * cursor_col as f32;
-        let ghost_top = content_top + self.line_height * cursor_line as f32;
-        let dropdown_top = ghost_top + self.line_height + px(6.0);
         let selected_index = self.history_prompt.selected_index();
         let search_query = self.history_prompt.query_input().to_string();
         let view = cx.entity().clone();
+        let ghost_left = self.terminal_bounds.origin.x + self.cell_width * cursor_col as f32;
+        let ghost_top = self.terminal_bounds.origin.y + self.line_height * cursor_line as f32;
+        let dropdown_origin = history_prompt_dropdown_origin(
+            self.terminal_bounds,
+            self.cell_width,
+            self.line_height,
+            cursor_line,
+            cursor_col,
+            matches.len(),
+            search_mode,
+        );
         let ghost_suffix = if search_mode {
             None
         } else {
@@ -1164,10 +1225,10 @@ impl TerminalView {
                 .child(
                     div()
                         .absolute()
-                        .left(content_left)
-                        .top(dropdown_top)
-                        .min_w(px(300.0))
-                        .max_w(px(500.0))
+                        .left(dropdown_origin.x)
+                        .top(dropdown_origin.y)
+                        .min_w(px(HISTORY_PROMPT_DROPDOWN_MIN_WIDTH))
+                        .max_w(px(HISTORY_PROMPT_DROPDOWN_MAX_WIDTH))
                         .flex()
                         .flex_col()
                         .gap_1()
@@ -1373,6 +1434,11 @@ impl TerminalView {
 
         self.auto_copy_on_select = auto_copy;
         self.apply_autocomplete_enabled(autocomplete_enabled, cx);
+        if !self.history_prompt_enabled(cx) {
+            self.suggestion_debounce.take();
+            self.hide_history_prompt_dropdown();
+            self.dismiss_history_prompt_matches();
+        }
         self.middle_click_paste = middle_click_paste;
 
         self.terminal.update(cx, |terminal, _cx| {
@@ -3354,15 +3420,15 @@ impl Element for ResizeEventHandler {
 mod tests {
     use super::{
         alt_screen_scroll_arrow, detect_unbracketed_paste_hazard, has_trailing_line_continuation,
-        has_unterminated_shell_quote, history_prompt_available, multiline_non_empty_line_count,
-        should_defer_inline_history_prompt_input_to_text_system,
+        has_unterminated_shell_quote, history_prompt_available, history_prompt_dropdown_origin,
+        multiline_non_empty_line_count, should_defer_inline_history_prompt_input_to_text_system,
         should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
         should_dismiss_history_prompt_for_scroll, should_reset_history_prompt_for_terminal_event,
         should_scroll_to_bottom_on_user_input, take_whole_scroll_lines, UnbracketedPasteHazard,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::term::TermMode;
-    use gpui::{Keystroke, MouseButton};
+    use gpui::{px, size, Bounds, Keystroke, MouseButton, Point};
     use std::cell::Cell as StdCell;
     use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
 
@@ -3448,7 +3514,7 @@ mod tests {
     fn history_prompt_requires_global_autocomplete_switch() {
         let mode = TermMode::empty();
 
-        assert!(history_prompt_available(
+        assert!(!history_prompt_available(
             true,
             TerminalConnectionKind::Local,
             mode,
@@ -3458,6 +3524,49 @@ mod tests {
             TerminalConnectionKind::Local,
             mode,
         ));
+    }
+
+    #[test]
+    fn history_prompt_only_remains_available_for_ssh() {
+        let mode = TermMode::empty();
+
+        assert!(!history_prompt_available(
+            true,
+            TerminalConnectionKind::Local,
+            mode,
+        ));
+        assert!(!history_prompt_available(
+            true,
+            TerminalConnectionKind::Local,
+            mode,
+        ));
+        assert!(history_prompt_available(
+            true,
+            TerminalConnectionKind::Ssh,
+            mode,
+        ));
+    }
+
+    #[test]
+    fn history_prompt_dropdown_flips_above_when_cursor_is_near_bottom() {
+        let terminal_bounds =
+            Bounds::new(Point::new(px(12.0), px(12.0)), size(px(800.0), px(280.0)));
+        let line_height = px(20.0);
+        let cursor_line = 11;
+        let cursor_top = terminal_bounds.origin.y + line_height * cursor_line as f32;
+
+        let origin = history_prompt_dropdown_origin(
+            terminal_bounds,
+            px(8.0),
+            line_height,
+            cursor_line,
+            24,
+            6,
+            false,
+        );
+
+        assert!(origin.y < cursor_top);
+        assert!(origin.y >= terminal_bounds.origin.y);
     }
 
     #[test]

@@ -1,13 +1,12 @@
 use futures::channel::oneshot;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle,
-    Window, div, px, uniform_list,
+    div, px, uniform_list, AnyElement, App, AsyncApp, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
+    UniformListScrollHandle, Window,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     clipboard::Clipboard,
@@ -19,14 +18,13 @@ use gpui_component::{
     scroll::Scrollbar,
     select::{Select, SelectEvent, SelectItem, SelectState},
     tab::{Tab, TabBar},
-    v_flex,
+    v_flex, ActiveTheme, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
 };
 use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use crate::database_view_plugin::{ColumnEditorCapabilities, DatabaseViewPluginRegistry};
-use db::GlobalDbState;
 #[cfg(test)]
 use db::duckdb::DuckDbPlugin;
 use db::plugin::DatabasePlugin;
@@ -34,6 +32,7 @@ use db::types::{
     CharsetInfo, CollationInfo, ColumnDefinition, ColumnInfo, IndexDefinition, IndexInfo,
     ParsedColumnType, TableDesign, TableOptions,
 };
+use db::GlobalDbState;
 use gpui_component::select::SearchableVec;
 use one_core::storage::DatabaseType;
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
@@ -217,6 +216,10 @@ fn extract_scale_from_type_str(data_type: &str) -> Option<u32> {
     None
 }
 
+fn column_order_snapshot(design: &TableDesign) -> Vec<&str> {
+    design.columns.iter().map(|col| col.name.as_str()).collect()
+}
+
 pub struct TableDesigner {
     title: SharedString,
     focus_handle: FocusHandle,
@@ -234,6 +237,7 @@ pub struct TableDesigner {
     sql_preview_input: Entity<InputState>,
     ddl_preview_input: Entity<InputState>,
     preview_refresh_state: PreviewRefreshScheduleState,
+    metadata_load_seq: usize,
     original_design: Option<TableDesign>,
     _subscriptions: Vec<Subscription>,
 }
@@ -466,6 +470,7 @@ impl TableDesigner {
             sql_preview_input,
             ddl_preview_input,
             preview_refresh_state: PreviewRefreshScheduleState::default(),
+            metadata_load_seq: 0,
             original_design: None,
             _subscriptions: vec![
                 name_sub,
@@ -482,7 +487,7 @@ impl TableDesigner {
         designer.update_previews(window, cx);
 
         if designer.config.table_name.is_some() {
-            designer.load_table_structure(cx);
+            designer.load_table_structure("initial_open", cx);
         }
 
         designer
@@ -658,6 +663,25 @@ impl TableDesigner {
         let sql = self.build_diff_preview_sql(&design, &column_renames, cx);
         let ddl = self.build_ddl_preview_sql(&design, cx);
 
+        if let Some(original) = &self.original_design {
+            if Self::sql_has_changes(&sql) {
+                let original_order = column_order_snapshot(original);
+                let current_order = column_order_snapshot(&design);
+                tracing::warn!(
+                    target: "table_designer_diag",
+                    table = %design.table_name,
+                    database_type = ?self.config.database_type,
+                    ?column_renames,
+                    ?original_order,
+                    ?current_order,
+                    original_columns = ?original.columns,
+                    current_columns = ?design.columns,
+                    sql = %sql,
+                    "[table_designer_diag] existing table preview detected diff"
+                );
+            }
+        }
+
         self.sql_preview_input.update(cx, |state, cx| {
             state.set_value(sql, window, cx);
         });
@@ -768,7 +792,7 @@ impl TableDesigner {
                                                 designer.config.table_name =
                                                     Some(request.table_name.clone());
                                             }
-                                            designer.load_table_structure(cx);
+                                            designer.load_table_structure("after_save", cx);
                                         }
                                         ExecuteSuccessBehavior::CloseTab {
                                             tab_container,
@@ -907,10 +931,23 @@ impl TableDesigner {
         self.maybe_confirm_and_execute(request, window, cx);
     }
 
-    pub fn load_table_structure(&mut self, cx: &mut Context<Self>) {
+    pub fn load_table_structure(&mut self, reason: &'static str, cx: &mut Context<Self>) {
         let Some(table_name) = self.config.table_name.clone() else {
             return;
         };
+
+        self.metadata_load_seq += 1;
+        let load_seq = self.metadata_load_seq;
+        tracing::warn!(
+            target: "table_designer_diag",
+            seq = load_seq,
+            reason,
+            connection_id = %self.config.connection_id,
+            database = %self.config.database_name,
+            schema = ?self.config.schema_name,
+            table = %table_name,
+            "[table_designer_diag] load_table_structure triggered"
+        );
 
         let global_state = cx.global::<GlobalDbState>().clone();
         let connection_id = self.config.connection_id.clone();
@@ -939,6 +976,16 @@ impl TableDesigner {
                     table_name.clone(),
                 )
                 .await;
+
+            tracing::warn!(
+                target: "table_designer_diag",
+                seq = load_seq,
+                columns_ok = columns_result.is_ok(),
+                columns_count = columns_result.as_ref().map(|cols| cols.len()).unwrap_or(0),
+                indexes_ok = indexes_result.is_ok(),
+                indexes_count = indexes_result.as_ref().map(|idxs| idxs.len()).unwrap_or(0),
+                "[table_designer_diag] load_table_structure query finished"
+            );
 
             let _ = cx.update(|cx| {
                 if let Some(window_id) = cx.active_window() {
@@ -1824,7 +1871,11 @@ impl ColumnsEditor {
 
                 let default_value = {
                     let val = row.default_input.read(cx).text().to_string();
-                    if val.is_empty() { None } else { Some(val) }
+                    if val.is_empty() {
+                        None
+                    } else {
+                        Some(val)
+                    }
                 };
                 let comment = row.comment_input.read(cx).text().to_string();
                 let charset = row
@@ -1857,6 +1908,51 @@ impl ColumnsEditor {
                 }
             })
             .collect()
+    }
+
+    fn build_existing_collation_selection(
+        plugin: Option<&dyn DatabasePlugin>,
+        charset_name: &str,
+        current_collation: Option<&str>,
+    ) -> (Vec<CollationSelectItem>, usize) {
+        let mut items: Vec<CollationSelectItem> = plugin
+            .map(|plugin| plugin.get_collations(charset_name))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|info| CollationSelectItem { info })
+            .collect();
+
+        if let Some(collation) = current_collation.filter(|value| !value.is_empty()) {
+            if !items.iter().any(|item| item.info.name == collation) {
+                items.insert(
+                    0,
+                    CollationSelectItem {
+                        info: CollationInfo {
+                            name: collation.to_string(),
+                            charset: charset_name.to_string(),
+                            is_default: false,
+                        },
+                    },
+                );
+            }
+        }
+
+        if items.is_empty() {
+            items.push(CollationSelectItem {
+                info: CollationInfo {
+                    name: "".into(),
+                    charset: charset_name.to_string(),
+                    is_default: true,
+                },
+            });
+        }
+
+        let selected_idx = current_collation
+            .and_then(|collation| items.iter().position(|item| item.info.name == collation))
+            .or_else(|| items.iter().position(|item| item.info.is_default))
+            .unwrap_or(0);
+
+        (items, selected_idx)
     }
 
     pub fn get_column_renames(&self, cx: &App) -> Vec<(String, String)> {
@@ -1982,22 +2078,11 @@ impl ColumnsEditor {
             // 根据列已有的 charset 加载对应的排序规则列表，并选中已有值
             let collation_select = cx.new(|cx| {
                 let (items, selected_idx) = if let Some(ref charset_name) = col.charset {
-                    let collations = if let Some(ref p) = plugin {
-                        p.get_collations(charset_name)
-                    } else {
-                        vec![]
-                    };
-                    let items: Vec<CollationSelectItem> = collations
-                        .into_iter()
-                        .map(|info| CollationSelectItem { info })
-                        .collect();
-                    let idx = col
-                        .collation
-                        .as_ref()
-                        .and_then(|coll| items.iter().position(|item| item.info.name == *coll))
-                        .or_else(|| items.iter().position(|c| c.info.is_default))
-                        .unwrap_or(0);
-                    (items, idx)
+                    Self::build_existing_collation_selection(
+                        plugin.as_deref(),
+                        charset_name,
+                        col.collation.as_deref(),
+                    )
                 } else {
                     let items = vec![CollationSelectItem {
                         info: CollationInfo {
@@ -4326,5 +4411,35 @@ mod tests {
         assert_eq!(numeric_definition.length, Some(11));
         assert_eq!(enum_definition.data_type, "enum('todo','done')");
         assert_eq!(enum_definition.collation.as_deref(), Some("utf8mb4_bin"));
+    }
+
+    #[test]
+    fn test_build_existing_collation_selection_preserves_utf8mb3_collation() {
+        let plugin = MySqlPlugin::new();
+
+        let (items, selected_idx) = ColumnsEditor::build_existing_collation_selection(
+            Some(&plugin),
+            "utf8mb3",
+            Some("utf8mb3_general_ci"),
+        );
+
+        assert!(items
+            .iter()
+            .any(|item| item.info.name == "utf8mb3_general_ci"));
+        assert_eq!(items[selected_idx].info.name, "utf8mb3_general_ci");
+    }
+
+    #[test]
+    fn test_build_existing_collation_selection_preserves_unknown_collation() {
+        let plugin = MySqlPlugin::new();
+
+        let (items, selected_idx) = ColumnsEditor::build_existing_collation_selection(
+            Some(&plugin),
+            "utf8mb4",
+            Some("utf8mb4_custom_ci"),
+        );
+
+        assert_eq!(items[selected_idx].info.name, "utf8mb4_custom_ci");
+        assert_eq!(items[selected_idx].info.charset, "utf8mb4");
     }
 }

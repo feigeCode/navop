@@ -179,8 +179,12 @@ fn suggestion_rank(command: &str, query: &str) -> Option<u8> {
         Some(0)
     } else if has_token_prefix(command, query) {
         Some(1)
-    } else if command.contains(query) {
+    } else if has_token_initialism_prefix(command, query) {
         Some(2)
+    } else if command.contains(query) {
+        Some(3)
+    } else if is_subsequence(query, command) {
+        Some(4)
     } else {
         None
     }
@@ -269,6 +273,25 @@ fn has_token_prefix(command: &str, query: &str) -> bool {
         .any(|token| token.starts_with(query))
 }
 
+fn token_initialism(command: &str) -> String {
+    command
+        .split_whitespace()
+        .filter_map(|token| {
+            token
+                .chars()
+                .find(|ch| ch.is_ascii_alphanumeric())
+                .map(|ch| ch.to_ascii_lowercase())
+        })
+        .collect()
+}
+
+fn has_token_initialism_prefix(command: &str, query: &str) -> bool {
+    if query.len() < 2 {
+        return false;
+    }
+    token_initialism(command).starts_with(query)
+}
+
 fn is_subsequence(query: &str, command: &str) -> bool {
     let mut query_chars = query.chars();
     let mut current = query_chars.next();
@@ -293,10 +316,12 @@ fn history_search_rank(command: &str, query: &str) -> Option<u8> {
         Some(0)
     } else if has_token_prefix(command, query) {
         Some(1)
-    } else if command.contains(query) {
+    } else if has_token_initialism_prefix(command, query) {
         Some(2)
-    } else if is_subsequence(query, command) {
+    } else if command.contains(query) {
         Some(3)
+    } else if is_subsequence(query, command) {
+        Some(4)
     } else {
         None
     }
@@ -475,6 +500,27 @@ mod tests {
         let matches = collect_history_suggestions(&session, &persisted, "git", 5);
 
         assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn inline_suggest_matches_token_initialism() {
+        let session = session_from_strings(&["git commit -m", "git checkout main"]);
+        let persisted = vec![];
+
+        let matches = collect_history_suggestions(&session, &persisted, "gcm", 5);
+
+        assert!(matches.contains(&"git commit -m".to_string()));
+    }
+
+    #[test]
+    fn inline_suggest_matches_subsequence_after_stronger_strategies() {
+        let session = session_from_strings(&["git status", "git stash", "cargo test"]);
+        let persisted = vec![];
+
+        let matches = collect_history_suggestions(&session, &persisted, "gst", 5);
+
+        assert!(matches.contains(&"git status".to_string()));
+        assert!(matches.contains(&"git stash".to_string()));
     }
 
     #[test]

@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Macro to reduce boilerplate for plugin operations with session management
 macro_rules! with_plugin_session {
@@ -311,7 +311,7 @@ impl ConnectionManager {
 
         // Try to acquire an existing session and switch database if needed
         if let Some(session_id) = self.try_acquire_session(&config).await? {
-            info!(
+            debug!(
                 "[DB][Timing] create_session reused config_id={} database_type={:?} database={:?} session_id={} elapsed={}ms",
                 config_id,
                 database_type,
@@ -412,7 +412,7 @@ impl ConnectionManager {
             {
                 session.mark_in_use();
 
-                info!(
+                debug!(
                     "Reusing session: {} (database: {:?})",
                     session.session_id, config.database
                 );
@@ -474,7 +474,7 @@ impl ConnectionManager {
                     Ok(_) => {
                         // Check passed (consistent or updated), release normally
                         session.release();
-                        info!("Session {} released", session_id);
+                        debug!("Session {} released", session_id);
                         return Ok(());
                     }
                     Err(e) => {

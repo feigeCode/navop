@@ -1,16 +1,16 @@
 //! AI Input - 支持 SQL/Agent 双模式的智能输入组件
 
-use db::GlobalDbState;
 use db::plugin::SqlCompletionInfo;
+use db::GlobalDbState;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Context, Corner, Entity, EventEmitter, FocusHandle,
-    Focusable, IntoElement, ParentElement, Render, Styled, Subscription, Window, div, px,
+    div, px, AnyElement, App, AppContext, AsyncApp, Context, Corner, Entity, EventEmitter,
+    FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Subscription, Window,
 };
 use gpui_component::button::ButtonVariants;
 use gpui_component::{
-    ActiveTheme, IconName, Sizable, Size, button::Button, h_flex, input::InputEvent,
-    popover::Popover, v_flex,
+    button::Button, h_flex, input::InputEvent, popover::Popover, v_flex, ActiveTheme, IconName,
+    Sizable, Size,
 };
 use rust_i18n::t;
 use std::rc::Rc;
@@ -53,6 +53,10 @@ impl InputMode {
             InputMode::Agent => IconName::AI,
             InputMode::Sql => IconName::Database,
         }
+    }
+
+    fn needs_column_metadata(&self) -> bool {
+        matches!(self, InputMode::Sql)
     }
 }
 
@@ -328,6 +332,7 @@ impl AIInput {
         }
         self.mode = mode.clone();
         self.apply_editor_mode(window, cx);
+        self.update_sql_editor_schema(window, cx);
         cx.emit(AIInputEvent::ModeChanged { mode });
         cx.notify();
     }
@@ -421,6 +426,7 @@ impl AIInput {
         self.apply_completion_provider(window, cx);
 
         let global_state = cx.global::<GlobalDbState>().clone();
+        let should_load_columns = self.mode.needs_column_metadata();
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let tables = match global_state
                 .list_tables(
@@ -470,6 +476,10 @@ impl AIInput {
                         });
                     }
                 });
+            }
+
+            if !should_load_columns {
+                return;
             }
 
             let mut full_schema = table_schema;
@@ -717,5 +727,20 @@ impl Render for AIInput {
             .child(self.render_header(cx))
             .child(self.render_input_area(cx))
             .child(self.render_footer(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InputMode;
+
+    #[test]
+    fn test_agent_mode_does_not_need_column_metadata() {
+        assert!(!InputMode::Agent.needs_column_metadata());
+    }
+
+    #[test]
+    fn test_sql_mode_needs_column_metadata() {
+        assert!(InputMode::Sql.needs_column_metadata());
     }
 }
