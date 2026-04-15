@@ -328,6 +328,10 @@ fn history_prompt_dropdown_origin(
     Point::new(left, top)
 }
 
+fn history_prompt_overlay_bounds(terminal_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+    Bounds::new(Point::new(px(0.0), px(0.0)), terminal_bounds.size)
+}
+
 /// 正在调整大小的面板
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResizingPanel {
@@ -1202,10 +1206,11 @@ impl TerminalView {
         let selected_index = self.history_prompt.selected_index();
         let search_query = self.history_prompt.query_input().to_string();
         let view = cx.entity().clone();
-        let ghost_left = self.terminal_bounds.origin.x + self.cell_width * cursor_col as f32;
-        let ghost_top = self.terminal_bounds.origin.y + self.line_height * cursor_line as f32;
+        let overlay_bounds = history_prompt_overlay_bounds(self.terminal_bounds);
+        let ghost_left = self.cell_width * cursor_col as f32;
+        let ghost_top = self.line_height * cursor_line as f32;
         let dropdown_origin = history_prompt_dropdown_origin(
-            self.terminal_bounds,
+            overlay_bounds,
             self.cell_width,
             self.line_height,
             cursor_line,
@@ -3170,6 +3175,9 @@ impl Render for TerminalView {
                             .bg(self.current_theme.background)
                             .overflow_hidden()
                             .child(self.render_terminal(cx))
+                            .when_some(self.render_history_prompt_overlay(cx), |this, overlay| {
+                                this.child(overlay)
+                            })
                             .context_menu(move |menu, window, cx| {
                                 Self::build_context_menu(
                                     menu,
@@ -3181,9 +3189,6 @@ impl Render for TerminalView {
                                     cx,
                                 )
                             })
-                    })
-                    .when_some(self.render_history_prompt_overlay(cx), |this, overlay| {
-                        this.child(overlay)
                     })
                     .when_some(tooltip.zip(mouse_pos), |this, (tooltip, pos)| {
                         let relative_x = pos.x - terminal_bounds.origin.x;
@@ -3456,7 +3461,8 @@ mod tests {
     use super::{
         alt_screen_scroll_arrow, detect_unbracketed_paste_hazard, has_trailing_line_continuation,
         has_unterminated_shell_quote, history_prompt_available, history_prompt_dropdown_origin,
-        multiline_non_empty_line_count, should_defer_inline_history_prompt_input_to_text_system,
+        history_prompt_overlay_bounds, multiline_non_empty_line_count,
+        should_defer_inline_history_prompt_input_to_text_system,
         should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
         should_dismiss_history_prompt_for_scroll, should_reset_history_prompt_for_terminal_event,
         should_scroll_to_bottom_on_user_input, take_whole_scroll_lines, UnbracketedPasteHazard,
@@ -3602,6 +3608,17 @@ mod tests {
 
         assert!(origin.y < cursor_top);
         assert!(origin.y >= terminal_bounds.origin.y);
+    }
+
+    #[test]
+    fn history_prompt_overlay_bounds_reset_origin_for_local_overlay_positioning() {
+        let terminal_bounds =
+            Bounds::new(Point::new(px(96.0), px(144.0)), size(px(800.0), px(280.0)));
+
+        let overlay_bounds = history_prompt_overlay_bounds(terminal_bounds);
+
+        assert_eq!(overlay_bounds.origin, Point::new(px(0.0), px(0.0)));
+        assert_eq!(overlay_bounds.size, terminal_bounds.size);
     }
 
     #[test]
