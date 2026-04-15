@@ -3,219 +3,18 @@ use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
 use db_view::chatdb::chat_panel::ChatPanel;
 use db_view::database_tab::DatabaseTabView;
 use gpui::AppContext;
-use gpui::{App, BorrowAppContext, Context, Entity, Window};
+use gpui::{App, Context, Window};
 use mongodb_view::MongoTabView;
 use one_core::storage::{ConnectionType, StoredConnection, Workspace};
 use one_core::tab_container::TabItem;
 use redis_view::RedisTabView;
 use sftp_view::{SftpView, SftpViewEvent};
 use terminal::LocalConfig;
-use terminal_view::{TerminalConnectionKind, TerminalTheme, TerminalView, TerminalViewEvent};
+use terminal_view::{current_settings as current_terminal_settings, TerminalConnectionKind, TerminalView};
 
 impl HomePage {
     fn terminal_sync_path_enabled(cx: &App) -> bool {
-        if cx.has_global::<AppSettings>() {
-            AppSettings::global(cx).terminal_sync_path_with_terminal
-        } else {
-            false
-        }
-    }
-
-    fn register_terminal_view(&mut self, terminal_view: &Entity<TerminalView>) {
-        self.terminal_views.retain(|view| view.upgrade().is_some());
-        self.terminal_views.push(terminal_view.downgrade());
-    }
-
-    /// 注册终端视图：应用当前全局设置 + 绑定事件同步
-    ///
-    /// 所有创建 TerminalView 的地方都应调用此方法，
-    /// 替代之前散落的 register + apply + bind × 2。
-    fn setup_terminal_view(
-        &mut self,
-        terminal_view: &Entity<TerminalView>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.register_terminal_view(terminal_view);
-
-        // 从 AppSettings 读取所有终端设置并应用
-        if cx.has_global::<AppSettings>() {
-            let settings = AppSettings::global(cx);
-            let font_size = settings.terminal_font_size as f32;
-            let auto_copy = settings.terminal_auto_copy;
-            let autocomplete = settings.terminal_enable_autocomplete;
-            let middle_click_paste = settings.terminal_middle_click_paste;
-            let sync_path = settings.terminal_sync_path_with_terminal;
-            let cursor_blink = settings.terminal_cursor_blink;
-            let confirm_multiline = settings.terminal_confirm_multiline_paste;
-            let confirm_high_risk = settings.terminal_confirm_high_risk_command;
-            let theme = TerminalTheme::find_by_name(&settings.terminal_theme);
-
-            terminal_view.update(cx, |view, cx| {
-                view.apply_terminal_settings(
-                    font_size,
-                    auto_copy,
-                    autocomplete,
-                    middle_click_paste,
-                    sync_path,
-                    window,
-                    cx,
-                );
-                view.apply_cursor_blink(cursor_blink, window, cx);
-                view.apply_confirm_multiline_paste(confirm_multiline, cx);
-                view.apply_confirm_high_risk_command(confirm_high_risk, cx);
-            });
-            if let Some(theme) = theme {
-                terminal_view.update(cx, |view, cx| {
-                    view.apply_theme(&theme, window, cx);
-                });
-            }
-        }
-
-        // 单一订阅处理所有 TerminalViewEvent
-        let subscription = cx.subscribe_in(
-            terminal_view,
-            window,
-            |this, _view, event: &TerminalViewEvent, window, cx| {
-                match event {
-                    // ---- 持久化到 AppSettings 并同步 ----
-                    TerminalViewEvent::FontSizeChanged { size } => {
-                        cx.update_global::<AppSettings, _>(|s, _| {
-                            s.terminal_font_size = *size as f64;
-                            s.save();
-                        });
-                        let settings = AppSettings::global(cx).clone();
-                        this.apply_terminal_settings_to_all(&settings, window, cx);
-                    }
-                    TerminalViewEvent::AutoCopyChanged { enabled } => {
-                        cx.update_global::<AppSettings, _>(|s, _| {
-                            s.terminal_auto_copy = *enabled;
-                            s.save();
-                        });
-                        let settings = AppSettings::global(cx).clone();
-                        this.apply_terminal_settings_to_all(&settings, window, cx);
-                    }
-                    TerminalViewEvent::AutocompleteChanged { enabled } => {
-                        cx.update_global::<AppSettings, _>(|s, _| {
-                            s.terminal_enable_autocomplete = *enabled;
-                            s.save();
-                        });
-                        let settings = AppSettings::global(cx).clone();
-                        this.apply_terminal_settings_to_all(&settings, window, cx);
-                    }
-                    TerminalViewEvent::MiddleClickPasteChanged { enabled } => {
-                        cx.update_global::<AppSettings, _>(|s, _| {
-                            s.terminal_middle_click_paste = *enabled;
-                            s.save();
-                        });
-                        let settings = AppSettings::global(cx).clone();
-                        this.apply_terminal_settings_to_all(&settings, window, cx);
-                    }
-                    TerminalViewEvent::SyncPathChanged { enabled } => {
-                        cx.update_global::<AppSettings, _>(|s, _| {
-                            s.terminal_sync_path_with_terminal = *enabled;
-                            s.save();
-                        });
-                        let settings = AppSettings::global(cx).clone();
-                        this.apply_terminal_settings_to_all(&settings, window, cx);
-                    }
-
-                    // ---- 持久化到 AppSettings 并同步 ----
-                    TerminalViewEvent::ThemeChanged { theme } => {
-                        cx.update_global::<AppSettings, _>(|s, _| {
-                            s.terminal_theme = theme.name.to_string();
-                            s.save();
-                        });
-                        let theme = theme.clone();
-                        this.for_each_terminal_view(window, cx, |view, window, cx| {
-                            view.apply_theme(&theme, window, cx);
-                        });
-                    }
-                    TerminalViewEvent::CursorBlinkChanged { enabled } => {
-                        cx.update_global::<AppSettings, _>(|s, _| {
-                            s.terminal_cursor_blink = *enabled;
-                            s.save();
-                        });
-                        let enabled = *enabled;
-                        this.for_each_terminal_view(window, cx, |view, window, cx| {
-                            view.apply_cursor_blink(enabled, window, cx);
-                        });
-                    }
-                    TerminalViewEvent::ConfirmMultilinePasteChanged { enabled } => {
-                        cx.update_global::<AppSettings, _>(|s, _| {
-                            s.terminal_confirm_multiline_paste = *enabled;
-                            s.save();
-                        });
-                        let enabled = *enabled;
-                        this.for_each_terminal_view(window, cx, |view, _window, cx| {
-                            view.apply_confirm_multiline_paste(enabled, cx);
-                        });
-                    }
-                    TerminalViewEvent::ConfirmHighRiskCommandChanged { enabled } => {
-                        cx.update_global::<AppSettings, _>(|s, _| {
-                            s.terminal_confirm_high_risk_command = *enabled;
-                            s.save();
-                        });
-                        let enabled = *enabled;
-                        this.for_each_terminal_view(window, cx, |view, _window, cx| {
-                            view.apply_confirm_high_risk_command(enabled, cx);
-                        });
-                    }
-                }
-                cx.notify();
-            },
-        );
-        self._subscriptions.push(subscription);
-    }
-
-    pub(crate) fn apply_terminal_settings_to_all(
-        &mut self,
-        settings: &AppSettings,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let font_size = settings.terminal_font_size as f32;
-        let auto_copy = settings.terminal_auto_copy;
-        let autocomplete = settings.terminal_enable_autocomplete;
-        let middle_click_paste = settings.terminal_middle_click_paste;
-        let sync_path = settings.terminal_sync_path_with_terminal;
-        self.terminal_views.retain(|weak| {
-            if let Some(view) = weak.upgrade() {
-                view.update(cx, |view, cx| {
-                    view.apply_terminal_settings(
-                        font_size,
-                        auto_copy,
-                        autocomplete,
-                        middle_click_paste,
-                        sync_path,
-                        window,
-                        cx,
-                    );
-                });
-                true
-            } else {
-                false
-            }
-        });
-    }
-
-    /// 遍历所有存活的终端视图并执行回调，同时清理已释放的弱引用
-    fn for_each_terminal_view(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        mut f: impl FnMut(&mut TerminalView, &mut Window, &mut Context<TerminalView>),
-    ) {
-        self.terminal_views.retain(|weak| {
-            if let Some(entity) = weak.upgrade() {
-                entity.update(cx, |view, cx| {
-                    f(view, window, cx);
-                });
-                true
-            } else {
-                false
-            }
-        });
+        current_terminal_settings(cx).sync_path_with_terminal
     }
 
     pub(crate) fn open_ssh_terminal(
@@ -251,7 +50,6 @@ impl HomePage {
         let terminal_view = cx.new(|cx| {
             TerminalView::new_ssh_with_index(conn, tab_index, window, cx, None, sync_path)
         });
-        self.setup_terminal_view(&terminal_view, window, cx);
         self.tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, "ssh", terminal_view);
             tc.add_and_activate_tab_with_focus(tab, window, cx);
@@ -287,7 +85,6 @@ impl HomePage {
 
         let terminal_view =
             cx.new(|cx| TerminalView::new_serial_with_index(conn, tab_index, window, cx));
-        self.setup_terminal_view(&terminal_view, window, cx);
         self.tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, "serial", terminal_view);
             tc.add_and_activate_tab_with_focus(tab, window, cx);
@@ -330,7 +127,7 @@ impl HomePage {
         let subscription = cx.subscribe_in(
             &sftp_view,
             window,
-            move |this, _sftp, event: &SftpViewEvent, window, cx| {
+            move |_this, _sftp, event: &SftpViewEvent, window, cx| {
                 match event {
                     SftpViewEvent::OpenLocalTerminal { working_dir } => {
                         // 使用时间戳生成唯一 tab_id，支持打开多个本地终端
@@ -360,7 +157,6 @@ impl HomePage {
                         };
                         let terminal_view =
                             cx.new(|cx| TerminalView::new_with_index(config, idx, window, cx));
-                        this.setup_terminal_view(&terminal_view, window, cx);
                         tab_container.update(cx, |tc, cx| {
                             let tab = TabItem::new(tab_id, "terminal", terminal_view);
                             tc.add_and_activate_tab_with_focus(tab, window, cx);
@@ -402,7 +198,6 @@ impl HomePage {
                                 sync_path,
                             )
                         });
-                        this.setup_terminal_view(&terminal_view, window, cx);
                         tab_container.update(cx, |tc, cx| {
                             let tab = TabItem::new(tab_id, "ssh", terminal_view);
                             tc.add_and_activate_tab_with_focus(tab, window, cx);
@@ -582,11 +377,10 @@ impl HomePage {
         let tab_container = self.tab_container.clone();
         let home = cx.entity();
         window.defer(cx, move |window, cx| {
-            home.update(cx, |this, cx| {
+            home.update(cx, |_this, cx| {
                 let terminal_view = cx.new(|cx| {
                     TerminalView::new_with_index(LocalConfig::default(), tab_index, window, cx)
                 });
-                this.setup_terminal_view(&terminal_view, window, cx);
                 tab_container.update(cx, |tc, cx| {
                     let tab = TabItem::new(tab_id, "home", terminal_view);
                     tc.add_and_activate_tab_with_focus(tab, window, cx);

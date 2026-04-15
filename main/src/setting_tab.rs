@@ -33,12 +33,12 @@ use one_core::utils::auto_save_config::AutoSaveConfig;
 use reqwest_client::ReqwestClient;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
+use terminal_view::TerminalSettings;
 use tracing::{error, info};
 
 use crate::app_init::is_valid_system_hotkey;
 use crate::auth::get_auth_service;
 use crate::license::{get_license_service, offline_license_public_key};
-use crate::onetcli_app::GlobalHomePage;
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::update;
 
@@ -435,6 +435,7 @@ impl AppSettings {
 
 pub fn init_settings(cx: &mut App) {
     let settings = AppSettings::load();
+    terminal_view::init_settings(cx, Some(legacy_terminal_settings(&settings)));
     // 初始化自动保存配置全局状态
     cx.set_global(AutoSaveConfig::new(
         settings.enable_sql_auto_save,
@@ -444,6 +445,20 @@ pub fn init_settings(cx: &mut App) {
     cx.set_global(settings);
 }
 
+fn legacy_terminal_settings(settings: &AppSettings) -> TerminalSettings {
+    TerminalSettings {
+        font_size: settings.terminal_font_size as f32,
+        auto_copy: settings.terminal_auto_copy,
+        enable_autocomplete: settings.terminal_enable_autocomplete,
+        middle_click_paste: settings.terminal_middle_click_paste,
+        sync_path_with_terminal: settings.terminal_sync_path_with_terminal,
+        theme: settings.terminal_theme.clone(),
+        cursor_blink: settings.terminal_cursor_blink,
+        confirm_multiline_paste: settings.terminal_confirm_multiline_paste,
+        confirm_high_risk_command: settings.terminal_confirm_high_risk_command,
+    }
+}
+
 pub(crate) fn build_app_http_client(
     proxy: &GlobalProxySettings,
 ) -> Result<Arc<ReqwestClient>, String> {
@@ -451,21 +466,6 @@ pub(crate) fn build_app_http_client(
     ReqwestClient::proxy_and_user_agent(proxy_url, "one-hub")
         .map(Arc::new)
         .map_err(|err| format!("HTTP 客户端初始化失败: {}", err))
-}
-
-fn sync_terminal_settings_to_all(settings: AppSettings, cx: &mut App) {
-    let Some(home) = cx.try_global::<GlobalHomePage>() else {
-        return;
-    };
-    let Some(window_id) = cx.active_window() else {
-        return;
-    };
-    let home_page = home.home_page.clone();
-    let _ = cx.update_window(window_id, move |_, window, cx| {
-        home_page.update(cx, |hp, cx| {
-            hp.apply_terminal_settings_to_all(&settings, window, cx);
-        });
-    });
 }
 
 pub struct SettingsPanel {
@@ -615,83 +615,6 @@ impl SettingsPanel {
                             )
                             .description(t!("Settings.General.Font.font_size_desc").to_string()),
                         ),
-                    SettingGroup::new()
-                        .title(t!("Settings.General.Terminal.group_title"))
-                        .items(vec![
-                            SettingItem::new(
-                                t!("Settings.General.Terminal.font_size"),
-                                SettingField::number_input(
-                                    NumberFieldOptions {
-                                        min: 8.0,
-                                        max: 72.0,
-                                        ..Default::default()
-                                    },
-                                    |cx: &App| AppSettings::global(cx).terminal_font_size,
-                                    |val: f64, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.terminal_font_size = val;
-                                        settings.save();
-                                        let settings_snapshot = settings.clone();
-                                        sync_terminal_settings_to_all(settings_snapshot, cx);
-                                    },
-                                )
-                                .default_value(default_settings.terminal_font_size),
-                            )
-                            .description(
-                                t!("Settings.General.Terminal.font_size_desc").to_string(),
-                            ),
-                            SettingItem::new(
-                                t!("Settings.General.Terminal.auto_copy"),
-                                SettingField::switch(
-                                    |cx: &App| AppSettings::global(cx).terminal_auto_copy,
-                                    |val: bool, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.terminal_auto_copy = val;
-                                        settings.save();
-                                        let settings_snapshot = settings.clone();
-                                        sync_terminal_settings_to_all(settings_snapshot, cx);
-                                    },
-                                )
-                                .default_value(default_settings.terminal_auto_copy),
-                            )
-                            .description(
-                                t!("Settings.General.Terminal.auto_copy_desc").to_string(),
-                            ),
-                            SettingItem::new(
-                                t!("Settings.General.Terminal.autocomplete"),
-                                SettingField::switch(
-                                    |cx: &App| AppSettings::global(cx).terminal_enable_autocomplete,
-                                    |val: bool, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.terminal_enable_autocomplete = val;
-                                        settings.save();
-                                        let settings_snapshot = settings.clone();
-                                        sync_terminal_settings_to_all(settings_snapshot, cx);
-                                    },
-                                )
-                                .default_value(default_settings.terminal_enable_autocomplete),
-                            )
-                            .description(
-                                t!("Settings.General.Terminal.autocomplete_desc").to_string(),
-                            ),
-                            SettingItem::new(
-                                t!("Settings.General.Terminal.middle_click_paste"),
-                                SettingField::switch(
-                                    |cx: &App| AppSettings::global(cx).terminal_middle_click_paste,
-                                    |val: bool, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.terminal_middle_click_paste = val;
-                                        settings.save();
-                                        let settings_snapshot = settings.clone();
-                                        sync_terminal_settings_to_all(settings_snapshot, cx);
-                                    },
-                                )
-                                .default_value(default_settings.terminal_middle_click_paste),
-                            )
-                            .description(
-                                t!("Settings.General.Terminal.middle_click_paste_desc").to_string(),
-                            ),
-                        ]),
                     SettingGroup::new()
                         .title(t!("Settings.General.Database.group_title"))
                         .items(vec![
@@ -1832,10 +1755,17 @@ mod tests {
     }
 
     #[test]
-    fn app_settings_enable_terminal_autocomplete_by_default() {
+    fn legacy_terminal_settings_maps_terminal_fields() {
         let settings = AppSettings::default();
+        let legacy = super::legacy_terminal_settings(&settings);
 
-        assert!(settings.terminal_enable_autocomplete);
+        assert_eq!(legacy.font_size, settings.terminal_font_size as f32);
+        assert_eq!(legacy.auto_copy, settings.terminal_auto_copy);
+        assert_eq!(
+            legacy.enable_autocomplete,
+            settings.terminal_enable_autocomplete
+        );
+        assert_eq!(legacy.theme, settings.terminal_theme);
     }
 }
 

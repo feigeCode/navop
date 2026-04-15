@@ -20,6 +20,10 @@ use crate::addon::{
     TerminalAddonMouseContext,
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
+use crate::settings::{
+    current_settings, update_settings, GlobalTerminalSettings, TerminalSettings,
+    TerminalSettingsEvent,
+};
 use crate::sidebar::{SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
 use crate::terminal_element::{RenderCache, TerminalElement};
 use crate::theme::{TerminalTheme, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE};
@@ -52,19 +56,6 @@ actions!(
         ResetFont,
     ]
 );
-
-#[derive(Clone, Debug)]
-pub enum TerminalViewEvent {
-    FontSizeChanged { size: f32 },
-    AutoCopyChanged { enabled: bool },
-    AutocompleteChanged { enabled: bool },
-    MiddleClickPasteChanged { enabled: bool },
-    SyncPathChanged { enabled: bool },
-    ThemeChanged { theme: TerminalTheme },
-    CursorBlinkChanged { enabled: bool },
-    ConfirmMultilinePasteChanged { enabled: bool },
-    ConfirmHighRiskCommandChanged { enabled: bool },
-}
 
 const TERMINAL_CONTEXT: &str = "TerminalView";
 
@@ -714,6 +705,14 @@ impl TerminalView {
         subscriptions.push(blink_subscription);
         subscriptions.push(focus_subscription);
         subscriptions.push(blur_subscription);
+        if let Some(global_settings) = cx.try_global::<GlobalTerminalSettings>().cloned() {
+            let settings_subscription = cx.subscribe_in(
+                &global_settings.0,
+                window,
+                Self::handle_terminal_settings_event,
+            );
+            subscriptions.push(settings_subscription);
+        }
 
         let scrollbar_metrics = Rc::new(RefCell::new(TerminalScrollbarMetrics::default()));
         let scrollbar_handle = TerminalScrollbarHandle::new(
@@ -721,7 +720,7 @@ impl TerminalView {
             scrollbar_metrics.clone(),
         );
 
-        Self {
+        let mut this = Self {
             terminal,
             local_working_dir: if is_local_terminal {
                 local_working_dir
@@ -760,6 +759,23 @@ impl TerminalView {
             view_bounds: Bounds::default(),
             scrollbar_metrics,
             scrollbar_handle,
+        };
+        let initial_settings = current_settings(cx);
+        this.apply_settings_snapshot(&initial_settings, window, cx);
+        this
+    }
+
+    fn handle_terminal_settings_event(
+        &mut self,
+        _store: &Entity<crate::settings::TerminalSettingsStore>,
+        event: &TerminalSettingsEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            TerminalSettingsEvent::Changed { current, .. } => {
+                self.apply_settings_snapshot(current, window, cx);
+            }
         }
     }
 
@@ -792,9 +808,9 @@ impl TerminalView {
                 self.set_font_family(family.clone(), cx);
             }
             TerminalSidebarEvent::ThemeChanged(theme) => {
-                self.set_theme(theme.clone(), cx);
-                cx.emit(TerminalViewEvent::ThemeChanged {
-                    theme: theme.clone(),
+                let theme_name = theme.name.to_string();
+                let _ = update_settings(cx, move |settings| {
+                    settings.theme = theme_name;
                 });
             }
             TerminalSidebarEvent::ExecuteCommand(command) => {
@@ -810,21 +826,22 @@ impl TerminalView {
                 cx.notify();
             }
             TerminalSidebarEvent::CursorBlinkChanged(enabled) => {
-                self.cursor_blink_enabled = *enabled;
-                if *enabled {
-                    self.blink_manager.update(cx, BlinkCursor::start);
-                } else {
-                    self.blink_manager.update(cx, BlinkCursor::stop);
-                }
-                cx.emit(TerminalViewEvent::CursorBlinkChanged { enabled: *enabled });
+                let enabled = *enabled;
+                let _ = update_settings(cx, move |settings| {
+                    settings.cursor_blink = enabled;
+                });
             }
             TerminalSidebarEvent::ConfirmMultilinePasteChanged(enabled) => {
-                self.confirm_multiline_paste = *enabled;
-                cx.emit(TerminalViewEvent::ConfirmMultilinePasteChanged { enabled: *enabled });
+                let enabled = *enabled;
+                let _ = update_settings(cx, move |settings| {
+                    settings.confirm_multiline_paste = enabled;
+                });
             }
             TerminalSidebarEvent::ConfirmHighRiskCommandChanged(enabled) => {
-                self.confirm_high_risk_command = *enabled;
-                cx.emit(TerminalViewEvent::ConfirmHighRiskCommandChanged { enabled: *enabled });
+                let enabled = *enabled;
+                let _ = update_settings(cx, move |settings| {
+                    settings.confirm_high_risk_command = enabled;
+                });
             }
             TerminalSidebarEvent::AutoCopyChanged(enabled) => {
                 self.set_auto_copy(*enabled, cx);
@@ -836,7 +853,10 @@ impl TerminalView {
                 self.set_middle_click_paste(*enabled, cx);
             }
             TerminalSidebarEvent::SyncPathChanged(enabled) => {
-                cx.emit(TerminalViewEvent::SyncPathChanged { enabled: *enabled });
+                let enabled = *enabled;
+                let _ = update_settings(cx, move |settings| {
+                    settings.sync_path_with_terminal = enabled;
+                });
             }
             TerminalSidebarEvent::CdToTerminal(path) => {
                 // 向终端发送 cd 命令并回车
@@ -1406,11 +1426,9 @@ impl TerminalView {
         if (current - clamped).abs() < f32::EPSILON {
             return;
         }
-        self.current_theme.font_size = px(clamped);
-        self.font_size = self.current_theme.font_size;
-        self.line_height = self.current_theme.line_height();
-        cx.emit(TerminalViewEvent::FontSizeChanged { size: clamped });
-        cx.notify();
+        let _ = update_settings(cx, move |settings| {
+            settings.font_size = clamped;
+        });
     }
 
     pub fn apply_terminal_settings(
@@ -1454,6 +1472,29 @@ impl TerminalView {
         });
 
         cx.notify();
+    }
+
+    fn apply_settings_snapshot(
+        &mut self,
+        settings: &TerminalSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_terminal_settings(
+            settings.font_size,
+            settings.auto_copy,
+            settings.enable_autocomplete,
+            settings.middle_click_paste,
+            settings.sync_path_with_terminal,
+            window,
+            cx,
+        );
+        self.apply_cursor_blink(settings.cursor_blink, window, cx);
+        self.apply_confirm_multiline_paste(settings.confirm_multiline_paste, cx);
+        self.apply_confirm_high_risk_command(settings.confirm_high_risk_command, cx);
+        if let Some(theme) = TerminalTheme::find_by_name(&settings.theme) {
+            self.apply_theme(&theme, window, cx);
+        }
     }
 
     /// 应用主题（不 emit 事件，用于跨 tab 同步）
@@ -1523,12 +1564,9 @@ impl TerminalView {
         if self.auto_copy_on_select == enabled {
             return;
         }
-        self.auto_copy_on_select = enabled;
-        self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.set_auto_copy(enabled, cx);
+        let _ = update_settings(cx, move |settings| {
+            settings.auto_copy = enabled;
         });
-        cx.emit(TerminalViewEvent::AutoCopyChanged { enabled });
-        cx.notify();
     }
 
     pub fn apply_autocomplete_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -1552,20 +1590,18 @@ impl TerminalView {
         if self.autocomplete_enabled == enabled {
             return;
         }
-        self.apply_autocomplete_enabled(enabled, cx);
-        cx.emit(TerminalViewEvent::AutocompleteChanged { enabled });
+        let _ = update_settings(cx, move |settings| {
+            settings.enable_autocomplete = enabled;
+        });
     }
 
     pub fn set_middle_click_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.middle_click_paste == enabled {
             return;
         }
-        self.middle_click_paste = enabled;
-        self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.set_middle_click_paste(enabled, cx);
+        let _ = update_settings(cx, move |settings| {
+            settings.middle_click_paste = enabled;
         });
-        cx.emit(TerminalViewEvent::MiddleClickPasteChanged { enabled });
-        cx.notify();
     }
 
     /// 增大字体
@@ -2938,7 +2974,6 @@ impl Focusable for TerminalView {
 }
 
 impl EventEmitter<TabContentEvent> for TerminalView {}
-impl EventEmitter<TerminalViewEvent> for TerminalView {}
 
 impl TabContent for TerminalView {
     fn content_key(&self) -> &'static str {

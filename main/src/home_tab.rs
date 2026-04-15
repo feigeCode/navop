@@ -41,7 +41,6 @@ use one_core::storage::{
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
 use redis_view::{RedisFormWindow, RedisFormWindowConfig};
 use rust_i18n::t;
-use terminal_view::TerminalView;
 use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
@@ -86,7 +85,6 @@ pub struct HomePage {
     pub(crate) workspace_filter_open: bool,
     workspace_filter_list: Option<Entity<ListState<WorkspaceFilterDelegate>>>,
     pub(crate) _subscriptions: Vec<Subscription>,
-    pub(crate) terminal_views: Vec<WeakEntity<TerminalView>>,
     /// 云同步服务
     cloud_sync_service: Arc<std::sync::RwLock<CloudSyncService>>,
     /// 云端加载错误信息
@@ -151,7 +149,6 @@ impl HomePage {
             workspace_filter_open: false,
             workspace_filter_list: None,
             _subscriptions: Vec::new(),
-            terminal_views: Vec::new(),
             cloud_sync_service: Arc::new(std::sync::RwLock::new(CloudSyncService::new())),
             cloud_error: None,
             syncing: false,
