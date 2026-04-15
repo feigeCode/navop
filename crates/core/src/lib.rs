@@ -16,7 +16,7 @@ pub mod llm;
 pub mod popup_window;
 pub mod storage;
 pub mod tab_container;
-pub mod tab_persistence;
+// pub mod tab_persistence;
 pub mod themes;
 pub mod utils;
 

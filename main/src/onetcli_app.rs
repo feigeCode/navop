@@ -1,7 +1,7 @@
 use crate::home_tab::{HomePage, NewConnectionShortcut, OpenConnectionQuickOpen};
 use crate::setting_tab::{AppSettings, build_app_http_client};
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, KeyBinding, ParentElement, Render, Styled, Task,
+    App, AppContext, Context, Entity, IntoElement, KeyBinding, ParentElement, Render, Styled,
     Window, actions, div,
 };
 use gpui_component::WindowExt;
@@ -46,9 +46,8 @@ use gpui_component::dock::{ClosePanel, ToggleZoom};
 use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
 use one_core::tab_container::{
-    TabContainer, TabContainerEvent, TabContainerState, TabContentRegistry, TabItem,
+    TabContainer, TabContentRegistry, TabItem,
 };
-use one_core::tab_persistence::{load_tabs, save_tab_state, schedule_save};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -262,8 +261,6 @@ pub fn init(cx: &mut App) {
 
 pub struct OnetCliApp {
     tab_container: Entity<TabContainer>,
-    last_layout_state: Option<TabContainerState>,
-    _save_layout_task: Option<Task<()>>,
 }
 
 impl OnetCliApp {
@@ -299,18 +296,6 @@ impl OnetCliApp {
         cx.set_global(GlobalTabContainer {
             tab_container: tab_container.clone(),
         });
-
-        let registry = cx.global::<TabContentRegistry>().clone();
-
-        match load_tabs(&tab_container, &registry, window, cx) {
-            Ok(_) => {
-                tracing::info!("Tab layout loaded successfully");
-            }
-            Err(err) => {
-                tracing::error!("Failed to load tab layout: {:?}", err);
-            }
-        }
-
         // Set HomePage as the pinned tab (always visible, not scrollable)
         {
             let tab_container_clone = tab_container.clone();
@@ -325,43 +310,11 @@ impl OnetCliApp {
             });
         }
 
-        cx.subscribe_in(
-            &tab_container,
-            window,
-            |this, _tc, ev: &TabContainerEvent, _window, cx| {
-                if matches!(ev, TabContainerEvent::LayoutChanged) {
-                    this.save_layout(cx);
-                }
-            },
-        )
-        .detach();
 
-        cx.on_app_quit({
-            let tab_container = tab_container.clone();
-            move |_, cx| {
-                let state = tab_container.read(cx).dump(cx);
-                cx.background_executor().spawn(async move {
-                    if let Err(err) = save_tab_state(&state) {
-                        tracing::error!("Failed to save tab state on quit: {:?}", err);
-                    }
-                })
-            }
-        })
-        .detach();
 
         Self {
-            tab_container,
-            last_layout_state: None,
-            _save_layout_task: None,
+            tab_container
         }
-    }
-
-    fn save_layout(&mut self, cx: &mut App) {
-        self._save_layout_task = Some(schedule_save(
-            self.tab_container.clone(),
-            &mut self.last_layout_state,
-            cx,
-        ));
     }
 }
 
