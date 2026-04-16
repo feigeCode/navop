@@ -80,10 +80,6 @@
 | Linux | x86_64 | Vulkan |
 | Windows | x86_64 | — |
 
-## 安装
-
-最新版本下载：[v0.2.3](https://github.com/feigeCode/onetcli/releases/tag/v0.2.3)
-
 ### 前置条件
 
 - Rust（2024 edition）

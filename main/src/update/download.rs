@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
+#[cfg(unix)]
 use super::install::set_executable_permission;
 
 pub(crate) async fn download_update_file<F>(
