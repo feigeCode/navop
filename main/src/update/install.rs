@@ -215,16 +215,23 @@ fn is_cross_device_link_error(err: &std::io::Error) -> bool {
     err.raw_os_error() == Some(18)
 }
 
-#[cfg(unix)]
 pub(super) fn set_executable_permission(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
 
-    let mut permissions = std::fs::metadata(path)
-        .map_err(|err| format!("读取文件权限失败: {}", err))?
-        .permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(path, permissions)
-        .map_err(|err| format!("设置可执行权限失败: {}", err))?;
+        let mut permissions = std::fs::metadata(path)
+            .map_err(|err| format!("读取文件权限失败: {}", err))?
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions)
+            .map_err(|err| format!("设置可执行权限失败: {}", err))?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 
     Ok(())
 }
@@ -268,6 +275,17 @@ mod tests {
         assert!(result.is_err());
         let target_bytes = std::fs::read(&target_path).expect("替换失败后旧版本应仍存在");
         assert_eq!(target_bytes, b"old-binary");
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn set_executable_permission_is_noop_on_non_unix() {
+        use super::set_executable_permission;
+
+        let path = PathBuf::from("C:\\onetcli-update.exe");
+        let result = set_executable_permission(&path);
+
+        assert!(result.is_ok());
     }
 
     struct TestDir {

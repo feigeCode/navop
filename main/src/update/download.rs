@@ -7,9 +7,6 @@ use sha2::{Digest, Sha256};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
-#[cfg(unix)]
-use super::install::set_executable_permission;
-
 pub(crate) async fn download_update_file<F>(
     http_client: Arc<dyn HttpClient>,
     download_url: &str,
@@ -92,7 +89,7 @@ where
         .map_err(|err| format!("同步更新文件失败: {}", err))?;
 
     #[cfg(unix)]
-    set_executable_permission(download_path)?;
+    super::install::set_executable_permission(download_path)?;
 
     Ok(())
 }
