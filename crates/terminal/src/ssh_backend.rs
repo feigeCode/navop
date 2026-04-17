@@ -6,7 +6,7 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
-use ssh::{ChannelEvent, PtyConfig, RusshClient, SshChannel, SshClient, SshConnectConfig};
+use ssh::{ChannelEvent, PtyConfig, SshChannel, SshClient, SshSessionManager};
 
 use crate::osc::{extract_osc_events, OscEvent};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
@@ -52,7 +52,8 @@ fn build_shell_integration_setup_script(
     shell_marker: &str,
 ) -> String {
     let script = shell_single_quote(script);
-    let integration_source = format!("$HOME/.config/onetcli/sessions/{session_key}/shell_integration.sh");
+    let integration_source =
+        format!("$HOME/.config/onetcli/sessions/{session_key}/shell_integration.sh");
     let session_key = shell_double_quote(session_key);
     let success_marker = shell_single_quote(success_marker);
     let home_marker = shell_single_quote(home_marker);
@@ -62,19 +63,15 @@ fn build_shell_integration_setup_script(
         "ZDOTDIR=\"${ONETCLI_ORIG_ZDOTDIR:-$HOME}\"\n\
          [[ -f \"$ZDOTDIR/.zshenv\" ]] && . \"$ZDOTDIR/.zshenv\"\n",
     );
-    let zshrc = shell_single_quote(
-        &format!(
-            "ZDOTDIR=\"${{ONETCLI_ORIG_ZDOTDIR:-$HOME}}\"\n\
+    let zshrc = shell_single_quote(&format!(
+        "ZDOTDIR=\"${{ONETCLI_ORIG_ZDOTDIR:-$HOME}}\"\n\
              [[ -f \"$ZDOTDIR/.zshrc\" ]] && . \"$ZDOTDIR/.zshrc\"\n\
              . \"{integration_source}\"\n"
-        ),
-    );
-    let bashrc = shell_single_quote(
-        &format!(
-            "[ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"\n\
+    ));
+    let bashrc = shell_single_quote(&format!(
+        "[ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"\n\
              . \"{integration_source}\"\n"
-        ),
-    );
+    ));
 
     format!(
         concat!(
@@ -113,15 +110,14 @@ fn build_shell_integration_setup_command(
     session_marker: &str,
     shell_marker: &str,
 ) -> String {
-    let script =
-        build_shell_integration_setup_script(
-            script,
-            session_key,
-            success_marker,
-            home_marker,
-            session_marker,
-            shell_marker,
-        );
+    let script = build_shell_integration_setup_script(
+        script,
+        session_key,
+        success_marker,
+        home_marker,
+        session_marker,
+        shell_marker,
+    );
     format!("sh -c {}", shell_single_quote(&script))
 }
 
@@ -137,7 +133,7 @@ pub struct SshBackend {
 
 impl SshBackend {
     pub async fn connect(
-        config: SshConnectConfig,
+        session_manager: Arc<SshSessionManager>,
         pty_config: PtyConfig,
         connection_id: Option<i64>,
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
@@ -147,8 +143,11 @@ impl SshBackend {
         on_disconnect: Option<UnboundedSender<()>>,
         init_commands: Option<String>,
     ) -> anyhow::Result<Self> {
-        let mut client = RusshClient::connect(config).await?;
-        let mut channel = Self::prepare_ssh_channel(&mut client, &pty_config, connection_id).await?;
+        let client = session_manager.client().await?;
+        let mut channel = {
+            let mut guard = client.lock().await;
+            Self::prepare_ssh_channel(&mut *guard, &pty_config, connection_id).await?
+        };
 
         // ③ init_commands 改为等 shell ready 后发送
         let pending_init = init_commands;
@@ -268,7 +267,7 @@ impl SshBackend {
             }
 
             if !shutdown {
-                let _ = client.disconnect().await;
+                let _ = session_manager.invalidate().await;
             }
             if let Some(tx) = on_disconnect {
                 let _ = tx.send(());
@@ -360,9 +359,7 @@ impl SshBackend {
         pty_config: &PtyConfig,
         setup: &ShellIntegrationSetup,
     ) -> anyhow::Result<()> {
-        channel
-            .set_env("ONETCLI_SHELL_INTEGRATION", "1")
-            .await?;
+        channel.set_env("ONETCLI_SHELL_INTEGRATION", "1").await?;
         channel
             .set_env("ONETCLI_ORIG_ZDOTDIR", &setup.home_dir)
             .await?;
@@ -402,6 +399,7 @@ mod tests {
     use crate::osc::parse_osc_payload;
     use anyhow::{anyhow, Result};
     use async_trait::async_trait;
+    use ssh::SshConnectConfig;
     use std::collections::VecDeque;
     use std::fs;
     use std::process::Command;
@@ -618,7 +616,10 @@ mod tests {
         let result =
             SshBackend::prepare_ssh_channel(&mut client, &PtyConfig::default(), Some(42)).await;
 
-        assert!(result.is_ok(), "bash shell wrapper 应通过独立交互 channel 启动");
+        assert!(
+            result.is_ok(),
+            "bash shell wrapper 应通过独立交互 channel 启动"
+        );
         assert_eq!(
             recorded_ops(&setup_state),
             vec![ChannelOp::Exec, ChannelOp::Close]

@@ -1,26 +1,26 @@
 use crate::{FileEntry, ProgressCallback, SftpClient, TransferCancelled, TransferProgress};
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use russh::client::{self, Handle};
 use russh::keys::PublicKey;
-use russh_sftp::client::RawSftpSession;
-use russh_sftp::client::SftpSession;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::rawsession::Limits;
+use russh_sftp::client::RawSftpSession;
+use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use rust_i18n::t;
 use ssh::{
-    AuthFailureMessages, ProxyConnectConfig, ProxyType, SshConnectConfig,
-    authenticate_with_strategy,
+    authenticate_with_strategy, AuthFailureMessages, ProxyConnectConfig, ProxyType, RusshClient,
+    SshConnectConfig,
 };
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpStream;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 
 const BUFFER_SIZE: usize = 256 * 1024; // 256 KB
 const PIPELINE_CHUNK_SIZE: u32 = 61440; // 60 KB per read request (within 65535 packet limit)
@@ -181,24 +181,60 @@ fn base64_encode(input: &str) -> String {
     String::from_utf8(result).unwrap()
 }
 
+enum SessionOwner {
+    Owned {
+        session: Handle<SftpHandler>,
+        _jump_session: Option<Handle<SftpHandler>>,
+    },
+    Shared {
+        client: Arc<Mutex<RusshClient>>,
+    },
+}
+
 pub struct RusshSftpClient {
     sftp: SftpSession,
-    session: Handle<SftpHandler>,
-    /// 跳板机会话（如果使用跳板机连接）
-    _jump_session: Option<Handle<SftpHandler>>,
+    owner: SessionOwner,
     /// 懒初始化的原始 SFTP 会话，用于流水线下载
     raw_sftp: Option<Arc<RawSftpSession>>,
 }
 
 impl RusshSftpClient {
+    pub async fn connect_with_client(client: Arc<Mutex<RusshClient>>) -> Result<Self> {
+        let channel = {
+            let mut guard = client.lock().await;
+            guard.open_raw_channel().await?
+        };
+        channel.request_subsystem(true, "sftp").await?;
+        let sftp = SftpSession::new(channel.into_stream()).await?;
+
+        Ok(Self {
+            sftp,
+            owner: SessionOwner::Shared { client },
+            raw_sftp: None,
+        })
+    }
+
     /// 在已有 SSH 连接上创建一个新的 RawSftpSession 用于流水线操作
     async fn get_or_create_raw_session(&mut self) -> Result<Arc<RawSftpSession>> {
         if let Some(ref raw) = self.raw_sftp {
             return Ok(Arc::clone(raw));
         }
 
-        let channel = self.session.channel_open_session().await?;
-        channel.request_subsystem(true, "sftp").await?;
+        let channel = match &self.owner {
+            SessionOwner::Owned { session, .. } => {
+                let channel = session.channel_open_session().await?;
+                channel.request_subsystem(true, "sftp").await?;
+                channel
+            }
+            SessionOwner::Shared { client } => {
+                let channel = {
+                    let mut guard = client.lock().await;
+                    guard.open_raw_channel().await?
+                };
+                channel.request_subsystem(true, "sftp").await?;
+                channel
+            }
+        };
 
         let mut raw = RawSftpSession::new(channel.into_stream());
         raw.init()
@@ -667,8 +703,10 @@ impl SftpClient for RusshSftpClient {
 
         Ok(Self {
             sftp,
-            session,
-            _jump_session: jump_session,
+            owner: SessionOwner::Owned {
+                session,
+                _jump_session: jump_session,
+            },
             raw_sftp: None,
         })
     }

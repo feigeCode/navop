@@ -677,6 +677,7 @@ impl TerminalView {
         // 创建默认主题（需要在创建侧边栏之前）
         let default_theme = TerminalTheme::ocean();
         let ssh_config = terminal.read(cx).ssh_config().cloned();
+        let ssh_session_manager = terminal.read(cx).ssh_session_manager().cloned();
 
         // 创建侧边栏（传递 StoredConnection 用于文件管理器）
         let sidebar = cx.new(|cx| {
@@ -684,6 +685,7 @@ impl TerminalView {
                 connection_id,
                 stored_connection,
                 ssh_config,
+                ssh_session_manager,
                 &default_theme,
                 sync_path_enabled,
                 window,
@@ -1022,12 +1024,7 @@ impl TerminalView {
             return;
         }
 
-        let Some(ssh_config) = self
-            .terminal
-            .read(cx)
-            .ssh_config()
-            .map(|config| config.ssh_config.clone())
-        else {
+        let Some(session_manager) = self.terminal.read(cx).ssh_session_manager().cloned() else {
             self.history_prompt.set_matches(Vec::new());
             return;
         };
@@ -1044,7 +1041,12 @@ impl TerminalView {
         let task = Tokio::spawn(cx, async move {
             let client = match existing_client {
                 Some(client) => client,
-                None => Arc::new(Mutex::new(RusshSftpClient::connect(ssh_config).await?)),
+                None => {
+                    let shared_client = session_manager.client().await?;
+                    Arc::new(Mutex::new(
+                        RusshSftpClient::connect_with_client(shared_client).await?,
+                    ))
+                }
             };
             let entries = {
                 let mut client = client.lock().await;

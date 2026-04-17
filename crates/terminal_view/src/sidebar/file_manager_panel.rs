@@ -25,10 +25,10 @@ use gpui_component::{
     v_flex, ActiveTheme, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
 };
 use one_core::gpui_tokio::Tokio;
-use one_core::storage::models::{ProxyType as StorageProxyType, SshAuthMethod, StoredConnection};
+use one_core::storage::models::StoredConnection;
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
-use ssh::{JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth, SshConnectConfig};
+use ssh::SshSessionManager;
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
 use std::path::PathBuf;
@@ -407,74 +407,12 @@ fn rename_conflicting_uploads(
 }
 
 /// 从 StoredConnection 构建 SshConnectConfig
-fn build_ssh_config(conn: &StoredConnection) -> anyhow::Result<SshConnectConfig> {
-    let ssh_params = conn.to_ssh_params().map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    let auth = match ssh_params.auth_method {
-        SshAuthMethod::Password { password } => SshAuth::Password(password),
-        SshAuthMethod::PrivateKey {
-            key_path,
-            passphrase,
-        } => SshAuth::PrivateKey {
-            key_path,
-            passphrase,
-            certificate_path: None,
-        },
-        SshAuthMethod::Agent => SshAuth::Agent,
-        SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-    };
-
-    Ok(SshConnectConfig {
-        host: ssh_params.host,
-        port: ssh_params.port,
-        username: ssh_params.username,
-        auth,
-        timeout: ssh_params.connect_timeout.map(Duration::from_secs),
-        keepalive_interval: ssh_params.keepalive_interval.map(Duration::from_secs),
-        keepalive_max: ssh_params.keepalive_max,
-        jump_server: ssh_params.jump_server.map(|jump| {
-            let jump_auth = match jump.auth_method {
-                SshAuthMethod::Password { password } => SshAuth::Password(password),
-                SshAuthMethod::PrivateKey {
-                    key_path,
-                    passphrase,
-                } => SshAuth::PrivateKey {
-                    key_path,
-                    passphrase,
-                    certificate_path: None,
-                },
-                SshAuthMethod::Agent => SshAuth::Agent,
-                SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
-            };
-            JumpServerConnectConfig {
-                host: jump.host,
-                port: jump.port,
-                username: jump.username,
-                auth: jump_auth,
-            }
-        }),
-        proxy: ssh_params.proxy.map(|p| {
-            let proxy_type = match p.proxy_type {
-                StorageProxyType::Socks5 => ProxyType::Socks5,
-                StorageProxyType::Http => ProxyType::Http,
-            };
-            ProxyConnectConfig {
-                proxy_type,
-                host: p.host,
-                port: p.port,
-                username: p.username,
-                password: p.password,
-            }
-        }),
-    })
-}
-
 // ── FileManagerPanel ──────────────────────────────────────────
 
 /// 终端侧边栏文件管理器面板
 pub struct FileManagerPanel {
-    /// 存储的连接信息
-    stored_connection: StoredConnection,
+    /// 共享 SSH 会话管理器
+    session_manager: Arc<SshSessionManager>,
     /// SFTP 客户端（浏览用）
     sftp_client: Option<Arc<Mutex<RusshSftpClient>>>,
     /// 连接状态
@@ -531,7 +469,8 @@ pub struct FileManagerPanel {
 
 impl FileManagerPanel {
     pub fn new(
-        stored_connection: StoredConnection,
+        _stored_connection: StoredConnection,
+        session_manager: Arc<SshSessionManager>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -569,7 +508,7 @@ impl FileManagerPanel {
         ));
 
         Self {
-            stored_connection,
+            session_manager,
             sftp_client: None,
             connection_state: ConnectionState::Idle,
             current_path: "/".to_string(),
@@ -609,19 +548,11 @@ impl FileManagerPanel {
         self.connection_state = ConnectionState::Connecting;
         cx.notify();
 
-        let config = match build_ssh_config(&self.stored_connection) {
-            Ok(config) => config,
-            Err(e) => {
-                self.connection_state =
-                    ConnectionState::Error(format!("{}: {}", t!("FileManager.connect_failed"), e));
-                cx.notify();
-                return;
-            }
-        };
-
         let initial_dir = self.initial_working_dir.take();
+        let session_manager = self.session_manager.clone();
         let task = Tokio::spawn(cx, async move {
-            let mut client = RusshSftpClient::connect(config).await?;
+            let shared_client = session_manager.client().await?;
+            let mut client = RusshSftpClient::connect_with_client(shared_client).await?;
             // 优先使用终端当前工作目录，否则回退到 realpath(".")
             let real_path = if let Some(dir) = initial_dir {
                 dir
@@ -1054,26 +985,10 @@ impl FileManagerPanel {
             return;
         }
 
-        let config = match build_ssh_config(&self.stored_connection) {
-            Ok(config) => config,
-            Err(e) => {
-                tracing::error!("{}: {}", t!("FileManager.transfer_connect_failed"), e);
-                // 将所有排队任务标记为失败
-                let error_msg = format!("{}: {}", t!("FileManager.transfer_connect_failed"), e);
-                for task in &mut self.transfer_queue.tasks {
-                    if task.state == TransferTaskState::Pending {
-                        task.state = TransferTaskState::Failed;
-                        task.error = Some(error_msg.clone());
-                    }
-                }
-                self.transfer_queue.pending.clear();
-                cx.notify();
-                return;
-            }
-        };
-
+        let session_manager = self.session_manager.clone();
         let connect_task = Tokio::spawn(cx, async move {
-            let client = RusshSftpClient::connect(config).await?;
+            let shared_client = session_manager.client().await?;
+            let client = RusshSftpClient::connect_with_client(shared_client).await?;
             Ok::<_, anyhow::Error>(client)
         });
 

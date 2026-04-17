@@ -42,7 +42,7 @@ use crate::history::{
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 
 use crate::{LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalEvent, TerminalSize};
-use ssh::{ChannelEvent, RusshClient, SshChannel, SshClient};
+use ssh::{ChannelEvent, SshChannel, SshSessionManager};
 pub use ssh::{
     JumpServerConnectConfig, ProxyConnectConfig, ProxyType, PtyConfig, SshAuth, SshConnectConfig,
 };
@@ -383,9 +383,8 @@ fn parse_remote_history_output(output: &str) -> Vec<String> {
     commands
 }
 
-async fn load_ssh_history(config: SshConnectConfig) -> anyhow::Result<Vec<String>> {
-    let mut client = RusshClient::connect(config).await?;
-    let mut channel = client.open_channel().await?;
+async fn load_ssh_history(manager: Arc<SshSessionManager>) -> anyhow::Result<Vec<String>> {
+    let mut channel = manager.open_channel().await?;
     let command = build_remote_history_load_command();
     channel.exec(&command).await?;
 
@@ -402,7 +401,6 @@ async fn load_ssh_history(config: SshConnectConfig) -> anyhow::Result<Vec<String
     }
 
     let _ = channel.close().await;
-    let _ = client.disconnect().await;
 
     if let Some(code) = exit_code {
         anyhow::ensure!(code == 0, "ssh history loader exited with status {code}");
@@ -441,6 +439,8 @@ pub struct Terminal {
 
     /// SSH 配置（用于重连）
     ssh_config: Option<SshTerminalConfig>,
+    /// SSH 会话管理器（同一 SSH tab 共享底层连接）
+    ssh_session_manager: Option<Arc<SshSessionManager>>,
     /// 串口参数（用于重连）
     serial_params: Option<SerialParams>,
     /// 事件发送器（用于 SSH 重连）
@@ -542,6 +542,7 @@ impl Terminal {
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             ssh_config: None,
+            ssh_session_manager: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: None,
@@ -612,6 +613,7 @@ impl Terminal {
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             ssh_config: None,
+            ssh_session_manager: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: None, // 本地终端的 event_proxy 已在 LocalPtyBackend 中设置
@@ -706,6 +708,7 @@ impl Terminal {
             ssh_config,
             pty_config,
         };
+        let ssh_session_manager = Arc::new(SshSessionManager::new(config.ssh_config.clone()));
 
         let cols = config.pty_config.width as usize;
         let rows = config.pty_config.height as usize;
@@ -717,6 +720,7 @@ impl Terminal {
         Self::spawn_disconnect_handler(disconnect_rx, cx);
         Self::spawn_event_loop(event_rx, cx);
         Self::spawn_ssh_connect(
+            ssh_session_manager.clone(),
             config.clone(),
             term.clone(),
             event_proxy.clone(),
@@ -726,7 +730,7 @@ impl Terminal {
             init_commands.clone(),
             cx,
         );
-        Self::spawn_ssh_history_loader(config.ssh_config.clone(), cx);
+        Self::spawn_ssh_history_loader(ssh_session_manager.clone(), cx);
 
         Self {
             term,
@@ -738,6 +742,7 @@ impl Terminal {
             cols,
             rows,
             ssh_config: Some(config),
+            ssh_session_manager: Some(ssh_session_manager),
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -781,6 +786,7 @@ impl Terminal {
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             ssh_config: None,
+            ssh_session_manager: None,
             serial_params: Some(serial_params),
             event_tx: Some(event_tx),
             event_proxy: None,
@@ -827,8 +833,8 @@ impl Terminal {
         .detach();
     }
 
-    fn spawn_ssh_history_loader(config: SshConnectConfig, cx: &mut Context<Self>) {
-        let task = Tokio::spawn(cx, async move { load_ssh_history(config).await });
+    fn spawn_ssh_history_loader(manager: Arc<SshSessionManager>, cx: &mut Context<Self>) {
+        let task = Tokio::spawn(cx, async move { load_ssh_history(manager).await });
 
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
             let Ok(Ok(history)) = task.await else {
@@ -918,6 +924,7 @@ impl Terminal {
     }
 
     fn spawn_ssh_connect(
+        session_manager: Arc<SshSessionManager>,
         config: SshTerminalConfig,
         term: Arc<FairMutex<Term<GpuiEventProxy>>>,
         event_proxy: GpuiEventProxy,
@@ -949,7 +956,7 @@ impl Terminal {
                 sender
             });
             SshBackend::connect(
-                config.ssh_config,
+                session_manager,
                 config.pty_config,
                 connection_id,
                 term,
@@ -1215,6 +1222,10 @@ impl Terminal {
         self.ssh_config.as_ref()
     }
 
+    pub fn ssh_session_manager(&self) -> Option<&Arc<SshSessionManager>> {
+        self.ssh_session_manager.as_ref()
+    }
+
     /// 获取连接类型
     pub fn connection_kind(&self) -> TerminalConnectionKind {
         self.connection_kind
@@ -1266,6 +1277,9 @@ impl Terminal {
     /// 重新连接 SSH 或串口
     pub fn reconnect(&mut self, cx: &mut Context<Self>) {
         if let Some(config) = self.ssh_config.clone() {
+            let Some(session_manager) = self.ssh_session_manager.clone() else {
+                return;
+            };
             let Some(event_tx) = self.event_tx.clone() else {
                 return;
             };
@@ -1274,10 +1288,17 @@ impl Terminal {
             };
 
             self.connection_state = ConnectionState::Connecting;
+            cx.spawn(async move |_this, _cx| {
+                let _ = session_manager.disconnect().await;
+            })
+            .detach();
 
             let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
             Self::spawn_disconnect_handler(disconnect_rx, cx);
             Self::spawn_ssh_connect(
+                self.ssh_session_manager
+                    .clone()
+                    .expect("SSH terminal 应持有 session manager"),
                 config,
                 self.term.clone(),
                 event_proxy,

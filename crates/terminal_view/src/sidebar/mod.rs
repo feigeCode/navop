@@ -31,6 +31,8 @@ use one_core::layout::TOOLBAR_WIDTH;
 use one_core::storage::models::StoredConnection;
 use one_core::{AiChatPanel, AiChatPanelEvent, CodeBlockAction, LanguageMatcher};
 use rust_i18n::t;
+use ssh::SshSessionManager;
+use std::sync::Arc;
 use terminal::terminal::SshTerminalConfig;
 
 const TERMINAL_AI_SYSTEM_INSTRUCTION: &str = r#"你是终端侧边栏中的 Linux 命令助手，默认面向 Linux shell 环境回答。
@@ -156,6 +158,7 @@ impl TerminalSidebar {
         connection_id: Option<i64>,
         stored_connection: Option<StoredConnection>,
         ssh_config: Option<SshTerminalConfig>,
+        ssh_session_manager: Option<Arc<SshSessionManager>>,
         initial_theme: &TerminalTheme,
         sync_path_enabled: bool,
         window: &mut Window,
@@ -180,18 +183,16 @@ impl TerminalSidebar {
         let ai_chat_panel = cx.new(|cx| AiChatPanel::new(window, cx));
 
         // 仅 SSH 终端（有 StoredConnection）时创建文件管理器面板
-        let file_manager_panel =
-            stored_connection.map(|conn| cx.new(|cx| FileManagerPanel::new(conn, window, cx)));
-        let server_monitor_panel = ssh_config.map(|config| {
-            cx.new(|cx| {
-                ServerMonitorPanel::new(
-                    connection_id,
-                    config.ssh_config.clone(),
-                    auto_show_server_monitor,
-                    cx,
-                )
-            })
-        });
+        let file_manager_panel = stored_connection
+            .zip(ssh_session_manager.clone())
+            .map(|(conn, manager)| cx.new(|cx| FileManagerPanel::new(conn, manager, window, cx)));
+        let server_monitor_panel = ssh_config
+            .zip(ssh_session_manager)
+            .map(|(_config, manager)| {
+                cx.new(|cx| {
+                    ServerMonitorPanel::new(connection_id, manager, auto_show_server_monitor, cx)
+                })
+            });
 
         // 注册 bash/sh 代码块操作，并注入终端专属提示词
         let sidebar_entity = cx.entity();
