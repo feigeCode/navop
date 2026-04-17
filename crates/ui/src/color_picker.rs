@@ -1,13 +1,13 @@
 use gpui::{
-    App, AppContext, Context, Corner, Div, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
-    Hsla, InteractiveElement as _, IntoElement, KeyBinding, ParentElement, Render, RenderOnce,
+    div, hsla, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, App, AppContext,
+    Context, Corner, Div, ElementId, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
+    InteractiveElement as _, IntoElement, KeyBinding, ParentElement, Render, RenderOnce,
     SharedString, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription,
-    TextAlign, Window, div, hsla, linear_color_stop, linear_gradient, prelude::FluentBuilder as _,
+    TextAlign, Window,
 };
 use rust_i18n::t;
 
 use crate::{
-    ActiveTheme as _, Colorize as _, Icon, Sizable, Size, StyleSized,
     actions::Confirm,
     button::{Button, ButtonVariants},
     divider::Divider,
@@ -17,7 +17,7 @@ use crate::{
     slider::{Slider, SliderEvent, SliderState},
     tab::{Tab, TabBar},
     tooltip::Tooltip,
-    v_flex,
+    v_flex, ActiveTheme as _, Colorize as _, Icon, Sizable, Size, StyleSized,
 };
 
 const CONTEXT: &'static str = "ColorPicker";
@@ -242,6 +242,16 @@ impl ColorPickerState {
         cx: &mut Context<Self>,
     ) {
         self.update_value(Some(value.into()), false, window, cx)
+    }
+
+    /// Set current optional color value.
+    pub fn set_optional_value(
+        &mut self,
+        value: Option<Hsla>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_value(value, false, window, cx)
     }
 
     /// Get current color value.

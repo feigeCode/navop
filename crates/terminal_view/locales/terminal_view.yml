@@ -364,6 +364,215 @@ Settings:
     zh-CN: 通过 Shell 集成脚本自动将当前 SSH 工作目录同步到文件管理器。
     zh-HK: 透過 Shell 整合腳本自動將目前 SSH 工作目錄同步到文件管理器。
 
+CustomHighlight:
+  title:
+    en: Custom Highlights
+    zh-CN: 自定义高亮
+    zh-HK: 自訂高亮
+  add_rule:
+    en: Add Rule
+    zh-CN: 添加规则
+    zh-HK: 新增規則
+  description:
+    en: Built-in rules are ready to use. You can edit, disable, delete, or add your own rules below.
+    zh-CN: 内建规则已直接生效，你可以在下方编辑、关闭、删除，或继续添加自己的规则。
+    zh-HK: 內建規則已直接生效，你可以在下方編輯、關閉、刪除，或繼續新增自己的規則。
+  presets_label:
+    en: Presets
+    zh-CN: 预设
+    zh-HK: 預設
+  empty:
+    en: No custom highlight rules yet.
+    zh-CN: 还没有自定义高亮规则。
+    zh-HK: 尚未建立自訂高亮規則。
+  no_note:
+    en: No note
+    zh-CN: 暂无备注
+    zh-HK: 暫無備註
+  add_rule_title:
+    en: Add Highlight Rule
+    zh-CN: 添加高亮规则
+    zh-HK: 新增高亮規則
+  edit_rule_title:
+    en: Edit Highlight Rule
+    zh-CN: 编辑高亮规则
+    zh-HK: 編輯高亮規則
+  import_success:
+    en: 'Imported preset "%{title}" with %{count} rules'
+    zh-CN: '已导入预设“%{title}”，共 %{count} 条规则'
+    zh-HK: '已匯入預設「%{title}」，共 %{count} 條規則'
+  priority_value:
+    en: 'Priority %{priority}'
+    zh-CN: '优先级 %{priority}'
+    zh-HK: '優先級 %{priority}'
+  actions:
+    edit:
+      en: Edit
+      zh-CN: 编辑
+      zh-HK: 編輯
+    delete:
+      en: Delete
+      zh-CN: 删除
+      zh-HK: 刪除
+  fields:
+    regex:
+      en: Regex
+      zh-CN: 正则
+      zh-HK: 正則
+    foreground:
+      en: Foreground
+      zh-CN: 前景色
+      zh-HK: 前景色
+    background:
+      en: Background
+      zh-CN: 背景色
+      zh-HK: 背景色
+    priority:
+      en: Priority
+      zh-CN: 优先级
+      zh-HK: 優先級
+    note:
+      en: Note
+      zh-CN: 备注
+      zh-HK: 備註
+  placeholders:
+    regex:
+      en: regex pattern
+      zh-CN: 输入正则表达式
+      zh-HK: 輸入正則表達式
+    note:
+      en: note
+      zh-CN: 输入备注
+      zh-HK: 輸入備註
+  errors:
+    invalid_priority:
+      en: Priority must be an integer between 0 and 255
+      zh-CN: 优先级必须是 0-255 的整数
+      zh-HK: 優先級必須是 0-255 的整數
+    pattern_required:
+      en: Regex pattern cannot be empty
+      zh-CN: 正则不能为空
+      zh-HK: 正則不能為空
+    color_required:
+      en: Set at least one color
+      zh-CN: 至少设置一种颜色
+      zh-HK: 至少設定一種顏色
+    invalid_regex:
+      en: 'Invalid regex: %{error}'
+      zh-CN: '正则无效：%{error}'
+      zh-HK: '正則無效：%{error}'
+    invalid_foreground:
+      en: 'Invalid foreground color: %{error}'
+      zh-CN: '前景色无效：%{error}'
+      zh-HK: '前景色無效：%{error}'
+    invalid_background:
+      en: 'Invalid background color: %{error}'
+      zh-CN: '背景色无效：%{error}'
+      zh-HK: '背景色無效：%{error}'
+  presets:
+    linux_permissions:
+      title:
+        en: Linux Permissions
+        zh-CN: Linux 权限与属主
+        zh-HK: Linux 權限與屬主
+      description:
+        en: Highlight permission bits and privileged commands in common shell output.
+        zh-CN: 高亮常见 shell 输出中的权限位和提权相关命令。
+        zh-HK: 高亮常見 shell 輸出中的權限位與提權相關命令。
+      rules:
+        root:
+          en: root, sudo, and su users or commands
+          zh-CN: root、sudo、su 用户或命令
+          zh-HK: root、sudo、su 使用者或指令
+        owner:
+          en: ownership and permission commands
+          zh-CN: 属主与权限修改命令
+          zh-HK: 擁有者與權限修改指令
+        mode:
+          en: ls -l permission bits
+          zh-CN: ls -l 权限位
+          zh-HK: ls -l 權限位
+    status_signals:
+      title:
+        en: Status Signals
+        zh-CN: 状态信号词
+        zh-HK: 狀態訊號詞
+      description:
+        en: Emphasize success, warning, and failure keywords in logs and command output.
+        zh-CN: 突出日志和命令输出中的成功、警告与失败关键词。
+        zh-HK: 突出日誌與指令輸出中的成功、警告與失敗關鍵字。
+      rules:
+        success:
+          en: success keywords
+          zh-CN: 成功状态词
+          zh-HK: 成功狀態詞
+        warning:
+          en: warning keywords
+          zh-CN: 警告状态词
+          zh-HK: 警告狀態詞
+        error:
+          en: failure keywords
+          zh-CN: 失败状态词
+          zh-HK: 失敗狀態詞
+    ip_addresses:
+      title:
+        en: IP Addresses
+        zh-CN: IP 地址
+        zh-HK: IP 位址
+      description:
+        en: Highlight IPv4 and IPv6 addresses directly in terminal output.
+        zh-CN: 直接高亮终端输出中的 IPv4 和 IPv6 地址。
+        zh-HK: 直接高亮終端輸出中的 IPv4 與 IPv6 位址。
+      rules:
+        ipv4:
+          en: IPv4 addresses
+          zh-CN: IPv4 地址
+          zh-HK: IPv4 位址
+        ipv6:
+          en: IPv6 addresses
+          zh-CN: IPv6 地址
+          zh-HK: IPv6 位址
+    network_markers:
+      title:
+        en: Network Markers
+        zh-CN: 网络标记
+        zh-HK: 網路標記
+      description:
+        en: Mark URLs and port hints when reading connectivity output.
+        zh-CN: 标记连接输出里的 URL 和端口提示。
+        zh-HK: 標記連線輸出中的 URL 與連接埠提示。
+      rules:
+        url:
+          en: URL links
+          zh-CN: URL 链接
+          zh-HK: URL 連結
+        port:
+          en: ports and listening hints
+          zh-CN: 端口与监听信息
+          zh-HK: 連接埠與監聽資訊
+    time_and_numbers:
+      title:
+        en: Time and Numbers
+        zh-CN: 时间与数值
+        zh-HK: 時間與數值
+      description:
+        en: Highlight timestamps, clock values, and common duration or size units.
+        zh-CN: 高亮时间戳、时分秒和常见耗时或容量单位。
+        zh-HK: 高亮時間戳、時分秒與常見耗時或容量單位。
+      rules:
+        datetime:
+          en: dates and timestamps
+          zh-CN: 日期与时间戳
+          zh-HK: 日期與時間戳
+        clock:
+          en: HH:MM:SS clock values
+          zh-CN: 时分秒
+          zh-HK: 時分秒
+        quantity:
+          en: durations, sizes, and percentages
+          zh-CN: 耗时、大小与百分比
+          zh-HK: 耗時、大小與百分比
+
 # 右键菜单
 ContextMenu:
   copy:

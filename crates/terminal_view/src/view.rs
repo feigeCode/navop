@@ -16,13 +16,13 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::addon::{
-    register_default_addons, AddonManager, SearchAddon, TerminalAddonFrameContext,
-    TerminalAddonMouseContext,
+    register_default_addons, AddonManager, CustomHighlightAddon, SearchAddon,
+    TerminalAddonFrameContext, TerminalAddonMouseContext,
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
 use crate::settings::{
-    current_settings, update_settings, GlobalTerminalSettings, TerminalSettings,
-    TerminalSettingsEvent,
+    current_settings, update_settings, GlobalTerminalSettings, TerminalHighlightRule,
+    TerminalSettings, TerminalSettingsEvent,
 };
 use crate::sidebar::{SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
 use crate::terminal_element::{RenderCache, TerminalElement};
@@ -862,6 +862,12 @@ impl TerminalView {
                     settings.sync_path_with_terminal = enabled;
                 });
             }
+            TerminalSidebarEvent::CustomHighlightsChanged(rules) => {
+                let rules = rules.clone();
+                let _ = update_settings(cx, move |settings| {
+                    settings.custom_highlights = rules;
+                });
+            }
             TerminalSidebarEvent::CdToTerminal(path) => {
                 // 向终端发送 cd 命令并回车
                 let cmd = format!("cd {}\n", shell_escape(path));
@@ -1497,9 +1503,27 @@ impl TerminalView {
         self.apply_cursor_blink(settings.cursor_blink, window, cx);
         self.apply_confirm_multiline_paste(settings.confirm_multiline_paste, cx);
         self.apply_confirm_high_risk_command(settings.confirm_high_risk_command, cx);
+        self.apply_custom_highlight_rules(&settings.custom_highlights, cx);
         if let Some(theme) = TerminalTheme::find_by_name(&settings.theme) {
             self.apply_theme(&theme, window, cx);
         }
+    }
+
+    fn apply_custom_highlight_rules(
+        &mut self,
+        rules: &[TerminalHighlightRule],
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(addon) = self
+            .addon_manager
+            .get_as_mut::<CustomHighlightAddon>("custom_highlights")
+        {
+            addon.set_rules(rules);
+        }
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_custom_highlights(rules.to_vec(), cx);
+        });
+        cx.notify();
     }
 
     /// 应用主题（不 emit 事件，用于跨 tab 同步）

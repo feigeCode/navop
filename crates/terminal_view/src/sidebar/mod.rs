@@ -16,7 +16,10 @@ pub use quick_command_panel::QuickCommandPanel;
 pub use server_monitor_panel::{ServerMonitorPanel, ServerMonitorPanelEvent};
 pub use settings_panel::SettingsPanel;
 
-use crate::theme::{TerminalColors, TerminalTheme};
+use crate::{
+    theme::{TerminalColors, TerminalTheme},
+    TerminalHighlightRule,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -116,6 +119,8 @@ pub enum TerminalSidebarEvent {
     MiddleClickPasteChanged(bool),
     /// 路径与终端同步开关
     SyncPathChanged(bool),
+    /// 自定义高亮规则变更
+    CustomHighlightsChanged(Vec<TerminalHighlightRule>),
     /// 在终端中 cd 到指定路径
     CdToTerminal(String),
     /// 请求将终端当前工作目录同步到文件管理器
@@ -261,6 +266,9 @@ impl TerminalSidebar {
                 settings_panel::SettingsPanelEvent::SyncPathChanged(enabled) => {
                     this.sync_path_enabled = *enabled;
                     cx.emit(TerminalSidebarEvent::SyncPathChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::CustomHighlightsChanged(rules) => {
+                    cx.emit(TerminalSidebarEvent::CustomHighlightsChanged(rules.clone()));
                 }
             },
         );
@@ -436,6 +444,16 @@ impl TerminalSidebar {
     pub fn set_confirm_high_risk_command(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_confirm_high_risk_command(enabled, cx);
+        });
+    }
+
+    pub fn set_custom_highlights(
+        &mut self,
+        rules: Vec<TerminalHighlightRule>,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_custom_highlights(rules, cx);
         });
     }
 

@@ -6,21 +6,28 @@ use gpui::prelude::FluentBuilder;
 use gpui::FontWeight;
 use gpui::{
     div, px, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, MouseButton, ParentElement, Render, SharedString,
+    Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
+    color_picker::{ColorPicker, ColorPickerState},
+    dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
+    notification::Notification,
     scroll::ScrollableElement,
     select::{Select, SelectEvent, SelectState},
     switch::Switch,
-    v_flex, ActiveTheme, Icon, IconName, Sizable, Size,
+    try_parse_color, v_flex, ActiveTheme, Colorize, Icon, IconName, Sizable, Size, WindowExt,
 };
 use rust_i18n::t;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::theme::{TerminalTheme, MAX_FONT_SIZE, MIN_FONT_SIZE};
+use crate::{
+    theme::{TerminalTheme, MAX_FONT_SIZE, MIN_FONT_SIZE},
+    TerminalHighlightRule,
+};
 
 /// 设置面板事件
 #[derive(Clone, Debug)]
@@ -53,6 +60,8 @@ pub enum SettingsPanelEvent {
     MiddleClickPasteChanged(bool),
     /// 路径同步开关变更
     SyncPathChanged(bool),
+    /// 自定义高亮规则变更
+    CustomHighlightsChanged(Vec<TerminalHighlightRule>),
 }
 
 /// 设置面板组件
@@ -81,6 +90,8 @@ pub struct SettingsPanel {
     middle_click_paste: bool,
     /// 路径与终端同步开关
     sync_path: bool,
+    /// 全局自定义高亮规则
+    custom_highlights: Vec<TerminalHighlightRule>,
     /// 是否有文件管理器面板（仅 SSH 终端有）
     has_file_manager: bool,
     /// 焦点句柄
@@ -215,6 +226,7 @@ impl SettingsPanel {
             autocomplete_enabled,
             middle_click_paste,
             sync_path,
+            custom_highlights: Vec::new(),
             has_file_manager,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
@@ -266,6 +278,15 @@ impl SettingsPanel {
         cx.notify();
     }
 
+    pub fn set_custom_highlights(
+        &mut self,
+        rules: Vec<TerminalHighlightRule>,
+        cx: &mut Context<Self>,
+    ) {
+        self.custom_highlights = rules;
+        cx.notify();
+    }
+
     pub fn set_cursor_blink(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.cursor_blink = enabled;
         cx.notify();
@@ -279,6 +300,268 @@ impl SettingsPanel {
     pub fn set_confirm_high_risk_command(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.confirm_high_risk_command = enabled;
         cx.notify();
+    }
+
+    fn emit_custom_highlights_changed(&self, cx: &mut Context<Self>) {
+        cx.emit(SettingsPanelEvent::CustomHighlightsChanged(
+            self.custom_highlights.clone(),
+        ));
+    }
+
+    fn next_rule_id() -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("系统时间应晚于 UNIX 纪元")
+            .as_nanos();
+        format!("custom-highlight-{nanos}")
+    }
+
+    fn open_rule_editor(
+        &mut self,
+        index: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let existing = index.and_then(|idx| self.custom_highlights.get(idx).cloned());
+        let initial_pattern = existing
+            .as_ref()
+            .map(|rule| rule.pattern.clone())
+            .unwrap_or_default();
+        let initial_foreground = existing
+            .as_ref()
+            .and_then(|rule| rule.foreground.clone())
+            .unwrap_or_default();
+        let initial_background = existing
+            .as_ref()
+            .and_then(|rule| rule.background.clone())
+            .unwrap_or_default();
+        let initial_priority = existing
+            .as_ref()
+            .map(|rule| rule.priority.to_string())
+            .unwrap_or_else(|| "50".to_string());
+        let initial_note = existing
+            .as_ref()
+            .map(|rule| rule.note.clone())
+            .unwrap_or_default();
+        let pattern_state = cx.new(|cx| {
+            let mut state =
+                InputState::new(window, cx).placeholder(t!("CustomHighlight.placeholders.regex"));
+            if !initial_pattern.is_empty() {
+                state = state.default_value(&initial_pattern);
+            }
+            state
+        });
+        let foreground_color = parse_optional_hex_color(Some(&initial_foreground));
+        let background_color = parse_optional_hex_color(Some(&initial_background));
+        let foreground_state = cx.new(|cx| {
+            let state = ColorPickerState::new(window, cx);
+            match foreground_color {
+                Some(color) => state.default_value(color),
+                None => state,
+            }
+        });
+        let background_state = cx.new(|cx| {
+            let state = ColorPickerState::new(window, cx);
+            match background_color {
+                Some(color) => state.default_value(color),
+                None => state,
+            }
+        });
+        let priority_state = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .placeholder("50")
+                .pattern(regex::Regex::new(r"^\d{0,3}$").expect("priority regex 应可编译"));
+            state = state.default_value(&initial_priority);
+            state
+        });
+        let note_state = cx.new(|cx| {
+            let mut state =
+                InputState::new(window, cx).placeholder(t!("CustomHighlight.placeholders.note"));
+            if !initial_note.is_empty() {
+                state = state.default_value(&initial_note);
+            }
+            state
+        });
+        let enabled = existing.as_ref().map(|rule| rule.enabled).unwrap_or(true);
+        let view = cx.entity().clone();
+        let title = if existing.is_some() {
+            t!("CustomHighlight.edit_rule_title").to_string()
+        } else {
+            t!("CustomHighlight.add_rule_title").to_string()
+        };
+
+        window.open_dialog(cx, move |dialog, window, _cx| {
+            let view_ok = view.clone();
+            let pattern_ok = pattern_state.clone();
+            let foreground_ok = foreground_state.clone();
+            let background_ok = background_state.clone();
+            let foreground_clear = foreground_state.clone();
+            let background_clear = background_state.clone();
+            let priority_ok = priority_state.clone();
+            let note_ok = note_state.clone();
+            let existing_rule = existing.clone();
+
+            dialog
+                .title(title.clone())
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .child(div().text_xs().child(t!("CustomHighlight.fields.regex")))
+                                .child(Input::new(&pattern_state).small().w_full()),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .child(t!("CustomHighlight.fields.foreground")),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_2()
+                                                .items_center()
+                                                .child(ColorPicker::new(&foreground_state).small())
+                                                .child(
+                                                    Button::new(
+                                                        "custom-highlight-clear-foreground",
+                                                    )
+                                                    .label(t!("Common.none").to_string())
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .on_click(window.listener_for(
+                                                        &foreground_clear,
+                                                        move |state, _, window, cx| {
+                                                            state.set_optional_value(
+                                                                None, window, cx,
+                                                            );
+                                                        },
+                                                    )),
+                                                ),
+                                        ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .child(t!("CustomHighlight.fields.background")),
+                                        )
+                                        .child(
+                                            h_flex()
+                                                .gap_2()
+                                                .items_center()
+                                                .child(ColorPicker::new(&background_state).small())
+                                                .child(
+                                                    Button::new(
+                                                        "custom-highlight-clear-background",
+                                                    )
+                                                    .label(t!("Common.none").to_string())
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .on_click(window.listener_for(
+                                                        &background_clear,
+                                                        move |state, _, window, cx| {
+                                                            state.set_optional_value(
+                                                                None, window, cx,
+                                                            );
+                                                        },
+                                                    )),
+                                                ),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    v_flex()
+                                        .w(px(96.0))
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .child(t!("CustomHighlight.fields.priority")),
+                                        )
+                                        .child(Input::new(&priority_state).small()),
+                                )
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .child(t!("CustomHighlight.fields.note")),
+                                        )
+                                        .child(Input::new(&note_state).small().w_full()),
+                                ),
+                        )
+                        .into_any_element(),
+                )
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t!("Common.save").to_string())
+                        .cancel_text(t!("Common.cancel").to_string()),
+                )
+                .on_ok(move |_event, window, cx| {
+                    let pattern = pattern_ok.read(cx).value().trim().to_string();
+                    let foreground = serialize_optional_color(foreground_ok.read(cx).value());
+                    let background = serialize_optional_color(background_ok.read(cx).value());
+                    let note = note_ok.read(cx).value().trim().to_string();
+                    let priority_text = priority_ok.read(cx).value().trim().to_string();
+                    let priority = if priority_text.is_empty() {
+                        50
+                    } else if let Ok(priority) = priority_text.parse::<u8>() {
+                        priority
+                    } else {
+                        window.push_notification(
+                            Notification::error(t!("CustomHighlight.errors.invalid_priority")),
+                            cx,
+                        );
+                        return false;
+                    };
+
+                    let rule = TerminalHighlightRule {
+                        id: existing_rule
+                            .as_ref()
+                            .map(|rule| rule.id.clone())
+                            .unwrap_or_else(SettingsPanel::next_rule_id),
+                        enabled,
+                        pattern,
+                        foreground,
+                        background,
+                        priority,
+                        note,
+                    };
+
+                    if let Err(error) = validate_rule_for_save(&rule) {
+                        window.push_notification(Notification::error(error), cx);
+                        return false;
+                    }
+
+                    view_ok.update(cx, |this, cx| {
+                        match index {
+                            Some(idx) if idx < this.custom_highlights.len() => {
+                                this.custom_highlights[idx] = rule;
+                            }
+                            _ => this.custom_highlights.push(rule),
+                        }
+                        this.emit_custom_highlights_changed(cx);
+                        cx.notify();
+                    });
+                    true
+                })
+        });
     }
 
     /// 获取搜索值
@@ -706,6 +989,223 @@ impl SettingsPanel {
             )
     }
 
+    fn render_highlight_rule_row(
+        &self,
+        index: usize,
+        rule: &TerminalHighlightRule,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let border = cx.theme().border;
+        let muted = cx.theme().muted;
+        let muted_fg = cx.theme().muted_foreground;
+        let enabled = rule.enabled;
+        let pattern = rule.pattern.clone();
+        let note = if rule.note.trim().is_empty() {
+            t!("CustomHighlight.no_note").to_string()
+        } else {
+            rule.note.clone()
+        };
+        let priority = rule.priority;
+        let fg_preview = rule
+            .foreground
+            .as_deref()
+            .and_then(|value| try_parse_color(value).ok());
+        let bg_preview = rule
+            .background
+            .as_deref()
+            .and_then(|value| try_parse_color(value).ok());
+
+        v_flex()
+            .gap_2()
+            .p_2()
+            .rounded_md()
+            .border_1()
+            .border_color(border)
+            .bg(muted)
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                Switch::new(SharedString::from(format!(
+                                    "custom-highlight-enabled-{index}"
+                                )))
+                                .checked(enabled)
+                                .small()
+                                .on_click(cx.listener(
+                                    move |this, checked: &bool, _window, cx| {
+                                        if let Some(rule) = this.custom_highlights.get_mut(index) {
+                                            rule.enabled = *checked;
+                                            this.emit_custom_highlights_changed(cx);
+                                            cx.notify();
+                                        }
+                                    },
+                                )),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(pattern.clone()),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .gap_1()
+                            .ml_2()
+                            .items_center()
+                            .child(
+                                Button::new(SharedString::from(format!(
+                                    "custom-highlight-edit-{index}"
+                                )))
+                                .label(t!("CustomHighlight.actions.edit").to_string())
+                                .ghost()
+                                .xsmall()
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.open_rule_editor(Some(index), window, cx);
+                                    },
+                                )),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!(
+                                    "custom-highlight-delete-{index}"
+                                )))
+                                .label(t!("CustomHighlight.actions.delete").to_string())
+                                .ghost()
+                                .xsmall()
+                                .on_click(cx.listener(
+                                    move |this, _, _window, cx| {
+                                        if index < this.custom_highlights.len() {
+                                            this.custom_highlights.remove(index);
+                                            this.emit_custom_highlights_changed(cx);
+                                            cx.notify();
+                                        }
+                                    },
+                                )),
+                            ),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .flex_wrap()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_xs()
+                            .text_color(muted_fg)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(note),
+                    )
+                    .child(div().flex_shrink_0().text_xs().text_color(muted_fg).child(
+                        t!("CustomHighlight.priority_value", priority = priority).to_string(),
+                    ))
+                    .when_some(fg_preview, |this, color| {
+                        this.child(
+                            div()
+                                .w(px(14.0))
+                                .h(px(14.0))
+                                .rounded_sm()
+                                .bg(color)
+                                .border_1()
+                                .border_color(border),
+                        )
+                    })
+                    .when_some(bg_preview, |this, color| {
+                        this.child(
+                            div()
+                                .w(px(14.0))
+                                .h(px(14.0))
+                                .rounded_sm()
+                                .bg(color)
+                                .border_1()
+                                .border_color(border),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn render_custom_highlight_section(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let border = cx.theme().border;
+        let muted = cx.theme().muted;
+        let muted_fg = cx.theme().muted_foreground;
+        let rows: Vec<AnyElement> = self
+            .custom_highlights
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| self.render_highlight_rule_row(index, rule, cx))
+            .collect();
+
+        v_flex()
+            .gap_3()
+            .p_3()
+            .border_t_1()
+            .border_color(border)
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(muted_fg)
+                            .child(t!("CustomHighlight.title").to_uppercase()),
+                    )
+                    .child(
+                        Button::new("custom-highlight-add")
+                            .label(t!("CustomHighlight.add_rule").to_string())
+                            .ghost()
+                            .xsmall()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_rule_editor(None, window, cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted_fg)
+                    .child(t!("CustomHighlight.description")),
+            )
+            .child(
+                div()
+                    .rounded_md()
+                    .bg(muted)
+                    .p_2()
+                    .children(if rows.is_empty() {
+                        vec![div()
+                            .text_xs()
+                            .text_color(muted_fg)
+                            .child(t!("CustomHighlight.empty"))
+                            .into_any_element()]
+                    } else {
+                        rows
+                    }),
+            )
+    }
+
     /// 渲染主题选择区域
     fn render_theme_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().border;
@@ -743,6 +1243,67 @@ impl SettingsPanel {
     }
 }
 
+fn parse_optional_hex_color(value: Option<&str>) -> Option<Hsla> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| Hsla::parse_hex(value).ok())
+}
+
+fn serialize_optional_color(value: Option<Hsla>) -> Option<String> {
+    value.map(|color| color.to_hex())
+}
+
+fn validate_rule_for_save(rule: &TerminalHighlightRule) -> Result<(), String> {
+    if rule.pattern.trim().is_empty() {
+        return Err(t!("CustomHighlight.errors.pattern_required").to_string());
+    }
+    if rule.foreground.is_none() && rule.background.is_none() {
+        return Err(t!("CustomHighlight.errors.color_required").to_string());
+    }
+    regex::Regex::new(&rule.pattern)
+        .map_err(|error| t!("CustomHighlight.errors.invalid_regex", error = error).to_string())?;
+    if let Some(foreground) = rule.foreground.as_deref() {
+        try_parse_color(foreground).map_err(|error| {
+            t!("CustomHighlight.errors.invalid_foreground", error = error).to_string()
+        })?;
+    }
+    if let Some(background) = rule.background.as_deref() {
+        try_parse_color(background).map_err(|error| {
+            t!("CustomHighlight.errors.invalid_background", error = error).to_string()
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_optional_hex_color, serialize_optional_color};
+    use gpui::Hsla;
+
+    #[test]
+    fn parse_optional_hex_color_returns_none_for_invalid_input() {
+        assert!(parse_optional_hex_color(None).is_none());
+        assert!(parse_optional_hex_color(Some("bad-color")).is_none());
+    }
+
+    #[test]
+    fn parse_and_serialize_optional_hex_color_round_trip() {
+        let color = parse_optional_hex_color(Some("#64C8FF")).expect("应解析有效 hex");
+        let serialized = serialize_optional_color(Some(color)).expect("应序列化颜色");
+        let reparsed = parse_optional_hex_color(Some(&serialized));
+
+        assert!(serialized.starts_with('#'));
+        assert!(matches!(serialized.len(), 7 | 9));
+        assert!(reparsed.is_some());
+    }
+
+    #[test]
+    fn serialize_optional_color_returns_none_when_empty() {
+        assert_eq!(serialize_optional_color(None::<Hsla>), None);
+    }
+}
+
 impl EventEmitter<SettingsPanelEvent> for SettingsPanel {}
 
 impl Focusable for SettingsPanel {
@@ -752,7 +1313,7 @@ impl Focusable for SettingsPanel {
 }
 
 impl Render for SettingsPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_file_manager = self.has_file_manager;
 
         v_flex()
@@ -776,6 +1337,7 @@ impl Render for SettingsPanel {
                             .when(has_file_manager, |el| {
                                 el.child(self.render_file_manager_section(cx))
                             })
+                            .child(self.render_custom_highlight_section(window, cx))
                             .child(self.render_theme_section(cx)),
                     ),
             )

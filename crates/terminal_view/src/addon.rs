@@ -2,11 +2,13 @@
 //!
 //! Similar to xterm.js addon architecture, provides extensible plugin mechanism.
 
+use crate::settings::TerminalHighlightRule;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Point as AlacPoint};
 use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::Term;
 use gpui::*;
+use gpui_component::try_parse_color;
 use std::any::Any;
 use std::collections::HashMap;
 use std::ops::{Range, RangeInclusive};
@@ -399,6 +401,51 @@ impl Drop for AddonManager {
     }
 }
 
+#[derive(Clone, Debug)]
+struct CompiledHighlightRule {
+    regex: regex::Regex,
+    foreground: Option<Hsla>,
+    background: Option<Hsla>,
+    priority: u8,
+}
+
+fn compile_custom_highlight_rules(rules: &[TerminalHighlightRule]) -> Vec<CompiledHighlightRule> {
+    rules
+        .iter()
+        .filter(|rule| rule.enabled)
+        .filter(|rule| rule.validate().is_ok())
+        .filter_map(|rule| {
+            let regex = regex::Regex::new(&rule.pattern).ok()?;
+            let foreground = rule
+                .foreground
+                .as_deref()
+                .and_then(|value| try_parse_color(value).ok());
+            let background = rule
+                .background
+                .as_deref()
+                .and_then(|value| try_parse_color(value).ok());
+
+            if foreground.is_none() && background.is_none() {
+                return None;
+            }
+
+            Some(CompiledHighlightRule {
+                regex,
+                foreground,
+                background,
+                priority: rule.priority,
+            })
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug)]
+struct CustomHighlightMatch {
+    line: usize,
+    col_range: Range<usize>,
+    decoration: CellDecoration,
+}
+
 // ============================================================================
 // Built-in Addons
 // ============================================================================
@@ -739,122 +786,87 @@ impl TerminalAddon for SearchAddon {
     }
 }
 
-/// IP Address Highlight Addon - Highlight IP addresses in terminal
-pub struct IpHighlightAddon {
-    ipv4_regex: regex::Regex,
-    ipv6_regex: regex::Regex,
-    highlight_color: (u8, u8, u8),
-    enabled: bool,
-    cached_ips: Vec<IpAddress>, // Cached IP addresses for current frame
+pub struct CustomHighlightAddon {
+    compiled_rules: Vec<CompiledHighlightRule>,
+    cached_matches: Vec<CustomHighlightMatch>,
 }
 
-#[derive(Clone, Debug)]
-pub struct IpAddress {
-    pub ip: String,
-    pub line: usize,
-    pub col_range: Range<usize>,
-}
-
-impl IpHighlightAddon {
+impl CustomHighlightAddon {
     pub fn new() -> Self {
         Self {
-            ipv4_regex: regex::Regex::new(
-                r"\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b",
-            )
-            .expect("Invalid IPv4 regex"),
-            ipv6_regex: regex::Regex::new(
-                r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|\b(?:[0-9a-fA-F]{1,4}:){1,7}:\b|\b(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}\b",
-            )
-            .expect("Invalid IPv6 regex"),
-            highlight_color: (100, 200, 255),
-            enabled: true,
-            cached_ips: Vec::new(),
+            compiled_rules: Vec::new(),
+            cached_matches: Vec::new(),
         }
     }
 
-    /// Update cached IP addresses (call this before rendering)
-    pub fn update_cache(&mut self, ips: Vec<IpAddress>) {
-        self.cached_ips = ips;
+    pub fn set_rules(&mut self, rules: &[TerminalHighlightRule]) {
+        self.compiled_rules = compile_custom_highlight_rules(rules);
+        self.cached_matches.clear();
     }
 
-    /// Set highlight color (RGB)
-    pub fn set_color(&mut self, r: u8, g: u8, b: u8) {
-        self.highlight_color = (r, g, b);
-    }
-
-    /// Get current highlight color
-    pub fn color(&self) -> (u8, u8, u8) {
-        self.highlight_color
-    }
-
-    /// Enable or disable IP highlighting
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-    }
-
-    /// Check if highlighting is enabled
-    pub fn is_enabled(&self) -> bool {
-        self.enabled
-    }
-
-    /// Detect all IP addresses in a line
-    pub fn detect_ips_in_line(&self, line_text: &str, screen_line: usize) -> Vec<IpAddress> {
-        if !self.enabled || line_text.is_empty() {
+    fn detect_matches_in_line(&self, line_text: &str, line: usize) -> Vec<CustomHighlightMatch> {
+        if line_text.is_empty() {
             return Vec::new();
         }
 
-        let mut ips = Vec::new();
+        let mut matches = Vec::new();
+        for rule in &self.compiled_rules {
+            for mat in rule.regex.find_iter(line_text) {
+                let start_col = line_text[..mat.start()].chars().count();
+                let end_col = line_text[..mat.end()].chars().count();
+                if start_col >= end_col {
+                    continue;
+                }
 
-        // Detect IPv4 addresses
-        for mat in self.ipv4_regex.find_iter(line_text) {
-            let start_col = line_text[..mat.start()].chars().count();
-            let end_col = line_text[..mat.end()].chars().count();
+                let decoration = match (rule.foreground, rule.background) {
+                    (Some(foreground), Some(background)) => CellDecoration::Highlight {
+                        foreground,
+                        background,
+                        priority: rule.priority,
+                    },
+                    (Some(color), None) => CellDecoration::Foreground {
+                        color,
+                        priority: rule.priority,
+                    },
+                    (None, Some(color)) => CellDecoration::Background {
+                        color,
+                        priority: rule.priority,
+                    },
+                    (None, None) => continue,
+                };
 
-            ips.push(IpAddress {
-                ip: mat.as_str().to_string(),
-                line: screen_line,
-                col_range: start_col..end_col,
-            });
+                matches.push(CustomHighlightMatch {
+                    line,
+                    col_range: start_col..end_col,
+                    decoration,
+                });
+            }
         }
 
-        // Detect IPv6 addresses
-        for mat in self.ipv6_regex.find_iter(line_text) {
-            let start_col = line_text[..mat.start()].chars().count();
-            let end_col = line_text[..mat.end()].chars().count();
-
-            ips.push(IpAddress {
-                ip: mat.as_str().to_string(),
-                line: screen_line,
-                col_range: start_col..end_col,
-            });
-        }
-
-        ips
+        matches
     }
 }
 
-impl Default for IpHighlightAddon {
+impl Default for CustomHighlightAddon {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TerminalAddon for IpHighlightAddon {
+impl TerminalAddon for CustomHighlightAddon {
     fn id(&self) -> &'static str {
-        "ip_highlight"
+        "custom_highlights"
     }
 
     fn on_frame(&mut self, context: &TerminalAddonFrameContext) {
-        if !self.enabled {
-            self.cached_ips.clear();
+        self.cached_matches.clear();
+        if self.compiled_rules.is_empty() {
             return;
         }
 
         let term = context.term;
         let content = term.renderable_content();
         let display_offset = content.display_offset;
-
-        let mut ips = Vec::new();
         let mut seen_lines = std::collections::HashSet::new();
 
         for cell in content.display_iter {
@@ -867,7 +879,6 @@ impl TerminalAddon for IpHighlightAddon {
             if !context.visible_lines.contains(&line_idx) || seen_lines.contains(&line_idx) {
                 continue;
             }
-
             seen_lines.insert(line_idx);
 
             let grid = term.grid();
@@ -879,10 +890,9 @@ impl TerminalAddon for IpHighlightAddon {
                 }
             }
 
-            ips.extend(self.detect_ips_in_line(&line_text, line_idx));
+            self.cached_matches
+                .extend(self.detect_matches_in_line(&line_text, line_idx));
         }
-
-        self.update_cache(ips);
     }
 
     fn provide_decorations(
@@ -890,29 +900,13 @@ impl TerminalAddon for IpHighlightAddon {
         visible_lines: Range<usize>,
         _display_offset: usize,
     ) -> Vec<DecorationSpan> {
-        if !self.enabled {
-            return Vec::new();
-        }
-
-        let (r, g, b) = self.highlight_color;
-        let color = Rgba {
-            r: r as f32 / 255.0,
-            g: g as f32 / 255.0,
-            b: b as f32 / 255.0,
-            a: 1.0,
-        }
-        .into();
-
-        self.cached_ips
+        self.cached_matches
             .iter()
-            .filter(|ip| visible_lines.contains(&ip.line))
-            .map(|ip| DecorationSpan {
-                line: ip.line,
-                col_range: ip.col_range.clone(),
-                decoration: CellDecoration::Foreground {
-                    color,
-                    priority: 40, // Lower priority than search
-                },
+            .filter(|matched| visible_lines.contains(&matched.line))
+            .map(|matched| DecorationSpan {
+                line: matched.line,
+                col_range: matched.col_range.clone(),
+                decoration: matched.decoration.clone(),
             })
             .collect()
     }
@@ -1136,7 +1130,7 @@ pub fn register_default_addons(manager: &mut AddonManager) {
     manager.load(Box::new(WebLinksAddon::new()));
     manager.load(Box::new(FilePathAddon::new()));
     manager.load(Box::new(SearchAddon::new()));
-    manager.load(Box::new(IpHighlightAddon::new()));
+    manager.load(Box::new(CustomHighlightAddon::new()));
 }
 
 fn split_path_line_column(candidate: &str) -> (String, Option<u32>, Option<u32>) {
@@ -1224,4 +1218,52 @@ fn file_path_to_url(path: &Path) -> Option<String> {
     };
 
     Some(url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compile_custom_highlight_rules, register_default_addons, AddonManager};
+    use crate::settings::TerminalHighlightRule;
+
+    #[test]
+    fn custom_highlight_rule_requires_pattern_and_color() {
+        let rule = TerminalHighlightRule {
+            id: "rule-1".into(),
+            enabled: true,
+            pattern: String::new(),
+            foreground: None,
+            background: None,
+            priority: 1,
+            note: String::new(),
+        };
+
+        assert!(rule.validate().is_err());
+    }
+
+    #[test]
+    fn custom_highlight_compiler_skips_disabled_rules() {
+        let rules = vec![TerminalHighlightRule {
+            id: "rule-1".into(),
+            enabled: false,
+            pattern: "root".into(),
+            foreground: Some("#ff0000".into()),
+            background: None,
+            priority: 10,
+            note: String::new(),
+        }];
+
+        let compiled = compile_custom_highlight_rules(&rules);
+
+        assert!(compiled.is_empty());
+    }
+
+    #[test]
+    fn register_default_addons_uses_custom_highlights_for_ip_rules() {
+        let mut manager = AddonManager::new();
+
+        register_default_addons(&mut manager);
+
+        assert!(manager.is_loaded("custom_highlights"));
+        assert!(!manager.is_loaded("ip_highlight"));
+    }
 }

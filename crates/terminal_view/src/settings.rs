@@ -1,3 +1,4 @@
+use crate::highlight_presets::{builtin_highlight_rules, merge_builtin_highlight_rules};
 use gpui::{App, AppContext, Context, Entity, EventEmitter};
 use one_core::storage::get_config_dir;
 use serde::{Deserialize, Serialize};
@@ -5,6 +6,29 @@ use std::path::{Path, PathBuf};
 use tracing::error;
 
 const TERMINAL_SETTINGS_FILE: &str = "terminal-settings.json";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalHighlightRule {
+    pub id: String,
+    pub enabled: bool,
+    pub pattern: String,
+    pub foreground: Option<String>,
+    pub background: Option<String>,
+    pub priority: u8,
+    pub note: String,
+}
+
+impl TerminalHighlightRule {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.pattern.trim().is_empty() {
+            return Err("正则不能为空".into());
+        }
+        if self.foreground.is_none() && self.background.is_none() {
+            return Err("至少设置一种颜色".into());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TerminalSettings {
@@ -17,6 +41,10 @@ pub struct TerminalSettings {
     pub cursor_blink: bool,
     pub confirm_multiline_paste: bool,
     pub confirm_high_risk_command: bool,
+    #[serde(default)]
+    pub builtin_highlights_initialized: bool,
+    #[serde(default)]
+    pub custom_highlights: Vec<TerminalHighlightRule>,
 }
 
 impl Default for TerminalSettings {
@@ -31,6 +59,8 @@ impl Default for TerminalSettings {
             cursor_blink: false,
             confirm_multiline_paste: true,
             confirm_high_risk_command: true,
+            builtin_highlights_initialized: true,
+            custom_highlights: builtin_highlight_rules(),
         }
     }
 }
@@ -128,19 +158,39 @@ fn terminal_settings_path() -> anyhow::Result<PathBuf> {
     Ok(config_dir.join(TERMINAL_SETTINGS_FILE))
 }
 
-fn resolve_initial_settings(path: &Path, legacy_seed: Option<TerminalSettings>) -> TerminalSettings {
+fn resolve_initial_settings(
+    path: &Path,
+    legacy_seed: Option<TerminalSettings>,
+) -> TerminalSettings {
     if let Some(settings) = load_settings_from_path(path) {
-        return settings;
+        let (migrated, changed) = initialize_builtin_highlights(settings);
+        if changed {
+            if let Err(err) = save_settings_to_path(path, &migrated) {
+                error!("failed to save terminal settings after builtin highlight migration: {err}");
+            }
+        }
+        return migrated;
     }
 
     if let Some(legacy) = legacy_seed {
-        if let Err(err) = save_settings_to_path(path, &legacy) {
+        let (migrated, _) = initialize_builtin_highlights(legacy);
+        if let Err(err) = save_settings_to_path(path, &migrated) {
             error!("failed to migrate legacy terminal settings: {err}");
         }
-        return legacy;
+        return migrated;
     }
 
     TerminalSettings::default()
+}
+
+fn initialize_builtin_highlights(mut settings: TerminalSettings) -> (TerminalSettings, bool) {
+    if settings.builtin_highlights_initialized {
+        return (settings, false);
+    }
+
+    settings.custom_highlights = merge_builtin_highlight_rules(&settings.custom_highlights);
+    settings.builtin_highlights_initialized = true;
+    (settings, true)
 }
 
 fn load_settings_from_path(path: &Path) -> Option<TerminalSettings> {
@@ -160,8 +210,8 @@ fn save_settings_to_path(path: &Path, settings: &TerminalSettings) -> anyhow::Re
 #[cfg(test)]
 mod tests {
     use super::{
-        load_settings_from_path, resolve_initial_settings, save_settings_to_path, TerminalSettings,
-        TerminalSettingsStore,
+        load_settings_from_path, resolve_initial_settings, save_settings_to_path,
+        TerminalHighlightRule, TerminalSettings, TerminalSettingsStore,
     };
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -187,6 +237,8 @@ mod tests {
             cursor_blink: true,
             confirm_multiline_paste: false,
             confirm_high_risk_command: false,
+            builtin_highlights_initialized: true,
+            custom_highlights: Vec::new(),
         };
 
         save_settings_to_path(&path, &settings).expect("应写入 terminal settings");
@@ -202,14 +254,17 @@ mod tests {
             font_size: 17.0,
             theme: "light".to_string(),
             sync_path_with_terminal: true,
+            builtin_highlights_initialized: false,
+            custom_highlights: Vec::new(),
             ..TerminalSettings::default()
         };
 
         let resolved = resolve_initial_settings(&path, Some(legacy.clone()));
 
-        assert_eq!(resolved, legacy);
+        assert!(resolved.builtin_highlights_initialized);
+        assert_ne!(resolved.custom_highlights, legacy.custom_highlights);
         let persisted = load_settings_from_path(&path).expect("迁移后应写出新文件");
-        assert_eq!(persisted, legacy);
+        assert_eq!(persisted, resolved);
     }
 
     #[test]
@@ -219,5 +274,71 @@ mod tests {
 
         assert_eq!(store.snapshot(), initial);
         assert!(store.path.is_none());
+    }
+
+    #[test]
+    fn terminal_settings_default_includes_builtin_highlight_rules() {
+        let settings = TerminalSettings::default();
+
+        assert!(settings.builtin_highlights_initialized);
+        assert!(!settings.custom_highlights.is_empty());
+        assert!(settings
+            .custom_highlights
+            .iter()
+            .any(|rule| rule.id == "preset:ip_addresses:ipv4"));
+    }
+
+    #[test]
+    fn terminal_settings_existing_file_is_migrated_to_builtin_rules_once() {
+        let path = temp_file_path("terminal-settings-builtin-migration");
+        let legacy = TerminalSettings {
+            builtin_highlights_initialized: false,
+            custom_highlights: vec![TerminalHighlightRule {
+                id: "custom:user-rule".into(),
+                enabled: true,
+                pattern: "\\bhello\\b".into(),
+                foreground: Some("#00ff00".into()),
+                background: None,
+                priority: 30,
+                note: "custom".into(),
+            }],
+            ..TerminalSettings::default()
+        };
+        save_settings_to_path(&path, &legacy).expect("应写入旧版 terminal settings");
+
+        let resolved = resolve_initial_settings(&path, None);
+
+        assert!(resolved.builtin_highlights_initialized);
+        assert!(resolved
+            .custom_highlights
+            .iter()
+            .any(|rule| rule.id == "custom:user-rule"));
+        assert!(resolved
+            .custom_highlights
+            .iter()
+            .any(|rule| rule.id == "preset:ip_addresses:ipv4"));
+    }
+
+    #[test]
+    fn terminal_settings_round_trip_preserves_custom_highlights() {
+        let path = temp_file_path("terminal-settings-highlights-round-trip");
+        let settings = TerminalSettings {
+            custom_highlights: vec![TerminalHighlightRule {
+                id: "rule-1".into(),
+                enabled: true,
+                pattern: "\\berror\\b".into(),
+                foreground: Some("#ff0000".into()),
+                background: Some("#1f1f1f".into()),
+                priority: 42,
+                note: "Errors".into(),
+            }],
+            builtin_highlights_initialized: true,
+            ..TerminalSettings::default()
+        };
+
+        save_settings_to_path(&path, &settings).expect("应写入 terminal settings");
+        let loaded = load_settings_from_path(&path).expect("应读回 terminal settings");
+
+        assert_eq!(loaded.custom_highlights, settings.custom_highlights);
     }
 }
