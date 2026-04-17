@@ -1,11 +1,12 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 pub mod addon;
-pub mod history_prompt;
+pub mod cd_completion;
 pub mod highlight_presets;
+pub mod history_prompt;
 pub mod keys;
-pub mod settings;
 pub mod serial_form_window;
+pub mod settings;
 pub mod sidebar;
 pub mod ssh_form_window;
 pub mod terminal_element;

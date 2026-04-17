@@ -10,14 +10,20 @@ use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
 use gpui_component::{kbd::Kbd, BlinkCursor, Icon, IconName, Sizable, WindowExt};
+use one_core::gpui_tokio::Tokio;
 use std::borrow::Cow;
 use std::cell::{Cell as StdCell, RefCell};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::addon::{
     register_default_addons, AddonManager, CustomHighlightAddon, SearchAddon,
     TerminalAddonFrameContext, TerminalAddonMouseContext,
+};
+use crate::cd_completion::{
+    build_cd_completion_suggestions, parse_cd_completion_query, CdCompletionQuery,
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
 use crate::settings::{
@@ -32,11 +38,13 @@ use one_core::storage::models::{ActiveConnections, StoredConnection};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_ui::resize_handle::{resize_handle, HandlePlacement, ResizePanel};
 use rust_i18n::t;
+use sftp::{RusshSftpClient, SftpClient};
 use std::ops::Deref;
 use terminal::terminal::{
     ConnectionState, Terminal, TerminalConnectionKind, TerminalModelEvent, TerminalScrollProxy,
 };
 use terminal::LocalConfig;
+use tokio::sync::Mutex;
 
 actions!(
     terminal_view,
@@ -425,6 +433,12 @@ pub struct TerminalView {
     history_prompt: HistoryPromptState,
     /// InlineSuggest 防抖任务（30ms 延迟刷新建议）
     suggestion_debounce: Option<gpui::Task<()>>,
+    /// `cd` 目录补全的独立 SFTP 连接
+    cd_completion_client: Option<Arc<Mutex<RusshSftpClient>>>,
+    /// 按父目录缓存远端子目录名，减少重复 SFTP 请求
+    cd_completion_cache: HashMap<String, Vec<String>>,
+    /// 当前正在加载目录候选的父目录
+    cd_completion_loading_parent: Option<String>,
 
     current_theme: TerminalTheme,
 
@@ -750,6 +764,9 @@ impl TerminalView {
             ime_state: None,
             history_prompt: HistoryPromptState::default(),
             suggestion_debounce: None,
+            cd_completion_client: None,
+            cd_completion_cache: HashMap::new(),
+            cd_completion_loading_parent: None,
             current_theme: default_theme,
             tab_index,
             cursor_blink_enabled: false,
@@ -934,7 +951,7 @@ impl TerminalView {
         );
     }
 
-    fn refresh_history_prompt_matches(&mut self, cx: &App) {
+    fn refresh_history_prompt_matches(&mut self, cx: &mut Context<Self>) {
         if !self.history_prompt_enabled(cx) {
             self.hide_history_prompt_dropdown();
             self.log_history_prompt_state("refresh_skipped", "history prompt disabled", cx);
@@ -944,6 +961,11 @@ impl TerminalView {
         if !self.history_prompt.is_active() {
             self.history_prompt.set_matches(Vec::new());
             self.log_history_prompt_state("refresh_skipped", "tracking inactive", cx);
+            return;
+        }
+
+        if let Some(query) = self.current_cd_completion_query(cx) {
+            self.refresh_cd_completion_matches(query, cx);
             return;
         }
 
@@ -967,6 +989,120 @@ impl TerminalView {
             first_match = %first_match,
             "history prompt refreshed"
         );
+    }
+
+    fn current_cd_completion_query(&self, cx: &App) -> Option<CdCompletionQuery> {
+        if self.history_prompt.mode() != HistoryPromptMode::InlineSuggest {
+            return None;
+        }
+
+        let terminal = self.terminal.read(cx);
+        if terminal.connection_kind() != TerminalConnectionKind::Ssh {
+            return None;
+        }
+
+        parse_cd_completion_query(
+            self.history_prompt.query_input(),
+            terminal.current_working_dir(),
+        )
+    }
+
+    fn refresh_cd_completion_matches(&mut self, query: CdCompletionQuery, cx: &mut Context<Self>) {
+        if let Some(directory_names) = self.cd_completion_cache.get(&query.parent_dir) {
+            let matches = build_cd_completion_suggestions(&query, directory_names);
+            self.history_prompt.set_matches(matches);
+            tracing::debug!(
+                target: "terminal.history_prompt",
+                reason = "refresh_cd_matches_cached",
+                query = %self.history_prompt.query_input(),
+                parent_dir = %query.parent_dir,
+                matches_len = self.history_prompt.matches().len(),
+                "cd completion refreshed from cache"
+            );
+            return;
+        }
+
+        let Some(ssh_config) = self
+            .terminal
+            .read(cx)
+            .ssh_config()
+            .map(|config| config.ssh_config.clone())
+        else {
+            self.history_prompt.set_matches(Vec::new());
+            return;
+        };
+
+        if self.cd_completion_loading_parent.as_deref() == Some(query.parent_dir.as_str()) {
+            return;
+        }
+
+        self.history_prompt.set_matches(Vec::new());
+        self.cd_completion_loading_parent = Some(query.parent_dir.clone());
+        let existing_client = self.cd_completion_client.clone();
+        let parent_dir = query.parent_dir.clone();
+        let request_parent_dir = parent_dir.clone();
+        let task = Tokio::spawn(cx, async move {
+            let client = match existing_client {
+                Some(client) => client,
+                None => Arc::new(Mutex::new(RusshSftpClient::connect(ssh_config).await?)),
+            };
+            let entries = {
+                let mut client = client.lock().await;
+                client.list_dir(&request_parent_dir).await?
+            };
+            Ok::<_, anyhow::Error>((client, entries))
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.cd_completion_loading_parent = None;
+                match result {
+                    Ok(Ok((client, entries))) => {
+                        this.cd_completion_client = Some(client);
+                        let directory_names = entries
+                            .into_iter()
+                            .filter(|entry| entry.is_dir && entry.name != "." && entry.name != "..")
+                            .map(|entry| entry.name)
+                            .collect::<Vec<_>>();
+                        this.cd_completion_cache
+                            .insert(parent_dir.clone(), directory_names);
+
+                        if let Some(current_query) = this.current_cd_completion_query(cx) {
+                            if current_query.parent_dir == parent_dir {
+                                if let Some(directory_names) =
+                                    this.cd_completion_cache.get(&parent_dir)
+                                {
+                                    let matches = build_cd_completion_suggestions(
+                                        &current_query,
+                                        directory_names,
+                                    );
+                                    this.history_prompt.set_matches(matches);
+                                    cx.notify();
+                                }
+                            }
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        tracing::warn!(
+                            target: "terminal.history_prompt",
+                            parent_dir = %parent_dir,
+                            error = %error,
+                            "cd completion list_dir failed"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "terminal.history_prompt",
+                            parent_dir = %parent_dir,
+                            error = %error,
+                            "cd completion task failed"
+                        );
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     fn dismiss_history_prompt(&mut self) {
@@ -1004,7 +1140,7 @@ impl TerminalView {
         }));
     }
 
-    fn apply_paste_to_history_prompt(&mut self, text: &str, cx: &App) {
+    fn apply_paste_to_history_prompt(&mut self, text: &str, cx: &mut Context<Self>) {
         if !self.history_prompt_enabled(cx) {
             self.hide_history_prompt_dropdown();
             self.log_history_prompt_state("paste_skipped", "history prompt disabled", cx);
