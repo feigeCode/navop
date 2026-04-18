@@ -1,0 +1,28 @@
+[package]
+name = "remote_file_editor"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+ui = [
+    "dep:gpui",
+    "dep:gpui-component",
+    "dep:one-core",
+    "dep:sftp",
+    "dep:tokio",
+    "dep:tracing",
+]
+
+[dependencies]
+anyhow = { workspace = true }
+gpui = { workspace = true, optional = true }
+gpui-component = { workspace = true, optional = true }
+one-core = { workspace = true, optional = true }
+sftp = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+[lints]
+workspace = true

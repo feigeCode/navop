@@ -19,7 +19,7 @@ members = [
     "crates/db_view",
     "crates/terminal",
     "crates/terminal_view"
-    , "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis_view", "crates/license_tool", "crates/mongodb_view"]
+    , "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor"]
 resolver = "2"
 
 [workspace.package]
@@ -79,6 +79,7 @@ terminal_view = { path = "crates/terminal_view" }
 sftp_view = { path = "crates/sftp_view" }
 one-core = { path = "crates/core" }
 mongodb_view = {path = "crates/mongodb_view"}
+remote_file_editor = { path = "crates/remote_file_editor" }
 
 
 json5 = "1.3.0"

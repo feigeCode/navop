@@ -8,6 +8,7 @@ edition = "2021"
 terminal = { workspace = true }
 ssh = { workspace = true }
 sftp = { workspace = true }
+remote_file_editor = { workspace = true, features = ["ui"] }
 
 # GPUI
 gpui = { workspace = true }

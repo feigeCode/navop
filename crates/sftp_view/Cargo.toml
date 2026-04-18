@@ -9,6 +9,7 @@ gpui = { workspace = true }
 gpui-component = { workspace = true }
 one-core = { workspace = true }
 sftp = { workspace = true }
+remote_file_editor = { workspace = true, features = ["ui"] }
 ssh = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

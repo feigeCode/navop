@@ -590,6 +590,7 @@ impl FileListPanel {
         let path_for_rename = full_path.to_string();
         let name_for_download = name.to_string();
         let path_for_download = full_path.to_string();
+        let path_for_edit = full_path.to_string();
         let name_for_permissions = name.to_string();
         let path_for_permissions = full_path.to_string();
         let path_for_terminal = full_path.to_string();
@@ -653,6 +654,17 @@ impl FileListPanel {
                         });
                     })),
             );
+
+            if !is_dir {
+                let view_edit = view_ref.clone();
+                menu = menu.item(PopupMenuItem::new("Edit").icon(IconName::Edit).on_click(
+                    window.listener_for(&view_edit, move |_this, _, _, cx| {
+                        cx.emit(FileListPanelEvent::Edit {
+                            full_path: path_for_edit.clone(),
+                        });
+                    }),
+                ));
+            }
         }
 
         // 本地面板：上传
@@ -811,7 +823,11 @@ impl FileListPanel {
 #[derive(Clone, Debug)]
 pub enum FileListPanelEvent {
     PathChanged(String),
-    ItemDoubleClicked(String),
+    ItemDoubleClicked {
+        name: String,
+        full_path: String,
+        is_dir: bool,
+    },
     SelectionChanged(Vec<String>),
     /// 新建文件
     NewFile,
@@ -825,6 +841,9 @@ pub enum FileListPanelEvent {
     /// 下载文件/文件夹
     Download {
         name: String,
+        full_path: String,
+    },
+    Edit {
         full_path: String,
     },
     /// 修改权限
@@ -1023,9 +1042,11 @@ impl Render for FileListPanel {
                                         .cursor_pointer()
                                         .on_double_click(cx.listener(
                                             move |_this, _, _window, cx| {
-                                                cx.emit(FileListPanelEvent::ItemDoubleClicked(
-                                                    "..".to_string(),
-                                                ));
+                                                cx.emit(FileListPanelEvent::ItemDoubleClicked {
+                                                    name: "..".to_string(),
+                                                    full_path: "..".to_string(),
+                                                    is_dir: true,
+                                                });
                                             },
                                         ))
                                         .child(state.render_parent_row(cx))
@@ -1123,12 +1144,13 @@ impl Render for FileListPanel {
                                     )
                                     .on_double_click(cx.listener({
                                         let name = item_name.clone();
+                                        let full_path = full_path.clone();
                                         move |_this, _, _window, cx| {
-                                            if is_dir {
-                                                cx.emit(FileListPanelEvent::ItemDoubleClicked(
-                                                    name.clone(),
-                                                ));
-                                            }
+                                            cx.emit(FileListPanelEvent::ItemDoubleClicked {
+                                                name: name.clone(),
+                                                full_path: full_path.clone(),
+                                                is_dir,
+                                            });
                                         }
                                     }))
                                     .context_menu(move |menu, window, cx| {

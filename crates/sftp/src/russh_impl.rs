@@ -1,21 +1,24 @@
-use crate::{FileEntry, ProgressCallback, SftpClient, TransferCancelled, TransferProgress};
-use anyhow::{anyhow, Result};
+use crate::{
+    FileEntry, ProgressCallback, SftpClient, TransferCancelled, TransferProgress,
+    validate_read_size,
+};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use russh::client::{self, Handle};
 use russh::keys::PublicKey;
-use russh_sftp::client::error::Error as SftpError;
-use russh_sftp::client::rawsession::Limits;
 use russh_sftp::client::RawSftpSession;
 use russh_sftp::client::SftpSession;
+use russh_sftp::client::error::Error as SftpError;
+use russh_sftp::client::rawsession::Limits;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use rust_i18n::t;
 use ssh::{
-    authenticate_with_strategy, AuthFailureMessages, ProxyConnectConfig, ProxyType, RusshClient,
-    SshConnectConfig,
+    AuthFailureMessages, ProxyConnectConfig, ProxyType, RusshClient, SshConnectConfig,
+    authenticate_with_strategy,
 };
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
@@ -1050,6 +1053,43 @@ impl SftpClient for RusshSftpClient {
 
     async fn chmod(&mut self, _path: &str, _mode: u32) -> Result<()> {
         anyhow::bail!("chmod not yet supported")
+    }
+
+    async fn read_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        let metadata = self
+            .sftp
+            .metadata(path)
+            .await
+            .map_err(|e| anyhow!("Failed to get remote file metadata {}: {}", path, e))?;
+
+        let total_size = metadata.size.unwrap_or(0) as usize;
+        validate_read_size(total_size, max_bytes)?;
+
+        let mut remote_file = self
+            .sftp
+            .open_with_flags(path, OpenFlags::READ)
+            .await
+            .map_err(|e| anyhow!("Failed to open remote file {}: {}", path, e))?;
+
+        let capacity = total_size.min(max_bytes);
+        let mut content = Vec::with_capacity(capacity);
+        let mut buffer = vec![0u8; BUFFER_SIZE];
+
+        loop {
+            let bytes_read = remote_file
+                .read(&mut buffer)
+                .await
+                .map_err(|e| anyhow!("Failed to read remote file {}: {}", path, e))?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            content.extend_from_slice(&buffer[..bytes_read]);
+            validate_read_size(content.len(), max_bytes)?;
+        }
+
+        Ok(content)
     }
 
     async fn write_file(&mut self, path: &str, content: &[u8]) -> Result<()> {

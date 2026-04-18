@@ -31,6 +31,7 @@ use one_core::storage::models::{
     ActiveConnections, ProxyType as StorageProxyType, SshAuthMethod, StoredConnection,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
+use remote_file_editor::open_remote_file_editor;
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
 use ssh::{JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth, SshConnectConfig};
@@ -546,8 +547,12 @@ impl SftpView {
             &local_panel,
             window,
             |this, _state, event: &FileListPanelEvent, window, cx| match event {
-                FileListPanelEvent::ItemDoubleClicked(name) => {
-                    this.on_local_item_double_click(name.clone(), cx);
+                FileListPanelEvent::ItemDoubleClicked {
+                    name,
+                    full_path: _,
+                    is_dir,
+                } => {
+                    this.on_local_item_double_click(name.clone(), *is_dir, cx);
                 }
                 FileListPanelEvent::PathChanged(path) => {
                     this.on_local_path_changed(path.clone(), cx);
@@ -562,8 +567,18 @@ impl SftpView {
             &remote_panel,
             window,
             |this, _state, event: &FileListPanelEvent, window, cx| match event {
-                FileListPanelEvent::ItemDoubleClicked(name) => {
-                    this.on_remote_item_double_click(name.clone(), cx);
+                FileListPanelEvent::ItemDoubleClicked {
+                    name,
+                    full_path,
+                    is_dir,
+                } => {
+                    this.on_remote_item_double_click(
+                        name.clone(),
+                        full_path.clone(),
+                        *is_dir,
+                        window,
+                        cx,
+                    );
                 }
                 FileListPanelEvent::PathChanged(path) => {
                     this.on_remote_path_changed(path.clone(), cx);
@@ -859,10 +874,10 @@ impl SftpView {
         .detach();
     }
 
-    fn on_local_item_double_click(&mut self, name: String, cx: &mut Context<Self>) {
+    fn on_local_item_double_click(&mut self, name: String, is_dir: bool, cx: &mut Context<Self>) {
         if name == ".." {
             self.go_up_local(cx);
-        } else {
+        } else if is_dir {
             self.local_current_path.push(&name);
             self.push_local_history(self.local_current_path.clone());
             self.refresh_local_dir(cx);
@@ -870,15 +885,36 @@ impl SftpView {
         cx.notify();
     }
 
-    fn on_remote_item_double_click(&mut self, name: String, cx: &mut Context<Self>) {
+    fn on_remote_item_double_click(
+        &mut self,
+        name: String,
+        full_path: String,
+        is_dir: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if name == ".." {
             self.go_up_remote(cx);
-        } else {
+        } else if is_dir {
             self.remote_current_path = join_remote_path(&self.remote_current_path, &name);
             self.push_remote_history(self.remote_current_path.clone());
             self.refresh_remote_dir(cx);
+        } else {
+            self.open_remote_editor(full_path, window, cx);
         }
         cx.notify();
+    }
+
+    fn open_remote_editor(&self, full_path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(client) = self.sftp_client.clone() else {
+            window.push_notification(
+                Notification::error("SFTP client is not connected".to_string()),
+                cx,
+            );
+            return;
+        };
+
+        open_remote_file_editor(full_path, client, cx);
     }
 
     fn navigate_local_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {

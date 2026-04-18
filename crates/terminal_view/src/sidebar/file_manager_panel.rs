@@ -6,12 +6,13 @@
 
 use chrono::{DateTime, Local};
 use gpui::{
-    div, prelude::*, px, uniform_list, App, ClipboardItem, Context, Entity, EventEmitter,
-    ExternalPaths, FocusHandle, Focusable, IntoElement, ListSizingBehavior, MouseButton,
-    MouseDownEvent, ParentElement, PathPromptOptions, Render, SharedString, Styled,
-    UniformListScrollHandle, Window,
+    App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable,
+    IntoElement, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, PathPromptOptions,
+    Render, SharedString, Styled, UniformListScrollHandle, Window, div, prelude::*, px,
+    uniform_list,
 };
 use gpui_component::{
+    ActiveTheme, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
     dialog::DialogButtonProps,
@@ -22,18 +23,19 @@ use gpui_component::{
     progress::Progress,
     spinner::Spinner,
     tooltip::Tooltip,
-    v_flex, ActiveTheme, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
+    v_flex,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::models::StoredConnection;
+use remote_file_editor::open_remote_file_editor;
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
 use ssh::SshSessionManager;
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
 
@@ -1309,27 +1311,29 @@ impl FileManagerPanel {
             return;
         }
 
-        self.progress_refresh_task = Some(cx.spawn(async move |this, cx| loop {
-            let should_continue = this
-                .update(cx, |this, cx| {
-                    let has_active = this.transfer_queue.has_active();
-                    if has_active {
-                        cx.notify();
-                        true
-                    } else {
-                        this.progress_refresh_task = None;
-                        false
-                    }
-                })
-                .unwrap_or(false);
+        self.progress_refresh_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let should_continue = this
+                    .update(cx, |this, cx| {
+                        let has_active = this.transfer_queue.has_active();
+                        if has_active {
+                            cx.notify();
+                            true
+                        } else {
+                            this.progress_refresh_task = None;
+                            false
+                        }
+                    })
+                    .unwrap_or(false);
 
-            if !should_continue {
-                break;
+                if !should_continue {
+                    break;
+                }
+
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
             }
-
-            cx.background_executor()
-                .timer(Duration::from_millis(100))
-                .await;
         }));
     }
 
@@ -1818,6 +1822,18 @@ impl FileManagerPanel {
         .detach();
     }
 
+    fn open_remote_editor(&self, full_path: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(client) = self.sftp_client.clone() else {
+            window.push_notification(
+                Notification::error("SFTP client is not connected".to_string()),
+                cx,
+            );
+            return;
+        };
+
+        open_remote_file_editor(full_path, client, cx);
+    }
+
     // ── 渲染方法 ──────────────────────────────────────────────
 
     /// 渲染工具栏
@@ -2288,6 +2304,7 @@ impl FileManagerPanel {
         let name_for_copy = name.to_string();
         let path_for_download = full_path.to_string();
         let is_dir_for_download = is_dir;
+        let path_for_edit = full_path.to_string();
 
         let mut menu = menu;
 
@@ -2307,6 +2324,15 @@ impl FileManagerPanel {
                     }),
                 ),
         );
+
+        if !is_dir {
+            let view_edit = view.clone();
+            menu = menu.item(PopupMenuItem::new("Edit").icon(IconName::Edit).on_click(
+                window.listener_for(&view_edit, move |this, _, window, cx| {
+                    this.open_remote_editor(path_for_edit.clone(), window, cx);
+                }),
+            ));
+        }
 
         // 文件夹：在终端中 CD
         if is_dir {
@@ -2753,19 +2779,18 @@ impl FileManagerPanel {
                                                         ),
                                                     )
                                                     .on_double_click(cx.listener({
-                                                        let name = item_name.clone();
                                                         let fp = full_path.clone();
-                                                        move |this, _, _window, cx| {
+                                                        move |this, _, window, cx| {
                                                             if is_dir {
                                                                 this.navigate_to(
                                                                     fp.clone(),
                                                                     cx,
                                                                 );
                                                             } else {
-                                                                cx.write_to_clipboard(
-                                                                    ClipboardItem::new_string(
-                                                                        name.clone(),
-                                                                    ),
+                                                                this.open_remote_editor(
+                                                                    fp.clone(),
+                                                                    window,
+                                                                    cx,
                                                                 );
                                                             }
                                                         }
@@ -2855,8 +2880,8 @@ impl Render for FileManagerPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_refresh_error_plan, build_retry_reset_plan, clear_remote_listing_state,
-        ConnectionState, RetryResetPlan,
+        ConnectionState, RetryResetPlan, build_refresh_error_plan, build_retry_reset_plan,
+        clear_remote_listing_state,
     };
     use std::collections::HashSet;
 

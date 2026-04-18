@@ -195,6 +195,9 @@ impl ContextMenuHandler for SftpView {
             } => {
                 self.download_selected(window, cx);
             }
+            FileListPanelEvent::Edit { full_path } => {
+                self.open_remote_editor(full_path.clone(), window, cx);
+            }
             FileListPanelEvent::ChangePermissions { name, full_path } => {
                 self.change_permissions(name, full_path, window, cx);
             }
