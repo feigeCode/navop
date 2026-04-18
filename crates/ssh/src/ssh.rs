@@ -12,6 +12,29 @@ use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{oneshot, Mutex};
 
+/// keepalive/超时的集中默认值，供 ssh 与 sftp 两侧共享。
+pub mod defaults {
+    use std::time::Duration;
+
+    /// russh `inactivity_timeout` 默认值：服务端无响应多久视为断链。
+    pub const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(300);
+    /// keepalive 心跳间隔，比以前的 60s 更勤，抗弱网抖动。
+    pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+    /// 连续 N 次 keepalive 无响应才认为断开，总等待 = INTERVAL * MAX。
+    pub const KEEPALIVE_MAX: usize = 6;
+}
+
+/// 远端 shell integration 安装后采集的"会话信息"。
+///
+/// 定义在 `ssh` crate 主要是为了让 `SshSessionManager` 能把它跟 client 绑定缓存，
+/// 避免每次新开终端都要重跑安装脚本，也方便 terminal crate 在 setup 失败时走降级分支。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellIntegrationSetup {
+    pub home_dir: String,
+    pub session_dir: String,
+    pub login_shell: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct SshConnectConfig {
     pub host: String,
@@ -140,6 +163,16 @@ pub trait SshClient: Send + Sync {
     async fn disconnect(&mut self) -> Result<()>;
 
     fn is_connected(&self) -> bool;
+
+    /// 向远端发送一次轻量探活请求，带内部超时。
+    /// 默认实现基于 `is_connected`，具体实现可以覆盖以打真实 ping。
+    async fn ping(&self) -> Result<()> {
+        if self.is_connected() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("session not connected"))
+        }
+    }
 }
 
 struct RusshHandler;
@@ -899,9 +932,11 @@ impl SshClient for RusshClient {
 
     async fn connect(config: SshConnectConfig) -> Result<Self> {
         let russh_config = Arc::new(client::Config {
-            inactivity_timeout: config.timeout.or(Some(Duration::from_secs(300))),
-            keepalive_interval: config.keepalive_interval.or(Some(Duration::from_secs(60))),
-            keepalive_max: config.keepalive_max.unwrap_or(3),
+            inactivity_timeout: config.timeout.or(Some(defaults::INACTIVITY_TIMEOUT)),
+            keepalive_interval: config
+                .keepalive_interval
+                .or(Some(defaults::KEEPALIVE_INTERVAL)),
+            keepalive_max: config.keepalive_max.unwrap_or(defaults::KEEPALIVE_MAX),
             ..<_>::default()
         });
 
@@ -1018,6 +1053,17 @@ impl SshClient for RusshClient {
 
     fn is_connected(&self) -> bool {
         !self.session.is_closed()
+    }
+
+    async fn ping(&self) -> Result<()> {
+        if self.session.is_closed() {
+            return Err(anyhow::anyhow!("session already closed"));
+        }
+        match tokio::time::timeout(Duration::from_secs(3), self.session.send_ping()).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(anyhow::anyhow!("ping failed: {e}")),
+            Err(_) => Err(anyhow::anyhow!("ping timed out after 3s")),
+        }
     }
 }
 

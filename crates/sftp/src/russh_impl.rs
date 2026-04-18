@@ -13,8 +13,8 @@ use russh_sftp::client::rawsession::Limits;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use rust_i18n::t;
 use ssh::{
-    AuthFailureMessages, ProxyConnectConfig, ProxyType, RusshClient, SshConnectConfig,
-    authenticate_with_strategy,
+    authenticate_with_strategy, defaults, AuthFailureMessages, ProxyConnectConfig, ProxyType,
+    RusshClient, SshConnectConfig,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -632,11 +632,11 @@ impl RusshSftpClient {
 impl SftpClient for RusshSftpClient {
     async fn connect(ssh_config: SshConnectConfig) -> Result<Self> {
         let config = Arc::new(client::Config {
-            inactivity_timeout: ssh_config.timeout.or(Some(Duration::from_secs(300))),
+            inactivity_timeout: ssh_config.timeout.or(Some(defaults::INACTIVITY_TIMEOUT)),
             keepalive_interval: ssh_config
                 .keepalive_interval
-                .or(Some(Duration::from_secs(60))),
-            keepalive_max: ssh_config.keepalive_max.unwrap_or(3),
+                .or(Some(defaults::KEEPALIVE_INTERVAL)),
+            keepalive_max: ssh_config.keepalive_max.unwrap_or(defaults::KEEPALIVE_MAX),
             window_size: 16 * 1024 * 1024, // 16 MB
             maximum_packet_size: 0xFFFF,   // 65535, max allowed by russh
             nodelay: true,

@@ -6,11 +6,16 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
-use ssh::{ChannelEvent, PtyConfig, SshChannel, SshClient, SshSessionManager};
+use ssh::{
+    ChannelEvent, PtyConfig, ShellIntegrationSetup, SshChannel, SshClient, SshSessionManager,
+};
 
 use crate::osc::{extract_osc_events, OscEvent};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
 use crate::{TerminalBackend, TerminalSize};
+
+/// 整个 shell integration 安装流程的硬超时，避免远端受限或挂死卡住连接。
+const SHELL_INTEGRATION_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn shell_single_quote(input: &str) -> String {
     format!("'{}'", input.replace('\'', "'\"'\"'"))
@@ -18,13 +23,6 @@ fn shell_single_quote(input: &str) -> String {
 
 fn shell_double_quote(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ShellIntegrationSetup {
-    home_dir: String,
-    session_dir: String,
-    login_shell: Option<String>,
 }
 
 fn remote_session_key(connection_id: Option<i64>) -> String {
@@ -35,6 +33,33 @@ fn remote_session_key(connection_id: Option<i64>) -> String {
 
 fn shell_basename(shell: &str) -> &str {
     shell.rsplit('/').next().unwrap_or(shell)
+}
+
+fn is_channel_open_failure(err: &anyhow::Error) -> bool {
+    let msg = format!("{err:#}").to_ascii_lowercase();
+    msg.contains("channel open") || msg.contains("maxsessions")
+}
+
+fn is_timeout_failure(err: &anyhow::Error) -> bool {
+    let msg = format!("{err:#}").to_ascii_lowercase();
+    msg.contains("timed out")
+        || msg.contains("timeout")
+        || msg.contains("deadline has elapsed")
+        || msg.contains("i/o timeout")
+}
+
+fn add_connect_error_context(err: anyhow::Error) -> anyhow::Error {
+    if is_channel_open_failure(&err) {
+        return err.context(
+            "服务器拒绝打开新 channel，可能是 MaxSessions 限制（可尝试在 SSH server 设置更大值）",
+        );
+    }
+
+    if is_timeout_failure(&err) {
+        return err.context("连接超时，检查网络/代理/跳板机可达性");
+    }
+
+    err
 }
 
 fn extract_marker_value(output: &str, marker: &str) -> Option<String> {
@@ -102,23 +127,24 @@ fn build_shell_integration_setup_script(
     )
 }
 
-fn build_shell_integration_setup_command(
-    script: &str,
-    session_key: &str,
-    success_marker: &str,
-    home_marker: &str,
-    session_marker: &str,
-    shell_marker: &str,
-) -> String {
-    let script = build_shell_integration_setup_script(
-        script,
-        session_key,
-        success_marker,
-        home_marker,
-        session_marker,
-        shell_marker,
-    );
-    format!("sh -c {}", shell_single_quote(&script))
+fn format_numbered_script(script: &str) -> String {
+    script
+        .lines()
+        .enumerate()
+        .map(|(index, line)| format!("{:>2} | {}", index + 1, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_setup_failure_context(script: &str, stdout: &[u8], stderr: &[u8]) -> String {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    format!(
+        "stderr: {}\nstdout: {}\nsetup script:\n{}",
+        stderr.trim(),
+        stdout.trim(),
+        format_numbered_script(script)
+    )
 }
 
 enum SshCommand {
@@ -143,11 +169,12 @@ impl SshBackend {
         on_disconnect: Option<UnboundedSender<()>>,
         init_commands: Option<String>,
     ) -> anyhow::Result<Self> {
-        let client = session_manager.client().await?;
-        let mut channel = {
-            let mut guard = client.lock().await;
-            Self::prepare_ssh_channel(&mut *guard, &pty_config, connection_id).await?
-        };
+        let (client, mut channel) =
+            Self::establish_channel(&session_manager, &pty_config, connection_id)
+                .await
+                .map_err(add_connect_error_context)?;
+        // 关联变量，避免 clippy 警告未使用。
+        let _keep_client = client;
 
         // ③ init_commands 改为等 shell ready 后发送
         let pending_init = init_commands;
@@ -277,20 +304,125 @@ impl SshBackend {
         Ok(Self { command_tx })
     }
 
+    /// 获取一个 interactive channel，封装了"channel open 失败时 invalidate 并重试一次"的重连逻辑。
+    /// 同时把首次 setup 成功的 `ShellIntegrationSetup` 写回 manager，供其他 terminal 复用。
+    async fn establish_channel(
+        session_manager: &Arc<SshSessionManager>,
+        pty_config: &PtyConfig,
+        connection_id: Option<i64>,
+    ) -> anyhow::Result<(Arc<tokio::sync::Mutex<ssh::RusshClient>>, ssh::RusshChannel)> {
+        let mut attempt = 0usize;
+        loop {
+            let client = session_manager.client().await?;
+            let cached = session_manager.cached_shell_integration().await;
+
+            let result = {
+                let mut guard = client.lock().await;
+                Self::prepare_ssh_channel(&mut *guard, pty_config, connection_id, cached).await
+            };
+
+            match result {
+                Ok((channel, new_setup)) => {
+                    if let Some(setup) = new_setup {
+                        session_manager.set_shell_integration(&client, setup).await;
+                    }
+                    return Ok((client, channel));
+                }
+                Err(err) if attempt == 0 && is_channel_open_failure(&err) => {
+                    tracing::warn!(
+                        target: "terminal.ssh.connect",
+                        error = %err,
+                        "channel open 失败，尝试 invalidate 并重连一次（可能是 MaxSessions 限制）"
+                    );
+                    session_manager.invalidate().await;
+                    attempt += 1;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
     async fn prepare_ssh_channel<C: SshClient>(
         client: &mut C,
         pty_config: &PtyConfig,
         connection_id: Option<i64>,
-    ) -> anyhow::Result<C::Channel> {
-        let mut setup_channel = client.open_channel().await?;
-        let setup_result =
-            Self::run_shell_integration_setup(&mut setup_channel, connection_id).await;
-        let _ = setup_channel.close().await;
-        let setup = setup_result?;
+        cached: Option<ShellIntegrationSetup>,
+    ) -> anyhow::Result<(C::Channel, Option<ShellIntegrationSetup>)> {
+        let (setup, new_setup) = if let Some(cached) = cached {
+            (Some(cached), None)
+        } else {
+            // 首次连接：尝试安装 integration，失败降级为"无 integration"分支。
+            let setup = Self::try_install_shell_integration(client, connection_id).await;
+            (setup.clone(), setup)
+        };
 
         let mut channel = client.open_channel().await?;
-        Self::start_interactive_shell(&mut channel, pty_config, &setup).await?;
-        Ok(channel)
+        Self::start_interactive_shell(&mut channel, pty_config, setup.as_ref()).await?;
+        Ok((channel, new_setup))
+    }
+
+    /// 打开一个临时 channel 跑 integration 安装脚本。任何失败（open 失败 / setup 出错 / 超时）
+    /// 都只记 warn 日志并返回 `None`，不阻断 SSH 连接。
+    async fn try_install_shell_integration<C: SshClient>(
+        client: &mut C,
+        connection_id: Option<i64>,
+    ) -> Option<ShellIntegrationSetup> {
+        Self::try_install_shell_integration_with_timeout(
+            client,
+            connection_id,
+            SHELL_INTEGRATION_SETUP_TIMEOUT,
+        )
+        .await
+    }
+
+    async fn try_install_shell_integration_with_timeout<C: SshClient>(
+        client: &mut C,
+        connection_id: Option<i64>,
+        timeout: Duration,
+    ) -> Option<ShellIntegrationSetup> {
+        let mut setup_channel = match client.open_channel().await {
+            Ok(ch) => ch,
+            Err(err) => {
+                tracing::warn!(
+                    target: "terminal.ssh.setup",
+                    connection_id,
+                    error = %err,
+                    "打开 shell integration 安装通道失败，降级为无 integration 模式"
+                );
+                return None;
+            }
+        };
+
+        let setup_future = Self::run_shell_integration_setup(&mut setup_channel, connection_id);
+        let result = match tokio::time::timeout(timeout, setup_future).await {
+            Ok(r) => r,
+            Err(_) => {
+                tracing::warn!(
+                    target: "terminal.ssh.setup",
+                    connection_id,
+                    timeout_secs = timeout.as_secs(),
+                    "shell integration 安装超时，降级为无 integration 模式"
+                );
+                let _ = setup_channel.close().await;
+                return None;
+            }
+        };
+        let _ = setup_channel.close().await;
+
+        match result {
+            Ok(setup) => Some(setup),
+            Err(err) => {
+                tracing::warn!(
+                    target: "terminal.ssh.setup",
+                    connection_id,
+                    error = %err,
+                    "shell integration 安装失败，降级为无 integration 模式（终端仍可使用，\
+                     但无 prompt hook / 命令记录）"
+                );
+                None
+            }
+        }
     }
 
     /// 在 PTY 之前写入 integration 脚本。
@@ -303,7 +435,7 @@ impl SshBackend {
         const HOME_MARKER: &str = "__ONETCLI_HOME__=";
         const SESSION_MARKER: &str = "__ONETCLI_SESSION_DIR__=";
         const SHELL_MARKER: &str = "__ONETCLI_LOGIN_SHELL__=";
-        let cmd = build_shell_integration_setup_command(
+        let setup_script = build_shell_integration_setup_script(
             SCRIPT,
             &remote_session_key(connection_id),
             SUCCESS_MARKER,
@@ -311,6 +443,7 @@ impl SshBackend {
             SESSION_MARKER,
             SHELL_MARKER,
         );
+        let cmd = format!("sh -c {}", shell_single_quote(&setup_script));
 
         channel.exec(&cmd).await?;
 
@@ -324,18 +457,35 @@ impl SshBackend {
                     stderr.extend(data);
                 }
                 Some(ChannelEvent::ExitStatus(code)) => {
+                    let context = format_setup_failure_context(&setup_script, &stdout, &stderr);
+                    if code != 0 {
+                        tracing::error!(
+                            target: "terminal.ssh.setup",
+                            connection_id,
+                            exit_code = code,
+                            %context,
+                            "shell integration setup failed"
+                        );
+                    }
                     anyhow::ensure!(
                         code == 0,
-                        "shell integration setup failed with exit code {code}: {}",
-                        String::from_utf8_lossy(&stderr).trim()
+                        "shell integration setup failed with exit code {code}: {context}",
                     );
                 }
                 Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
                     let output = String::from_utf8_lossy(&stdout);
+                    let context = format_setup_failure_context(&setup_script, &stdout, &stderr);
+                    if !output.contains(SUCCESS_MARKER) {
+                        tracing::error!(
+                            target: "terminal.ssh.setup",
+                            connection_id,
+                            %context,
+                            "shell integration setup ended before success marker"
+                        );
+                    }
                     anyhow::ensure!(
                         output.contains(SUCCESS_MARKER),
-                        "shell integration setup ended before confirming completion: {}",
-                        String::from_utf8_lossy(&stderr).trim()
+                        "shell integration setup ended before confirming completion: {context}",
                     );
                     let home_dir = extract_marker_value(&output, HOME_MARKER)
                         .ok_or_else(|| anyhow::anyhow!("missing setup home directory marker"))?;
@@ -357,8 +507,15 @@ impl SshBackend {
     async fn start_interactive_shell(
         channel: &mut dyn SshChannel,
         pty_config: &PtyConfig,
-        setup: &ShellIntegrationSetup,
+        setup: Option<&ShellIntegrationSetup>,
     ) -> anyhow::Result<()> {
+        let Some(setup) = setup else {
+            // 降级路径：远端没有安装 integration，只请求基本 pty + shell。
+            channel.request_pty(pty_config).await?;
+            channel.request_shell().await?;
+            return Ok(());
+        };
+
         channel.set_env("ONETCLI_SHELL_INTEGRATION", "1").await?;
         channel
             .set_env("ONETCLI_ORIG_ZDOTDIR", &setup.home_dir)
@@ -404,6 +561,7 @@ mod tests {
     use std::fs;
     use std::process::Command;
     use std::sync::{Arc, Mutex};
+    use tokio::time::sleep;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum ChannelOp {
@@ -419,6 +577,7 @@ mod tests {
         ops: Vec<ChannelOp>,
         events: VecDeque<ChannelEvent>,
         exec_consumes_session: bool,
+        recv_delay: Option<Duration>,
     }
 
     struct MockChannel {
@@ -430,10 +589,19 @@ mod tests {
             events: impl IntoIterator<Item = ChannelEvent>,
             exec_consumes_session: bool,
         ) -> (Self, Arc<Mutex<MockChannelState>>) {
+            Self::new_with_delay(events, exec_consumes_session, None)
+        }
+
+        fn new_with_delay(
+            events: impl IntoIterator<Item = ChannelEvent>,
+            exec_consumes_session: bool,
+            recv_delay: Option<Duration>,
+        ) -> (Self, Arc<Mutex<MockChannelState>>) {
             let state = Arc::new(Mutex::new(MockChannelState {
                 ops: Vec::new(),
                 events: events.into_iter().collect(),
                 exec_consumes_session,
+                recv_delay,
             }));
             (
                 Self {
@@ -490,6 +658,15 @@ mod tests {
         }
 
         async fn recv(&mut self) -> Option<ChannelEvent> {
+            let delay = {
+                self.state
+                    .lock()
+                    .expect("mock channel state should lock")
+                    .recv_delay
+            };
+            if let Some(delay) = delay {
+                sleep(delay).await;
+            }
             self.state
                 .lock()
                 .expect("mock channel state should lock")
@@ -573,11 +750,14 @@ mod tests {
         let mut client = MockClient::new([setup_channel, interactive_channel]);
 
         let result =
-            SshBackend::prepare_ssh_channel(&mut client, &PtyConfig::default(), Some(42)).await;
+            SshBackend::prepare_ssh_channel(&mut client, &PtyConfig::default(), Some(42), None)
+                .await;
 
+        let (_channel, new_setup) =
+            result.expect("安装 shell integration 不应占用交互 shell 的 channel");
         assert!(
-            result.is_ok(),
-            "安装 shell integration 不应占用交互 shell 的 channel"
+            new_setup.is_some(),
+            "首次成功安装应返回新 setup 以便写入 manager 缓存"
         );
         assert_eq!(
             recorded_ops(&setup_state),
@@ -614,12 +794,11 @@ mod tests {
         let mut client = MockClient::new([setup_channel, interactive_channel]);
 
         let result =
-            SshBackend::prepare_ssh_channel(&mut client, &PtyConfig::default(), Some(42)).await;
+            SshBackend::prepare_ssh_channel(&mut client, &PtyConfig::default(), Some(42), None)
+                .await;
 
-        assert!(
-            result.is_ok(),
-            "bash shell wrapper 应通过独立交互 channel 启动"
-        );
+        let (_channel, new_setup) = result.expect("bash shell wrapper 应通过独立交互 channel 启动");
+        assert!(new_setup.is_some());
         assert_eq!(
             recorded_ops(&setup_state),
             vec![ChannelOp::Exec, ChannelOp::Close]
@@ -667,6 +846,158 @@ mod tests {
         let result = SshBackend::run_shell_integration_setup(&mut channel, Some(42)).await;
 
         assert!(result.is_ok(), "收到成功标记后应接受无 ExitStatus 的 Close");
+    }
+
+    #[tokio::test]
+    async fn run_shell_integration_setup_exit_status_error_includes_numbered_script_context() {
+        let (mut channel, _) = MockChannel::new(
+            [
+                ChannelEvent::ExtendedData {
+                    ext: 1,
+                    data: b"sh: 7: cannot create /tmp/x: Directory nonexistent".to_vec(),
+                },
+                ChannelEvent::ExitStatus(1),
+            ],
+            false,
+        );
+
+        let error = SshBackend::run_shell_integration_setup(&mut channel, Some(42))
+            .await
+            .expect_err("exit code 1 应返回带上下文的错误");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("sh: 7: cannot create /tmp/x: Directory nonexistent"),
+            "错误消息应保留远端 stderr，实际: {message}"
+        );
+        assert!(
+            message.contains("setup script:"),
+            "错误消息应包含编号后的 setup script，实际: {message}"
+        );
+        assert!(
+            message.contains("7 |"),
+            "错误消息应包含脚本行号，实际: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_ssh_channel_falls_back_to_plain_shell_when_setup_fails() {
+        // setup 通道返回 exit 1，应该被降级路径捕获：interactive 通道不 set_env、只 pty+shell。
+        let (setup_channel, setup_state) = MockChannel::new(
+            [
+                ChannelEvent::ExtendedData {
+                    ext: 1,
+                    data:
+                        b"mkdir: cannot create directory '/root/.config/onetcli': Permission denied"
+                            .to_vec(),
+                },
+                ChannelEvent::ExitStatus(1),
+            ],
+            false,
+        );
+        let (interactive_channel, interactive_state) = MockChannel::new([], false);
+        let mut client = MockClient::new([setup_channel, interactive_channel]);
+
+        let (_ch, new_setup) =
+            SshBackend::prepare_ssh_channel(&mut client, &PtyConfig::default(), Some(42), None)
+                .await
+                .expect("setup 失败时 prepare_ssh_channel 不应整体失败");
+
+        assert!(
+            new_setup.is_none(),
+            "失败降级不应向 manager 写入任何 integration 缓存"
+        );
+        assert_eq!(
+            recorded_ops(&setup_state),
+            vec![ChannelOp::Exec, ChannelOp::Close],
+            "setup 通道仍应正常跑完 exec + close"
+        );
+        assert_eq!(
+            recorded_ops(&interactive_state),
+            vec![ChannelOp::RequestPty, ChannelOp::RequestShell],
+            "降级路径绝对不能调 set_env，也不能走 bash wrapper exec"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_ssh_channel_skips_setup_when_cache_hit() {
+        // 命中缓存：只应打开 1 个 channel（interactive）。mock client 只提供 1 个 channel。
+        let (interactive_channel, interactive_state) = MockChannel::new([], false);
+        let mut client = MockClient::new([interactive_channel]);
+
+        let cached = ShellIntegrationSetup {
+            home_dir: "/tmp/home".into(),
+            session_dir: "/tmp/home/.config/onetcli/sessions/42".into(),
+            login_shell: Some("/bin/zsh".into()),
+        };
+
+        let (_ch, new_setup) = SshBackend::prepare_ssh_channel(
+            &mut client,
+            &PtyConfig::default(),
+            Some(42),
+            Some(cached),
+        )
+        .await
+        .expect("缓存命中时应直接复用 setup 结果");
+
+        assert!(
+            new_setup.is_none(),
+            "缓存命中不应再向 manager 写入新的 integration"
+        );
+        assert_eq!(
+            recorded_ops(&interactive_state),
+            vec![
+                ChannelOp::SetEnv("ONETCLI_SHELL_INTEGRATION".into(), "1".into()),
+                ChannelOp::SetEnv("ONETCLI_ORIG_ZDOTDIR".into(), "/tmp/home".into()),
+                ChannelOp::SetEnv(
+                    "ZDOTDIR".into(),
+                    "/tmp/home/.config/onetcli/sessions/42/zsh".into(),
+                ),
+                ChannelOp::RequestPty,
+                ChannelOp::RequestShell,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn try_install_shell_integration_times_out_in_ten_seconds() {
+        // 测试里用短 timeout 验证逻辑；生产路径仍走 10s 常量。
+        let (setup_channel, _) = MockChannel::new_with_delay(
+            [ChannelEvent::Data(b"pending...".to_vec())],
+            false,
+            Some(Duration::from_millis(20)),
+        );
+        let mut client = MockClient::new([setup_channel]);
+
+        let res = SshBackend::try_install_shell_integration_with_timeout(
+            &mut client,
+            Some(42),
+            Duration::from_millis(1),
+        )
+        .await;
+        assert!(res.is_none(), "10s 超时后应降级为 None");
+    }
+
+    #[test]
+    fn add_connect_error_context_wraps_channel_open_failures() {
+        let err = anyhow!("channel open failed: administratively prohibited");
+        let message = add_connect_error_context(err).to_string();
+
+        assert!(
+            message.contains("服务器拒绝打开新 channel"),
+            "channel open 错误应补充 MaxSessions 提示，实际: {message}"
+        );
+    }
+
+    #[test]
+    fn add_connect_error_context_wraps_timeout_failures() {
+        let err = anyhow!("dial tcp 10.0.0.8:22: i/o timeout");
+        let message = add_connect_error_context(err).to_string();
+
+        assert!(
+            message.contains("连接超时"),
+            "timeout 错误应补充网络/代理排查提示，实际: {message}"
+        );
     }
 
     #[test]
