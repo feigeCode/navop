@@ -1337,9 +1337,15 @@ impl DataGrid {
                 d = d
                     .footer(|ok, cancel, window, cx| vec![ok(window, cx), cancel(window, cx)])
                     .on_ok(move |_, window, cx| {
+                        if !editor.read(cx).has_pending_writeback() {
+                            return true;
+                        }
                         let content = editor.read(cx).get_writeback_text(cx);
                         return match content {
                             Ok(val) => {
+                                editor.update(cx, |editor, _| {
+                                    editor.mark_writeback_clean();
+                                });
                                 data_grid.table.update(cx, |state, cx| {
                                     let delegate = state.delegate_mut();
                                     let Some(actual_row_ix) = delegate.resolve_display_row(row_ix)

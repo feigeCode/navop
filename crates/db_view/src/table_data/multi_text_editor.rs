@@ -41,17 +41,9 @@ fn normalize_commit_text(active_tab: EditorTab, raw_text: &str) -> Result<String
     }
 }
 
-fn validate_writeback_text(active_tab: EditorTab, raw_text: &str) -> Result<String, json5::Error> {
-    if active_tab == EditorTab::Json {
-        json5::from_str::<serde_json::Value>(raw_text)?;
-    }
-
-    Ok(raw_text.to_string())
-}
-
 #[derive(Clone, Debug)]
 pub enum MultiTextEditorEvent {
-    ActiveEditorBlurred,
+    ActiveEditorBlurred(String),
 }
 
 impl EventEmitter<MultiTextEditorEvent> for MultiTextEditor {}
@@ -60,6 +52,8 @@ pub struct MultiTextEditor {
     active_tab: EditorTab,
     text_editor: Entity<InputState>,
     json_editor: Entity<InputState>,
+    has_user_edits: bool,
+    suppress_edit_tracking: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -97,27 +91,35 @@ impl MultiTextEditor {
             active_tab: EditorTab::Text,
             text_editor,
             json_editor,
+            has_user_edits: false,
+            suppress_edit_tracking: false,
             _subs: Vec::new(),
         };
         this._subs = vec![
             cx.subscribe_in(
                 &this.text_editor,
                 window,
-                |this, _, event: &InputEvent, window, cx| {
-                    if matches!(event, InputEvent::Blur) && this.active_tab == EditorTab::Text {
-                        this.normalize_after_blur(window, cx);
-                        cx.emit(MultiTextEditorEvent::ActiveEditorBlurred);
+                |this, _, event: &InputEvent, _window, cx| match event {
+                    InputEvent::Change if !this.suppress_edit_tracking => {
+                        this.has_user_edits = true;
                     }
+                    InputEvent::Blur if this.active_tab == EditorTab::Text => {
+                        this.emit_blur_event(cx);
+                    }
+                    _ => {}
                 },
             ),
             cx.subscribe_in(
                 &this.json_editor,
                 window,
-                |this, _, event: &InputEvent, window, cx| {
-                    if matches!(event, InputEvent::Blur) && this.active_tab == EditorTab::Json {
-                        this.normalize_after_blur(window, cx);
-                        cx.emit(MultiTextEditorEvent::ActiveEditorBlurred);
+                |this, _, event: &InputEvent, _window, cx| match event {
+                    InputEvent::Change if !this.suppress_edit_tracking => {
+                        this.has_user_edits = true;
                     }
+                    InputEvent::Blur if this.active_tab == EditorTab::Json => {
+                        this.emit_blur_event(cx);
+                    }
+                    _ => {}
                 },
             ),
         ];
@@ -156,7 +158,15 @@ impl MultiTextEditor {
     }
 
     pub fn get_writeback_text(&self, cx: &App) -> Result<String, json5::Error> {
-        validate_writeback_text(self.active_tab, &self.get_raw_active_text(cx))
+        normalize_commit_text(self.active_tab, &self.get_raw_active_text(cx))
+    }
+
+    pub fn has_pending_writeback(&self) -> bool {
+        self.has_user_edits
+    }
+
+    pub fn mark_writeback_clean(&mut self) {
+        self.has_user_edits = false;
     }
 
     fn set_editor_values(
@@ -166,6 +176,7 @@ impl MultiTextEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.suppress_edit_tracking = true;
         self.text_editor.update(cx, |s, cx| {
             s.set_value(text_value.clone(), window, cx);
         });
@@ -173,6 +184,7 @@ impl MultiTextEditor {
         self.json_editor.update(cx, |s, cx| {
             s.set_value(json_value, window, cx);
         });
+        self.suppress_edit_tracking = false;
     }
 
     pub fn set_active_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -183,19 +195,32 @@ impl MultiTextEditor {
         };
 
         self.set_editor_values(text, json_text, window, cx);
+        self.mark_writeback_clean();
     }
 
-    fn normalize_after_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let raw_text = self.get_raw_active_text(cx);
-        let Ok(normalized) = normalize_commit_text(self.active_tab, &raw_text) else {
-            return;
-        };
+    pub fn load_external_text(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let is_json = json5::from_str::<serde_json::Value>(&text).is_ok();
+        self.set_active_text(text, window, cx);
+        if self.active_tab == EditorTab::Json && !is_json {
+            self.active_tab = EditorTab::Text;
+            cx.notify();
+        }
+    }
 
-        if normalized == raw_text {
+    fn emit_blur_event(&mut self, cx: &mut Context<Self>) {
+        if !self.has_pending_writeback() {
             return;
         }
 
-        self.set_editor_values(normalized.clone(), normalized, window, cx);
+        let value = self
+            .get_writeback_text(cx)
+            .unwrap_or_else(|_| self.get_raw_active_text(cx));
+        cx.emit(MultiTextEditorEvent::ActiveEditorBlurred(value));
     }
 
     pub fn format_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -340,17 +365,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_writeback_text_preserves_minified_json_text() {
-        let value = validate_writeback_text(EditorTab::Text, "{\"a\":1,\"b\":true}")
-            .expect("writeback should preserve current editor text");
-
-        assert_eq!(value, "{\"a\":1,\"b\":true}");
-    }
-
-    #[test]
-    fn validate_writeback_text_validates_json_tab_without_reserializing() {
-        let value = validate_writeback_text(EditorTab::Json, "{\"a\":1,\"b\":true}")
-            .expect("json tab should validate and preserve raw text");
+    fn get_writeback_text_minifies_json_for_writeback() {
+        let value = normalize_commit_text(EditorTab::Text, "{\n  \"a\": 1,\n  \"b\": true\n}")
+            .expect("writeback should minify valid json");
 
         assert_eq!(value, "{\"a\":1,\"b\":true}");
     }

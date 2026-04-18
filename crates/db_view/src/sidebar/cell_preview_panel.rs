@@ -25,8 +25,8 @@ impl CellPreviewPanel {
             &editor,
             window,
             |this, _, event: &MultiTextEditorEvent, _window, cx| match event {
-                MultiTextEditorEvent::ActiveEditorBlurred => {
-                    this.flush_pending(cx);
+                MultiTextEditorEvent::ActiveEditorBlurred(value) => {
+                    this.write_back_value(value.clone(), cx);
                 }
             },
         );
@@ -79,6 +79,9 @@ impl CellPreviewPanel {
         if !target.editable {
             return true;
         }
+        if !self.editor.read(cx).has_pending_writeback() {
+            return true;
+        }
 
         let Some(grid) = self.data_grid.as_ref().and_then(|grid| grid.upgrade()) else {
             return true;
@@ -96,19 +99,13 @@ impl CellPreviewPanel {
         };
 
         if value == target.value {
+            self.editor.update(cx, |editor, _| {
+                editor.mark_writeback_clean();
+            });
             return true;
         }
 
-        if grid.update(cx, |grid, cx| {
-            grid.apply_large_text_target_value(&target, value.clone(), cx)
-        }) {
-            if let Some(current_target) = self.current_target.as_mut() {
-                current_target.value = value;
-            }
-            true
-        } else {
-            false
-        }
+        self.apply_value_to_target(grid, target, value, cx)
     }
 
     fn handle_selection_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -137,6 +134,50 @@ impl CellPreviewPanel {
         cx.notify();
     }
 
+    fn write_back_value(&mut self, value: String, cx: &mut Context<Self>) -> bool {
+        let Some(target) = self.current_target.clone() else {
+            return true;
+        };
+        if !target.editable || !self.editor.read(cx).has_pending_writeback() {
+            return true;
+        }
+
+        let Some(grid) = self.data_grid.as_ref().and_then(|grid| grid.upgrade()) else {
+            return true;
+        };
+
+        if value == target.value {
+            self.editor.update(cx, |editor, _| {
+                editor.mark_writeback_clean();
+            });
+            return true;
+        }
+
+        self.apply_value_to_target(grid, target, value, cx)
+    }
+
+    fn apply_value_to_target(
+        &mut self,
+        grid: Entity<DataGrid>,
+        target: LargeTextCellTarget,
+        value: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if grid.update(cx, |grid, cx| {
+            grid.apply_large_text_target_value(&target, value.clone(), cx)
+        }) {
+            if let Some(current_target) = self.current_target.as_mut() {
+                current_target.value = value;
+            }
+            self.editor.update(cx, |editor, _| {
+                editor.mark_writeback_clean();
+            });
+            true
+        } else {
+            false
+        }
+    }
+
     fn clear_binding(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.data_grid = None;
         self.current_target = None;
@@ -146,7 +187,7 @@ impl CellPreviewPanel {
 
     fn set_editor_content(&mut self, value: String, window: &mut Window, cx: &mut Context<Self>) {
         self.editor.update(cx, |editor, cx| {
-            editor.set_active_text(value, window, cx);
+            editor.load_external_text(value, window, cx);
         });
     }
 
