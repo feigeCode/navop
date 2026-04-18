@@ -1,14 +1,17 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use db_view::{DbViewSettings, LargeTextEditorOpenMode};
 use gpui::http_client::{AsyncBody, Method, Request, Url};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, FontWeight, InteractiveElement, IntoElement, Keystroke, ParentElement,
-    PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window,
+    App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    FontWeight, InteractiveElement, IntoElement, Keystroke, ParentElement, PathPromptOptions,
+    Render, SharedString, Styled, WeakEntity, Window, div,
 };
 use gpui_component::{
+    ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, Theme, ThemeMode, TitleBar,
+    WindowExt,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     group_box::GroupBoxVariant,
@@ -19,14 +22,13 @@ use gpui_component::{
     select::{Select, SelectItem, SelectState},
     setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
     switch::Switch,
-    v_flex, ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, Theme, ThemeMode,
-    TitleBar, WindowExt,
+    v_flex,
 };
 use one_core::cloud_sync::GlobalCloudUser;
 use one_core::cloud_sync::UserInfo;
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::manager::GlobalProviderState;
-use one_core::popup_window::{open_popup_window, PopupWindowOptions};
+use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -92,6 +94,39 @@ pub enum DatabaseOpenMode {
     Single,
     /// 工作区模式：按工作区分组打开，同一工作区的数据库在同一标签页
     Workspace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LargeTextCellEditorOpenMode {
+    #[default]
+    SidebarPreview,
+    Dialog,
+}
+
+impl LargeTextCellEditorOpenMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LargeTextCellEditorOpenMode::SidebarPreview => "sidebar_preview",
+            LargeTextCellEditorOpenMode::Dialog => "dialog",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "dialog" => LargeTextCellEditorOpenMode::Dialog,
+            _ => LargeTextCellEditorOpenMode::SidebarPreview,
+        }
+    }
+}
+
+impl From<LargeTextCellEditorOpenMode> for LargeTextEditorOpenMode {
+    fn from(value: LargeTextCellEditorOpenMode) -> Self {
+        match value {
+            LargeTextCellEditorOpenMode::SidebarPreview => LargeTextEditorOpenMode::SidebarPreview,
+            LargeTextCellEditorOpenMode::Dialog => LargeTextEditorOpenMode::Dialog,
+        }
+    }
 }
 
 impl DatabaseOpenMode {
@@ -248,6 +283,8 @@ pub struct AppSettings {
     pub global_proxy: GlobalProxySettings,
     #[serde(default)]
     pub database_open_mode: DatabaseOpenMode,
+    #[serde(default)]
+    pub large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode,
     /// 是否启用SQL查询的自动保存功能
     #[serde(default = "default_true")]
     pub enable_sql_auto_save: bool,
@@ -315,6 +352,7 @@ impl Default for AppSettings {
             auto_update: true,
             global_proxy: GlobalProxySettings::default(),
             database_open_mode: DatabaseOpenMode::default(),
+            large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             enable_sql_auto_save: true,
             sql_auto_save_interval: default_auto_save_interval(),
             system_hotkey_macos: default_system_hotkey_macos(),
@@ -417,6 +455,12 @@ impl AppSettings {
 
         // 同步自动保存配置
         self.sync_auto_save_config(cx);
+        db_view::init_db_view_settings(
+            cx,
+            DbViewSettings {
+                large_text_editor_open_mode: self.large_text_cell_editor_open_mode.into(),
+            },
+        );
     }
 
     /// 同步自动保存配置到全局状态
@@ -500,29 +544,37 @@ impl SettingsPanel {
                 .groups(vec![
                     SettingGroup::new()
                         .title(t!("Settings.General.Language.group_title"))
-                        .items(vec![SettingItem::new(
-                            t!("Settings.General.Language.ui_language"),
-                            SettingField::dropdown(
-                                vec![
-                                    ("zh-CN".into(), t!("Settings.General.Language.zh_cn").into()),
-                                    ("zh-HK".into(), t!("Settings.General.Language.zh_hk").into()),
-                                    ("en".into(), t!("Settings.General.Language.en").into()),
-                                ],
-                                |cx: &App| {
-                                    SharedString::from(AppSettings::global(cx).locale.clone())
-                                },
-                                |val: SharedString, cx: &mut App| {
-                                    let settings = AppSettings::global_mut(cx);
-                                    settings.locale = val.to_string();
-                                    gpui_component::set_locale(&settings.locale);
-                                    settings.save();
-                                },
+                        .items(vec![
+                            SettingItem::new(
+                                t!("Settings.General.Language.ui_language"),
+                                SettingField::dropdown(
+                                    vec![
+                                        (
+                                            "zh-CN".into(),
+                                            t!("Settings.General.Language.zh_cn").into(),
+                                        ),
+                                        (
+                                            "zh-HK".into(),
+                                            t!("Settings.General.Language.zh_hk").into(),
+                                        ),
+                                        ("en".into(), t!("Settings.General.Language.en").into()),
+                                    ],
+                                    |cx: &App| {
+                                        SharedString::from(AppSettings::global(cx).locale.clone())
+                                    },
+                                    |val: SharedString, cx: &mut App| {
+                                        let settings = AppSettings::global_mut(cx);
+                                        settings.locale = val.to_string();
+                                        gpui_component::set_locale(&settings.locale);
+                                        settings.save();
+                                    },
+                                )
+                                .default_value(SharedString::from(default_settings.locale)),
                             )
-                            .default_value(SharedString::from(default_settings.locale)),
-                        )
-                        .description(
-                            t!("Settings.General.Language.ui_language_desc").to_string(),
-                        )]),
+                            .description(
+                                t!("Settings.General.Language.ui_language_desc").to_string(),
+                            ),
+                        ]),
                     SettingGroup::new()
                         .title(t!("Settings.General.Appearance.group_title"))
                         .items(vec![
@@ -652,6 +704,51 @@ impl SettingsPanel {
                             )
                             .description(
                                 t!("Settings.General.Database.open_mode_desc").to_string(),
+                            ),
+                            SettingItem::new(
+                                t!("Settings.General.Database.large_text_editor_open_mode"),
+                                SettingField::dropdown(
+                                    vec![
+                                        (
+                                            "sidebar_preview".into(),
+                                            t!(
+                                                "Settings.General.Database.large_text_editor_open_mode_sidebar"
+                                            )
+                                            .into(),
+                                        ),
+                                        (
+                                            "dialog".into(),
+                                            t!(
+                                                "Settings.General.Database.large_text_editor_open_mode_dialog"
+                                            )
+                                            .into(),
+                                        ),
+                                    ],
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx)
+                                                .large_text_cell_editor_open_mode
+                                                .as_str(),
+                                        )
+                                    },
+                                    |val: SharedString, cx: &mut App| {
+                                        let mode =
+                                            LargeTextCellEditorOpenMode::from_str(val.as_ref());
+                                        let settings = AppSettings::global_mut(cx);
+                                        settings.large_text_cell_editor_open_mode = mode;
+                                        settings.save();
+                                        db_view::set_large_text_editor_open_mode(mode.into(), cx);
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings
+                                        .large_text_cell_editor_open_mode
+                                        .as_str(),
+                                )),
+                            )
+                            .description(
+                                t!("Settings.General.Database.large_text_editor_open_mode_desc")
+                                    .to_string(),
                             ),
                             SettingItem::new(
                                 t!("Settings.General.Database.auto_save"),

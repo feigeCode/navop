@@ -45,9 +45,7 @@ use gpui::px;
 use gpui_component::dock::{ClosePanel, ToggleZoom};
 use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
-use one_core::tab_container::{
-    TabContainer, TabContentRegistry, TabItem,
-};
+use one_core::tab_container::{TabContainer, TabContentRegistry, TabItem};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -310,11 +308,7 @@ impl OnetCliApp {
             });
         }
 
-
-
-        Self {
-            tab_container
-        }
+        Self { tab_container }
     }
 }
 

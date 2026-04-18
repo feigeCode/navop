@@ -1,16 +1,16 @@
 //! AI Input - 支持 SQL/Agent 双模式的智能输入组件
 
-use db::plugin::SqlCompletionInfo;
 use db::GlobalDbState;
+use db::plugin::SqlCompletionInfo;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, AnyElement, App, AppContext, AsyncApp, Context, Corner, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Subscription, Window,
+    AnyElement, App, AppContext, AsyncApp, Context, Corner, Entity, EventEmitter, FocusHandle,
+    Focusable, IntoElement, ParentElement, Render, Styled, Subscription, Window, div, px,
 };
 use gpui_component::button::ButtonVariants;
 use gpui_component::{
-    button::Button, h_flex, input::InputEvent, popover::Popover, v_flex, ActiveTheme, IconName,
-    Sizable, Size,
+    ActiveTheme, IconName, Sizable, Size, button::Button, h_flex, input::InputEvent,
+    popover::Popover, v_flex,
 };
 use rust_i18n::t;
 use std::rc::Rc;

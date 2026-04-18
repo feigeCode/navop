@@ -40,6 +40,7 @@ fn main() {
         cx.set_global(db_state);
 
         db_view::init_ask_ai_notifier(cx);
+        db_view::init_cell_editor_sidebar_notifier(cx);
 
         let view_registry = DatabaseViewPluginRegistry::new();
         cx.set_global(view_registry);

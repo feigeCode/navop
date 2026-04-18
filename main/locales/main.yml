@@ -629,6 +629,22 @@ Settings:
         en: Workspace Mode
         zh-CN: 工作区模式
         zh-HK: 工作區模式
+      large_text_editor_open_mode:
+        en: Large Text Cell Editor Open Mode
+        zh-CN: 大文本单元格编辑器打开方式
+        zh-HK: 大文本單元格編輯器打開方式
+      large_text_editor_open_mode_desc:
+        en: Choose whether large text cells open in the sidebar preview or a dialog
+        zh-CN: 选择大文本单元格是通过侧边栏预览打开还是弹窗打开
+        zh-HK: 選擇大文本單元格是通過側邊欄預覽打開還是彈窗打開
+      large_text_editor_open_mode_sidebar:
+        en: Sidebar Preview
+        zh-CN: 侧边栏预览
+        zh-HK: 側邊欄預覽
+      large_text_editor_open_mode_dialog:
+        en: Dialog
+        zh-CN: 弹窗
+        zh-HK: 彈窗
       auto_save:
         en: SQL Auto Save
         zh-CN: SQL自动保存

@@ -1,5 +1,6 @@
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, IntoElement, Render, Styled as _, Window,
+    App, AppContext, Context, Entity, EventEmitter, IntoElement, Render, Styled as _, Subscription,
+    Window,
 };
 use gpui_component::highlighter::Language;
 use gpui_component::input::{Input, InputEvent, InputState, TabSize};
@@ -22,12 +23,44 @@ impl EditorTab {
     }
 }
 
-impl EventEmitter<InputEvent> for MultiTextEditor {}
+fn active_editor_text(active_tab: EditorTab, text_content: &str, json_content: &str) -> String {
+    match active_tab {
+        EditorTab::Text => text_content.to_string(),
+        EditorTab::Json => json_content.to_string(),
+    }
+}
+
+fn normalize_commit_text(active_tab: EditorTab, raw_text: &str) -> Result<String, json5::Error> {
+    if active_tab == EditorTab::Json {
+        return json5::from_str::<serde_json::Value>(raw_text).map(|value| value.to_string());
+    }
+
+    match json5::from_str::<serde_json::Value>(raw_text) {
+        Ok(value) => Ok(value.to_string()),
+        Err(_) => Ok(raw_text.to_string()),
+    }
+}
+
+fn validate_writeback_text(active_tab: EditorTab, raw_text: &str) -> Result<String, json5::Error> {
+    if active_tab == EditorTab::Json {
+        json5::from_str::<serde_json::Value>(raw_text)?;
+    }
+
+    Ok(raw_text.to_string())
+}
+
+#[derive(Clone, Debug)]
+pub enum MultiTextEditorEvent {
+    ActiveEditorBlurred,
+}
+
+impl EventEmitter<MultiTextEditorEvent> for MultiTextEditor {}
 
 pub struct MultiTextEditor {
     active_tab: EditorTab,
     text_editor: Entity<InputState>,
     json_editor: Entity<InputState>,
+    _subs: Vec<Subscription>,
 }
 
 impl MultiTextEditor {
@@ -60,27 +93,52 @@ impl MultiTextEditor {
                 .placeholder("Enter JSON here...")
         });
 
-        Self {
+        let mut this = Self {
             active_tab: EditorTab::Text,
             text_editor,
             json_editor,
-        }
+            _subs: Vec::new(),
+        };
+        this._subs = vec![
+            cx.subscribe_in(
+                &this.text_editor,
+                window,
+                |this, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Blur) && this.active_tab == EditorTab::Text {
+                        this.normalize_after_blur(window, cx);
+                        cx.emit(MultiTextEditorEvent::ActiveEditorBlurred);
+                    }
+                },
+            ),
+            cx.subscribe_in(
+                &this.json_editor,
+                window,
+                |this, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Blur) && this.active_tab == EditorTab::Json {
+                        this.normalize_after_blur(window, cx);
+                        cx.emit(MultiTextEditorEvent::ActiveEditorBlurred);
+                    }
+                },
+            ),
+        ];
+        this
     }
 
-    pub fn switch_tab(&mut self, tab: EditorTab, cx: &mut Context<Self>) {
+    pub fn switch_tab(&mut self, tab: EditorTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_tab == tab {
+            return;
+        }
+
+        let content = self
+            .get_active_text(cx)
+            .unwrap_or_else(|_| self.get_raw_active_text(cx));
         self.active_tab = tab;
+        self.set_active_text(content, window, cx);
         cx.notify();
     }
 
-    fn get_active_editor(&self) -> &Entity<InputState> {
-        match self.active_tab {
-            EditorTab::Text => &self.text_editor,
-            EditorTab::Json => &self.json_editor,
-        }
-    }
-
     pub fn get_active_text(&self, cx: &App) -> Result<String, json5::Error> {
-        let value = self.get_active_editor().read(cx).text().to_string();
+        let value = self.get_raw_active_text(cx);
         if self.active_tab == EditorTab::Json {
             return match json5::from_str::<serde_json::Value>(&value) {
                 Ok(v) => Ok(v.to_string()),
@@ -90,21 +148,54 @@ impl MultiTextEditor {
         Ok(value)
     }
 
-    pub fn set_active_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
-        // Set text editor
+    pub fn get_raw_active_text(&self, cx: &App) -> String {
+        let text_content = self.text_editor.read(cx).text().to_string();
+        let json_content = self.json_editor.read(cx).text().to_string();
+
+        active_editor_text(self.active_tab, &text_content, &json_content)
+    }
+
+    pub fn get_writeback_text(&self, cx: &App) -> Result<String, json5::Error> {
+        validate_writeback_text(self.active_tab, &self.get_raw_active_text(cx))
+    }
+
+    fn set_editor_values(
+        &mut self,
+        text_value: String,
+        json_value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.text_editor.update(cx, |s, cx| {
-            s.set_value(text.clone(), window, cx);
+            s.set_value(text_value.clone(), window, cx);
         });
 
+        self.json_editor.update(cx, |s, cx| {
+            s.set_value(json_value, window, cx);
+        });
+    }
+
+    pub fn set_active_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         // Try to parse and format as JSON for json editor
         let json_text = match json5::from_str::<serde_json::Value>(&text) {
             Ok(value) => serde_json::to_string_pretty(&value).unwrap_or(text.clone()),
             Err(_) => text.clone(),
         };
 
-        self.json_editor.update(cx, |s, cx| {
-            s.set_value(json_text, window, cx);
-        });
+        self.set_editor_values(text, json_text, window, cx);
+    }
+
+    fn normalize_after_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let raw_text = self.get_raw_active_text(cx);
+        let Ok(normalized) = normalize_commit_text(self.active_tab, &raw_text) else {
+            return;
+        };
+
+        if normalized == raw_text {
+            return;
+        }
+
+        self.set_editor_values(normalized.clone(), normalized, window, cx);
     }
 
     pub fn format_json(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -112,9 +203,8 @@ impl MultiTextEditor {
         match json5::from_str::<serde_json::Value>(&text) {
             Ok(value) => {
                 if let Ok(formatted) = serde_json::to_string_pretty(&value) {
-                    self.json_editor.update(cx, |s, cx| {
-                        s.set_value(formatted, window, cx);
-                    });
+                    self.set_active_text(formatted, window, cx);
+                    self.active_tab = EditorTab::Json;
                 }
             }
             Err(e) => {
@@ -128,9 +218,8 @@ impl MultiTextEditor {
         match json5::from_str::<serde_json::Value>(&text) {
             Ok(value) => {
                 if let Ok(minified) = serde_json::to_string(&value) {
-                    self.json_editor.update(cx, |s, cx| {
-                        s.set_value(minified, window, cx);
-                    });
+                    self.set_active_text(minified, window, cx);
+                    self.active_tab = EditorTab::Json;
                 }
             }
             Err(e) => {
@@ -158,13 +247,13 @@ impl Render for MultiTextEditor {
                     .selected_index(active_index)
                     .child(Tab::new().label("Text"))
                     .child(Tab::new().label("JSON"))
-                    .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                    .on_click(cx.listener(|this, ix: &usize, window, cx| {
                         let tab = if *ix == 0 {
                             EditorTab::Text
                         } else {
                             EditorTab::Json
                         };
-                        this.switch_tab(tab, cx);
+                        this.switch_tab(tab, window, cx);
                     }))
                     .suffix(h_flex().gap_2().when(is_json_tab, |this| {
                         this.child(
@@ -206,4 +295,63 @@ pub fn create_multi_text_editor_with_content(
         }
         editor
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_editor_text_returns_text_tab_content() {
+        let value = active_editor_text(EditorTab::Text, "plain text", "{\n  \"a\": 1\n}");
+
+        assert_eq!(value, "plain text");
+    }
+
+    #[test]
+    fn active_editor_text_returns_json_tab_content() {
+        let value = active_editor_text(EditorTab::Json, "plain text", "{\n  \"a\": 1\n}");
+
+        assert_eq!(value, "{\n  \"a\": 1\n}");
+    }
+
+    #[test]
+    fn normalize_commit_text_minifies_valid_json_from_text_tab() {
+        let value = normalize_commit_text(EditorTab::Text, "{\n  \"a\": 1,\n  \"b\": true\n}")
+            .expect("text tab JSON should be minified");
+
+        assert_eq!(value, "{\"a\":1,\"b\":true}");
+    }
+
+    #[test]
+    fn normalize_commit_text_preserves_plain_text_from_text_tab() {
+        let value = normalize_commit_text(EditorTab::Text, "plain text")
+            .expect("plain text should be preserved");
+
+        assert_eq!(value, "plain text");
+    }
+
+    #[test]
+    fn normalize_commit_text_requires_valid_json_from_json_tab() {
+        let err = normalize_commit_text(EditorTab::Json, "{invalid json}")
+            .expect_err("json tab should validate before commit");
+
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn validate_writeback_text_preserves_minified_json_text() {
+        let value = validate_writeback_text(EditorTab::Text, "{\"a\":1,\"b\":true}")
+            .expect("writeback should preserve current editor text");
+
+        assert_eq!(value, "{\"a\":1,\"b\":true}");
+    }
+
+    #[test]
+    fn validate_writeback_text_validates_json_tab_without_reserializing() {
+        let value = validate_writeback_text(EditorTab::Json, "{\"a\":1,\"b\":true}")
+            .expect("json tab should validate and preserve raw text");
+
+        assert_eq!(value, "{\"a\":1,\"b\":true}");
+    }
 }

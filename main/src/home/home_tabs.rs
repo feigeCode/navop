@@ -10,7 +10,9 @@ use one_core::tab_container::TabItem;
 use redis_view::RedisTabView;
 use sftp_view::{SftpView, SftpViewEvent};
 use terminal::LocalConfig;
-use terminal_view::{current_settings as current_terminal_settings, TerminalConnectionKind, TerminalView};
+use terminal_view::{
+    TerminalConnectionKind, TerminalView, current_settings as current_terminal_settings,
+};
 
 impl HomePage {
     fn terminal_sync_path_enabled(cx: &App) -> bool {
