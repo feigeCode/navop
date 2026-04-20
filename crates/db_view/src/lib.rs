@@ -34,4 +34,3 @@ pub use settings::{
     DbViewSettings, LargeTextEditorOpenMode, current_settings as current_db_view_settings,
     init_settings as init_db_view_settings, set_large_text_editor_open_mode,
 };
-pub use sidebar::cell_editor_notifier::init_cell_editor_sidebar_notifier;

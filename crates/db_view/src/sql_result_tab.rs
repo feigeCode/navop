@@ -24,6 +24,7 @@ use one_ui::edit_table::Column;
 use smol::Timer;
 use tracing::log::error;
 
+use crate::table_data::cell_preview_host::CellPreviewHost;
 use crate::table_data::data_grid::{DataGrid, DataGridConfig, DataGridUsage};
 use one_core::ai_chat::ask_ai::AskAiButton;
 // 3. 当前 crate 导入（按模块分组）
@@ -39,6 +40,7 @@ pub struct SqlResultTab {
     pub execution_time: String,
     pub rows_count: String,
     pub data_grid: Option<Entity<DataGrid>>,
+    pub content: Option<Entity<CellPreviewHost>>,
 }
 
 /// 执行状态
@@ -526,6 +528,7 @@ impl SqlResultTabContainer {
                 .sql(query_result.sql.clone());
 
                 let data_grid = cx.new(|cx| DataGrid::new(config, _window, cx));
+                let content = cx.new(|cx| CellPreviewHost::new(data_grid.clone(), _window, cx));
 
                 let columns = query_result
                     .columns
@@ -586,6 +589,7 @@ impl SqlResultTabContainer {
                     execution_time: format!("{}ms", query_result.elapsed_ms),
                     rows_count: format!("{} rows", query_result.rows.len()),
                     data_grid: Some(data_grid),
+                    content: Some(content),
                 };
 
                 new_tabs.push(tab);
@@ -1125,8 +1129,8 @@ impl SqlResultTabContainer {
         let query_tabs = self.result_tabs.read(cx);
         query_tabs
             .get(active_idx - 1)
-            .and_then(|tab| tab.data_grid.as_ref())
-            .map(|data_grid| data_grid.clone().into_any_element())
+            .and_then(|tab| tab.content.as_ref())
+            .map(|content| content.clone().into_any_element())
             .unwrap_or_else(|| {
                 div()
                     .flex_1()

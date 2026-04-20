@@ -14,6 +14,7 @@ use gpui_component::{
 };
 use one_ui::edit_table::Column;
 
+use crate::table_data::cell_preview_host::CellPreviewHost;
 use crate::table_data::data_grid::{DataGrid, DataGridConfig, DataGridUsage};
 use db::SqlResult;
 use gpui_component::button::ButtonVariants;
@@ -25,6 +26,7 @@ pub struct SqlResultItem {
     pub sql: String,
     pub result: SqlResult,
     pub data_grid: Option<Entity<DataGrid>>,
+    pub content: Option<Entity<CellPreviewHost>>,
 }
 
 /// 可复用的 SQL 结果视图组件
@@ -66,6 +68,7 @@ impl ChatSqlResultView {
                         sql: q.sql.clone(),
                         result,
                         data_grid: None,
+                        content: None,
                     });
                 }
                 SqlResult::Exec(e) => {
@@ -75,6 +78,7 @@ impl ChatSqlResultView {
                         sql: e.sql.clone(),
                         result,
                         data_grid: None,
+                        content: None,
                     });
                 }
                 SqlResult::Error(e) => {
@@ -83,6 +87,7 @@ impl ChatSqlResultView {
                         sql: e.sql.clone(),
                         result,
                         data_grid: None,
+                        content: None,
                     });
                 }
             }
@@ -136,6 +141,7 @@ impl ChatSqlResultView {
         for item in &mut self.results {
             if matches!(item.result, SqlResult::Query(_)) {
                 item.data_grid = None;
+                item.content = None;
             }
         }
     }
@@ -170,6 +176,7 @@ impl ChatSqlResultView {
         .sql(q.sql.clone());
 
         let data_grid = cx.new(|cx| DataGrid::new(config, window, cx));
+        let content = cx.new(|cx| CellPreviewHost::new(data_grid.clone(), window, cx));
 
         let columns: Vec<Column> = q
             .columns
@@ -187,6 +194,7 @@ impl ChatSqlResultView {
         });
 
         item.data_grid = Some(data_grid);
+        item.content = Some(content);
     }
 
     fn render_query_result(
@@ -199,7 +207,7 @@ impl ChatSqlResultView {
         let Some(item) = self.results.get(result_idx) else {
             return div().into_any_element();
         };
-        if let Some(grid) = &item.data_grid {
+        if let Some(content) = &item.content {
             return div()
                 .w_full()
                 .h(px(250.0))
@@ -207,7 +215,7 @@ impl ChatSqlResultView {
                 .border_color(cx.theme().border)
                 .rounded_md()
                 .overflow_hidden()
-                .child(grid.clone())
+                .child(content.clone())
                 .into_any_element();
         }
         div().into_any_element()

@@ -1,6 +1,7 @@
 use crate::table_data::data_grid::{DataGrid, DataGridEvent, LargeTextCellTarget};
 use crate::table_data::multi_text_editor::{
     MultiTextEditor, MultiTextEditorEvent, create_multi_text_editor_with_content,
+    large_text_values_equivalent,
 };
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled,
@@ -62,6 +63,7 @@ impl CellPreviewPanel {
                 DataGridEvent::LargeTextSelectionChanged => {
                     this.handle_selection_changed(window, cx);
                 }
+                DataGridEvent::ToggleLargeTextEditorRequested => {}
             },
         ));
         self.load_selected_cell(window, cx);
@@ -98,7 +100,7 @@ impl CellPreviewPanel {
             }
         };
 
-        if value == target.value {
+        if large_text_values_equivalent(&target.value, &value) {
             self.editor.update(cx, |editor, _| {
                 editor.mark_writeback_clean();
             });
@@ -146,7 +148,7 @@ impl CellPreviewPanel {
             return true;
         };
 
-        if value == target.value {
+        if large_text_values_equivalent(&target.value, &value) {
             self.editor.update(cx, |editor, _| {
                 editor.mark_writeback_clean();
             });
@@ -259,5 +261,31 @@ impl Render for CellPreviewPanel {
                     ),
             )
             .child(div().flex_1().min_h_0().child(self.editor.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::table_data::multi_text_editor::large_text_values_equivalent;
+
+    #[test]
+    fn skips_writeback_for_identical_plain_text() {
+        assert!(large_text_values_equivalent("plain text", "plain text"));
+    }
+
+    #[test]
+    fn skips_writeback_for_equivalent_json_with_different_formatting() {
+        assert!(large_text_values_equivalent(
+            "{\n  \"name\": \"codex\",\n  \"enabled\": true\n}",
+            "{\"name\":\"codex\",\"enabled\":true}",
+        ));
+    }
+
+    #[test]
+    fn does_not_skip_writeback_for_different_json_values() {
+        assert!(!large_text_values_equivalent(
+            "{\"name\":\"codex\"}",
+            "{\"name\":\"agent\"}"
+        ));
     }
 }

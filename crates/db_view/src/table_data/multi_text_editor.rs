@@ -23,11 +23,49 @@ impl EditorTab {
     }
 }
 
+fn canonicalize_large_text_value(value: &str) -> Option<String> {
+    json5::from_str::<serde_json::Value>(value)
+        .ok()
+        .map(|json| json.to_string())
+}
+
+pub(crate) fn large_text_values_equivalent(original: &str, candidate: &str) -> bool {
+    if original == candidate {
+        return true;
+    }
+
+    match (
+        canonicalize_large_text_value(original),
+        canonicalize_large_text_value(candidate),
+    ) {
+        (Some(original_json), Some(candidate_json)) => original_json == candidate_json,
+        _ => false,
+    }
+}
+
 fn active_editor_text(active_tab: EditorTab, text_content: &str, json_content: &str) -> String {
     match active_tab {
         EditorTab::Text => text_content.to_string(),
         EditorTab::Json => json_content.to_string(),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonEditorSyncMode {
+    Pretty,
+    Mirror,
+}
+
+fn editor_values_for_text(text: &str, json_sync_mode: JsonEditorSyncMode) -> (String, String) {
+    let json_text = match json_sync_mode {
+        JsonEditorSyncMode::Pretty => match json5::from_str::<serde_json::Value>(text) {
+            Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| text.to_string()),
+            Err(_) => text.to_string(),
+        },
+        JsonEditorSyncMode::Mirror => text.to_string(),
+    };
+
+    (text.to_string(), json_text)
 }
 
 fn normalize_commit_text(active_tab: EditorTab, raw_text: &str) -> Result<String, json5::Error> {
@@ -187,15 +225,62 @@ impl MultiTextEditor {
         self.suppress_edit_tracking = false;
     }
 
-    pub fn set_active_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
-        // Try to parse and format as JSON for json editor
-        let json_text = match json5::from_str::<serde_json::Value>(&text) {
-            Ok(value) => serde_json::to_string_pretty(&value).unwrap_or(text.clone()),
-            Err(_) => text.clone(),
-        };
+    fn next_dirty_state_after_programmatic_change(was_dirty: bool) -> bool {
+        was_dirty
+    }
 
-        self.set_editor_values(text, json_text, window, cx);
-        self.mark_writeback_clean();
+    fn next_dirty_state_after_json_transform(_was_dirty: bool) -> bool {
+        true
+    }
+
+    fn set_text_with_sync_mode_and_dirty_state(
+        &mut self,
+        text: String,
+        json_sync_mode: JsonEditorSyncMode,
+        next_dirty_state: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (text_value, json_text) = editor_values_for_text(&text, json_sync_mode);
+        self.set_editor_values(text_value, json_text, window, cx);
+        self.has_user_edits = next_dirty_state;
+    }
+
+    fn set_active_text_with_dirty_state(
+        &mut self,
+        text: String,
+        next_dirty_state: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_text_with_sync_mode_and_dirty_state(
+            text,
+            JsonEditorSyncMode::Pretty,
+            next_dirty_state,
+            window,
+            cx,
+        );
+    }
+
+    pub fn set_active_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        let next_dirty_state =
+            Self::next_dirty_state_after_programmatic_change(self.has_user_edits);
+        self.set_active_text_with_dirty_state(text, next_dirty_state, window, cx);
+    }
+
+    fn load_committed_text(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_active_text_with_dirty_state(text, false, window, cx);
+    }
+
+    fn apply_json_transform(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+        let next_dirty_state = Self::next_dirty_state_after_json_transform(self.has_user_edits);
+        self.set_text_with_sync_mode_and_dirty_state(
+            text,
+            JsonEditorSyncMode::Mirror,
+            next_dirty_state,
+            window,
+            cx,
+        );
     }
 
     pub fn load_external_text(
@@ -205,7 +290,7 @@ impl MultiTextEditor {
         cx: &mut Context<Self>,
     ) {
         let is_json = json5::from_str::<serde_json::Value>(&text).is_ok();
-        self.set_active_text(text, window, cx);
+        self.load_committed_text(text, window, cx);
         if self.active_tab == EditorTab::Json && !is_json {
             self.active_tab = EditorTab::Text;
             cx.notify();
@@ -228,7 +313,7 @@ impl MultiTextEditor {
         match json5::from_str::<serde_json::Value>(&text) {
             Ok(value) => {
                 if let Ok(formatted) = serde_json::to_string_pretty(&value) {
-                    self.set_active_text(formatted, window, cx);
+                    self.apply_json_transform(formatted, window, cx);
                     self.active_tab = EditorTab::Json;
                 }
             }
@@ -243,7 +328,7 @@ impl MultiTextEditor {
         match json5::from_str::<serde_json::Value>(&text) {
             Ok(value) => {
                 if let Ok(minified) = serde_json::to_string(&value) {
-                    self.set_active_text(minified, window, cx);
+                    self.apply_json_transform(minified, window, cx);
                     self.active_tab = EditorTab::Json;
                 }
             }
@@ -256,9 +341,9 @@ impl MultiTextEditor {
 
 impl Render for MultiTextEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use gpui::ParentElement;
         use gpui::prelude::FluentBuilder;
-        use gpui_component::{IconName, Sizable, Size, button::Button, h_flex};
+        use gpui::ParentElement;
+        use gpui_component::{button::Button, h_flex, IconName, Sizable, Size};
 
         let active_tab = self.active_tab;
         let is_json_tab = active_tab == EditorTab::Json;
@@ -316,7 +401,7 @@ pub fn create_multi_text_editor_with_content(
     cx.new(|cx| {
         let mut editor = MultiTextEditor::new(window, cx);
         if let Some(content) = initial_content {
-            editor.set_active_text(content, window, cx);
+            editor.load_committed_text(content, window, cx);
         }
         editor
     })
@@ -370,5 +455,53 @@ mod tests {
             .expect("writeback should minify valid json");
 
         assert_eq!(value, "{\"a\":1,\"b\":true}");
+    }
+
+    #[test]
+    fn large_text_values_equivalent_ignores_json_formatting() {
+        assert!(large_text_values_equivalent(
+            "{\n  \"name\": \"codex\",\n  \"enabled\": true\n}",
+            "{\"name\":\"codex\",\"enabled\":true}",
+        ));
+    }
+
+    #[test]
+    fn editor_values_for_text_pretty_formats_json_for_json_editor() {
+        let (_, json_value) = editor_values_for_text(
+            "{\"name\":\"codex\",\"enabled\":true}",
+            JsonEditorSyncMode::Pretty,
+        );
+
+        assert_eq!(
+            json_value,
+            "{\n  \"name\": \"codex\",\n  \"enabled\": true\n}"
+        );
+    }
+
+    #[test]
+    fn editor_values_for_text_mirror_keeps_minified_json_visible() {
+        let (text_value, json_value) = editor_values_for_text(
+            "{\"name\":\"codex\",\"enabled\":true}",
+            JsonEditorSyncMode::Mirror,
+        );
+
+        assert_eq!(text_value, "{\"name\":\"codex\",\"enabled\":true}");
+        assert_eq!(json_value, "{\"name\":\"codex\",\"enabled\":true}");
+    }
+
+    #[test]
+    fn next_dirty_state_after_programmatic_change_preserves_existing_dirty_state() {
+        assert!(MultiTextEditor::next_dirty_state_after_programmatic_change(
+            true
+        ));
+        assert!(!MultiTextEditor::next_dirty_state_after_programmatic_change(false));
+    }
+
+    #[test]
+    fn next_dirty_state_after_json_transform_marks_editor_dirty() {
+        assert!(MultiTextEditor::next_dirty_state_after_json_transform(true));
+        assert!(MultiTextEditor::next_dirty_state_after_json_transform(
+            false
+        ));
     }
 }

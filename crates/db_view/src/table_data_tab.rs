@@ -1,3 +1,4 @@
+use crate::table_data::cell_preview_host::CellPreviewHost;
 use crate::table_data::data_grid::{DataGrid, DataGridConfig};
 use futures::channel::oneshot;
 use gpui::{
@@ -12,6 +13,7 @@ use std::sync::{Arc, Mutex};
 
 pub struct TableDataTabContent {
     pub data_grid: Entity<DataGrid>,
+    content: Entity<CellPreviewHost>,
     database_name: String,
     table_name: String,
     focus_handle: FocusHandle,
@@ -42,10 +44,12 @@ impl TableDataTabContent {
         }
 
         let data_grid = cx.new(|cx| DataGrid::new(config, window, cx));
+        let content = cx.new(|cx| CellPreviewHost::new(data_grid.clone(), window, cx));
         let focus_handle = cx.focus_handle();
 
         Self {
             data_grid,
+            content,
             database_name,
             table_name,
             focus_handle,
@@ -55,7 +59,7 @@ impl TableDataTabContent {
 
 impl Render for TableDataTabContent {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex().size_full().child(self.data_grid.clone())
+        v_flex().size_full().child(self.content.clone())
     }
 }
 
@@ -90,6 +94,9 @@ impl TabContent for TableDataTabContent {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
+        let _ = self
+            .content
+            .update(cx, |content, cx| content.flush_pending(cx));
         let has_changes = self.data_grid.read(cx).has_unsaved_changes(cx);
         if !has_changes {
             return Task::ready(true);
@@ -163,6 +170,7 @@ impl Clone for TableDataTabContent {
     fn clone(&self) -> Self {
         Self {
             data_grid: self.data_grid.clone(),
+            content: self.content.clone(),
             database_name: self.database_name.clone(),
             table_name: self.table_name.clone(),
             focus_handle: self.focus_handle.clone(),

@@ -15,11 +15,12 @@ use tracing::{error, log::trace};
 
 use crate::import_export::table_export_view::DataExportView;
 use crate::settings::{LargeTextEditorOpenMode, current_settings as current_db_view_settings};
-use crate::sidebar::cell_editor_notifier::emit_toggle_cell_editor_sidebar_event;
 use crate::sql_editor::SqlEditor;
 use crate::table_data::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
 use crate::table_data::filter_editor::{FilterEditorEvent, TableFilterEditor, TableSchema};
-use crate::table_data::multi_text_editor::create_multi_text_editor_with_content;
+use crate::table_data::multi_text_editor::{
+    create_multi_text_editor_with_content, large_text_values_equivalent,
+};
 use crate::table_data::results_delegate::{EditorTableDelegate, RowChange};
 use chrono::Local;
 use db::{
@@ -33,6 +34,7 @@ use one_core::storage::DatabaseType;
 use one_core::tab_container::TabContainer;
 use one_ui::edit_table::ColumnSort;
 use std::path::PathBuf;
+use gpui_component::button::ButtonVariants;
 
 actions!(
     data_grid,
@@ -103,6 +105,20 @@ pub struct LargeTextCellTarget {
 #[derive(Clone, Debug)]
 pub enum DataGridEvent {
     LargeTextSelectionChanged,
+    ToggleLargeTextEditorRequested,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LargeTextEditorRoute {
+    PagePreview,
+    Dialog,
+}
+
+fn resolve_large_text_editor_route(mode: LargeTextEditorOpenMode) -> LargeTextEditorRoute {
+    match mode {
+        LargeTextEditorOpenMode::SidebarPreview => LargeTextEditorRoute::PagePreview,
+        LargeTextEditorOpenMode::Dialog => LargeTextEditorRoute::Dialog,
+    }
 }
 
 /// 数据表格使用场景
@@ -680,13 +696,16 @@ impl DataGrid {
     }
 
     pub fn open_large_text_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if current_db_view_settings(cx).large_text_editor_open_mode
-            == LargeTextEditorOpenMode::SidebarPreview
-            && emit_toggle_cell_editor_sidebar_event(cx.entity().downgrade(), cx)
-        {
-            return;
+        match resolve_large_text_editor_route(
+            current_db_view_settings(cx).large_text_editor_open_mode,
+        ) {
+            LargeTextEditorRoute::PagePreview => {
+                cx.emit(DataGridEvent::ToggleLargeTextEditorRequested);
+            }
+            LargeTextEditorRoute::Dialog => {
+                self.show_large_text_editor(window, cx);
+            }
         }
-        self.show_large_text_editor(window, cx);
     }
 
     pub fn set_large_text_editor_sidebar_open(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -1316,13 +1335,14 @@ impl DataGrid {
         cx: &mut App,
     ) {
         let dialog_text_editor =
-            create_multi_text_editor_with_content(Some(initial_text), window, cx);
+            create_multi_text_editor_with_content(Some(initial_text.clone()), window, cx);
         let data_grid = self.clone();
         let title = title.to_string();
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let editor = dialog_text_editor.clone();
             let data_grid = data_grid.clone();
+            let original_text = initial_text.clone();
 
             let mut d = dialog
                 .title(SharedString::from(title.clone()))
@@ -1343,6 +1363,12 @@ impl DataGrid {
                         let content = editor.read(cx).get_writeback_text(cx);
                         return match content {
                             Ok(val) => {
+                                if large_text_values_equivalent(&original_text, &val) {
+                                    editor.update(cx, |editor, _| {
+                                        editor.mark_writeback_clean();
+                                    });
+                                    return true;
+                                }
                                 editor.update(cx, |editor, _| {
                                     editor.mark_writeback_clean();
                                 });
@@ -2280,7 +2306,7 @@ impl DataGrid {
                 Button::new("toggle-editor")
                     .with_size(Size::Medium)
                     .icon(IconName::EditBorder)
-                    .selected(large_text_button_selected)
+                    .when(large_text_button_selected, |this| this.primary())
                     .tooltip(t!("TableDataGrid.large_text_editor").to_string())
                     .disabled(loading)
                     .on_click(cx.listener(Self::handle_large_text_editor)),
@@ -2631,9 +2657,10 @@ pub fn notification(cx: &mut App, error: String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ExportFormat, TableMetadata, build_header_order_by_clause, build_large_text_editor_title,
-        collect_delete_row_indices,
+        ExportFormat, LargeTextEditorRoute, TableMetadata, build_header_order_by_clause,
+        build_large_text_editor_title, collect_delete_row_indices, resolve_large_text_editor_route,
     };
+    use crate::settings::LargeTextEditorOpenMode;
     use db::DbManager;
     use gpui::SharedString;
     use one_core::storage::DatabaseType;
@@ -2733,6 +2760,20 @@ mod tests {
             title,
             t!("TableDataGrid.edit_cell_title", column = "payload", row = 3).to_string()
         );
+    }
+
+    #[test]
+    fn resolve_large_text_editor_route_uses_page_preview_for_sidebar_mode() {
+        let route = resolve_large_text_editor_route(LargeTextEditorOpenMode::SidebarPreview);
+
+        assert_eq!(route, LargeTextEditorRoute::PagePreview);
+    }
+
+    #[test]
+    fn resolve_large_text_editor_route_uses_dialog_for_dialog_mode() {
+        let route = resolve_large_text_editor_route(LargeTextEditorOpenMode::Dialog);
+
+        assert_eq!(route, LargeTextEditorRoute::Dialog);
     }
 
     #[test]
