@@ -43,12 +43,31 @@ struct FlatEntry {
     depth: usize,
 }
 
+fn apply_mongo_selection_state(
+    selected_node: &mut Option<String>,
+    context_menu_node_id: &mut Option<String>,
+    node_id: &str,
+) {
+    *selected_node = Some(node_id.to_string());
+    *context_menu_node_id = None;
+}
+
+fn apply_mongo_context_menu_target(
+    selected_node: &mut Option<String>,
+    context_menu_node_id: &mut Option<String>,
+    node_id: &str,
+) {
+    *selected_node = Some(node_id.to_string());
+    *context_menu_node_id = Some(node_id.to_string());
+}
+
 /// MongoDB 树形视图
 pub struct MongoTreeView {
     nodes: HashMap<String, MongoNode>,
     flat_entries: Vec<FlatEntry>,
     expanded_nodes: HashSet<String>,
     selected_node: Option<String>,
+    context_menu_node_id: Option<String>,
     loading_nodes: HashSet<String>,
     error_nodes: HashMap<String, String>,
     search_query: String,
@@ -82,6 +101,7 @@ impl MongoTreeView {
             flat_entries: Vec::new(),
             expanded_nodes: HashSet::new(),
             selected_node: None,
+            context_menu_node_id: None,
             loading_nodes: HashSet::new(),
             error_nodes: HashMap::new(),
             search_query: String::new(),
@@ -137,12 +157,28 @@ impl MongoTreeView {
         self.connected_nodes.contains(node_id)
     }
 
+    fn set_selected_node(&mut self, node_id: &str) {
+        apply_mongo_selection_state(
+            &mut self.selected_node,
+            &mut self.context_menu_node_id,
+            node_id,
+        );
+    }
+
+    fn set_context_menu_target(&mut self, node_id: &str) {
+        apply_mongo_context_menu_target(
+            &mut self.selected_node,
+            &mut self.context_menu_node_id,
+            node_id,
+        );
+    }
+
     pub fn active_connection(&mut self, connection_id: String, cx: &mut Context<Self>) {
         if !self.nodes.contains_key(&connection_id) {
             return;
         }
 
-        self.selected_node = Some(connection_id.clone());
+        self.set_selected_node(&connection_id);
         self.expand_node(&connection_id);
         self.connect_node(connection_id, cx);
     }
@@ -507,7 +543,7 @@ impl MongoTreeView {
     }
 
     fn handle_click(&mut self, node_id: String, cx: &mut Context<Self>) {
-        self.selected_node = Some(node_id.clone());
+        self.set_selected_node(&node_id);
 
         let Some(node) = self.nodes.get(&node_id).cloned() else {
             cx.notify();
@@ -543,7 +579,7 @@ impl MongoTreeView {
     }
 
     fn handle_double_click(&mut self, node_id: &str, cx: &mut Context<Self>) {
-        self.selected_node = Some(node_id.to_string());
+        self.set_selected_node(node_id);
         let Some(node) = self.nodes.get(node_id) else {
             cx.notify();
             return;
@@ -1017,6 +1053,9 @@ impl MongoTreeView {
                     if view.selected_node.as_deref() == Some(database_node_id.as_str()) {
                         view.selected_node = None;
                     }
+                    if view.context_menu_node_id.as_deref() == Some(database_node_id.as_str()) {
+                        view.context_menu_node_id = None;
+                    }
                     Self::notify_success(t!("MongoTree.database_deleted").as_ref(), cx);
                 }
                 Err(error) => {
@@ -1095,6 +1134,13 @@ impl MongoTreeView {
                 self.selected_node = None;
             }
         }
+        if let Some(context_menu_id) = self.context_menu_node_id.clone() {
+            if context_menu_id == connection_id
+                || context_menu_id.starts_with(&format!("{}:", connection_id))
+            {
+                self.context_menu_node_id = None;
+            }
+        }
         if let Ok(conn_id) = connection_id.parse::<i64>() {
             cx.global_mut::<ActiveConnections>().remove(conn_id);
         }
@@ -1118,6 +1164,9 @@ impl MongoTreeView {
         self.expanded_nodes.remove(node_id);
         self.loading_nodes.remove(node_id);
         self.error_nodes.remove(node_id);
+        if self.context_menu_node_id.as_deref() == Some(node_id) {
+            self.context_menu_node_id = None;
+        }
     }
 
     fn notify_error(message: &str, cx: &mut Context<Self>) {
@@ -1229,6 +1278,12 @@ impl MongoTreeView {
                     });
                 }
             })
+            .on_mouse_down(MouseButton::Right, move |_event, _window, cx| {
+                view_for_context.update(cx, |view, cx| {
+                    view.set_context_menu_target(&node_id_for_context);
+                    cx.notify();
+                });
+            })
             .child(div().w(indent))
             .child(
                 div()
@@ -1276,18 +1331,20 @@ impl MongoTreeView {
             .when_some(error_message, |this, error| {
                 this.child(div().text_xs().text_color(cx.theme().danger).child(error))
             })
-            .context_menu({
-                move |menu, window, cx| {
-                    Self::build_context_menu(
-                        menu,
-                        &view_for_context,
-                        &node_id_for_context,
-                        window,
-                        cx,
-                    )
-                }
-            })
             .into_any_element()
+    }
+
+    fn build_context_menu_for_target(
+        menu: PopupMenu,
+        view: &Entity<Self>,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let Some(node_id) = view.read(cx).context_menu_node_id.clone() else {
+            return menu;
+        };
+
+        Self::build_context_menu(menu, view, &node_id, window, cx)
     }
 
     fn build_context_menu(
@@ -1534,25 +1591,56 @@ impl Render for MongoTreeView {
                     })
                     .when(entry_count > 0, |this| {
                         this.child(
-                            uniform_list(
-                                "mongo-tree-list",
-                                entry_count,
-                                cx.processor(
-                                    move |this: &mut Self,
-                                          visible_range: std::ops::Range<usize>,
-                                          window,
-                                          cx| {
-                                        visible_range
-                                            .map(|ix| this.render_item(ix, window, cx))
-                                            .collect()
-                                    },
+                            div()
+                                .size_full()
+                                .context_menu({
+                                    let view = cx.entity().clone();
+                                    move |menu, window, cx| {
+                                        Self::build_context_menu_for_target(menu, &view, window, cx)
+                                    }
+                                })
+                                .child(
+                                    uniform_list(
+                                        "mongo-tree-list",
+                                        entry_count,
+                                        cx.processor(
+                                            move |this: &mut Self,
+                                                  visible_range: std::ops::Range<usize>,
+                                                  window,
+                                                  cx| {
+                                                visible_range
+                                                    .map(|ix| this.render_item(ix, window, cx))
+                                                    .collect()
+                                            },
+                                        ),
+                                    )
+                                    .size_full()
+                                    .track_scroll(&self.scroll_handle),
                                 ),
-                            )
-                            .size_full()
-                            .track_scroll(&self.scroll_handle),
                         )
                     })
                     .child(Scrollbar::vertical(&self.scroll_handle)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_menu_target_updates_selection_and_normal_selection_clears_it() {
+        let mut selected_node = None;
+        let mut context_menu_node_id = None;
+
+        apply_mongo_context_menu_target(&mut selected_node, &mut context_menu_node_id, "mongo-1");
+
+        assert_eq!(selected_node.as_deref(), Some("mongo-1"));
+        assert_eq!(context_menu_node_id.as_deref(), Some("mongo-1"));
+
+        apply_mongo_selection_state(&mut selected_node, &mut context_menu_node_id, "mongo-2");
+
+        assert_eq!(selected_node.as_deref(), Some("mongo-2"));
+        assert_eq!(context_menu_node_id, None);
     }
 }

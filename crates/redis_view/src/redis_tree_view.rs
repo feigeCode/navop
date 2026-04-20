@@ -14,7 +14,7 @@ use gpui_component::{
     clipboard::Clipboard,
     h_flex,
     input::{Input, InputEvent, InputState},
-    menu::{ContextMenuExt, PopupMenuItem},
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     popover::Popover,
     scroll::ScrollableElement,
     spinner::Spinner,
@@ -65,6 +65,24 @@ struct FlatEntry {
     depth: usize,
 }
 
+fn apply_redis_selection_state(
+    selected_node: &mut Option<String>,
+    context_menu_node_id: &mut Option<String>,
+    node_id: &str,
+) {
+    *selected_node = Some(node_id.to_string());
+    *context_menu_node_id = None;
+}
+
+fn apply_redis_context_menu_target(
+    selected_node: &mut Option<String>,
+    context_menu_node_id: &mut Option<String>,
+    node_id: &str,
+) {
+    *selected_node = Some(node_id.to_string());
+    *context_menu_node_id = Some(node_id.to_string());
+}
+
 /// Redis 树形视图
 pub struct RedisTreeView {
     /// 节点映射
@@ -75,6 +93,8 @@ pub struct RedisTreeView {
     expanded_nodes: HashSet<String>,
     /// 选中的节点 ID
     selected_node: Option<String>,
+    /// 当前右键菜单关联的节点 ID
+    context_menu_node_id: Option<String>,
     /// 搜索状态
     search_state: Entity<InputState>,
     /// 搜索关键词
@@ -142,6 +162,7 @@ impl RedisTreeView {
             flat_entries: Vec::new(),
             expanded_nodes: HashSet::new(),
             selected_node: None,
+            context_menu_node_id: None,
             search_state,
             search_keyword: String::new(),
             search_tokens: HashMap::new(),
@@ -224,13 +245,29 @@ impl RedisTreeView {
         self.error_nodes.get(node_id)
     }
 
+    fn set_selected_node(&mut self, node_id: &str) {
+        apply_redis_selection_state(
+            &mut self.selected_node,
+            &mut self.context_menu_node_id,
+            node_id,
+        );
+    }
+
+    fn set_context_menu_target(&mut self, node_id: &str) {
+        apply_redis_context_menu_target(
+            &mut self.selected_node,
+            &mut self.context_menu_node_id,
+            node_id,
+        );
+    }
+
     /// 激活连接并自动连接
     pub fn active_connection(&mut self, connection_id: String, cx: &mut Context<Self>) {
         if !self.nodes.contains_key(&connection_id) {
             return;
         }
 
-        self.selected_node = Some(connection_id.clone());
+        self.set_selected_node(&connection_id);
         self.expand_node(&connection_id, cx);
         self.connect_node(connection_id, cx);
     }
@@ -863,6 +900,9 @@ impl RedisTreeView {
         if self.selected_node.as_ref() == Some(&node.id) {
             self.selected_node = None;
         }
+        if self.context_menu_node_id.as_ref() == Some(&node.id) {
+            self.context_menu_node_id = None;
+        }
 
         self.expanded_nodes.remove(&node.id);
         self.loading_nodes.remove(&node.id);
@@ -1286,6 +1326,8 @@ impl RedisTreeView {
 
     /// 处理双击事件
     fn handle_double_click(&mut self, node_id: &str, cx: &mut Context<Self>) {
+        self.context_menu_node_id = None;
+
         // 如果有错误，双击重试
         if self.error_nodes.contains_key(node_id) {
             self.error_nodes.remove(node_id);
@@ -1694,7 +1736,7 @@ impl RedisTreeView {
                     });
                 } else {
                     view.update(cx, |view, cx| {
-                        view.selected_node = Some(node_id.clone());
+                        view.set_selected_node(&node_id);
                         cx.notify();
 
                         // 单击只选中，不展开
@@ -1703,6 +1745,12 @@ impl RedisTreeView {
                         });
                     });
                 }
+            })
+            .on_mouse_down(MouseButton::Right, move |_event, _window, cx| {
+                view_for_context.update(cx, |view, cx| {
+                    view.set_context_menu_target(&node_id_for_context);
+                    cx.notify();
+                });
             })
             // 展开/折叠箭头
             .child(
@@ -1852,283 +1900,210 @@ impl RedisTreeView {
                         .child(format!("({})", count)),
                 )
             })
-            // 右键菜单
-            .context_menu({
-                let view_for_context = view_for_context.clone();
-                let node_id_for_context = node_id_for_context.clone();
-                move |menu, window, cx| {
-                    // 右键即选中
-                    view_for_context.update(cx, |view, cx| {
-                        view.selected_node = Some(node_id_for_context.clone());
-                        cx.notify();
-                    });
-                    let is_connected = view_for_context
-                        .read(cx)
-                        .connected_nodes
-                        .contains(&node_id_for_context);
-                    let node = view_for_context
-                        .read(cx)
-                        .nodes
-                        .get(&node_id_for_context)
-                        .cloned();
+            .into_any_element()
+    }
 
-                    if let Some(node) = node {
-                        match &node.node_type {
-                            RedisNodeType::Key(_) => {
-                                // 键节点：显示"在新标签页中打开"和"删除"菜单项
-                                let view_for_open = view_for_context.clone();
-                                let view_for_delete = view_for_context.clone();
-                                let node_id_for_open = node_id_for_context.clone();
-                                let node_id_for_delete = node_id_for_context.clone();
-                                menu.item(
-                                    PopupMenuItem::new(
-                                        t!("RedisTree.menu_open_in_new_tab").to_string(),
-                                    )
-                                    .on_click(
-                                        window.listener_for(
-                                            &view_for_open,
-                                            move |_view, _, _, cx| {
-                                                cx.emit(RedisTreeViewEvent::OpenKeyInNewTab {
-                                                    node_id: node_id_for_open.clone(),
-                                                });
-                                            },
-                                        ),
-                                    ),
-                                )
-                                .separator()
-                                .item(
-                                    PopupMenuItem::new(t!("Common.delete").to_string()).on_click(
-                                        window.listener_for(
-                                            &view_for_delete,
-                                            move |_view, _, _, cx| {
-                                                cx.emit(RedisTreeViewEvent::DeleteKey {
-                                                    node_id: node_id_for_delete.clone(),
-                                                });
-                                            },
-                                        ),
-                                    ),
-                                )
-                            }
-                            RedisNodeType::Connection => {
-                                if is_connected {
-                                    // 已连接：打开 CLI、切换数据库、新建 Key、刷新、断开连接
-                                    let view_for_cli = view_for_context.clone();
-                                    let view_for_create = view_for_context.clone();
-                                    let view_for_refresh = view_for_context.clone();
-                                    let view_for_disconnect = view_for_context.clone();
-                                    let connection_id_for_cli = node.connection_id.clone();
-                                    let stored_for_cli = view_for_context
-                                        .read(cx)
-                                        .stored_connections
-                                        .get(&node_id_for_context)
-                                        .cloned();
-                                    let node_id_for_create = node_id_for_context.clone();
-                                    let node_id_for_refresh = node_id_for_context.clone();
-                                    let node_id_for_disconnect = node_id_for_context.clone();
-                                    menu.item(
-                                        PopupMenuItem::new(
-                                            t!("RedisTree.menu_open_cli").to_string(),
-                                        )
-                                        .on_click(
-                                            window.listener_for(
-                                                &view_for_cli,
-                                                move |_view, _, _, cx| {
-                                                    if let Some(stored_connection) =
-                                                        stored_for_cli.clone()
-                                                    {
-                                                        cx.emit(RedisTreeViewEvent::OpenCli {
-                                                            connection_id: connection_id_for_cli
-                                                                .clone(),
-                                                            db_index: 0,
-                                                            stored_connection,
-                                                        });
-                                                    }
-                                                },
-                                            ),
-                                        ),
-                                    )
-                                    .separator()
-                                    .item(
-                                        PopupMenuItem::new(
-                                            t!("RedisTree.menu_create_key").to_string(),
-                                        )
-                                        .on_click(
-                                            window.listener_for(
-                                                &view_for_create,
-                                                move |_view, _, _, cx| {
-                                                    cx.emit(RedisTreeViewEvent::CreateKey {
-                                                        node_id: node_id_for_create.clone(),
-                                                    });
-                                                },
-                                            ),
-                                        ),
-                                    )
-                                    .separator()
-                                    .item(
-                                        PopupMenuItem::new(t!("Common.refresh").to_string())
-                                            .on_click(window.listener_for(
-                                                &view_for_refresh,
-                                                move |view, _, _, cx| {
-                                                    if let Some(node) =
-                                                        view.nodes.get_mut(&node_id_for_refresh)
-                                                    {
-                                                        node.children_loaded = false;
-                                                    }
-                                                    view.refresh_keys(
-                                                        node_id_for_refresh.clone(),
-                                                        cx,
-                                                    );
-                                                },
-                                            )),
-                                    )
-                                    .separator()
-                                    .item(
-                                        PopupMenuItem::new(
-                                            t!("RedisTree.menu_disconnect").to_string(),
-                                        )
-                                        .on_click(
-                                            window.listener_for(
-                                                &view_for_disconnect,
-                                                move |view, _, _, cx| {
-                                                    view.disconnect_connection(
-                                                        &node_id_for_disconnect,
-                                                        cx,
-                                                    );
-                                                    cx.emit(RedisTreeViewEvent::CloseConnection {
-                                                        node_id: node_id_for_disconnect.clone(),
-                                                    });
-                                                },
-                                            ),
-                                        ),
-                                    )
-                                } else {
-                                    // 未连接：连接
-                                    let view_for_connect = view_for_context.clone();
-                                    let node_id_for_connect = node_id_for_context.clone();
-                                    menu.item(
-                                        PopupMenuItem::new(
-                                            t!("RedisTree.menu_connect").to_string(),
-                                        )
-                                        .on_click(
-                                            window.listener_for(
-                                                &view_for_connect,
-                                                move |view, _, _, cx| {
-                                                    view.connect_node(
-                                                        node_id_for_connect.clone(),
-                                                        cx,
-                                                    );
-                                                },
-                                            ),
-                                        ),
-                                    )
-                                }
-                            }
-                            RedisNodeType::Database(_db_idx) => {
-                                // 数据库节点：打开 CLI、新建 Key、刷新
-                                let view_for_cli = view_for_context.clone();
-                                let view_for_create = view_for_context.clone();
-                                let view_for_refresh = view_for_context.clone();
-                                let connection_id_for_cli = node.connection_id.clone();
-                                let node_id_for_cli = node_id_for_context.clone();
-                                let node_id_for_create = node_id_for_context.clone();
-                                let node_id_for_refresh = node_id_for_context.clone();
-                                let stored_for_cli = view_for_context
-                                    .read(cx)
-                                    .stored_connections
-                                    .get(&node.connection_id)
-                                    .cloned();
-                                menu.item(
-                                    PopupMenuItem::new(t!("RedisTree.menu_open_cli").to_string())
-                                        .on_click(window.listener_for(
-                                            &view_for_cli,
-                                            move |view, _, _, cx| {
-                                                if let Some(node) = view.nodes.get(&node_id_for_cli)
-                                                {
-                                                    if let RedisNodeType::Database(
-                                                        db_index_for_cli,
-                                                    ) = node.node_type
-                                                    {
-                                                        if let Some(stored_connection) =
-                                                            stored_for_cli.clone()
-                                                        {
-                                                            cx.emit(RedisTreeViewEvent::OpenCli {
-                                                                connection_id:
-                                                                    connection_id_for_cli.clone(),
-                                                                db_index: db_index_for_cli,
-                                                                stored_connection,
-                                                            });
-                                                        }
-                                                    }
-                                                }
-                                            },
-                                        )),
-                                )
-                                .separator()
-                                .item(
-                                    PopupMenuItem::new(t!("RedisTree.menu_create_key").to_string())
-                                        .on_click(window.listener_for(
-                                            &view_for_create,
-                                            move |_view, _, _, cx| {
-                                                cx.emit(RedisTreeViewEvent::CreateKey {
-                                                    node_id: node_id_for_create.clone(),
-                                                });
-                                            },
-                                        )),
-                                )
-                                .separator()
-                                .item(
-                                    PopupMenuItem::new(t!("Common.refresh").to_string()).on_click(
-                                        window.listener_for(
-                                            &view_for_refresh,
-                                            move |view, _, _, cx| {
-                                                if let Some(node) =
-                                                    view.nodes.get_mut(&node_id_for_refresh)
-                                                {
-                                                    node.children_loaded = false;
-                                                }
-                                                view.refresh_keys(node_id_for_refresh.clone(), cx);
-                                            },
-                                        ),
-                                    ),
-                                )
-                            }
-                            RedisNodeType::Namespace => {
-                                // 命名空间节点：刷新
-                                let view_for_refresh = view_for_context.clone();
-                                let node_id_for_refresh = node_id_for_context.clone();
-                                menu.item(
-                                    PopupMenuItem::new(t!("Common.refresh").to_string()).on_click(
-                                        window.listener_for(
-                                            &view_for_refresh,
-                                            move |view, _, _, cx| {
-                                                // 刷新命名空间所在的数据库
-                                                if let Some(node) =
-                                                    view.nodes.get(&node_id_for_refresh)
-                                                {
-                                                    let db_node_id = format!(
-                                                        "{}:db{}",
-                                                        node.connection_id, node.db_index
-                                                    );
-                                                    if let Some(db_node) =
-                                                        view.nodes.get_mut(&db_node_id)
-                                                    {
-                                                        db_node.children_loaded = false;
-                                                    }
-                                                    view.refresh_keys(db_node_id, cx);
-                                                }
-                                            },
-                                        ),
-                                    ),
-                                )
-                            }
-                            RedisNodeType::LoadMore => menu,
-                        }
+    fn build_context_menu_for_target(
+        menu: PopupMenu,
+        view: &Entity<Self>,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let Some(node_id) = view.read(cx).context_menu_node_id.clone() else {
+            return menu;
+        };
+
+        Self::build_context_menu(menu, view, &node_id, window, cx)
+    }
+
+    fn build_context_menu(
+        menu: PopupMenu,
+        view: &Entity<Self>,
+        node_id: &str,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let is_connected = view.read(cx).connected_nodes.contains(node_id);
+        let node = view.read(cx).nodes.get(node_id).cloned();
+
+        if let Some(node) = node {
+            match &node.node_type {
+                RedisNodeType::Key(_) => {
+                    let view_for_open = view.clone();
+                    let view_for_delete = view.clone();
+                    let node_id_for_open = node_id.to_string();
+                    let node_id_for_delete = node_id.to_string();
+                    menu.item(
+                        PopupMenuItem::new(t!("RedisTree.menu_open_in_new_tab").to_string())
+                            .on_click(window.listener_for(
+                                &view_for_open,
+                                move |_view, _, _, cx| {
+                                    cx.emit(RedisTreeViewEvent::OpenKeyInNewTab {
+                                        node_id: node_id_for_open.clone(),
+                                    });
+                                },
+                            )),
+                    )
+                    .separator()
+                    .item(
+                        PopupMenuItem::new(t!("Common.delete").to_string()).on_click(
+                            window.listener_for(&view_for_delete, move |_view, _, _, cx| {
+                                cx.emit(RedisTreeViewEvent::DeleteKey {
+                                    node_id: node_id_for_delete.clone(),
+                                });
+                            }),
+                        ),
+                    )
+                }
+                RedisNodeType::Connection => {
+                    if is_connected {
+                        let view_for_cli = view.clone();
+                        let view_for_create = view.clone();
+                        let view_for_refresh = view.clone();
+                        let view_for_disconnect = view.clone();
+                        let connection_id_for_cli = node.connection_id.clone();
+                        let stored_for_cli = view.read(cx).stored_connections.get(node_id).cloned();
+                        let node_id_for_create = node_id.to_string();
+                        let node_id_for_refresh = node_id.to_string();
+                        let node_id_for_disconnect = node_id.to_string();
+                        menu.item(
+                            PopupMenuItem::new(t!("RedisTree.menu_open_cli").to_string()).on_click(
+                                window.listener_for(&view_for_cli, move |_view, _, _, cx| {
+                                    if let Some(stored_connection) = stored_for_cli.clone() {
+                                        cx.emit(RedisTreeViewEvent::OpenCli {
+                                            connection_id: connection_id_for_cli.clone(),
+                                            db_index: 0,
+                                            stored_connection,
+                                        });
+                                    }
+                                }),
+                            ),
+                        )
+                        .separator()
+                        .item(
+                            PopupMenuItem::new(t!("RedisTree.menu_create_key").to_string())
+                                .on_click(window.listener_for(
+                                    &view_for_create,
+                                    move |_view, _, _, cx| {
+                                        cx.emit(RedisTreeViewEvent::CreateKey {
+                                            node_id: node_id_for_create.clone(),
+                                        });
+                                    },
+                                )),
+                        )
+                        .separator()
+                        .item(
+                            PopupMenuItem::new(t!("Common.refresh").to_string()).on_click(
+                                window.listener_for(&view_for_refresh, move |view, _, _, cx| {
+                                    if let Some(node) = view.nodes.get_mut(&node_id_for_refresh) {
+                                        node.children_loaded = false;
+                                    }
+                                    view.refresh_keys(node_id_for_refresh.clone(), cx);
+                                }),
+                            ),
+                        )
+                        .separator()
+                        .item(
+                            PopupMenuItem::new(t!("RedisTree.menu_disconnect").to_string())
+                                .on_click(window.listener_for(
+                                    &view_for_disconnect,
+                                    move |view, _, _, cx| {
+                                        view.disconnect_connection(&node_id_for_disconnect, cx);
+                                        cx.emit(RedisTreeViewEvent::CloseConnection {
+                                            node_id: node_id_for_disconnect.clone(),
+                                        });
+                                    },
+                                )),
+                        )
                     } else {
-                        menu
+                        let view_for_connect = view.clone();
+                        let node_id_for_connect = node_id.to_string();
+                        menu.item(
+                            PopupMenuItem::new(t!("RedisTree.menu_connect").to_string()).on_click(
+                                window.listener_for(&view_for_connect, move |view, _, _, cx| {
+                                    view.connect_node(node_id_for_connect.clone(), cx);
+                                }),
+                            ),
+                        )
                     }
                 }
-            })
-            .into_any_element()
+                RedisNodeType::Database(_db_idx) => {
+                    let view_for_cli = view.clone();
+                    let view_for_create = view.clone();
+                    let view_for_refresh = view.clone();
+                    let connection_id_for_cli = node.connection_id.clone();
+                    let node_id_for_cli = node_id.to_string();
+                    let node_id_for_create = node_id.to_string();
+                    let node_id_for_refresh = node_id.to_string();
+                    let stored_for_cli = view
+                        .read(cx)
+                        .stored_connections
+                        .get(&node.connection_id)
+                        .cloned();
+                    menu.item(
+                        PopupMenuItem::new(t!("RedisTree.menu_open_cli").to_string()).on_click(
+                            window.listener_for(&view_for_cli, move |view, _, _, cx| {
+                                if let Some(node) = view.nodes.get(&node_id_for_cli) {
+                                    if let RedisNodeType::Database(db_index_for_cli) =
+                                        node.node_type
+                                    {
+                                        if let Some(stored_connection) = stored_for_cli.clone() {
+                                            cx.emit(RedisTreeViewEvent::OpenCli {
+                                                connection_id: connection_id_for_cli.clone(),
+                                                db_index: db_index_for_cli,
+                                                stored_connection,
+                                            });
+                                        }
+                                    }
+                                }
+                            }),
+                        ),
+                    )
+                    .separator()
+                    .item(
+                        PopupMenuItem::new(t!("RedisTree.menu_create_key").to_string()).on_click(
+                            window.listener_for(&view_for_create, move |_view, _, _, cx| {
+                                cx.emit(RedisTreeViewEvent::CreateKey {
+                                    node_id: node_id_for_create.clone(),
+                                });
+                            }),
+                        ),
+                    )
+                    .separator()
+                    .item(
+                        PopupMenuItem::new(t!("Common.refresh").to_string()).on_click(
+                            window.listener_for(&view_for_refresh, move |view, _, _, cx| {
+                                if let Some(node) = view.nodes.get_mut(&node_id_for_refresh) {
+                                    node.children_loaded = false;
+                                }
+                                view.refresh_keys(node_id_for_refresh.clone(), cx);
+                            }),
+                        ),
+                    )
+                }
+                RedisNodeType::Namespace => {
+                    let view_for_refresh = view.clone();
+                    let node_id_for_refresh = node_id.to_string();
+                    menu.item(
+                        PopupMenuItem::new(t!("Common.refresh").to_string()).on_click(
+                            window.listener_for(&view_for_refresh, move |view, _, _, cx| {
+                                if let Some(node) = view.nodes.get(&node_id_for_refresh) {
+                                    let db_node_id =
+                                        format!("{}:db{}", node.connection_id, node.db_index);
+                                    if let Some(db_node) = view.nodes.get_mut(&db_node_id) {
+                                        db_node.children_loaded = false;
+                                    }
+                                    view.refresh_keys(db_node_id, cx);
+                                }
+                            }),
+                        ),
+                    )
+                }
+                RedisNodeType::LoadMore => menu,
+            }
+        } else {
+            menu
+        }
     }
 }
 
@@ -2176,24 +2151,55 @@ impl Render for RedisTreeView {
                     })
                     .when(!self.is_loading && entry_count > 0, |this| {
                         this.child(
-                            uniform_list(
-                                "redis-tree-list",
-                                entry_count,
-                                cx.processor(
-                                    move |this: &mut Self,
-                                          visible_range: std::ops::Range<usize>,
-                                          window,
-                                          cx| {
-                                        visible_range
-                                            .map(|ix| this.render_item(ix, window, cx))
-                                            .collect()
-                                    },
+                            div()
+                                .size_full()
+                                .context_menu({
+                                    let view = cx.entity().clone();
+                                    move |menu, window, cx| {
+                                        Self::build_context_menu_for_target(menu, &view, window, cx)
+                                    }
+                                })
+                                .child(
+                                    uniform_list(
+                                        "redis-tree-list",
+                                        entry_count,
+                                        cx.processor(
+                                            move |this: &mut Self,
+                                                  visible_range: std::ops::Range<usize>,
+                                                  window,
+                                                  cx| {
+                                                visible_range
+                                                    .map(|ix| this.render_item(ix, window, cx))
+                                                    .collect()
+                                            },
+                                        ),
+                                    )
+                                    .size_full()
+                                    .track_scroll(&self.scroll_handle),
                                 ),
-                            )
-                            .size_full()
-                            .track_scroll(&self.scroll_handle),
                         )
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_menu_target_updates_selection_and_clears_on_normal_selection() {
+        let mut selected_node = None;
+        let mut context_menu_node_id = None;
+
+        apply_redis_context_menu_target(&mut selected_node, &mut context_menu_node_id, "node-1");
+
+        assert_eq!(selected_node.as_deref(), Some("node-1"));
+        assert_eq!(context_menu_node_id.as_deref(), Some("node-1"));
+
+        apply_redis_selection_state(&mut selected_node, &mut context_menu_node_id, "node-2");
+
+        assert_eq!(selected_node.as_deref(), Some("node-2"));
+        assert_eq!(context_menu_node_id, None);
     }
 }

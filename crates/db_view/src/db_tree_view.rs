@@ -85,6 +85,30 @@ fn sync_selected_databases_for_connection(
     selected_databases.insert(connection_id, selected);
 }
 
+fn apply_db_selection_state(
+    selected_node_id: &mut Option<String>,
+    selected_ix: &mut Option<usize>,
+    context_menu_node_id: &mut Option<String>,
+    node_id: &str,
+    ix: usize,
+) {
+    *selected_node_id = Some(node_id.to_string());
+    *selected_ix = Some(ix);
+    *context_menu_node_id = None;
+}
+
+fn apply_db_context_menu_target(
+    selected_node_id: &mut Option<String>,
+    selected_ix: &mut Option<usize>,
+    context_menu_node_id: &mut Option<String>,
+    node_id: &str,
+    ix: usize,
+) {
+    *selected_node_id = Some(node_id.to_string());
+    *selected_ix = Some(ix);
+    *context_menu_node_id = Some(node_id.to_string());
+}
+
 // ============================================================================
 // FlatDbEntry - 扁平化的树条目（用于 uniform_list 渲染）
 // ============================================================================
@@ -365,6 +389,7 @@ pub struct DbTreeView {
     scroll_handle: UniformListScrollHandle,
     selected_ix: Option<usize>,
     selected_node_id: Option<String>,
+    context_menu_node_id: Option<String>,
     // 存储 DbNode 映射 (ID -> DbNode)，用于懒加载
     db_nodes: HashMap<String, DbNode>,
     // 已经懒加载过子节点的集合
@@ -577,6 +602,7 @@ impl DbTreeView {
             scroll_handle: UniformListScrollHandle::new(),
             selected_ix: None,
             selected_node_id: None,
+            context_menu_node_id: None,
             db_nodes,
             loaded_children: HashSet::new(),
             loading_nodes: HashSet::new(),
@@ -1735,6 +1761,8 @@ impl DbTreeView {
     }
 
     fn handle_item_double_click(&mut self, node_id: &str, cx: &mut Context<Self>) {
+        self.context_menu_node_id = None;
+
         // 如果节点有错误，双击重试连接
         if self.error_nodes.contains_key(node_id) {
             self.error_nodes.remove(node_id);
@@ -1812,13 +1840,48 @@ impl DbTreeView {
     }
 
     fn handle_item_click(&mut self, node_id: &str, ix: usize, cx: &mut Context<Self>) {
-        self.selected_node_id = Some(node_id.to_string());
-        self.selected_ix = Some(ix);
+        self.set_selected_node(node_id, ix);
         // 发出节点选择事件
         cx.emit(DbTreeViewEvent::NodeSelected {
             node_id: node_id.to_string(),
         });
         cx.notify();
+    }
+
+    fn set_selected_node(&mut self, node_id: &str, ix: usize) {
+        apply_db_selection_state(
+            &mut self.selected_node_id,
+            &mut self.selected_ix,
+            &mut self.context_menu_node_id,
+            node_id,
+            ix,
+        );
+    }
+
+    fn set_context_menu_target(&mut self, node_id: &str, ix: usize) {
+        apply_db_context_menu_target(
+            &mut self.selected_node_id,
+            &mut self.selected_ix,
+            &mut self.context_menu_node_id,
+            node_id,
+            ix,
+        );
+    }
+
+    fn build_context_menu_for_target(
+        menu: PopupMenu,
+        view: &Entity<Self>,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let Some(node_id) = view.read(cx).context_menu_node_id.clone() else {
+            return menu;
+        };
+        let Some(node) = view.read(cx).db_nodes.get(&node_id).cloned() else {
+            return menu;
+        };
+
+        Self::build_context_menu(menu, &node, &node_id, view, window, cx)
     }
 
     /// 获取节点信息（公开方法）
@@ -2138,36 +2201,45 @@ impl DbTreeView {
     fn render_tree_list(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entries_len = self.flat_entries.len();
         let selected_ix = self.selected_ix;
+        let view = cx.entity();
 
-        uniform_list(
-            "db-tree-entries",
-            entries_len,
-            cx.processor(
-                move |this: &mut Self, visible_range: Range<usize>, window, cx| {
-                    let view = cx.entity();
-                    let mut items = Vec::with_capacity(visible_range.len());
-                    for ix in visible_range {
-                        if let Some(entry) = this.flat_entries.get(ix).cloned() {
-                            let is_selected = selected_ix == Some(ix);
-                            let item = this.render_tree_item(
-                                ix,
-                                entry,
-                                is_selected,
-                                view.clone(),
-                                window,
-                                cx,
-                            );
-                            items.push(item);
-                        }
-                    }
-                    items
-                },
-            ),
-        )
-        .flex_1()
-        .size_full()
-        .track_scroll(&self.scroll_handle)
-        .with_sizing_behavior(ListSizingBehavior::Auto)
+        div()
+            .size_full()
+            .context_menu({
+                let view = view.clone();
+                move |menu, window, cx| Self::build_context_menu_for_target(menu, &view, window, cx)
+            })
+            .child(
+                uniform_list(
+                    "db-tree-entries",
+                    entries_len,
+                    cx.processor(
+                        move |this: &mut Self, visible_range: Range<usize>, window, cx| {
+                            let view = cx.entity();
+                            let mut items = Vec::with_capacity(visible_range.len());
+                            for ix in visible_range {
+                                if let Some(entry) = this.flat_entries.get(ix).cloned() {
+                                    let is_selected = selected_ix == Some(ix);
+                                    let item = this.render_tree_item(
+                                        ix,
+                                        entry,
+                                        is_selected,
+                                        view.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                    items.push(item);
+                                }
+                            }
+                            items
+                        },
+                    ),
+                )
+                .flex_1()
+                .size_full()
+                .track_scroll(&self.scroll_handle)
+                .with_sizing_behavior(ListSizingBehavior::Auto),
+            )
     }
 
     fn render_tree_item(
@@ -2355,6 +2427,12 @@ impl DbTreeView {
                     }
                 }
             })
+            .on_mouse_down(MouseButton::Right, move |_event, _window, cx| {
+                view_for_context.update(cx, |this, cx| {
+                    this.set_context_menu_target(&node_id_for_context, ix);
+                    cx.notify();
+                });
+            })
             // 内容
             .child(
                 h_flex()
@@ -2511,28 +2589,6 @@ impl DbTreeView {
                         )
                     }),
             )
-            // 上下文菜单
-            .context_menu({
-                move |menu, window, cx| {
-                    if let Some(node) = view_for_context
-                        .read(cx)
-                        .db_nodes
-                        .get(&node_id_for_context)
-                        .cloned()
-                    {
-                        Self::build_context_menu(
-                            menu,
-                            &node,
-                            &node_id_for_context,
-                            &view_for_context,
-                            window,
-                            cx,
-                        )
-                    } else {
-                        menu
-                    }
-                }
-            })
             .into_any_element()
     }
 
@@ -2710,5 +2766,36 @@ mod tests {
         sync_selected_databases_for_connection(&mut selected_databases, &connection);
 
         assert_eq!(selected_databases.get("9"), Some(&None));
+    }
+
+    #[test]
+    fn set_context_menu_target_selects_row_and_tracks_menu_node() {
+        let mut selected_node_id = None;
+        let mut selected_ix = None;
+        let mut context_menu_node_id = None;
+
+        apply_db_context_menu_target(
+            &mut selected_node_id,
+            &mut selected_ix,
+            &mut context_menu_node_id,
+            "node-1",
+            3,
+        );
+
+        assert_eq!(selected_node_id.as_deref(), Some("node-1"));
+        assert_eq!(selected_ix, Some(3));
+        assert_eq!(context_menu_node_id.as_deref(), Some("node-1"));
+
+        apply_db_selection_state(
+            &mut selected_node_id,
+            &mut selected_ix,
+            &mut context_menu_node_id,
+            "node-2",
+            4,
+        );
+
+        assert_eq!(selected_node_id.as_deref(), Some("node-2"));
+        assert_eq!(selected_ix, Some(4));
+        assert_eq!(context_menu_node_id, None);
     }
 }
