@@ -1,3 +1,5 @@
+rust_i18n::i18n!("locales", fallback = "en");
+
 mod close_guard;
 #[cfg(feature = "ui")]
 mod editor_window;

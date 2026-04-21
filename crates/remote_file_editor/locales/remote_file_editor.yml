@@ -1,0 +1,102 @@
+_version: 2
+
+RemoteFileEditor:
+  title:
+    en: "Edit %{name}"
+    zh-CN: "编辑 %{name}"
+    zh-HK: "編輯 %{name}"
+  action:
+    save:
+      en: Save
+      zh-CN: 保存
+      zh-HK: 儲存
+    search:
+      en: Search
+      zh-CN: 搜索
+      zh-HK: 搜索
+    reload:
+      en: Reload
+      zh-CN: 重新加载
+      zh-HK: 重新載入
+    soft_wrap:
+      en: Soft Wrap
+      zh-CN: 自动换行
+      zh-HK: 自動換行
+    discard:
+      en: Discard
+      zh-CN: 放弃更改
+      zh-HK: 放棄更改
+    cancel:
+      en: Cancel
+      zh-CN: 取消
+      zh-HK: 取消
+  status:
+    loading:
+      en: Loading...
+      zh-CN: 加载中...
+      zh-HK: 載入中...
+    load_failed:
+      en: Load failed
+      zh-CN: 加载失败
+      zh-HK: 載入失敗
+    loaded:
+      en: Loaded
+      zh-CN: 已加载
+      zh-HK: 已載入
+    loaded_plain_text:
+      en: Loaded in plain text mode
+      zh-CN: 已按纯文本模式加载
+      zh-HK: 已按純文字模式載入
+    saving:
+      en: Saving...
+      zh-CN: 保存中...
+      zh-HK: 儲存中...
+    saved:
+      en: Saved
+      zh-CN: 已保存
+      zh-HK: 已儲存
+    save_failed:
+      en: Save failed
+      zh-CN: 保存失败
+      zh-HK: 儲存失敗
+  state:
+    modified:
+      en: Modified
+      zh-CN: 已修改
+      zh-HK: 已修改
+    saved:
+      en: Saved
+      zh-CN: 已保存
+      zh-HK: 已儲存
+  policy:
+    code:
+      en: Code
+      zh-CN: 代码
+      zh-HK: 程式碼
+    plain_text:
+      en: Plain Text
+      zh-CN: 纯文本
+      zh-HK: 純文字
+  prompt:
+    unsaved_title:
+      en: This file has unsaved changes.
+      zh-CN: 该文件有未保存的更改。
+      zh-HK: 此檔案有未儲存的更改。
+    unsaved_message:
+      en: Choose Save to upload the latest changes before closing.
+      zh-CN: 选择“保存”可在关闭前上传最新更改。
+      zh-HK: 選擇「儲存」可在關閉前上傳最新更改。
+  notification:
+    saved:
+      en: Remote file saved
+      zh-CN: 远程文件已保存
+      zh-HK: 遠端檔案已儲存
+  body:
+    loading:
+      en: Loading remote file...
+      zh-CN: 正在加载远程文件...
+      zh-HK: 正在載入遠端檔案...
+    unable_to_open:
+      en: Unable to open file
+      zh-CN: 无法打开文件
+      zh-HK: 無法打開檔案

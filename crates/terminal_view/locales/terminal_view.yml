@@ -65,6 +65,10 @@ Common:
     en: Close
     zh-CN: 关闭
     zh-HK: 關閉
+  edit:
+    en: Edit
+    zh-CN: 编辑
+    zh-HK: 編輯
 
 # 连接
 Connection:
@@ -319,6 +323,38 @@ ConnectionForm:
 
 # 设置面板
 Settings:
+  title:
+    en: Settings
+    zh-CN: 设置
+    zh-HK: 設定
+  search:
+    en: Search
+    zh-CN: 搜索
+    zh-HK: 搜尋
+  search_placeholder:
+    en: Search...
+    zh-CN: 搜索...
+    zh-HK: 搜尋...
+  search_shortcuts_hint:
+    en: Press ⌘G for next, ⇧⌘G for previous
+    zh-CN: 按 ⌘G 跳到下一个，按 ⇧⌘G 跳到上一个
+    zh-HK: 按 ⌘G 跳到下一個，按 ⇧⌘G 跳到上一個
+  font_size:
+    en: Font Size
+    zh-CN: 字体大小
+    zh-HK: 字體大小
+  font_family:
+    en: Font Family
+    zh-CN: 字体
+    zh-HK: 字體
+  font_family_placeholder:
+    en: Select font...
+    zh-CN: 选择字体...
+    zh-HK: 選擇字體...
+  theme:
+    en: Theme
+    zh-CN: 主题
+    zh-HK: 主題
   cursor:
     en: Cursor
     zh-CN: 光标

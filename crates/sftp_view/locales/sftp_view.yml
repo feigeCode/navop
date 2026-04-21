@@ -50,6 +50,10 @@ Common:
     en: Close
     zh-CN: 关闭
     zh-HK: 關閉
+  edit:
+    en: Edit
+    zh-CN: 编辑
+    zh-HK: 編輯
 
 # 文件操作
 File:

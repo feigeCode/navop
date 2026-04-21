@@ -20,6 +20,7 @@ anyhow = { workspace = true }
 gpui = { workspace = true, optional = true }
 gpui-component = { workspace = true, optional = true }
 one-core = { workspace = true, optional = true }
+rust-i18n.workspace = true
 sftp = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }

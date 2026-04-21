@@ -2327,7 +2327,7 @@ impl FileManagerPanel {
 
         if !is_dir {
             let view_edit = view.clone();
-            menu = menu.item(PopupMenuItem::new("Edit").icon(IconName::Edit).on_click(
+            menu = menu.item(PopupMenuItem::new(t!("Common.edit")).icon(IconName::Edit).on_click(
                 window.listener_for(&view_edit, move |this, _, window, cx| {
                     this.open_remote_editor(path_for_edit.clone(), window, cx);
                 }),

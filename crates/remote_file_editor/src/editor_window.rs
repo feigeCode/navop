@@ -17,6 +17,7 @@ use gpui_component::{
     v_flex,
 };
 use one_core::gpui_tokio::Tokio;
+use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -26,7 +27,11 @@ pub fn open_remote_file_editor<T: 'static>(
     client: Arc<Mutex<RusshSftpClient>>,
     cx: &mut Context<T>,
 ) {
-    let title = format!("Edit {}", display_name_from_path(&remote_path));
+    let title = t!(
+        "RemoteFileEditor.title",
+        name = display_name_from_path(&remote_path)
+    )
+    .to_string();
     cx.spawn(async move |_this, cx| {
         let title = title.clone();
         let remote_path_for_log = remote_path.clone();
@@ -120,7 +125,7 @@ impl RemoteFileEditorWindow {
             soft_wrap: false,
             close_prompt_open: false,
             close_after_save: false,
-            status_message: "Loading...".to_string(),
+            status_message: t!("RemoteFileEditor.status.loading").to_string(),
             load_error: None,
         };
         this.register_close_guard(window, cx);
@@ -139,7 +144,7 @@ impl RemoteFileEditorWindow {
     fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.loading = true;
         self.load_error = None;
-        self.status_message = "Loading...".to_string();
+        self.status_message = t!("RemoteFileEditor.status.loading").to_string();
         cx.notify();
 
         let remote_path = self.remote_path.clone();
@@ -176,7 +181,7 @@ impl RemoteFileEditorWindow {
                     let _ = view.update_in(cx, |this, window, cx| {
                         this.loading = false;
                         this.load_error = Some(message.clone());
-                        this.status_message = "Load failed".to_string();
+                        this.status_message = t!("RemoteFileEditor.status.load_failed").to_string();
                         window.push_notification(Notification::error(message), cx);
                     });
                 }
@@ -185,7 +190,7 @@ impl RemoteFileEditorWindow {
                     let _ = view.update_in(cx, |this, window, cx| {
                         this.loading = false;
                         this.load_error = Some(message.clone());
-                        this.status_message = "Load failed".to_string();
+                        this.status_message = t!("RemoteFileEditor.status.load_failed").to_string();
                         window.push_notification(Notification::error(message), cx);
                     });
                 }
@@ -239,9 +244,9 @@ impl RemoteFileEditorWindow {
         self.saving = false;
         self.load_error = None;
         self.status_message = if policy.is_large_file {
-            "Loaded in plain text mode".to_string()
+            t!("RemoteFileEditor.status.loaded_plain_text").to_string()
         } else {
-            "Loaded".to_string()
+            t!("RemoteFileEditor.status.loaded").to_string()
         };
         cx.notify();
     }
@@ -262,7 +267,7 @@ impl RemoteFileEditorWindow {
 
         let text = editor.read(cx).text().to_string();
         self.saving = true;
-        self.status_message = "Saving...".to_string();
+        self.status_message = t!("RemoteFileEditor.status.saving").to_string();
         cx.notify();
 
         let remote_path = self.remote_path.clone();
@@ -281,14 +286,16 @@ impl RemoteFileEditorWindow {
                         this.saved_text = saved_text;
                         this.file_size = this.saved_text.len();
                         this.saving = false;
-                        this.status_message = "Saved".to_string();
+                        this.status_message = t!("RemoteFileEditor.status.saved").to_string();
                         let close_after_save = this.close_after_save;
                         this.close_after_save = false;
                         if close_after_save {
                             window.remove_window();
                         } else {
                             window.push_notification(
-                                Notification::success("Remote file saved".to_string()),
+                                Notification::success(
+                                    t!("RemoteFileEditor.notification.saved").to_string(),
+                                ),
                                 cx,
                             );
                         }
@@ -300,7 +307,7 @@ impl RemoteFileEditorWindow {
                     let _ = view.update_in(cx, |this, window, cx| {
                         this.saving = false;
                         this.close_after_save = false;
-                        this.status_message = "Save failed".to_string();
+                        this.status_message = t!("RemoteFileEditor.status.save_failed").to_string();
                         window.push_notification(Notification::error(message), cx);
                     });
                 }
@@ -309,7 +316,7 @@ impl RemoteFileEditorWindow {
                     let _ = view.update_in(cx, |this, window, cx| {
                         this.saving = false;
                         this.close_after_save = false;
-                        this.status_message = "Save failed".to_string();
+                        this.status_message = t!("RemoteFileEditor.status.save_failed").to_string();
                         window.push_notification(Notification::error(message), cx);
                     });
                 }
@@ -330,11 +337,21 @@ impl RemoteFileEditorWindow {
 
     fn show_unsaved_changes_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_prompt_open = true;
+        let prompt_title = t!("RemoteFileEditor.prompt.unsaved_title").to_string();
+        let prompt_message = t!("RemoteFileEditor.prompt.unsaved_message").to_string();
+        let save_label = t!("RemoteFileEditor.action.save").to_string();
+        let discard_label = t!("RemoteFileEditor.action.discard").to_string();
+        let cancel_label = t!("RemoteFileEditor.action.cancel").to_string();
+        let buttons = [
+            save_label.as_str(),
+            discard_label.as_str(),
+            cancel_label.as_str(),
+        ];
         let answer = window.prompt(
             PromptLevel::Warning,
-            "This file has unsaved changes.",
-            Some("Choose Save to upload the latest changes before closing."),
-            &["Save", "Discard", "Cancel"],
+            &prompt_title,
+            Some(&prompt_message),
+            &buttons,
             cx,
         );
         let window_handle = window.window_handle();
@@ -399,7 +416,7 @@ impl RemoteFileEditorWindow {
             .bg(cx.theme().title_bar)
             .child(
                 Button::new("remote-file-save")
-                    .label("Save")
+                    .label(t!("RemoteFileEditor.action.save"))
                     .with_size(Size::Small)
                     .disabled(disabled)
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -408,7 +425,7 @@ impl RemoteFileEditorWindow {
             )
             .child(
                 Button::new("remote-file-search")
-                    .label("Search")
+                    .label(t!("RemoteFileEditor.action.search"))
                     .with_size(Size::Small)
                     .disabled(disabled)
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -417,7 +434,7 @@ impl RemoteFileEditorWindow {
             )
             .child(
                 Button::new("remote-file-reload")
-                    .label("Reload")
+                    .label(t!("RemoteFileEditor.action.reload"))
                     .with_size(Size::Small)
                     .disabled(self.loading || self.saving)
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -426,7 +443,7 @@ impl RemoteFileEditorWindow {
             )
             .child(
                 Button::new("remote-file-soft-wrap")
-                    .label("Soft Wrap")
+                    .label(t!("RemoteFileEditor.action.soft_wrap"))
                     .selected(self.soft_wrap)
                     .with_size(Size::Small)
                     .disabled(disabled)
@@ -449,7 +466,11 @@ impl RemoteFileEditorWindow {
                     } else {
                         cx.theme().muted_foreground
                     })
-                    .child(if dirty { "Modified" } else { "Saved" }),
+                    .child(if dirty {
+                        t!("RemoteFileEditor.state.modified")
+                    } else {
+                        t!("RemoteFileEditor.state.saved")
+                    }),
             )
     }
 
@@ -489,7 +510,7 @@ impl RemoteFileEditorWindow {
                 .size_full()
                 .items_center()
                 .justify_center()
-                .child(div().text_sm().child("Loading remote file..."))
+                .child(div().text_sm().child(t!("RemoteFileEditor.body.loading")))
                 .into_any_element();
         }
 
@@ -499,7 +520,7 @@ impl RemoteFileEditorWindow {
                 .items_center()
                 .justify_center()
                 .gap_2()
-                .child(div().text_base().child("Unable to open file"))
+                .child(div().text_base().child(t!("RemoteFileEditor.body.unable_to_open")))
                 .child(
                     div()
                         .max_w(px(560.0))
@@ -521,8 +542,8 @@ impl RemoteFileEditorWindow {
 
     fn policy_label(&self) -> String {
         match self.policy.mode {
-            EditorMode::Code => "Code".to_string(),
-            EditorMode::PlainText => "Plain Text".to_string(),
+            EditorMode::Code => t!("RemoteFileEditor.policy.code").to_string(),
+            EditorMode::PlainText => t!("RemoteFileEditor.policy.plain_text").to_string(),
         }
     }
 }

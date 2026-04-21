@@ -657,7 +657,7 @@ impl FileListPanel {
 
             if !is_dir {
                 let view_edit = view_ref.clone();
-                menu = menu.item(PopupMenuItem::new("Edit").icon(IconName::Edit).on_click(
+                menu = menu.item(PopupMenuItem::new(t!("Common.edit").to_string()).icon(IconName::Edit).on_click(
                     window.listener_for(&view_edit, move |_this, _, _, cx| {
                         cx.emit(FileListPanelEvent::Edit {
                             full_path: path_for_edit.clone(),
