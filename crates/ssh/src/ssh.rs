@@ -418,7 +418,12 @@ where
     let mut last_error = None;
     for identity in identities {
         match session
-            .authenticate_publickey_with(username, identity, hash_alg, &mut agent)
+            .authenticate_publickey_with(
+                username,
+                identity.public_key().into_owned(),
+                hash_alg,
+                &mut agent,
+            )
             .await
         {
             Ok(result) if result.success() => return Ok(()),
@@ -439,7 +444,7 @@ where
 async fn connect_agent_client(
     messages: &AuthFailureMessages,
 ) -> Result<agent::client::AgentClient<tokio::net::UnixStream>> {
-    russh::keys::agent::client::AgentClient::connect_env()
+    agent::client::AgentClient::connect_env()
         .await
         .map_err(|e| anyhow::anyhow!("{}: {}", messages.agent_connect_failed, e))
 }
