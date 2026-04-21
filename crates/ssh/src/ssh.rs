@@ -475,7 +475,7 @@ where
     let mut last_error = None;
     for identity in identities {
         match session
-            .authenticate_publickey_with(username, identity, hash_alg, &mut agent)
+            .authenticate_publickey_with(username, identity.public_key().into_owned(), hash_alg, &mut agent)
             .await
         {
             Ok(result) if result.success() => return Ok(()),
