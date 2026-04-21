@@ -96,6 +96,6 @@ else
         PROMPT_COMMAND="__onetcli_precmd_bash;${PROMPT_COMMAND}"
     fi
 
-    PS1="${PS1}"$'\033]133;B\007'
+    PS1="${PS1}"$'\\[\033]133;B\007\\]'
     trap '__onetcli_preexec_bash' DEBUG
 fi
