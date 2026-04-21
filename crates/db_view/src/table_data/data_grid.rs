@@ -5,7 +5,7 @@ use gpui::{
     Window, actions, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IconName, Selectable, Sizable as _, Size, WindowExt,
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, Size, WindowExt,
     button::Button, h_flex, v_flex,
 };
 use one_ui::edit_table::{Column, EditTable, EditTableEvent, EditTableState};
