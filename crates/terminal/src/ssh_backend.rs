@@ -12,6 +12,9 @@ use ssh::{
 
 use crate::osc::{extract_osc_events, OscEvent};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
+use crate::shell_integration::{
+    embedded_shell_integration_script, normalized_shell_integration_script,
+};
 use crate::{TerminalBackend, TerminalSize};
 
 /// 整个 shell integration 安装流程的硬超时，避免远端受限或挂死卡住连接。
@@ -76,7 +79,8 @@ fn build_shell_integration_setup_script(
     session_marker: &str,
     shell_marker: &str,
 ) -> String {
-    let script = shell_single_quote(script);
+    let script = normalized_shell_integration_script(script);
+    let script = shell_single_quote(&script);
     let integration_source =
         format!("$HOME/.config/onetcli/sessions/{session_key}/shell_integration.sh");
     let session_key = shell_double_quote(session_key);
@@ -430,13 +434,13 @@ impl SshBackend {
         channel: &mut dyn SshChannel,
         connection_id: Option<i64>,
     ) -> anyhow::Result<ShellIntegrationSetup> {
-        const SCRIPT: &str = include_str!("shell_integration.sh");
         const SUCCESS_MARKER: &str = "__ONETCLI_SETUP_OK__";
         const HOME_MARKER: &str = "__ONETCLI_HOME__=";
         const SESSION_MARKER: &str = "__ONETCLI_SESSION_DIR__=";
         const SHELL_MARKER: &str = "__ONETCLI_LOGIN_SHELL__=";
+        let script = embedded_shell_integration_script();
         let setup_script = build_shell_integration_setup_script(
-            SCRIPT,
+            &script,
             &remote_session_key(connection_id),
             SUCCESS_MARKER,
             HOME_MARKER,
@@ -1074,6 +1078,53 @@ mod tests {
                 home_dir.display(),
                 session_dir.display()
             )
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn build_shell_integration_setup_command_normalizes_crlf_script_contents() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "onetcli-shell-setup-crlf-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).expect("应创建临时目录");
+
+        let home_dir = temp_dir.join("home");
+        fs::create_dir_all(&home_dir).expect("应创建 home 目录");
+
+        let command = build_shell_integration_setup_script(
+            "echo one\r\necho two\r\n",
+            "42",
+            "__TEST_OK__",
+            "__HOME__=",
+            "__SESSION__=",
+            "__SHELL__=",
+        );
+
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .env("HOME", &home_dir)
+            .output()
+            .expect("应能执行本地 shell setup 命令");
+
+        assert!(
+            output.status.success(),
+            "shell setup 命令应成功执行: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let integration_path = home_dir.join(".config/onetcli/sessions/42/shell_integration.sh");
+        assert_eq!(
+            fs::read_to_string(&integration_path).expect("应写入 integration 文件"),
+            "echo one\necho two\n",
+            "session integration 脚本应统一写成 LF，避免远端 bash 解析 $'\\r'"
         );
 
         let _ = fs::remove_dir_all(&temp_dir);

@@ -40,6 +40,7 @@ use crate::history::{
     SESSION_HISTORY_LIMIT,
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
+use crate::shell_integration::embedded_shell_integration_script;
 
 use crate::{LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalEvent, TerminalSize};
 use ssh::{ChannelEvent, SshChannel, SshSessionManager};
@@ -255,7 +256,7 @@ fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec
 
     // 写入 shell_integration.sh（含交互式守卫，不影响 rsync/scp 等非交互通道）
     let integration_path = session_dir.join("shell_integration.sh");
-    if let Err(e) = fs::write(&integration_path, include_str!("shell_integration.sh")) {
+    if let Err(e) = fs::write(&integration_path, embedded_shell_integration_script()) {
         tracing::warn!("写入 shell_integration.sh 失败: {e}");
         return (vec![], vec![]);
     }
@@ -1605,6 +1606,24 @@ mod tests {
 
         assert_eq!(resolved, cmd.to_string_lossy());
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn prepare_shell_integration_writes_lf_only_script() {
+        let session_dir = std::env::temp_dir().join(format!("onetcli-{}", std::process::id()));
+        let integration_path = session_dir.join("shell_integration.sh");
+        let _ = fs::remove_dir_all(&session_dir);
+
+        let (_env, _args) = super::prepare_shell_integration(Some("/bin/bash"));
+
+        let script = fs::read_to_string(&integration_path).expect("应写入本地 integration 脚本");
+        assert!(
+            !script.contains('\r'),
+            "本地 shell integration 脚本应统一写成 LF，避免 Windows 工件污染"
+        );
+
+        let _ = fs::remove_dir_all(&session_dir);
     }
 
     #[test]

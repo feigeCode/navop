@@ -111,7 +111,8 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search_input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
+        let search_input_state =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("Settings.search_placeholder")));
 
         // 字体大小输入框
         let font_size = f32::from(initial_theme.font_size);
@@ -615,7 +616,7 @@ impl SettingsPanel {
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(fg)
-                            .child("Settings"),
+                            .child(t!("Settings.title")),
                     ),
             )
             .child(
@@ -641,7 +642,7 @@ impl SettingsPanel {
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(muted_fg)
-                        .child("SEARCH"),
+                        .child(t!("Settings.search").to_uppercase()),
                 )
                 .child(
                     h_flex()
@@ -670,7 +671,7 @@ impl SettingsPanel {
                     div()
                         .text_xs()
                         .text_color(muted_fg)
-                        .child("Press ⌘G for next, ⇧⌘G for previous"),
+                        .child(t!("Settings.search_shortcuts_hint")),
                 ),
         )
     }
@@ -756,7 +757,7 @@ impl SettingsPanel {
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(muted_fg)
-                            .child("FONT SIZE"),
+                            .child(t!("Settings.font_size").to_uppercase()),
                     )
                     .child(
                         NumberInput::new(&self.font_size_input_state)
@@ -773,13 +774,13 @@ impl SettingsPanel {
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(muted_fg)
-                            .child("FONT FAMILY"),
+                            .child(t!("Settings.font_family").to_uppercase()),
                     )
                     .child(
                         Select::new(&self.font_select_state)
                             .small()
                             .text_color(fg)
-                            .placeholder("Select font..."),
+                            .placeholder(t!("Settings.font_family_placeholder")),
                     ),
             )
     }
@@ -1228,7 +1229,7 @@ impl SettingsPanel {
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(muted_fg)
-                    .child("THEME"),
+                    .child(t!("Settings.theme").to_uppercase()),
             )
             .child(
                 div()
@@ -1301,6 +1302,28 @@ mod tests {
     #[test]
     fn serialize_optional_color_returns_none_when_empty() {
         assert_eq!(serialize_optional_color(None::<Hsla>), None);
+    }
+
+    #[test]
+    fn settings_panel_source_avoids_hard_coded_user_facing_strings() {
+        let source = include_str!("settings_panel.rs");
+        let forbidden_snippets = [
+            format!(".child({:?})", "Settings"),
+            format!(".placeholder({:?})", "Search..."),
+            format!(".child({:?})", "SEARCH"),
+            format!(".child({:?})", "Press ⌘G for next, ⇧⌘G for previous"),
+            format!(".child({:?})", "FONT SIZE"),
+            format!(".child({:?})", "FONT FAMILY"),
+            format!(".placeholder({:?})", "Select font..."),
+            format!(".child({:?})", "THEME"),
+        ];
+
+        for snippet in forbidden_snippets {
+            assert!(
+                !source.contains(&snippet),
+                "settings_panel.rs still contains hard-coded UI text snippet: {snippet}"
+            );
+        }
     }
 }
 
