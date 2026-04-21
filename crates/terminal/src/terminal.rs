@@ -40,6 +40,7 @@ use crate::history::{
     SESSION_HISTORY_LIMIT,
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
+#[cfg(not(target_os = "windows"))]
 use crate::shell_integration::embedded_shell_integration_script;
 
 use crate::{LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalEvent, TerminalSize};
