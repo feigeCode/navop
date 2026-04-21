@@ -3,15 +3,15 @@
         <section class="hero">
             <div class="hero-copy">
                 <p class="eyebrow">OnetCli / 桌面工作台</p>
-                <h1>把数据库、服务器和 AI 工作流收进一个真正顺手的桌面客户端</h1>
+                <h1>把数据库、SSH / SFTP 和终端收进一个真正顺手的桌面客户端</h1>
                 <p class="hero-description">
-                    OnetCli 把数据库连接、SSH / SFTP、本地终端和 AI 助手放进同一个跨平台工作台里，
-                    让排查、分析、部署和日常维护不再被一堆零散工具切碎。
+                    OnetCli 是一个跨平台桌面工作台，用来统一处理数据库连接、远程访问、文件传输和本地终端操作。
+                    AI 主要用于辅助数据分析、快速生成 SQL 和解释查询，帮助你更高效地完成日常工作。
                 </p>
                 <div class="hero-note">
-                    <span>支持多数据库</span>
+                    <span>多数据库支持</span>
                     <span>原生 SSH / SFTP</span>
-                    <span>GitHub Releases 下载</span>
+                    <span>内置终端</span>
                 </div>
                 <div class="hero-actions">
                     <a class="primary-action" href="https://github.com/feigeCode/onetcli/releases" target="_blank" rel="noreferrer">
@@ -24,7 +24,7 @@
                 <dl class="hero-metrics">
                     <div>
                         <dt>聚焦任务</dt>
-                        <dd>连接、查询、排查、传输、分析</dd>
+                        <dd>连接、查询、排查、传输、执行</dd>
                     </div>
                     <div>
                         <dt>适用平台</dt>
@@ -42,8 +42,7 @@
                 <p class="section-label">真实界面</p>
                 <h2>直接展示你每天会用到的工作界面</h2>
                 <p>
-                    不是一张抽象插画，而是数据库管理、SSH 会话、SFTP 文件传输和 AI
-                    分析的真实桌面界面。
+                    不是一张抽象插画，而是数据库管理、SSH 会话、SFTP 文件传输和查询辅助的真实桌面界面。
                 </p>
             </div>
             <div class="screenshot-grid">
@@ -58,9 +57,9 @@
                     <p>从远程终端到文件传输，用一套连接信息覆盖排查、部署和日常维护。</p>
                 </article>
                 <article class="screenshot-card">
-                    <img :src="chatdbImage" alt="OnetCli AI 分析界面截图" />
-                    <h3>AI 助手</h3>
-                    <p>把自然语言 SQL、查询解释和数据分析收进应用内，不再来回切网页。</p>
+                    <img :src="chatdbImage" alt="OnetCli 查询与分析辅助界面截图" />
+                    <h3>查询与分析辅助</h3>
+                    <p>用自然语言辅助生成 SQL、解释查询结果，并在数据分析场景里提升处理效率。</p>
                 </article>
             </div>
         </section>
@@ -68,7 +67,7 @@
         <section class="section-block capability-section">
             <div class="section-heading">
                 <p class="section-label">核心能力</p>
-                <h2>把原本分散的工具链收成一个工作台</h2>
+                <h2>把数据库、远程连接和终端收成一个工作台</h2>
             </div>
             <div class="capability-grid">
                 <article class="capability-card">
@@ -84,8 +83,8 @@
                     <p>内置终端支持多标签页工作流，适合数据库调试、脚本执行和部署操作。</p>
                 </article>
                 <article class="capability-card">
-                    <h3>AI 助手</h3>
-                    <p>支持 AI 生成 SQL、解释查询和辅助分析，帮助你更快理解数据与结果。</p>
+                    <h3>智能辅助</h3>
+                    <p>支持生成 SQL、解释查询和辅助数据分析，作为数据库工作的提效能力使用。</p>
                 </article>
             </div>
         </section>
@@ -98,7 +97,7 @@
             <div class="value-list">
                 <article>
                     <h3>统一工作流</h3>
-                    <p>数据库、远程连接、终端和 AI 不再分散在多个工具和多个浏览器标签里。</p>
+                    <p>数据库、远程连接和终端不再分散在多个工具里，常用操作可以在同一个桌面工作台里连续完成。</p>
                 </article>
                 <article>
                     <h3>桌面体验</h3>
@@ -106,7 +105,7 @@
                 </article>
                 <article>
                     <h3>面向真实任务</h3>
-                    <p>站点展示的每个模块都直接对应开发、运维、数据分析中的高频动作，而不是抽象的技术概念。</p>
+                    <p>AI 在这里围绕 SQL 生成、查询理解和数据分析提供辅助，服务真实高频任务，而不是喧宾夺主地占据产品主叙事。</p>
                 </article>
             </div>
         </section>
@@ -138,7 +137,7 @@
             <div class="faq-list">
                 <article>
                     <h3>OnetCli 是什么？</h3>
-                    <p>OnetCli 是一个跨平台桌面客户端，用来统一处理数据库、SSH、终端与 AI 相关工作流。</p>
+                    <p>OnetCli 是一个跨平台桌面客户端，用来统一处理数据库、SSH / SFTP 与终端操作，并提供面向数据库场景的智能辅助能力。</p>
                 </article>
                 <article>
                     <h3>OnetCli 支持哪些数据库？</h3>
@@ -150,7 +149,7 @@
                 </article>
                 <article>
                     <h3>OnetCli 是否支持 AI 生成 SQL？</h3>
-                    <p>支持。AI 助手可用于自然语言生成 SQL、解释查询以及数据分析辅助。</p>
+                    <p>支持。智能辅助能力可用于自然语言生成 SQL、解释查询以及数据分析提效，核心目标是让数据库工作更快、更顺。</p>
                 </article>
             </div>
         </section>
@@ -198,7 +197,7 @@ const structuredData = JSON.stringify(
             applicationCategory: "DeveloperApplication",
             operatingSystem: "macOS, Windows, Linux",
             description:
-                "OnetCli 是一个统一管理数据库、SSH、终端与 AI 工作流的跨平台桌面客户端。",
+                "OnetCli 是一个统一管理数据库、SSH / SFTP 与终端操作，并提供 SQL 生成与数据分析辅助能力的跨平台桌面客户端。",
             downloadUrl: "https://github.com/feigeCode/onetcli/releases",
         },
         {
@@ -210,7 +209,7 @@ const structuredData = JSON.stringify(
                     name: "OnetCli 是什么？",
                     acceptedAnswer: {
                         "@type": "Answer",
-                        text: "OnetCli 是一个跨平台桌面客户端，用来统一处理数据库、SSH、终端与 AI 相关工作流。",
+                        text: "OnetCli 是一个跨平台桌面客户端，用来统一处理数据库、SSH / SFTP 与终端操作，并提供面向数据库场景的智能辅助能力。",
                     },
                 },
                 {
@@ -226,7 +225,7 @@ const structuredData = JSON.stringify(
                     name: "OnetCli 是否支持 AI 生成 SQL？",
                     acceptedAnswer: {
                         "@type": "Answer",
-                        text: "支持。AI 助手可用于自然语言生成 SQL、解释查询以及辅助数据分析。",
+                        text: "支持。智能辅助能力可用于自然语言生成 SQL、解释查询以及辅助数据分析，核心目标是让数据库工作更快、更顺。",
                     },
                 },
             ],
