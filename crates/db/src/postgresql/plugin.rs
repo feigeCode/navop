@@ -14,8 +14,8 @@ use crate::import_export::{
     ImportResult,
 };
 use crate::manifest_helpers::{
-    action, action_with_scope, field, option, ssh_auth_rules, ssh_enabled_rules, ssh_field,
-    ssh_number_field, ssh_password_field, tab, yes_no_options, DatabaseActionDescriptorExt,
+    DatabaseActionDescriptorExt, action, action_with_scope, field, option, ssh_auth_rules,
+    ssh_enabled_rules, ssh_field, ssh_number_field, ssh_password_field, tab, yes_no_options,
 };
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
@@ -305,15 +305,17 @@ fn postgresql_connection_form() -> DatabaseFormManifest {
             tab(
                 "notes",
                 "ConnectionForm.notes",
-                vec![field(
-                    "remark",
-                    "ConnectionForm.remark",
-                    DatabaseFormFieldType::TextArea,
-                )
-                .optional()
-                .with_rows(14)
-                .with_placeholder("ConnectionForm.enter_remark")
-                .with_default("")],
+                vec![
+                    field(
+                        "remark",
+                        "ConnectionForm.remark",
+                        DatabaseFormFieldType::TextArea,
+                    )
+                    .optional()
+                    .with_rows(14)
+                    .with_placeholder("ConnectionForm.enter_remark")
+                    .with_default(""),
+                ],
             ),
         ],
     }
@@ -2250,11 +2252,13 @@ mod tests {
                 DatabaseFormKind::CreateSchema,
             ]
         );
-        assert!(manifest
-            .actions
-            .actions
-            .iter()
-            .any(|action| action.id == DatabaseActionId::CreateSchema));
+        assert!(
+            manifest
+                .actions
+                .actions
+                .iter()
+                .any(|action| action.id == DatabaseActionId::CreateSchema)
+        );
     }
 
     // ==================== DDL SQL Generation Tests ====================
@@ -2613,9 +2617,11 @@ mod tests {
         let original = TableDesign {
             database_name: "test_db".to_string(),
             table_name: "users".to_string(),
-            columns: vec![ColumnDefinition::new("name")
-                .data_type("VARCHAR")
-                .length(50)],
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("VARCHAR")
+                    .length(50),
+            ],
             indexes: vec![],
             foreign_keys: vec![],
             options: TableOptions::default(),
@@ -2624,9 +2630,11 @@ mod tests {
         let new = TableDesign {
             database_name: "test_db".to_string(),
             table_name: "users".to_string(),
-            columns: vec![ColumnDefinition::new("name")
-                .data_type("VARCHAR")
-                .length(100)],
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("VARCHAR")
+                    .length(100),
+            ],
             indexes: vec![],
             foreign_keys: vec![],
             options: TableOptions::default(),
@@ -2681,9 +2689,11 @@ mod tests {
         let original = TableDesign {
             database_name: "test_db".to_string(),
             table_name: "users".to_string(),
-            columns: vec![ColumnDefinition::new("name")
-                .data_type("VARCHAR")
-                .length(50)],
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("VARCHAR")
+                    .length(50),
+            ],
             indexes: vec![],
             foreign_keys: vec![],
             options: TableOptions::default(),
@@ -2692,11 +2702,13 @@ mod tests {
         let new = TableDesign {
             database_name: "test_db".to_string(),
             table_name: "users".to_string(),
-            columns: vec![ColumnDefinition::new("name")
-                .data_type("VARCHAR")
-                .length(50)
-                .nullable(false)
-                .default_value("'guest'")],
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("VARCHAR")
+                    .length(50)
+                    .nullable(false)
+                    .default_value("'guest'"),
+            ],
             indexes: vec![],
             foreign_keys: vec![],
             options: TableOptions::default(),
@@ -2738,9 +2750,10 @@ mod tests {
         assert!(!info.snippets.is_empty());
 
         assert!(info.keywords.iter().any(|(k, _)| *k == "RETURNING"));
-        assert!(info
-            .functions
-            .iter()
-            .any(|(f, _)| f.starts_with("ARRAY_AGG")));
+        assert!(
+            info.functions
+                .iter()
+                .any(|(f, _)| f.starts_with("ARRAY_AGG"))
+        );
     }
 }

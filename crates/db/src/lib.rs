@@ -44,6 +44,31 @@ pub use ssh_tunnel::*;
 pub use streaming_parser::*;
 pub use types::*;
 
+pub fn translate_or_raw_for_locale(locale: &str, key_or_text: &str) -> String {
+    let translated = _rust_i18n_translate(locale, key_or_text).into_owned();
+    let missing_with_locale = format!("{locale}.{key_or_text}");
+
+    if translated == key_or_text || translated == missing_with_locale {
+        key_or_text.to_string()
+    } else {
+        translated
+    }
+}
+
+pub fn translate_connection_title_for_locale(
+    locale: &str,
+    is_editing: bool,
+    db_type: &str,
+) -> String {
+    let key = if is_editing {
+        "Connection.edit"
+    } else {
+        "Connection.new"
+    };
+
+    translate_or_raw_for_locale(locale, key).replace("%{db_type}", db_type)
+}
+
 pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
@@ -53,4 +78,26 @@ pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &s[..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn translate_or_raw_for_locale_keeps_literal_placeholder() {
+        assert_eq!(translate_or_raw_for_locale("zh-CN", "28800"), "28800");
+    }
+
+    #[test]
+    fn translate_connection_title_for_locale_formats_db_type() {
+        assert_eq!(
+            translate_connection_title_for_locale("zh-CN", false, "MySQL"),
+            "新建 MySQL 连接"
+        );
+        assert_eq!(
+            translate_connection_title_for_locale("zh-CN", true, "MySQL"),
+            "编辑 MySQL 连接"
+        );
+    }
 }

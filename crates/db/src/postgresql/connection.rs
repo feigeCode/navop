@@ -13,7 +13,7 @@ use rustls::{
     Error as RustlsError, RootCertStore, SignatureScheme,
 };
 use tokio::sync::Mutex;
-use tokio_postgres::{config::SslMode, types::Type, Client, Config, NoTls, Row, Statement};
+use tokio_postgres::{Client, Config, NoTls, Row, Statement, config::SslMode, types::Type};
 use tokio_postgres_rustls::MakeRustlsConnect;
 use tracing::{debug, error, info, warn};
 
@@ -23,7 +23,7 @@ use crate::executor::{
 };
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::resolve_connection_target;
-use crate::{format_message, truncate_str, DatabasePlugin};
+use crate::{DatabasePlugin, format_message, truncate_str};
 use ssh::LocalPortForwardTunnel;
 use tokio::sync::mpsc;
 
@@ -596,19 +596,15 @@ impl DbConnection for PostgresDbConnection {
                             error
                         );
                         let retry_started = Instant::now();
-                        let client =
-                            Self::connect_without_tls(&pg_config)
-                                .await
-                                .map_err(|retry_error| {
-                                    error!(
+                        let client = Self::connect_without_tls(&pg_config).await.map_err(
+                            |retry_error| {
+                                error!(
                                     "[PostgreSQL] Non-TLS retry after TLS failure also failed: {}",
                                     retry_error
                                 );
-                                    DbError::connection_with_source(
-                                        "failed to connect",
-                                        retry_error,
-                                    )
-                                })?;
+                                DbError::connection_with_source("failed to connect", retry_error)
+                            },
+                        )?;
                         info!(
                             "[PostgreSQL][Timing] retry_without_tls={}ms ssl_mode=Prefer",
                             retry_started.elapsed().as_millis()

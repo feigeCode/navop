@@ -13,6 +13,7 @@ use gpui_component::{
 use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
 use one_core::storage::{DatabaseType, StoredConnection, Workspace};
+use rust_i18n::locale;
 use rust_i18n::t;
 
 use crate::common::db_connection_form::{DbConnectionForm, DbConnectionFormEvent};
@@ -44,11 +45,11 @@ impl ConnectionFormWindow {
         let is_editing = config.editing_connection.is_some();
         let db_type = config.db_type;
 
-        let title: SharedString = if is_editing {
-            t!("Connection.edit", db_type = db_type.as_str()).to_string()
-        } else {
-            t!("Connection.new", db_type = db_type.as_str()).to_string()
-        }
+        let title: SharedString = db::translate_connection_title_for_locale(
+            locale().as_ref(),
+            is_editing,
+            db_type.as_str(),
+        )
         .into();
 
         let form = create_connection_form_for(db_type, window, cx);

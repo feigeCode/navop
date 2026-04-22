@@ -23,8 +23,8 @@ use one_core::storage::{DatabaseType, DbConnectionConfig};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 /// Macro to reduce boilerplate for plugin operations with session management
@@ -1935,8 +1935,7 @@ impl GlobalDbState {
         if node.node_type == DbNodeType::Connection && !node.children_loaded {
             info!(
                 "[DB][Timing] load_object_view skipped connection_id={} node_id={} reason=connection_children_not_loaded",
-                connection_id,
-                node.id
+                connection_id, node.id
             );
             return Ok(None);
         }

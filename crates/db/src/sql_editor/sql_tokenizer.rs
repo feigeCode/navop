@@ -268,7 +268,7 @@ impl<'a> SqlTokenizer<'a> {
                     String::new(),
                     self.input.len(),
                     self.input.len(),
-                )
+                );
             }
         };
 
@@ -459,7 +459,7 @@ impl<'a> SqlTokenizer<'a> {
             match self.chars.peek().copied() {
                 Some((_, '\'')) => {
                     self.advance(); // consume quote
-                                    // Check for escaped quote ('')
+                    // Check for escaped quote ('')
                     if let Some(&(_, '\'')) = self.chars.peek() {
                         self.advance(); // consume second quote, continue string
                     } else {
@@ -483,7 +483,7 @@ impl<'a> SqlTokenizer<'a> {
             match self.chars.peek().copied() {
                 Some((_, '"')) => {
                     self.advance(); // consume quote
-                                    // Check for escaped quote ("")
+                    // Check for escaped quote ("")
                     if let Some(&(_, '"')) = self.chars.peek() {
                         self.advance(); // consume second quote, continue identifier
                     } else {

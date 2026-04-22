@@ -16,6 +16,10 @@ pub(crate) fn translate(key: &str) -> String {
     crate::_rust_i18n_translate(locale().as_ref(), key).into_owned()
 }
 
+fn translate_connection_form_text(key_or_text: &str) -> String {
+    db::translate_or_raw_for_locale(locale().as_ref(), key_or_text)
+}
+
 pub(crate) fn find_form(
     manifest: &DatabaseUiManifest,
     kind: DatabaseFormKind,
@@ -42,13 +46,13 @@ pub(crate) fn to_connection_form_config(
 
     DbFormConfig {
         db_type,
-        title: translate(&form.title_i18n_key),
+        title: translate_connection_form_text(&form.title_i18n_key),
         tab_groups: form
             .tabs
             .iter()
             .map(|tab| TabGroup {
                 name: tab.id.clone(),
-                label: translate(&tab.label_i18n_key),
+                label: translate_connection_form_text(&tab.label_i18n_key),
                 fields: tab
                     .fields
                     .iter()
@@ -66,16 +70,21 @@ fn to_connection_field(
 ) -> FormField {
     let options = resolve_field_options(plugin, field, context)
         .into_iter()
-        .map(|option| (option.value, translate(&option.label_i18n_key)))
+        .map(|option| {
+            (
+                option.value,
+                translate_connection_form_text(&option.label_i18n_key),
+            )
+        })
         .collect();
 
     FormField {
         name: field.id.clone(),
-        label: translate(&field.label_i18n_key),
+        label: translate_connection_form_text(&field.label_i18n_key),
         placeholder: field
             .placeholder_i18n_key
             .as_deref()
-            .map(translate)
+            .map(translate_connection_form_text)
             .unwrap_or_default(),
         field_type: to_connection_field_type(field.field_type),
         rows: field.rows.unwrap_or(5) as usize,
@@ -168,4 +177,14 @@ pub(crate) fn matches_node_type(
         .targets
         .iter()
         .any(|target| target.node_type == node_type)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::translate_connection_form_text;
+
+    #[test]
+    fn connection_form_translation_keeps_literal_placeholder() {
+        assert_eq!(translate_connection_form_text("28800"), "28800");
+    }
 }

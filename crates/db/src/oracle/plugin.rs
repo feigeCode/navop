@@ -7,6 +7,7 @@ use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use rust_i18n::t;
 
+use crate::QueryResult;
 use crate::connection::{DbConnection, DbError};
 use crate::executor::SqlResult;
 use crate::import_export::{
@@ -14,8 +15,8 @@ use crate::import_export::{
     ImportResult,
 };
 use crate::manifest_helpers::{
-    action, action_with_scope, field, option, ssh_auth_rules, ssh_enabled_rules, ssh_field,
-    ssh_number_field, ssh_password_field, tab, yes_no_options, DatabaseActionDescriptorExt,
+    DatabaseActionDescriptorExt, action, action_with_scope, field, option, ssh_auth_rules,
+    ssh_enabled_rules, ssh_field, ssh_number_field, ssh_password_field, tab, yes_no_options,
 };
 use crate::oracle::connection::OracleDbConnection;
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
@@ -25,7 +26,6 @@ use crate::plugin_manifest::{
     DatabaseUiManifest,
 };
 use crate::types::*;
-use crate::QueryResult;
 
 /// Oracle data types (name, description)
 pub const ORACLE_DATA_TYPES: &[(&str, &str)] = &[
@@ -136,14 +136,16 @@ fn oracle_connection_form() -> DatabaseFormManifest {
             tab(
                 "advanced",
                 "ConnectionForm.advanced",
-                vec![field(
-                    "connect_timeout",
-                    "ConnectionForm.connect_timeout",
-                    DatabaseFormFieldType::Number,
-                )
-                .optional()
-                .with_placeholder("30")
-                .with_default("30")],
+                vec![
+                    field(
+                        "connect_timeout",
+                        "ConnectionForm.connect_timeout",
+                        DatabaseFormFieldType::Number,
+                    )
+                    .optional()
+                    .with_placeholder("30")
+                    .with_default("30"),
+                ],
             ),
             tab(
                 "ssh",
@@ -204,15 +206,17 @@ fn oracle_connection_form() -> DatabaseFormManifest {
             tab(
                 "notes",
                 "ConnectionForm.notes",
-                vec![field(
-                    "remark",
-                    "ConnectionForm.remark",
-                    DatabaseFormFieldType::TextArea,
-                )
-                .optional()
-                .with_rows(14)
-                .with_placeholder("ConnectionForm.enter_remark")
-                .with_default("")],
+                vec![
+                    field(
+                        "remark",
+                        "ConnectionForm.remark",
+                        DatabaseFormFieldType::TextArea,
+                    )
+                    .optional()
+                    .with_rows(14)
+                    .with_placeholder("ConnectionForm.enter_remark")
+                    .with_default(""),
+                ],
             ),
         ],
     }
@@ -2167,11 +2171,13 @@ mod tests {
                 DatabaseFormKind::EditDatabase,
             ]
         );
-        assert!(manifest
-            .actions
-            .actions
-            .iter()
-            .any(|action| action.id == DatabaseActionId::DeleteSchema));
+        assert!(
+            manifest
+                .actions
+                .actions
+                .iter()
+                .any(|action| action.id == DatabaseActionId::DeleteSchema)
+        );
     }
 
     // ==================== DDL SQL Generation Tests ====================
@@ -2506,10 +2512,12 @@ mod tests {
         let original = TableDesign {
             database_name: "test_schema".to_string(),
             table_name: "users".to_string(),
-            columns: vec![ColumnDefinition::new("status")
-                .data_type("VARCHAR2")
-                .length(20)
-                .default_value("'A'")],
+            columns: vec![
+                ColumnDefinition::new("status")
+                    .data_type("VARCHAR2")
+                    .length(20)
+                    .default_value("'A'"),
+            ],
             indexes: vec![],
             foreign_keys: vec![],
             options: TableOptions::default(),
@@ -2518,10 +2526,12 @@ mod tests {
         let new = TableDesign {
             database_name: "test_schema".to_string(),
             table_name: "users".to_string(),
-            columns: vec![ColumnDefinition::new("status")
-                .data_type("VARCHAR2")
-                .length(20)
-                .nullable(false)],
+            columns: vec![
+                ColumnDefinition::new("status")
+                    .data_type("VARCHAR2")
+                    .length(20)
+                    .nullable(false),
+            ],
             indexes: vec![],
             foreign_keys: vec![],
             options: TableOptions::default(),
@@ -2560,9 +2570,11 @@ mod tests {
                     .data_type("VARCHAR2")
                     .length(100),
             ],
-            indexes: vec![IndexDefinition::new("idx_email")
-                .columns(vec!["email".to_string()])
-                .unique(true)],
+            indexes: vec![
+                IndexDefinition::new("idx_email")
+                    .columns(vec!["email".to_string()])
+                    .unique(true),
+            ],
             foreign_keys: vec![],
             options: TableOptions::default(),
         };
@@ -2612,9 +2624,10 @@ mod tests {
 
         assert!(info.functions.iter().any(|(f, _)| f.starts_with("DECODE")));
         assert!(info.functions.iter().any(|(f, _)| f.starts_with("LISTAGG")));
-        assert!(info
-            .functions
-            .iter()
-            .any(|(f, _)| f.starts_with("SYS_GUID")));
+        assert!(
+            info.functions
+                .iter()
+                .any(|(f, _)| f.starts_with("SYS_GUID"))
+        );
     }
 }

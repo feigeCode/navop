@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use mysql_async::{prelude::*, Conn, Opts, OptsBuilder, SslOpts, Value};
+use mysql_async::{Conn, Opts, OptsBuilder, SslOpts, Value, prelude::*};
 use one_core::storage::DbConnectionConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{debug, error, info};
 
@@ -16,7 +16,7 @@ use crate::executor::{
 };
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::resolve_connection_target;
-use crate::{format_message, truncate_str, DatabasePlugin};
+use crate::{DatabasePlugin, format_message, truncate_str};
 use ssh::LocalPortForwardTunnel;
 
 pub struct MysqlDbConnection {

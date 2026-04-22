@@ -14,8 +14,8 @@ use crate::import_export::{
     ImportResult,
 };
 use crate::manifest_helpers::{
-    action, action_with_scope, field, option, ssh_auth_rules, ssh_enabled_rules, ssh_field,
-    ssh_number_field, ssh_password_field, tab, yes_no_options, DatabaseActionDescriptorExt,
+    DatabaseActionDescriptorExt, action, action_with_scope, field, option, ssh_auth_rules,
+    ssh_enabled_rules, ssh_field, ssh_number_field, ssh_password_field, tab, yes_no_options,
 };
 use crate::mssql::connection::MssqlDbConnection;
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
@@ -253,15 +253,17 @@ fn mssql_connection_form() -> DatabaseFormManifest {
             tab(
                 "notes",
                 "ConnectionForm.notes",
-                vec![field(
-                    "remark",
-                    "ConnectionForm.remark",
-                    DatabaseFormFieldType::TextArea,
-                )
-                .optional()
-                .with_rows(14)
-                .with_placeholder("ConnectionForm.enter_remark")
-                .with_default("")],
+                vec![
+                    field(
+                        "remark",
+                        "ConnectionForm.remark",
+                        DatabaseFormFieldType::TextArea,
+                    )
+                    .optional()
+                    .with_rows(14)
+                    .with_placeholder("ConnectionForm.enter_remark")
+                    .with_default(""),
+                ],
             ),
         ],
     }
@@ -2579,11 +2581,13 @@ mod tests {
                 DatabaseFormKind::CreateSchema,
             ]
         );
-        assert!(manifest
-            .actions
-            .actions
-            .iter()
-            .any(|action| action.id == DatabaseActionId::CreateSchema));
+        assert!(
+            manifest
+                .actions
+                .actions
+                .iter()
+                .any(|action| action.id == DatabaseActionId::CreateSchema)
+        );
     }
 
     #[test]
@@ -2920,9 +2924,11 @@ mod tests {
         let original = TableDesign {
             database_name: "test_db".to_string(),
             table_name: "users".to_string(),
-            columns: vec![ColumnDefinition::new("name")
-                .data_type("NVARCHAR")
-                .length(50)],
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("NVARCHAR")
+                    .length(50),
+            ],
             indexes: vec![],
             foreign_keys: vec![],
             options: TableOptions::default(),
@@ -2931,10 +2937,12 @@ mod tests {
         let new = TableDesign {
             database_name: "test_db".to_string(),
             table_name: "users".to_string(),
-            columns: vec![ColumnDefinition::new("name")
-                .data_type("NVARCHAR")
-                .length(100)
-                .nullable(false)],
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("NVARCHAR")
+                    .length(100)
+                    .nullable(false),
+            ],
             indexes: vec![],
             foreign_keys: vec![],
             options: TableOptions::default(),
@@ -2973,9 +2981,11 @@ mod tests {
                     .data_type("NVARCHAR")
                     .length(50),
             ],
-            indexes: vec![IndexDefinition::new("idx_name")
-                .columns(vec!["name".to_string()])
-                .unique(true)],
+            indexes: vec![
+                IndexDefinition::new("idx_name")
+                    .columns(vec!["name".to_string()])
+                    .unique(true),
+            ],
             foreign_keys: vec![],
             options: TableOptions::default(),
         };

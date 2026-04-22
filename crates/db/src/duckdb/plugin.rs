@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
@@ -12,7 +12,7 @@ use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportProgressSender,
     ImportResult,
 };
-use crate::manifest_helpers::{action, action_with_scope, field, tab, DatabaseActionDescriptorExt};
+use crate::manifest_helpers::{DatabaseActionDescriptorExt, action, action_with_scope, field, tab};
 use crate::plugin::{DatabaseOperationRequest, DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
@@ -474,15 +474,17 @@ fn duckdb_connection_form(default_db_path: &str) -> DatabaseFormManifest {
             tab(
                 "notes",
                 "ConnectionForm.notes",
-                vec![field(
-                    "remark",
-                    "ConnectionForm.remark",
-                    DatabaseFormFieldType::TextArea,
-                )
-                .optional()
-                .with_rows(14)
-                .with_placeholder("ConnectionForm.enter_remark")
-                .with_default("")],
+                vec![
+                    field(
+                        "remark",
+                        "ConnectionForm.remark",
+                        DatabaseFormFieldType::TextArea,
+                    )
+                    .optional()
+                    .with_rows(14)
+                    .with_placeholder("ConnectionForm.enter_remark")
+                    .with_default(""),
+                ],
             ),
         ],
     }
@@ -1470,11 +1472,13 @@ mod tests {
                 DatabaseFormKind::EditDatabase,
             ]
         );
-        assert!(manifest
-            .actions
-            .actions
-            .iter()
-            .any(|action| action.id == DatabaseActionId::OpenTableData));
+        assert!(
+            manifest
+                .actions
+                .actions
+                .iter()
+                .any(|action| action.id == DatabaseActionId::OpenTableData)
+        );
     }
 
     #[tokio::test]
@@ -1550,10 +1554,12 @@ mod tests {
             .expect("list_views should succeed");
         assert_eq!(views.len(), 1);
         assert_eq!(views[0].name, "test_view");
-        assert!(views[0]
-            .definition
-            .as_deref()
-            .is_some_and(|definition| definition.contains("SELECT id, email FROM test")));
+        assert!(
+            views[0]
+                .definition
+                .as_deref()
+                .is_some_and(|definition| definition.contains("SELECT id, email FROM test"))
+        );
 
         let ddl = plugin
             .export_table_create_sql(&connection, "main", Some("main"), "test")
@@ -1629,9 +1635,11 @@ mod tests {
                     .default_value("'anon'"),
                 ColumnDefinition::new("email").data_type("VARCHAR"),
             ],
-            indexes: vec![IndexDefinition::new("idx_name")
-                .columns(vec!["name".to_string()])
-                .unique(true)],
+            indexes: vec![
+                IndexDefinition::new("idx_name")
+                    .columns(vec!["name".to_string()])
+                    .unique(true),
+            ],
             foreign_keys: vec![],
             options: TableOptions::default(),
         };
