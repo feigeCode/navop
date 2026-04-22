@@ -228,7 +228,10 @@ impl ManifestDatabaseViewPlugin {
                 ),
                 DatabaseActionPlacement::Both => true,
             })
-            .filter(|action| action.toolbar_scope == toolbar_scope)
+            .filter(|action| match placement {
+                DatabaseActionPlacement::Toolbar => action.toolbar_scope == toolbar_scope,
+                DatabaseActionPlacement::ContextMenu | DatabaseActionPlacement::Both => true,
+            })
             .collect()
     }
 }
@@ -308,18 +311,50 @@ impl ManifestDatabaseViewPlugin {
     }
 
     fn build_context_menu(&self, node_id: &str, node_type: DbNodeType) -> Vec<ContextMenuItem> {
-        self.action_descriptors(node_type, DatabaseActionPlacement::ContextMenu, None)
-            .into_iter()
-            .filter_map(|action| {
-                let label = translate(&action.label_i18n_key);
-                let event = map_tree_event(action.id, node_id)?;
-                Some(if action.requires_active_connection {
-                    ContextMenuItem::item(label, event)
-                } else {
-                    ContextMenuItem::always_enabled_item(label, event)
-                })
-            })
-            .collect()
+        let mut actions =
+            self.action_descriptors(node_type, DatabaseActionPlacement::ContextMenu, None);
+        actions.sort_by_key(|action| context_menu_rank(node_type, action.id));
+        let mut items = Vec::new();
+        let mut index = 0;
+        let mut last_group: Option<String> = None;
+
+        while index < actions.len() {
+            let current_group = context_menu_group(node_type, actions[index]);
+            if let Some(current_group) = current_group.clone() {
+                if let Some(previous_group) = &last_group {
+                    if previous_group != &current_group && !items.is_empty() {
+                        items.push(ContextMenuItem::separator());
+                    }
+                }
+                last_group = Some(current_group);
+            }
+
+            if is_dump_sql_action(actions[index].id) {
+                let mut sub_items = Vec::new();
+
+                while index < actions.len() && is_dump_sql_action(actions[index].id) {
+                    if let Some(item) = action_to_context_menu_item(actions[index], node_id) {
+                        sub_items.push(item);
+                    }
+                    index += 1;
+                }
+
+                if !sub_items.is_empty() {
+                    items.push(ContextMenuItem::submenu(
+                        translate("ImportExport.dump_sql_file"),
+                        sub_items,
+                    ));
+                }
+                continue;
+            }
+
+            if let Some(item) = action_to_context_menu_item(actions[index], node_id) {
+                items.push(item);
+            }
+            index += 1;
+        }
+
+        items
     }
 
     fn build_toolbar_buttons(
@@ -366,6 +401,160 @@ impl ManifestDatabaseViewPlugin {
 
 fn manifest_plugin(database_type: DatabaseType) -> ManifestDatabaseViewPlugin {
     ManifestDatabaseViewPlugin::new(database_type)
+}
+
+fn action_to_context_menu_item(
+    action: &DatabaseActionDescriptor,
+    node_id: &str,
+) -> Option<ContextMenuItem> {
+    let label = translate(&action.label_i18n_key);
+    let event = map_tree_event(action.id, node_id)?;
+    Some(if action.requires_active_connection {
+        ContextMenuItem::item(label, event)
+    } else {
+        ContextMenuItem::always_enabled_item(label, event)
+    })
+}
+
+fn is_dump_sql_action(action_id: DatabaseActionId) -> bool {
+    matches!(
+        action_id,
+        DatabaseActionId::DumpSqlStructure
+            | DatabaseActionId::DumpSqlData
+            | DatabaseActionId::DumpSqlStructureAndData
+    )
+}
+
+fn context_menu_rank(node_type: DbNodeType, action_id: DatabaseActionId) -> usize {
+    match node_type {
+        DbNodeType::Connection => match action_id {
+            DatabaseActionId::RunSqlFile => 10,
+            DatabaseActionId::CloseConnection => 20,
+            DatabaseActionId::DeleteConnection => 30,
+            DatabaseActionId::CreateDatabase => 40,
+            _ => 900,
+        },
+        DbNodeType::Database => match action_id {
+            DatabaseActionId::DesignTable => 10,
+            DatabaseActionId::CreateNewQuery => 20,
+            DatabaseActionId::RunSqlFile => 30,
+            DatabaseActionId::DumpSqlStructure => 40,
+            DatabaseActionId::DumpSqlData => 41,
+            DatabaseActionId::DumpSqlStructureAndData => 42,
+            DatabaseActionId::EditDatabase => 50,
+            DatabaseActionId::CreateSchema => 60,
+            DatabaseActionId::CloseDatabase => 70,
+            DatabaseActionId::DeleteDatabase => 80,
+            _ => 900,
+        },
+        DbNodeType::Schema => match action_id {
+            DatabaseActionId::CreateNewQuery => 10,
+            DatabaseActionId::RunSqlFile => 20,
+            DatabaseActionId::DesignTable => 30,
+            DatabaseActionId::DumpSqlStructure => 40,
+            DatabaseActionId::DumpSqlData => 41,
+            DatabaseActionId::DumpSqlStructureAndData => 42,
+            DatabaseActionId::DeleteSchema => 50,
+            _ => 900,
+        },
+        DbNodeType::Table => match action_id {
+            DatabaseActionId::OpenTableData => 10,
+            DatabaseActionId::DesignTable => 20,
+            DatabaseActionId::RenameTable => 30,
+            DatabaseActionId::CopyTable => 40,
+            DatabaseActionId::TruncateTable => 50,
+            DatabaseActionId::DeleteTable => 60,
+            DatabaseActionId::DumpSqlStructure => 70,
+            DatabaseActionId::DumpSqlData => 71,
+            DatabaseActionId::DumpSqlStructureAndData => 72,
+            DatabaseActionId::ImportData => 80,
+            DatabaseActionId::ExportData => 90,
+            _ => 900,
+        },
+        DbNodeType::View => match action_id {
+            DatabaseActionId::OpenViewData => 10,
+            DatabaseActionId::DeleteView => 20,
+            _ => 900,
+        },
+        DbNodeType::TablesFolder => match action_id {
+            DatabaseActionId::DesignTable => 10,
+            _ => 900,
+        },
+        DbNodeType::QueriesFolder => match action_id {
+            DatabaseActionId::CreateNewQuery => 10,
+            _ => 900,
+        },
+        DbNodeType::NamedQuery => match action_id {
+            DatabaseActionId::OpenNamedQuery => 10,
+            DatabaseActionId::RenameQuery => 20,
+            DatabaseActionId::DeleteQuery => 30,
+            _ => 900,
+        },
+        _ => 900,
+    }
+}
+
+fn context_menu_group(node_type: DbNodeType, action: &DatabaseActionDescriptor) -> Option<String> {
+    action.group.clone().or_else(|| {
+        let group = match node_type {
+            DbNodeType::Connection => match action.id {
+                DatabaseActionId::RunSqlFile => Some("sql"),
+                DatabaseActionId::CloseConnection | DatabaseActionId::DeleteConnection => {
+                    Some("connection")
+                }
+                DatabaseActionId::CreateDatabase => Some("create"),
+                _ => None,
+            },
+            DbNodeType::Database => match action.id {
+                DatabaseActionId::DesignTable | DatabaseActionId::CreateNewQuery => Some("create"),
+                DatabaseActionId::RunSqlFile
+                | DatabaseActionId::DumpSqlStructure
+                | DatabaseActionId::DumpSqlData
+                | DatabaseActionId::DumpSqlStructureAndData => Some("sql"),
+                DatabaseActionId::EditDatabase
+                | DatabaseActionId::CreateSchema
+                | DatabaseActionId::CloseDatabase
+                | DatabaseActionId::DeleteDatabase => Some("database"),
+                _ => None,
+            },
+            DbNodeType::Schema => match action.id {
+                DatabaseActionId::CreateNewQuery | DatabaseActionId::DesignTable => Some("create"),
+                DatabaseActionId::RunSqlFile => Some("sql"),
+                DatabaseActionId::DumpSqlStructure
+                | DatabaseActionId::DumpSqlData
+                | DatabaseActionId::DumpSqlStructureAndData => Some("dump"),
+                DatabaseActionId::DeleteSchema => Some("schema"),
+                _ => None,
+            },
+            DbNodeType::Table => match action.id {
+                DatabaseActionId::OpenTableData | DatabaseActionId::DesignTable => Some("open"),
+                DatabaseActionId::RenameTable
+                | DatabaseActionId::CopyTable
+                | DatabaseActionId::TruncateTable
+                | DatabaseActionId::DeleteTable => Some("table"),
+                DatabaseActionId::DumpSqlStructure
+                | DatabaseActionId::DumpSqlData
+                | DatabaseActionId::DumpSqlStructureAndData => Some("dump"),
+                DatabaseActionId::ImportData | DatabaseActionId::ExportData => Some("io"),
+                _ => None,
+            },
+            DbNodeType::View => match action.id {
+                DatabaseActionId::OpenViewData => Some("open"),
+                DatabaseActionId::DeleteView => Some("view"),
+                _ => None,
+            },
+            DbNodeType::TablesFolder => Some("create"),
+            DbNodeType::QueriesFolder => Some("create"),
+            DbNodeType::NamedQuery => match action.id {
+                DatabaseActionId::OpenNamedQuery => Some("open"),
+                DatabaseActionId::RenameQuery | DatabaseActionId::DeleteQuery => Some("query"),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        group.map(str::to_string)
+    })
 }
 
 pub fn create_connection_form_for(
@@ -606,5 +795,89 @@ fn action_id(action: &DatabaseActionDescriptor) -> &'static str {
         DatabaseActionId::DumpSqlStructure => "dump-sql-structure",
         DatabaseActionId::DumpSqlData => "dump-sql-data",
         DatabaseActionId::DumpSqlStructureAndData => "dump-sql-structure-and-data",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn has_label(items: &[ContextMenuItem], expected: &str) -> bool {
+        items.iter().any(|item| match item {
+            ContextMenuItem::Item { label, .. } => label == expected,
+            ContextMenuItem::Separator => false,
+            ContextMenuItem::Submenu { label, items, .. } => {
+                label == expected || has_label(items, expected)
+            }
+        })
+    }
+
+    #[test]
+    fn mysql_table_context_menu_keeps_design_table_action() {
+        let items = build_context_menu_for(DatabaseType::MySQL, "node-1", DbNodeType::Table);
+
+        assert!(
+            has_label(&items, &translate("Table.design_table")),
+            "设计表菜单项不应因 toolbar_scope 过滤而丢失"
+        );
+    }
+
+    #[test]
+    fn mysql_table_context_menu_keeps_dump_sql_submenu() {
+        let items = build_context_menu_for(DatabaseType::MySQL, "node-1", DbNodeType::Table);
+
+        let dump_submenu = items.iter().find_map(|item| match item {
+            ContextMenuItem::Submenu { label, items, .. }
+                if label == &translate("ImportExport.dump_sql_file") =>
+            {
+                Some(items)
+            }
+            _ => None,
+        });
+
+        let dump_submenu = dump_submenu.expect("导出 SQL 二级菜单不应丢失");
+        assert!(
+            has_label(dump_submenu, &translate("ImportExport.export_structure")),
+            "导出结构菜单项应存在于二级菜单中"
+        );
+        assert!(
+            has_label(dump_submenu, &translate("ImportExport.export_data")),
+            "导出数据菜单项应存在于二级菜单中"
+        );
+        assert!(
+            has_label(
+                dump_submenu,
+                &translate("ImportExport.export_structure_and_data")
+            ),
+            "导出结构和数据菜单项应存在于二级菜单中"
+        );
+    }
+
+    #[test]
+    fn mysql_database_context_menu_restores_legacy_order_and_separators() {
+        let items = build_context_menu_for(DatabaseType::MySQL, "node-1", DbNodeType::Database);
+
+        let labels: Vec<String> = items
+            .iter()
+            .map(|item| match item {
+                ContextMenuItem::Item { label, .. } => label.clone(),
+                ContextMenuItem::Separator => "---".to_string(),
+                ContextMenuItem::Submenu { label, .. } => format!("submenu:{label}"),
+            })
+            .collect();
+
+        let expected = vec![
+            translate("Table.new_table"),
+            translate("Query.new_query"),
+            "---".to_string(),
+            translate("ImportExport.run_sql_file"),
+            format!("submenu:{}", translate("ImportExport.dump_sql_file")),
+            "---".to_string(),
+            translate("Database.edit_database"),
+            translate("Database.close_database"),
+            translate("Database.delete_database"),
+        ];
+
+        assert_eq!(labels, expected);
     }
 }
