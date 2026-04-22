@@ -5957,13 +5957,14 @@ checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 
 [[package]]
 name = "main"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "db",
  "db_view",
  "dirs 6.0.0",
+ "flate2",
  "futures",
  "global-hotkey",
  "gpui",
@@ -5981,12 +5982,14 @@ dependencies = [
  "sftp_view",
  "sha2 0.10.9",
  "smol",
+ "tar",
  "terminal",
  "terminal_view",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "winresource",
+ "zip 2.4.2",
 ]
 
 [[package]]
@@ -13844,6 +13847,23 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.105",
+]
+
+[[package]]
+name = "zip"
+version = "2.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "crossbeam-utils",
+ "displaydoc",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "thiserror 2.0.18",
+ "zopfli",
 ]
 
 [[package]]

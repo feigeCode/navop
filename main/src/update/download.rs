@@ -88,9 +88,6 @@ where
         .await
         .map_err(|err| format!("同步更新文件失败: {}", err))?;
 
-    #[cfg(unix)]
-    super::install::set_executable_permission(download_path)?;
-
     Ok(())
 }
 
@@ -104,26 +101,34 @@ fn download_file_name(version: &str, download_url: &str) -> String {
     let parsed = http::Uri::try_from(download_url).ok();
     let extension = parsed
         .and_then(|uri| uri.path().rsplit('/').next().map(|path| path.to_string()))
-        .and_then(|name| {
-            Path::new(&name)
-                .extension()
-                .map(|extension| extension.to_string_lossy().to_string())
-        })
-        .unwrap_or_else(|| {
-            #[cfg(target_os = "windows")]
-            {
-                return "exe".to_string();
-            }
-            #[allow(unreachable_code)]
-            String::new()
-        });
+        .map(|name| archive_extension(&name))
+        .unwrap_or_default();
 
     let base_name = format!("onetcli-update-{}", version.replace('/', "-"));
     if extension.is_empty() {
         base_name
     } else {
-        format!("{}.{}", base_name, extension)
+        format!("{base_name}{extension}")
     }
+}
+
+fn archive_extension(file_name: &str) -> String {
+    if file_name.ends_with(".tar.gz") {
+        return ".tar.gz".to_string();
+    }
+
+    if file_name.ends_with(".tgz") {
+        return ".tgz".to_string();
+    }
+
+    if file_name.ends_with(".zip") {
+        return ".zip".to_string();
+    }
+
+    Path::new(file_name)
+        .extension()
+        .map(|extension| format!(".{}", extension.to_string_lossy()))
+        .unwrap_or_default()
 }
 
 /// 校验下载文件的 SHA256 哈希值。
@@ -163,5 +168,30 @@ async fn cleanup_old_downloads(dir: &Path) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::download_file_name;
+
+    #[test]
+    fn download_file_name_preserves_tar_gz_suffix() {
+        let file_name = download_file_name(
+            "0.3.2",
+            "https://example.com/onetcli-x86_64-apple-darwin.tar.gz",
+        );
+
+        assert_eq!(file_name, "onetcli-update-0.3.2.tar.gz");
+    }
+
+    #[test]
+    fn download_file_name_preserves_zip_suffix() {
+        let file_name = download_file_name(
+            "0.3.2",
+            "https://example.com/onetcli-x86_64-pc-windows-msvc.zip",
+        );
+
+        assert_eq!(file_name, "onetcli-update-0.3.2.zip");
     }
 }

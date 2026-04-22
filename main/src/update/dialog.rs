@@ -31,10 +31,7 @@ const DOWNLOAD_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(super) fn show_update_dialog(info: UpdateDialogInfo, cx: &mut App) {
     open_popup_window(
-        PopupWindowOptions::new(t!("Update.title").to_string())
-            .size(480.0, 260.0)
-            .min_width(420.0)
-            .min_height(220.0),
+        PopupWindowOptions::new(t!("Update.title").to_string()).size(480.0, 300.0),
         move |_window, cx| cx.new(|cx| UpdateDialogView::new(info, cx)),
         cx,
     );

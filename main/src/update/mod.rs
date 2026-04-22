@@ -11,6 +11,7 @@ use one_core::config::UpdateConfig;
 mod custom_api;
 mod dialog;
 mod download;
+mod extract;
 mod github_release;
 mod install;
 mod network;
@@ -19,7 +20,7 @@ mod util;
 use custom_api::{fetch_update_info, select_download_url};
 use dialog::show_update_dialog;
 use github_release::{fetch_github_release, github_release_to_dialog_info};
-use install::apply_update_helper;
+use install::{apply_update_helper, cleanup_stale_update_backups};
 use network::check_network_connectivity;
 use util::parse_version;
 
@@ -65,10 +66,12 @@ pub(crate) struct UpdateDialogInfo {
 pub fn handle_update_command() -> bool {
     let mut args = std::env::args().skip(1);
     let Some(flag) = args.next() else {
+        cleanup_stale_update_backups();
         return false;
     };
 
     if flag != APPLY_UPDATE_FLAG {
+        cleanup_stale_update_backups();
         return false;
     }
 
