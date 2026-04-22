@@ -520,7 +520,11 @@ impl RemoteFileEditorWindow {
                 .items_center()
                 .justify_center()
                 .gap_2()
-                .child(div().text_base().child(t!("RemoteFileEditor.body.unable_to_open")))
+                .child(
+                    div()
+                        .text_base()
+                        .child(t!("RemoteFileEditor.body.unable_to_open")),
+                )
                 .child(
                     div()
                         .max_w(px(560.0))

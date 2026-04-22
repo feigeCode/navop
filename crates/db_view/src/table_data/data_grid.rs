@@ -5,8 +5,8 @@ use gpui::{
     Window, actions, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _, Size, WindowExt,
-    button::Button, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, Size, WindowExt, button::Button,
+    h_flex, v_flex,
 };
 use one_ui::edit_table::{Column, EditTable, EditTableEvent, EditTableState};
 use rust_i18n::t;
@@ -27,6 +27,7 @@ use db::{
     ColumnInfo, DbManager, ExecOptions, GlobalDbState, IndexInfo, QueryResult, SqlResult,
     TableCellChange, TableDataRequest, TableRowChange, TableSaveRequest,
 };
+use gpui_component::button::ButtonVariants;
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
@@ -34,7 +35,6 @@ use one_core::storage::DatabaseType;
 use one_core::tab_container::TabContainer;
 use one_ui::edit_table::ColumnSort;
 use std::path::PathBuf;
-use gpui_component::button::ButtonVariants;
 
 actions!(
     data_grid,

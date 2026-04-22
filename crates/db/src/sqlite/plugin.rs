@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use crate::connection::{DbConnection, DbError};
 use crate::executor::SqlResult;
@@ -10,7 +11,13 @@ use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportProgressSender,
     ImportResult,
 };
+use crate::manifest_helpers::{action, action_with_scope, field, tab, DatabaseActionDescriptorExt};
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
+use crate::plugin_manifest::{
+    DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
+    DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest, DatabaseUiCapabilities,
+    DatabaseUiManifest,
+};
 use crate::sqlite::SqliteDbConnection;
 use crate::types::*;
 
@@ -28,6 +35,8 @@ pub const SQLITE_DATA_TYPES: &[(&str, &str)] = &[
 
 /// SQLite database plugin implementation
 pub struct SqlitePlugin;
+
+static SQLITE_UI_MANIFEST: LazyLock<DatabaseUiManifest> = LazyLock::new(build_sqlite_ui_manifest);
 
 impl SqlitePlugin {
     pub fn new() -> Self {
@@ -258,10 +267,311 @@ impl SqlitePlugin {
     }
 }
 
+fn build_sqlite_ui_manifest() -> DatabaseUiManifest {
+    let default_db_path = one_core::storage::manager::get_config_dir()
+        .map(|path| {
+            path.join("onetcli_default.db")
+                .to_string_lossy()
+                .to_string()
+        })
+        .unwrap_or_else(|_| "onetcli_default.db".to_string());
+
+    DatabaseUiManifest {
+        capabilities: DatabaseUiCapabilities {
+            supports_auto_increment: true,
+            ..DatabaseUiCapabilities::default()
+        },
+        forms: vec![
+            sqlite_connection_form(&default_db_path),
+            sqlite_database_form(false),
+            sqlite_database_form(true),
+        ],
+        actions: sqlite_action_manifest(),
+        ..DatabaseUiManifest::default()
+    }
+}
+
+fn sqlite_connection_form(default_db_path: &str) -> DatabaseFormManifest {
+    DatabaseFormManifest {
+        kind: DatabaseFormKind::Connection,
+        title_i18n_key: "Common.new".into(),
+        submit_i18n_key: "Common.save".into(),
+        tabs: vec![
+            tab(
+                "general",
+                "ConnectionForm.general",
+                vec![
+                    field(
+                        "name",
+                        "ConnectionForm.connection_name",
+                        DatabaseFormFieldType::Text,
+                    )
+                    .with_placeholder("My SQLite Database")
+                    .with_default("Local SQLite"),
+                    field(
+                        "host",
+                        "ConnectionForm.database_file_path",
+                        DatabaseFormFieldType::FilePath,
+                    )
+                    .with_placeholder("/path/to/database.db")
+                    .with_default(default_db_path),
+                ],
+            ),
+            tab(
+                "notes",
+                "ConnectionForm.notes",
+                vec![field(
+                    "remark",
+                    "ConnectionForm.remark",
+                    DatabaseFormFieldType::TextArea,
+                )
+                .optional()
+                .with_rows(14)
+                .with_placeholder("ConnectionForm.enter_remark")
+                .with_default("")],
+            ),
+        ],
+    }
+}
+
+fn sqlite_database_form(is_edit_mode: bool) -> DatabaseFormManifest {
+    DatabaseFormManifest {
+        kind: if is_edit_mode {
+            DatabaseFormKind::EditDatabase
+        } else {
+            DatabaseFormKind::CreateDatabase
+        },
+        title_i18n_key: if is_edit_mode {
+            "Database.edit_database".into()
+        } else {
+            "Database.new_database".into()
+        },
+        submit_i18n_key: if is_edit_mode {
+            "Common.save".into()
+        } else {
+            "Common.create".into()
+        },
+        tabs: vec![tab(
+            "general",
+            "ConnectionForm.general",
+            vec![
+                field(
+                    "name",
+                    "Database.database_name",
+                    DatabaseFormFieldType::Text,
+                )
+                .with_placeholder("Database.enter_database_name")
+                .disabled_when_editing(is_edit_mode),
+                field(
+                    "path",
+                    "Database.file_path",
+                    DatabaseFormFieldType::FilePath,
+                )
+                .optional()
+                .with_placeholder("Database.file_path_placeholder"),
+            ],
+        )],
+    }
+}
+
+fn sqlite_action_manifest() -> DatabaseActionManifest {
+    DatabaseActionManifest {
+        actions: vec![
+            action(
+                DatabaseActionId::RunSqlFile,
+                "ImportExport.run_sql_file",
+                vec![DbNodeType::Connection, DbNodeType::Database],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::CloseConnection,
+                "Connection.close_connection",
+                vec![DbNodeType::Connection],
+                DatabaseActionPlacement::Both,
+                false,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteConnection,
+                "Connection.delete_connection",
+                vec![DbNodeType::Connection],
+                DatabaseActionPlacement::Both,
+                false,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action(
+                DatabaseActionId::DesignTable,
+                "Table.new_table",
+                vec![DbNodeType::Database, DbNodeType::TablesFolder],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::CurrentNode),
+            action(
+                DatabaseActionId::DesignTable,
+                "Table.design_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::CurrentNode),
+            action(
+                DatabaseActionId::CreateNewQuery,
+                "Query.new_query",
+                vec![DbNodeType::Database, DbNodeType::QueriesFolder],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::CreateNewQuery,
+                "Query.new_query",
+                vec![DbNodeType::QueriesFolder, DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenTableData,
+                "Table.view_data",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenTableData,
+                "Table.view_data",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::RenameTable,
+                "Table.rename_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::CopyTable,
+                "Table.copy_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::TruncateTable,
+                "Table.truncate_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteTable,
+                "Table.delete_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteTable,
+                "Table.delete_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::DumpSqlStructure,
+                "ImportExport.export_structure",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::DumpSqlData,
+                "ImportExport.export_data",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::DumpSqlStructureAndData,
+                "ImportExport.export_structure_and_data",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::ImportData,
+                "ImportExport.import_data",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::ExportData,
+                "ImportExport.export_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenViewData,
+                "View.view_data",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenViewData,
+                "View.view_data",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteView,
+                "View.delete_view",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteView,
+                "View.delete_view",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::OpenNamedQuery,
+                "Query.open_query",
+                vec![DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+            action(
+                DatabaseActionId::RenameQuery,
+                "Query.rename_query",
+                vec![DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+            action(
+                DatabaseActionId::DeleteQuery,
+                "Query.delete_query",
+                vec![DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+        ],
+    }
+}
+
 #[async_trait]
 impl DatabasePlugin for SqlitePlugin {
     fn name(&self) -> DatabaseType {
         DatabaseType::SQLite
+    }
+
+    fn ui_manifest(&self) -> DatabaseUiManifest {
+        SQLITE_UI_MANIFEST.clone()
     }
 
     fn quote_identifier(&self, identifier: &str) -> String {
@@ -1125,6 +1435,7 @@ impl Default for SqlitePlugin {
 mod tests {
     use super::*;
     use crate::plugin::DatabasePlugin;
+    use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
     use crate::types::{ColumnDefinition, IndexDefinition, TableDesign, TableOptions};
 
     fn create_plugin() -> SqlitePlugin {
@@ -1145,6 +1456,27 @@ mod tests {
         assert_eq!(plugin.quote_identifier("table_name"), "\"table_name\"");
         assert_eq!(plugin.quote_identifier("column"), "\"column\"");
         assert_eq!(plugin.quote_identifier("col\"umn"), "\"col\"\"umn\"");
+    }
+
+    #[test]
+    fn test_ui_manifest_smoke() {
+        let manifest = create_plugin().ui_manifest();
+        let form_kinds: Vec<_> = manifest.forms.iter().map(|form| form.kind).collect();
+
+        assert_eq!(manifest.schema_version, 1);
+        assert_eq!(
+            form_kinds,
+            vec![
+                DatabaseFormKind::Connection,
+                DatabaseFormKind::CreateDatabase,
+                DatabaseFormKind::EditDatabase,
+            ]
+        );
+        assert!(manifest
+            .actions
+            .actions
+            .iter()
+            .any(|action| action.id == DatabaseActionId::OpenTableData));
     }
 
     // ==================== DDL SQL Generation Tests ====================

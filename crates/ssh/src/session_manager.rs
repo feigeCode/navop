@@ -293,17 +293,17 @@ impl SshSessionManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionPool, SharedSessionClient, SharedSessionConnector, PING_THROTTLE};
+    use super::{PING_THROTTLE, SessionPool, SharedSessionClient, SharedSessionConnector};
     use crate::{
         JumpServerConnectConfig, ProxyConnectConfig, ShellIntegrationSetup, SshAuth,
         SshConnectConfig,
     };
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
     use async_trait::async_trait;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::sync::Notify;
-    use tokio::time::{sleep, Duration};
+    use tokio::time::{Duration, sleep};
 
     #[derive(Default)]
     struct FakeConnector {

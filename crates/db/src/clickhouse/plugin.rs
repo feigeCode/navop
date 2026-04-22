@@ -2,6 +2,7 @@ use anyhow::Result;
 use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use crate::clickhouse::connection::ClickHouseDbConnection;
 use crate::connection::{DbConnection, DbError};
@@ -10,7 +11,16 @@ use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportProgressSender,
     ImportResult,
 };
+use crate::manifest_helpers::{
+    action, action_with_scope, field, option, ssh_auth_rules, ssh_enabled_rules, ssh_field,
+    ssh_number_field, ssh_password_field, tab, yes_no_options, DatabaseActionDescriptorExt,
+};
 use crate::plugin::{DatabaseOperationRequest, DatabasePlugin, SqlCompletionInfo};
+use crate::plugin_manifest::{
+    DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
+    DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest, DatabaseUiCapabilities,
+    DatabaseUiManifest,
+};
 use crate::types::*;
 
 /// ClickHouse data types (name, description)
@@ -46,9 +56,438 @@ pub const CLICKHOUSE_DATA_TYPES: &[(&str, &str)] = &[
 /// ClickHouse database plugin implementation (stateless)
 pub struct ClickHousePlugin;
 
+const CLICKHOUSE_TABLE_ENGINES: &[&str] = &[
+    "MergeTree",
+    "ReplacingMergeTree",
+    "SummingMergeTree",
+    "AggregatingMergeTree",
+    "CollapsingMergeTree",
+    "VersionedCollapsingMergeTree",
+    "GraphiteMergeTree",
+    "ReplicatedMergeTree",
+    "Log",
+    "TinyLog",
+    "StripeLog",
+    "Memory",
+    "Distributed",
+];
+
+static CLICKHOUSE_UI_MANIFEST: LazyLock<DatabaseUiManifest> =
+    LazyLock::new(build_clickhouse_ui_manifest);
+
 impl ClickHousePlugin {
     pub fn new() -> Self {
         Self
+    }
+}
+
+fn build_clickhouse_ui_manifest() -> DatabaseUiManifest {
+    DatabaseUiManifest {
+        capabilities: DatabaseUiCapabilities {
+            supports_functions: true,
+            supports_table_engine: true,
+            table_engines: clickhouse_engine_names(),
+            ..DatabaseUiCapabilities::default()
+        },
+        forms: vec![
+            clickhouse_connection_form(),
+            clickhouse_database_form(false),
+            clickhouse_database_form(true),
+        ],
+        actions: clickhouse_action_manifest(),
+        ..DatabaseUiManifest::default()
+    }
+}
+
+fn clickhouse_engine_names() -> Vec<String> {
+    CLICKHOUSE_TABLE_ENGINES
+        .iter()
+        .map(|engine| (*engine).to_string())
+        .collect()
+}
+
+fn clickhouse_connection_form() -> DatabaseFormManifest {
+    DatabaseFormManifest {
+        kind: DatabaseFormKind::Connection,
+        title_i18n_key: "Common.new".into(),
+        submit_i18n_key: "Common.save".into(),
+        tabs: vec![
+            tab(
+                "general",
+                "ConnectionForm.general",
+                vec![
+                    field(
+                        "name",
+                        "ConnectionForm.connection_name",
+                        DatabaseFormFieldType::Text,
+                    )
+                    .with_placeholder("My ClickHouse Database")
+                    .with_default("Local ClickHouse"),
+                    field("host", "ConnectionForm.host", DatabaseFormFieldType::Text)
+                        .with_placeholder("localhost")
+                        .with_default("localhost"),
+                    field("port", "ConnectionForm.port", DatabaseFormFieldType::Number)
+                        .with_placeholder("8123 (HTTP port)")
+                        .with_default("8123"),
+                    field(
+                        "username",
+                        "ConnectionForm.username",
+                        DatabaseFormFieldType::Text,
+                    )
+                    .with_placeholder("default")
+                    .with_default("default"),
+                    field(
+                        "password",
+                        "ConnectionForm.password",
+                        DatabaseFormFieldType::Password,
+                    )
+                    .with_placeholder("Enter password"),
+                    field(
+                        "database",
+                        "ConnectionForm.database",
+                        DatabaseFormFieldType::Text,
+                    )
+                    .optional()
+                    .with_placeholder("database name (optional)"),
+                ],
+            ),
+            tab(
+                "advanced",
+                "ConnectionForm.advanced",
+                vec![
+                    field(
+                        "connect_timeout",
+                        "ConnectionForm.connect_timeout",
+                        DatabaseFormFieldType::Number,
+                    )
+                    .optional()
+                    .with_placeholder("30")
+                    .with_default("30"),
+                    field(
+                        "compression",
+                        "ConnectionForm.compression",
+                        DatabaseFormFieldType::Select,
+                    )
+                    .optional()
+                    .with_default("lz4")
+                    .with_options(vec![option("none", "Common.none"), option("lz4", "LZ4")]),
+                ],
+            ),
+            tab(
+                "ssl",
+                "ConnectionForm.ssl",
+                vec![field(
+                    "schema",
+                    "ConnectionForm.schema",
+                    DatabaseFormFieldType::Select,
+                )
+                .optional()
+                .with_default("http")
+                .with_options(vec![
+                    option("http", "ConnectionForm.schema_http"),
+                    option("https", "ConnectionForm.schema_https"),
+                ])],
+            ),
+            tab(
+                "ssh",
+                "ConnectionForm.ssh",
+                vec![
+                    field(
+                        "ssh_tunnel_enabled",
+                        "ConnectionForm.ssh_tunnel_enabled",
+                        DatabaseFormFieldType::Select,
+                    )
+                    .optional()
+                    .with_default("false")
+                    .with_options(yes_no_options()),
+                    ssh_field("ssh_host", "ConnectionForm.ssh_host")
+                        .with_placeholder("jump.example.com"),
+                    ssh_number_field("ssh_port", "ConnectionForm.ssh_port")
+                        .with_default("22")
+                        .with_placeholder("22"),
+                    ssh_field("ssh_username", "ConnectionForm.ssh_username")
+                        .with_placeholder("root"),
+                    field(
+                        "ssh_auth_type",
+                        "ConnectionForm.ssh_auth_type",
+                        DatabaseFormFieldType::Select,
+                    )
+                    .optional()
+                    .with_default("password")
+                    .with_options(vec![
+                        option("password", "ConnectionForm.ssh_auth_password"),
+                        option("private_key", "ConnectionForm.ssh_auth_private_key"),
+                        option("agent", "ConnectionForm.ssh_auth_agent"),
+                    ])
+                    .with_visibility(ssh_enabled_rules()),
+                    ssh_password_field(
+                        "ssh_password",
+                        "ConnectionForm.ssh_password",
+                        "Enter SSH password",
+                    )
+                    .with_visibility(ssh_auth_rules("password")),
+                    ssh_field(
+                        "ssh_private_key_path",
+                        "ConnectionForm.ssh_private_key_path",
+                    )
+                    .with_placeholder("~/.ssh/id_rsa")
+                    .with_visibility(ssh_auth_rules("private_key")),
+                    ssh_password_field(
+                        "ssh_private_key_passphrase",
+                        "ConnectionForm.ssh_private_key_passphrase",
+                        "Enter key passphrase",
+                    )
+                    .with_visibility(ssh_auth_rules("private_key")),
+                    ssh_field("ssh_target_host", "ConnectionForm.ssh_target_host")
+                        .with_placeholder("127.0.0.1"),
+                    ssh_number_field("ssh_target_port", "ConnectionForm.ssh_target_port")
+                        .with_placeholder("8123"),
+                ],
+            ),
+            tab(
+                "notes",
+                "ConnectionForm.notes",
+                vec![field(
+                    "remark",
+                    "ConnectionForm.remark",
+                    DatabaseFormFieldType::TextArea,
+                )
+                .optional()
+                .with_rows(14)
+                .with_placeholder("ConnectionForm.enter_remark")
+                .with_default("")],
+            ),
+        ],
+    }
+}
+
+fn clickhouse_database_form(is_edit_mode: bool) -> DatabaseFormManifest {
+    DatabaseFormManifest {
+        kind: if is_edit_mode {
+            DatabaseFormKind::EditDatabase
+        } else {
+            DatabaseFormKind::CreateDatabase
+        },
+        title_i18n_key: if is_edit_mode {
+            "Database.edit_database".into()
+        } else {
+            "Database.new_database".into()
+        },
+        submit_i18n_key: if is_edit_mode {
+            "Common.save".into()
+        } else {
+            "Common.create".into()
+        },
+        tabs: vec![tab(
+            "general",
+            "ConnectionForm.general",
+            vec![
+                field(
+                    "name",
+                    "Database.database_name",
+                    DatabaseFormFieldType::Text,
+                )
+                .with_placeholder("Database.enter_database_name")
+                .disabled_when_editing(is_edit_mode),
+                field("engine", "Database.engine", DatabaseFormFieldType::Select)
+                    .optional()
+                    .with_default("Atomic")
+                    .with_options(vec![
+                        option("Atomic", "Database.engine_atomic"),
+                        option("Ordinary", "Database.engine_ordinary"),
+                        option("Memory", "Database.engine_memory"),
+                        option("Lazy", "Database.engine_lazy"),
+                        option("MySQL", "Database.engine_mysql"),
+                        option("PostgreSQL", "Database.engine_postgresql"),
+                    ]),
+                field("comment", "Database.comment", DatabaseFormFieldType::Text)
+                    .optional()
+                    .with_placeholder("Database.engine_comment"),
+            ],
+        )],
+    }
+}
+
+fn clickhouse_action_manifest() -> DatabaseActionManifest {
+    DatabaseActionManifest {
+        actions: vec![
+            action(
+                DatabaseActionId::RunSqlFile,
+                "ImportExport.run_sql_file",
+                vec![DbNodeType::Connection, DbNodeType::Database],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::CloseConnection,
+                "Connection.close_connection",
+                vec![DbNodeType::Connection],
+                DatabaseActionPlacement::Both,
+                false,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteConnection,
+                "Connection.delete_connection",
+                vec![DbNodeType::Connection],
+                DatabaseActionPlacement::Both,
+                false,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::CreateDatabase,
+                "Database.new_database",
+                vec![DbNodeType::Connection],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteDatabase,
+                "Database.delete_database",
+                vec![DbNodeType::Database],
+                DatabaseActionPlacement::Both,
+                false,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action(
+                DatabaseActionId::CloseDatabase,
+                "Database.close_database",
+                vec![DbNodeType::Database],
+                DatabaseActionPlacement::ContextMenu,
+            )
+            .always_enabled(),
+            action(
+                DatabaseActionId::DesignTable,
+                "Table.new_table",
+                vec![DbNodeType::Database, DbNodeType::TablesFolder],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::CurrentNode),
+            action(
+                DatabaseActionId::DesignTable,
+                "Table.design_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::CurrentNode),
+            action(
+                DatabaseActionId::CreateNewQuery,
+                "Query.new_query",
+                vec![DbNodeType::Database, DbNodeType::QueriesFolder],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::CreateNewQuery,
+                "Query.new_query",
+                vec![DbNodeType::QueriesFolder, DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenTableData,
+                "Table.view_data",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenTableData,
+                "Table.view_data",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::RenameTable,
+                "Table.rename_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::CopyTable,
+                "Table.copy_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::TruncateTable,
+                "Table.truncate_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteTable,
+                "Table.delete_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteTable,
+                "Table.delete_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenViewData,
+                "View.view_data",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenViewData,
+                "View.view_data",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteView,
+                "View.delete_view",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteView,
+                "View.delete_view",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::OpenNamedQuery,
+                "Query.open_query",
+                vec![DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+            action(
+                DatabaseActionId::RenameQuery,
+                "Query.rename_query",
+                vec![DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+            action(
+                DatabaseActionId::DeleteQuery,
+                "Query.delete_query",
+                vec![DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+        ],
     }
 }
 
@@ -60,6 +499,14 @@ impl DatabasePlugin for ClickHousePlugin {
 
     fn quote_identifier(&self, identifier: &str) -> String {
         format!("`{}`", identifier.replace("`", "``"))
+    }
+
+    fn ui_manifest(&self) -> DatabaseUiManifest {
+        CLICKHOUSE_UI_MANIFEST.clone()
+    }
+
+    fn engines(&self) -> Vec<String> {
+        clickhouse_engine_names()
     }
 
     fn get_completion_info(&self) -> SqlCompletionInfo {
@@ -1110,6 +1557,7 @@ impl DatabasePlugin for ClickHousePlugin {
 mod tests {
     use super::*;
     use crate::plugin::DatabasePlugin;
+    use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
     use crate::types::{ColumnDefinition, IndexDefinition, TableDesign, TableOptions};
     use std::collections::HashMap;
 
@@ -1131,6 +1579,28 @@ mod tests {
         assert_eq!(plugin.quote_identifier("table_name"), "`table_name`");
         assert_eq!(plugin.quote_identifier("column"), "`column`");
         assert_eq!(plugin.quote_identifier("col`umn"), "`col``umn`");
+    }
+
+    #[test]
+    fn test_ui_manifest_smoke() {
+        let manifest = create_plugin().ui_manifest();
+        let form_kinds: Vec<_> = manifest.forms.iter().map(|form| form.kind).collect();
+
+        assert_eq!(manifest.schema_version, 1);
+        assert_eq!(
+            form_kinds,
+            vec![
+                DatabaseFormKind::Connection,
+                DatabaseFormKind::CreateDatabase,
+                DatabaseFormKind::EditDatabase,
+            ]
+        );
+        assert!(manifest
+            .actions
+            .actions
+            .iter()
+            .any(|action| action.id == DatabaseActionId::CreateDatabase));
+        assert_eq!(create_plugin().engines(), clickhouse_engine_names());
     }
 
     // ==================== DDL SQL Generation Tests ====================

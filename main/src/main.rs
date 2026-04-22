@@ -16,7 +16,6 @@ mod user_avatar;
 
 use crate::onetcli_app::OnetCliApp;
 use db::GlobalDbState;
-use db_view::database_view_plugin::DatabaseViewPluginRegistry;
 use gpui::*;
 
 use gpui_component::Root;
@@ -41,8 +40,6 @@ fn main() {
 
         db_view::init_ask_ai_notifier(cx);
 
-        let view_registry = DatabaseViewPluginRegistry::new();
-        cx.set_global(view_registry);
         let mut window_size = size(px(1600.0), px(1200.0));
         if let Some(display) = cx.primary_display() {
             let display_size = display.bounds().size;

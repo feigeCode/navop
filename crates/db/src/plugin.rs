@@ -7,6 +7,9 @@ use crate::import_export::{
     DataFormat, ExportConfig, ExportProgressSender, ExportResult, FormatHandler, ImportConfig,
     ImportProgressSender, ImportResult,
 };
+use crate::plugin_manifest::{
+    DatabaseUiCapabilities, DatabaseUiManifest, FormSelectOption, ReferenceDataKind,
+};
 use crate::streaming_parser::StreamingSqlParser;
 use crate::types::*;
 use crate::QueryResult;
@@ -437,6 +440,31 @@ pub trait DatabasePlugin: Send + Sync {
     fn supports_procedures(&self) -> bool {
         true
     }
+
+    fn ui_manifest(&self) -> DatabaseUiManifest {
+        DatabaseUiManifest {
+            capabilities: DatabaseUiCapabilities {
+                supports_schema: self.supports_schema(),
+                uses_schema_as_database: self.uses_schema_as_database(),
+                supports_sequences: self.supports_sequences(),
+                supports_functions: self.supports_functions(),
+                supports_procedures: self.supports_procedures(),
+                table_engines: self.engines(),
+                ..DatabaseUiCapabilities::default()
+            },
+            ..DatabaseUiManifest::default()
+        }
+    }
+
+    fn resolve_reference_data(
+        &self,
+        kind: ReferenceDataKind,
+        context: &HashMap<String, String>,
+    ) -> Vec<FormSelectOption> {
+        let _ = (kind, context);
+        Vec::new()
+    }
+
     // === Procedure Operations ===
     async fn list_procedures(
         &self,
@@ -2118,6 +2146,11 @@ pub trait DatabasePlugin: Send + Sync {
 
     /// Get collations for a specific charset
     fn get_collations(&self, _charset: &str) -> Vec<CollationInfo> {
+        vec![]
+    }
+
+    /// Get supported table engines for this database.
+    fn engines(&self) -> Vec<String> {
         vec![]
     }
 

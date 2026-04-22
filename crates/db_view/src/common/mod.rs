@@ -1,8 +1,13 @@
 mod database_editor_view;
 pub mod db_connection_form;
+mod generic_database_form;
+mod generic_schema_form;
+pub mod manifest_bridge;
 mod schema_editor_view;
 
 pub use database_editor_view::DatabaseEditorView;
+pub use generic_database_form::GenericDatabaseForm;
+pub use generic_schema_form::GenericSchemaForm;
 pub use schema_editor_view::SchemaEditorView;
 
 use db::plugin::DatabaseOperationRequest;

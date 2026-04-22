@@ -30,7 +30,7 @@ use rust_i18n::t;
 use tracing::log::{error, info, trace, warn};
 
 // 3. 当前 crate 导入（按模块分组）
-use crate::database_view_plugin::DatabaseViewPluginRegistry;
+use crate::database_view_plugin::build_context_menu_for;
 use db::{DbNode, DbNodeType, GlobalDbState};
 use gpui_component::label::Label;
 use gpui_component::menu::PopupMenu;
@@ -2612,16 +2612,10 @@ impl DbTreeView {
         let is_active =
             conn_active && (node.node_type != DbNodeType::Database || node.children_loaded);
 
-        // 尝试从 plugin 获取菜单
-        let registry = cx.global::<DatabaseViewPluginRegistry>();
-        if let Some(plugin) = registry.get(&node.database_type) {
-            let menu_items = plugin.build_context_menu(node_id, node.node_type);
-
-            if !menu_items.is_empty() {
-                // 渲染 plugin 提供的菜单，传入连接激活状态
-                menu =
-                    Self::render_context_menu_items(menu, menu_items, is_active, view, window, cx);
-            }
+        let menu_items = build_context_menu_for(node.database_type, node_id, node.node_type);
+        if !menu_items.is_empty() {
+            // 渲染 plugin 提供的菜单，传入连接激活状态
+            menu = Self::render_context_menu_items(menu, menu_items, is_active, view, window, cx);
         }
 
         // 添加通用的刷新菜单项

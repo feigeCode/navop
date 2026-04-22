@@ -341,9 +341,9 @@ impl MultiTextEditor {
 
 impl Render for MultiTextEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use gpui::prelude::FluentBuilder;
         use gpui::ParentElement;
-        use gpui_component::{button::Button, h_flex, IconName, Sizable, Size};
+        use gpui::prelude::FluentBuilder;
+        use gpui_component::{IconName, Sizable, Size, button::Button, h_flex};
 
         let active_tab = self.active_tab;
         let is_json_tab = active_tab == EditorTab::Json;

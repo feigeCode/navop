@@ -2,7 +2,10 @@ use crate::database_objects_tab::{DatabaseObjectsBatchAction, DatabaseObjectsEve
 use crate::db_tree_view::SqlDumpMode;
 use crate::{
     database_objects_tab::DatabaseObjectsPanel,
-    database_view_plugin::DatabaseViewPluginRegistry,
+    database_view_plugin::{
+        create_database_editor_view_for_edit_type, create_database_editor_view_for_new,
+        create_schema_editor_view_for,
+    },
     db_tree_view::{DbTreeView, DbTreeViewEvent},
     sql_editor_view::SqlEditorTab,
     table_designer_tab::{TableDesigner, TableDesignerConfig},
@@ -1144,21 +1147,8 @@ impl DatabaseEventHandler {
         let connection_id = node.connection_id.clone();
         let database_type = node.database_type;
 
-        let plugin_registry = cx.global::<DatabaseViewPluginRegistry>();
-        let editor_view = if let Some(plugin) = plugin_registry.get(&database_type) {
-            plugin.create_database_editor_view(connection_id.clone(), window, cx)
-        } else {
-            Self::show_error(
-                window,
-                t!(
-                    "DbTreeEvent.unsupported_database_type",
-                    db_type = format!("{:?}", database_type)
-                )
-                .to_string(),
-                cx,
-            );
-            return;
-        };
+        let editor_view =
+            create_database_editor_view_for_new(database_type, connection_id.clone(), window, cx);
 
         let global_state_clone = global_state.clone();
         let connection_id_clone = connection_id.clone();
@@ -1283,26 +1273,13 @@ impl DatabaseEventHandler {
         let database_name = node.name.clone();
         let database_type = node.database_type;
 
-        let plugin_registry = cx.global::<DatabaseViewPluginRegistry>();
-        let editor_view = if let Some(plugin) = plugin_registry.get(&database_type) {
-            plugin.create_database_editor_view_for_edit(
-                connection_id.clone(),
-                database_name.clone(),
-                window,
-                cx,
-            )
-        } else {
-            Self::show_error(
-                window,
-                t!(
-                    "DbTreeEvent.unsupported_database_type",
-                    db_type = format!("{:?}", database_type)
-                )
-                .to_string(),
-                cx,
-            );
-            return;
-        };
+        let editor_view = create_database_editor_view_for_edit_type(
+            database_type,
+            connection_id.clone(),
+            database_name.clone(),
+            window,
+            cx,
+        );
 
         let global_state_clone = global_state.clone();
         let connection_id_clone = connection_id.clone();
@@ -1560,32 +1537,19 @@ impl DatabaseEventHandler {
         let database_name = node.name.clone();
         let database_type = node.database_type;
 
-        let plugin_registry = cx.global::<DatabaseViewPluginRegistry>();
-        let editor_view = if let Some(plugin) = plugin_registry.get(&database_type) {
-            if let Some(view) = plugin.create_schema_editor_view(
-                connection_id.clone(),
-                database_name.clone(),
-                window,
-                cx,
-            ) {
-                view
-            } else {
-                Self::show_error(
-                    window,
-                    t!(
-                        "DbTreeEvent.create_schema_unsupported",
-                        db_type = format!("{:?}", database_type)
-                    )
-                    .to_string(),
-                    cx,
-                );
-                return;
-            }
+        let editor_view = if let Some(view) = create_schema_editor_view_for(
+            database_type,
+            connection_id.clone(),
+            database_name.clone(),
+            window,
+            cx,
+        ) {
+            view
         } else {
             Self::show_error(
                 window,
                 t!(
-                    "DbTreeEvent.unsupported_database_type",
+                    "DbTreeEvent.create_schema_unsupported",
                     db_type = format!("{:?}", database_type)
                 )
                 .to_string(),

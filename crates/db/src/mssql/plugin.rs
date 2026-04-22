@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use gpui_component::table::Column;
@@ -12,8 +13,17 @@ use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportProgressSender,
     ImportResult,
 };
+use crate::manifest_helpers::{
+    action, action_with_scope, field, option, ssh_auth_rules, ssh_enabled_rules, ssh_field,
+    ssh_number_field, ssh_password_field, tab, yes_no_options, DatabaseActionDescriptorExt,
+};
 use crate::mssql::connection::MssqlDbConnection;
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
+use crate::plugin_manifest::{
+    DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
+    DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest, DatabaseUiCapabilities,
+    DatabaseUiManifest, FormSelectOption, ReferenceDataKind,
+};
 use crate::types::*;
 
 /// MSSQL data types (name, description)
@@ -62,9 +72,507 @@ fn fix_mssql_brackets(sql: &str) -> String {
 /// MSSQL database plugin implementation (stateless)
 pub struct MsSqlPlugin;
 
+static MSSQL_UI_MANIFEST: LazyLock<DatabaseUiManifest> = LazyLock::new(build_mssql_ui_manifest);
+
 impl MsSqlPlugin {
     pub fn new() -> Self {
         Self
+    }
+}
+
+fn build_mssql_ui_manifest() -> DatabaseUiManifest {
+    DatabaseUiManifest {
+        capabilities: DatabaseUiCapabilities {
+            supports_schema: true,
+            supports_sequences: true,
+            supports_functions: true,
+            supports_procedures: true,
+            supports_triggers: true,
+            supports_table_collation: true,
+            ..DatabaseUiCapabilities::default()
+        },
+        forms: vec![
+            mssql_connection_form(),
+            mssql_database_form(false),
+            mssql_database_form(true),
+            mssql_schema_form(),
+        ],
+        actions: mssql_action_manifest(),
+        ..DatabaseUiManifest::default()
+    }
+}
+
+fn mssql_connection_form() -> DatabaseFormManifest {
+    DatabaseFormManifest {
+        kind: DatabaseFormKind::Connection,
+        title_i18n_key: "Common.new".into(),
+        submit_i18n_key: "Common.save".into(),
+        tabs: vec![
+            tab(
+                "general",
+                "ConnectionForm.general",
+                vec![
+                    field(
+                        "name",
+                        "ConnectionForm.connection_name",
+                        DatabaseFormFieldType::Text,
+                    )
+                    .with_placeholder("My SQL Server Database")
+                    .with_default("Local SQL Server"),
+                    field("host", "ConnectionForm.host", DatabaseFormFieldType::Text)
+                        .with_placeholder("localhost")
+                        .with_default("localhost"),
+                    field("port", "ConnectionForm.port", DatabaseFormFieldType::Number)
+                        .with_placeholder("1433")
+                        .with_default("1433"),
+                    field(
+                        "username",
+                        "ConnectionForm.username",
+                        DatabaseFormFieldType::Text,
+                    )
+                    .with_placeholder("sa")
+                    .with_default("sa"),
+                    field(
+                        "password",
+                        "ConnectionForm.password",
+                        DatabaseFormFieldType::Password,
+                    )
+                    .with_placeholder("Enter password"),
+                    field(
+                        "database",
+                        "ConnectionForm.database",
+                        DatabaseFormFieldType::Text,
+                    )
+                    .optional()
+                    .with_placeholder("database name (optional)"),
+                ],
+            ),
+            tab(
+                "advanced",
+                "ConnectionForm.advanced",
+                vec![
+                    field(
+                        "connect_timeout",
+                        "ConnectionForm.connect_timeout",
+                        DatabaseFormFieldType::Number,
+                    )
+                    .optional()
+                    .with_placeholder("30")
+                    .with_default("30"),
+                    field(
+                        "application_name",
+                        "ConnectionForm.application_name",
+                        DatabaseFormFieldType::Text,
+                    )
+                    .optional()
+                    .with_placeholder("Application Name"),
+                ],
+            ),
+            tab(
+                "ssl",
+                "ConnectionForm.ssl",
+                vec![
+                    field(
+                        "encrypt",
+                        "ConnectionForm.encrypt",
+                        DatabaseFormFieldType::Select,
+                    )
+                    .optional()
+                    .with_default("off")
+                    .with_options(vec![
+                        option("off", "ConnectionForm.encrypt_off"),
+                        option("on", "ConnectionForm.encrypt_on"),
+                        option("required", "ConnectionForm.encrypt_strict"),
+                    ]),
+                    field(
+                        "trust_cert",
+                        "ConnectionForm.trust_certificate",
+                        DatabaseFormFieldType::Select,
+                    )
+                    .optional()
+                    .with_default("true")
+                    .with_options(yes_no_options()),
+                ],
+            ),
+            tab(
+                "ssh",
+                "ConnectionForm.ssh",
+                vec![
+                    field(
+                        "ssh_tunnel_enabled",
+                        "ConnectionForm.ssh_tunnel_enabled",
+                        DatabaseFormFieldType::Select,
+                    )
+                    .optional()
+                    .with_default("false")
+                    .with_options(yes_no_options()),
+                    ssh_field("ssh_host", "ConnectionForm.ssh_host")
+                        .with_placeholder("jump.example.com"),
+                    ssh_number_field("ssh_port", "ConnectionForm.ssh_port")
+                        .with_default("22")
+                        .with_placeholder("22"),
+                    ssh_field("ssh_username", "ConnectionForm.ssh_username")
+                        .with_placeholder("root"),
+                    field(
+                        "ssh_auth_type",
+                        "ConnectionForm.ssh_auth_type",
+                        DatabaseFormFieldType::Select,
+                    )
+                    .optional()
+                    .with_default("password")
+                    .with_options(vec![
+                        option("password", "ConnectionForm.ssh_auth_password"),
+                        option("private_key", "ConnectionForm.ssh_auth_private_key"),
+                        option("agent", "ConnectionForm.ssh_auth_agent"),
+                    ])
+                    .with_visibility(ssh_enabled_rules()),
+                    ssh_password_field(
+                        "ssh_password",
+                        "ConnectionForm.ssh_password",
+                        "Enter SSH password",
+                    )
+                    .with_visibility(ssh_auth_rules("password")),
+                    ssh_field(
+                        "ssh_private_key_path",
+                        "ConnectionForm.ssh_private_key_path",
+                    )
+                    .with_placeholder("~/.ssh/id_rsa")
+                    .with_visibility(ssh_auth_rules("private_key")),
+                    ssh_password_field(
+                        "ssh_private_key_passphrase",
+                        "ConnectionForm.ssh_private_key_passphrase",
+                        "Enter key passphrase",
+                    )
+                    .with_visibility(ssh_auth_rules("private_key")),
+                    ssh_field("ssh_target_host", "ConnectionForm.ssh_target_host")
+                        .with_placeholder("127.0.0.1"),
+                    ssh_number_field("ssh_target_port", "ConnectionForm.ssh_target_port")
+                        .with_placeholder("1433"),
+                ],
+            ),
+            tab(
+                "notes",
+                "ConnectionForm.notes",
+                vec![field(
+                    "remark",
+                    "ConnectionForm.remark",
+                    DatabaseFormFieldType::TextArea,
+                )
+                .optional()
+                .with_rows(14)
+                .with_placeholder("ConnectionForm.enter_remark")
+                .with_default("")],
+            ),
+        ],
+    }
+}
+
+fn mssql_database_form(is_edit_mode: bool) -> DatabaseFormManifest {
+    DatabaseFormManifest {
+        kind: if is_edit_mode {
+            DatabaseFormKind::EditDatabase
+        } else {
+            DatabaseFormKind::CreateDatabase
+        },
+        title_i18n_key: if is_edit_mode {
+            "Database.edit_database".into()
+        } else {
+            "Database.new_database".into()
+        },
+        submit_i18n_key: if is_edit_mode {
+            "Common.save".into()
+        } else {
+            "Common.create".into()
+        },
+        tabs: vec![tab(
+            "general",
+            "ConnectionForm.general",
+            vec![
+                field(
+                    "name",
+                    "Database.database_name",
+                    DatabaseFormFieldType::Text,
+                )
+                .with_placeholder("Database.enter_database_name")
+                .disabled_when_editing(is_edit_mode),
+                field(
+                    "collation",
+                    "Database.collation",
+                    DatabaseFormFieldType::Select,
+                )
+                .optional()
+                .with_default("Chinese_PRC_CI_AS")
+                .with_options_source(ReferenceDataKind::MsSqlCollations),
+            ],
+        )],
+    }
+}
+
+fn mssql_schema_form() -> DatabaseFormManifest {
+    DatabaseFormManifest {
+        kind: DatabaseFormKind::CreateSchema,
+        title_i18n_key: "Database.new_schema".into(),
+        submit_i18n_key: "Common.create".into(),
+        tabs: vec![tab(
+            "general",
+            "ConnectionForm.general",
+            vec![
+                field("name", "Database.schema_name", DatabaseFormFieldType::Text)
+                    .with_placeholder("Database.enter_schema_name"),
+                field(
+                    "comment",
+                    "Database.remark",
+                    DatabaseFormFieldType::TextArea,
+                )
+                .optional()
+                .with_rows(3)
+                .with_placeholder("Database.enter_remark"),
+            ],
+        )],
+    }
+}
+
+fn mssql_action_manifest() -> DatabaseActionManifest {
+    DatabaseActionManifest {
+        actions: vec![
+            action(
+                DatabaseActionId::RunSqlFile,
+                "ImportExport.run_sql_file",
+                vec![DbNodeType::Connection, DbNodeType::Database],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::CloseConnection,
+                "Connection.close_connection",
+                vec![DbNodeType::Connection],
+                DatabaseActionPlacement::Both,
+                false,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteConnection,
+                "Connection.delete_connection",
+                vec![DbNodeType::Connection],
+                DatabaseActionPlacement::Both,
+                false,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::CreateDatabase,
+                "Database.new_database",
+                vec![DbNodeType::Connection],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action_with_scope(
+                DatabaseActionId::EditDatabase,
+                "Database.edit_database",
+                vec![DbNodeType::Database],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action(
+                DatabaseActionId::CreateSchema,
+                "Database.new_schema",
+                vec![DbNodeType::Database],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::CurrentNode),
+            action(
+                DatabaseActionId::CloseDatabase,
+                "Database.close_database",
+                vec![DbNodeType::Database],
+                DatabaseActionPlacement::ContextMenu,
+            )
+            .always_enabled(),
+            action_with_scope(
+                DatabaseActionId::DeleteDatabase,
+                "Database.delete_database",
+                vec![DbNodeType::Database],
+                DatabaseActionPlacement::Both,
+                false,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteSchema,
+                "Database.delete_schema",
+                vec![DbNodeType::Schema],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action(
+                DatabaseActionId::DesignTable,
+                "Table.new_table",
+                vec![
+                    DbNodeType::Database,
+                    DbNodeType::Schema,
+                    DbNodeType::TablesFolder,
+                ],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::CurrentNode),
+            action(
+                DatabaseActionId::DesignTable,
+                "Table.design_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::CurrentNode),
+            action_with_scope(
+                DatabaseActionId::OpenTableData,
+                "Table.view_data",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenTableData,
+                "Table.view_data",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::RenameTable,
+                "Table.rename_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::CopyTable,
+                "Table.copy_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::TruncateTable,
+                "Table.truncate_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteTable,
+                "Table.delete_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteTable,
+                "Table.delete_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::DumpSqlStructure,
+                "ImportExport.export_structure",
+                vec![DbNodeType::Database, DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::DumpSqlData,
+                "ImportExport.export_data",
+                vec![DbNodeType::Database, DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::DumpSqlStructureAndData,
+                "ImportExport.export_structure_and_data",
+                vec![DbNodeType::Database, DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::ImportData,
+                "ImportExport.import_data",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action(
+                DatabaseActionId::ExportData,
+                "ImportExport.export_table",
+                vec![DbNodeType::Table],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenViewData,
+                "View.view_data",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::OpenViewData,
+                "View.view_data",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteView,
+                "View.delete_view",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Both,
+                true,
+                Some(DatabaseActionToolbarScope::SelectedRow),
+            ),
+            action_with_scope(
+                DatabaseActionId::DeleteView,
+                "View.delete_view",
+                vec![DbNodeType::View],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::CreateNewQuery,
+                "Query.new_query",
+                vec![
+                    DbNodeType::Database,
+                    DbNodeType::Schema,
+                    DbNodeType::QueriesFolder,
+                ],
+                DatabaseActionPlacement::ContextMenu,
+            ),
+            action_with_scope(
+                DatabaseActionId::CreateNewQuery,
+                "Query.new_query",
+                vec![DbNodeType::QueriesFolder, DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Toolbar,
+                true,
+                Some(DatabaseActionToolbarScope::CurrentNode),
+            ),
+            action(
+                DatabaseActionId::OpenNamedQuery,
+                "Query.open_query",
+                vec![DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+            action(
+                DatabaseActionId::RenameQuery,
+                "Query.rename_query",
+                vec![DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+            action(
+                DatabaseActionId::DeleteQuery,
+                "Query.delete_query",
+                vec![DbNodeType::NamedQuery],
+                DatabaseActionPlacement::Both,
+            )
+            .with_toolbar_scope(DatabaseActionToolbarScope::SelectedRow),
+        ],
     }
 }
 
@@ -76,6 +584,41 @@ impl DatabasePlugin for MsSqlPlugin {
 
     fn quote_identifier(&self, identifier: &str) -> String {
         format!("[{}]", identifier.replace("]", "]]"))
+    }
+
+    fn ui_manifest(&self) -> DatabaseUiManifest {
+        MSSQL_UI_MANIFEST.clone()
+    }
+
+    fn resolve_reference_data(
+        &self,
+        kind: ReferenceDataKind,
+        context: &HashMap<String, String>,
+    ) -> Vec<FormSelectOption> {
+        match kind {
+            ReferenceDataKind::MsSqlCharsets => self
+                .get_charsets()
+                .into_iter()
+                .map(|charset| FormSelectOption {
+                    value: charset.name,
+                    label_i18n_key: charset.description,
+                })
+                .collect(),
+            ReferenceDataKind::MsSqlCollations => {
+                let charset = context
+                    .get("charset")
+                    .cloned()
+                    .unwrap_or_else(|| "Chinese_PRC".to_string());
+                self.get_collations(&charset)
+                    .into_iter()
+                    .map(|collation| FormSelectOption {
+                        value: collation.name.clone(),
+                        label_i18n_key: collation.name,
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
     }
 
     fn get_completion_info(&self) -> SqlCompletionInfo {
@@ -1985,6 +2528,7 @@ impl DatabasePlugin for MsSqlPlugin {
 mod tests {
     use super::*;
     use crate::plugin::DatabasePlugin;
+    use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
     use crate::types::{ColumnDefinition, IndexDefinition, TableDesign, TableOptions};
     use std::collections::HashMap;
 
@@ -2018,6 +2562,28 @@ mod tests {
     fn test_supports_sequences() {
         let plugin = create_plugin();
         assert!(plugin.supports_sequences());
+    }
+
+    #[test]
+    fn test_ui_manifest_smoke() {
+        let manifest = create_plugin().ui_manifest();
+        let form_kinds: Vec<_> = manifest.forms.iter().map(|form| form.kind).collect();
+
+        assert_eq!(manifest.schema_version, 1);
+        assert_eq!(
+            form_kinds,
+            vec![
+                DatabaseFormKind::Connection,
+                DatabaseFormKind::CreateDatabase,
+                DatabaseFormKind::EditDatabase,
+                DatabaseFormKind::CreateSchema,
+            ]
+        );
+        assert!(manifest
+            .actions
+            .actions
+            .iter()
+            .any(|action| action.id == DatabaseActionId::CreateSchema));
     }
 
     #[test]

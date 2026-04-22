@@ -1,13 +1,13 @@
 use gpui::{
-    div, hsla, linear_color_stop, linear_gradient, prelude::FluentBuilder as _, App, AppContext,
-    Context, Corner, Div, ElementId, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
-    InteractiveElement as _, IntoElement, KeyBinding, ParentElement, Render, RenderOnce,
+    App, AppContext, Context, Corner, Div, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
+    Hsla, InteractiveElement as _, IntoElement, KeyBinding, ParentElement, Render, RenderOnce,
     SharedString, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription,
-    TextAlign, Window,
+    TextAlign, Window, div, hsla, linear_color_stop, linear_gradient, prelude::FluentBuilder as _,
 };
 use rust_i18n::t;
 
 use crate::{
+    ActiveTheme as _, Colorize as _, Icon, Sizable, Size, StyleSized,
     actions::Confirm,
     button::{Button, ButtonVariants},
     divider::Divider,
@@ -17,7 +17,7 @@ use crate::{
     slider::{Slider, SliderEvent, SliderState},
     tab::{Tab, TabBar},
     tooltip::Tooltip,
-    v_flex, ActiveTheme as _, Colorize as _, Icon, Sizable, Size, StyleSized,
+    v_flex,
 };
 
 const CONTEXT: &'static str = "ColorPicker";

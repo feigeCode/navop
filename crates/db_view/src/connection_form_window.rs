@@ -16,7 +16,7 @@ use one_core::storage::{DatabaseType, StoredConnection, Workspace};
 use rust_i18n::t;
 
 use crate::common::db_connection_form::{DbConnectionForm, DbConnectionFormEvent};
-use crate::database_view_plugin::DatabaseViewPluginRegistry;
+use crate::database_view_plugin::create_connection_form_for;
 
 /// 连接表单窗口的配置
 pub struct ConnectionFormWindowConfig {
@@ -51,12 +51,7 @@ impl ConnectionFormWindow {
         }
         .into();
 
-        let plugin_registry = cx.global::<DatabaseViewPluginRegistry>();
-        let plugin = plugin_registry
-            .get(&db_type)
-            .expect("Plugin should exist for db_type");
-
-        let form = plugin.create_connection_form(window, cx);
+        let form = create_connection_form_for(db_type, window, cx);
 
         form.update(cx, |f, cx| {
             f.set_workspaces(config.workspaces.clone(), window, cx);

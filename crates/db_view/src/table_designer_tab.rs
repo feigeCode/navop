@@ -25,7 +25,10 @@ use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-use crate::database_view_plugin::{ColumnEditorCapabilities, DatabaseViewPluginRegistry};
+use crate::database_view_plugin::{
+    ColumnEditorCapabilities, get_column_editor_capabilities_for, get_engines_for,
+    get_table_designer_capabilities_for,
+};
 use db::GlobalDbState;
 #[cfg(test)]
 use db::duckdb::DuckDbPlugin;
@@ -316,18 +319,12 @@ impl TableDesigner {
             Vec<EngineSelectItem>,
             ColumnEditorCapabilities,
         ) = {
-            let registry = cx.global::<DatabaseViewPluginRegistry>();
-            if let Some(view_plugin) = registry.get(&config.database_type) {
-                let engines = view_plugin
-                    .get_engines()
-                    .into_iter()
-                    .map(|name| EngineSelectItem { name })
-                    .collect();
-                let capabilities = view_plugin.get_column_editor_capabilities();
-                (engines, capabilities)
-            } else {
-                (vec![], ColumnEditorCapabilities::default())
-            }
+            let engines = get_engines_for(config.database_type)
+                .into_iter()
+                .map(|name| EngineSelectItem { name })
+                .collect();
+            let capabilities = get_column_editor_capabilities_for(config.database_type);
+            (engines, capabilities)
         };
 
         let engine_select = cx.new(|cx| {
@@ -1178,11 +1175,7 @@ impl TableDesigner {
     }
 
     fn render_options(&self, cx: &Context<Self>) -> AnyElement {
-        let registry = cx.global::<DatabaseViewPluginRegistry>();
-        let capabilities = registry
-            .get(&self.config.database_type)
-            .map(|plugin| plugin.get_table_designer_capabilities())
-            .unwrap_or_default();
+        let capabilities = get_table_designer_capabilities_for(self.config.database_type);
 
         v_flex()
             .size_full()
