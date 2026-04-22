@@ -72,6 +72,9 @@
 **终端自带SFTP侧边栏，支持文件拖拽上传**
 ![sftp_sidebar.png](sftp_sidebar.png)
 
+**直接在应用程序中编辑文件，具备语法高亮显示和自动完成功能。**
+![remote_file_editor](remote_file_editor.png)
+
 ## 平台支持
 
 | 平台 | 架构 | 渲染后端 |

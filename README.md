@@ -66,6 +66,9 @@
 **The terminal comes with an SFTP sidebar that supports file drag-and-drop upload.**    
 ![sftp_sidebar.png](sftp_sidebar.png)
 
+**Edit files directly from the app, with syntax highlighting and autocomplete.**
+![remote_file_editor](remote_file_editor.png)
+
 ## Platform Support
 
 | Platform | Architecture | Rendering |
