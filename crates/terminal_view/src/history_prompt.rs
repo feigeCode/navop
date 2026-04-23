@@ -233,8 +233,8 @@ impl HistoryPromptState {
         }
     }
 
-    pub fn selected_index(&self) -> usize {
-        self.selected.unwrap_or(0)
+    pub fn selected_index(&self) -> Option<usize> {
+        self.selected
     }
 
     pub fn selected_match(&self) -> Option<&str> {
@@ -553,6 +553,18 @@ mod tests {
         assert_eq!(state.input(), "git status");
         // selected 应保持，以便继续部分接受
         assert!(state.selected_match().is_some());
+    }
+
+    #[test]
+    fn selected_index_remains_none_until_user_explicitly_navigates() {
+        let mut state = HistoryPromptState::from_input("git");
+        state.set_matches(vec!["git status".to_string(), "git stash".to_string()]);
+
+        assert_eq!(state.selected_index(), None);
+        assert_eq!(state.selected_match(), Some("git status"));
+
+        assert_eq!(state.navigate_previous().as_deref(), Some("git status"));
+        assert_eq!(state.selected_index(), Some(0));
     }
 
     #[test]
