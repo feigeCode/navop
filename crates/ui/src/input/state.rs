@@ -1946,6 +1946,67 @@ impl InputState {
         self.offset_from_utf16(range_utf16.start)..self.offset_from_utf16(range_utf16.end)
     }
 
+    fn utf16_offset_to_byte_offset(text: &str, offset_utf16: usize, bias: Bias) -> usize {
+        if offset_utf16 == 0 {
+            return 0;
+        }
+
+        let mut utf16_offset = 0;
+        for (byte_offset, ch) in text.char_indices() {
+            let next_utf16 = utf16_offset + ch.len_utf16();
+            if offset_utf16 < next_utf16 {
+                return if bias == Bias::Left {
+                    byte_offset
+                } else {
+                    byte_offset + ch.len_utf8()
+                };
+            }
+            if offset_utf16 == next_utf16 {
+                return byte_offset + ch.len_utf8();
+            }
+            utf16_offset = next_utf16;
+        }
+
+        text.len()
+    }
+
+    fn relative_utf16_range_to_byte_range(text: &str, range_utf16: &Range<usize>) -> Range<usize> {
+        let start = Self::utf16_offset_to_byte_offset(text, range_utf16.start, Bias::Left);
+        let end = Self::utf16_offset_to_byte_offset(text, range_utf16.end, Bias::Right);
+        start..end
+    }
+
+    fn absolute_range_from_relative_utf16(
+        base_start: usize,
+        text: &str,
+        range_utf16: &Range<usize>,
+    ) -> Range<usize> {
+        let range = Self::relative_utf16_range_to_byte_range(text, range_utf16);
+        (base_start + range.start)..(base_start + range.end)
+    }
+
+    fn replacement_range_from_utf16(&self, range_utf16: Option<&Range<usize>>) -> Range<usize> {
+        if let Some(marked_range) = self.ime_marked_range {
+            return range_utf16
+                .map(|range_utf16| {
+                    let marked_text = self
+                        .text
+                        .slice(marked_range.start..marked_range.end)
+                        .to_string();
+                    Self::absolute_range_from_relative_utf16(
+                        marked_range.start,
+                        &marked_text,
+                        range_utf16,
+                    )
+                })
+                .unwrap_or_else(|| marked_range.into());
+        }
+
+        range_utf16
+            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .unwrap_or(self.selected_range.into())
+    }
+
     pub(super) fn previous_boundary(&self, offset: usize) -> usize {
         let mut offset = self.text.clip_offset(offset.saturating_sub(1), Bias::Left);
         if let Some(ch) = self.text.char_at(offset) {
@@ -2361,14 +2422,7 @@ impl EntityInputHandler for InputState {
 
         self.pause_blink_cursor(cx);
 
-        let range = range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or(self.ime_marked_range.map(|range| {
-                let range = self.range_to_utf16(&(range.start..range.end));
-                self.range_from_utf16(&range)
-            }))
-            .unwrap_or(self.selected_range.into());
+        let range = self.replacement_range_from_utf16(range_utf16.as_ref());
 
         // 括号自动配对逻辑
         let (actual_text, cursor_offset_back, skip_insert) = if self.auto_pair {
@@ -2448,14 +2502,7 @@ impl EntityInputHandler for InputState {
 
         self.lsp.reset();
 
-        let range = range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or(self.ime_marked_range.map(|range| {
-                let range = self.range_to_utf16(&(range.start..range.end));
-                self.range_from_utf16(&range)
-            }))
-            .unwrap_or(self.selected_range.into());
+        let range = self.replacement_range_from_utf16(range_utf16.as_ref());
 
         let old_text = self.text.clone();
         self.text.replace(range.clone(), new_text);
@@ -2485,12 +2532,14 @@ impl EntityInputHandler for InputState {
             self.selected_range = (range.start..range.start).into();
             self.ime_marked_range = None;
         } else {
-            self.ime_marked_range = Some((range.start..range.start + new_text.len()).into());
+            let marked_range = range.start..range.start + new_text.len();
+            self.ime_marked_range = Some(marked_range.clone().into());
             self.selected_range = new_selected_range_utf16
                 .as_ref()
-                .map(|range_utf16| self.range_from_utf16(range_utf16))
-                .map(|new_range| new_range.start + range.start..new_range.end + range.end)
-                .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len())
+                .map(|range_utf16| {
+                    Self::absolute_range_from_relative_utf16(range.start, new_text, range_utf16)
+                })
+                .unwrap_or_else(|| marked_range.end..marked_range.end)
                 .into();
         }
         self.mode.update_auto_grow(&self.text_wrapper);
@@ -2604,5 +2653,22 @@ impl Render for InputState {
             .children(self.diagnostic_popover.clone())
             .children(self.context_menu.as_ref().map(|menu| menu.render()))
             .children(self.hover_popover.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InputState;
+
+    #[test]
+    fn relative_utf16_range_maps_to_utf8_bytes_for_cjk_text() {
+        let actual = InputState::relative_utf16_range_to_byte_range("数据解读", &(1..1));
+        assert_eq!(actual, "数".len().."数".len());
+    }
+
+    #[test]
+    fn relative_utf16_range_respects_base_offset_for_marked_text() {
+        let actual = InputState::absolute_range_from_relative_utf16(1, "数据解读", &(0..1));
+        assert_eq!(actual, 1..(1 + "数".len()));
     }
 }
