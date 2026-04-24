@@ -14,6 +14,10 @@ RemoteFileEditor:
       en: Search
       zh-CN: 搜索
       zh-HK: 搜索
+    replace:
+      en: Replace
+      zh-CN: 替换
+      zh-HK: 取代
     reload:
       en: Reload
       zh-CN: 重新加载

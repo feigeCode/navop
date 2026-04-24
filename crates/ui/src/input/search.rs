@@ -26,6 +26,18 @@ const CONTEXT: &'static str = "SearchPanel";
 
 actions!(input, [Tab]);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchOpenMode {
+    Search,
+    Replace,
+}
+
+impl SearchOpenMode {
+    fn starts_in_replace_mode(self) -> bool {
+        matches!(self, Self::Replace)
+    }
+}
+
 pub(super) fn init(cx: &mut App) {
     cx.bind_keys(vec![KeyBinding::new(
         "shift-enter",
@@ -196,6 +208,19 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_search_panel(SearchOpenMode::Search, window, cx);
+    }
+
+    pub fn open_search_and_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_search_panel(SearchOpenMode::Replace, window, cx);
+    }
+
+    fn open_search_panel(
+        &mut self,
+        open_mode: SearchOpenMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.searchable {
             return;
         }
@@ -211,7 +236,7 @@ impl InputState {
         search_panel.update(cx, |this, cx| {
             this.editor = editor;
             this.matcher.update(&text);
-            this.show(&selected_text, window, cx);
+            this.show(&selected_text, open_mode, window, cx);
         });
         self.search_panel = Some(search_panel);
         cx.notify();
@@ -251,18 +276,15 @@ impl SearchPanel {
         })
     }
 
-    pub(super) fn show(
+    fn show(
         &mut self,
         selected_text: &Rope,
+        open_mode: SearchOpenMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.open = true;
-        self.search_input
-            .read(cx)
-            .focus_handle
-            .clone()
-            .focus(window, cx);
+        self.replace_mode = open_mode.starts_in_replace_mode();
 
         self.search_input.update(cx, |this, cx| {
             if selected_text.len() > 0 {
@@ -271,6 +293,13 @@ impl SearchPanel {
             }
             this.select_all(&super::SelectAll, window, cx);
         });
+
+        let focus_handle = if self.replace_mode {
+            self.replace_input.read(cx).focus_handle.clone()
+        } else {
+            self.search_input.read(cx).focus_handle.clone()
+        };
+        focus_handle.focus(window, cx);
     }
 
     fn update_search_query(&mut self, cx: &mut Context<Self>) {
@@ -636,5 +665,11 @@ mod tests {
 
         matcher.update_cursor_by_offset(31);
         assert_eq!(matcher.current_match_ix, 2);
+    }
+
+    #[test]
+    fn test_search_open_mode_replace_starts_in_replace_mode() {
+        assert!(SearchOpenMode::Replace.starts_in_replace_mode());
+        assert!(!SearchOpenMode::Search.starts_in_replace_mode());
     }
 }

@@ -4,8 +4,9 @@ use crate::file_policy::{
 use crate::language::language_for_path;
 use crate::{CloseIntercept, decide_close_intercept};
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement, PromptLevel, Render,
-    Size as GpuiSize, Styled, Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
+    App, AppContext, Bounds, Context, Entity, InteractiveElement as _, IntoElement, KeyBinding,
+    ParentElement, PromptLevel, Render, Size as GpuiSize, Styled, Window, WindowBounds, WindowKind,
+    WindowOptions, actions, div, px, size,
 };
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Root, Selectable as _, Sizable as _, Size, TitleBar,
@@ -19,14 +20,29 @@ use gpui_component::{
 use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient};
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 use tokio::sync::Mutex;
+
+actions!(remote_file_editor, [OpenSearch, OpenReplace]);
+
+const REMOTE_FILE_EDITOR_CONTEXT: &str = "RemoteFileEditor";
+#[cfg(target_os = "macos")]
+const REMOTE_EDITOR_SEARCH_SHORTCUT: &str = "cmd-f";
+#[cfg(not(target_os = "macos"))]
+const REMOTE_EDITOR_SEARCH_SHORTCUT: &str = "ctrl-f";
+#[cfg(target_os = "macos")]
+const REMOTE_EDITOR_REPLACE_SHORTCUT: &str = "cmd-r";
+#[cfg(not(target_os = "macos"))]
+const REMOTE_EDITOR_REPLACE_SHORTCUT: &str = "ctrl-r";
+
+static REMOTE_EDITOR_KEYBINDINGS_INIT: Once = Once::new();
 
 pub fn open_remote_file_editor<T: 'static>(
     remote_path: String,
     client: Arc<Mutex<RusshSftpClient>>,
     cx: &mut Context<T>,
 ) {
+    init_keybindings(cx);
     let title = t!(
         "RemoteFileEditor.title",
         name = display_name_from_path(&remote_path)
@@ -74,6 +90,31 @@ pub fn open_remote_file_editor<T: 'static>(
         }
     })
     .detach();
+}
+
+fn init_keybindings(cx: &mut App) {
+    REMOTE_EDITOR_KEYBINDINGS_INIT.call_once(|| {
+        cx.bind_keys([
+            KeyBinding::new(
+                search_shortcut(),
+                OpenSearch,
+                Some(REMOTE_FILE_EDITOR_CONTEXT),
+            ),
+            KeyBinding::new(
+                replace_shortcut(),
+                OpenReplace,
+                Some(REMOTE_FILE_EDITOR_CONTEXT),
+            ),
+        ]);
+    });
+}
+
+fn search_shortcut() -> &'static str {
+    REMOTE_EDITOR_SEARCH_SHORTCUT
+}
+
+fn replace_shortcut() -> &'static str {
+    REMOTE_EDITOR_REPLACE_SHORTCUT
 }
 
 struct LoadedFile {
@@ -375,6 +416,39 @@ impl RemoteFileEditorWindow {
     }
 
     fn trigger_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_editor(window, cx);
+        window.dispatch_action(Box::new(Search), cx);
+    }
+
+    fn on_action_open_search(
+        &mut self,
+        _: &OpenSearch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.trigger_search(window, cx);
+    }
+
+    fn on_action_open_replace(
+        &mut self,
+        _: &OpenReplace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.trigger_replace(window, cx);
+    }
+
+    fn trigger_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = self.editor.as_ref() else {
+            return;
+        };
+
+        editor.update(cx, |state, cx| {
+            state.open_search_and_replace(window, cx);
+        });
+    }
+
+    fn focus_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editor) = self.editor.as_ref() else {
             return;
         };
@@ -382,7 +456,6 @@ impl RemoteFileEditorWindow {
         editor.update(cx, |state, cx| {
             state.focus(window, cx);
         });
-        window.dispatch_action(Box::new(Search), cx);
     }
 
     fn toggle_soft_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -430,6 +503,15 @@ impl RemoteFileEditorWindow {
                     .disabled(disabled)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.trigger_search(window, cx);
+                    })),
+            )
+            .child(
+                Button::new("remote-file-replace")
+                    .label(t!("RemoteFileEditor.action.replace"))
+                    .with_size(Size::Small)
+                    .disabled(disabled)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.trigger_replace(window, cx);
                     })),
             )
             .child(
@@ -556,6 +638,9 @@ impl Render for RemoteFileEditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
+            .key_context(REMOTE_FILE_EDITOR_CONTEXT)
+            .on_action(cx.listener(Self::on_action_open_search))
+            .on_action(cx.listener(Self::on_action_open_replace))
             .bg(cx.theme().background)
             .child(
                 TitleBar::new().child(
@@ -591,5 +676,26 @@ fn format_size(size: usize) -> String {
         format!("{:.1} KiB", size as f64 / KIB as f64)
     } else {
         format!("{} B", size)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "macos")]
+    const EXPECTED_SEARCH_SHORTCUT: &str = "cmd-f";
+    #[cfg(not(target_os = "macos"))]
+    const EXPECTED_SEARCH_SHORTCUT: &str = "ctrl-f";
+
+    #[cfg(target_os = "macos")]
+    const EXPECTED_REPLACE_SHORTCUT: &str = "cmd-r";
+    #[cfg(not(target_os = "macos"))]
+    const EXPECTED_REPLACE_SHORTCUT: &str = "ctrl-r";
+
+    #[test]
+    fn test_platform_shortcuts_match_editor_expectations() {
+        assert_eq!(search_shortcut(), EXPECTED_SEARCH_SHORTCUT);
+        assert_eq!(replace_shortcut(), EXPECTED_REPLACE_SHORTCUT);
     }
 }
