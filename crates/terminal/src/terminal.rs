@@ -1335,6 +1335,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
+            self.reset_terminal_surface();
 
             let generation = self.next_connection_generation();
             let term = self.term.clone();
@@ -1375,6 +1376,7 @@ impl Terminal {
             if let Some(backend) = self.backend.take() {
                 backend.shutdown();
             }
+            self.reset_terminal_surface();
             let generation = self.next_connection_generation();
 
             let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
@@ -1392,6 +1394,34 @@ impl Terminal {
         }
 
         cx.emit(TerminalModelEvent::Wakeup);
+    }
+
+    fn reset_terminal_surface(&mut self) {
+        let Some(event_tx) = self.event_tx.clone() else {
+            return;
+        };
+
+        let event_proxy = self
+            .event_proxy
+            .clone()
+            .unwrap_or_else(|| GpuiEventProxy::new(event_tx.clone()));
+        let term_config = TermConfig {
+            scrolling_history: 10000,
+            ..Default::default()
+        };
+        let new_term = Term::new(
+            term_config,
+            &TermDimensions {
+                cols: self.cols,
+                rows: self.rows,
+            },
+            event_proxy,
+        );
+
+        *self.term.lock() = new_term;
+        self.title.clear();
+        self.current_working_dir = None;
+        self.child_exited = None;
     }
 
     /// 更新 SSH 终端的路径同步设置。
@@ -1504,15 +1534,19 @@ mod tests {
     use super::{
         build_cd_command, build_ssh_base_init_commands, build_ssh_init_commands,
         compose_ssh_init_commands, format_connection_error, resolve_default_windows_shell_from_env,
-        shell_escape_arg,
+        shell_escape_arg, ConnectionState, Terminal, TerminalConnectionKind,
     };
     use crate::history::{
         collect_history_suggestions, normalize_history_command, parse_shell_history,
         push_history_entry, HistoryEntry, ShellHistoryFormat,
     };
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::{Column, Line};
+    use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
     use anyhow::anyhow;
     use std::collections::VecDeque;
     use std::fs;
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn shell_escape_arg_handles_single_quote() {
@@ -1708,6 +1742,50 @@ mod tests {
             message.contains("channel open failed"),
             "格式化结果应保留底层错误，实际: {message}"
         );
+    }
+
+    #[test]
+    fn reset_terminal_surface_clears_buffer_and_stale_connection_metadata() {
+        let (event_tx, _event_rx) = unbounded_channel();
+        let (term, event_proxy, _colors) = Terminal::create_term(80, 24, event_tx.clone());
+        let mut terminal = Terminal {
+            term,
+            backend: None,
+            title: "old title".to_string(),
+            current_working_dir: Some("/tmp/project".to_string()),
+            child_exited: Some(255),
+            connection_state: ConnectionState::Connected,
+            cols: 80,
+            rows: 24,
+            ssh_config: None,
+            ssh_session_manager: None,
+            serial_params: None,
+            event_tx: Some(event_tx),
+            event_proxy: Some(event_proxy),
+            connection_id: Some(1),
+            connection_name: Some("SSH".to_string()),
+            init_commands: None,
+            session_history: VecDeque::new(),
+            persisted_history: Vec::new(),
+            connection_generation: 1,
+            connection_kind: TerminalConnectionKind::Ssh,
+        };
+
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        processor.advance(&mut *terminal.term.lock(), b"hello");
+
+        assert_eq!(terminal.term.lock().grid()[Line(0)][Column(0)].c, 'h');
+
+        terminal.reset_terminal_surface();
+
+        let term = terminal.term.lock();
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, ' ');
+        assert_eq!(term.columns(), 80);
+        assert_eq!(term.screen_lines(), 24);
+        drop(term);
+        assert_eq!(terminal.title(), "");
+        assert_eq!(terminal.current_working_dir(), None);
+        assert_eq!(terminal.child_exited(), None);
     }
 }
 
