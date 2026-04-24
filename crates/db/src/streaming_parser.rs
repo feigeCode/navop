@@ -172,11 +172,7 @@ impl StreamingSqlParser {
 
             if self.eof {
                 let trimmed = self.buffer.trim();
-                if !trimmed.is_empty()
-                    && !trimmed.to_uppercase().starts_with("DELIMITER")
-                    && !self.is_pure_comment(trimmed)
-                {
-                    let stmt = trimmed.to_string();
+                if let Some(stmt) = self.finalize_statement(trimmed) {
                     self.buffer.clear();
                     self.last_checked_len = 0;
                     return Ok(Some(stmt));
@@ -256,7 +252,7 @@ impl StreamingSqlParser {
             }
         }
 
-        if ch == '-' && self.buffer.ends_with('-') {
+        if self.should_start_line_comment(ch) {
             self.buffer.push(ch);
             self.in_line_comment = true;
             return None;
@@ -358,11 +354,7 @@ impl StreamingSqlParser {
                     .unwrap_or(trimmed_current)
                     .trim();
 
-                if !stmt.is_empty()
-                    && !stmt.to_uppercase().starts_with("DELIMITER")
-                    && !self.is_pure_comment(stmt)
-                {
-                    let result = stmt.to_string();
+                if let Some(result) = self.finalize_statement(stmt) {
                     self.buffer.clear();
                     self.last_checked_len = 0;
                     return Some(result);
@@ -391,6 +383,94 @@ impl StreamingSqlParser {
         }
 
         None
+    }
+
+    fn should_start_line_comment(&self, ch: char) -> bool {
+        match self.db_type {
+            DatabaseType::MySQL => {
+                self.buffer.ends_with("--") && (ch.is_whitespace() || ch.is_control())
+            }
+            _ => ch == '-' && self.buffer.ends_with('-'),
+        }
+    }
+
+    fn finalize_statement(&self, stmt: &str) -> Option<String> {
+        let normalized = self.strip_leading_ignorable_lines(stmt).trim();
+        let normalized = normalized
+            .strip_suffix(self.delimiter.as_str())
+            .unwrap_or(normalized)
+            .trim();
+        if normalized.is_empty()
+            || normalized.to_uppercase().starts_with("DELIMITER")
+            || self.is_pure_comment(normalized)
+        {
+            return None;
+        }
+        Some(normalized.to_string())
+    }
+
+    fn strip_leading_ignorable_lines<'a>(&self, stmt: &'a str) -> &'a str {
+        let mut remaining = stmt;
+
+        loop {
+            let trimmed_start = remaining.trim_start();
+            if trimmed_start.is_empty() {
+                return trimmed_start;
+            }
+
+            let line_end = trimmed_start.find('\n').unwrap_or(trimmed_start.len());
+            let line = trimmed_start[..line_end].trim_end_matches('\r');
+
+            if !self.is_ignorable_leading_line(line) {
+                return trimmed_start;
+            }
+
+            if line_end == trimmed_start.len() {
+                return "";
+            }
+
+            remaining = &trimmed_start[line_end + 1..];
+        }
+    }
+
+    fn is_ignorable_leading_line(&self, line: &str) -> bool {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return true;
+        }
+
+        if self.is_separator_line(trimmed) {
+            return true;
+        }
+
+        match self.db_type {
+            DatabaseType::MySQL => {
+                if let Some(rest) = trimmed.strip_prefix("--") {
+                    return rest.is_empty()
+                        || rest
+                            .chars()
+                            .next()
+                            .is_some_and(|ch| ch.is_whitespace() || ch.is_control());
+                }
+                trimmed.starts_with('#')
+            }
+            _ => trimmed.starts_with("--"),
+        }
+    }
+
+    fn is_separator_line(&self, line: &str) -> bool {
+        const MIN_SEPARATOR_LEN: usize = 3;
+
+        let mut chars = line.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+
+        if !matches!(first, '-' | '=' | '*' | '/' | '#') {
+            return false;
+        }
+
+        line.chars().count() >= MIN_SEPARATOR_LEN && chars.all(|ch| ch == first)
     }
 
     fn try_extract_dollar_quote(&self) -> Option<String> {
@@ -905,5 +985,34 @@ SELECT 'done';"#;
         assert!(statements[0].contains("'test;value'"));
         assert!(statements[0].contains("'O''Reilly'"));
         assert_eq!(statements[1], "SELECT 'done'");
+    }
+
+    #[test]
+    fn test_mysql_separator_comment_block_should_not_be_executed() {
+        let sql = r#"------------------------------------------------------------------------
+-- 模块: 用户表
+------------------------------------------------------------------------
+SELECT 1;
+"#;
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MySQL);
+
+        assert_eq!(statements, vec!["SELECT 1"]);
+    }
+
+    #[test]
+    fn test_mysql_block_comment_with_separator_only_should_not_be_executed() {
+        let sql = r#"/**
+ sql脚本文件命名规则:
+ V: 前缀
+ 1: 自增长序列，新增的以 2 开始
+ readme: 本文档的 版本号等说明
+ 版本号 V8.0SP2
+ */
+
+ ------------------------------------------------------------------------
+"#;
+        let statements = parse_all(SqlSource::Script(sql.to_string()), DatabaseType::MySQL);
+
+        assert!(statements.is_empty());
     }
 }

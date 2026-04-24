@@ -194,6 +194,9 @@ pub trait DatabasePlugin: Send + Sync {
     /// Split SQL text into statements using the database-specific parser.
     fn split_sql_statements(&self, sql: &str) -> Vec<String> {
         let trimmed = sql.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
         let Ok(parser) = self.create_parser(SqlSource::Script(trimmed.to_string())) else {
             return vec![trimmed.to_string()];
         };
@@ -212,7 +215,7 @@ pub trait DatabasePlugin: Send + Sync {
         }
 
         if statements.is_empty() {
-            return vec![trimmed.to_string()];
+            return Vec::new();
         }
 
         statements
@@ -2806,6 +2809,7 @@ pub fn analyze_select_editability_fallback(sql: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mysql::MySqlPlugin;
     use sqlparser::dialect::MySqlDialect;
     use sqlparser::parser::Parser;
 
@@ -2892,6 +2896,23 @@ mod tests {
         ));
         assert!(!is_query_statement_fallback("DELETE FROM users"));
         assert!(!is_query_statement_fallback("CREATE TABLE t (id INT)"));
+    }
+
+    #[test]
+    fn test_split_sql_statements_ignores_comment_only_script() {
+        let plugin = MySqlPlugin::new();
+        let sql = r#"/**
+ sql脚本文件命名规则:
+ V: 前缀
+ 1: 自增长序列，新增的以 2 开始
+ readme: 本文档的 版本号等说明
+ 版本号 V8.0SP2
+ */
+
+ ------------------------------------------------------------------------
+"#;
+
+        assert!(plugin.split_sql_statements(sql).is_empty());
     }
 
     // ==================== classify_stmt tests (AST-based) ====================
