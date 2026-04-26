@@ -5,7 +5,7 @@
 <h1 align="center">OnetCli</h1>
 
 <p align="center">
-  <strong>O</strong>ne <strong>Net</strong> <strong>Cl</strong>ient — A cross-platform desktop client for databases, SSH, terminals & AI, all in one place.
+  <strong>One</strong> Ne<strong>t</strong> <strong>Cl</strong>ient — A cross-platform desktop client for databases, SSH, terminals & AI, all in one place.
 </p>
 
 <p align="center">

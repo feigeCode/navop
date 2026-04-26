@@ -5,7 +5,7 @@
 <h1 align="center">OnetCli</h1>
 
 <p align="center">
-  <strong>O</strong>ne <strong>Net</strong> <strong>Cl</strong>ient — 跨平台桌面客户端，数据库、SSH、终端与 AI 一站式管理。
+  <strong>One</strong> Ne<strong>t</strong> <strong>Cl</strong>ient — 跨平台桌面客户端，数据库、SSH、终端与 AI 一站式管理。
 </p>
 
 <p align="center">
