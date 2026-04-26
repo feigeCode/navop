@@ -318,6 +318,14 @@ fn join_remote_path(base: &str, name: &str) -> String {
     }
 }
 
+fn should_apply_directory_result(current_path: &str, listed_path: &str) -> bool {
+    current_path == listed_path
+}
+
+fn should_refresh_after_upload(current_path: &str, remote_path: &str) -> bool {
+    current_path == remote_path_parent(remote_path)
+}
+
 fn is_valid_entry_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -786,6 +794,7 @@ impl FileManagerPanel {
         cx.notify();
 
         let path = self.current_path.clone();
+        let listed_path = path.clone();
         let task = Tokio::spawn(cx, async move {
             let mut client: tokio::sync::MutexGuard<'_, RusshSftpClient> = client.lock().await;
             client.list_dir(&path).await
@@ -795,6 +804,11 @@ impl FileManagerPanel {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.loading = false;
+                if !should_apply_directory_result(&this.current_path, &listed_path) {
+                    cx.notify();
+                    return;
+                }
+
                 match result {
                     Ok(Ok(entries)) => {
                         this.items = entries
@@ -1084,8 +1098,6 @@ impl FileManagerPanel {
 
         let cancelled = shared_progress.cancelled.clone();
         let progress_for_callback = shared_progress.clone();
-        let current_remote_path = self.current_path.clone();
-        let local_path_for_refresh = local_path.clone();
         let remote_path_for_refresh = remote_path.clone();
 
         let upload_task = Tokio::spawn(cx, async move {
@@ -1149,19 +1161,10 @@ impl FileManagerPanel {
                 this.update_task_state(task_id, result);
                 this.schedule_transfers(cx);
 
-                if should_refresh {
-                    // 上传完成后，如果当前目录与上传目标同级，刷新目录
-                    let remote_parent = remote_path_parent(&current_remote_path);
-                    let upload_parent = remote_path_parent(&remote_path_parent_of_upload(
-                        &local_path_for_refresh,
-                        &remote_path_for_refresh,
-                    ));
-                    if current_remote_path == remote_parent
-                        || current_remote_path == upload_parent
-                        || remote_path_for_refresh.starts_with(&current_remote_path)
-                    {
-                        this.refresh_dir(cx);
-                    }
+                if should_refresh
+                    && should_refresh_after_upload(&this.current_path, &remote_path_for_refresh)
+                {
+                    this.refresh_dir(cx);
                 }
                 cx.notify();
             });
@@ -2847,11 +2850,6 @@ fn remote_path_parent(path: &str) -> String {
     }
 }
 
-/// 从上传操作中推断远程目标的父目录
-fn remote_path_parent_of_upload(_local_path: &PathBuf, remote_path: &str) -> String {
-    remote_path.to_string()
-}
-
 impl EventEmitter<FileManagerPanelEvent> for FileManagerPanel {}
 
 impl Focusable for FileManagerPanel {
@@ -2880,7 +2878,8 @@ impl Render for FileManagerPanel {
 mod tests {
     use super::{
         build_refresh_error_plan, build_retry_reset_plan, clear_remote_listing_state,
-        ConnectionState, RetryResetPlan,
+        should_apply_directory_result, should_refresh_after_upload, ConnectionState,
+        RetryResetPlan,
     };
     use std::collections::HashSet;
 
@@ -2918,5 +2917,20 @@ mod tests {
         assert!(items.is_empty());
         assert!(filtered_indices.is_empty());
         assert!(selected_indices.is_empty());
+    }
+
+    #[test]
+    fn only_apply_directory_result_for_active_path() {
+        assert!(should_apply_directory_result("/srv/app", "/srv/app"));
+        assert!(!should_apply_directory_result("/srv/other", "/srv/app"));
+    }
+
+    #[test]
+    fn only_refresh_upload_target_directory_when_still_viewing_it() {
+        assert!(should_refresh_after_upload("/srv/app", "/srv/app/file.txt"));
+        assert!(!should_refresh_after_upload(
+            "/srv/other",
+            "/srv/app/file.txt"
+        ));
     }
 }

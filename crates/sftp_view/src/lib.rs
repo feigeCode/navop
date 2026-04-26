@@ -315,6 +315,14 @@ fn join_remote_path(base: &str, name: &str) -> String {
     }
 }
 
+fn should_apply_remote_listing(current_path: &str, listed_path: &str) -> bool {
+    current_path == listed_path
+}
+
+fn should_apply_local_listing(current_path: &std::path::Path, listed_path: &std::path::Path) -> bool {
+    current_path == listed_path
+}
+
 fn is_valid_entry_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -822,6 +830,7 @@ impl SftpView {
         });
         cx.notify();
 
+        let listed_path = path.clone();
         let task = Tokio::spawn(cx, async move {
             let mut client = client.lock().await;
             client.list_dir(&path).await
@@ -842,28 +851,27 @@ impl SftpView {
                             permissions: format_permissions(e.permissions, e.is_dir),
                         })
                         .collect();
-
-                    let _ = remote_panel.update(cx, |panel, cx| {
-                        panel.set_items(items, cx);
+                    let _ = view.update(cx, |this, cx| {
+                        if should_apply_remote_listing(&this.remote_current_path, &listed_path) {
+                            let _ = remote_panel.update(cx, |panel, cx| {
+                                panel.set_items(items, cx);
+                            });
+                        }
                     });
                 }
                 Ok(Err(e)) => {
-                    tracing::error!("Failed to list remote directory: {}", e);
-                    // cx.update(|cx| {
-                    //     window.push_notification(
-                    //         Notification::error(format!("读取目录失败: {}", e)),
-                    //         cx,
-                    //     );
-                    // }).ok();
+                    let _ = view.update(cx, |this, _cx| {
+                        if should_apply_remote_listing(&this.remote_current_path, &listed_path) {
+                            tracing::error!("Failed to list remote directory: {}", e);
+                        }
+                    });
                 }
                 Err(e) => {
-                    tracing::error!("Task error: {}", e);
-                    // cx.update(| cx| {
-                    //     window.push_notification(
-                    //         Notification::error(format!("读取目录失败: {}", e)),
-                    //         cx,
-                    //     );
-                    // }).ok();
+                    let _ = view.update(cx, |this, _cx| {
+                        if should_apply_remote_listing(&this.remote_current_path, &listed_path) {
+                            tracing::error!("Task error: {}", e);
+                        }
+                    });
                 }
             }
             let _ = view.update(cx, |this, cx| {
@@ -1541,9 +1549,9 @@ impl SftpView {
         cx: &mut Context<Self>,
     ) {
         let pool = self.transfer_client_pool.clone();
-        let remote_panel = self.remote_panel.clone();
         let cancelled = shared_progress.cancelled.clone();
         let progress_for_callback = shared_progress.clone();
+        let remote_dir_for_result = remote_dir.clone();
 
         if is_dir {
             shared_progress.scanning.store(true, Ordering::Relaxed);
@@ -1644,33 +1652,44 @@ impl SftpView {
                 cx.notify();
             });
 
-            if should_refresh {
-                if let Some(entries) = entries_option {
-                    let mut sorted_entries = entries;
-                    sorted_entries.sort_by(|a, b| {
-                        if a.is_dir == b.is_dir {
-                            a.name.to_lowercase().cmp(&b.name.to_lowercase())
-                        } else if a.is_dir {
-                            std::cmp::Ordering::Less
-                        } else {
-                            std::cmp::Ordering::Greater
-                        }
-                    });
-                    let items: Vec<FileItem> = sorted_entries
-                        .into_iter()
-                        .map(|e| FileItem {
-                            name: e.name,
-                            size: e.size,
-                            modified: e.modified,
-                            is_dir: e.is_dir,
-                            permissions: format_permissions(e.permissions, e.is_dir),
-                        })
-                        .collect();
-                    let _ = remote_panel.update(cx, |panel, cx| {
-                        panel.set_items(items, cx);
-                    });
-                }
+            if !should_refresh {
+                return;
             }
+
+            let _ = this.update(cx, |this, cx| {
+                if !should_apply_remote_listing(&this.remote_current_path, &remote_dir_for_result) {
+                    return;
+                }
+
+                let Some(entries) = entries_option else {
+                    return;
+                };
+
+                let mut sorted_entries = entries;
+                sorted_entries.sort_by(|a, b| {
+                    if a.is_dir == b.is_dir {
+                        a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                    } else if a.is_dir {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    }
+                });
+                let items: Vec<FileItem> = sorted_entries
+                    .into_iter()
+                    .map(|e| FileItem {
+                        name: e.name,
+                        size: e.size,
+                        modified: e.modified,
+                        is_dir: e.is_dir,
+                        permissions: format_permissions(e.permissions, e.is_dir),
+                    })
+                    .collect();
+
+                this.remote_panel.update(cx, |panel, cx| {
+                    panel.set_items(items, cx);
+                });
+            });
         })
         .detach();
     }
@@ -1782,42 +1801,51 @@ impl SftpView {
                 cx.notify();
             });
 
-            if should_refresh {
-                if let Ok(dir_entries) = std::fs::read_dir(&local_dir) {
-                    let mut entries = Vec::new();
-                    for entry in dir_entries.flatten() {
-                        if let Ok(metadata) = entry.metadata() {
-                            entries.push(LocalFileEntry {
-                                name: entry.file_name().to_string_lossy().to_string(),
-                                size: metadata.len(),
-                                modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-                                is_dir: metadata.is_dir(),
-                            });
-                        }
+            if !should_refresh {
+                return;
+            }
+
+            if let Ok(dir_entries) = std::fs::read_dir(&local_dir) {
+                let mut entries = Vec::new();
+                for entry in dir_entries.flatten() {
+                    if let Ok(metadata) = entry.metadata() {
+                        entries.push(LocalFileEntry {
+                            name: entry.file_name().to_string_lossy().to_string(),
+                            size: metadata.len(),
+                            modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                            is_dir: metadata.is_dir(),
+                        });
                     }
-                    entries.sort_by(|a, b| {
-                        if a.is_dir == b.is_dir {
-                            a.name.to_lowercase().cmp(&b.name.to_lowercase())
-                        } else if a.is_dir {
-                            std::cmp::Ordering::Less
-                        } else {
-                            std::cmp::Ordering::Greater
-                        }
-                    });
-                    let items: Vec<FileItem> = entries
-                        .into_iter()
-                        .map(|e| FileItem {
-                            name: e.name,
-                            size: e.size,
-                            modified: e.modified,
-                            is_dir: e.is_dir,
-                            permissions: String::new(),
-                        })
-                        .collect();
+                }
+                entries.sort_by(|a, b| {
+                    if a.is_dir == b.is_dir {
+                        a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                    } else if a.is_dir {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    }
+                });
+                let items: Vec<FileItem> = entries
+                    .into_iter()
+                    .map(|e| FileItem {
+                        name: e.name,
+                        size: e.size,
+                        modified: e.modified,
+                        is_dir: e.is_dir,
+                        permissions: String::new(),
+                    })
+                    .collect();
+                let local_dir_for_result = local_dir.clone();
+                let _ = this.update(cx, |this, cx| {
+                    if !should_apply_local_listing(&this.local_current_path, &local_dir_for_result) {
+                        return;
+                    }
+
                     let _ = local_panel.update(cx, |panel, cx| {
                         panel.set_items(items, cx);
                     });
-                }
+                });
             }
         })
         .detach();
@@ -4014,5 +4042,23 @@ impl Render for SftpView {
             .when(is_disconnected, |el| {
                 el.child(self.render_connection_overlay(cx))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{should_apply_local_listing, should_apply_remote_listing};
+    use std::path::Path;
+
+    #[test]
+    fn only_apply_remote_listing_for_active_path() {
+        assert!(should_apply_remote_listing("/srv/app", "/srv/app"));
+        assert!(!should_apply_remote_listing("/srv/other", "/srv/app"));
+    }
+
+    #[test]
+    fn only_apply_local_listing_for_active_path() {
+        assert!(should_apply_local_listing(Path::new("/tmp/a"), Path::new("/tmp/a")));
+        assert!(!should_apply_local_listing(Path::new("/tmp/b"), Path::new("/tmp/a")));
     }
 }
