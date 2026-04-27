@@ -203,6 +203,11 @@ struct RetryResetPlan {
     clear_listing: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NavigationRecoveryPlan {
+    fallback_path: String,
+}
+
 fn build_retry_reset_plan(current_path: &str, working_dir: Option<String>) -> RetryResetPlan {
     RetryResetPlan {
         next_state: ConnectionState::Idle,
@@ -211,12 +216,24 @@ fn build_retry_reset_plan(current_path: &str, working_dir: Option<String>) -> Re
     }
 }
 
-fn build_refresh_error_plan(current_path: &str, message: String) -> RetryResetPlan {
-    RetryResetPlan {
-        next_state: ConnectionState::Error(message),
-        initial_working_dir: Some(current_path.to_string()),
-        clear_listing: true,
-    }
+fn build_navigation_recovery_plan(
+    current_path: &str,
+    working_dir: Option<&str>,
+    history: &[String],
+    history_index: usize,
+) -> NavigationRecoveryPlan {
+    let fallback_path = working_dir
+        .filter(|path| !path.is_empty() && *path != current_path)
+        .map(ToString::to_string)
+        .or_else(|| {
+            history
+                .get(history_index.saturating_sub(1))
+                .filter(|path| !path.is_empty() && path.as_str() != current_path)
+                .cloned()
+        })
+        .unwrap_or_else(|| "/".to_string());
+
+    NavigationRecoveryPlan { fallback_path }
 }
 
 fn clear_remote_listing_state<T>(
@@ -472,8 +489,8 @@ pub struct FileManagerPanel {
     progress_refresh_task: Option<gpui::Task<()>>,
     /// 是否有外部文件拖入
     is_dragging_over: bool,
-    /// 终端当前工作目录（连接前由外部设置，连接时作为初始路径）
-    initial_working_dir: Option<String>,
+    /// 终端当前工作目录缓存，用于首次连接和导航失败恢复
+    working_dir_hint: Option<String>,
 }
 
 impl FileManagerPanel {
@@ -542,7 +559,7 @@ impl FileManagerPanel {
             next_task_id: 0,
             progress_refresh_task: None,
             is_dragging_over: false,
-            initial_working_dir: None,
+            working_dir_hint: None,
         }
     }
 
@@ -557,7 +574,7 @@ impl FileManagerPanel {
         self.connection_state = ConnectionState::Connecting;
         cx.notify();
 
-        let initial_dir = self.initial_working_dir.take();
+        let initial_dir = self.working_dir_hint.clone();
         let session_manager = self.session_manager.clone();
         let task = Tokio::spawn(cx, async move {
             let shared_client = session_manager.client().await?;
@@ -580,6 +597,7 @@ impl FileManagerPanel {
                     this.sftp_client = Some(Arc::new(Mutex::new(client)));
                     this.connection_state = ConnectionState::Connected;
                     this.current_path = real_path.clone();
+                    this.working_dir_hint = Some(real_path.clone());
                     this.history = vec![real_path];
                     this.history_index = 0;
                     this.refresh_dir(cx);
@@ -618,7 +636,7 @@ impl FileManagerPanel {
 
     fn apply_retry_reset_plan(&mut self, plan: RetryResetPlan) {
         self.connection_state = plan.next_state;
-        self.initial_working_dir = plan.initial_working_dir;
+        self.working_dir_hint = plan.initial_working_dir;
         self.sftp_client = None;
         self.transfer_client = None;
         self.loading = false;
@@ -637,9 +655,53 @@ impl FileManagerPanel {
         self.apply_retry_reset_plan(plan);
     }
 
-    fn handle_refresh_error(&mut self, message: String) {
-        let plan = build_refresh_error_plan(&self.current_path, message);
-        self.apply_retry_reset_plan(plan);
+    fn repair_history_after_navigation_failure(
+        &mut self,
+        failed_path: &str,
+        fallback_path: &str,
+    ) {
+        if self.history_index < self.history.len() {
+            self.history.truncate(self.history_index + 1);
+        }
+
+        if self.history.last().map(String::as_str) == Some(failed_path) {
+            self.history.pop();
+        }
+
+        if self.history.last().map(String::as_str) != Some(fallback_path) {
+            self.history.push(fallback_path.to_string());
+        }
+
+        if self.history.is_empty() {
+            self.history.push(fallback_path.to_string());
+        }
+
+        self.history_index = self.history.len().saturating_sub(1);
+    }
+
+    fn recover_from_navigation_error(&mut self, message: String, cx: &mut Context<Self>) {
+        if let Some(window) = cx.active_window() {
+            let notification =
+                Notification::error(t!("FileManager.read_dir_failed_recovered", error = message))
+                    .autohide(true);
+            let _ = window.update(cx, |_, window, cx| {
+                window.push_notification(notification, cx);
+            });
+        }
+
+        let plan = build_navigation_recovery_plan(
+            &self.current_path,
+            self.working_dir_hint.as_deref(),
+            &self.history,
+            self.history_index,
+        );
+        let failed_path = self.current_path.clone();
+
+        self.connection_state = ConnectionState::Connected;
+        self.loading = false;
+        self.current_path = plan.fallback_path.clone();
+        self.repair_history_after_navigation_failure(&failed_path, &plan.fallback_path);
+        self.refresh_dir(cx);
     }
 
     pub fn reconnect_with_working_dir(
@@ -662,8 +724,9 @@ impl FileManagerPanel {
     ///
     /// 仅在尚未连接时有效，连接后应使用 `sync_navigate_to`。
     pub fn set_initial_working_dir(&mut self, path: String) {
+        self.working_dir_hint = Some(path.clone());
         if self.connection_state == ConnectionState::Idle {
-            self.initial_working_dir = Some(path);
+            self.current_path = path;
         }
     }
 
@@ -671,6 +734,7 @@ impl FileManagerPanel {
     ///
     /// 仅在已连接且路径不同时才导航，避免不必要的刷新。
     pub fn sync_navigate_to(&mut self, path: String, cx: &mut Context<Self>) {
+        self.working_dir_hint = Some(path.clone());
         if self.connection_state != ConnectionState::Connected {
             return;
         }
@@ -827,15 +891,11 @@ impl FileManagerPanel {
                     }
                     Ok(Err(e)) => {
                         tracing::error!("列出目录失败: {}", e);
-                        this.handle_refresh_error(
-                            t!("FileManager.read_dir_failed", error = e).to_string(),
-                        );
+                        this.recover_from_navigation_error(e.to_string(), cx);
                     }
                     Err(e) => {
                         tracing::error!("SFTP 任务失败: {}", e);
-                        this.handle_refresh_error(
-                            t!("FileManager.read_dir_failed", error = e).to_string(),
-                        );
+                        this.recover_from_navigation_error(e.to_string(), cx);
                     }
                 }
                 cx.notify();
@@ -2877,9 +2937,9 @@ impl Render for FileManagerPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_refresh_error_plan, build_retry_reset_plan, clear_remote_listing_state,
+        build_navigation_recovery_plan, build_retry_reset_plan, clear_remote_listing_state,
         should_apply_directory_result, should_refresh_after_upload, ConnectionState,
-        RetryResetPlan,
+        NavigationRecoveryPlan,
     };
     use std::collections::HashSet;
 
@@ -2893,15 +2953,35 @@ mod tests {
     }
 
     #[test]
-    fn build_refresh_error_plan_preserves_current_path_for_retry() {
-        let plan = build_refresh_error_plan("/srv/project", "连接已断开".to_string());
+    fn build_navigation_recovery_plan_prefers_working_directory() {
+        let plan = build_navigation_recovery_plan(
+            "/srv/invalid",
+            Some("/srv/workspace"),
+            &["/srv/home".to_string(), "/srv/invalid".to_string()],
+            1,
+        );
 
         assert_eq!(
             plan,
-            RetryResetPlan {
-                next_state: ConnectionState::Error("连接已断开".to_string()),
-                initial_working_dir: Some("/srv/project".to_string()),
-                clear_listing: true,
+            NavigationRecoveryPlan {
+                fallback_path: "/srv/workspace".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn build_navigation_recovery_plan_falls_back_to_previous_history() {
+        let plan = build_navigation_recovery_plan(
+            "/srv/invalid",
+            None,
+            &["/srv/home".to_string(), "/srv/invalid".to_string()],
+            1,
+        );
+
+        assert_eq!(
+            plan,
+            NavigationRecoveryPlan {
+                fallback_path: "/srv/home".to_string(),
             }
         );
     }

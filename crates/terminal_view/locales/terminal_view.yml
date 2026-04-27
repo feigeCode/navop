@@ -995,6 +995,10 @@ FileManager:
     en: Connection failed
     zh-CN: 连接失败
     zh-HK: 連接失敗
+  read_dir_failed_recovered:
+    en: "Failed to read directory: %{error}. Returned to your working directory."
+    zh-CN: "读取目录失败：%{error}。已返回你的工作目录。"
+    zh-HK: "讀取目錄失敗：%{error}。已返回你的工作目錄。"
   retry:
     en: Retry
     zh-CN: 重试
