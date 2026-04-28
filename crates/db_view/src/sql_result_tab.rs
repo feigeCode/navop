@@ -5,8 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, Styled, UniformListScrollHandle, Window, div, px, uniform_list,
+    AnyElement, App, AppContext, AsyncApp, Context, Entity, InteractiveElement, IntoElement,
+    ParentElement, Render, ScrollHandle, StatefulInteractiveElement, Styled,
+    UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, StyledExt,
@@ -15,7 +16,7 @@ use gpui_component::{
     h_flex,
     popover::Popover,
     progress::Progress,
-    scroll::ScrollableElement,
+    scroll::{ScrollableElement, Scrollbar},
     spinner::Spinner,
     tab::{Tab, TabBar},
     v_flex,
@@ -159,6 +160,7 @@ pub struct SqlResultTabContainer {
     pub execution_state: Entity<ExecutionState>,
     pub statement_list: Entity<StatementListData>,
     pub scroll_handle: UniformListScrollHandle,
+    pub tab_scroll_handle: ScrollHandle,
     pub show_errors_only: Entity<bool>,
     pub total_elapsed_ms: Entity<f64>,
     /// 执行开始时间，用于实时更新运行时间
@@ -176,6 +178,7 @@ impl SqlResultTabContainer {
         let execution_state = cx.new(|_| ExecutionState::Idle);
         let statement_list = cx.new(|_| StatementListData::new());
         let scroll_handle = UniformListScrollHandle::new();
+        let tab_scroll_handle = ScrollHandle::new();
         let show_errors_only = cx.new(|_| false);
         let total_elapsed_ms = cx.new(|_| 0.0);
         let execution_start = cx.new(|_| None);
@@ -188,6 +191,7 @@ impl SqlResultTabContainer {
             execution_state,
             statement_list,
             scroll_handle,
+            tab_scroll_handle,
             show_errors_only,
             total_elapsed_ms,
             execution_start,
@@ -224,6 +228,7 @@ impl SqlResultTabContainer {
             *active = 0;
             cx.notify();
         });
+        self.tab_scroll_handle.scroll_to_item(0);
 
         self.is_visible.update(cx, |visible, cx| {
             *visible = true;
@@ -416,10 +421,12 @@ impl SqlResultTabContainer {
 
                 if has_query_result {
                     if let Some(idx) = first_query_index {
+                        let active_idx = idx + 1;
                         clone_self.active_result_tab.update(cx, |active, cx| {
-                            *active = idx + 1;
+                            *active = active_idx;
                             cx.notify();
                         });
+                        clone_self.tab_scroll_handle.scroll_to_item(active_idx);
                     }
                 }
             });
@@ -834,27 +841,58 @@ impl SqlResultTabContainer {
         filtered_items: Vec<StatementListItem>,
         is_executing: bool,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         let item_count = filtered_items.len();
 
         // 当执行中且列表为空时，显示加载占位符
         if is_executing && item_count == 0 {
-            return div().flex_1().w_full().px_4().py_8().child(
-                v_flex()
-                    .items_center()
-                    .justify_center()
-                    .gap_4()
-                    .child(Spinner::new().with_size(Size::Large))
-                    .child(
-                        div()
-                            .text_base()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t!("SqlResultTab.query_executing_wait")),
-                    ),
-            );
+            return div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .px_4()
+                .py_8()
+                .child(
+                    v_flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_4()
+                        .child(Spinner::new().with_size(Size::Large))
+                        .child(
+                            div()
+                                .text_base()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SqlResultTab.query_executing_wait")),
+                        ),
+                )
+                .into_any_element();
         }
 
-        div().flex_1().w_full().px_4().child(
+        div()
+            .id("statement-list-container")
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .relative()
+            .child(
+                div()
+                    .id("statement-list-scroll")
+                    .flex_1()
+                    .size_full()
+                    .overflow_scroll()
+                    .px_4()
+                    .child(self.render_statement_list_content(item_count, cx)),
+            )
+            .child(Scrollbar::vertical(&self.scroll_handle))
+            .into_any_element()
+    }
+
+    fn render_statement_list_content(
+        &self,
+        item_count: usize,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        div().size_full().child(
             uniform_list(
                 "statement-list",
                 item_count,
@@ -1102,6 +1140,7 @@ impl SqlResultTabContainer {
 
         div()
             .flex_1()
+            .min_h_0()
             .bg(cx.theme().background)
             .border_1()
             .border_color(cx.theme().border)
@@ -1110,6 +1149,7 @@ impl SqlResultTabContainer {
             .child(
                 v_flex()
                     .size_full()
+                    .min_h_0()
                     .child(self.render_stats_row(
                         all_results,
                         success_count,
@@ -1157,14 +1197,16 @@ impl Render for SqlResultTabContainer {
             .size_full()
             .gap_0()
             .child(
-                h_flex().w_full().items_center().justify_center().child(
+                div().w_full().relative().child(
                     TabBar::new("result-tabs")
                         .p_2()
                         .w_full()
                         .underline()
                         .justify_center()
                         .with_size(Size::Small)
+                        .track_scroll(&self.tab_scroll_handle)
                         .selected_index(active_idx)
+                        .menu(true)
                         .on_click({
                             let clone_self = clone_self.clone();
                             move |ix: &usize, _w, cx| {
@@ -1172,6 +1214,7 @@ impl Render for SqlResultTabContainer {
                                     *active = *ix;
                                     cx.notify();
                                 });
+                                clone_self.tab_scroll_handle.scroll_to_item(*ix);
                             }
                         })
                         .child(
