@@ -17,7 +17,7 @@ use one_core::storage::DatabaseType;
 use one_core::storage::manager::get_queries_dir;
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
-use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
+use one_ui::resize_handle::{ResizePanel, resize_handle};
 use rust_i18n::t;
 use smol::Timer;
 use std::ops::Deref;
@@ -791,16 +791,17 @@ impl SqlEditorTab {
     ) -> impl IntoElement {
         let view = cx.entity().clone();
 
-        resize_handle::<ResizePanel, ResizePanel>("result-resize-handle", Axis::Vertical)
-            .placement(HandlePlacement::Left)
-            .on_drag(ResizePanel, move |info, _, _, cx| {
+        resize_handle::<ResizePanel, ResizePanel>("result-resize-handle", Axis::Vertical).on_drag(
+            ResizePanel,
+            move |info, _, _, cx| {
                 cx.stop_propagation();
                 view.update(cx, |view, cx| {
                     view.resizing = true;
                     cx.notify();
                 });
                 cx.new(|_| info.deref().clone())
-            })
+            },
+        )
     }
 
     fn resize(
