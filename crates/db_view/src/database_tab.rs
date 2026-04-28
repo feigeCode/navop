@@ -596,11 +596,21 @@ impl Render for DatabaseTabView {
                                     .h_full()
                                     .w(sidebar_panel_size)
                                     .flex_shrink_0()
+                                    .overflow_hidden()
                                     .child(self.render_sidebar_resize_handle(window, cx))
                                     .child(self.sidebar.clone()),
                             )
                         })
-                        .when(!sidebar_visible, |this| this.child(self.sidebar.clone()))
+                        .when(!sidebar_visible, |this| {
+                            this.child(
+                                div()
+                                    .h_full()
+                                    .w(TOOLBAR_WIDTH)
+                                    .flex_shrink_0()
+                                    .overflow_hidden()
+                                    .child(self.sidebar.clone()),
+                            )
+                        })
                         .child(ResizeEventHandler { view }),
                 )
             })
