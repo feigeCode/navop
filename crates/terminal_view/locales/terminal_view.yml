@@ -692,6 +692,10 @@ TerminalView:
     en: "Vi mode disabled."
     zh-CN: "已退出 Vi 模式。"
     zh-HK: "已退出 Vi 模式。"
+  font_reset_triggered:
+    en: "Terminal font size has been reset to 15."
+    zh-CN: "已触发终端字体重置为 15。"
+    zh-HK: "已觸發終端字體重置為 15。"
   multiline_paste_title:
     en: Confirm Multiline Paste
     zh-CN: 确认多行粘贴

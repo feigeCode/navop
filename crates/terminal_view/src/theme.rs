@@ -14,10 +14,8 @@
 //! - 在 `muted` 上使用 `foreground` 或 `muted_foreground`
 //! - 在 `accent` 上使用 `accent_foreground`
 
-use gpui::{rgb, Hsla, Pixels, SharedString};
+use gpui::{rgb, Hsla, SharedString};
 
-/// 默认字体大小
-pub const DEFAULT_FONT_SIZE: f32 = 13.0;
 /// 最小字体大小
 pub const MIN_FONT_SIZE: f32 = 8.0;
 /// 最大字体大小
@@ -64,14 +62,6 @@ pub struct TerminalTheme {
     pub cursor: Hsla,
     /// 选中区域颜色
     pub selection: Hsla,
-    /// 主字体
-    pub font_family: SharedString,
-    /// 字体大小
-    pub font_size: Pixels,
-    /// 备用字体列表
-    pub font_fallbacks: Vec<SharedString>,
-    /// 行高比例
-    pub line_height_scale: f32,
 }
 
 impl PartialEq for TerminalTheme {
@@ -81,9 +71,6 @@ impl PartialEq for TerminalTheme {
             && self.background == other.background
             && self.cursor == other.cursor
             && self.selection == other.selection
-            && self.font_family == other.font_family
-            && self.font_size == other.font_size
-            && self.line_height_scale == other.line_height_scale
     }
 }
 
@@ -151,8 +138,8 @@ impl TerminalTheme {
         ]
     }
 
-    /// 创建带有默认字体配置的主题
-    fn with_default_font(
+    /// 创建主题
+    fn new(
         name: &'static str,
         foreground: Hsla,
         background: Hsla,
@@ -165,16 +152,12 @@ impl TerminalTheme {
             background,
             cursor,
             selection,
-            font_family: default_monospace_font().into(),
-            font_size: gpui::px(DEFAULT_FONT_SIZE),
-            font_fallbacks: default_font_fallbacks(),
-            line_height_scale: DEFAULT_LINE_HEIGHT_SCALE,
         }
     }
 
     /// 暗夜主题（深灰背景，浅灰文字）
     pub fn midnight() -> Self {
-        Self::with_default_font(
+        Self::new(
             "midnight",
             rgb(0xE4E4E4).into(),
             rgb(0x1E1E1E).into(),
@@ -185,7 +168,7 @@ impl TerminalTheme {
 
     /// 明亮主题（白色背景，深灰文字）
     pub fn daylight() -> Self {
-        Self::with_default_font(
+        Self::new(
             "daylight",
             rgb(0x2E3436).into(),
             rgb(0xFFFFFF).into(),
@@ -196,7 +179,7 @@ impl TerminalTheme {
 
     /// 墨黑主题（近黑背景，米色文字）
     pub fn ink() -> Self {
-        Self::with_default_font(
+        Self::new(
             "ink",
             rgb(0xCECDC3).into(),
             rgb(0x100F0F).into(),
@@ -207,7 +190,7 @@ impl TerminalTheme {
 
     /// 纸白主题（米白背景，深色文字）
     pub fn paper() -> Self {
-        Self::with_default_font(
+        Self::new(
             "paper",
             rgb(0x100F0F).into(),
             rgb(0xFFFCF0).into(),
@@ -218,7 +201,7 @@ impl TerminalTheme {
 
     /// 海浪主题（深蓝灰背景，暖米色文字）
     pub fn ocean() -> Self {
-        Self::with_default_font(
+        Self::new(
             "ocean",
             rgb(0xDCD7BA).into(),
             rgb(0x1F1F28).into(),
@@ -229,7 +212,7 @@ impl TerminalTheme {
 
     /// 黑曜主题（深棕黑背景，灰绿文字）
     pub fn obsidian() -> Self {
-        Self::with_default_font(
+        Self::new(
             "obsidian",
             rgb(0xC5C9C5).into(),
             rgb(0x181616).into(),
@@ -240,7 +223,7 @@ impl TerminalTheme {
 
     /// 莲白主题（米黄背景，深灰紫文字）
     pub fn lotus() -> Self {
-        Self::with_default_font(
+        Self::new(
             "lotus",
             rgb(0x545464).into(),
             rgb(0xF2ECBC).into(),
@@ -251,7 +234,7 @@ impl TerminalTheme {
 
     /// 霓蓝主题（深蓝黑背景，青蓝文字）
     pub fn neon_blue() -> Self {
-        Self::with_default_font(
+        Self::new(
             "neon_blue",
             rgb(0x00D9FF).into(),
             rgb(0x0A0E14).into(),
@@ -262,7 +245,7 @@ impl TerminalTheme {
 
     /// 矩阵主题（近黑背景，亮绿文字，Matrix 风格）
     pub fn matrix() -> Self {
-        Self::with_default_font(
+        Self::new(
             "matrix",
             rgb(0x00FF41).into(),
             rgb(0x0D0D0D).into(),
@@ -273,7 +256,7 @@ impl TerminalTheme {
 
     /// 赤红主题（深红黑背景，亮红文字）
     pub fn crimson() -> Self {
-        Self::with_default_font(
+        Self::new(
             "crimson",
             rgb(0xFF5555).into(),
             rgb(0x1A0A0A).into(),
@@ -285,36 +268,6 @@ impl TerminalTheme {
     /// 根据名称查找主题
     pub fn find_by_name(name: &str) -> Option<Self> {
         Self::all().into_iter().find(|t| t.name == name)
-    }
-
-    /// 设置字体大小（会限制在最小和最大值之间）
-    pub fn with_font_size(mut self, size: f32) -> Self {
-        let clamped = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
-        self.font_size = gpui::px(clamped);
-        self
-    }
-
-    /// 设置主字体
-    pub fn with_font_family(mut self, family: impl Into<SharedString>) -> Self {
-        self.font_family = family.into();
-        self
-    }
-
-    /// 设置备用字体列表
-    pub fn with_font_fallbacks(mut self, fallbacks: Vec<SharedString>) -> Self {
-        self.font_fallbacks = fallbacks;
-        self
-    }
-
-    /// 设置行高比例
-    pub fn with_line_height_scale(mut self, scale: f32) -> Self {
-        self.line_height_scale = scale.clamp(1.0, 2.5);
-        self
-    }
-
-    /// 获取计算后的行高
-    pub fn line_height(&self) -> Pixels {
-        self.font_size * self.line_height_scale
     }
 
     /// 判断是否为深色主题
@@ -465,12 +418,5 @@ impl TerminalTheme {
                 "IBM Plex Mono",
             ]
         }
-    }
-
-    /// 获取可用的字体大小预设列表
-    pub fn available_font_sizes() -> Vec<f32> {
-        vec![
-            8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 18.0, 20.0, 22.0, 24.0,
-        ]
     }
 }

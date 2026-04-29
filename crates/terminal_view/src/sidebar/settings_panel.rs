@@ -6,8 +6,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::FontWeight;
 use gpui::{
     div, px, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window,
+    Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Render,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -74,6 +74,10 @@ pub struct SettingsPanel {
     font_select_state: Entity<SelectState<Vec<SharedString>>>,
     /// 当前主题
     current_theme: TerminalTheme,
+    /// 当前终端字体大小
+    font_size: f32,
+    /// 当前终端字体
+    font_family: SharedString,
     /// 字体大小输入变更抑制
     suppress_font_size_change: bool,
     /// 光标闪烁开关
@@ -103,6 +107,8 @@ pub struct SettingsPanel {
 impl SettingsPanel {
     pub fn new(
         initial_theme: &TerminalTheme,
+        initial_font_size: Pixels,
+        initial_font_family: SharedString,
         has_file_manager: bool,
         auto_copy: bool,
         autocomplete_enabled: bool,
@@ -115,7 +121,7 @@ impl SettingsPanel {
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("Settings.search_placeholder")));
 
         // 字体大小输入框
-        let font_size = f32::from(initial_theme.font_size);
+        let font_size = f32::from(initial_font_size);
         let font_size_input_state = cx.new(|cx| InputState::new(window, cx).placeholder("13"));
         font_size_input_state.update(cx, |state: &mut InputState, cx| {
             state.set_value(&format!("{:.0}", font_size), window, cx);
@@ -128,7 +134,7 @@ impl SettingsPanel {
             .collect();
 
         // 找到当前字体的索引
-        let current_font = initial_theme.font_family.to_string();
+        let current_font = initial_font_family.to_string();
         let selected_index = fonts
             .iter()
             .position(|f| f.as_ref() == current_font)
@@ -173,7 +179,7 @@ impl SettingsPanel {
                     let value = font_size_entity.read(cx).value().to_string();
                     if let Ok(size) = value.parse::<f32>() {
                         let clamped: f32 = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
-                        this.current_theme.font_size = px(clamped);
+                        this.font_size = clamped;
                         cx.emit(SettingsPanelEvent::FontSizeChanged(clamped));
                     }
                 }
@@ -188,12 +194,12 @@ impl SettingsPanel {
             window,
             move |this, _state, event: &NumberInputEvent, window, cx| match event {
                 NumberInputEvent::Step(action) => {
-                    let current = f32::from(this.current_theme.font_size);
+                    let current = this.font_size;
                     let new_size = match action {
                         StepAction::Increment => (current + 1.0).min(MAX_FONT_SIZE),
                         StepAction::Decrement => (current - 1.0).max(MIN_FONT_SIZE),
                     };
-                    this.current_theme.font_size = px(new_size);
+                    this.font_size = new_size;
                     font_size_entity2.update(cx, |state: &mut InputState, cx| {
                         state.set_value(&format!("{:.0}", new_size), window, cx);
                     });
@@ -208,7 +214,7 @@ impl SettingsPanel {
             window,
             move |this, _state, event: &SelectEvent<Vec<SharedString>>, _window, cx| {
                 if let SelectEvent::Confirm(Some(font)) = event {
-                    this.current_theme.font_family = font.clone();
+                    this.font_family = font.clone();
                     cx.emit(SettingsPanelEvent::FontFamilyChanged(font.to_string()));
                 }
             },
@@ -219,6 +225,8 @@ impl SettingsPanel {
             font_size_input_state,
             font_select_state,
             current_theme: initial_theme.clone(),
+            font_size,
+            font_family: initial_font_family,
             suppress_font_size_change: false,
             cursor_blink: false,
             confirm_multiline_paste: true,
@@ -238,24 +246,20 @@ impl SettingsPanel {
     pub fn set_current_theme(
         &mut self,
         theme: TerminalTheme,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // 更新字体大小输入框
-        let font_size = f32::from(theme.font_size);
+        self.current_theme = theme;
+        cx.notify();
+    }
+
+    pub fn set_font_size(&mut self, font_size: f32, window: &mut Window, cx: &mut Context<Self>) {
+        self.font_size = font_size;
         self.suppress_font_size_change = true;
         self.font_size_input_state.update(cx, |state, cx| {
             state.set_value(&format!("{:.0}", font_size), window, cx);
         });
         self.suppress_font_size_change = false;
-
-        // 更新字体选择
-        let font_family = theme.font_family.clone();
-        self.font_select_state.update(cx, |state, cx| {
-            state.set_selected_value(&font_family, window, cx);
-        });
-
-        self.current_theme = theme;
         cx.notify();
     }
 

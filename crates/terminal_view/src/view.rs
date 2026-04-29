@@ -33,7 +33,10 @@ use crate::settings::{
 };
 use crate::sidebar::{SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
 use crate::terminal_element::{RenderCache, TerminalElement};
-use crate::theme::{TerminalTheme, DEFAULT_FONT_SIZE, MAX_FONT_SIZE, MIN_FONT_SIZE};
+use crate::theme::{
+    default_font_fallbacks, default_monospace_font, TerminalTheme, DEFAULT_LINE_HEIGHT_SCALE,
+    MAX_FONT_SIZE, MIN_FONT_SIZE,
+};
 use one_core::layout::{SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
 use one_core::storage::models::{ActiveConnections, StoredConnection};
 use one_core::tab_container::{TabContent, TabContentEvent};
@@ -93,6 +96,7 @@ const TERMINAL_TOGGLE_VI_MODE_SHORTCUT: &str = "f7";
 const DEFAULT_CELL_WIDTH: Pixels = px(8.0);
 const DEFAULT_COLS: usize = 80;
 const DEFAULT_ROWS: usize = 24;
+const TERMINAL_RESET_FONT_SIZE: f32 = 15.0;
 const HISTORY_SUGGESTION_LIMIT: usize = 6;
 
 fn take_whole_scroll_lines(scroll_lines_accumulated: &mut f32) -> i32 {
@@ -413,6 +417,9 @@ pub struct TerminalView {
 
     font_size: Pixels,
     line_height: Pixels,
+    font_family: SharedString,
+    font_fallbacks: Vec<SharedString>,
+    line_height_scale: f32,
     cell_width: Pixels,
 
     last_size: Option<(usize, usize)>,
@@ -677,6 +684,10 @@ impl TerminalView {
 
         // 创建默认主题（需要在创建侧边栏之前）
         let default_theme = TerminalTheme::ocean();
+        let default_font_size = px(TERMINAL_RESET_FONT_SIZE);
+        let default_font_family: SharedString = default_monospace_font().into();
+        let default_font_fallbacks = default_font_fallbacks();
+        let default_line_height_scale = DEFAULT_LINE_HEIGHT_SCALE;
         let ssh_config = terminal.read(cx).ssh_config().cloned();
         let ssh_session_manager = terminal.read(cx).ssh_session_manager().cloned();
 
@@ -688,6 +699,8 @@ impl TerminalView {
                 ssh_config,
                 ssh_session_manager,
                 &default_theme,
+                default_font_size,
+                default_font_family.clone(),
                 sync_path_enabled,
                 window,
                 cx,
@@ -750,8 +763,11 @@ impl TerminalView {
             },
             blink_manager,
             sidebar,
-            font_size: default_theme.font_size,
-            line_height: default_theme.line_height(),
+            font_size: default_font_size,
+            line_height: default_font_size * default_line_height_scale,
+            font_family: default_font_family,
+            font_fallbacks: default_font_fallbacks,
+            line_height_scale: default_line_height_scale,
             cell_width: DEFAULT_CELL_WIDTH,
             // 初始化为 None，确保首次渲染时会触发 resize，
             // 将正确的终端尺寸发送给 PTY
@@ -1388,7 +1404,7 @@ impl TerminalView {
                             .left(ghost_left)
                             .top(ghost_top)
                             .text_color(self.current_theme.foreground.opacity(0.35))
-                            .text_size(self.current_theme.font_size)
+                            .text_size(self.font_size)
                             .child(ghost_suffix),
                     )
                 })
@@ -1539,8 +1555,6 @@ impl TerminalView {
     /// Apply a terminal theme
     pub fn set_theme(&mut self, theme: TerminalTheme, cx: &mut Context<Self>) {
         self.current_theme = theme;
-        self.font_size = self.current_theme.font_size;
-        self.line_height = self.current_theme.line_height();
         cx.notify();
     }
 
@@ -1572,7 +1586,7 @@ impl TerminalView {
     /// 设置字体大小
     pub fn set_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
         let clamped = size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
-        let current = f32::from(self.current_theme.font_size);
+        let current = f32::from(self.font_size);
         if (current - clamped).abs() < f32::EPSILON {
             return;
         }
@@ -1593,11 +1607,10 @@ impl TerminalView {
     ) {
         // 字体大小
         let clamped = font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
-        let current = f32::from(self.current_theme.font_size);
+        let current = f32::from(self.font_size);
         if (current - clamped).abs() >= f32::EPSILON {
-            self.current_theme.font_size = px(clamped);
-            self.font_size = self.current_theme.font_size;
-            self.line_height = self.current_theme.line_height();
+            self.font_size = px(clamped);
+            self.line_height = self.font_size * self.line_height_scale;
         }
 
         self.auto_copy_on_select = auto_copy;
@@ -1616,6 +1629,7 @@ impl TerminalView {
         let theme = self.current_theme.clone();
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.update_current_theme(&theme, window, cx);
+            sidebar.set_font_size(clamped, window, cx);
             sidebar.set_auto_copy(auto_copy, cx);
             sidebar.set_middle_click_paste(middle_click_paste, cx);
             sidebar.set_sync_path_enabled(sync_path, cx);
@@ -1676,8 +1690,6 @@ impl TerminalView {
             return;
         }
         self.current_theme = theme.clone();
-        self.font_size = self.current_theme.font_size;
-        self.line_height = self.current_theme.line_height();
         self.sync_sidebar_theme(window, cx);
         cx.notify();
     }
@@ -1774,47 +1786,47 @@ impl TerminalView {
 
     /// 增大字体
     pub fn increase_font_size(&mut self, cx: &mut Context<Self>) {
-        let current = f32::from(self.current_theme.font_size);
+        let current = f32::from(self.font_size);
         self.set_font_size(current + 1.0, cx);
     }
 
     /// 减小字体
     pub fn decrease_font_size(&mut self, cx: &mut Context<Self>) {
-        let current = f32::from(self.current_theme.font_size);
+        let current = f32::from(self.font_size);
         self.set_font_size(current - 1.0, cx);
     }
 
     /// 重置字体大小为默认值
     pub fn reset_font_size(&mut self, cx: &mut Context<Self>) {
-        self.set_font_size(DEFAULT_FONT_SIZE, cx);
+        self.set_font_size(TERMINAL_RESET_FONT_SIZE, cx);
     }
 
     /// 获取当前字体大小
     pub fn font_size(&self) -> f32 {
-        f32::from(self.current_theme.font_size)
+        f32::from(self.font_size)
     }
 
     /// 设置主字体
     pub fn set_font_family(&mut self, family: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.current_theme.font_family = family.into();
+        self.font_family = family.into();
         cx.notify();
     }
 
     /// 获取当前主字体
     pub fn font_family(&self) -> &SharedString {
-        &self.current_theme.font_family
+        &self.font_family
     }
 
     /// 设置行高比例
     pub fn set_line_height_scale(&mut self, scale: f32, cx: &mut Context<Self>) {
-        self.current_theme.line_height_scale = scale.clamp(1.0, 2.5);
-        self.line_height = self.current_theme.line_height();
+        self.line_height_scale = scale.clamp(1.0, 2.5);
+        self.line_height = self.font_size * self.line_height_scale;
         cx.notify();
     }
 
     /// 获取当前行高比例
     pub fn line_height_scale(&self) -> f32 {
-        self.current_theme.line_height_scale
+        self.line_height_scale
     }
 
     pub fn reconnect(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2229,6 +2241,10 @@ impl TerminalView {
     fn reset_font(&mut self, _: &ResetFont, window: &mut Window, cx: &mut Context<Self>) {
         self.reset_font_size(cx);
         self.sync_sidebar_theme(window, cx);
+        window.push_notification(
+            Notification::info(t!("TerminalView.font_reset_triggered").to_string()).autohide(true),
+            cx,
+        );
     }
 
     /// 粘贴文本到终端
@@ -2594,14 +2610,10 @@ impl TerminalView {
 
         TerminalElement::new(
             &self.render_cache,
-            self.current_theme.font_family.clone(),
-            self.current_theme.font_size,
-            self.current_theme
-                .font_fallbacks
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
-            self.current_theme.line_height_scale,
+            self.font_family.clone(),
+            self.font_size,
+            self.font_fallbacks.iter().map(|s| s.to_string()).collect(),
+            self.line_height_scale,
             cursor_visible,
             self.cell_width, // 传入预计算的 cell_width，确保与 resize 一致
         )
@@ -3218,12 +3230,11 @@ impl TabContent for TerminalView {
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 创建与 terminal_element 一致的字体配置（包含 fallbacks）
-        let fallbacks = if self.current_theme.font_fallbacks.is_empty() {
+        let fallbacks = if self.font_fallbacks.is_empty() {
             None
         } else {
             Some(FontFallbacks::from_fonts(
-                self.current_theme
-                    .font_fallbacks
+                self.font_fallbacks
                     .iter()
                     .map(|s| s.to_string())
                     .collect::<Vec<_>>(),
@@ -3232,7 +3243,7 @@ impl Render for TerminalView {
         let features = FontFeatures(std::sync::Arc::new(vec![("calt".to_string(), 0)]));
 
         let font = Font {
-            family: self.current_theme.font_family.clone(),
+            family: self.font_family.clone(),
             weight: FontWeight::NORMAL,
             style: FontStyle::Normal,
             features,
@@ -3243,16 +3254,15 @@ impl Render for TerminalView {
         // advance 返回字符的前进宽度，比 em_width 更准确反映等宽字体的单元格宽度
         let new_cell_width = window
             .text_system()
-            .advance(font_id, self.current_theme.font_size, 'm')
+            .advance(font_id, self.font_size, 'm')
             .map(|size| size.width)
-            .unwrap_or(self.current_theme.font_size * 0.6);
+            .unwrap_or(self.font_size * 0.6);
 
         if self.cell_width != new_cell_width {
             self.cell_width = new_cell_width;
         }
 
-        self.line_height = self.current_theme.font_size * self.current_theme.line_height_scale;
-        self.font_size = self.current_theme.font_size;
+        self.line_height = self.font_size * self.line_height_scale;
 
         if let Some(new_display_offset) = self.scrollbar_handle.take_future_display_offset() {
             self.terminal.update(cx, |terminal, _| {
@@ -3679,6 +3689,29 @@ mod tests {
         accumulated -= 0.8;
         assert_eq!(take_whole_scroll_lines(&mut accumulated), -1);
         assert!((accumulated + 0.25).abs() < 0.0001);
+    }
+
+    #[test]
+    fn terminal_keybindings_bind_ctrl_zero_to_reset_font() {
+        let source = include_str!("view.rs");
+        let binding = format!("{}{}", r#"KeyBinding::new("ctrl-0", "#, "ResetFont");
+
+        assert!(source.contains(&binding));
+    }
+
+    #[test]
+    fn terminal_reset_font_size_is_fifteen() {
+        assert_eq!(super::TERMINAL_RESET_FONT_SIZE, 15.0);
+    }
+
+    #[test]
+    fn terminal_theme_source_does_not_define_font_settings() {
+        let source = include_str!("theme.rs");
+
+        assert!(!source.contains("pub font_size"));
+        assert!(!source.contains("pub font_family"));
+        assert!(!source.contains("pub font_fallbacks"));
+        assert!(!source.contains("pub line_height_scale"));
     }
 
     #[test]
