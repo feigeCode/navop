@@ -742,7 +742,7 @@ mod tests {
         // Unknown alias should be returned as-is
         let sql = "SELECT x. FROM users u";
         let offset = 9; // After "SELECT x."
-        // 'x' is not defined as an alias, so it's returned as-is
+                        // 'x' is not defined as an alias, so it's returned as-is
         assert_eq!(
             infer_context(sql, offset),
             SqlContext::DotColumn("x".to_string())

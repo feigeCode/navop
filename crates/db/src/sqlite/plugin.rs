@@ -11,7 +11,7 @@ use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportProgressSender,
     ImportResult,
 };
-use crate::manifest_helpers::{DatabaseActionDescriptorExt, action, action_with_scope, field, tab};
+use crate::manifest_helpers::{action, action_with_scope, field, tab, DatabaseActionDescriptorExt};
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
@@ -320,17 +320,15 @@ fn sqlite_connection_form(default_db_path: &str) -> DatabaseFormManifest {
             tab(
                 "notes",
                 "ConnectionForm.notes",
-                vec![
-                    field(
-                        "remark",
-                        "ConnectionForm.remark",
-                        DatabaseFormFieldType::TextArea,
-                    )
-                    .optional()
-                    .with_rows(14)
-                    .with_placeholder("ConnectionForm.enter_remark")
-                    .with_default(""),
-                ],
+                vec![field(
+                    "remark",
+                    "ConnectionForm.remark",
+                    DatabaseFormFieldType::TextArea,
+                )
+                .optional()
+                .with_rows(14)
+                .with_placeholder("ConnectionForm.enter_remark")
+                .with_default("")],
             ),
         ],
     }
@@ -1474,13 +1472,11 @@ mod tests {
                 DatabaseFormKind::EditDatabase,
             ]
         );
-        assert!(
-            manifest
-                .actions
-                .actions
-                .iter()
-                .any(|action| action.id == DatabaseActionId::OpenTableData)
-        );
+        assert!(manifest
+            .actions
+            .actions
+            .iter()
+            .any(|action| action.id == DatabaseActionId::OpenTableData));
     }
 
     // ==================== DDL SQL Generation Tests ====================

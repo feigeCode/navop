@@ -2853,6 +2853,16 @@ DatabaseTab:
     zh-CN: 打开新编辑器
     zh-HK: 打開新編輯器
 
+ErDiagram:
+  open:
+    en: Open ER Diagram
+    zh-CN: 打开 ER 图
+    zh-HK: 打開 ER 圖
+  loading:
+    en: Loading ER diagram...
+    zh-CN: 正在加载 ER 图...
+    zh-HK: 正在載入 ER 圖...
+
 # 团队同步
 TeamSync:
   personal:

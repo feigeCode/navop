@@ -609,7 +609,9 @@ pub fn build_context_menu_for(
     node_id: &str,
     node_type: DbNodeType,
 ) -> Vec<ContextMenuItem> {
-    manifest_plugin(database_type).build_context_menu(node_id, node_type)
+    let mut items = manifest_plugin(database_type).build_context_menu(node_id, node_type);
+    append_er_diagram_item(&mut items, node_id, node_type);
+    items
 }
 
 pub fn build_toolbar_buttons_for(
@@ -618,6 +620,21 @@ pub fn build_toolbar_buttons_for(
     data_node_type: DbNodeType,
 ) -> Vec<ToolbarButton> {
     manifest_plugin(database_type).build_toolbar_buttons(node_type, data_node_type)
+}
+
+fn append_er_diagram_item(items: &mut Vec<ContextMenuItem>, node_id: &str, node_type: DbNodeType) {
+    if !matches!(node_type, DbNodeType::Database | DbNodeType::Schema) {
+        return;
+    }
+    if !items.is_empty() {
+        items.push(ContextMenuItem::separator());
+    }
+    items.push(ContextMenuItem::item(
+        translate("ErDiagram.open"),
+        DbTreeViewEvent::OpenErDiagram {
+            node_id: node_id.to_string(),
+        },
+    ));
 }
 
 pub fn get_table_designer_capabilities_for(

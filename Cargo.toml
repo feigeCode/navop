@@ -17,6 +17,7 @@ members = [
     "examples/focus_trap",
     "crates/db",
     "crates/db_view",
+    "crates/er_flow",
     "crates/terminal",
     "crates/terminal_view"
     , "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor"]
@@ -80,6 +81,7 @@ sftp_view = { path = "crates/sftp_view" }
 one-core = { path = "crates/core" }
 mongodb_view = {path = "crates/mongodb_view"}
 remote_file_editor = { path = "crates/remote_file_editor" }
+er_flow = { path = "crates/er_flow" }
 
 
 json5 = "1.3.0"

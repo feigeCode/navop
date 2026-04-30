@@ -23,8 +23,8 @@ use one_core::storage::{DatabaseType, DbConnectionConfig};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 /// Macro to reduce boilerplate for plugin operations with session management
@@ -122,6 +122,27 @@ macro_rules! with_plugin_session_db {
         })
         .await
     }};
+}
+
+async fn cached_foreign_keys(
+    cx: &mut AsyncApp,
+    cache: GlobalNodeCache,
+    connection_id: &str,
+    database: &str,
+    schema: Option<&str>,
+    table: &str,
+) -> anyhow::Result<Vec<crate::types::ForeignKeyDefinition>> {
+    let conn_id = connection_id.to_string();
+    let db = database.to_string();
+    let sch = schema.map(str::to_string);
+    let tbl = table.to_string();
+    Tokio::spawn_result(cx, async move {
+        cache
+            .get_foreign_keys(&conn_id, &db, sch.as_deref(), &tbl)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Cache miss"))
+    })
+    .await
 }
 
 /// Database manager - creates database plugins
@@ -1851,6 +1872,55 @@ impl GlobalDbState {
         }
 
         Ok(indexes)
+    }
+
+    /// List foreign keys (with caching)
+    pub async fn list_foreign_keys(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        database: String,
+        schema: Option<String>,
+        table: String,
+    ) -> anyhow::Result<Vec<crate::types::ForeignKeyDefinition>> {
+        let cache = cx.update(|cx| cx.try_global::<GlobalNodeCache>().cloned());
+        if let Some(cache) = cache.clone() {
+            let result = cached_foreign_keys(
+                cx,
+                cache,
+                &connection_id,
+                &database,
+                schema.as_deref(),
+                &table,
+            )
+            .await;
+            if let Ok(foreign_keys) = result {
+                return Ok(foreign_keys);
+            }
+        }
+
+        let conn_id = connection_id.clone();
+        let db = database.clone();
+        let sch = schema.clone();
+        let tbl = table.clone();
+        let foreign_keys =
+            with_plugin_session_db!(self, cx, connection_id, database.clone(), |plugin, conn| {
+                plugin
+                    .list_foreign_keys(&*conn, &database, schema, &table)
+                    .await
+            })?;
+
+        if let Some(cache) = cache {
+            let foreign_keys_clone = foreign_keys.clone();
+            Tokio::spawn(cx, async move {
+                cache
+                    .cache_foreign_keys(&conn_id, &db, sch.as_deref(), &tbl, foreign_keys_clone)
+                    .await;
+            })
+            .detach();
+        }
+
+        Ok(foreign_keys)
     }
 
     /// List views

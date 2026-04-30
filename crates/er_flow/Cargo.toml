@@ -1,0 +1,16 @@
+[package]
+name = "er_flow"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures.workspace = true
+gpui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

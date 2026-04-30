@@ -3,7 +3,7 @@ use crate::executor::{
     ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
 };
 use crate::ssh_tunnel::resolve_connection_target;
-use crate::{DatabasePlugin, format_message, truncate_str};
+use crate::{format_message, truncate_str, DatabasePlugin};
 
 use async_trait::async_trait;
 use clickhouse::Client;

@@ -2462,6 +2462,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "db",
+ "er_flow",
  "futures",
  "gpui",
  "gpui-component",
@@ -3075,6 +3076,18 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
+name = "er_flow"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "gpui",
+ "serde",
+ "serde_json",
+ "uuid",
+]
 
 [[package]]
 name = "erased-serde"
@@ -10652,6 +10665,7 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
+ "async-trait",
  "chrono",
  "gpui",
  "gpui-component",

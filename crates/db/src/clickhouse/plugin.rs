@@ -12,8 +12,8 @@ use crate::import_export::{
     ImportResult,
 };
 use crate::manifest_helpers::{
-    DatabaseActionDescriptorExt, action, action_with_scope, field, option, ssh_auth_rules,
-    ssh_enabled_rules, ssh_field, ssh_number_field, ssh_password_field, tab, yes_no_options,
+    action, action_with_scope, field, option, ssh_auth_rules, ssh_enabled_rules, ssh_field,
+    ssh_number_field, ssh_password_field, tab, yes_no_options, DatabaseActionDescriptorExt,
 };
 use crate::plugin::{DatabaseOperationRequest, DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
@@ -176,19 +176,17 @@ fn clickhouse_connection_form() -> DatabaseFormManifest {
             tab(
                 "ssl",
                 "ConnectionForm.ssl",
-                vec![
-                    field(
-                        "schema",
-                        "ConnectionForm.schema",
-                        DatabaseFormFieldType::Select,
-                    )
-                    .optional()
-                    .with_default("http")
-                    .with_options(vec![
-                        option("http", "ConnectionForm.schema_http"),
-                        option("https", "ConnectionForm.schema_https"),
-                    ]),
-                ],
+                vec![field(
+                    "schema",
+                    "ConnectionForm.schema",
+                    DatabaseFormFieldType::Select,
+                )
+                .optional()
+                .with_default("http")
+                .with_options(vec![
+                    option("http", "ConnectionForm.schema_http"),
+                    option("https", "ConnectionForm.schema_https"),
+                ])],
             ),
             tab(
                 "ssh",
@@ -249,17 +247,15 @@ fn clickhouse_connection_form() -> DatabaseFormManifest {
             tab(
                 "notes",
                 "ConnectionForm.notes",
-                vec![
-                    field(
-                        "remark",
-                        "ConnectionForm.remark",
-                        DatabaseFormFieldType::TextArea,
-                    )
-                    .optional()
-                    .with_rows(14)
-                    .with_placeholder("ConnectionForm.enter_remark")
-                    .with_default(""),
-                ],
+                vec![field(
+                    "remark",
+                    "ConnectionForm.remark",
+                    DatabaseFormFieldType::TextArea,
+                )
+                .optional()
+                .with_rows(14)
+                .with_placeholder("ConnectionForm.enter_remark")
+                .with_default("")],
             ),
         ],
     }
@@ -1599,13 +1595,11 @@ mod tests {
                 DatabaseFormKind::EditDatabase,
             ]
         );
-        assert!(
-            manifest
-                .actions
-                .actions
-                .iter()
-                .any(|action| action.id == DatabaseActionId::CreateDatabase)
-        );
+        assert!(manifest
+            .actions
+            .actions
+            .iter()
+            .any(|action| action.id == DatabaseActionId::CreateDatabase));
         assert_eq!(create_plugin().engines(), clickhouse_engine_names());
     }
 
@@ -1790,11 +1784,9 @@ mod tests {
                     .data_type("UInt32")
                     .nullable(false),
             ],
-            indexes: vec![
-                IndexDefinition::new("idx_user_id")
-                    .columns(vec!["user_id".to_string()])
-                    .unique(false),
-            ],
+            indexes: vec![IndexDefinition::new("idx_user_id")
+                .columns(vec!["user_id".to_string()])
+                .unique(false)],
             foreign_keys: vec![],
             options: TableOptions::default(),
         };

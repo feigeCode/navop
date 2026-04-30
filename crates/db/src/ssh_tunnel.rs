@@ -72,6 +72,7 @@ pub async fn resolve_connection_target(
         keepalive_max: None,
         jump_server: None,
         proxy: None,
+        keyboard_interactive_responder: None,
     };
 
     // Wrap tunnel setup with an explicit timeout.

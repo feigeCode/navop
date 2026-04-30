@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use duckdb::{Connection, types::ValueRef};
+use duckdb::{types::ValueRef, Connection};
 use tokio::sync::mpsc;
 use tokio::task::spawn_blocking;
 use tracing::{debug, error, info};
@@ -11,7 +11,7 @@ use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
     ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
 };
-use crate::{DatabasePlugin, format_message, truncate_str};
+use crate::{format_message, truncate_str, DatabasePlugin};
 use one_core::storage::DbConnectionConfig;
 
 pub struct DuckDbConnection {

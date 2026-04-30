@@ -311,6 +311,8 @@ pub enum DbTreeViewEvent {
     DesignTable { node_id: String },
     /// 为指定数据库创建新查询
     CreateNewQuery { node_id: String },
+    /// 打开数据库或 Schema 的 ER 图
+    OpenErDiagram { node_id: String },
     /// 打开命名查询
     OpenNamedQuery { node_id: String },
     /// 重命名查询
