@@ -387,6 +387,7 @@ mod tests {
             keepalive_max: None,
             jump_server: None::<JumpServerConnectConfig>,
             proxy: None::<ProxyConnectConfig>,
+            keyboard_interactive_responder: None,
         }
     }
 

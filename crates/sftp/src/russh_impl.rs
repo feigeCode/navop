@@ -61,6 +61,9 @@ fn sftp_auth_failure_messages() -> AuthFailureMessages {
         auto_publickey_failed: t!("Sftp.auth_auto_publickey_failed").to_string(),
         no_local_identity: t!("Sftp.auth_no_local_identity").to_string(),
         auto_publickey_next_step: t!("Sftp.auth_auto_publickey_next_step").to_string(),
+        keyboard_interactive_required: t!("Sftp.auth_keyboard_interactive_required").to_string(),
+        keyboard_interactive_failed: t!("Sftp.auth_keyboard_interactive_failed").to_string(),
+        keyboard_interactive_cancelled: t!("Sftp.auth_keyboard_interactive_cancelled").to_string(),
     }
 }
 

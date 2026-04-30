@@ -707,6 +707,7 @@ impl Terminal {
                     password: p.password,
                 }
             }),
+            keyboard_interactive_responder: None,
         };
 
         let pty_config = PtyConfig::default();

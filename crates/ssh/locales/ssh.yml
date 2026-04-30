@@ -37,6 +37,18 @@ Ssh:
     en: Please load SSH Agent or switch to "Private Key" mode to specify a key file manually
     zh-CN: 请加载 SSH Agent，或切换为「私钥文件」模式手动指定私钥
     zh-HK: 請加載 SSH Agent，或切換為「私鑰文件」模式手動指定私鑰
+  auth_keyboard_interactive_required:
+    en: SSH server requires MFA/keyboard-interactive authentication
+    zh-CN: SSH 服务器需要 MFA/keyboard-interactive 二次认证
+    zh-HK: SSH 伺服器需要 MFA/keyboard-interactive 二次認證
+  auth_keyboard_interactive_failed:
+    en: MFA/keyboard-interactive authentication failed
+    zh-CN: MFA/keyboard-interactive 二次认证失败
+    zh-HK: MFA/keyboard-interactive 二次認證失敗
+  auth_keyboard_interactive_cancelled:
+    en: MFA/keyboard-interactive authentication was cancelled
+    zh-CN: 已取消 MFA/keyboard-interactive 二次认证
+    zh-HK: 已取消 MFA/keyboard-interactive 二次認證
   socks5_proxy_connect_failed:
     en: "SOCKS5 proxy connection failed: %{error}"
     zh-CN: "SOCKS5代理连接失败: %{error}"

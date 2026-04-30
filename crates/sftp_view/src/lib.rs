@@ -528,6 +528,7 @@ impl SftpView {
                     password: p.password,
                 }
             }),
+            keyboard_interactive_responder: None,
         };
 
         let focus_handle = cx.focus_handle();

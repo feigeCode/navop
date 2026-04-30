@@ -48,6 +48,8 @@ pub struct SshConnectConfig {
     pub jump_server: Option<JumpServerConnectConfig>,
     /// 代理配置
     pub proxy: Option<ProxyConnectConfig>,
+    /// keyboard-interactive/MFA 输入回调。用于跳板机或目标服务器按需请求二次认证。
+    pub keyboard_interactive_responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
 }
 
 /// 跳板机连接配置
@@ -99,6 +101,34 @@ pub struct AuthFailureMessages {
     pub auto_publickey_failed: String,
     pub no_local_identity: String,
     pub auto_publickey_next_step: String,
+    pub keyboard_interactive_required: String,
+    pub keyboard_interactive_failed: String,
+    pub keyboard_interactive_cancelled: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyboardInteractiveTarget {
+    JumpServer,
+    TargetServer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyboardInteractivePrompt {
+    pub prompt: String,
+    pub echo: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyboardInteractiveRequest {
+    pub target: KeyboardInteractiveTarget,
+    pub name: String,
+    pub instructions: String,
+    pub prompts: Vec<KeyboardInteractivePrompt>,
+}
+
+#[async_trait]
+pub trait KeyboardInteractiveResponder: Send + Sync {
+    async fn respond(&self, request: KeyboardInteractiveRequest) -> Result<Vec<String>>;
 }
 
 #[derive(Clone)]
@@ -238,14 +268,43 @@ pub async fn authenticate_session<H>(
 where
     H: client::Handler,
 {
+    authenticate_session_for_target(
+        session,
+        username,
+        auth,
+        messages,
+        KeyboardInteractiveTarget::TargetServer,
+        None,
+    )
+    .await
+}
+
+async fn authenticate_session_for_target<H>(
+    session: &mut client::Handle<H>,
+    username: &str,
+    auth: &SshAuth,
+    messages: AuthFailureMessages,
+    target: KeyboardInteractiveTarget,
+    responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
+) -> Result<()>
+where
+    H: client::Handler,
+{
     let hash_alg = session.best_supported_rsa_hash().await?.flatten();
 
     match auth {
         SshAuth::Password(password) => {
             let auth_result = session.authenticate_password(username, password).await?;
-            if !auth_result.success() {
-                anyhow::bail!(messages.password_failed.clone());
-            }
+            finish_auth_result_or_keyboard_interactive(
+                session,
+                username,
+                auth_result,
+                target,
+                responder,
+                &messages,
+                &messages.password_failed,
+            )
+            .await?;
         }
         SshAuth::PrivateKey {
             key_path,
@@ -259,9 +318,16 @@ where
                 let auth_result = session
                     .authenticate_openssh_cert(username, Arc::new(key_pair), cert)
                     .await?;
-                if !auth_result.success() {
-                    anyhow::bail!(messages.certificate_failed.clone());
-                }
+                finish_auth_result_or_keyboard_interactive(
+                    session,
+                    username,
+                    auth_result,
+                    target,
+                    responder,
+                    &messages,
+                    &messages.certificate_failed,
+                )
+                .await?;
             } else {
                 let auth_result = session
                     .authenticate_publickey(
@@ -269,15 +335,131 @@ where
                         PrivateKeyWithHashAlg::new(Arc::new(key_pair), hash_alg),
                     )
                     .await?;
-                if !auth_result.success() {
-                    anyhow::bail!(messages.public_key_failed.clone());
-                }
+                finish_auth_result_or_keyboard_interactive(
+                    session,
+                    username,
+                    auth_result,
+                    target,
+                    responder,
+                    &messages,
+                    &messages.public_key_failed,
+                )
+                .await?;
             }
         }
         SshAuth::Agent => authenticate_with_agent(session, username, hash_alg, &messages).await?,
         SshAuth::AutoPublicKey => unreachable!("AutoPublicKey 应由高层认证编排处理"),
     }
     Ok(())
+}
+
+async fn finish_auth_result_or_keyboard_interactive<H>(
+    session: &mut client::Handle<H>,
+    username: &str,
+    auth_result: client::AuthResult,
+    target: KeyboardInteractiveTarget,
+    responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
+    messages: &AuthFailureMessages,
+    failure_message: &str,
+) -> Result<()>
+where
+    H: client::Handler,
+{
+    if auth_result.success() {
+        return Ok(());
+    }
+
+    if auth_result_allows_keyboard_interactive(&auth_result) {
+        return authenticate_keyboard_interactive(session, username, target, responder, messages)
+            .await;
+    }
+
+    anyhow::bail!(failure_message.to_string());
+}
+
+fn auth_result_allows_keyboard_interactive(auth_result: &client::AuthResult) -> bool {
+    match auth_result {
+        client::AuthResult::Failure {
+            remaining_methods, ..
+        } => remaining_methods.contains(&russh::MethodKind::KeyboardInteractive),
+        client::AuthResult::Success => false,
+    }
+}
+
+async fn authenticate_keyboard_interactive<H>(
+    session: &mut client::Handle<H>,
+    username: &str,
+    target: KeyboardInteractiveTarget,
+    responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
+    messages: &AuthFailureMessages,
+) -> Result<()>
+where
+    H: client::Handler,
+{
+    let mut response = session
+        .authenticate_keyboard_interactive_start(username, None::<String>)
+        .await?;
+
+    loop {
+        response = match response {
+            client::KeyboardInteractiveAuthResponse::Success => return Ok(()),
+            client::KeyboardInteractiveAuthResponse::Failure { .. } => {
+                anyhow::bail!(messages.keyboard_interactive_failed.clone());
+            }
+            client::KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => {
+                let request =
+                    build_keyboard_interactive_request(target, name, instructions, prompts);
+                let answers = request_keyboard_interactive_responses(
+                    responder.clone(),
+                    request,
+                    &messages.keyboard_interactive_required,
+                )
+                .await?;
+                session
+                    .authenticate_keyboard_interactive_respond(answers)
+                    .await?
+            }
+        };
+    }
+}
+
+fn build_keyboard_interactive_request(
+    target: KeyboardInteractiveTarget,
+    name: String,
+    instructions: String,
+    prompts: Vec<client::Prompt>,
+) -> KeyboardInteractiveRequest {
+    KeyboardInteractiveRequest {
+        target,
+        name,
+        instructions,
+        prompts: prompts
+            .into_iter()
+            .map(|prompt| KeyboardInteractivePrompt {
+                prompt: prompt.prompt,
+                echo: prompt.echo,
+            })
+            .collect(),
+    }
+}
+
+async fn request_keyboard_interactive_responses(
+    responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
+    request: KeyboardInteractiveRequest,
+    required_message: &str,
+) -> Result<Vec<String>> {
+    let Some(responder) = responder else {
+        anyhow::bail!(required_message.to_string());
+    };
+
+    responder
+        .respond(request)
+        .await
+        .context(t!("Ssh.auth_keyboard_interactive_cancelled").to_string())
 }
 
 pub fn discover_default_private_keys() -> Vec<String> {
@@ -354,6 +536,9 @@ fn default_auth_failure_messages() -> AuthFailureMessages {
         auto_publickey_failed: t!("Ssh.auth_auto_publickey_failed").to_string(),
         no_local_identity: t!("Ssh.auth_no_local_identity").to_string(),
         auto_publickey_next_step: t!("Ssh.auth_auto_publickey_next_step").to_string(),
+        keyboard_interactive_required: t!("Ssh.auth_keyboard_interactive_required").to_string(),
+        keyboard_interactive_failed: t!("Ssh.auth_keyboard_interactive_failed").to_string(),
+        keyboard_interactive_cancelled: t!("Ssh.auth_keyboard_interactive_cancelled").to_string(),
     }
 }
 
@@ -386,12 +571,37 @@ pub async fn authenticate_with_strategy<H>(
 where
     H: client::Handler,
 {
+    authenticate_with_strategy_for_target(
+        session,
+        username,
+        auth,
+        messages,
+        KeyboardInteractiveTarget::TargetServer,
+        None,
+    )
+    .await
+}
+
+async fn authenticate_with_strategy_for_target<H>(
+    session: &mut client::Handle<H>,
+    username: &str,
+    auth: &SshAuth,
+    messages: AuthFailureMessages,
+    target: KeyboardInteractiveTarget,
+    responder: Option<Arc<dyn KeyboardInteractiveResponder>>,
+) -> Result<()>
+where
+    H: client::Handler,
+{
     match auth {
         SshAuth::AutoPublicKey => {
             let auth_candidates = expand_auto_publickey_auth();
             authenticate_session_with_fallbacks(session, username, &auth_candidates, messages).await
         }
-        _ => authenticate_session(session, username, auth, messages).await,
+        _ => {
+            authenticate_session_for_target(session, username, auth, messages, target, responder)
+                .await
+        }
     }
 }
 
@@ -513,6 +723,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use std::sync::{Arc, Mutex as StdMutex};
     #[cfg(unix)]
     use std::sync::{Mutex, OnceLock};
 
@@ -528,6 +740,9 @@ mod tests {
             auto_publickey_failed: "auto_publickey_failed".to_string(),
             no_local_identity: "no_local_identity".to_string(),
             auto_publickey_next_step: "next_step".to_string(),
+            keyboard_interactive_required: "keyboard_interactive_required".to_string(),
+            keyboard_interactive_failed: "keyboard_interactive_failed".to_string(),
+            keyboard_interactive_cancelled: "keyboard_interactive_cancelled".to_string(),
         }
     }
 
@@ -706,6 +921,56 @@ mod tests {
         assert!(msg.contains("auto_publickey_failed"));
         assert!(msg.contains("no_local_identity"));
         assert!(msg.contains("next_step"));
+    }
+
+    #[test]
+    fn password_failure_can_continue_with_keyboard_interactive() {
+        let result = client::AuthResult::Failure {
+            remaining_methods: russh::MethodSet::from(
+                &[russh::MethodKind::KeyboardInteractive][..],
+            ),
+            partial_success: false,
+        };
+
+        assert!(auth_result_allows_keyboard_interactive(&result));
+    }
+
+    #[tokio::test]
+    async fn keyboard_interactive_responder_receives_prompts() {
+        #[derive(Default)]
+        struct RecordingResponder {
+            requests: StdMutex<Vec<KeyboardInteractiveRequest>>,
+        }
+
+        #[async_trait]
+        impl KeyboardInteractiveResponder for RecordingResponder {
+            async fn respond(&self, request: KeyboardInteractiveRequest) -> Result<Vec<String>> {
+                self.requests.lock().unwrap().push(request);
+                Ok(vec!["654321".to_string()])
+            }
+        }
+
+        let responder = Arc::new(RecordingResponder::default());
+        let request = KeyboardInteractiveRequest {
+            target: KeyboardInteractiveTarget::JumpServer,
+            name: "MFA".to_string(),
+            instructions: "Enter verification code".to_string(),
+            prompts: vec![KeyboardInteractivePrompt {
+                prompt: "Verification code:".to_string(),
+                echo: false,
+            }],
+        };
+
+        let responses =
+            request_keyboard_interactive_responses(Some(responder.clone()), request, "required")
+                .await
+                .expect("responder should provide MFA response");
+
+        assert_eq!(responses, vec!["654321"]);
+        let requests = responder.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].target, KeyboardInteractiveTarget::JumpServer);
+        assert_eq!(requests[0].prompts[0].prompt, "Verification code:");
     }
 }
 
@@ -965,11 +1230,13 @@ impl SshClient for RusshClient {
 
             // 认证跳板机
             let mut jump_session = jump_session;
-            authenticate_with_strategy(
+            authenticate_with_strategy_for_target(
                 &mut jump_session,
                 &jump.username,
                 &jump.auth,
                 default_auth_failure_messages(),
+                KeyboardInteractiveTarget::JumpServer,
+                config.keyboard_interactive_responder.clone(),
             )
             .await?;
 
@@ -986,11 +1253,13 @@ impl SshClient for RusshClient {
                     .await?;
 
             // 认证目标服务器
-            authenticate_with_strategy(
+            authenticate_with_strategy_for_target(
                 &mut session,
                 &config.username,
                 &config.auth,
                 default_auth_failure_messages(),
+                KeyboardInteractiveTarget::TargetServer,
+                config.keyboard_interactive_responder.clone(),
             )
             .await?;
 
@@ -1012,11 +1281,13 @@ impl SshClient for RusshClient {
             let handler = RusshHandler;
             let mut session = client::connect_stream(russh_config, stream, handler).await?;
 
-            authenticate_with_strategy(
+            authenticate_with_strategy_for_target(
                 &mut session,
                 &config.username,
                 &config.auth,
                 default_auth_failure_messages(),
+                KeyboardInteractiveTarget::TargetServer,
+                config.keyboard_interactive_responder.clone(),
             )
             .await?;
 
@@ -1031,11 +1302,13 @@ impl SshClient for RusshClient {
             let handler = RusshHandler;
             let mut session = client::connect(russh_config, addrs, handler).await?;
 
-            authenticate_with_strategy(
+            authenticate_with_strategy_for_target(
                 &mut session,
                 &config.username,
                 &config.auth,
                 default_auth_failure_messages(),
+                KeyboardInteractiveTarget::TargetServer,
+                config.keyboard_interactive_responder.clone(),
             )
             .await?;
 
