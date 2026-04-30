@@ -1,5 +1,5 @@
-use crate::DatabasePlugin;
 use crate::executor::{ExecOptions, SqlResult, SqlSource};
+use crate::DatabasePlugin;
 use async_trait::async_trait;
 use one_core::storage::DbConnectionConfig;
 use thiserror::Error;
@@ -168,7 +168,13 @@ pub trait DbConnection: Sync + Send {
     async fn query(&self, query: &str) -> Result<SqlResult, DbError>;
 
     async fn ping(&self) -> Result<(), DbError> {
-        self.query("SELECT 1").await.map(|_| ())
+        match self.query("SELECT 1").await? {
+            SqlResult::Error(error) => Err(DbError::connection(format!(
+                "connection ping failed: {}",
+                error.message
+            ))),
+            _ => Ok(()),
+        }
     }
 
     /// Get current database/schema name from the connection
