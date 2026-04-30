@@ -783,8 +783,8 @@ impl SshFormWindow {
             .map(|(index, prompt)| {
                 let existing_value = existing_values.get(index).cloned().unwrap_or_default();
                 let input = cx.new(|cx| {
-                    let mut state = InputState::new(window, cx)
-                        .placeholder(mfa_prompt_label(&prompt.prompt));
+                    let mut state =
+                        InputState::new(window, cx).placeholder(mfa_prompt_label(&prompt.prompt));
                     if !prompt.echo {
                         state = state.masked(true);
                     }
@@ -821,9 +821,14 @@ impl SshFormWindow {
         let mut config = self.build_ssh_connect_config(&params);
         let jump_mfa_capture = CapturedMfaRequest::default();
         let jump_mfa_responses = self.collect_jump_mfa_responses(cx, &signature);
-        if config.jump_server.is_some() {
+        if let Some(jump_server) = &config.jump_server {
+            let jump_password = match &jump_server.auth {
+                SshAuth::Password(password) => Some(password.clone()),
+                _ => None,
+            };
             config.keyboard_interactive_responder = Some(Arc::new(JumpServerMfaResponder::new(
                 jump_mfa_responses,
+                jump_password,
                 jump_mfa_capture.clone(),
             )));
         }
@@ -837,13 +842,13 @@ impl SshFormWindow {
             })
             .await;
 
+            let jump_mfa_request = match &spawn_result {
+                Err(error) if is_jump_mfa_required_error(error.as_ref()) => jump_mfa_capture.take(),
+                _ => None,
+            };
             let test_result: Result<(), String> = match spawn_result {
                 Ok(task) => Ok(task),
                 Err(e) => Err(e.to_string()),
-            };
-            let jump_mfa_request = match &test_result {
-                Err(error) if is_jump_mfa_required_error(error) => jump_mfa_capture.take(),
-                _ => None,
             };
 
             let _ = cx.update_window(window_handle, |_, window, cx| {

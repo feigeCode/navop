@@ -6,10 +6,11 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dialog::DialogButtonProps;
+use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
-use gpui_component::{kbd::Kbd, BlinkCursor, Icon, IconName, Sizable, WindowExt};
+use gpui_component::{h_flex, kbd::Kbd, v_flex, BlinkCursor, Icon, IconName, Sizable, WindowExt};
 use one_core::gpui_tokio::Tokio;
 use std::borrow::Cow;
 use std::cell::{Cell as StdCell, RefCell};
@@ -404,6 +405,12 @@ struct ImeState {
     marked_range: Option<std::ops::Range<usize>>,
 }
 
+struct SshMfaInput {
+    prompt: String,
+    echo: bool,
+    input: Entity<InputState>,
+}
+
 /// Terminal view component - supports both Local and SSH backends
 pub struct TerminalView {
     /// Terminal model entity
@@ -447,6 +454,8 @@ pub struct TerminalView {
     cd_completion_cache: HashMap<String, Vec<String>>,
     /// 当前正在加载目录候选的父目录
     cd_completion_loading_parent: Option<String>,
+    ssh_mfa_inputs: Vec<SshMfaInput>,
+    focus_terminal_after_connect: bool,
 
     current_theme: TerminalTheme,
 
@@ -711,7 +720,7 @@ impl TerminalView {
         let sidebar_subscription = cx.subscribe_in(&sidebar, window, Self::handle_sidebar_event);
 
         // 订阅 Terminal 事件
-        let terminal_subscription = cx.subscribe(&terminal, Self::handle_terminal_event);
+        let terminal_subscription = cx.subscribe_in(&terminal, window, Self::handle_terminal_event);
 
         // 订阅 BlinkCursor 变化
         let blink_subscription = cx.observe(&blink_manager, |this, _, cx| {
@@ -786,6 +795,8 @@ impl TerminalView {
             cd_completion_client: None,
             cd_completion_cache: HashMap::new(),
             cd_completion_loading_parent: None,
+            ssh_mfa_inputs: Vec::new(),
+            focus_terminal_after_connect: false,
             current_theme: default_theme,
             tab_index,
             cursor_blink_enabled: false,
@@ -1500,8 +1511,9 @@ impl TerminalView {
 
     fn handle_terminal_event(
         &mut self,
-        _terminal: Entity<Terminal>,
+        _terminal: &Entity<Terminal>,
         event: &TerminalModelEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         tracing::debug!(
@@ -1518,7 +1530,14 @@ impl TerminalView {
 
         match event {
             TerminalModelEvent::Wakeup => {
+                self.sync_ssh_mfa_inputs(window, cx);
+                self.focus_terminal_after_connect_if_ready(window, cx);
                 self.refresh_history_prompt_matches(cx);
+                cx.notify();
+            }
+            TerminalModelEvent::SshMfaChanged => {
+                self.sync_ssh_mfa_inputs(window, cx);
+                self.focus_terminal_after_connect_if_ready(window, cx);
                 cx.notify();
             }
             TerminalModelEvent::PromptStart | TerminalModelEvent::InputStart => {
@@ -1543,6 +1562,85 @@ impl TerminalView {
                     sidebar.sync_file_manager_path(path, cx);
                 });
             }
+        }
+    }
+
+    fn sync_ssh_mfa_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(request) = self.terminal.read(cx).ssh_mfa_request() else {
+            self.ssh_mfa_inputs.clear();
+            return;
+        };
+
+        let inputs_match_request = self.ssh_mfa_inputs.len() == request.prompts.len()
+            && self
+                .ssh_mfa_inputs
+                .iter()
+                .zip(request.prompts.iter())
+                .all(|(input, prompt)| input.prompt == prompt.prompt && input.echo == prompt.echo);
+
+        if !inputs_match_request {
+            self.ssh_mfa_inputs = request
+                .prompts
+                .iter()
+                .map(|prompt| SshMfaInput {
+                    prompt: prompt.prompt.clone(),
+                    echo: prompt.echo,
+                    input: cx.new(|cx| {
+                        let mut state =
+                            InputState::new(window, cx).placeholder(prompt.prompt.clone());
+                        if !prompt.echo {
+                            state = state.masked(true);
+                        }
+                        state
+                    }),
+                })
+                .collect();
+        }
+        if let Some(input) = self.ssh_mfa_inputs.first() {
+            input.input.update(cx, |state, cx| state.focus(window, cx));
+        }
+    }
+
+    fn submit_ssh_mfa(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let responses = self
+            .ssh_mfa_inputs
+            .iter()
+            .map(|input| input.input.read(cx).text().to_string())
+            .collect();
+        if self.terminal.read(cx).submit_ssh_mfa(responses) {
+            self.ssh_mfa_inputs.clear();
+            self.focus_terminal_after_connect = true;
+            self.focus_terminal_after_connect_if_ready(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn focus_terminal_after_connect_if_ready(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.focus_terminal_after_connect {
+            return;
+        }
+
+        let (connection_state, has_mfa_request) = {
+            let terminal = self.terminal.read(cx);
+            (
+                terminal.connection_state().clone(),
+                terminal.ssh_mfa_request().is_some(),
+            )
+        };
+
+        match connection_state {
+            ConnectionState::Connected if !has_mfa_request => {
+                self.focus_terminal_after_connect = false;
+                self.focus_terminal(window, cx);
+            }
+            ConnectionState::Disconnected { .. } => {
+                self.focus_terminal_after_connect = false;
+            }
+            _ => {}
         }
     }
 
@@ -1835,6 +1933,7 @@ impl TerminalView {
             .read(cx)
             .current_working_dir()
             .map(str::to_string);
+        self.focus_terminal_after_connect = true;
         self.terminal.update(cx, |terminal, cx| {
             terminal.reconnect(cx);
         });
@@ -2742,6 +2841,8 @@ impl TerminalView {
             ConnectionState::Disconnected { error } => error.clone(),
             _ => None,
         };
+        let mfa_request = self.terminal.read(cx).ssh_mfa_request();
+        let has_mfa_request = mfa_request.is_some();
 
         div()
             .absolute()
@@ -2765,7 +2866,8 @@ impl TerminalView {
                     .bg(rgb(0x2d2d2d))
                     .rounded_lg()
                     .shadow_lg()
-                    .max_w(px(400.0))
+                    .w(px(560.0))
+                    .max_w(px(640.0))
                     .child(
                         div()
                             .flex()
@@ -2818,16 +2920,53 @@ impl TerminalView {
                                 t!("SshSession.disconnected")
                             }),
                     )
-                    .when(can_reconnect && !is_connecting, |this| {
+                    .when_some(mfa_request, |this, request| {
                         this.child(
-                            Button::new("reconnect-btn")
-                                .label(t!("SshSession.reconnect"))
-                                .primary()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.reconnect(window, cx);
-                                })),
+                            v_flex()
+                                .gap_2()
+                                .w_full()
+                                .items_center()
+                                .children((0..request.prompts.len()).map(|index| {
+                                    let input = self.ssh_mfa_inputs.get(index);
+                                    div()
+                                        .w(px(320.0))
+                                        .when_some(input, |this, input| {
+                                            let input_element = if input.echo {
+                                                Input::new(&input.input).into_any_element()
+                                            } else {
+                                                Input::new(&input.input)
+                                                    .mask_toggle()
+                                                    .into_any_element()
+                                            };
+                                            this.child(input_element)
+                                        })
+                                        .into_any_element()
+                                }))
+                                .child(
+                                    h_flex().justify_center().child(
+                                        Button::new("submit-ssh-mfa")
+                                            .label(t!("Common.ok"))
+                                            .primary()
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.submit_ssh_mfa(window, cx);
+                                            })),
+                                    ),
+                                ),
                         )
-                    }),
+                    })
+                    .when(
+                        can_reconnect && !is_connecting && !has_mfa_request,
+                        |this| {
+                            this.child(
+                                Button::new("reconnect-btn")
+                                    .label(t!("SshSession.reconnect"))
+                                    .primary()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.reconnect(window, cx);
+                                    })),
+                            )
+                        },
+                    ),
             )
     }
 
@@ -2934,7 +3073,9 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus_handle, cx);
+        if self.terminal.read(cx).ssh_mfa_request().is_none() {
+            window.focus(&self.focus_handle, cx);
+        }
         tracing::debug!(
             target: "terminal.history_prompt",
             reason = "mouse_down",

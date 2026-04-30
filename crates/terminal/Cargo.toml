@@ -8,6 +8,7 @@ edition = "2021"
 tokio = { workspace = true }
 futures = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 one-core = { workspace = true }
 gpui = { workspace = true }
 ssh = { workspace = true }
@@ -24,5 +25,3 @@ dirs = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-[dev-dependencies]
-async-trait = { workspace = true }

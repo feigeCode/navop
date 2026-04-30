@@ -42,13 +42,19 @@ impl CapturedMfaRequest {
 
 pub struct JumpServerMfaResponder {
     responses: Vec<String>,
+    password: Option<String>,
     captured: CapturedMfaRequest,
 }
 
 impl JumpServerMfaResponder {
-    pub fn new(responses: Vec<String>, captured: CapturedMfaRequest) -> Self {
+    pub fn new(
+        responses: Vec<String>,
+        password: Option<String>,
+        captured: CapturedMfaRequest,
+    ) -> Self {
         Self {
             responses,
+            password,
             captured,
         }
     }
@@ -63,8 +69,12 @@ impl KeyboardInteractiveResponder for JumpServerMfaResponder {
             ));
         }
 
-        if mfa_responses_are_complete(&request.prompts, &self.responses) {
-            return Ok(self.responses.clone());
+        if let Some(answers) = keyboard_interactive_answers(
+            &request.prompts,
+            &self.responses,
+            self.password.as_deref(),
+        ) {
+            return Ok(answers);
         }
 
         self.captured.store(request);
@@ -72,8 +82,9 @@ impl KeyboardInteractiveResponder for JumpServerMfaResponder {
     }
 }
 
-pub fn is_jump_mfa_required_error(error: &str) -> bool {
-    error.contains(JUMP_MFA_REQUIRED_MARKER)
+pub fn is_jump_mfa_required_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    error.to_string().contains(JUMP_MFA_REQUIRED_MARKER)
+        || error.source().is_some_and(is_jump_mfa_required_error)
 }
 
 pub fn form_mfa_request_from_keyboard_interactive(
@@ -83,34 +94,68 @@ pub fn form_mfa_request_from_keyboard_interactive(
         return None;
     }
 
+    let prompts = request
+        .prompts
+        .iter()
+        .filter(|prompt| !is_password_prompt(&prompt.prompt))
+        .map(form_mfa_prompt_from_keyboard_interactive)
+        .collect::<Vec<_>>();
+
+    if prompts.is_empty() {
+        return None;
+    }
+
     Some(FormMfaRequest {
         name: request.name.clone(),
         instructions: request.instructions.clone(),
-        prompts: request
-            .prompts
-            .iter()
-            .map(form_mfa_prompt_from_keyboard_interactive)
-            .collect(),
+        prompts,
     })
 }
 
-pub fn mfa_responses_are_complete(
+pub fn keyboard_interactive_answers(
     prompts: &[KeyboardInteractivePrompt],
     responses: &[String],
-) -> bool {
-    prompts.len() == responses.len()
-        && responses
+    password: Option<&str>,
+) -> Option<Vec<String>> {
+    let mut response_index = 0;
+    let mut answers = Vec::with_capacity(prompts.len());
+
+    for prompt in prompts {
+        if is_password_prompt(&prompt.prompt) {
+            answers.push(password?.to_string());
+        } else {
+            let response = responses.get(response_index)?;
+            if response.trim().is_empty() {
+                return None;
+            }
+            answers.push(response.clone());
+            response_index += 1;
+        }
+    }
+
+    if response_index == responses.len()
+        || prompts
             .iter()
-            .all(|response| !response.trim().is_empty())
+            .all(|prompt| is_password_prompt(&prompt.prompt))
+    {
+        Some(answers)
+    } else {
+        None
+    }
 }
 
-fn form_mfa_prompt_from_keyboard_interactive(
-    prompt: &KeyboardInteractivePrompt,
-) -> FormMfaPrompt {
+fn form_mfa_prompt_from_keyboard_interactive(prompt: &KeyboardInteractivePrompt) -> FormMfaPrompt {
     FormMfaPrompt {
         prompt: prompt.prompt.clone(),
         echo: prompt.echo,
     }
+}
+
+fn is_password_prompt(prompt: &str) -> bool {
+    prompt
+        .trim()
+        .trim_end_matches(':')
+        .eq_ignore_ascii_case("password")
 }
 
 #[cfg(test)]
@@ -125,21 +170,41 @@ mod tests {
     }
 
     #[test]
-    fn mfa_responses_require_one_non_empty_value_per_prompt() {
-        let prompts = vec![prompt("Code:"), prompt("Backup:")];
+    fn keyboard_interactive_answers_merge_password_and_mfa_responses() {
+        let prompts = vec![prompt("Password:"), prompt("Verification code:")];
 
-        assert!(mfa_responses_are_complete(
-            &prompts,
-            &["123456".to_string(), "abcdef".to_string()]
-        ));
-        assert!(!mfa_responses_are_complete(
-            &prompts,
-            &["123456".to_string()]
-        ));
-        assert!(!mfa_responses_are_complete(
-            &prompts,
-            &["123456".to_string(), " ".to_string()]
-        ));
+        assert_eq!(
+            Some(vec!["secret".to_string(), "123456".to_string()]),
+            keyboard_interactive_answers(&prompts, &["123456".to_string()], Some("secret"))
+        );
+        assert_eq!(
+            None,
+            keyboard_interactive_answers(&prompts, &["123456".to_string()], None)
+        );
+        assert_eq!(
+            None,
+            keyboard_interactive_answers(&prompts, &[" ".to_string()], Some("secret"))
+        );
+    }
+
+    #[test]
+    fn keyboard_interactive_answers_allow_password_round_before_mfa_round() {
+        assert_eq!(
+            Some(vec!["secret".to_string()]),
+            keyboard_interactive_answers(
+                &[prompt("Password:")],
+                &["123456".to_string()],
+                Some("secret")
+            )
+        );
+    }
+
+    #[test]
+    fn jump_mfa_required_error_matches_error_chain() {
+        let error =
+            anyhow!(JUMP_MFA_REQUIRED_MARKER).context("已取消 MFA/keyboard-interactive 二次认证");
+
+        assert!(is_jump_mfa_required_error(error.as_ref()));
     }
 
     #[test]
@@ -148,7 +213,7 @@ mod tests {
             target: KeyboardInteractiveTarget::JumpServer,
             name: "Verification".to_string(),
             instructions: "Enter code".to_string(),
-            prompts: vec![prompt("Code:")],
+            prompts: vec![prompt("Password:"), prompt("Code:")],
         };
 
         let form_request = form_mfa_request_from_keyboard_interactive(&request).unwrap();
