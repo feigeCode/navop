@@ -2,8 +2,8 @@ mod loader;
 
 use db::GlobalDbState;
 use ferrum_flow::{
-    BackgroundPlugin, EdgePlugin, FitAllGraphPlugin, FlowCanvas, Graph,
-    NodeInteractionPlugin, NodePlugin, ViewportPlugin, ZoomControlsPlugin,
+    BackgroundPlugin, EdgePlugin, FitAllGraphPlugin, FlowCanvas, Graph, NodeInteractionPlugin,
+    NodePlugin, ViewportPlugin, ZoomControlsPlugin,
 };
 
 use er_flow::{er_flow_theme, er_node_renderers, graph_from_diagram};
@@ -16,8 +16,16 @@ use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, Size, button::Button, spinner::Spinner, v_flex,
 };
 use loader::load_er_diagram;
-use one_core::tab_container::{TabContent, TabContentEvent};
+use one_core::{
+    popup_window::{PopupWindowOptions, open_popup_window},
+    tab_container::{TabContent, TabContentEvent},
+};
 use rust_i18n::t;
+
+const ER_DIAGRAM_WINDOW_WIDTH: f32 = 1200.0;
+const ER_DIAGRAM_WINDOW_HEIGHT: f32 = 800.0;
+const ER_DIAGRAM_WINDOW_MIN_WIDTH: f32 = 800.0;
+const ER_DIAGRAM_WINDOW_MIN_HEIGHT: f32 = 500.0;
 
 #[derive(Clone)]
 pub(crate) struct ErDiagramConfig {
@@ -126,6 +134,23 @@ impl ErDiagramTab {
     }
 }
 
+pub(crate) fn open_er_diagram_window(config: ErDiagramConfig, cx: &mut App) {
+    let title = er_diagram_title(&config);
+    open_popup_window(
+        PopupWindowOptions::new(title)
+            .size(ER_DIAGRAM_WINDOW_WIDTH, ER_DIAGRAM_WINDOW_HEIGHT)
+            .min_width(ER_DIAGRAM_WINDOW_MIN_WIDTH)
+            .min_height(ER_DIAGRAM_WINDOW_MIN_HEIGHT),
+        move |window, cx| cx.new(|cx| ErDiagramTab::new(config, window, cx)),
+        cx,
+    );
+}
+
+fn er_diagram_title(config: &ErDiagramConfig) -> SharedString {
+    let scope = config.schema_name.as_ref().unwrap_or(&config.database_name);
+    format!("{} - ER", scope).into()
+}
+
 async fn load_graph(
     global_state: GlobalDbState,
     config: ErDiagramConfig,
@@ -194,12 +219,7 @@ impl TabContent for ErDiagramTab {
     }
 
     fn title(&self, _cx: &App) -> SharedString {
-        let scope = self
-            .config
-            .schema_name
-            .as_ref()
-            .unwrap_or(&self.config.database_name);
-        format!("{} - ER", scope).into()
+        er_diagram_title(&self.config)
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {

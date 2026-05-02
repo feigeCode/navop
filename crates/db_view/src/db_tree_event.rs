@@ -7,7 +7,7 @@ use crate::{
         create_schema_editor_view_for,
     },
     db_tree_view::{DbTreeView, DbTreeViewEvent},
-    er_diagram_tab::{ErDiagramConfig, ErDiagramTab},
+    er_diagram_tab::{ErDiagramConfig, open_er_diagram_window},
     sql_editor_view::SqlEditorTab,
     table_designer_tab::{TableDesigner, TableDesignerConfig},
 };
@@ -27,15 +27,6 @@ use rust_i18n::t;
 use std::collections::HashSet;
 use tracing::log::{error, warn};
 use uuid::Uuid;
-
-fn er_diagram_tab_id(connection_id: &str, database: &str, schema: Option<&str>) -> String {
-    format!(
-        "er-diagram-{}-{}-{}",
-        connection_id,
-        database,
-        schema.unwrap_or_default()
-    )
-}
 
 // Event handler for database tree view events
 pub struct DatabaseEventHandler {
@@ -111,7 +102,7 @@ impl DatabaseEventHandler {
                     }
                     DbTreeViewEvent::OpenErDiagram { node_id } => {
                         if let Some(node) = get_node(&node_id, cx) {
-                            Self::handle_open_er_diagram(node, tab_container, window, cx);
+                            Self::handle_open_er_diagram(node, window, cx);
                         }
                     }
                     DbTreeViewEvent::OpenTableData { node_id } => {
@@ -608,42 +599,20 @@ impl DatabaseEventHandler {
         });
     }
 
-    fn handle_open_er_diagram(
-        node: DbNode,
-        tab_container: Entity<TabContainer>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
+    fn handle_open_er_diagram(node: DbNode, window: &mut Window, cx: &mut App) {
         let Some(database) = node.get_database_name() else {
             Self::show_error(window, t!("Common.error_info").to_string(), cx);
             return;
         };
         let schema = node.get_schema_name();
-        let tab_id = er_diagram_tab_id(&node.connection_id, &database, schema.as_deref());
-        let tab_id_clone = tab_id.clone();
-        let connection_id = node.connection_id.clone();
-
-        tab_container.update(cx, |container, cx| {
-            container.activate_or_add_tab_lazy(
-                tab_id.clone(),
-                move |window, cx| {
-                    let tab = cx.new(|cx| {
-                        ErDiagramTab::new(
-                            ErDiagramConfig {
-                                connection_id: connection_id.clone(),
-                                database_name: database.clone(),
-                                schema_name: schema.clone(),
-                            },
-                            window,
-                            cx,
-                        )
-                    });
-                    TabItem::new(tab_id_clone.clone(), connection_id.clone(), tab)
-                },
-                window,
-                cx,
-            );
-        });
+        open_er_diagram_window(
+            ErDiagramConfig {
+                connection_id: node.connection_id,
+                database_name: database,
+                schema_name: schema,
+            },
+            cx,
+        );
     }
 
     /// 处理打开表数据事件
