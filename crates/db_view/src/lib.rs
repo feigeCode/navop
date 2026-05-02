@@ -8,7 +8,7 @@ pub mod database_tab;
 pub mod database_view_plugin;
 mod db_tree_event;
 pub mod db_tree_view;
-pub mod er_diagram_tab;
+pub mod er_diagram;
 mod import_export;
 pub mod settings;
 mod sidebar;

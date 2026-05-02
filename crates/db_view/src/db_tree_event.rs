@@ -7,7 +7,7 @@ use crate::{
         create_schema_editor_view_for,
     },
     db_tree_view::{DbTreeView, DbTreeViewEvent},
-    er_diagram_tab::{ErDiagramConfig, open_er_diagram_window},
+    er_diagram::{ErDiagramConfig, open_er_diagram_window},
     sql_editor_view::SqlEditorTab,
     table_designer_tab::{TableDesigner, TableDesignerConfig},
 };
