@@ -1,14 +1,12 @@
 mod loader;
-mod model;
-#[cfg(test)]
-mod model_tests;
-mod renderer;
 
 use db::GlobalDbState;
-use er_flow::{
-    BackgroundPlugin, EdgePlugin, FitAllGraphPlugin, FlowCanvas, Graph, NodeInteractionPlugin,
-    NodePlugin, ViewportPlugin, ZoomControlsPlugin,
+use ferrum_flow::{
+    BackgroundPlugin, EdgePlugin, FitAllGraphPlugin, FlowCanvas, FlowCanvasElement, Graph,
+    NodeInteractionPlugin, NodePlugin, ViewportPlugin, ZoomControlsPlugin,
 };
+
+use er_flow::{er_flow_theme, er_node_renderers, graph_from_diagram};
 use gpui::{
     App, AppContext as _, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
@@ -17,14 +15,9 @@ use gpui::{
 use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, Size, button::Button, spinner::Spinner, v_flex,
 };
+use loader::load_er_diagram;
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
-
-use loader::load_er_tables;
-#[cfg(test)]
-pub(crate) use model::infer_relationships;
-pub(crate) use model::{ErColumnModel, ErForeignKeyModel, ErTableModel, build_er_graph};
-use renderer::ErTableRenderer;
 
 #[derive(Clone)]
 pub(crate) struct ErDiagramConfig {
@@ -58,23 +51,22 @@ impl ErDiagramTab {
         tab
     }
 
-    fn reload(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.loading = true;
         self.error = None;
         self.canvas = None;
 
+        let window_handle = window.window_handle();
         let global_state = cx.global::<GlobalDbState>().clone();
         let config = self.config.clone();
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = load_graph(global_state, config, cx).await;
             let _ = cx.update(|cx| {
-                if let Some(window_id) = cx.active_window() {
-                    let _ = cx.update_window(window_id, |_, window, cx| {
-                        let _ = this.update(cx, |this, cx| {
-                            this.apply_load_result(result, window, cx);
-                        });
+                let _ = cx.update_window(window_handle, |_, window, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        this.apply_load_result(result, window, cx);
                     });
-                }
+                });
             });
         })
         .detach();
@@ -139,7 +131,7 @@ async fn load_graph(
     config: ErDiagramConfig,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<Graph> {
-    let tables = load_er_tables(
+    let diagram = load_er_diagram(
         global_state,
         cx,
         config.connection_id,
@@ -147,7 +139,7 @@ async fn load_graph(
         config.schema_name,
     )
     .await?;
-    Ok(build_er_graph(tables))
+    graph_from_diagram(&diagram)
 }
 
 fn build_canvas(
@@ -157,14 +149,15 @@ fn build_canvas(
 ) -> Entity<FlowCanvas> {
     cx.new(|cx| {
         FlowCanvas::builder(graph, cx, window)
+            .theme(er_flow_theme())
             .plugin(BackgroundPlugin::new())
-            .plugin(NodeInteractionPlugin::new())
-            .plugin(ViewportPlugin::with_blank_left_drag())
+            .plugin(ViewportPlugin::new())
             .plugin(EdgePlugin::new())
             .plugin(NodePlugin::new())
+            .plugin(NodeInteractionPlugin::new())
             .plugin(FitAllGraphPlugin::new())
             .plugin(ZoomControlsPlugin::new())
-            .node_renderer("er.table", ErTableRenderer)
+            .node_renderers(er_node_renderers())
             .build()
     })
 }
@@ -180,7 +173,7 @@ impl Render for ErDiagramTab {
             })
             .when(!self.loading && self.error.is_none(), |this| {
                 match self.canvas.as_ref() {
-                    Some(canvas) => this.child(canvas.clone()),
+                    Some(canvas) => this.child(FlowCanvasElement::new(canvas.clone())),
                     None => this.child(div().size_full()),
                 }
             })

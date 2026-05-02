@@ -17,6 +17,7 @@ smol.workspace = true
 gpui.workspace = true
 db.workspace = true
 er_flow.workspace = true
+ferrum-flow.workspace = true
 gpui-component = { workspace = true }
 one-ui.workspace = true
 one-core.workspace = true

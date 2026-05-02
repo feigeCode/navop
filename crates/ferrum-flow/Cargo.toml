@@ -1,0 +1,25 @@
+[package]
+name = "ferrum-flow"
+version = "0.2.1"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["tu6ge"]
+repository = "https://github.com/tu6ge/ferrum-flow"
+description = "A high-performance node-based editor framework built with Rust and GPUI."
+
+[features]
+default = []
+## Public `command_interop` test helpers; run `cargo test -p ferrum-flow --features testing`.
+testing = []
+
+[dependencies]
+anyhow = { workspace = true }
+gpui = { workspace = true }
+# used by background plugin
+image = { workspace = true }
+# used by background plugin
+smallvec = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+futures = { workspace = true, features = ["std"] }
+uuid = { workspace = true }

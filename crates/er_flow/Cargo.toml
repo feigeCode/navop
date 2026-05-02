@@ -1,16 +1,11 @@
 [package]
 name = "er_flow"
 version = "0.1.0"
-publish.workspace = true
-edition.workspace = true
+edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
-futures.workspace = true
+ferrum-flow.workspace = true
 gpui.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-uuid.workspace = true
-
-[lints]
-workspace = true
