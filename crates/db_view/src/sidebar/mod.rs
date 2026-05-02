@@ -9,13 +9,13 @@ use crate::chatdb::chat_panel::{ChatPanel, ChatPanelEvent};
 use crate::chatdb::db_connection_selector::DbSelectorContext;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    div, px, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    StatefulInteractiveElement, Styled, Subscription, Window,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
+use gpui_component::{v_flex, ActiveTheme, Icon, IconName, Sizable, Size};
+use one_core::ai_chat::ask_ai::{get_ask_ai_notifier, AskAiEvent};
 use one_core::ai_chat::CodeBlockAction;
-use one_core::ai_chat::ask_ai::{AskAiEvent, get_ask_ai_notifier};
 use one_core::layout::TOOLBAR_WIDTH;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,12 +199,11 @@ impl Render for DatabaseSidebar {
         let border_color = cx.theme().border;
         let bg_color = cx.theme().background;
 
-        gpui_component::h_flex()
+        div()
             .h_full()
             .flex_shrink_0()
-            .child(self.render_toolbar(window, cx))
             .when_some(self.active_panel, |this, panel| {
-                this.flex_1().child(
+                this.w_full().child(
                     v_flex()
                         .size_full()
                         .border_l_1()
@@ -212,6 +211,9 @@ impl Render for DatabaseSidebar {
                         .bg(bg_color)
                         .child(self.render_panel_content(panel, window, cx)),
                 )
+            })
+            .when(!self.is_panel_visible(), |this| {
+                this.child(self.render_toolbar(window, cx))
             })
     }
 }
