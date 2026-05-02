@@ -157,6 +157,78 @@ fn mysql_engine_names() -> Vec<String> {
         .collect()
 }
 
+fn mysql_foreign_keys_sql(database: &str, table: &str) -> String {
+    format!(
+        "SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, \
+         k.REFERENCED_COLUMN_NAME, rc.DELETE_RULE, rc.UPDATE_RULE \
+         FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k \
+         LEFT JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc \
+           ON rc.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA \
+          AND rc.CONSTRAINT_NAME = k.CONSTRAINT_NAME \
+          AND rc.TABLE_NAME = k.TABLE_NAME \
+         WHERE k.TABLE_SCHEMA = '{}' AND k.TABLE_NAME = '{}' \
+           AND k.REFERENCED_TABLE_NAME IS NOT NULL \
+         ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION",
+        database, table
+    )
+}
+
+fn mysql_table_triggers_sql(database: &str, table: &str) -> String {
+    format!(
+        "SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, EVENT_MANIPULATION, ACTION_TIMING, \
+         ACTION_STATEMENT \
+         FROM INFORMATION_SCHEMA.TRIGGERS \
+         WHERE TRIGGER_SCHEMA = '{}' AND EVENT_OBJECT_TABLE = '{}' \
+         ORDER BY TRIGGER_NAME",
+        database, table
+    )
+}
+
+fn row_value(row: &[Option<String>], index: usize) -> String {
+    row.get(index).and_then(|v| v.clone()).unwrap_or_default()
+}
+
+fn parse_mysql_foreign_keys(rows: Vec<Vec<Option<String>>>) -> Vec<ForeignKeyDefinition> {
+    let mut foreign_keys = Vec::new();
+    let mut positions = HashMap::new();
+
+    for row in rows {
+        let name = row_value(&row, 0);
+        if name.is_empty() {
+            continue;
+        }
+
+        let index = *positions.entry(name.clone()).or_insert_with(|| {
+            foreign_keys.push(ForeignKeyDefinition {
+                name: name.clone(),
+                columns: Vec::new(),
+                ref_table: row_value(&row, 2),
+                ref_columns: Vec::new(),
+                on_delete: row_value(&row, 4),
+                on_update: row_value(&row, 5),
+            });
+            foreign_keys.len() - 1
+        });
+
+        foreign_keys[index].columns.push(row_value(&row, 1));
+        foreign_keys[index].ref_columns.push(row_value(&row, 3));
+    }
+
+    foreign_keys
+}
+
+fn parse_mysql_triggers(rows: Vec<Vec<Option<String>>>) -> Vec<TriggerInfo> {
+    rows.into_iter()
+        .map(|row| TriggerInfo {
+            name: row_value(&row, 0),
+            table_name: row_value(&row, 1),
+            event: row_value(&row, 2),
+            timing: row_value(&row, 3),
+            definition: row.get(4).and_then(|v| v.clone()),
+        })
+        .collect()
+}
+
 fn mysql_connection_form() -> DatabaseFormManifest {
     DatabaseFormManifest {
         kind: DatabaseFormKind::Connection,
@@ -1342,6 +1414,27 @@ impl DatabasePlugin for MySqlPlugin {
             rows,
         })
     }
+
+    async fn list_foreign_keys(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        _schema: Option<String>,
+        table: &str,
+    ) -> Result<Vec<ForeignKeyDefinition>> {
+        let sql = mysql_foreign_keys_sql(database, table);
+        let result = connection
+            .query(&sql)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list foreign keys: {}", e))?;
+
+        if let SqlResult::Query(query_result) = result {
+            Ok(parse_mysql_foreign_keys(query_result.rows))
+        } else {
+            Err(anyhow::anyhow!("Unexpected result type"))
+        }
+    }
+
     // === View Operations ===
 
     async fn list_table_checks(
@@ -1612,6 +1705,26 @@ impl DatabasePlugin for MySqlPlugin {
                     definition: None,
                 })
                 .collect())
+        } else {
+            Err(anyhow::anyhow!("Unexpected result type"))
+        }
+    }
+
+    async fn list_table_triggers(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        _schema: Option<String>,
+        table: &str,
+    ) -> Result<Vec<TriggerInfo>> {
+        let sql = mysql_table_triggers_sql(database, table);
+        let result = connection
+            .query(&sql)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list table triggers: {}", e))?;
+
+        if let SqlResult::Query(query_result) = result {
+            Ok(parse_mysql_triggers(query_result.rows))
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
@@ -2724,6 +2837,14 @@ mod tests {
         MySqlPlugin::new()
     }
 
+    fn cell(value: &str) -> Option<String> {
+        Some(value.to_string())
+    }
+
+    fn row(values: &[&str]) -> Vec<Option<String>> {
+        values.iter().map(|value| cell(value)).collect()
+    }
+
     // ==================== Basic Plugin Info Tests ====================
 
     #[test]
@@ -2738,6 +2859,84 @@ mod tests {
         assert_eq!(plugin.quote_identifier("table_name"), "`table_name`");
         assert_eq!(plugin.quote_identifier("column"), "`column`");
         assert_eq!(plugin.quote_identifier("col`umn"), "`col``umn`");
+    }
+
+    #[test]
+    fn test_mysql_foreign_keys_sql_targets_table_metadata() {
+        let sql = mysql_foreign_keys_sql("app", "order_items");
+
+        assert!(sql.contains("INFORMATION_SCHEMA.KEY_COLUMN_USAGE"));
+        assert!(sql.contains("INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS"));
+        assert!(sql.contains("k.TABLE_SCHEMA = 'app'"));
+        assert!(sql.contains("k.TABLE_NAME = 'order_items'"));
+        assert!(sql.contains("k.REFERENCED_TABLE_NAME IS NOT NULL"));
+    }
+
+    #[test]
+    fn test_parse_mysql_foreign_keys_groups_composite_columns() {
+        let foreign_keys = parse_mysql_foreign_keys(vec![
+            row(&[
+                "fk_order_items_order",
+                "tenant_id",
+                "orders",
+                "tenant_id",
+                "CASCADE",
+                "RESTRICT",
+            ]),
+            row(&[
+                "fk_order_items_order",
+                "order_id",
+                "orders",
+                "id",
+                "CASCADE",
+                "RESTRICT",
+            ]),
+        ]);
+
+        assert_eq!(1, foreign_keys.len());
+        assert_eq!("fk_order_items_order", foreign_keys[0].name);
+        assert_eq!(
+            vec!["tenant_id".to_string(), "order_id".to_string()],
+            foreign_keys[0].columns
+        );
+        assert_eq!("orders", foreign_keys[0].ref_table);
+        assert_eq!(
+            vec!["tenant_id".to_string(), "id".to_string()],
+            foreign_keys[0].ref_columns
+        );
+        assert_eq!("CASCADE", foreign_keys[0].on_delete);
+        assert_eq!("RESTRICT", foreign_keys[0].on_update);
+    }
+
+    #[test]
+    fn test_mysql_table_triggers_sql_filters_table() {
+        let sql = mysql_table_triggers_sql("app", "orders");
+
+        assert!(sql.contains("INFORMATION_SCHEMA.TRIGGERS"));
+        assert!(sql.contains("TRIGGER_SCHEMA = 'app'"));
+        assert!(sql.contains("EVENT_OBJECT_TABLE = 'orders'"));
+        assert!(sql.contains("ACTION_STATEMENT"));
+    }
+
+    #[test]
+    fn test_parse_mysql_triggers_maps_table_event_timing_and_definition() {
+        let triggers = parse_mysql_triggers(vec![row(&[
+            "orders_before_insert",
+            "orders",
+            "INSERT",
+            "BEFORE",
+            "SET NEW.created_at = NOW()",
+        ])]);
+
+        assert_eq!(1, triggers.len());
+        assert_eq!("orders_before_insert", triggers[0].name);
+        assert_eq!("orders", triggers[0].table_name);
+        assert_eq!("INSERT", triggers[0].event);
+        assert_eq!("BEFORE", triggers[0].timing);
+        assert_eq!(
+            Some("SET NEW.created_at = NOW()".to_string()),
+            triggers[0].definition
+        );
     }
 
     // ==================== DDL SQL Generation Tests ====================
