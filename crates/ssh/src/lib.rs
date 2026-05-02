@@ -5,9 +5,10 @@ mod ssh;
 
 pub use session_manager::SshSessionManager;
 pub use ssh::{
-    AuthFailureMessages, ChannelEvent, JumpServerConnectConfig, LocalPortForwardTunnel,
-    ProxyConnectConfig, ProxyType, PtyConfig, RusshChannel, RusshClient, ShellIntegrationSetup,
-    SshAuth, SshChannel, SshClient, SshConnectConfig, authenticate_session,
+    AuthFailureMessages, ChannelEvent, JumpServerConnectConfig, KeyboardInteractivePrompt,
+    KeyboardInteractiveRequest, KeyboardInteractiveResponder, KeyboardInteractiveTarget,
+    LocalPortForwardTunnel, ProxyConnectConfig, ProxyType, PtyConfig, RusshChannel, RusshClient,
+    ShellIntegrationSetup, SshAuth, SshChannel, SshClient, SshConnectConfig, authenticate_session,
     authenticate_session_with_fallbacks, authenticate_with_strategy, defaults,
     expand_auto_publickey_auth, start_local_port_forward,
 };

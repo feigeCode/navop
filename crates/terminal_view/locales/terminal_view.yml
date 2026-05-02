@@ -245,6 +245,22 @@ SSH:
     en: Jump Password
     zh-CN: 跳板机密码
     zh-HK: 跳板機密碼
+  jump_mfa_required:
+    en: Please fill in the jump server MFA field and test again.
+    zh-CN: 请填写跳板机 MFA 后重新测试。
+    zh-HK: 請填寫跳板機 MFA 後重新測試。
+  jump_mfa_required_hint:
+    en: Jump server requires MFA. Fill in the dynamic field below, then test again.
+    zh-CN: 跳板机要求 MFA。请填写下方动态字段后重新测试。
+    zh-HK: 跳板機要求 MFA。請填寫下方動態字段後重新測試。
+  mfa_prompt_placeholder:
+    en: MFA response
+    zh-CN: MFA 响应
+    zh-HK: MFA 回應
+  mfa_target_dynamic_not_supported:
+    en: SSH target MFA is not supported in this form yet.
+    zh-CN: 当前表单暂不支持目标服务器 MFA。
+    zh-HK: 當前表單暫不支持目標伺服器 MFA。
   # 代理相关
   enable_proxy:
     en: Enable Proxy

@@ -13,6 +13,8 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
 use alacritty_terminal::tty::{self, Options as PtyOptions};
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
 use futures::StreamExt;
 use gpui::*;
 use one_core::gpui_tokio::Tokio;
@@ -22,9 +24,10 @@ use one_core::storage::models::{
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 use tokio::time::interval;
 
 #[cfg(any(test, target_os = "windows"))]
@@ -44,7 +47,10 @@ use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 use crate::shell_integration::embedded_shell_integration_script;
 
 use crate::{LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalEvent, TerminalSize};
-use ssh::{ChannelEvent, SshChannel, SshSessionManager};
+use ssh::{
+    ChannelEvent, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
+    KeyboardInteractiveTarget, SshChannel, SshSessionManager,
+};
 pub use ssh::{
     JumpServerConnectConfig, ProxyConnectConfig, ProxyType, PtyConfig, SshAuth, SshConnectConfig,
 };
@@ -54,6 +60,8 @@ pub use ssh::{
 pub enum TerminalModelEvent {
     /// 终端内容已更新，需要重新渲染
     Wakeup,
+    /// SSH keyboard-interactive/MFA 请求状态变化
+    SshMfaChanged,
     /// shell 开始渲染新的 prompt（OSC 133;A）
     PromptStart,
     /// shell prompt 已渲染完成，用户可以输入（OSC 133;B）
@@ -91,6 +99,197 @@ pub enum TerminalConnectionKind {
 pub struct SshTerminalConfig {
     pub ssh_config: SshConnectConfig,
     pub pty_config: PtyConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalMfaPrompt {
+    pub prompt: String,
+    pub echo: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalMfaRequest {
+    pub name: String,
+    pub instructions: String,
+    pub prompts: Vec<TerminalMfaPrompt>,
+}
+
+#[derive(Clone, Default)]
+pub struct TerminalMfaResponder {
+    state: Arc<StdMutex<TerminalMfaState>>,
+    event_tx: Option<UnboundedSender<TerminalEvent>>,
+    jump_password: Option<String>,
+    target_password: Option<String>,
+}
+
+#[derive(Default)]
+struct TerminalMfaState {
+    pending: Option<TerminalMfaPending>,
+}
+
+struct TerminalMfaPending {
+    request: TerminalMfaRequest,
+    response_tx: Option<oneshot::Sender<Vec<String>>>,
+}
+
+impl TerminalMfaResponder {
+    pub fn new(
+        event_tx: UnboundedSender<TerminalEvent>,
+        jump_password: Option<String>,
+        target_password: Option<String>,
+    ) -> Self {
+        Self {
+            state: Arc::new(StdMutex::new(TerminalMfaState::default())),
+            event_tx: Some(event_tx),
+            jump_password,
+            target_password,
+        }
+    }
+
+    pub fn pending_request(&self) -> Option<TerminalMfaRequest> {
+        self.state
+            .lock()
+            .ok()?
+            .pending
+            .as_ref()
+            .map(|pending| pending.request.clone())
+    }
+
+    pub fn submit(&self, responses: Vec<String>) -> bool {
+        let Some(mut pending) = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|mut state| state.pending.take())
+        else {
+            return false;
+        };
+
+        let sent = pending
+            .response_tx
+            .take()
+            .is_some_and(|tx| tx.send(responses).is_ok());
+        self.notify_changed();
+        sent
+    }
+
+    pub fn cancel(&self) -> bool {
+        let cleared = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|mut state| state.pending.take())
+            .is_some();
+        if cleared {
+            self.notify_changed();
+        }
+        cleared
+    }
+
+    fn notify_changed(&self) {
+        if let Some(event_tx) = &self.event_tx {
+            let _ = event_tx.send(TerminalEvent::SshMfaChanged);
+        }
+    }
+}
+
+#[async_trait]
+impl KeyboardInteractiveResponder for TerminalMfaResponder {
+    async fn respond(&self, request: KeyboardInteractiveRequest) -> Result<Vec<String>> {
+        let terminal_prompts = request
+            .prompts
+            .iter()
+            .filter(|prompt| !is_ssh_password_prompt(&prompt.prompt))
+            .map(|prompt| TerminalMfaPrompt {
+                prompt: prompt.prompt.clone(),
+                echo: prompt.echo,
+            })
+            .collect::<Vec<_>>();
+
+        if terminal_prompts.is_empty() {
+            return keyboard_interactive_answers_for_terminal(
+                &request,
+                &[],
+                self.jump_password.as_deref(),
+                self.target_password.as_deref(),
+            );
+        }
+
+        let (response_tx, response_rx) = oneshot::channel();
+        let terminal_request = TerminalMfaRequest {
+            name: request.name.clone(),
+            instructions: request.instructions.clone(),
+            prompts: terminal_prompts,
+        };
+
+        if let Ok(mut state) = self.state.lock() {
+            state.pending = Some(TerminalMfaPending {
+                request: terminal_request,
+                response_tx: Some(response_tx),
+            });
+        } else {
+            return Err(anyhow!("failed to store SSH MFA request"));
+        }
+        self.notify_changed();
+
+        let responses = response_rx
+            .await
+            .map_err(|_| anyhow!("SSH MFA response was cancelled"))?;
+
+        keyboard_interactive_answers_for_terminal(
+            &request,
+            &responses,
+            self.jump_password.as_deref(),
+            self.target_password.as_deref(),
+        )
+    }
+}
+
+fn keyboard_interactive_answers_for_terminal(
+    request: &KeyboardInteractiveRequest,
+    responses: &[String],
+    jump_password: Option<&str>,
+    target_password: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut response_index = 0;
+    let mut answers = Vec::with_capacity(request.prompts.len());
+
+    for prompt in &request.prompts {
+        if is_ssh_password_prompt(&prompt.prompt) {
+            let password = match request.target {
+                KeyboardInteractiveTarget::JumpServer => jump_password,
+                KeyboardInteractiveTarget::TargetServer => target_password,
+            };
+            answers.push(
+                password
+                    .ok_or_else(|| anyhow!("SSH password prompt has no configured password"))?
+                    .to_string(),
+            );
+        } else {
+            let response = responses
+                .get(response_index)
+                .ok_or_else(|| anyhow!("SSH MFA response is missing"))?;
+            if response.trim().is_empty() {
+                return Err(anyhow!("SSH MFA response is empty"));
+            }
+            answers.push(response.clone());
+            response_index += 1;
+        }
+    }
+
+    if response_index == responses.len() {
+        Ok(answers)
+    } else {
+        Err(anyhow!("SSH MFA response count does not match prompts"))
+    }
+}
+
+fn is_ssh_password_prompt(prompt: &str) -> bool {
+    prompt
+        .trim()
+        .trim_end_matches(':')
+        .to_ascii_lowercase()
+        .ends_with("password")
 }
 
 const DEFAULT_COLS: usize = 80;
@@ -443,6 +642,8 @@ pub struct Terminal {
     ssh_config: Option<SshTerminalConfig>,
     /// SSH 会话管理器（同一 SSH tab 共享底层连接）
     ssh_session_manager: Option<Arc<SshSessionManager>>,
+    /// SSH keyboard-interactive/MFA 输入响应器
+    ssh_mfa_responder: Option<TerminalMfaResponder>,
     /// 串口参数（用于重连）
     serial_params: Option<SerialParams>,
     /// 事件发送器（用于 SSH 重连）
@@ -547,6 +748,7 @@ impl Terminal {
             rows: DEFAULT_ROWS,
             ssh_config: None,
             ssh_session_manager: None,
+            ssh_mfa_responder: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: None,
@@ -619,6 +821,7 @@ impl Terminal {
             rows: DEFAULT_ROWS,
             ssh_config: None,
             ssh_session_manager: None,
+            ssh_mfa_responder: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: None, // 本地终端的 event_proxy 已在 LocalPtyBackend 中设置
@@ -643,6 +846,19 @@ impl Terminal {
             .to_ssh_params()
             .expect("StoredConnection should contain valid SSH params");
 
+        let target_password = match &ssh_params.auth_method {
+            SshAuthMethod::Password { password } => Some(password.clone()),
+            _ => None,
+        };
+        let jump_password =
+            ssh_params
+                .jump_server
+                .as_ref()
+                .and_then(|jump| match &jump.auth_method {
+                    SshAuthMethod::Password { password } => Some(password.clone()),
+                    _ => None,
+                });
+
         let auth = match ssh_params.auth_method.clone() {
             SshAuthMethod::Password { password } => SshAuth::Password(password),
             SshAuthMethod::PrivateKey {
@@ -665,7 +881,7 @@ impl Terminal {
             sync_path_with_terminal,
         );
 
-        let ssh_config = SshConnectConfig {
+        let mut ssh_config = SshConnectConfig {
             host: ssh_params.host,
             port: ssh_params.port,
             username: ssh_params.username,
@@ -707,9 +923,14 @@ impl Terminal {
                     password: p.password,
                 }
             }),
+            keyboard_interactive_responder: None,
         };
 
         let pty_config = PtyConfig::default();
+        let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
+        let ssh_mfa_responder =
+            TerminalMfaResponder::new(event_tx.clone(), jump_password, target_password);
+        ssh_config.keyboard_interactive_responder = Some(Arc::new(ssh_mfa_responder.clone()));
         let config = SshTerminalConfig {
             ssh_config,
             pty_config,
@@ -719,7 +940,6 @@ impl Terminal {
         let cols = config.pty_config.width as usize;
         let rows = config.pty_config.height as usize;
 
-        let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
         let (term, event_proxy, _colors) = Self::create_term(cols, rows, event_tx.clone());
         let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
         let connection_generation = 1;
@@ -751,6 +971,7 @@ impl Terminal {
             rows,
             ssh_config: Some(config),
             ssh_session_manager: Some(ssh_session_manager),
+            ssh_mfa_responder: Some(ssh_mfa_responder),
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),
@@ -798,6 +1019,7 @@ impl Terminal {
             rows: DEFAULT_ROWS,
             ssh_config: None,
             ssh_session_manager: None,
+            ssh_mfa_responder: None,
             serial_params: Some(serial_params),
             event_tx: Some(event_tx),
             event_proxy: None,
@@ -1043,12 +1265,18 @@ impl Terminal {
                 self.backend = Some(Box::new(backend));
             }
             Ok(Err(e)) => {
+                if let Some(responder) = &self.ssh_mfa_responder {
+                    responder.cancel();
+                }
                 self.connection_state = ConnectionState::Disconnected {
                     error: Some(format_connection_error(&e)),
                 };
                 self.set_connection_active(false, cx);
             }
             Err(e) => {
+                if let Some(responder) = &self.ssh_mfa_responder {
+                    responder.cancel();
+                }
                 self.connection_state = ConnectionState::Disconnected {
                     error: Some(e.to_string()),
                 };
@@ -1165,6 +1393,9 @@ impl Terminal {
             TerminalEvent::Wakeup => {
                 cx.emit(TerminalModelEvent::Wakeup);
             }
+            TerminalEvent::SshMfaChanged => {
+                cx.emit(TerminalModelEvent::SshMfaChanged);
+            }
             TerminalEvent::PromptStart => {
                 cx.emit(TerminalModelEvent::PromptStart);
             }
@@ -1269,6 +1500,18 @@ impl Terminal {
         self.ssh_session_manager.as_ref()
     }
 
+    pub fn ssh_mfa_request(&self) -> Option<TerminalMfaRequest> {
+        self.ssh_mfa_responder
+            .as_ref()
+            .and_then(TerminalMfaResponder::pending_request)
+    }
+
+    pub fn submit_ssh_mfa(&self, responses: Vec<String>) -> bool {
+        self.ssh_mfa_responder
+            .as_ref()
+            .is_some_and(|responder| responder.submit(responses))
+    }
+
     /// 获取连接类型
     pub fn connection_kind(&self) -> TerminalConnectionKind {
         self.connection_kind
@@ -1338,6 +1581,9 @@ impl Terminal {
             self.reset_terminal_surface();
 
             let generation = self.next_connection_generation();
+            if let Some(responder) = &self.ssh_mfa_responder {
+                responder.cancel();
+            }
             let term = self.term.clone();
             let connection_id = self.connection_id;
             let init_commands = self.init_commands.clone();
@@ -1533,17 +1779,21 @@ impl EventEmitter<TerminalModelEvent> for Terminal {}
 mod tests {
     use super::{
         build_cd_command, build_ssh_base_init_commands, build_ssh_init_commands,
-        compose_ssh_init_commands, format_connection_error, resolve_default_windows_shell_from_env,
-        shell_escape_arg, ConnectionState, Terminal, TerminalConnectionKind,
+        compose_ssh_init_commands, format_connection_error,
+        keyboard_interactive_answers_for_terminal, resolve_default_windows_shell_from_env,
+        shell_escape_arg, ConnectionState, Terminal, TerminalConnectionKind, TerminalMfaPrompt,
+        TerminalMfaRequest, TerminalMfaResponder,
     };
     use crate::history::{
         collect_history_suggestions, normalize_history_command, parse_shell_history,
         push_history_entry, HistoryEntry, ShellHistoryFormat,
     };
+    use crate::TerminalEvent;
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
     use anyhow::anyhow;
+    use ssh::{KeyboardInteractiveRequest, KeyboardInteractiveResponder};
     use std::collections::VecDeque;
     use std::fs;
     use tokio::sync::mpsc::unbounded_channel;
@@ -1722,6 +1972,136 @@ mod tests {
         assert!(matches.is_empty());
     }
 
+    #[tokio::test]
+    async fn terminal_mfa_responder_waits_for_submitted_response() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let responder = TerminalMfaResponder::new(event_tx, Some("jump123".to_string()), None);
+        let pending = responder.clone();
+        let task = tokio::spawn(async move {
+            pending
+                .respond(KeyboardInteractiveRequest {
+                    target: ssh::KeyboardInteractiveTarget::JumpServer,
+                    name: "MFA".to_string(),
+                    instructions: "Enter code".to_string(),
+                    prompts: vec![ssh::KeyboardInteractivePrompt {
+                        prompt: "Verification code:".to_string(),
+                        echo: false,
+                    }],
+                })
+                .await
+        });
+
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(TerminalEvent::SshMfaChanged)
+        ));
+        assert_eq!(
+            Some(TerminalMfaRequest {
+                name: "MFA".to_string(),
+                instructions: "Enter code".to_string(),
+                prompts: vec![TerminalMfaPrompt {
+                    prompt: "Verification code:".to_string(),
+                    echo: false,
+                }],
+            }),
+            responder.pending_request()
+        );
+        assert!(responder.submit(vec!["123456".to_string()]));
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(TerminalEvent::SshMfaChanged)
+        ));
+        assert_eq!(vec!["123456".to_string()], task.await.unwrap().unwrap());
+    }
+
+    #[tokio::test]
+    async fn terminal_mfa_responder_cancel_clears_pending_request() {
+        let (event_tx, mut event_rx) = unbounded_channel();
+        let responder = TerminalMfaResponder::new(event_tx, None, None);
+        let pending = responder.clone();
+        let task = tokio::spawn(async move {
+            pending
+                .respond(KeyboardInteractiveRequest {
+                    target: ssh::KeyboardInteractiveTarget::TargetServer,
+                    name: "MFA".to_string(),
+                    instructions: "Enter code".to_string(),
+                    prompts: vec![ssh::KeyboardInteractivePrompt {
+                        prompt: "Verification code:".to_string(),
+                        echo: false,
+                    }],
+                })
+                .await
+        });
+
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(TerminalEvent::SshMfaChanged)
+        ));
+        assert!(responder.pending_request().is_some());
+        assert!(responder.cancel());
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(TerminalEvent::SshMfaChanged)
+        ));
+        assert!(responder.pending_request().is_none());
+        assert!(task.await.unwrap().is_err());
+        assert!(!responder.cancel());
+    }
+
+    #[test]
+    fn terminal_mfa_answers_jump_mfa_and_both_password_rounds() {
+        let jump_password = keyboard_interactive_answers_for_terminal(
+            &KeyboardInteractiveRequest {
+                target: ssh::KeyboardInteractiveTarget::JumpServer,
+                name: String::new(),
+                instructions: String::new(),
+                prompts: vec![ssh::KeyboardInteractivePrompt {
+                    prompt: "Password:".to_string(),
+                    echo: false,
+                }],
+            },
+            &[],
+            Some("jump123"),
+            Some("target123"),
+        )
+        .unwrap();
+        assert_eq!(vec!["jump123".to_string()], jump_password);
+
+        let jump_mfa = keyboard_interactive_answers_for_terminal(
+            &KeyboardInteractiveRequest {
+                target: ssh::KeyboardInteractiveTarget::JumpServer,
+                name: String::new(),
+                instructions: String::new(),
+                prompts: vec![ssh::KeyboardInteractivePrompt {
+                    prompt: "Verification code:".to_string(),
+                    echo: false,
+                }],
+            },
+            &["123456".to_string()],
+            Some("jump123"),
+            Some("target123"),
+        )
+        .unwrap();
+        assert_eq!(vec!["123456".to_string()], jump_mfa);
+
+        let target_password = keyboard_interactive_answers_for_terminal(
+            &KeyboardInteractiveRequest {
+                target: ssh::KeyboardInteractiveTarget::TargetServer,
+                name: String::new(),
+                instructions: String::new(),
+                prompts: vec![ssh::KeyboardInteractivePrompt {
+                    prompt: "root@10.2.4.56's password:".to_string(),
+                    echo: false,
+                }],
+            },
+            &[],
+            Some("jump123"),
+            Some("target123"),
+        )
+        .unwrap();
+        assert_eq!(vec!["target123".to_string()], target_password);
+    }
+
     #[test]
     fn format_connection_error_keeps_anyhow_context_chain() {
         let err = anyhow!("channel open failed")
@@ -1759,6 +2139,7 @@ mod tests {
             rows: 24,
             ssh_config: None,
             ssh_session_manager: None,
+            ssh_mfa_responder: None,
             serial_params: None,
             event_tx: Some(event_tx),
             event_proxy: Some(event_proxy),

@@ -19,6 +19,7 @@ one-ui = { workspace = true }
 alacritty_terminal.workspace = true
 
 # Async
+async-trait = { workspace = true }
 regex = { workspace = true }
 # Utilities
 anyhow = { workspace = true }

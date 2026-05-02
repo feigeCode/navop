@@ -8,6 +8,7 @@ pub mod keys;
 pub mod serial_form_window;
 pub mod settings;
 pub mod sidebar;
+mod ssh_form_mfa;
 pub mod ssh_form_window;
 pub mod terminal_element;
 pub mod theme;

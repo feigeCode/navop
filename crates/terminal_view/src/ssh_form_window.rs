@@ -27,7 +27,13 @@ use ssh::{
     JumpServerConnectConfig, ProxyConnectConfig, ProxyType, RusshClient, SshAuth, SshClient,
     SshConnectConfig,
 };
+use std::sync::Arc;
 use std::time::Duration;
+
+use crate::ssh_form_mfa::{
+    form_mfa_request_from_keyboard_interactive, is_jump_mfa_required_error, CapturedMfaRequest,
+    FormMfaPrompt, FormMfaRequest, JumpServerMfaResponder,
+};
 
 pub struct SshFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
@@ -133,6 +139,9 @@ pub struct SshFormWindow {
     jump_port_input: Entity<InputState>,
     jump_username_input: Entity<InputState>,
     jump_password_input: Entity<InputState>,
+    jump_mfa_request: Option<FormMfaRequest>,
+    jump_mfa_inputs: Vec<JumpMfaInput>,
+    jump_mfa_signature: Option<String>,
 
     // 代理设置
     enable_proxy: bool,
@@ -163,6 +172,12 @@ pub struct SshFormWindow {
     test_result: Option<Result<(), String>>,
 }
 
+#[derive(Clone)]
+struct JumpMfaInput {
+    prompt: FormMfaPrompt,
+    input: Entity<InputState>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum AuthMethodSelection {
     #[default]
@@ -174,6 +189,14 @@ pub enum AuthMethodSelection {
 
 fn build_connection_test_signature(params: &SshParams) -> String {
     format!("{:?}", params)
+}
+
+fn validate_save_state(is_testing: bool) -> Result<(), &'static str> {
+    if is_testing {
+        Err("testing")
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -447,6 +470,9 @@ impl SshFormWindow {
             jump_port_input,
             jump_username_input,
             jump_password_input,
+            jump_mfa_request: None,
+            jump_mfa_inputs: Vec::new(),
+            jump_mfa_signature: None,
             enable_proxy,
             proxy_type,
             proxy_host_input,
@@ -713,10 +739,72 @@ impl SshFormWindow {
             keepalive_max: params.keepalive_max,
             jump_server,
             proxy,
+            keyboard_interactive_responder: None,
         }
     }
 
-    fn on_test(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn collect_jump_mfa_responses(&self, cx: &App, signature: &str) -> Vec<String> {
+        if self.jump_mfa_signature.as_deref() != Some(signature) {
+            return Vec::new();
+        }
+
+        self.jump_mfa_inputs
+            .iter()
+            .map(|input| input.input.read(cx).text().to_string())
+            .collect()
+    }
+
+    fn clear_jump_mfa_fields(&mut self) {
+        self.jump_mfa_request = None;
+        self.jump_mfa_inputs.clear();
+        self.jump_mfa_signature = None;
+    }
+
+    fn apply_jump_mfa_request(
+        &mut self,
+        request: ssh::KeyboardInteractiveRequest,
+        signature: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(form_request) = form_mfa_request_from_keyboard_interactive(&request) else {
+            return;
+        };
+        let existing_values = self
+            .jump_mfa_inputs
+            .iter()
+            .map(|input| input.input.read(cx).text().to_string())
+            .collect::<Vec<_>>();
+
+        self.jump_mfa_inputs = form_request
+            .prompts
+            .iter()
+            .enumerate()
+            .map(|(index, prompt)| {
+                let existing_value = existing_values.get(index).cloned().unwrap_or_default();
+                let input = cx.new(|cx| {
+                    let mut state =
+                        InputState::new(window, cx).placeholder(mfa_prompt_label(&prompt.prompt));
+                    if !prompt.echo {
+                        state = state.masked(true);
+                    }
+                    if !existing_value.is_empty() {
+                        state.set_value(&existing_value, window, cx);
+                    }
+                    state
+                });
+                JumpMfaInput {
+                    prompt: prompt.clone(),
+                    input,
+                }
+            })
+            .collect();
+        self.jump_mfa_request = Some(form_request);
+        self.jump_mfa_signature = Some(signature);
+        self.active_tab = 2;
+    }
+
+    fn on_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(params) = self.build_ssh_params(cx) else {
             self.last_tested_signature = None;
             self.test_result = Some(Err(t!("SSH.validation_error").to_string()));
@@ -730,7 +818,21 @@ impl SshFormWindow {
         cx.notify();
 
         let signature = build_connection_test_signature(&params);
-        let config = self.build_ssh_connect_config(&params);
+        let mut config = self.build_ssh_connect_config(&params);
+        let jump_mfa_capture = CapturedMfaRequest::default();
+        let jump_mfa_responses = self.collect_jump_mfa_responses(cx, &signature);
+        if let Some(jump_server) = &config.jump_server {
+            let jump_password = match &jump_server.auth {
+                SshAuth::Password(password) => Some(password.clone()),
+                _ => None,
+            };
+            config.keyboard_interactive_responder = Some(Arc::new(JumpServerMfaResponder::new(
+                jump_mfa_responses,
+                jump_password,
+                jump_mfa_capture.clone(),
+            )));
+        }
+        let window_handle = window.window_handle();
 
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let spawn_result = Tokio::spawn_result(cx, async move {
@@ -740,23 +842,36 @@ impl SshFormWindow {
             })
             .await;
 
+            let jump_mfa_request = match &spawn_result {
+                Err(error) if is_jump_mfa_required_error(error.as_ref()) => jump_mfa_capture.take(),
+                _ => None,
+            };
             let test_result: Result<(), String> = match spawn_result {
                 Ok(task) => Ok(task),
                 Err(e) => Err(e.to_string()),
             };
 
-            let _ = this.update(cx, |this, cx| {
-                this.is_testing = false;
-                this.last_tested_signature = test_result.as_ref().ok().map(|_| signature.clone());
-                this.test_result = Some(test_result);
-                cx.notify();
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.is_testing = false;
+                    if let Some(request) = jump_mfa_request {
+                        this.apply_jump_mfa_request(request, signature.clone(), window, cx);
+                        this.last_tested_signature = None;
+                        this.test_result = Some(Err(t!("SSH.jump_mfa_required").to_string()));
+                    } else {
+                        this.last_tested_signature =
+                            test_result.as_ref().ok().map(|_| signature.clone());
+                        this.test_result = Some(test_result);
+                    }
+                    cx.notify();
+                });
             });
         })
         .detach();
     }
 
     fn on_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_testing {
+        if validate_save_state(self.is_testing).is_err() {
             self.test_result = Some(Err(t!("SSH.save_while_testing").to_string()));
             cx.notify();
             return;
@@ -768,19 +883,6 @@ impl SshFormWindow {
             cx.notify();
             return;
         };
-
-        let current_signature = build_connection_test_signature(&params);
-        if !matches!(self.test_result.as_ref(), Some(Ok(()))) {
-            self.test_result = Some(Err(t!("SSH.test_required_before_save").to_string()));
-            cx.notify();
-            return;
-        }
-
-        if self.last_tested_signature.as_deref() != Some(current_signature.as_str()) {
-            self.test_result = Some(Err(t!("SSH.retest_after_change").to_string()));
-            cx.notify();
-            return;
-        }
 
         let name = self.name_input.read(cx).text().to_string();
         let name = if name.is_empty() {
@@ -1007,6 +1109,9 @@ impl SshFormWindow {
                         .checked(enable_jump)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.enable_jump_server = !this.enable_jump_server;
+                            if !this.enable_jump_server {
+                                this.clear_jump_mfa_fields();
+                            }
                             cx.notify();
                         })),
                 ),
@@ -1026,6 +1131,47 @@ impl SshFormWindow {
                     &t!("SSH.jump_password"),
                     Input::new(&self.jump_password_input).mask_toggle(),
                 ))
+                .when_some(self.jump_mfa_request.as_ref(), |this, request| {
+                    this.child(
+                        v_flex()
+                            .gap_2()
+                            .pt_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("SSH.jump_mfa_required_hint").to_string()),
+                            )
+                            .when(!request.name.is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(request.name.clone()),
+                                )
+                            })
+                            .when(!request.instructions.is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(request.instructions.clone()),
+                                )
+                            })
+                            .children(self.jump_mfa_inputs.iter().map(|input| {
+                                let input_element = if input.prompt.echo {
+                                    Input::new(&input.input).into_any_element()
+                                } else {
+                                    Input::new(&input.input).mask_toggle().into_any_element()
+                                };
+                                self.render_form_row(
+                                    &mfa_prompt_label(&input.prompt.prompt),
+                                    input_element,
+                                )
+                                .into_any_element()
+                            })),
+                    )
+                })
             })
     }
 
@@ -1113,6 +1259,15 @@ impl SshFormWindow {
         v_flex()
             .gap_2()
             .child(self.render_form_row(&t!("SSH.remark"), Input::new(&self.remark_input)))
+    }
+}
+
+fn mfa_prompt_label(prompt: &str) -> String {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        t!("SSH.mfa_prompt_placeholder").to_string()
+    } else {
+        prompt.to_string()
     }
 }
 
@@ -1246,7 +1401,7 @@ impl Render for SshFormWindow {
 
 #[cfg(test)]
 mod tests {
-    use super::build_connection_test_signature;
+    use super::{build_connection_test_signature, validate_save_state};
     use one_core::storage::{SshAuthMethod, SshParams};
 
     fn sample_params() -> SshParams {
@@ -1277,5 +1432,15 @@ mod tests {
         let mut changed_host = sample_params();
         changed_host.host = "example.com".to_string();
         assert_ne!(original, build_connection_test_signature(&changed_host));
+    }
+
+    #[test]
+    fn save_gate_allows_saving_without_successful_connection_test() {
+        assert_eq!(validate_save_state(false), Ok(()));
+    }
+
+    #[test]
+    fn save_gate_keeps_blocking_while_connection_test_is_running() {
+        assert_eq!(validate_save_state(true), Err("testing"));
     }
 }

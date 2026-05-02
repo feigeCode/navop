@@ -425,12 +425,33 @@ impl ConnectionManager {
     ) -> Result<Option<String>, DbError> {
         let mut sessions = self.sessions.write().await;
 
-        if let Some(session_list) = sessions.get_mut(&config.id) {
-            // Find an idle session with matching database
-            if let Some(session) = session_list
-                .iter_mut()
-                .find(|s| !s.in_use && Self::db_equals(s.connection.config(), config))
-            {
+        let remove_config_entry = {
+            let Some(session_list) = sessions.get_mut(&config.id) else {
+                return Ok(None);
+            };
+
+            let mut index = 0;
+            while index < session_list.len() {
+                let session = &session_list[index];
+                let matches_config =
+                    !session.in_use && Self::db_equals(session.connection.config(), config);
+
+                if !matches_config {
+                    index += 1;
+                    continue;
+                }
+
+                if let Err(error) = session.connection.ping().await {
+                    let mut session = session_list.remove(index);
+                    warn!(
+                        "Discarding stale session {} before reuse: {}",
+                        session.session_id, error
+                    );
+                    session.close().await;
+                    continue;
+                }
+
+                let session = &mut session_list[index];
                 session.mark_in_use();
 
                 debug!(
@@ -439,6 +460,12 @@ impl ConnectionManager {
                 );
                 return Ok(Some(session.session_id.clone()));
             }
+
+            session_list.is_empty()
+        };
+
+        if remove_config_entry {
+            sessions.remove(&config.id);
         }
 
         Ok(None)
@@ -2448,7 +2475,101 @@ impl Global for GlobalDbState {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection::DbConnection;
+    use crate::executor::{ExecOptions, ExecResult, SqlErrorInfo, SqlSource};
+    use async_trait::async_trait;
     use one_core::storage::DatabaseType;
+    use tokio::sync::mpsc;
+
+    struct MockConnection {
+        config: DbConnectionConfig,
+        healthy: bool,
+    }
+
+    impl MockConnection {
+        fn new(config: DbConnectionConfig, healthy: bool) -> Self {
+            Self { config, healthy }
+        }
+    }
+
+    #[async_trait]
+    impl DbConnection for MockConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, database: Option<String>) {
+            self.config.database = database;
+        }
+
+        async fn connect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> Result<Vec<SqlResult>, DbError> {
+            Ok(Vec::new())
+        }
+
+        async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+            if self.healthy {
+                Ok(SqlResult::Exec(ExecResult {
+                    sql: query.to_string(),
+                    rows_affected: 0,
+                    elapsed_ms: 0,
+                    message: None,
+                }))
+            } else {
+                Ok(SqlResult::Error(SqlErrorInfo {
+                    sql: query.to_string(),
+                    message: "connection closed".to_string(),
+                }))
+            }
+        }
+
+        async fn current_database(&self) -> Result<Option<String>, DbError> {
+            Ok(self.config.database.clone())
+        }
+
+        async fn switch_database(&self, _database: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: mpsc::Sender<StreamingProgress>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
+
+    fn test_config(id: &str) -> DbConnectionConfig {
+        DbConnectionConfig {
+            id: id.to_string(),
+            database_type: DatabaseType::PostgreSQL,
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            username: "user".to_string(),
+            password: "password".to_string(),
+            database: Some("postgres".to_string()),
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params: Default::default(),
+        }
+    }
 
     #[test]
     fn test_db_manager_registers_duckdb_plugin() {
@@ -2484,5 +2605,37 @@ mod tests {
         );
 
         assert!(!GlobalDbState::cached_children_ready(&node));
+    }
+
+    #[tokio::test]
+    async fn ping_returns_error_for_sql_error_result() {
+        let connection = MockConnection::new(test_config("conn1"), false);
+
+        assert!(connection.ping().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn try_acquire_session_discards_idle_session_when_ping_fails() {
+        let manager =
+            ConnectionManager::with_config(Duration::from_secs(300), Duration::from_secs(1800));
+        let config = test_config("conn1");
+        let session = ConnectionSession::new(
+            Box::new(MockConnection::new(config.clone(), false)),
+            "conn1:session:1".to_string(),
+        );
+
+        manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(session);
+
+        let acquired = manager.try_acquire_session(&config).await.unwrap();
+        let remaining = manager.list_sessions(&config.id).await;
+
+        assert!(acquired.is_none());
+        assert!(remaining.is_empty());
     }
 }
