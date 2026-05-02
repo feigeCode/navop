@@ -2,7 +2,7 @@ mod loader;
 
 use db::GlobalDbState;
 use ferrum_flow::{
-    BackgroundPlugin, EdgePlugin, FitAllGraphPlugin, FlowCanvas, FlowCanvasElement, Graph,
+    BackgroundPlugin, EdgePlugin, FitAllGraphPlugin, FlowCanvas, Graph,
     NodeInteractionPlugin, NodePlugin, ViewportPlugin, ZoomControlsPlugin,
 };
 
@@ -173,7 +173,7 @@ impl Render for ErDiagramTab {
             })
             .when(!self.loading && self.error.is_none(), |this| {
                 match self.canvas.as_ref() {
-                    Some(canvas) => this.child(FlowCanvasElement::new(canvas.clone())),
+                    Some(canvas) => this.child(canvas.clone()),
                     None => this.child(div().size_full()),
                 }
             })

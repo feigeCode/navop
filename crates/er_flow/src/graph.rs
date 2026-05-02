@@ -1,7 +1,7 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, bail};
-use ferrum_flow::{Graph, PortId, PortPosition};
+use ferrum_flow::{Graph, PortId};
 use serde_json::json;
 
 use crate::{ER_ENTITY_RENDERER_KEY, ErDataSource, ErDiagram, ErRelationship};
@@ -53,13 +53,26 @@ pub fn graph_from_diagram_with_options(
     let mut input_ports = HashMap::<String, PortId>::new();
     let mut output_ports = HashMap::<String, PortId>::new();
     let foreign_key_fields = foreign_key_fields(&diagram.relationships);
-    let positions = relationship_layout(diagram, options);
+    let columns = options.columns.max(1);
+    let mut row_heights = Vec::<f32>::new();
 
-    for entity in &diagram.entities {
-        let (x, y) = positions
-            .get(&entity.id)
-            .copied()
-            .unwrap_or((options.origin_x, options.origin_y));
+    for (index, entity) in diagram.entities.iter().enumerate() {
+        let row = index / columns;
+        let node_height = node_height(entity.fields.len(), options);
+        if row_heights.len() <= row {
+            row_heights.push(node_height);
+        } else {
+            row_heights[row] = row_heights[row].max(node_height);
+        }
+    }
+
+    let row_offsets = row_offsets(&row_heights, options.row_gap);
+
+    for (index, entity) in diagram.entities.iter().enumerate() {
+        let row = index / columns;
+        let column = index % columns;
+        let x = options.origin_x + column as f32 * (options.node_width + options.column_gap);
+        let y = options.origin_y + row_offsets[row];
         let node_height = node_height(entity.fields.len(), options);
         let fields = entity.fields.iter().map(|field| {
             json!({
@@ -77,8 +90,8 @@ pub fn graph_from_diagram_with_options(
             .create_node(ER_ENTITY_RENDERER_KEY)
             .position(x, y)
             .size(options.node_width, node_height)
-            .input_at(PortPosition::Left)
-            .output_at(PortPosition::Right)
+            .input()
+            .output()
             .data(json!({
                 "kind": "entity",
                 "id": entity.id,
@@ -105,8 +118,8 @@ pub fn graph_from_diagram_with_options(
     }
 
     for relationship in &diagram.relationships {
-        let source = output_ports[&relationship.to_entity];
-        let target = input_ports[&relationship.from_entity];
+        let source = output_ports[&relationship.from_entity];
+        let target = input_ports[&relationship.to_entity];
 
         graph
             .create_edge()
@@ -249,60 +262,21 @@ fn is_foreign_key(
     foreign_key_fields.contains(&(entity_id, field_name))
 }
 
-fn relationship_layout(
-    diagram: &ErDiagram,
-    options: ErGraphOptions,
-) -> HashMap<String, (f32, f32)> {
-    let mut levels = diagram
-        .entities
-        .iter()
-        .map(|entity| (entity.id.clone(), 0usize))
-        .collect::<HashMap<_, _>>();
-
-    for _ in 0..diagram.entities.len() {
-        for relationship in &diagram.relationships {
-            let target_level = levels.get(&relationship.to_entity).copied().unwrap_or(0);
-            let source_level = levels.entry(relationship.from_entity.clone()).or_insert(0);
-            *source_level = (*source_level).max(target_level + 1);
-        }
-    }
-
-    layered_positions(diagram, &levels, options)
-}
-
-fn layered_positions(
-    diagram: &ErDiagram,
-    levels: &HashMap<String, usize>,
-    options: ErGraphOptions,
-) -> HashMap<String, (f32, f32)> {
-    let mut layers = BTreeMap::<usize, Vec<&crate::ErEntity>>::new();
-    for entity in &diagram.entities {
-        layers
-            .entry(*levels.get(&entity.id).unwrap_or(&0))
-            .or_default()
-            .push(entity);
-    }
-
-    let mut positions = HashMap::new();
-    for (level, entities) in layers {
-        let mut y = options.origin_y;
-        for entity in entities {
-            positions.insert(
-                entity.id.clone(),
-                (
-                    options.origin_x + level as f32 * (options.node_width + options.column_gap),
-                    y,
-                ),
-            );
-            y += node_height(entity.fields.len(), options) + options.row_gap;
-        }
-    }
-    positions
-}
-
 fn node_height(field_count: usize, options: ErGraphOptions) -> f32 {
     let field_height = field_count as f32 * options.field_row_height;
     options.min_node_height.max(72.0 + field_height)
+}
+
+fn row_offsets(row_heights: &[f32], row_gap: f32) -> Vec<f32> {
+    let mut y = 0.0;
+    row_heights
+        .iter()
+        .map(|height| {
+            let current = y;
+            y += height + row_gap;
+            current
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -389,79 +363,6 @@ mod tests {
         let graph = graph_from_diagram(&users_orgs_diagram()).unwrap();
 
         assert_eq!(graph.edges().len(), 1);
-    }
-
-    #[test]
-    fn places_dependents_to_the_right_of_targets() {
-        let graph = graph_from_diagram(&users_orgs_diagram()).unwrap();
-        let users = graph
-            .nodes()
-            .values()
-            .find(|node| node.data_ref()["id"] == "users")
-            .unwrap();
-        let orgs = graph
-            .nodes()
-            .values()
-            .find(|node| node.data_ref()["id"] == "orgs")
-            .unwrap();
-
-        let (users_x, users_y) = users.position();
-        let (orgs_x, orgs_y) = orgs.position();
-        assert!(users_x > orgs_x);
-        assert_eq!(users_y, orgs_y);
-    }
-
-    #[test]
-    fn connects_target_right_side_to_source_left_side() {
-        let graph = graph_from_diagram(&users_orgs_diagram()).unwrap();
-        let users = graph
-            .nodes()
-            .values()
-            .find(|node| node.data_ref()["id"] == "users")
-            .unwrap();
-        let orgs = graph
-            .nodes()
-            .values()
-            .find(|node| node.data_ref()["id"] == "orgs")
-            .unwrap();
-        let edge = graph.edges().values().next().unwrap();
-
-        assert_eq!(Some(&edge.source_port), orgs.outputs().first());
-        assert_eq!(Some(&edge.target_port), users.inputs().first());
-    }
-
-    #[test]
-    fn stacks_unrelated_entities_without_overlap() {
-        let graph = graph_from_diagram(&ErDiagram {
-            entities: vec![
-                ErEntity {
-                    id: "users".to_string(),
-                    name: "users".to_string(),
-                    comment: None,
-                    fields: vec![field("id", true)],
-                },
-                ErEntity {
-                    id: "orgs".to_string(),
-                    name: "organizations".to_string(),
-                    comment: None,
-                    fields: vec![field("id", true)],
-                },
-            ],
-            relationships: vec![],
-        })
-        .unwrap();
-        let mut nodes = graph.nodes().values().collect::<Vec<_>>();
-        nodes.sort_by(|a, b| {
-            let (_, a_y) = a.position();
-            let (_, b_y) = b.position();
-            f32::total_cmp(&a_y.into(), &b_y.into())
-        });
-
-        let (_, first_y) = nodes[0].position();
-        let (_, second_y) = nodes[1].position();
-        let first_bottom: f32 = (first_y + nodes[0].size_ref().height).into();
-        let second_top: f32 = second_y.into();
-        assert!(second_top > first_bottom);
     }
 
     #[test]

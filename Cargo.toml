@@ -18,7 +18,6 @@ members = [
     "crates/db",
     "crates/db_view",
     "crates/er_flow",
-    "crates/ferrum-flow",
     "crates/terminal",
     "crates/terminal_view"
     , "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor"]
@@ -147,7 +146,7 @@ futures-util="0.3.31"
 url = "2.5.4"
 percent-encoding = "2.3.1"
 global-hotkey = "0.7.0"
-ferrum-flow = { path = "crates/ferrum-flow" }
+ferrum-flow = { git = "https://github.com/feigeCode/ferrum-flow", branch = "master" }
 
 [patch.crates-io]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "8b5328ca" }
