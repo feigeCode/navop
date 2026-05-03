@@ -42,6 +42,10 @@ Common:
     en: More
     zh-CN: 更多
     zh-HK: 更多
+  next:
+    en: Next
+    zh-CN: 下一步
+    zh-HK: 下一步
 
 # 首页
 Home:
