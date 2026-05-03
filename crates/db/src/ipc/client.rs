@@ -1,24 +1,27 @@
 use crate::connection::DbError;
-use crate::ipc::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::ipc::registry::IpcDriverManifest;
 use interprocess::local_socket::{
     tokio::{prelude::*, Stream as LocalSocketStream},
     GenericNamespaced,
 };
+use ipc::{
+    IpcRequest, IpcResponse,
+    framing::{recv_msg_async, send_msg_async},
+};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::time::{error::Elapsed, sleep, timeout, Instant};
+use tokio::time::{Instant, error::Elapsed, sleep, timeout};
 use tracing::warn;
 
 const REQUEST_TIMEOUT_MS: u64 = 30_000;
 
 pub struct JsonRpcClient {
     child: Option<Child>,
-    stream: BufReader<LocalSocketStream>,
+    stream: LocalSocketStream,
     next_id: u64,
 }
 
@@ -44,7 +47,7 @@ impl JsonRpcClient {
 
         Ok(Self {
             child,
-            stream: BufReader::new(stream),
+            stream,
             next_id: 1,
         })
     }
@@ -61,62 +64,52 @@ impl JsonRpcClient {
     pub async fn request_value(&mut self, method: &str, params: Value) -> Result<Value, DbError> {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-        let request = JsonRpcRequest::new(id, method, params);
-        let mut line = serde_json::to_string(&request).map_err(|error| {
-            DbError::query_with_source("failed to encode JSON-RPC request", error)
-        })?;
-        line.push('\n');
+        let request = IpcRequest::new(id, method, params);
 
-        self.write_line(&line).await?;
+        send_msg_async(&mut self.stream, &request).await.map_err(|error| {
+            DbError::query_with_source("failed to write IPC request", error)
+        })?;
+
         timeout(
             Duration::from_millis(REQUEST_TIMEOUT_MS),
-            self.read_response(id),
+            recv_msg_async::<_, IpcResponse>(&mut self.stream),
         )
         .await
         .map_err(request_timeout_error)?
+        .map_err(|error| DbError::query_with_source("failed to read IPC response", error))
+        .and_then(|response| validate_response(response, id))
     }
 
     pub async fn shutdown(&mut self) {
         shutdown_child(&mut self.child).await;
     }
+}
 
-    async fn write_line(&mut self, line: &str) -> Result<(), DbError> {
-        self.stream
-            .get_mut()
-            .write_all(line.as_bytes())
-            .await
-            .map_err(|error| {
-                DbError::query_with_source("failed to write JSON-RPC request", error)
-            })?;
-        self.stream
-            .get_mut()
-            .flush()
-            .await
-            .map_err(|error| DbError::query_with_source("failed to flush JSON-RPC request", error))
+fn validate_response(response: IpcResponse, expected_id: u64) -> Result<Value, DbError> {
+    let version = response.protocol_version;
+    if !ipc::IPC_VERSION.is_compatible_with(version) {
+        return Err(DbError::connection(format!(
+            "IPC protocol version mismatch: local {:?}, remote {:?}",
+            ipc::IPC_VERSION,
+            version
+        )));
     }
-
-    async fn read_response(&mut self, expected_id: u64) -> Result<Value, DbError> {
-        let mut line = String::new();
-        let bytes = self.stream.read_line(&mut line).await.map_err(|error| {
-            DbError::query_with_source("failed to read JSON-RPC response", error)
-        })?;
-        if bytes == 0 {
-            return Err(DbError::connection("external driver closed IPC stream"));
-        }
-
-        let response: JsonRpcResponse = serde_json::from_str(line.trim_end())
-            .map_err(|error| DbError::query_with_source("invalid JSON-RPC response", error))?;
-        validate_response_header(&response, expected_id)?;
-        if let Some(error) = response.error {
-            return Err(DbError::query(format!(
-                "external driver error {}: {}",
-                error.code, error.message
-            )));
-        }
-        response
-            .result
-            .ok_or_else(|| DbError::query("JSON-RPC response missing result"))
+    if response.request_id != expected_id {
+        return Err(DbError::query(format!(
+            "IPC response id mismatch: expected {}, got {}",
+            expected_id,
+            response.request_id
+        )));
     }
+    if let Some(error) = response.error {
+        return Err(DbError::query(format!(
+            "external driver error {:?}: {}",
+            error.code, error.message
+        )));
+    }
+    response
+        .result
+        .ok_or_else(|| DbError::query("IPC response missing result"))
 }
 
 async fn shutdown_child(child: &mut Option<Child>) {
@@ -127,7 +120,7 @@ async fn shutdown_child(child: &mut Option<Child>) {
 }
 
 fn request_timeout_error(error: Elapsed) -> DbError {
-    DbError::query_with_source("timed out waiting for JSON-RPC response", error)
+    DbError::query_with_source("timed out waiting for IPC response", error)
 }
 
 async fn spawn_driver_process(driver: &IpcDriverManifest) -> Result<Child, DbError> {
@@ -191,19 +184,6 @@ async fn connect_local_socket(name: &str, timeout_ms: u64) -> Result<LocalSocket
     }
 }
 
-fn validate_response_header(response: &JsonRpcResponse, expected_id: u64) -> Result<(), DbError> {
-    if response.jsonrpc != "2.0" {
-        return Err(DbError::query("invalid JSON-RPC version"));
-    }
-    if response.id != expected_id {
-        return Err(DbError::query(format!(
-            "JSON-RPC response id mismatch: expected {}, got {}",
-            expected_id, response.id
-        )));
-    }
-    Ok(())
-}
-
 fn spawn_stderr_logger(driver_id: String, stderr: tokio::process::ChildStderr) {
     tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
@@ -216,29 +196,36 @@ fn spawn_stderr_logger(driver_id: String, stderr: tokio::process::ChildStderr) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn response(json: &str) -> JsonRpcResponse {
-        serde_json::from_str(json).unwrap()
-    }
+    use ipc::{IpcErrorCode, ProtocolVersion};
 
     #[test]
-    fn accepts_matching_response_header() {
-        let parsed = response(r#"{"jsonrpc":"2.0","id":7,"result":{}}"#);
-
-        assert!(validate_response_header(&parsed, 7).is_ok());
+    fn accepts_matching_response() {
+        let response = IpcResponse::result(7, Value::String("ok".into()));
+        assert!(validate_response(response, 7).is_ok());
     }
 
     #[test]
     fn rejects_mismatched_response_id() {
-        let parsed = response(r#"{"jsonrpc":"2.0","id":8,"result":{}}"#);
-
-        assert!(validate_response_header(&parsed, 7).is_err());
+        let response = IpcResponse::result(8, Value::String("ok".into()));
+        assert!(validate_response(response, 7).is_err());
     }
 
     #[test]
-    fn rejects_invalid_json_rpc_version() {
-        let parsed = response(r#"{"jsonrpc":"1.0","id":7,"result":{}}"#);
+    fn rejects_incompatible_protocol_version() {
+        let response = IpcResponse {
+            protocol_version: ProtocolVersion::new(99, 0),
+            request_id: 7,
+            result: Some(Value::String("ok".into())),
+            error: None,
+        };
+        assert!(validate_response(response, 7).is_err());
+    }
 
-        assert!(validate_response_header(&parsed, 7).is_err());
+    #[test]
+    fn propagates_ipc_error() {
+        let response = IpcResponse::error(7, IpcErrorCode::Internal, "boom");
+        let result = validate_response(response, 7);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("boom"));
     }
 }

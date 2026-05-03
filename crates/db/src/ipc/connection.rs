@@ -5,10 +5,11 @@ use crate::ipc::protocol::{
     connection_config_params, database_params, empty_params, schema_params, sql_params,
 };
 use crate::ipc::registry::IpcDriverManifest;
-use crate::DatabasePlugin;
+use crate::{truncate_str, DatabasePlugin, SqlErrorInfo};
 use async_trait::async_trait;
 use one_core::storage::DbConnectionConfig;
 use tokio::sync::{mpsc, Mutex};
+use tracing::{debug, error};
 
 pub struct ExternalDbConnection {
     config: DbConnectionConfig,
@@ -141,30 +142,129 @@ impl DbConnection for ExternalDbConnection {
         options: ExecOptions,
         sender: mpsc::Sender<StreamingProgress>,
     ) -> Result<(), DbError> {
-        let script = match source {
-            SqlSource::Script(script) => script,
-            SqlSource::File(path) => {
-                tokio::fs::read_to_string(&path).await.map_err(|error| {
-                    DbError::query_with_source(
-                        format!("failed to read sql file: {}", path.display()),
-                        error,
-                    )
-                })?
+        debug!(
+            "[MySQL] execute_streaming() called, transactional={}, streaming={}",
+            options.transactional, options.streaming
+        );
+
+        let total_size = source.file_size().unwrap_or(0);
+        let is_file_source = source.is_file();
+
+        let mut parser = plugin
+            .create_parser(source)
+            .map_err(|e| DbError::query(format!("Failed to create parser: {}", e)))?;
+
+        if options.streaming || is_file_source {
+            let mut current = 0usize;
+
+            while let Some(stmt_result) = parser.next() {
+                let bytes_read = parser.bytes_read();
+                let sql = match stmt_result {
+                    Ok(s) if !s.trim().is_empty() => s,
+                    Ok(_) => continue,
+                    Err(e) => {
+                        let progress = StreamingProgress::with_file_progress(
+                            current,
+                            SqlResult::Error(SqlErrorInfo {
+                                sql: String::new(),
+                                message: format!("Parse error: {}", e),
+                            }),
+                            bytes_read,
+                            total_size,
+                        );
+                        let _ = sender.send(progress).await;
+                        if options.stop_on_error {
+                            break;
+                        }
+                        continue;
+                    }
+                };
+
+                current += 1;
+                debug!("[MySQL] Streaming statement {}", current);
+
+                let result = match self.query(&sql).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let sql_preview = if sql.len() > 200 {
+                            format!("{}...", truncate_str(&sql, 200))
+                        } else {
+                            sql.clone()
+                        };
+                        error!(
+                            "[MySQL] Streaming statement {} failed: {}, SQL: {}",
+                            current, e, sql_preview
+                        );
+                        SqlResult::Error(SqlErrorInfo {
+                            sql: sql.clone(),
+                            message: e.to_string(),
+                        })
+                    }
+                };
+
+                let is_error = result.is_error();
+                let progress = StreamingProgress::with_file_progress(
+                    current, result, bytes_read, total_size,
+                );
+                if sender.send(progress).await.is_err() {
+                    break;
+                }
+
+                if is_error && options.stop_on_error {
+                    break;
+                }
             }
-        };
-        let statements = plugin.split_sql_statements(&script);
-        let total = statements.len();
-        for (idx, statement) in statements.into_iter().enumerate() {
-            let result = self.query(&statement).await?;
-            let should_stop = options.stop_on_error && result.is_error();
-            let progress = StreamingProgress::new(idx + 1, total, result);
-            if sender.send(progress).await.is_err() {
-                break;
+
+        } else {
+            let statements: Vec<String> = parser
+                .filter_map(|r| r.ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let total = statements.len();
+            debug!("[MySQL] Streaming {} statement(s)", total);
+
+            if total == 0 {
+                debug!("[MySQL] No statements to execute");
+                return Ok(());
             }
-            if should_stop {
-                break;
+
+            for (index, sql) in statements.into_iter().enumerate() {
+                let current = index + 1;
+                debug!("[MySQL] Streaming statement {}/{}", current, total);
+
+                let result = match self.query(&sql).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let sql_preview = if sql.len() > 200 {
+                            format!("{}...", truncate_str(&sql, 200))
+                        } else {
+                            sql.clone()
+                        };
+                        error!(
+                                "[MySQL] Streaming statement {}/{} failed: {}, SQL: {}",
+                                current, total, e, sql_preview
+                            );
+                        SqlResult::Error(SqlErrorInfo {
+                            sql: sql.clone(),
+                            message: e.to_string(),
+                        })
+                    }
+                };
+
+                let is_error = result.is_error();
+                let progress = StreamingProgress::new(current, total, result);
+                if sender.send(progress).await.is_err() {
+                    break;
+                }
+
+                if is_error && options.stop_on_error {
+                    break;
+                }
             }
         }
+
+        debug!("[MySQL] execute_streaming() completed");
         Ok(())
     }
 }

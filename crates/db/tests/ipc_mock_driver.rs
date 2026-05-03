@@ -8,12 +8,13 @@ use interprocess::local_socket::{
     tokio::{prelude::*, Stream},
     GenericNamespaced, ListenerOptions,
 };
-use one_core::storage::{DatabaseType, DbConnectionConfig};
-use serde_json::{json, Value};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    sync::oneshot,
+use ipc::{
+    IpcRequest, IpcResponse,
+    framing::{recv_msg_async, send_msg_async},
 };
+use one_core::storage::{DatabaseType, DbConnectionConfig};
+use serde_json::json;
+use tokio::sync::oneshot;
 
 #[tokio::test]
 async fn external_connection_uses_mock_local_socket_driver() {
@@ -90,25 +91,22 @@ async fn run_mock_driver(socket_name: &str, ready_tx: oneshot::Sender<()>) -> st
     handle_conn(conn).await
 }
 
-async fn handle_conn(conn: Stream) -> std::io::Result<()> {
-    let mut reader = BufReader::new(&conn);
-    let mut writer = &conn;
-
+async fn handle_conn(mut conn: Stream) -> std::io::Result<()> {
     loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).await? == 0 {
-            break;
-        }
+        let request: IpcRequest = match recv_msg_async(&mut conn).await {
+            Ok(req) => req,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e),
+        };
 
-        let request: Value = serde_json::from_str(line.trim_end())?;
-        let id = request["id"].as_u64().unwrap();
-        let method = request["method"].as_str().unwrap();
+        let id = request.request_id;
+        let method = request.method.as_str();
         let result = match method {
             "initialize" | "connect" | "ping" | "disconnect" => json!({}),
             "current_database" => json!("mockdb"),
             "query" => json!({
                 "type": "Query",
-                "sql": request["params"]["sql"].as_str().unwrap(),
+                "sql": request.params["sql"].as_str().unwrap(),
                 "columns": ["value"],
                 "column_meta": [{
                     "name": "value",
@@ -122,15 +120,11 @@ async fn handle_conn(conn: Stream) -> std::io::Result<()> {
             "metadata.list_databases" => json!(["mockdb"]),
             other => json!({"unknown_method": other}),
         };
-        let response = json!({"jsonrpc":"2.0","id":id,"result":result});
-        writer.write_all(response.to_string().as_bytes()).await?;
-        writer.write_all(b"\n").await?;
-        writer.flush().await?;
+        send_msg_async(&mut conn, &IpcResponse::result(id, result)).await?;
 
         if method == "disconnect" {
             break;
         }
     }
-
     Ok(())
 }

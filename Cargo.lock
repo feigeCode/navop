@@ -5188,8 +5188,10 @@ dependencies = [
 name = "ipc"
 version = "0.1.0"
 dependencies = [
+ "interprocess",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
