@@ -136,13 +136,35 @@ impl DbConnection for ExternalDbConnection {
 
     async fn execute_streaming(
         &self,
-        _plugin: &dyn DatabasePlugin,
-        _source: SqlSource,
-        _options: ExecOptions,
-        _sender: mpsc::Sender<StreamingProgress>,
+        plugin: &dyn DatabasePlugin,
+        source: SqlSource,
+        options: ExecOptions,
+        sender: mpsc::Sender<StreamingProgress>,
     ) -> Result<(), DbError> {
-        Err(DbError::NotSupported(
-            "external database streaming execution".to_string(),
-        ))
+        let script = match source {
+            SqlSource::Script(script) => script,
+            SqlSource::File(path) => {
+                tokio::fs::read_to_string(&path).await.map_err(|error| {
+                    DbError::query_with_source(
+                        format!("failed to read sql file: {}", path.display()),
+                        error,
+                    )
+                })?
+            }
+        };
+        let statements = plugin.split_sql_statements(&script);
+        let total = statements.len();
+        for (idx, statement) in statements.into_iter().enumerate() {
+            let result = self.query(&statement).await?;
+            let should_stop = options.stop_on_error && result.is_error();
+            let progress = StreamingProgress::new(idx + 1, total, result);
+            if sender.send(progress).await.is_err() {
+                break;
+            }
+            if should_stop {
+                break;
+            }
+        }
+        Ok(())
     }
 }

@@ -37,6 +37,7 @@ moka.workspace = true
 smol.workspace = true
 regex.workspace = true
 thiserror.workspace = true
+ipc.workspace = true
 rust-i18n.workspace = true
 [dev-dependencies]
 proptest = { workspace = true }

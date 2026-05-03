@@ -1,41 +1,7 @@
 use one_core::storage::DbConnectionConfig;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-#[derive(Debug, Serialize)]
-pub struct JsonRpcRequest {
-    pub jsonrpc: &'static str,
-    pub id: u64,
-    pub method: String,
-    pub params: Value,
-}
-
-impl JsonRpcRequest {
-    pub fn new(id: u64, method: impl Into<String>, params: Value) -> Self {
-        Self {
-            jsonrpc: "2.0",
-            id,
-            method: method.into(),
-            params,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct JsonRpcResponse {
-    pub jsonrpc: String,
-    pub id: u64,
-    pub result: Option<Value>,
-    pub error: Option<JsonRpcError>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct JsonRpcError {
-    pub code: i64,
-    pub message: String,
-    #[serde(default)]
-    pub data: Option<Value>,
-}
+pub use ipc::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 
 pub fn connection_config_params(config: &DbConnectionConfig) -> Value {
     json!({

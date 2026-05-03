@@ -2427,6 +2427,7 @@ dependencies = [
  "gpui-component",
  "hex",
  "interprocess",
+ "ipc",
  "moka",
  "mysql_async",
  "one-core",
@@ -2844,6 +2845,7 @@ dependencies = [
  "duckdb",
  "hex",
  "interprocess",
+ "ipc",
  "serde",
  "serde_json",
  "tempfile",
@@ -5180,6 +5182,14 @@ dependencies = [
  "bitflags 2.10.0",
  "cfg-if",
  "libc",
+]
+
+[[package]]
+name = "ipc"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
