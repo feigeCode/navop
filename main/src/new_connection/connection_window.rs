@@ -1,21 +1,31 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyView, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    actions, div, px, AnyView, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable,
+    FontWeight, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable, Size, TitleBar,
     button::{Button, ButtonVariants as _},
     h_flex,
     scroll::ScrollableElement,
-    v_flex,
+    v_flex, ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable, Size, TitleBar,
 };
 use rust_i18n::t;
 
 use crate::home_tab::HomePage;
 use crate::new_connection::connection_kind::{NewConnectionCategory, NewConnectionKind};
 use crate::new_connection::form_page::{NewConnectionFormPage, NewConnectionFormResult};
+
+const KEY_CONTEXT: &str = "NewConnectionWindow";
+
+actions!(
+    new_connection_window,
+    [
+        SelectPreviousConnectionKind,
+        SelectNextConnectionKind,
+        OpenConnectionKind
+    ]
+);
 
 pub(crate) struct NewConnectionWindow {
     parent: Entity<HomePage>,
@@ -30,17 +40,34 @@ impl NewConnectionWindow {
     pub(crate) fn new(
         parent: Entity<HomePage>,
         parent_window: AnyWindowHandle,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.bind_keys([
+            KeyBinding::new("up", SelectPreviousConnectionKind, Some(KEY_CONTEXT)),
+            KeyBinding::new("left", SelectPreviousConnectionKind, Some(KEY_CONTEXT)),
+            KeyBinding::new("down", SelectNextConnectionKind, Some(KEY_CONTEXT)),
+            KeyBinding::new("right", SelectNextConnectionKind, Some(KEY_CONTEXT)),
+            KeyBinding::new("enter", OpenConnectionKind, Some(KEY_CONTEXT)),
+        ]);
+
+        let focus_handle = cx.focus_handle();
+        focus_handle.focus(window, cx);
+
         Self {
             parent,
             parent_window,
-            focus_handle: cx.focus_handle(),
+            focus_handle,
             selected_category: NewConnectionCategory::All,
-            selected_kind: None,
+            selected_kind: Self::first_visible_item(NewConnectionCategory::All),
             form: None,
         }
+    }
+
+    fn first_visible_item(category: NewConnectionCategory) -> Option<NewConnectionKind> {
+        NewConnectionKind::all()
+            .into_iter()
+            .find(|kind| category == NewConnectionCategory::All || kind.category() == category)
     }
 
     fn visible_items(&self) -> Vec<NewConnectionKind> {
@@ -51,6 +78,26 @@ impl NewConnectionWindow {
                     || kind.category() == self.selected_category
             })
             .collect()
+    }
+
+    fn select_visible_item(&mut self, offset: isize, cx: &mut Context<Self>) {
+        let items = self.visible_items();
+        if items.is_empty() {
+            return;
+        }
+
+        let current_index = self
+            .selected_kind
+            .as_ref()
+            .and_then(|selected| items.iter().position(|kind| kind == selected));
+        let next_index = match current_index {
+            Some(index) => (index as isize + offset).rem_euclid(items.len() as isize) as usize,
+            None if offset < 0 => items.len() - 1,
+            None => 0,
+        };
+
+        self.selected_kind = Some(items[next_index].clone());
+        cx.notify();
     }
 
     fn open_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -75,6 +122,33 @@ impl NewConnectionWindow {
     fn go_back_to_selection(&mut self, cx: &mut Context<Self>) {
         self.form = None;
         cx.notify();
+    }
+
+    fn on_action_select_previous(
+        &mut self,
+        _: &SelectPreviousConnectionKind,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_visible_item(-1, cx);
+    }
+
+    fn on_action_select_next(
+        &mut self,
+        _: &SelectNextConnectionKind,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_visible_item(1, cx);
+    }
+
+    fn on_action_open_selected(
+        &mut self,
+        _: &OpenConnectionKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_selected(window, cx);
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -127,7 +201,7 @@ impl NewConnectionWindow {
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected_category = category;
-                        this.selected_kind = None;
+                        this.selected_kind = Self::first_visible_item(category);
                         cx.notify();
                     }))
                     .child(Icon::new(category.icon()).color().with_size(Size::Medium))
@@ -321,8 +395,12 @@ impl Render for NewConnectionWindow {
         }
 
         v_flex()
+            .key_context(KEY_CONTEXT)
             .size_full()
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_action_select_previous))
+            .on_action(cx.listener(Self::on_action_select_next))
+            .on_action(cx.listener(Self::on_action_open_selected))
             .bg(cx.theme().background)
             .child(self.render_header(cx))
             .child(
