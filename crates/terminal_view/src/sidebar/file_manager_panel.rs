@@ -655,11 +655,7 @@ impl FileManagerPanel {
         self.apply_retry_reset_plan(plan);
     }
 
-    fn repair_history_after_navigation_failure(
-        &mut self,
-        failed_path: &str,
-        fallback_path: &str,
-    ) {
+    fn repair_history_after_navigation_failure(&mut self, failed_path: &str, fallback_path: &str) {
         if self.history_index < self.history.len() {
             self.history.truncate(self.history_index + 1);
         }

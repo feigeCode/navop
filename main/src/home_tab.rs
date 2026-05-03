@@ -10,7 +10,6 @@ use gpui::{
     div, px,
 };
 use gpui_component::button::{ButtonCustomVariant, ButtonVariant};
-use gpui_component::menu::DropdownMenu;
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _},
@@ -18,7 +17,6 @@ use gpui_component::{
     h_flex,
     input::{Input, InputEvent, InputState},
     list::{List, ListState},
-    menu::PopupMenuItem,
     popover::Popover,
     tooltip::Tooltip,
     v_flex,
@@ -46,11 +44,11 @@ use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
 use crate::auth::{AuthService, show_auth_dialog};
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
-use crate::home::home_new_connection::NewConnectionDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
-use crate::home::home_workspace_filter::WorkspaceFilterDelegate;
+use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_new_workspace_dialog};
 use crate::home::workspace_form_window::{WorkspaceFormWindow, WorkspaceFormWindowConfig};
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
+use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
 use crate::user_avatar::render_user_avatar;
 
@@ -846,7 +844,7 @@ impl HomePage {
                     .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
 
                 // 获取现有连接名称列表，用于生成唯一名称
-                let existing_names: std::collections::HashSet<String> = repo
+                let existing_names: HashSet<String> = repo
                     .list()
                     .unwrap_or_default()
                     .iter()
@@ -1086,41 +1084,19 @@ impl HomePage {
 
     pub(crate) fn show_new_connection_dialog(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.editing_connection_id = None;
         let parent = cx.entity();
-        let list = cx.new(|cx| {
-            let delegate = NewConnectionDelegate::new(parent);
-            ListState::new(delegate, window, cx).searchable(true)
-        });
-
-        let list_for_focus = list.clone();
-        window.open_dialog(cx, move |dialog, _window, cx| {
-            dialog
-                .title(t!("Home.new_connection").to_string())
-                .w(px(360.0))
-                .child(
-                    v_flex().gap_2().child(
-                        List::new(&list)
-                            .w_full()
-                            .max_h(px(360.0))
-                            .p(px(8.0))
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .rounded(cx.theme().radius),
-                    ),
-                )
-                .alert()
-                .button_props(
-                    gpui_component::dialog::DialogButtonProps::default()
-                        .ok_text(t!("Common.close")),
-                )
-        });
-        // 将焦点设置到 List 搜索框，使上下键和 Enter 键可用
-        list_for_focus.update(cx, |state, cx| {
-            state.focus(window, cx);
-        });
+        open_popup_window(
+            PopupWindowOptions::new(t!("Home.new_connection").to_string())
+                .size(1100.0, 680.0)
+                .min_width(1040.0)
+                .min_height(560.0),
+            move |window, cx| cx.new(|cx| NewConnectionWindow::new(parent, window, cx)),
+            cx,
+        );
     }
 
     pub(crate) fn open_connection_from_quick(
@@ -1501,7 +1477,7 @@ impl HomePage {
         );
     }
 
-    fn ensure_master_key_ready_for_new_connection(
+    pub(crate) fn ensure_master_key_ready_for_new_connection(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1726,108 +1702,9 @@ impl HomePage {
                                 ButtonCustomVariant::new(cx).hover(cx.theme().primary),
                             ))
                             .tooltip(t!("Home.new_connection"))
-                            .dropdown_menu(move |menu, window, _cx| {
-                                let mut menu = menu
-                                    .item(
-                                        PopupMenuItem::new(t!("Workspace.label"))
-                                            .icon(
-                                                IconName::AppsColor.color().with_size(Size::Medium),
-                                            )
-                                            .on_click(window.listener_for(
-                                                &view,
-                                                move |this, _, window, cx| {
-                                                    this.show_workspace_form(None, window, cx);
-                                                },
-                                            )),
-                                    )
-                                    .separator()
-                                    .item(
-                                        PopupMenuItem::new("SSH")
-                                            .icon(
-                                                IconName::TerminalColor
-                                                    .color()
-                                                    .with_size(Size::Medium),
-                                            )
-                                            .on_click(window.listener_for(
-                                                &view,
-                                                move |this, _, window, cx| {
-                                                    this.editing_connection_id = None;
-                                                    this.show_ssh_form(window, cx);
-                                                },
-                                            )),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new("Terminal")
-                                            .icon(
-                                                IconName::Terminal
-                                                    .mono()
-                                                    .text_color(gpui::rgb(0x8b5cf6))
-                                                    .with_size(Size::Medium),
-                                            )
-                                            .on_click(window.listener_for(
-                                                &view,
-                                                move |this, _, window, cx| {
-                                                    this.add_terminal_tab(window, cx);
-                                                },
-                                            )),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new("Redis")
-                                            .icon(IconName::Redis.color().with_size(Size::Medium))
-                                            .on_click(window.listener_for(
-                                                &view,
-                                                move |this, _, window, cx| {
-                                                    this.editing_connection_id = None;
-                                                    this.show_redis_form(window, cx);
-                                                },
-                                            )),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new("MongoDB")
-                                            .icon(IconName::MongoDB.color().with_size(Size::Medium))
-                                            .on_click(window.listener_for(
-                                                &view,
-                                                move |this, _, window, cx| {
-                                                    this.editing_connection_id = None;
-                                                    this.show_mongodb_form(window, cx);
-                                                },
-                                            )),
-                                    )
-                                    .item(
-                                        PopupMenuItem::new(t!("Serial.new"))
-                                            .icon(
-                                                IconName::SerialPort
-                                                    .color()
-                                                    .with_size(Size::Medium),
-                                            )
-                                            .on_click(window.listener_for(
-                                                &view,
-                                                move |this, _, window, cx| {
-                                                    this.editing_connection_id = None;
-                                                    this.show_serial_form(window, cx);
-                                                },
-                                            )),
-                                    )
-                                    .separator();
-
-                                for db_type in DatabaseType::all() {
-                                    let db_type = *db_type;
-                                    let label: SharedString = db_type.as_str().to_string().into();
-                                    menu = menu.item(
-                                        PopupMenuItem::new(label)
-                                            .icon(db_type.as_node_icon().with_size(Size::Medium))
-                                            .on_click(window.listener_for(
-                                                &view,
-                                                move |this, _, window, cx| {
-                                                    this.editing_connection_id = None;
-                                                    this.show_connection_form(db_type, window, cx);
-                                                },
-                                            )),
-                                    );
-                                }
-
-                                menu
-                            }),
+                            .on_click(window.listener_for(&view, move |this, _, window, cx| {
+                                this.show_new_connection_dialog(window, cx);
+                            })),
                     )
                     // 分隔线
                     .child(div().h(px(20.0)).w(px(1.0)).bg(cx.theme().border).mx_1())
@@ -1939,6 +1816,7 @@ impl HomePage {
         let view = cx.entity();
         let view_for_select = view.clone();
         let view_for_clear = view.clone();
+        let view_for_new = view.clone();
 
         let list = self.ensure_workspace_filter_list(window, cx);
 
@@ -2007,18 +1885,36 @@ impl HomePage {
                                         t!("Workspace.select_all").to_string().into_any_element(),
                                     )),
                             )
-                            .child({
-                                let view_clear = view_for_clear.clone();
-                                Button::new("clear-ws-filter")
-                                    .ghost()
-                                    .small()
-                                    .label(t!("Workspace.clear_filter"))
-                                    .on_click(move |_, _, cx| {
-                                        view_clear.update(cx, |this, cx| {
-                                            this.clear_workspace_filter(cx);
-                                        });
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .child({
+                                        let view_new = view_for_new.clone();
+                                        Button::new("new-workspace-from-filter")
+                                            .ghost()
+                                            .small()
+                                            .label(t!("Workspace.new"))
+                                            .on_click(move |_, window, cx| {
+                                                show_new_workspace_dialog(
+                                                    view_new.clone(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            })
                                     })
-                            }),
+                                    .child({
+                                        let view_clear = view_for_clear.clone();
+                                        Button::new("clear-ws-filter")
+                                            .ghost()
+                                            .small()
+                                            .label(t!("Workspace.clear_filter"))
+                                            .on_click(move |_, _, cx| {
+                                                view_clear.update(cx, |this, cx| {
+                                                    this.clear_workspace_filter(cx);
+                                                });
+                                            })
+                                    }),
+                            ),
                     )
                     .child(div().border_t_1().border_color(cx.theme().border))
                     .child(

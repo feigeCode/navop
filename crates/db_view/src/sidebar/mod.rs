@@ -9,13 +9,13 @@ use crate::chatdb::chat_panel::{ChatPanel, ChatPanelEvent};
 use crate::chatdb::db_connection_selector::DbSelectorContext;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
-use gpui_component::{v_flex, ActiveTheme, Icon, IconName, Sizable, Size};
-use one_core::ai_chat::ask_ai::{get_ask_ai_notifier, AskAiEvent};
+use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
 use one_core::ai_chat::CodeBlockAction;
+use one_core::ai_chat::ask_ai::{AskAiEvent, get_ask_ai_notifier};
 use one_core::layout::TOOLBAR_WIDTH;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

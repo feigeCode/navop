@@ -319,7 +319,10 @@ fn should_apply_remote_listing(current_path: &str, listed_path: &str) -> bool {
     current_path == listed_path
 }
 
-fn should_apply_local_listing(current_path: &std::path::Path, listed_path: &std::path::Path) -> bool {
+fn should_apply_local_listing(
+    current_path: &std::path::Path,
+    listed_path: &std::path::Path,
+) -> bool {
     current_path == listed_path
 }
 
@@ -1839,7 +1842,8 @@ impl SftpView {
                     .collect();
                 let local_dir_for_result = local_dir.clone();
                 let _ = this.update(cx, |this, cx| {
-                    if !should_apply_local_listing(&this.local_current_path, &local_dir_for_result) {
+                    if !should_apply_local_listing(&this.local_current_path, &local_dir_for_result)
+                    {
                         return;
                     }
 
@@ -4059,7 +4063,13 @@ mod tests {
 
     #[test]
     fn only_apply_local_listing_for_active_path() {
-        assert!(should_apply_local_listing(Path::new("/tmp/a"), Path::new("/tmp/a")));
-        assert!(!should_apply_local_listing(Path::new("/tmp/b"), Path::new("/tmp/a")));
+        assert!(should_apply_local_listing(
+            Path::new("/tmp/a"),
+            Path::new("/tmp/a")
+        ));
+        assert!(!should_apply_local_listing(
+            Path::new("/tmp/b"),
+            Path::new("/tmp/a")
+        ));
     }
 }

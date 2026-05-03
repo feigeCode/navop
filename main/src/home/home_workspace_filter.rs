@@ -2,18 +2,64 @@ use std::collections::HashSet;
 
 use crate::home_tab::HomePage;
 use gpui::{
-    App, Context, Entity, InteractiveElement, ParentElement, SharedString,
+    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Task, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, IconName, IndexPath, Sizable,
+    ActiveTheme, IconName, IndexPath, Sizable, WindowExt,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
+    input::{Input, InputState},
     list::{ListDelegate, ListItem, ListState},
     tooltip::Tooltip,
+    v_flex,
 };
 use one_core::storage::{StoredConnection, Workspace};
+use rust_i18n::t;
+
+pub(crate) fn show_new_workspace_dialog(
+    parent: Entity<HomePage>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let name_input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder(t!("Workspace.name_placeholder"))
+            .clean_on_escape()
+    });
+
+    name_input.update(cx, |state, cx| {
+        state.focus(window, cx);
+    });
+
+    let input_for_render = name_input.clone();
+    let input_for_ok = name_input.clone();
+    window.open_dialog(cx, move |dialog, _window, _cx| {
+        let parent_for_ok = parent.clone();
+        let input_for_ok = input_for_ok.clone();
+        dialog
+            .title(t!("Workspace.new").to_string().into_any_element())
+            .child(
+                v_flex()
+                    .gap_3()
+                    .w(px(360.0))
+                    .child(Input::new(&input_for_render).w_full()),
+            )
+            .confirm()
+            .on_ok(move |_, _, cx| {
+                let name = input_for_ok.read(cx).text().to_string().trim().to_string();
+                if name.is_empty() {
+                    return false;
+                }
+
+                let _ = parent_for_ok.update(cx, |home, cx| {
+                    home.handle_save_workspace(None, name, cx);
+                });
+                true
+            })
+    });
+}
 
 #[derive(Clone)]
 struct WorkspaceFilterItem {

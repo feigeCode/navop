@@ -8,6 +8,7 @@ mod app_init;
 mod home;
 mod home_tab;
 mod license;
+pub mod new_connection;
 mod onetcli_app;
 mod setting_tab;
 mod settings;
