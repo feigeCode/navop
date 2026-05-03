@@ -126,10 +126,15 @@ pub enum DatabaseType {
     MSSQL,
     Oracle,
     ClickHouse,
+    External,
 }
 
 impl DatabaseType {
     pub fn all() -> &'static [DatabaseType] {
+        Self::builtin_all()
+    }
+
+    pub fn builtin_all() -> &'static [DatabaseType] {
         &[
             DatabaseType::MySQL,
             DatabaseType::PostgreSQL,
@@ -150,6 +155,7 @@ impl DatabaseType {
             DatabaseType::MSSQL => "MSSQL",
             DatabaseType::Oracle => "Oracle",
             DatabaseType::ClickHouse => "ClickHouse",
+            DatabaseType::External => "External",
         }
     }
 
@@ -162,6 +168,7 @@ impl DatabaseType {
             "MSSQL" => Some(DatabaseType::MSSQL),
             "Oracle" => Some(DatabaseType::Oracle),
             "ClickHouse" => Some(DatabaseType::ClickHouse),
+            "External" => Some(DatabaseType::External),
             _ => None,
         }
     }
@@ -175,6 +182,7 @@ impl DatabaseType {
             DatabaseType::MSSQL => IconName::MSSQLColor.color().with_size(Large),
             DatabaseType::Oracle => IconName::OracleColor.color().with_size(Large),
             DatabaseType::ClickHouse => IconName::ClickHouseColor.color().with_size(Large),
+            DatabaseType::External => IconName::Database.color().with_size(Large),
         }
     }
     pub fn as_node_icon(&self) -> Icon {
@@ -186,6 +194,7 @@ impl DatabaseType {
             DatabaseType::MSSQL => IconName::MSSQLLineColor.color().with_size(Large),
             DatabaseType::Oracle => IconName::OracleLineColor.color().with_size(Large),
             DatabaseType::ClickHouse => IconName::ClickHouseLineColor.color().with_size(Large),
+            DatabaseType::External => IconName::Database.color().with_size(Large),
         }
     }
 }

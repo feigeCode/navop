@@ -47,6 +47,7 @@ pub(crate) fn to_connection_form_config(
     DbFormConfig {
         db_type,
         title: translate_connection_form_text(&form.title_i18n_key),
+        hidden_params: HashMap::new(),
         tab_groups: form
             .tabs
             .iter()

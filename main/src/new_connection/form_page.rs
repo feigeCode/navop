@@ -1,5 +1,5 @@
 use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
-use gpui::{AnyView, AppContext, Context, Entity, Window};
+use gpui::{AnyView, AnyWindowHandle, AppContext, Context, Entity, Window};
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
 use one_core::cloud_sync::get_cached_team_options;
 use one_core::storage::{ConnectionType, DatabaseType};
@@ -20,6 +20,7 @@ pub(crate) trait NewConnectionFormPage {
     fn build_form_view(
         self,
         parent: Entity<HomePage>,
+        parent_window: AnyWindowHandle,
         window: &mut Window,
         cx: &mut Context<NewConnectionWindow>,
     ) -> NewConnectionFormResult;
@@ -29,35 +30,41 @@ impl NewConnectionFormPage for NewConnectionKind {
     fn build_form_view(
         self,
         parent: Entity<HomePage>,
+        parent_window: AnyWindowHandle,
         window: &mut Window,
         cx: &mut Context<NewConnectionWindow>,
     ) -> NewConnectionFormResult {
         match self {
-            Self::Terminal => open_terminal_tab(parent, window, cx),
+            Self::Terminal => open_terminal_tab(parent, parent_window, cx),
             Self::Ssh => build_ssh_form(parent, window, cx),
             Self::Redis => build_redis_form(parent, window, cx),
             Self::MongoDB => build_mongo_form(parent, window, cx),
             Self::Serial => build_serial_form(parent, window, cx),
-            Self::Database(db_type) => build_database_form(parent, db_type, window, cx),
+            Self::Database(db_type) => build_database_form(parent, db_type, None, window, cx),
+            Self::ExternalDatabase { driver_id, .. } => {
+                build_database_form(parent, DatabaseType::External, Some(driver_id), window, cx)
+            }
         }
     }
 }
 
 fn open_terminal_tab(
     parent: Entity<HomePage>,
-    window: &mut Window,
+    parent_window: AnyWindowHandle,
     cx: &mut Context<NewConnectionWindow>,
 ) -> NewConnectionFormResult {
-    let _ = parent.update(cx, |home, cx| {
-        home.add_terminal_tab(window, cx);
+    let _ = parent_window.update(cx, |_, window, cx| {
+        let _ = parent.update(cx, |home, cx| {
+            home.add_terminal_tab(window, cx);
+        });
     });
-    window.remove_window();
     NewConnectionFormResult::Done
 }
 
 fn build_database_form(
     parent: Entity<HomePage>,
     db_type: DatabaseType,
+    external_driver_id: Option<String>,
     window: &mut Window,
     cx: &mut Context<NewConnectionWindow>,
 ) -> NewConnectionFormResult {
@@ -72,6 +79,7 @@ fn build_database_form(
         home.editing_connection_id = None;
         Some(ConnectionFormWindowConfig {
             db_type,
+            external_driver_id: external_driver_id.clone(),
             editing_connection,
             workspaces: home.workspaces.clone(),
             teams: get_cached_team_options(cx),

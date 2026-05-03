@@ -6,6 +6,7 @@ use crate::duckdb::DuckDbPlugin;
 use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportResult,
 };
+use crate::ipc::ExternalDatabasePlugin;
 use crate::mssql::MsSqlPlugin;
 use crate::mysql::MySqlPlugin;
 use crate::oracle::OraclePlugin;
@@ -154,6 +155,7 @@ pub struct DbManager {
     clickhouse: Arc<dyn DatabasePlugin>,
     mssql: Arc<dyn DatabasePlugin>,
     oracle: Arc<dyn DatabasePlugin>,
+    external: Arc<dyn DatabasePlugin>,
 }
 
 impl DbManager {
@@ -166,6 +168,7 @@ impl DbManager {
             clickhouse: Arc::new(ClickHousePlugin::new()),
             mssql: Arc::new(MsSqlPlugin::new()),
             oracle: Arc::new(OraclePlugin::new()),
+            external: Arc::new(ExternalDatabasePlugin::new()),
         }
     }
 
@@ -178,6 +181,7 @@ impl DbManager {
             DatabaseType::ClickHouse => Ok(Arc::clone(&self.clickhouse)),
             DatabaseType::MSSQL => Ok(Arc::clone(&self.mssql)),
             DatabaseType::Oracle => Ok(Arc::clone(&self.oracle)),
+            DatabaseType::External => Ok(Arc::clone(&self.external)),
         }
     }
 }
@@ -198,6 +202,7 @@ impl Clone for DbManager {
             clickhouse: Arc::clone(&self.clickhouse),
             mssql: Arc::clone(&self.mssql),
             oracle: Arc::clone(&self.oracle),
+            external: Arc::clone(&self.external),
         }
     }
 }

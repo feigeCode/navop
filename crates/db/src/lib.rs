@@ -6,6 +6,7 @@ pub mod connection;
 pub mod ddl_invalidator;
 pub mod executor;
 pub mod import_export;
+pub mod ipc;
 pub mod manager;
 mod manifest_helpers;
 pub mod metadata_cache;

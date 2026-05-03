@@ -17,11 +17,14 @@ use rust_i18n::locale;
 use rust_i18n::t;
 
 use crate::common::db_connection_form::{DbConnectionForm, DbConnectionFormEvent};
-use crate::database_view_plugin::create_connection_form_for;
+use crate::database_view_plugin::{
+    create_connection_form_for, create_external_connection_form_for,
+};
 
 /// 连接表单窗口的配置
 pub struct ConnectionFormWindowConfig {
     pub db_type: DatabaseType,
+    pub external_driver_id: Option<String>,
     pub editing_connection: Option<StoredConnection>,
     pub workspaces: Vec<Workspace>,
     pub teams: Vec<TeamOption>,
@@ -36,6 +39,16 @@ pub struct ConnectionFormWindow {
     title: SharedString,
 }
 
+fn external_driver_id_from_connection(conn: Option<&StoredConnection>) -> Option<String> {
+    conn.and_then(|conn| conn.to_db_connection().ok())
+        .and_then(|config| {
+            config
+                .extra_params
+                .get(db::ipc::EXTERNAL_DRIVER_ID_PARAM)
+                .cloned()
+        })
+}
+
 impl ConnectionFormWindow {
     pub fn new(
         config: ConnectionFormWindowConfig,
@@ -45,6 +58,10 @@ impl ConnectionFormWindow {
         let is_editing = config.editing_connection.is_some();
         let db_type = config.db_type;
 
+        let external_driver_id = config
+            .external_driver_id
+            .clone()
+            .or_else(|| external_driver_id_from_connection(config.editing_connection.as_ref()));
         let title: SharedString = db::translate_connection_title_for_locale(
             locale().as_ref(),
             is_editing,
@@ -52,7 +69,10 @@ impl ConnectionFormWindow {
         )
         .into();
 
-        let form = create_connection_form_for(db_type, window, cx);
+        let form = external_driver_id
+            .as_deref()
+            .and_then(|driver_id| create_external_connection_form_for(driver_id, window, cx))
+            .unwrap_or_else(|| create_connection_form_for(db_type, window, cx));
 
         form.update(cx, |f, cx| {
             f.set_workspaces(config.workspaces.clone(), window, cx);

@@ -1,4 +1,5 @@
 use anyhow::Error;
+use std::collections::HashMap;
 use std::time::Instant;
 
 use db::{GlobalDbState, oracle};
@@ -229,6 +230,7 @@ pub struct DbFormConfig {
     pub db_type: DatabaseType,
     pub title: String,
     pub tab_groups: Vec<TabGroup>,
+    pub hidden_params: HashMap<String, String>,
 }
 
 impl DbFormConfig {
@@ -493,6 +495,7 @@ impl DbFormConfig {
         Self {
             db_type: DatabaseType::MySQL,
             title: format!("{} (MySQL)", t!("Common.new")),
+            hidden_params: HashMap::new(),
             tab_groups: vec![
                 TabGroup::new("general", t!("ConnectionForm.general")).fields(vec![
                     FormField::new(
@@ -579,6 +582,7 @@ impl DbFormConfig {
         Self {
             db_type: DatabaseType::PostgreSQL,
             title: format!("{} (PostgreSQL)", t!("Common.new")),
+            hidden_params: HashMap::new(),
             tab_groups: vec![
                 TabGroup::new("general", t!("ConnectionForm.general")).fields(vec![
                     FormField::new(
@@ -654,6 +658,7 @@ impl DbFormConfig {
         Self {
             db_type: DatabaseType::MSSQL,
             title: format!("{} (SQL Server)", t!("Common.new")),
+            hidden_params: HashMap::new(),
             tab_groups: vec![
                 TabGroup::new("general", t!("ConnectionForm.general")).fields(vec![
                     FormField::new(
@@ -729,6 +734,7 @@ impl DbFormConfig {
         Self {
             db_type: DatabaseType::Oracle,
             title: format!("{} (Oracle)", t!("Common.new")),
+            hidden_params: HashMap::new(),
             tab_groups: vec![
                 TabGroup::new("general", t!("ConnectionForm.general")).fields(vec![
                     FormField::new(
@@ -795,6 +801,7 @@ impl DbFormConfig {
         Self {
             db_type: DatabaseType::ClickHouse,
             title: format!("{} (ClickHouse)", t!("Common.new")),
+            hidden_params: HashMap::new(),
             tab_groups: vec![
                 TabGroup::new("general", t!("ConnectionForm.general")).fields(vec![
                     FormField::new(
@@ -878,6 +885,7 @@ impl DbFormConfig {
         Self {
             db_type: DatabaseType::SQLite,
             title: format!("{} (SQLite)", t!("Common.new")),
+            hidden_params: HashMap::new(),
             tab_groups: vec![
                 TabGroup::new("general", t!("ConnectionForm.general")).fields(vec![
                     FormField::new(
@@ -923,6 +931,7 @@ impl DbFormConfig {
         Self {
             db_type: DatabaseType::DuckDB,
             title: format!("{} (DuckDB)", t!("Common.new")),
+            hidden_params: HashMap::new(),
             tab_groups: vec![
                 TabGroup::new("general", t!("ConnectionForm.general")).fields(vec![
                     FormField::new(
@@ -1403,7 +1412,7 @@ impl DbConnectionForm {
             "service_name",
             "sid",
         ];
-        let mut extra_params = std::collections::HashMap::new();
+        let mut extra_params = self.config.hidden_params.clone();
 
         for (field_name, value_entity) in &self.field_values {
             if !basic_fields.contains(&field_name.as_str()) {

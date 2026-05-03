@@ -1,8 +1,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyView, App, Context, Entity, FocusHandle, Focusable, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, px,
+    AnyView, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, FontWeight,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable, Size, TitleBar,
@@ -19,6 +19,7 @@ use crate::new_connection::form_page::{NewConnectionFormPage, NewConnectionFormR
 
 pub(crate) struct NewConnectionWindow {
     parent: Entity<HomePage>,
+    parent_window: AnyWindowHandle,
     focus_handle: FocusHandle,
     selected_category: NewConnectionCategory,
     selected_kind: Option<NewConnectionKind>,
@@ -28,11 +29,13 @@ pub(crate) struct NewConnectionWindow {
 impl NewConnectionWindow {
     pub(crate) fn new(
         parent: Entity<HomePage>,
+        parent_window: AnyWindowHandle,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
             parent,
+            parent_window,
             focus_handle: cx.focus_handle(),
             selected_category: NewConnectionCategory::All,
             selected_kind: None,
@@ -51,16 +54,18 @@ impl NewConnectionWindow {
     }
 
     fn open_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(kind) = self.selected_kind else {
+        let Some(kind) = self.selected_kind.clone() else {
             return;
         };
 
-        match kind.build_form_view(self.parent.clone(), window, cx) {
+        match kind.build_form_view(self.parent.clone(), self.parent_window, window, cx) {
             NewConnectionFormResult::Form(form) => {
                 self.form = Some(form);
                 cx.notify();
             }
-            NewConnectionFormResult::Done => {}
+            NewConnectionFormResult::Done => {
+                window.remove_window();
+            }
             NewConnectionFormResult::Blocked => {
                 cx.notify();
             }
@@ -179,7 +184,9 @@ impl NewConnectionWindow {
         kind: NewConnectionKind,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let is_selected = self.selected_kind == Some(kind);
+        let is_selected = self.selected_kind.as_ref() == Some(&kind);
+        let click_kind = kind.clone();
+        let double_click_kind = kind.clone();
         let label = kind.label();
         let description = kind.description();
 
@@ -208,11 +215,11 @@ impl NewConnectionWindow {
                     .border_color(cx.theme().list_active_border)
             })
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.selected_kind = Some(kind);
+                this.selected_kind = Some(click_kind.clone());
                 cx.notify();
             }))
             .on_double_click(cx.listener(move |this, _, window, cx| {
-                this.selected_kind = Some(kind);
+                this.selected_kind = Some(double_click_kind.clone());
                 this.open_selected(window, cx);
             }))
             .child(

@@ -1,6 +1,8 @@
 use db::DbNodeType;
 use db::clickhouse::ClickHousePlugin;
 use db::duckdb::DuckDbPlugin;
+use db::ipc::ExternalDatabasePlugin;
+use db::ipc::{EXTERNAL_DRIVER_ID_PARAM, IpcDriverManifest, IpcDriverRegistry};
 use db::mssql::MsSqlPlugin;
 use db::mysql::MySqlPlugin;
 use db::oracle::OraclePlugin;
@@ -15,7 +17,9 @@ use gpui::{App, AppContext, Entity, Window};
 use gpui_component::IconName;
 use one_core::storage::DatabaseType;
 
-use crate::common::db_connection_form::DbConnectionForm;
+use crate::common::db_connection_form::{
+    DbConnectionForm, DbFormConfig, FormField, FormFieldType, TabGroup,
+};
 use crate::common::manifest_bridge::{
     find_form, matches_node_type, to_column_editor_capabilities, to_connection_form_config,
     to_table_designer_capabilities, translate,
@@ -23,6 +27,7 @@ use crate::common::manifest_bridge::{
 use crate::common::{DatabaseEditorView, GenericDatabaseForm, GenericSchemaForm, SchemaEditorView};
 use crate::database_objects_tab::DatabaseObjectsEvent;
 use crate::db_tree_view::{DbTreeViewEvent, SqlDumpMode};
+use std::collections::HashMap;
 
 /// 工具栏按钮类型
 #[derive(Debug, Clone)]
@@ -565,6 +570,84 @@ pub fn create_connection_form_for(
     manifest_plugin(database_type).create_connection_form(window, cx)
 }
 
+pub fn create_external_connection_form_for(
+    driver_id: &str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Entity<DbConnectionForm>> {
+    let driver = IpcDriverRegistry::load_default().find(driver_id)?;
+    let config = external_form_config(&driver, cx)?;
+    Some(cx.new(|cx| DbConnectionForm::new(config, window, cx)))
+}
+
+fn external_form_config(driver: &IpcDriverManifest, cx: &mut App) -> Option<DbFormConfig> {
+    let plugin = cx
+        .global::<db::GlobalDbState>()
+        .get_plugin(&DatabaseType::External)
+        .ok()?;
+    let mut config = if let Some(manifest) = driver.ui.form.clone() {
+        let form = find_form(&manifest, DatabaseFormKind::Connection)?;
+        to_connection_form_config(DatabaseType::External, &form, plugin.as_ref())
+    } else {
+        default_external_form_config(driver)
+    };
+    config.title = format!("{} ({})", translate("Common.new"), driver.name);
+    config.hidden_params =
+        HashMap::from([(EXTERNAL_DRIVER_ID_PARAM.to_string(), driver.id.clone())]);
+    Some(config)
+}
+
+fn default_external_form_config(driver: &IpcDriverManifest) -> DbFormConfig {
+    DbFormConfig {
+        db_type: DatabaseType::External,
+        title: format!("{} ({})", translate("Common.new"), driver.name),
+        hidden_params: HashMap::new(),
+        tab_groups: vec![
+            TabGroup::new("general", translate("ConnectionForm.general")).fields(vec![
+                FormField::new(
+                    "name",
+                    translate("ConnectionForm.connection_name"),
+                    FormFieldType::Text,
+                )
+                .placeholder(driver.name.clone())
+                .default(driver.name.clone()),
+                FormField::new(
+                    "host",
+                    translate("ConnectionForm.host"),
+                    FormFieldType::Text,
+                )
+                .placeholder("localhost")
+                .default("localhost"),
+                FormField::new(
+                    "port",
+                    translate("ConnectionForm.port"),
+                    FormFieldType::Number,
+                )
+                .placeholder("0")
+                .default(driver.ui.default_port.unwrap_or_default().to_string()),
+                FormField::new(
+                    "username",
+                    translate("ConnectionForm.username"),
+                    FormFieldType::Text,
+                )
+                .optional(),
+                FormField::new(
+                    "password",
+                    translate("ConnectionForm.password"),
+                    FormFieldType::Password,
+                )
+                .optional(),
+                FormField::new(
+                    "database",
+                    translate("ConnectionForm.database"),
+                    FormFieldType::Text,
+                )
+                .optional(),
+            ]),
+        ],
+    }
+}
+
 pub fn create_database_editor_view_for_new(
     database_type: DatabaseType,
     connection_id: String,
@@ -660,6 +743,7 @@ fn build_ui_manifest(database_type: DatabaseType) -> DatabaseUiManifest {
         DatabaseType::ClickHouse => ClickHousePlugin::new().ui_manifest(),
         DatabaseType::SQLite => SqlitePlugin::new().ui_manifest(),
         DatabaseType::DuckDB => DuckDbPlugin::new().ui_manifest(),
+        DatabaseType::External => ExternalDatabasePlugin::new().ui_manifest(),
     }
 }
 

@@ -10,7 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
 duckdb.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process", "io-util"] }
 tracing.workspace = true
 hex.workspace = true
 gpui.workspace = true

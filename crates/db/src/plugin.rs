@@ -240,6 +240,7 @@ pub trait DatabasePlugin: Send + Sync {
                     "EXPLAIN PLAN FOR {sql};\nSELECT PLAN_TABLE_OUTPUT FROM TABLE(DBMS_XPLAN.DISPLAY())"
                 )
             }
+            _ => "".to_string(),
         }
     }
 
