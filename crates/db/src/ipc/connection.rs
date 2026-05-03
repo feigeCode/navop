@@ -1,6 +1,6 @@
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{ExecOptions, QueryColumnMeta, QueryResult, SqlResult, SqlSource};
-use crate::ipc::client::JsonRpcStdioClient;
+use crate::ipc::client::JsonRpcClient;
 use crate::ipc::protocol::{
     connection_config_params, database_params, empty_params, schema_params, sql_params,
 };
@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, Mutex};
 pub struct ExternalDbConnection {
     config: DbConnectionConfig,
     driver: IpcDriverManifest,
-    client: Mutex<Option<JsonRpcStdioClient>>,
+    client: Mutex<Option<JsonRpcClient>>,
 }
 
 impl ExternalDbConnection {
@@ -56,7 +56,7 @@ impl DbConnection for ExternalDbConnection {
     }
 
     async fn connect(&mut self) -> Result<(), DbError> {
-        let mut client = JsonRpcStdioClient::start(&self.driver).await?;
+        let mut client = JsonRpcClient::start(&self.driver).await?;
         let _: serde_json::Value = client.request("initialize", empty_params()).await?;
         let _: serde_json::Value = client
             .request("connect", connection_config_params(&self.config))

@@ -143,6 +143,7 @@ parking_lot = "0.12"
 bytes = "1.5"
 mongodb = "3.5.1"
 futures-util="0.3.31"
+interprocess = { version = "2.4.0", features = ["tokio"] }
 url = "2.5.4"
 percent-encoding = "2.3.1"
 global-hotkey = "0.7.0"

@@ -110,6 +110,7 @@ pub struct QueryResult {
     /// Row data (each row is a vector of optional strings)
     pub rows: Vec<Vec<Option<String>>>,
     /// Execution time in milliseconds
+    #[serde(with = "elapsed_ms_serde")]
     pub elapsed_ms: u128,
 }
 
@@ -121,6 +122,7 @@ pub struct ExecResult {
     /// Number of rows affected
     pub rows_affected: u64,
     /// Execution time in milliseconds
+    #[serde(with = "elapsed_ms_serde")]
     pub elapsed_ms: u128,
     /// Optional message
     pub message: Option<String>,
@@ -133,6 +135,24 @@ pub struct SqlErrorInfo {
     pub sql: String,
     /// Error message
     pub message: String,
+}
+
+mod elapsed_ms_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u64((*value).try_into().unwrap_or(u64::MAX))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u128, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(u64::deserialize(deserializer)? as u128)
+    }
 }
 
 pub fn format_message(sql: &str, rows_affected: u64) -> String {

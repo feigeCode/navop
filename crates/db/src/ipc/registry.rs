@@ -16,6 +16,7 @@ pub struct IpcDriverManifest {
     #[serde(default)]
     pub version: String,
     pub entry: IpcDriverEntry,
+    pub transport: IpcDriverTransport,
     #[serde(default)]
     pub dialect: IpcDriverDialect,
     #[serde(default)]
@@ -31,6 +32,29 @@ pub struct IpcDriverEntry {
     pub args: Vec<String>,
     #[serde(default)]
     pub working_dir: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IpcDriverTransport {
+    pub name: String,
+    #[serde(default)]
+    pub connect_timeout_ms: Option<u64>,
+}
+
+impl IpcDriverTransport {
+    const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
+
+    pub fn local_socket(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            connect_timeout_ms: None,
+        }
+    }
+
+    pub fn connect_timeout_ms(&self) -> u64 {
+        self.connect_timeout_ms
+            .unwrap_or(Self::DEFAULT_CONNECT_TIMEOUT_MS)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -88,6 +112,12 @@ impl IpcDriverManifest {
         if self.entry.command.trim().is_empty() {
             return Err(DbError::connection(format!(
                 "external driver '{}' command is required",
+                self.id
+            )));
+        }
+        if self.transport.name.trim().is_empty() {
+            return Err(DbError::connection(format!(
+                "external driver '{}' local socket name is required",
                 self.id
             )));
         }
@@ -170,13 +200,43 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn parses_local_socket_transport() {
+        let manifest: IpcDriverManifest = serde_json::from_str(
+            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(manifest.transport.name, "demo.sock");
+    }
+
+    #[test]
+    fn rejects_missing_transport() {
+        let result = serde_json::from_str::<IpcDriverManifest>(
+            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"}}"#,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_local_socket_transport_without_name() {
+        let mut manifest: IpcDriverManifest = serde_json::from_str(
+            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":""}}"#,
+        )
+        .unwrap();
+        manifest.manifest_dir = PathBuf::from(".");
+
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
     fn scans_driver_manifests() {
         let temp = tempfile::tempdir().unwrap();
         let driver_dir = temp.path().join("demo");
         fs::create_dir(&driver_dir).unwrap();
         fs::write(
             driver_dir.join(DRIVER_MANIFEST_FILE),
-            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"}}"#,
+            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"}}"#,
         )
         .unwrap();
 

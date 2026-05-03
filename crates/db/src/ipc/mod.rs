@@ -7,5 +7,6 @@ pub mod registry;
 pub use connection::ExternalDbConnection;
 pub use plugin::ExternalDatabasePlugin;
 pub use registry::{
-    IpcDriverEntry, IpcDriverManifest, IpcDriverRegistry, EXTERNAL_DRIVER_ID_PARAM,
+    IpcDriverEntry, IpcDriverManifest, IpcDriverRegistry, IpcDriverTransport,
+    EXTERNAL_DRIVER_ID_PARAM,
 };

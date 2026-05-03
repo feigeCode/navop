@@ -11,6 +11,7 @@ serde_json.workspace = true
 rusqlite.workspace = true
 duckdb.workspace = true
 tokio = { workspace = true, features = ["process", "io-util"] }
+interprocess.workspace = true
 tracing.workspace = true
 hex.workspace = true
 gpui.workspace = true
