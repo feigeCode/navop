@@ -17,6 +17,7 @@ members = [
     "examples/focus_trap",
     "crates/db",
     "crates/db_view",
+    "crates/duckdb_driver",
     "crates/er_flow",
     "crates/terminal",
     "crates/terminal_view"
