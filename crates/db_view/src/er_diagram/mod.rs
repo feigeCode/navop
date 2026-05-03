@@ -1,31 +1,42 @@
 mod loader;
+mod scroll_pan_plugin;
+mod pan_mode_plugin;
 
 use db::GlobalDbState;
 use ferrum_flow::{
-    BackgroundPlugin, EdgePlugin, FitAllGraphPlugin, FlowCanvas, Graph, NodeInteractionPlugin,
-    NodePlugin, ViewportPlugin, ZoomControlsPlugin,
+    BackgroundPlugin, Command, EdgePlugin, FitAllGraphPlugin,
+    FlowCanvas, Graph, Interaction,
+    NodeInteractionPlugin, NodePlugin, Plugin,
+    ViewportPlugin, ZoomControlsPlugin,
 };
 
+use crate::er_diagram::scroll_pan_plugin::ErDiagramScrollPanPlugin;
 use er_flow::{er_flow_theme, er_node_renderers, graph_from_diagram};
 use gpui::{
-    App, AppContext as _, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
-    Task, Window, div, prelude::FluentBuilder,
+    div, prelude::FluentBuilder, App, AppContext as _, AsyncApp, Context, Entity, EventEmitter,
+    FocusHandle, Focusable, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Task, Window
+    ,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, Size, button::Button, spinner::Spinner, v_flex,
+    button::Button, spinner::Spinner, v_flex, ActiveTheme as _, Icon, IconName, Sizable as _, Size,
 };
 use loader::load_er_diagram;
 use one_core::{
-    popup_window::{PopupWindowOptions, open_popup_window},
+    popup_window::{open_popup_window, PopupWindowOptions},
     tab_container::{TabContent, TabContentEvent},
 };
 use rust_i18n::t;
+use crate::er_diagram::pan_mode_plugin::ErDiagramPanModePlugin;
 
 const ER_DIAGRAM_WINDOW_WIDTH: f32 = 1200.0;
 const ER_DIAGRAM_WINDOW_HEIGHT: f32 = 800.0;
 const ER_DIAGRAM_WINDOW_MIN_WIDTH: f32 = 800.0;
 const ER_DIAGRAM_WINDOW_MIN_HEIGHT: f32 = 500.0;
+const ER_DIAGRAM_TOOL_MARGIN: f32 = 16.0;
+const ER_DIAGRAM_TOOL_SIZE: f32 = 36.0;
+const ER_DIAGRAM_TOOL_GAP: f32 = 6.0;
+const ER_DIAGRAM_PAN_LABEL: &str = "✋";
 
 #[derive(Clone)]
 pub(crate) struct ErDiagramConfig {
@@ -167,6 +178,10 @@ async fn load_graph(
     graph_from_diagram(&diagram)
 }
 
+
+
+
+
 fn build_canvas(
     graph: Graph,
     window: &mut Window,
@@ -176,6 +191,8 @@ fn build_canvas(
         FlowCanvas::builder(graph, cx, window)
             .theme(er_flow_theme())
             .plugin(BackgroundPlugin::new())
+            .plugin(ErDiagramScrollPanPlugin::new())
+            .plugin(ErDiagramPanModePlugin::new())
             .plugin(ViewportPlugin::new())
             .plugin(EdgePlugin::new())
             .plugin(NodePlugin::new())
