@@ -45,7 +45,7 @@ use terminal_view::{SshFormWindow, SshFormWindowConfig};
 use crate::auth::{AuthService, show_auth_dialog};
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
-use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_new_workspace_dialog};
+use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
 use crate::home::workspace_form_window::{WorkspaceFormWindow, WorkspaceFormWindowConfig};
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
 use crate::new_connection::NewConnectionWindow;
@@ -1084,17 +1084,20 @@ impl HomePage {
 
     pub(crate) fn show_new_connection_dialog(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.editing_connection_id = None;
         let parent = cx.entity();
+        let parent_window = window.window_handle();
         open_popup_window(
             PopupWindowOptions::new(t!("Home.new_connection").to_string())
                 .size(1100.0, 680.0)
                 .min_width(1040.0)
                 .min_height(560.0),
-            move |window, cx| cx.new(|cx| NewConnectionWindow::new(parent, window, cx)),
+            move |window, cx| {
+                cx.new(|cx| NewConnectionWindow::new(parent, parent_window, window, cx))
+            },
             cx,
         );
     }
@@ -1895,8 +1898,10 @@ impl HomePage {
                                             .small()
                                             .label(t!("Workspace.new"))
                                             .on_click(move |_, window, cx| {
-                                                show_new_workspace_dialog(
+                                                show_workspace_dialog(
                                                     view_new.clone(),
+                                                    None,
+                                                    String::new(),
                                                     window,
                                                     cx,
                                                 );
