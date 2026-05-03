@@ -9,7 +9,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, actions,
     div, px,
 };
-use gpui_component::button::{ButtonCustomVariant, ButtonVariant};
+use gpui_component::button::{ButtonVariant};
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _},
@@ -46,7 +46,6 @@ use crate::auth::{AuthService, show_auth_dialog};
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
 use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
-use crate::home::workspace_form_window::{WorkspaceFormWindow, WorkspaceFormWindowConfig};
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
 use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
@@ -1011,36 +1010,6 @@ impl HomePage {
         .detach();
     }
 
-    pub(crate) fn show_workspace_form(
-        &mut self,
-        workspace_id: Option<i64>,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let workspace_data =
-            workspace_id.and_then(|id| self.workspaces.iter().find(|w| w.id == Some(id)).cloned());
-        let config = WorkspaceFormWindowConfig {
-            parent: cx.entity().clone(),
-            workspace_id,
-            initial_name: workspace_data
-                .map(|workspace| workspace.name)
-                .unwrap_or_default(),
-        };
-
-        open_popup_window(
-            PopupWindowOptions::new(if config.workspace_id.is_some() {
-                t!("Workspace.edit").to_string()
-            } else {
-                t!("Workspace.new").to_string()
-            })
-            .size(420.0, 200.0)
-            .min_width(420.0)
-            .min_height(200.0),
-            move |window, cx| cx.new(|cx| WorkspaceFormWindow::new(config, window, cx)),
-            cx,
-        );
-    }
-
     pub(crate) fn show_connection_quick_open(
         &mut self,
         window: &mut Window,
@@ -1325,6 +1294,7 @@ impl HomePage {
 
         let config = ConnectionFormWindowConfig {
             db_type,
+            external_driver_id: None,
             editing_connection: editing_conn,
             workspaces: self.workspaces.clone(),
             teams: get_cached_team_options(cx),
@@ -1698,12 +1668,8 @@ impl HomePage {
                     .child(
                         Button::new("new-connect-button")
                             .icon(IconName::Plus)
+                            .primary()
                             .label(t!("Home.new_connection"))
-                            .text_color(cx.theme().primary_foreground)
-                            .bg(cx.theme().primary)
-                            .with_variant(ButtonVariant::Custom(
-                                ButtonCustomVariant::new(cx).hover(cx.theme().primary),
-                            ))
                             .tooltip(t!("Home.new_connection"))
                             .on_click(window.listener_for(&view, move |this, _, window, cx| {
                                 this.show_new_connection_dialog(window, cx);
@@ -1894,9 +1860,9 @@ impl HomePage {
                                     .child({
                                         let view_new = view_for_new.clone();
                                         Button::new("new-workspace-from-filter")
-                                            .ghost()
+                                            .primary()
                                             .small()
-                                            .label(t!("Workspace.new"))
+                                            .label(t!("Common.new"))
                                             .on_click(move |_, window, cx| {
                                                 show_workspace_dialog(
                                                     view_new.clone(),
@@ -2912,7 +2878,7 @@ impl HomePage {
 /// 生成复制连接的唯一名称
 fn generate_duplicate_name(
     original_name: &str,
-    existing_names: &std::collections::HashSet<String>,
+    existing_names: &HashSet<String>,
 ) -> String {
     let base_name = format!("{} (副本)", original_name);
 
