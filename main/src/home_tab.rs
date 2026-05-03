@@ -1061,9 +1061,7 @@ impl HomePage {
         let parent_window = window.window_handle();
         open_popup_window(
             PopupWindowOptions::new(t!("Home.new_connection").to_string())
-                .size(1100.0, 680.0)
-                .min_width(1040.0)
-                .min_height(560.0),
+                .size(1100.0, 700.0),
             move |window, cx| {
                 cx.new(|cx| NewConnectionWindow::new(parent, parent_window, window, cx))
             },
