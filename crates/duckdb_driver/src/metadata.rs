@@ -136,7 +136,7 @@ fn list_columns(connection: &Connection, params: &Value) -> Result<Vec<ColumnInf
         Ok(ColumnInfo {
             name: row.get(0)?,
             data_type: row.get(1)?,
-            is_nullable: parse_bool(row.get::<_, String>(2)?.as_str()),
+            is_nullable: row.get(2)?,
             is_primary_key: row.get(3)?,
             default_value: row.get(4)?,
             comment: None,
@@ -247,9 +247,6 @@ fn should_filter_schema(schema: &str) -> bool {
     !schema.trim().is_empty()
 }
 
-fn parse_bool(value: &str) -> bool {
-    matches!(value.to_ascii_uppercase().as_str(), "YES" | "TRUE" | "1")
-}
 fn collect_rows<T>(rows: impl Iterator<Item = duckdb::Result<T>>) -> Result<Vec<T>> {
     rows.collect::<duckdb::Result<Vec<_>>>().map_err(Into::into)
 }
