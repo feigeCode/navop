@@ -21,7 +21,8 @@ members = [
     "crates/duckdb_driver",
     "crates/er_flow",
     "crates/terminal",
-    "crates/terminal_view"
+    "crates/terminal_view",
+    "crates/ferrum-flow"
     , "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor"]
 resolver = "2"
 
@@ -150,7 +151,7 @@ interprocess = { version = "2.4.0", features = ["tokio"] }
 url = "2.5.4"
 percent-encoding = "2.3.1"
 global-hotkey = "0.7.0"
-ferrum-flow = { git = "https://github.com/feigeCode/ferrum-flow", branch = "master" }
+ferrum-flow = { path = "crates/ferrum-flow" }
 
 [patch.crates-io]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "8b5328ca" }
