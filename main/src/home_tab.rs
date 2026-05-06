@@ -9,7 +9,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, actions,
     div, px,
 };
-use gpui_component::button::{ButtonVariant};
+use gpui_component::button::ButtonVariant;
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _},
@@ -1060,8 +1060,7 @@ impl HomePage {
         let parent = cx.entity();
         let parent_window = window.window_handle();
         open_popup_window(
-            PopupWindowOptions::new(t!("Home.new_connection").to_string())
-                .size(1100.0, 700.0),
+            PopupWindowOptions::new(t!("Home.new_connection").to_string()).size(1100.0, 700.0),
             move |window, cx| {
                 cx.new(|cx| NewConnectionWindow::new(parent, parent_window, window, cx))
             },
@@ -2874,10 +2873,7 @@ impl HomePage {
 }
 
 /// 生成复制连接的唯一名称
-fn generate_duplicate_name(
-    original_name: &str,
-    existing_names: &HashSet<String>,
-) -> String {
+fn generate_duplicate_name(original_name: &str, existing_names: &HashSet<String>) -> String {
     let base_name = format!("{} (副本)", original_name);
 
     if !existing_names.contains(&base_name) {

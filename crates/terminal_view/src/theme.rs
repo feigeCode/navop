@@ -14,7 +14,7 @@
 //! - 在 `muted` 上使用 `foreground` 或 `muted_foreground`
 //! - 在 `accent` 上使用 `accent_foreground`
 
-use gpui::{rgb, Hsla, SharedString};
+use gpui::{Hsla, SharedString, rgb};
 
 /// 最小字体大小
 pub const MIN_FONT_SIZE: f32 = 8.0;

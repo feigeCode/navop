@@ -5,8 +5,8 @@
 use crate::settings::TerminalHighlightRule;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Point as AlacPoint};
-use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::Term;
+use alacritty_terminal::term::search::RegexSearch;
 use gpui::*;
 use gpui_component::try_parse_color;
 use std::any::Any;
@@ -1222,7 +1222,7 @@ fn file_path_to_url(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_custom_highlight_rules, register_default_addons, AddonManager};
+    use super::{AddonManager, compile_custom_highlight_rules, register_default_addons};
     use crate::settings::TerminalHighlightRule;
 
     #[test]

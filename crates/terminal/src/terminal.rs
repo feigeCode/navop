@@ -13,7 +13,7 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
 use alacritty_terminal::tty::{self, Options as PtyOptions};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use futures::StreamExt;
 use gpui::*;
@@ -26,7 +26,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tokio::time::interval;
 
@@ -38,9 +38,9 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use crate::history::{
+    HistoryEntry, PERSISTED_HISTORY_LIMIT, SESSION_HISTORY_LIMIT, ShellHistoryFormat,
     collect_history_search_results, collect_history_suggestions_with_cwd, parse_shell_history,
-    push_rich_history_entry, HistoryEntry, ShellHistoryFormat, PERSISTED_HISTORY_LIMIT,
-    SESSION_HISTORY_LIMIT,
+    push_rich_history_entry,
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 #[cfg(not(target_os = "windows"))]
@@ -1778,17 +1778,17 @@ impl EventEmitter<TerminalModelEvent> for Terminal {}
 #[cfg(test)]
 mod tests {
     use super::{
-        build_cd_command, build_ssh_base_init_commands, build_ssh_init_commands,
-        compose_ssh_init_commands, format_connection_error,
+        ConnectionState, Terminal, TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest,
+        TerminalMfaResponder, build_cd_command, build_ssh_base_init_commands,
+        build_ssh_init_commands, compose_ssh_init_commands, format_connection_error,
         keyboard_interactive_answers_for_terminal, resolve_default_windows_shell_from_env,
-        shell_escape_arg, ConnectionState, Terminal, TerminalConnectionKind, TerminalMfaPrompt,
-        TerminalMfaRequest, TerminalMfaResponder,
-    };
-    use crate::history::{
-        collect_history_suggestions, normalize_history_command, parse_shell_history,
-        push_history_entry, HistoryEntry, ShellHistoryFormat,
+        shell_escape_arg,
     };
     use crate::TerminalEvent;
+    use crate::history::{
+        HistoryEntry, ShellHistoryFormat, collect_history_suggestions, normalize_history_command,
+        parse_shell_history, push_history_entry,
+    };
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line};
     use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};

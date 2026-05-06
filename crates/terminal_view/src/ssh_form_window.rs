@@ -1,10 +1,11 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, WeakEntity, Window,
+    App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    WeakEntity, Window, div, px,
 };
 use gpui_component::{
+    ActiveTheme, Disableable, Sizable, Size, TitleBar,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -12,10 +13,10 @@ use gpui_component::{
     radio::Radio,
     select::{Select, SelectItem, SelectState},
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme, Disableable, Sizable, Size, TitleBar,
+    v_flex,
 };
 use one_core::cloud_sync::{GlobalCloudUser, TeamOption};
-use one_core::connection_notifier::{get_notifier, ConnectionDataEvent};
+use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
@@ -31,8 +32,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::ssh_form_mfa::{
-    form_mfa_request_from_keyboard_interactive, is_jump_mfa_required_error, CapturedMfaRequest,
-    FormMfaPrompt, FormMfaRequest, JumpServerMfaResponder,
+    CapturedMfaRequest, FormMfaPrompt, FormMfaRequest, JumpServerMfaResponder,
+    form_mfa_request_from_keyboard_interactive, is_jump_mfa_required_error,
 };
 
 pub struct SshFormWindowConfig {
@@ -192,11 +193,7 @@ fn build_connection_test_signature(params: &SshParams) -> String {
 }
 
 fn validate_save_state(is_testing: bool) -> Result<(), &'static str> {
-    if is_testing {
-        Err("testing")
-    } else {
-        Ok(())
-    }
+    if is_testing { Err("testing") } else { Ok(()) }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -532,11 +529,7 @@ impl SshFormWindow {
                 let key_path = self.key_path_input.read(cx).text().to_string();
                 let passphrase = {
                     let p = self.passphrase_input.read(cx).text().to_string();
-                    if p.is_empty() {
-                        None
-                    } else {
-                        Some(p)
-                    }
+                    if p.is_empty() { None } else { Some(p) }
                 };
                 SshAuthMethod::PrivateKey {
                     key_path,
@@ -573,19 +566,11 @@ impl SshFormWindow {
         // 初始化设置
         let default_directory = {
             let d = self.default_directory_input.read(cx).text().to_string();
-            if d.is_empty() {
-                None
-            } else {
-                Some(d)
-            }
+            if d.is_empty() { None } else { Some(d) }
         };
         let init_script = {
             let s = self.init_script_input.read(cx).text().to_string();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
+            if s.is_empty() { None } else { Some(s) }
         };
 
         // 跳板机配置
@@ -629,19 +614,11 @@ impl SshFormWindow {
                     .unwrap_or(1080);
                 let proxy_username = {
                     let u = self.proxy_username_input.read(cx).text().to_string();
-                    if u.is_empty() {
-                        None
-                    } else {
-                        Some(u)
-                    }
+                    if u.is_empty() { None } else { Some(u) }
                 };
                 let proxy_password = {
                     let p = self.proxy_password_input.read(cx).text().to_string();
-                    if p.is_empty() {
-                        None
-                    } else {
-                        Some(p)
-                    }
+                    if p.is_empty() { None } else { Some(p) }
                 };
                 let proxy_type = match self.proxy_type {
                     ProxyTypeSelection::Socks5 => StorageProxyType::Socks5,

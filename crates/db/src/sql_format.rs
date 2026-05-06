@@ -1,4 +1,4 @@
-use sqlformat::{format, FormatOptions, QueryParams};
+use sqlformat::{FormatOptions, QueryParams, format};
 
 /// SQL 美化：将 SQL 格式化为可读性更好的多行形式
 pub fn format_sql(sql: &str) -> String {

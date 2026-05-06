@@ -1,12 +1,12 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use db::{
-    ipc::{ExternalDbConnection, IpcDriverEntry, IpcDriverManifest, IpcDriverTransport},
     DbConnection, SqlResult,
+    ipc::{ExternalDbConnection, IpcDriverEntry, IpcDriverManifest, IpcDriverTransport},
 };
 use interprocess::local_socket::{
-    tokio::{prelude::*, Stream},
     GenericNamespaced, ListenerOptions,
+    tokio::{Stream, prelude::*},
 };
 use ipc::{
     IpcRequest, IpcResponse,

@@ -154,7 +154,7 @@ fn has_unterminated_shell_quote(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_cd_completion_suggestions, parse_cd_completion_query, CdCompletionQuery};
+    use super::{CdCompletionQuery, build_cd_completion_suggestions, parse_cd_completion_query};
 
     #[test]
     fn cd_completion_parses_empty_child_directory_query_from_current_working_dir() {

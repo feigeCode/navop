@@ -1,8 +1,8 @@
 use crate::connection::DbError;
 use crate::ipc::registry::IpcDriverManifest;
 use interprocess::local_socket::{
-    tokio::{prelude::*, Stream as LocalSocketStream},
     GenericNamespaced,
+    tokio::{Stream as LocalSocketStream, prelude::*},
 };
 use ipc::{
     IpcRequest, IpcResponse,
@@ -66,9 +66,9 @@ impl JsonRpcClient {
         self.next_id = self.next_id.saturating_add(1);
         let request = IpcRequest::new(id, method, params);
 
-        send_msg_async(&mut self.stream, &request).await.map_err(|error| {
-            DbError::query_with_source("failed to write IPC request", error)
-        })?;
+        send_msg_async(&mut self.stream, &request)
+            .await
+            .map_err(|error| DbError::query_with_source("failed to write IPC request", error))?;
 
         timeout(
             Duration::from_millis(REQUEST_TIMEOUT_MS),
@@ -97,8 +97,7 @@ fn validate_response(response: IpcResponse, expected_id: u64) -> Result<Value, D
     if response.request_id != expected_id {
         return Err(DbError::query(format!(
             "IPC response id mismatch: expected {}, got {}",
-            expected_id,
-            response.request_id
+            expected_id, response.request_id
         )));
     }
     if let Some(error) = response.error {

@@ -413,14 +413,16 @@ fn mysql_connection_form() -> DatabaseFormManifest {
             tab(
                 "notes",
                 "ConnectionForm.notes",
-                vec![field(
-                    "remark",
-                    "ConnectionForm.remark",
-                    DatabaseFormFieldType::TextArea,
-                )
-                .optional()
-                .with_rows(14)
-                .with_placeholder("ConnectionForm.enter_remark")],
+                vec![
+                    field(
+                        "remark",
+                        "ConnectionForm.remark",
+                        DatabaseFormFieldType::TextArea,
+                    )
+                    .optional()
+                    .with_rows(14)
+                    .with_placeholder("ConnectionForm.enter_remark"),
+                ],
             ),
         ],
     }
@@ -3180,10 +3182,12 @@ mod tests {
         let design = TableDesign {
             database_name: "test_db".to_string(),
             table_name: "products".to_string(),
-            columns: vec![ColumnDefinition::new("id")
-                .data_type("INT")
-                .nullable(false)
-                .primary_key(true)],
+            columns: vec![
+                ColumnDefinition::new("id")
+                    .data_type("INT")
+                    .nullable(false)
+                    .primary_key(true),
+            ],
             indexes: vec![],
             foreign_keys: vec![],
             options: TableOptions {
@@ -3351,9 +3355,11 @@ mod tests {
         let original = TableDesign {
             database_name: "test_db".to_string(),
             table_name: "users".to_string(),
-            columns: vec![ColumnDefinition::new("name")
-                .data_type("VARCHAR")
-                .length(50)],
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("VARCHAR")
+                    .length(50),
+            ],
             indexes: vec![],
             foreign_keys: vec![],
             options: TableOptions::default(),
@@ -3362,9 +3368,11 @@ mod tests {
         let new = TableDesign {
             database_name: "test_db".to_string(),
             table_name: "users".to_string(),
-            columns: vec![ColumnDefinition::new("name")
-                .data_type("VARCHAR")
-                .length(100)],
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("VARCHAR")
+                    .length(100),
+            ],
             indexes: vec![],
             foreign_keys: vec![],
             options: TableOptions::default(),
@@ -3720,10 +3728,11 @@ mod tests {
         assert!(!info.snippets.is_empty());
 
         assert!(info.keywords.iter().any(|(k, _)| *k == "AUTO_INCREMENT"));
-        assert!(info
-            .functions
-            .iter()
-            .any(|(f, _)| f.starts_with("GROUP_CONCAT")));
+        assert!(
+            info.functions
+                .iter()
+                .any(|(f, _)| f.starts_with("GROUP_CONCAT"))
+        );
         assert!(info.operators.iter().any(|(o, _)| *o == "REGEXP"));
     }
 }

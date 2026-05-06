@@ -6,12 +6,13 @@
 
 use chrono::{DateTime, Local};
 use gpui::{
-    div, prelude::*, px, uniform_list, App, ClipboardItem, Context, Entity, EventEmitter,
-    ExternalPaths, FocusHandle, Focusable, IntoElement, ListSizingBehavior, MouseButton,
-    MouseDownEvent, ParentElement, PathPromptOptions, Render, SharedString, Styled,
-    UniformListScrollHandle, Window,
+    App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable,
+    IntoElement, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, PathPromptOptions,
+    Render, SharedString, Styled, UniformListScrollHandle, Window, div, prelude::*, px,
+    uniform_list,
 };
 use gpui_component::{
+    ActiveTheme, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
     dialog::DialogButtonProps,
@@ -22,7 +23,7 @@ use gpui_component::{
     progress::Progress,
     spinner::Spinner,
     tooltip::Tooltip,
-    v_flex, ActiveTheme, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
+    v_flex,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::models::StoredConnection;
@@ -33,8 +34,8 @@ use ssh::SshSessionManager;
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
 
@@ -1369,27 +1370,29 @@ impl FileManagerPanel {
             return;
         }
 
-        self.progress_refresh_task = Some(cx.spawn(async move |this, cx| loop {
-            let should_continue = this
-                .update(cx, |this, cx| {
-                    let has_active = this.transfer_queue.has_active();
-                    if has_active {
-                        cx.notify();
-                        true
-                    } else {
-                        this.progress_refresh_task = None;
-                        false
-                    }
-                })
-                .unwrap_or(false);
+        self.progress_refresh_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let should_continue = this
+                    .update(cx, |this, cx| {
+                        let has_active = this.transfer_queue.has_active();
+                        if has_active {
+                            cx.notify();
+                            true
+                        } else {
+                            this.progress_refresh_task = None;
+                            false
+                        }
+                    })
+                    .unwrap_or(false);
 
-            if !should_continue {
-                break;
+                if !should_continue {
+                    break;
+                }
+
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
             }
-
-            cx.background_executor()
-                .timer(Duration::from_millis(100))
-                .await;
         }));
     }
 
@@ -2933,9 +2936,9 @@ impl Render for FileManagerPanel {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_navigation_recovery_plan, build_retry_reset_plan, clear_remote_listing_state,
-        should_apply_directory_result, should_refresh_after_upload, ConnectionState,
-        NavigationRecoveryPlan,
+        ConnectionState, NavigationRecoveryPlan, build_navigation_recovery_plan,
+        build_retry_reset_plan, clear_remote_listing_state, should_apply_directory_result,
+        should_refresh_after_upload,
     };
     use std::collections::HashSet;
 

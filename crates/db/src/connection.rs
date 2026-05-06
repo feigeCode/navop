@@ -1,5 +1,5 @@
-use crate::executor::{ExecOptions, SqlResult, SqlSource};
 use crate::DatabasePlugin;
+use crate::executor::{ExecOptions, SqlResult, SqlSource};
 use async_trait::async_trait;
 use one_core::storage::DbConnectionConfig;
 use thiserror::Error;

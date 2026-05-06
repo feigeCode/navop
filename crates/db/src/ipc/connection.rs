@@ -5,10 +5,10 @@ use crate::ipc::protocol::{
     connection_config_params, database_params, empty_params, schema_params, sql_params,
 };
 use crate::ipc::registry::IpcDriverManifest;
-use crate::{truncate_str, DatabasePlugin, SqlErrorInfo};
+use crate::{DatabasePlugin, SqlErrorInfo, truncate_str};
 use async_trait::async_trait;
 use one_core::storage::DbConnectionConfig;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error};
 
 pub struct ExternalDbConnection {
@@ -203,9 +203,8 @@ impl DbConnection for ExternalDbConnection {
                 };
 
                 let is_error = result.is_error();
-                let progress = StreamingProgress::with_file_progress(
-                    current, result, bytes_read, total_size,
-                );
+                let progress =
+                    StreamingProgress::with_file_progress(current, result, bytes_read, total_size);
                 if sender.send(progress).await.is_err() {
                     break;
                 }
@@ -214,7 +213,6 @@ impl DbConnection for ExternalDbConnection {
                     break;
                 }
             }
-
         } else {
             let statements: Vec<String> = parser
                 .filter_map(|r| r.ok())
@@ -242,9 +240,9 @@ impl DbConnection for ExternalDbConnection {
                             sql.clone()
                         };
                         error!(
-                                "[MySQL] Streaming statement {}/{} failed: {}, SQL: {}",
-                                current, total, e, sql_preview
-                            );
+                            "[MySQL] Streaming statement {}/{} failed: {}, SQL: {}",
+                            current, total, e, sql_preview
+                        );
                         SqlResult::Error(SqlErrorInfo {
                             sql: sql.clone(),
                             message: e.to_string(),

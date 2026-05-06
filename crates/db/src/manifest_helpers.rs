@@ -1,9 +1,9 @@
+use crate::DbNodeType;
 use crate::plugin_manifest::{
     DatabaseActionDescriptor, DatabaseActionId, DatabaseActionPlacement, DatabaseActionTarget,
     DatabaseActionToolbarScope, DatabaseFormField, DatabaseFormFieldType, DatabaseFormTab,
     FormSelectOption, FormValueCondition, FormVisibilityRule,
 };
-use crate::DbNodeType;
 
 pub(crate) fn tab(
     id: &str,

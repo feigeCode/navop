@@ -1,42 +1,109 @@
 use ferrum_flow::{Node, NodeCardVariant, NodeRenderer, Port, RenderContext};
 use gpui::{
-    AnyElement, Element as _, ParentElement as _, Styled as _, div, prelude::FluentBuilder, px, rgb,
+    AnyElement, Element as _, Hsla, ParentElement as _, Styled as _, div, prelude::FluentBuilder,
+    px, rgb,
 };
+use gpui_component::Theme;
 
-const CARD_BACKGROUND: u32 = 0xffffff;
-const CARD_BORDER: u32 = 0x60a5fa;
-const CARD_BORDER_SELECTED: u32 = 0x2563eb;
-const STRIPE_BACKGROUND: u32 = 0xe6f4ff;
-const HEADER_BACKGROUND: u32 = 0xe4e4e7;
-const HEADER_TEXT: u32 = 0x111827;
-const HEADER_BORDER: u32 = 0xbfdbfe;
-const ROW_BACKGROUND_ODD: u32 = 0xf9fafb;
-const ROW_BACKGROUND_EVEN: u32 = 0xffffff;
-const ROW_BORDER: u32 = 0xe5e7eb;
-const COLUMN_TEXT: u32 = 0x111827;
-const TYPE_TEXT: u32 = 0x6b7280;
-const NULL_TEXT: u32 = 0x9ca3af;
-const BLUE_ACCENT: u32 = 0x3b82f6;
-const GREEN_ACCENT: u32 = 0x22c55e;
-const FIELD_DOT: u32 = 0x9ca3af;
-const PORT_FILL: u32 = 0x2563eb;
+/// ER 实体卡片的主题色配置，映射自应用级 GPUI 主题。
 #[derive(Clone, Copy)]
-pub struct ErEntityRenderer;
+pub struct ErCardTheme {
+    pub card_background: Hsla,
+    pub card_border: Hsla,
+    pub card_border_selected: Hsla,
+    pub stripe: Hsla,
+    pub header_background: Hsla,
+    pub header_text: Hsla,
+    pub header_border: Hsla,
+    pub row_odd: Hsla,
+    pub row_even: Hsla,
+    pub row_border: Hsla,
+    pub column_text: Hsla,
+    pub type_text: Hsla,
+    pub null_text: Hsla,
+    pub badge_primary: Hsla,
+    pub badge_secondary: Hsla,
+    pub field_dot: Hsla,
+}
+
+impl Default for ErCardTheme {
+    fn default() -> Self {
+        Self {
+            card_background: rgb(0xffffff).into(),
+            card_border: rgb(0x60a5fa).into(),
+            card_border_selected: rgb(0x2563eb).into(),
+            stripe: rgb(0xe6f4ff).into(),
+            header_background: rgb(0xe4e4e7).into(),
+            header_text: rgb(0x111827).into(),
+            header_border: rgb(0xbfdbfe).into(),
+            row_odd: rgb(0xf9fafb).into(),
+            row_even: rgb(0xffffff).into(),
+            row_border: rgb(0xe5e7eb).into(),
+            column_text: rgb(0x111827).into(),
+            type_text: rgb(0x6b7280).into(),
+            null_text: rgb(0x9ca3af).into(),
+            badge_primary: rgb(0x3b82f6).into(),
+            badge_secondary: rgb(0x22c55e).into(),
+            field_dot: rgb(0x9ca3af).into(),
+        }
+    }
+}
+
+impl ErCardTheme {
+    /// 从应用的 GPUI 主题映射创建 ER 卡片主题色。
+    pub fn from_ui_theme(ui: &Theme) -> Self {
+        Self {
+            card_background: ui.background,
+            card_border: ui.primary,
+            card_border_selected: ui.primary,
+            stripe: ui.primary.opacity(0.08),
+            header_background: ui.muted,
+            header_text: ui.foreground,
+            header_border: ui.border,
+            row_odd: ui.table,
+            row_even: ui.background,
+            row_border: ui.border,
+            column_text: ui.foreground,
+            type_text: ui.muted_foreground,
+            null_text: ui.muted_foreground,
+            badge_primary: ui.primary,
+            badge_secondary: ui.success,
+            field_dot: ui.muted_foreground,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct ErEntityRenderer {
+    pub card_theme: ErCardTheme,
+}
+
+impl ErEntityRenderer {
+    pub fn new(theme: ErCardTheme) -> Self {
+        Self { card_theme: theme }
+    }
+
+    pub fn from_ui_theme(ui: &Theme) -> Self {
+        Self {
+            card_theme: ErCardTheme::from_ui_theme(ui),
+        }
+    }
+}
 
 impl NodeRenderer for ErEntityRenderer {
     fn render(&self, node: &Node, ctx: &mut RenderContext) -> AnyElement {
         let selected = ctx.graph.selected_node_iter().any(|id| *id == node.id());
 
         ctx.node_card_shell(node, selected, NodeCardVariant::Custom)
-            .bg(rgb(CARD_BACKGROUND))
-            .border_color(rgb(if selected {
-                CARD_BORDER_SELECTED
+            .bg(self.card_theme.card_background)
+            .border_color(if selected {
+                self.card_theme.card_border_selected
             } else {
-                CARD_BORDER
-            }))
+                self.card_theme.card_border
+            })
             .shadow_md()
             .overflow_hidden()
-            .child(render_table(node))
+            .child(render_table(node, &self.card_theme))
             .into_any()
     }
 
@@ -47,13 +114,13 @@ impl NodeRenderer for ErEntityRenderer {
             frame
                 .anchor_div()
                 .rounded_full()
-                .bg(rgb(PORT_FILL))
+                .bg(rgb(ctx.theme.default_port_fill))
                 .into_any(),
         )
     }
 }
 
-fn render_table(node: &Node) -> AnyElement {
+fn render_table(node: &Node, theme: &ErCardTheme) -> AnyElement {
     let columns = node
         .data_ref()
         .get("fields")
@@ -65,18 +132,18 @@ fn render_table(node: &Node) -> AnyElement {
         .size_full()
         .flex()
         .flex_col()
-        .child(div().w_full().h(px(10.0)).bg(rgb(STRIPE_BACKGROUND)))
-        .child(render_header(node))
+        .child(div().w_full().h(px(10.0)).bg(theme.stripe))
+        .child(render_header(node, theme))
         .children(
             columns
                 .iter()
                 .enumerate()
-                .map(|(index, column)| render_column(column, index)),
+                .map(|(index, column)| render_column(column, index, theme)),
         )
         .into_any()
 }
 
-fn render_header(node: &Node) -> AnyElement {
+fn render_header(node: &Node, theme: &ErCardTheme) -> AnyElement {
     let table = text_value(node, "name").unwrap_or_else(|| "table".to_string());
     let schema = text_value(node, "schema").or_else(|| text_value(node, "comment"));
 
@@ -84,31 +151,33 @@ fn render_header(node: &Node) -> AnyElement {
         .w_full()
         .h(px(48.0))
         .px(px(8.0))
-        .bg(rgb(HEADER_BACKGROUND))
+        .bg(theme.header_background)
         .border_b_1()
-        .border_color(rgb(HEADER_BORDER))
+        .border_color(theme.header_border)
         .flex()
         .items_center()
         .justify_between()
-        .child(header_title(table))
-        .when_some(schema, |this, schema| this.child(header_schema(schema)))
+        .child(header_title(table, theme))
+        .when_some(schema, |this, schema| {
+            this.child(header_schema(schema, theme))
+        })
         .into_any()
 }
 
-fn header_title(table: String) -> AnyElement {
+fn header_title(table: String, theme: &ErCardTheme) -> AnyElement {
     div()
         .flex()
         .items_center()
         .gap_2()
         .min_w_0()
-        .child(database_placeholder())
+        .child(database_placeholder(theme))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .text_lg()
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(rgb(HEADER_TEXT))
+                .text_color(theme.header_text)
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
@@ -117,26 +186,26 @@ fn header_title(table: String) -> AnyElement {
         .into_any()
 }
 
-fn database_placeholder() -> AnyElement {
+fn database_placeholder(theme: &ErCardTheme) -> AnyElement {
     div()
         .w(px(18.0))
         .h(px(18.0))
         .rounded(px(4.0))
         .border_1()
-        .border_color(rgb(BLUE_ACCENT))
+        .border_color(theme.badge_primary)
         .flex()
         .items_center()
         .justify_center()
         .text_xs()
-        .text_color(rgb(BLUE_ACCENT))
+        .text_color(theme.badge_primary)
         .child("D")
         .into_any()
 }
 
-fn header_schema(schema: String) -> AnyElement {
+fn header_schema(schema: String, theme: &ErCardTheme) -> AnyElement {
     div()
         .text_xs()
-        .text_color(rgb(TYPE_TEXT))
+        .text_color(theme.type_text)
         .max_w(px(92.0))
         .overflow_hidden()
         .whitespace_nowrap()
@@ -145,7 +214,7 @@ fn header_schema(schema: String) -> AnyElement {
         .into_any()
 }
 
-fn render_column(column: &serde_json::Value, index: usize) -> AnyElement {
+fn render_column(column: &serde_json::Value, index: usize, theme: &ErCardTheme) -> AnyElement {
     let name = json_text(column, "name");
     let ty = json_text(column, "data_type");
     let is_pk = column
@@ -161,9 +230,9 @@ fn render_column(column: &serde_json::Value, index: usize) -> AnyElement {
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
     let background = if index.is_multiple_of(2) {
-        ROW_BACKGROUND_ODD
+        theme.row_odd
     } else {
-        ROW_BACKGROUND_EVEN
+        theme.row_even
     };
 
     div()
@@ -175,29 +244,29 @@ fn render_column(column: &serde_json::Value, index: usize) -> AnyElement {
         .flex()
         .items_center()
         .justify_between()
-        .bg(rgb(background))
+        .bg(background)
         .border_b_1()
-        .border_color(rgb(ROW_BORDER))
-        .child(render_column_name(name, is_pk, is_fk))
-        .child(render_column_type(&ty, is_pk, is_fk, nullable))
+        .border_color(theme.row_border)
+        .child(render_column_name(name, is_pk, is_fk, theme))
+        .child(render_column_type(&ty, is_pk, is_fk, nullable, theme))
         .into_any()
 }
 
-fn render_column_name(name: String, is_pk: bool, is_fk: bool) -> AnyElement {
+fn render_column_name(name: String, is_pk: bool, is_fk: bool, theme: &ErCardTheme) -> AnyElement {
     div()
         .flex()
         .items_center()
         .gap_2()
         .flex_1()
         .min_w_0()
-        .child(status_dot(is_pk, is_fk))
+        .child(status_dot(is_pk, is_fk, theme))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .text_xs()
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(rgb(COLUMN_TEXT))
+                .text_color(theme.column_text)
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
@@ -206,13 +275,13 @@ fn render_column_name(name: String, is_pk: bool, is_fk: bool) -> AnyElement {
         .into_any()
 }
 
-fn status_dot(is_pk: bool, is_fk: bool) -> AnyElement {
+fn status_dot(is_pk: bool, is_fk: bool, theme: &ErCardTheme) -> AnyElement {
     let color = if is_pk {
-        BLUE_ACCENT
+        theme.badge_primary
     } else if is_fk {
-        GREEN_ACCENT
+        theme.badge_secondary
     } else {
-        FIELD_DOT
+        theme.field_dot
     };
 
     div()
@@ -220,11 +289,17 @@ fn status_dot(is_pk: bool, is_fk: bool) -> AnyElement {
         .h(px(10.0))
         .rounded_full()
         .flex_shrink_0()
-        .bg(rgb(color))
+        .bg(color)
         .into_any()
 }
 
-fn render_column_type(ty: &str, is_pk: bool, is_fk: bool, nullable: bool) -> AnyElement {
+fn render_column_type(
+    ty: &str,
+    is_pk: bool,
+    is_fk: bool,
+    nullable: bool,
+    theme: &ErCardTheme,
+) -> AnyElement {
     div()
         .max_w(px(132.0))
         .ml_2()
@@ -235,29 +310,31 @@ fn render_column_type(ty: &str, is_pk: bool, is_fk: bool, nullable: bool) -> Any
         .flex_shrink_0()
         .text_xs()
         .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(rgb(TYPE_TEXT))
+        .text_color(theme.type_text)
         .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
-        .when(is_pk, |this| this.child(type_badge("PK", BLUE_ACCENT)))
+        .when(is_pk, |this| {
+            this.child(type_badge("PK", theme.badge_primary))
+        })
         .when(is_fk && !is_pk, |this| {
-            this.child(type_badge("FK", GREEN_ACCENT))
+            this.child(type_badge("FK", theme.badge_secondary))
         })
         .child(ty.to_string())
         .when(nullable, |this| {
-            this.child(div().text_color(rgb(NULL_TEXT)).child("null"))
+            this.child(div().text_color(theme.null_text).child("null"))
         })
         .into_any()
 }
 
-fn type_badge(label: &'static str, color: u32) -> AnyElement {
+fn type_badge(label: &'static str, color: Hsla) -> AnyElement {
     div()
         .px(px(3.0))
         .rounded(px(3.0))
         .text_xs()
-        .text_color(rgb(color))
+        .text_color(color)
         .border_1()
-        .border_color(rgb(color))
+        .border_color(color)
         .child(label)
         .into_any()
 }

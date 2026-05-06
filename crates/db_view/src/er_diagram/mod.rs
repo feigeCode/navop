@@ -1,33 +1,30 @@
 mod loader;
-mod scroll_pan_plugin;
 mod pan_mode_plugin;
+mod scroll_pan_plugin;
 
 use db::GlobalDbState;
 use ferrum_flow::{
-    BackgroundPlugin, EdgePlugin, FitAllGraphPlugin,
-    FlowCanvas, Graph,
-    NodeInteractionPlugin, NodePlugin,
-    ViewportPlugin, ZoomControlsPlugin,
+    BackgroundPlugin, EdgePlugin, FitAllGraphPlugin, FlowCanvas, Graph, MinimapPlugin,
+    NodeInteractionPlugin, NodePlugin, ViewportPlugin, ZoomControlsPlugin,
 };
 
+use crate::er_diagram::pan_mode_plugin::ErDiagramPanModePlugin;
 use crate::er_diagram::scroll_pan_plugin::ErDiagramScrollPanPlugin;
-use er_flow::{er_flow_theme, er_node_renderers, graph_from_diagram};
+use er_flow::{er_flow_theme_from_ui, er_node_renderers_from_theme, graph_from_diagram};
 use gpui::{
-    div, prelude::FluentBuilder, App, AppContext as _, AsyncApp, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Task, Window
-    ,
+    App, AppContext as _, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
+    Task, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
-    button::Button, spinner::Spinner, v_flex, ActiveTheme as _, Icon, IconName, Sizable as _, Size,
+    ActiveTheme as _, Icon, IconName, Sizable as _, Size, button::Button, spinner::Spinner, v_flex,
 };
 use loader::load_er_diagram;
 use one_core::{
-    popup_window::{open_popup_window, PopupWindowOptions},
+    popup_window::{PopupWindowOptions, open_popup_window},
     tab_container::{TabContent, TabContentEvent},
 };
 use rust_i18n::t;
-use crate::er_diagram::pan_mode_plugin::ErDiagramPanModePlugin;
 
 const ER_DIAGRAM_WINDOW_WIDTH: f32 = 1200.0;
 const ER_DIAGRAM_WINDOW_HEIGHT: f32 = 800.0;
@@ -178,18 +175,21 @@ async fn load_graph(
     graph_from_diagram(&diagram)
 }
 
-
-
-
-
 fn build_canvas(
     graph: Graph,
     window: &mut Window,
     cx: &mut Context<ErDiagramTab>,
 ) -> Entity<FlowCanvas> {
+    let (renderers, flow_theme) = {
+        let theme = cx.theme();
+        (
+            er_node_renderers_from_theme(theme),
+            er_flow_theme_from_ui(theme),
+        )
+    };
     cx.new(|cx| {
         FlowCanvas::builder(graph, cx, window)
-            .theme(er_flow_theme())
+            .theme(flow_theme)
             .plugin(BackgroundPlugin::new())
             .plugin(ErDiagramScrollPanPlugin::new())
             .plugin(ErDiagramPanModePlugin::new())
@@ -199,7 +199,8 @@ fn build_canvas(
             .plugin(NodeInteractionPlugin::new())
             .plugin(FitAllGraphPlugin::new())
             .plugin(ZoomControlsPlugin::new())
-            .node_renderers(er_node_renderers())
+            .plugin(MinimapPlugin::new())
+            .node_renderers(renderers)
             .build()
     })
 }

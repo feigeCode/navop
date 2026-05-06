@@ -10,7 +10,7 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
-use gpui_component::{h_flex, kbd::Kbd, v_flex, BlinkCursor, Icon, IconName, Sizable, WindowExt};
+use gpui_component::{BlinkCursor, Icon, IconName, Sizable, WindowExt, h_flex, kbd::Kbd, v_flex};
 use one_core::gpui_tokio::Tokio;
 use std::borrow::Cow;
 use std::cell::{Cell as StdCell, RefCell};
@@ -21,34 +21,34 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::addon::{
-    register_default_addons, AddonManager, CustomHighlightAddon, SearchAddon,
-    TerminalAddonFrameContext, TerminalAddonMouseContext,
+    AddonManager, CustomHighlightAddon, SearchAddon, TerminalAddonFrameContext,
+    TerminalAddonMouseContext, register_default_addons,
 };
 use crate::cd_completion::{
-    build_cd_completion_suggestions, parse_cd_completion_query, CdCompletionQuery,
+    CdCompletionQuery, build_cd_completion_suggestions, parse_cd_completion_query,
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
 use crate::settings::{
-    current_settings, update_settings, GlobalTerminalSettings, TerminalHighlightRule,
-    TerminalSettings, TerminalSettingsEvent,
+    GlobalTerminalSettings, TerminalHighlightRule, TerminalSettings, TerminalSettingsEvent,
+    current_settings, update_settings,
 };
 use crate::sidebar::{SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
 use crate::terminal_element::{RenderCache, TerminalElement};
 use crate::theme::{
-    default_font_fallbacks, default_monospace_font, TerminalTheme, DEFAULT_LINE_HEIGHT_SCALE,
-    MAX_FONT_SIZE, MIN_FONT_SIZE,
+    DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, default_font_fallbacks,
+    default_monospace_font,
 };
 use one_core::layout::{SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
 use one_core::storage::models::{ActiveConnections, StoredConnection};
 use one_core::tab_container::{TabContent, TabContentEvent};
-use one_ui::resize_handle::{resize_handle, HandlePlacement, ResizePanel};
+use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient};
 use std::ops::Deref;
+use terminal::LocalConfig;
 use terminal::terminal::{
     ConnectionState, Terminal, TerminalConnectionKind, TerminalModelEvent, TerminalScrollProxy,
 };
-use terminal::LocalConfig;
 use tokio::sync::Mutex;
 
 actions!(
@@ -1938,29 +1938,31 @@ impl TerminalView {
             terminal.reconnect(cx);
         });
 
-        cx.spawn(async move |this, cx| loop {
-            let state = match this.update(cx, |this, cx| {
-                this.terminal.read(cx).connection_state().clone()
-            }) {
-                Ok(state) => state,
-                Err(_) => break,
-            };
+        cx.spawn(async move |this, cx| {
+            loop {
+                let state = match this.update(cx, |this, cx| {
+                    this.terminal.read(cx).connection_state().clone()
+                }) {
+                    Ok(state) => state,
+                    Err(_) => break,
+                };
 
-            match state {
-                ConnectionState::Connected => {
-                    let _ = this.update(cx, |this, cx| {
-                        this.sidebar.update(cx, |sidebar, cx| {
-                            sidebar.reconnect_file_manager(working_dir.clone(), cx);
-                            sidebar.reconnect_server_monitor(cx);
+                match state {
+                    ConnectionState::Connected => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.sidebar.update(cx, |sidebar, cx| {
+                                sidebar.reconnect_file_manager(working_dir.clone(), cx);
+                                sidebar.reconnect_server_monitor(cx);
+                            });
                         });
-                    });
-                    break;
-                }
-                ConnectionState::Disconnected { .. } => break,
-                ConnectionState::Connecting => {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(100))
-                        .await;
+                        break;
+                    }
+                    ConnectionState::Disconnected { .. } => break,
+                    ConnectionState::Connecting => {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(100))
+                            .await;
+                    }
                 }
             }
         })
@@ -3796,17 +3798,17 @@ impl Element for ResizeEventHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        alt_screen_scroll_arrow, detect_unbracketed_paste_hazard, has_trailing_line_continuation,
-        has_unterminated_shell_quote, history_prompt_available, history_prompt_dropdown_origin,
-        history_prompt_overlay_bounds, multiline_non_empty_line_count,
-        should_defer_inline_history_prompt_input_to_text_system,
+        UnbracketedPasteHazard, alt_screen_scroll_arrow, detect_unbracketed_paste_hazard,
+        has_trailing_line_continuation, has_unterminated_shell_quote, history_prompt_available,
+        history_prompt_dropdown_origin, history_prompt_overlay_bounds,
+        multiline_non_empty_line_count, should_defer_inline_history_prompt_input_to_text_system,
         should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
         should_dismiss_history_prompt_for_scroll, should_reset_history_prompt_for_terminal_event,
-        should_scroll_to_bottom_on_user_input, take_whole_scroll_lines, UnbracketedPasteHazard,
+        should_scroll_to_bottom_on_user_input, take_whole_scroll_lines,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::term::TermMode;
-    use gpui::{px, size, Bounds, Keystroke, MouseButton, Point};
+    use gpui::{Bounds, Keystroke, MouseButton, Point, px, size};
     use std::cell::Cell as StdCell;
     use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
 

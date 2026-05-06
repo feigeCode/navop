@@ -3111,6 +3111,7 @@ dependencies = [
  "anyhow",
  "ferrum-flow",
  "gpui",
+ "gpui-component",
  "serde",
  "serde_json",
 ]

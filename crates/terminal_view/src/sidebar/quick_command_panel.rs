@@ -4,21 +4,22 @@
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, uniform_list, App, AppContext, ClipboardItem, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
-    ParentElement, Render, SharedString, Styled, UniformListScrollHandle, Window,
+    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement, Render,
+    SharedString, Styled, UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::{
+    ActiveTheme, Icon, IconName, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
     notification::Notification,
     tooltip::Tooltip,
-    v_flex, ActiveTheme, Icon, IconName, Sizable, Size, WindowExt,
+    v_flex,
 };
 use one_core::storage::{
-    traits::Repository, GlobalStorageState, QuickCommand, QuickCommandRepository,
+    GlobalStorageState, QuickCommand, QuickCommandRepository, traits::Repository,
 };
 use rust_i18n::t;
 use std::ops::Range;

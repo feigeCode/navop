@@ -3,8 +3,8 @@
 //! 提取自 ssh_backend.rs，供 SSH 和本地终端后端共用。
 //! 支持 OSC 133（shell 集成协议）、OSC 7（工作目录）和 OSC 1337（命令记录）。
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
 /// OSC 事件类型（基于 OSC 133 协议）
 #[derive(Debug, PartialEq, Eq)]

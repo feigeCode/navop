@@ -278,14 +278,18 @@ mod tests {
             .find(|preset| preset.id == "ip_addresses")
             .expect("应找到 IP 地址预设");
 
-        assert!(preset
-            .rules
-            .iter()
-            .any(|rule| rule.id == "preset:ip_addresses:ipv4"));
-        assert!(preset
-            .rules
-            .iter()
-            .any(|rule| rule.id == "preset:ip_addresses:ipv6"));
+        assert!(
+            preset
+                .rules
+                .iter()
+                .any(|rule| rule.id == "preset:ip_addresses:ipv4")
+        );
+        assert!(
+            preset
+                .rules
+                .iter()
+                .any(|rule| rule.id == "preset:ip_addresses:ipv6")
+        );
     }
 
     #[test]

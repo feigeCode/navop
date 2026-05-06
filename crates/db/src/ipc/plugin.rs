@@ -6,11 +6,11 @@ use crate::import_export::{
 };
 use crate::ipc::connection::ExternalDbConnection;
 use crate::ipc::protocol::{database_metadata_params, table_metadata_params};
-use crate::ipc::registry::{IpcDriverManifest, IpcDriverRegistry, EXTERNAL_DRIVER_ID_PARAM};
+use crate::ipc::registry::{EXTERNAL_DRIVER_ID_PARAM, IpcDriverManifest, IpcDriverRegistry};
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::DatabaseUiManifest;
 use crate::types::*;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use sqlparser::dialect::{Dialect, GenericDialect};

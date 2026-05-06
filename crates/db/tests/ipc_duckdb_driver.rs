@@ -94,8 +94,12 @@ async fn duckdb_driver_ipc_full_integration() {
     }
 
     // ---- DDL + DML ----
-    conn.query("CREATE TABLE t (id INTEGER, name VARCHAR)").await.unwrap();
-    conn.query("INSERT INTO t VALUES (1, 'alice'), (2, 'bob')").await.unwrap();
+    conn.query("CREATE TABLE t (id INTEGER, name VARCHAR)")
+        .await
+        .unwrap();
+    conn.query("INSERT INTO t VALUES (1, 'alice'), (2, 'bob')")
+        .await
+        .unwrap();
 
     let result = conn.query("SELECT * FROM t ORDER BY id").await.unwrap();
     match result {
@@ -119,10 +123,7 @@ async fn duckdb_driver_ipc_full_integration() {
         SqlResult::Query(q) => {
             let cell = q.rows[0][0].as_deref().unwrap();
             let tables: Vec<serde_json::Value> = serde_json::from_str(cell).unwrap();
-            let names: Vec<&str> = tables
-                .iter()
-                .map(|t| t["name"].as_str().unwrap())
-                .collect();
+            let names: Vec<&str> = tables.iter().map(|t| t["name"].as_str().unwrap()).collect();
             assert!(names.contains(&"t"), "expected 't' in tables: {names:?}");
         }
         other => panic!("expected query result, got {other:?}"),

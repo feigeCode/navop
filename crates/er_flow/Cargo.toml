@@ -7,5 +7,6 @@ edition = "2024"
 anyhow.workspace = true
 ferrum-flow.workspace = true
 gpui.workspace = true
+gpui-component.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

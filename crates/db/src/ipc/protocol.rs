@@ -1,5 +1,5 @@
 use one_core::storage::DbConnectionConfig;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub use ipc::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 

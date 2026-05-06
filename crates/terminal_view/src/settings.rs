@@ -210,8 +210,8 @@ fn save_settings_to_path(path: &Path, settings: &TerminalSettings) -> anyhow::Re
 #[cfg(test)]
 mod tests {
     use super::{
-        load_settings_from_path, resolve_initial_settings, save_settings_to_path,
-        TerminalHighlightRule, TerminalSettings, TerminalSettingsStore,
+        TerminalHighlightRule, TerminalSettings, TerminalSettingsStore, load_settings_from_path,
+        resolve_initial_settings, save_settings_to_path,
     };
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -282,10 +282,12 @@ mod tests {
 
         assert!(settings.builtin_highlights_initialized);
         assert!(!settings.custom_highlights.is_empty());
-        assert!(settings
-            .custom_highlights
-            .iter()
-            .any(|rule| rule.id == "preset:ip_addresses:ipv4"));
+        assert!(
+            settings
+                .custom_highlights
+                .iter()
+                .any(|rule| rule.id == "preset:ip_addresses:ipv4")
+        );
     }
 
     #[test]
@@ -309,14 +311,18 @@ mod tests {
         let resolved = resolve_initial_settings(&path, None);
 
         assert!(resolved.builtin_highlights_initialized);
-        assert!(resolved
-            .custom_highlights
-            .iter()
-            .any(|rule| rule.id == "custom:user-rule"));
-        assert!(resolved
-            .custom_highlights
-            .iter()
-            .any(|rule| rule.id == "preset:ip_addresses:ipv4"));
+        assert!(
+            resolved
+                .custom_highlights
+                .iter()
+                .any(|rule| rule.id == "custom:user-rule")
+        );
+        assert!(
+            resolved
+                .custom_highlights
+                .iter()
+                .any(|rule| rule.id == "preset:ip_addresses:ipv4")
+        );
     }
 
     #[test]

@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
 use db::{
-    DatabaseActionDescriptor, DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement,
-    DatabaseActionTarget, DatabaseActionToolbarScope, DatabaseFormField, DatabaseFormFieldType,
-    DatabaseFormKind, DatabaseFormManifest, DatabaseFormSubmission, DatabaseFormTab,
-    DatabaseUiCapabilities, DatabaseUiManifest, DbNodeType, FormDefaultRule, FormSelectOption,
-    FormValueCondition, FormVisibilityRule, ReferenceDataKind, DATABASE_UI_MANIFEST_VERSION,
+    DATABASE_UI_MANIFEST_VERSION, DatabaseActionDescriptor, DatabaseActionId,
+    DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionTarget,
+    DatabaseActionToolbarScope, DatabaseFormField, DatabaseFormFieldType, DatabaseFormKind,
+    DatabaseFormManifest, DatabaseFormSubmission, DatabaseFormTab, DatabaseUiCapabilities,
+    DatabaseUiManifest, DbNodeType, FormDefaultRule, FormSelectOption, FormValueCondition,
+    FormVisibilityRule, ReferenceDataKind,
 };
 
 #[test]

@@ -1,6 +1,13 @@
-use ferrum_flow::{Command, CommandContext, EventResult, FlowEvent, GraphOp, InputEvent, Interaction, InteractionResult, Plugin, PluginContext, RenderContext, RenderLayer};
-use gpui::{div, px, rgb, Bounds, IntoElement, MouseButton, ParentElement, Pixels, Point, Size, Styled};
-use crate::er_diagram::{ER_DIAGRAM_PAN_LABEL, ER_DIAGRAM_TOOL_GAP, ER_DIAGRAM_TOOL_MARGIN, ER_DIAGRAM_TOOL_SIZE};
+use crate::er_diagram::{
+    ER_DIAGRAM_PAN_LABEL, ER_DIAGRAM_TOOL_GAP, ER_DIAGRAM_TOOL_MARGIN, ER_DIAGRAM_TOOL_SIZE,
+};
+use ferrum_flow::{
+    Command, CommandContext, EventResult, FlowEvent, GraphOp, InputEvent, Interaction,
+    InteractionResult, Plugin, PluginContext, RenderContext, RenderLayer,
+};
+use gpui::{
+    Bounds, IntoElement, MouseButton, ParentElement, Pixels, Point, Size, Styled, div, px, rgb,
+};
 
 pub(crate) struct ErDiagramPanModePlugin {
     last_bounds: Option<Bounds<Pixels>>,

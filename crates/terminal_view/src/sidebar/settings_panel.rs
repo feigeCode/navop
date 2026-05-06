@@ -2,14 +2,15 @@
 //!
 //! 提供搜索、字体设置和主题切换功能
 
-use gpui::prelude::FluentBuilder;
 use gpui::FontWeight;
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    Hsla, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Render,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels, Render, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
+    ActiveTheme, Colorize, Icon, IconName, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants},
     color_picker::{ColorPicker, ColorPickerState},
     dialog::DialogButtonProps,
@@ -19,14 +20,14 @@ use gpui_component::{
     scroll::ScrollableElement,
     select::{Select, SelectEvent, SelectState},
     switch::Switch,
-    try_parse_color, v_flex, ActiveTheme, Colorize, Icon, IconName, Sizable, Size, WindowExt,
+    try_parse_color, v_flex,
 };
 use rust_i18n::t;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    theme::{TerminalTheme, MAX_FONT_SIZE, MIN_FONT_SIZE},
     TerminalHighlightRule,
+    theme::{MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme},
 };
 
 /// 设置面板事件
@@ -1200,11 +1201,13 @@ impl SettingsPanel {
                     .bg(muted)
                     .p_2()
                     .children(if rows.is_empty() {
-                        vec![div()
-                            .text_xs()
-                            .text_color(muted_fg)
-                            .child(t!("CustomHighlight.empty"))
-                            .into_any_element()]
+                        vec![
+                            div()
+                                .text_xs()
+                                .text_color(muted_fg)
+                                .child(t!("CustomHighlight.empty"))
+                                .into_any_element(),
+                        ]
                     } else {
                         rows
                     }),

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use one_core::storage::DbConnectionConfig;
-use ssh::{start_local_port_forward, LocalPortForwardTunnel, SshAuth, SshConnectConfig};
+use ssh::{LocalPortForwardTunnel, SshAuth, SshConnectConfig, start_local_port_forward};
 use tokio::time::timeout;
 
 use crate::connection::DbError;

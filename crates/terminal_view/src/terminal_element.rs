@@ -6,8 +6,8 @@
 //! - Selection and search highlighting
 //! - Theme colors support
 
-use crate::addon::{AddonManager, CellDecoration, DecorationSpan};
 use crate::TerminalTheme;
+use crate::addon::{AddonManager, CellDecoration, DecorationSpan};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::Flags;
