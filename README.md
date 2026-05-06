@@ -156,3 +156,14 @@ The distribution and use of the OnetCli application are additionally subject to 
 - No hosting on unauthorized distribution platforms
 
 For licensing inquiries, contact xiaofei.hf@gmail.com.
+
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=feigeCode%2Fonetcli&type=date&logscale=&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=feigeCode/onetcli&type=date&theme=dark&logscale&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=feigeCode/onetcli&type=date&logscale&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=feigeCode/onetcli&type=date&logscale&legend=top-left" />
+ </picture>
+</a>
