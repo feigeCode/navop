@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use gpui::{Bounds, Element, MouseButton, PathBuilder, Pixels, Point, canvas, px, rgb};
+use gpui::{
+    Bounds, Element, MouseButton, PathBuilder, Pixels, Point, Styled as _, canvas, px, rgb,
+};
 
 use crate::{
     Edge, EdgeId, RenderContext,
@@ -95,14 +97,15 @@ impl Plugin for EdgePlugin {
         Some(
             canvas(
                 move |_, _, _| (edges, selected_edges, stroke, stroke_sel),
-                move |_, (edges, selected_edges, stroke, stroke_sel), win, _| {
+                move |bounds, (edges, selected_edges, stroke, stroke_sel), win, _| {
+                    let origin = bounds.origin;
                     for (id, geometry) in edges.iter() {
                         let Some(EdgeGeometry { start, c1, c2, end }) = geometry else {
                             return;
                         };
                         let mut line = PathBuilder::stroke(px(1.0));
-                        line.move_to(*start);
-                        line.cubic_bezier_to(*end, *c1, *c2);
+                        line.move_to(*start + origin);
+                        line.cubic_bezier_to(*end + origin, *c1 + origin, *c2 + origin);
 
                         let selected = selected_edges.iter().any(|i| *i == *id);
 
@@ -112,6 +115,8 @@ impl Plugin for EdgePlugin {
                     }
                 },
             )
+            .absolute()
+            .size_full()
             .into_any(),
         )
     }

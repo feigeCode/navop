@@ -20,16 +20,9 @@ use gpui_component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, Size, button::Button, spinner::Spinner, v_flex,
 };
 use loader::load_er_diagram;
-use one_core::{
-    popup_window::{PopupWindowOptions, open_popup_window},
-    tab_container::{TabContent, TabContentEvent},
-};
+use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem};
 use rust_i18n::t;
 
-const ER_DIAGRAM_WINDOW_WIDTH: f32 = 1200.0;
-const ER_DIAGRAM_WINDOW_HEIGHT: f32 = 800.0;
-const ER_DIAGRAM_WINDOW_MIN_WIDTH: f32 = 800.0;
-const ER_DIAGRAM_WINDOW_MIN_HEIGHT: f32 = 500.0;
 const ER_DIAGRAM_TOOL_MARGIN: f32 = 16.0;
 const ER_DIAGRAM_TOOL_SIZE: f32 = 36.0;
 const ER_DIAGRAM_TOOL_GAP: f32 = 6.0;
@@ -142,16 +135,36 @@ impl ErDiagramTab {
     }
 }
 
-pub(crate) fn open_er_diagram_window(config: ErDiagramConfig, cx: &mut App) {
-    let title = er_diagram_title(&config);
-    open_popup_window(
-        PopupWindowOptions::new(title)
-            .size(ER_DIAGRAM_WINDOW_WIDTH, ER_DIAGRAM_WINDOW_HEIGHT)
-            .min_width(ER_DIAGRAM_WINDOW_MIN_WIDTH)
-            .min_height(ER_DIAGRAM_WINDOW_MIN_HEIGHT),
-        move |window, cx| cx.new(|cx| ErDiagramTab::new(config, window, cx)),
-        cx,
-    );
+pub(crate) fn open_er_diagram_tab(
+    config: ErDiagramConfig,
+    tab_container: Entity<TabContainer>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let tab_id = er_diagram_tab_id(&config);
+    let tab_id_for_tab = tab_id.clone();
+    let connection_id = config.connection_id.clone();
+
+    tab_container.update(cx, |container, cx| {
+        container.activate_or_add_tab_lazy(
+            tab_id,
+            move |window, cx| {
+                let er_diagram = cx.new(|cx| ErDiagramTab::new(config, window, cx));
+                TabItem::new(tab_id_for_tab, connection_id, er_diagram)
+            },
+            window,
+            cx,
+        );
+    });
+}
+
+fn er_diagram_tab_id(config: &ErDiagramConfig) -> String {
+    format!(
+        "er-diagram-{}-{}-{}",
+        config.connection_id,
+        config.database_name,
+        config.schema_name.as_deref().unwrap_or("")
+    )
 }
 
 fn er_diagram_title(config: &ErDiagramConfig) -> SharedString {

@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use gpui::{Bounds, Element, MouseButton, PathBuilder, Pixels, Point, Size, canvas, px, rgb};
+use gpui::{
+    Bounds, Element, MouseButton, PathBuilder, Pixels, Point, Size, Styled as _, canvas, px, rgb,
+};
 
 use crate::{
     NodeId, Viewport,
@@ -303,12 +305,13 @@ impl Plugin for MinimapPlugin {
         Some(
             canvas(
                 move |_, _, _| (),
-                move |_, _, win, _| {
+                move |bounds, _, win, _| {
+                    let origin = bounds.origin;
                     // Inner background
-                    if let Ok(p) = rect_fill_path(inner) {
+                    if let Ok(p) = rect_fill_path(offset_bounds(inner, origin)) {
                         win.paint_path(p, rgb(minimap_background));
                     }
-                    if let Ok(p) = rect_stroke_path(inner, px(1.0)) {
+                    if let Ok(p) = rect_stroke_path(offset_bounds(inner, origin), px(1.0)) {
                         win.paint_path(p, rgb(minimap_border));
                     }
 
@@ -317,8 +320,8 @@ impl Plugin for MinimapPlugin {
                         let a = world_to_inner_pt(sx, sy, &layout);
                         let b = world_to_inner_pt(tx, ty, &layout);
                         let mut line = PathBuilder::stroke(px(1.0));
-                        line.move_to(a);
-                        line.line_to(b);
+                        line.move_to(a + origin);
+                        line.line_to(b + origin);
                         if let Ok(p) = line.build() {
                             win.paint_path(p, rgb(minimap_edge));
                         }
@@ -333,7 +336,7 @@ impl Plugin for MinimapPlugin {
                         let max_y = f32::max(f32::from(p0.y), f32::from(p1.y));
                         let rw = (max_x - min_x).max(2.0);
                         let rh = (max_y - min_y).max(2.0);
-                        let o = Point::new(px(min_x), px(min_y));
+                        let o = Point::new(px(min_x), px(min_y)) + origin;
                         let s = Size::new(px(rw), px(rh));
                         if let Ok(p) = rect_fill_bounds(o, s) {
                             win.paint_path(p, rgb(minimap_node_fill));
@@ -348,16 +351,22 @@ impl Plugin for MinimapPlugin {
                     let max_x = f32::max(f32::from(v_tl.x), f32::from(v_br.x));
                     let min_y = f32::min(f32::from(v_tl.y), f32::from(v_br.y));
                     let max_y = f32::max(f32::from(v_tl.y), f32::from(v_br.y));
-                    let vo = Point::new(px(min_x), px(min_y));
+                    let vo = Point::new(px(min_x), px(min_y)) + origin;
                     let vs = Size::new(px((max_x - min_x).max(2.0)), px((max_y - min_y).max(2.0)));
                     if let Ok(p) = rect_stroke_bounds(vo, vs, px(1.5)) {
                         win.paint_path(p, rgb(minimap_viewport_stroke));
                     }
                 },
             )
+            .absolute()
+            .size_full()
             .into_any(),
         )
     }
+}
+
+fn offset_bounds(bounds: Bounds<Pixels>, offset: Point<Pixels>) -> Bounds<Pixels> {
+    Bounds::new(bounds.origin + offset, bounds.size)
 }
 
 fn rect_fill_path(b: Bounds<Pixels>) -> Result<gpui::Path<Pixels>, anyhow::Error> {

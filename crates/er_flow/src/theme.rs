@@ -52,6 +52,10 @@ pub fn er_flow_theme_from_ui(ui: &Theme) -> FlowTheme {
         context_menu_text: hsla_to_u32(ui.foreground),
         context_menu_shortcut_text: hsla_to_u32(ui.muted_foreground),
         context_menu_separator: hsla_to_u32(ui.border),
+        error: hsla_to_u32(ui.background),
+        info: hsla_to_u32(ui.background),
+        success: hsla_to_u32(ui.background),
+        warning: hsla_to_u32(ui.background),
     }
 }
 
