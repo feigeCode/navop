@@ -340,7 +340,11 @@ impl DbConnection for MysqlDbConnection {
             .ip_or_hostname(&target.host)
             .tcp_port(target.port)
             .user(Some(&config.username))
-            .pass(Some(&config.password));
+            .pass(Some(&config.password))
+            // 禁用 prefer_socket：远程数据库管理工具始终走 TCP,
+            // 同时避免驱动在握手后查询 `@@socket`,从而兼容 StarRocks/Doris
+            // 等不支持该系统变量的 MySQL 协议兼容引擎(GitHub issue #36)。
+            .prefer_socket(false);
 
         if let Some(ref db) = config.database {
             opts_builder = opts_builder.db_name(Some(db));
