@@ -6,7 +6,7 @@ use gpui::{
 use gpui_component::Theme;
 
 /// ER 实体卡片的主题色配置，映射自应用级 GPUI 主题。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct ErCardTheme {
     pub card_background: Hsla,
     pub card_border: Hsla,

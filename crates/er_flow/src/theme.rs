@@ -1,6 +1,6 @@
 use ferrum_flow::FlowTheme;
 use gpui::Hsla;
-use gpui_component::Theme;
+use gpui_component::{Colorize as _, Theme};
 
 pub fn er_flow_theme() -> FlowTheme {
     FlowTheme {
@@ -18,6 +18,10 @@ pub fn er_flow_theme() -> FlowTheme {
 
 /// 从应用的 GPUI 主题映射创建 FlowTheme，使画布自适应亮/暗模式。
 pub fn er_flow_theme_from_ui(ui: &Theme) -> FlowTheme {
+    let grid_dot = blend_to_u32(ui.background, ui.muted_foreground, 0.78);
+    let muted_line = blend_to_u32(ui.background, ui.muted_foreground, 0.45);
+    let minimap_node_fill = blend_to_u32(ui.background, ui.muted, 0.5);
+
     FlowTheme {
         node_card_background: hsla_to_u32(ui.background),
         node_card_border: hsla_to_u32(ui.border),
@@ -28,20 +32,20 @@ pub fn er_flow_theme_from_ui(ui: &Theme) -> FlowTheme {
         undefined_node_caption_text: hsla_to_u32(ui.muted_foreground),
         default_port_fill: hsla_to_u32(ui.primary),
         background: hsla_to_u32(ui.background),
-        background_grid_dot: hsla_to_u32(ui.muted_foreground.opacity(0.25)),
-        edge_stroke: hsla_to_u32(ui.border),
+        background_grid_dot: grid_dot,
+        edge_stroke: muted_line,
         edge_stroke_selected: hsla_to_u32(ui.primary),
         selection_rect_border: hsla_to_u32(ui.primary),
         selection_rect_fill_rgba: hsla_to_u32_rgba(Hsla {
             a: 0.3,
             ..ui.primary
         }),
-        port_preview_line: hsla_to_u32(ui.border),
+        port_preview_line: hsla_to_u32(ui.primary),
         port_preview_dot: hsla_to_u32(ui.muted_foreground),
         minimap_background: hsla_to_u32(ui.popover),
         minimap_border: hsla_to_u32(ui.border),
-        minimap_edge: hsla_to_u32(ui.muted_foreground),
-        minimap_node_fill: hsla_to_u32(ui.background),
+        minimap_edge: muted_line,
+        minimap_node_fill,
         minimap_node_stroke: hsla_to_u32(ui.border),
         minimap_viewport_stroke: hsla_to_u32(ui.primary),
         zoom_controls_background: hsla_to_u32(ui.popover),
@@ -52,11 +56,15 @@ pub fn er_flow_theme_from_ui(ui: &Theme) -> FlowTheme {
         context_menu_text: hsla_to_u32(ui.foreground),
         context_menu_shortcut_text: hsla_to_u32(ui.muted_foreground),
         context_menu_separator: hsla_to_u32(ui.border),
-        error: hsla_to_u32(ui.background),
-        info: hsla_to_u32(ui.background),
-        success: hsla_to_u32(ui.background),
-        warning: hsla_to_u32(ui.background),
+        error: hsla_to_u32(ui.danger),
+        info: hsla_to_u32(ui.info),
+        success: hsla_to_u32(ui.success),
+        warning: hsla_to_u32(ui.warning),
     }
+}
+
+fn blend_to_u32(background: Hsla, foreground: Hsla, background_weight: f32) -> u32 {
+    hsla_to_u32(background.mix(foreground, background_weight))
 }
 
 /// 将 GPUI Hsla 颜色转换为 FlowTheme 使用的 `0x00RRGGBB` 格式。
@@ -81,6 +89,7 @@ fn hsla_to_u32_rgba(color: Hsla) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_component::ThemeColor;
 
     #[test]
     fn creates_er_theme() {
@@ -88,5 +97,18 @@ mod tests {
 
         assert_eq!(theme.default_port_fill, 0x000f766e);
         assert_eq!(theme.background, 0x00f8fafc);
+    }
+
+    #[test]
+    fn ui_theme_mapping_uses_current_background_and_semantic_colors() {
+        let ui = Theme::from(ThemeColor::dark().as_ref());
+        let theme = er_flow_theme_from_ui(&ui);
+
+        assert_eq!(theme.background, hsla_to_u32(ui.background));
+        assert_eq!(theme.error, hsla_to_u32(ui.danger));
+        assert_eq!(theme.info, hsla_to_u32(ui.info));
+        assert_eq!(theme.success, hsla_to_u32(ui.success));
+        assert_eq!(theme.warning, hsla_to_u32(ui.warning));
+        assert_ne!(theme.background_grid_dot, hsla_to_u32(ui.muted_foreground));
     }
 }

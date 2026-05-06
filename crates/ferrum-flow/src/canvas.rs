@@ -401,6 +401,30 @@ impl FlowCanvas {
         self.graph.clone()
     }
 
+    /// Replace the active canvas visual tokens and request a redraw when they changed.
+    pub fn set_theme(&mut self, theme: FlowTheme, cx: &mut Context<Self>) {
+        if self.theme == theme {
+            return;
+        }
+        self.theme = theme;
+        cx.notify();
+    }
+
+    /// Replace node renderers and clear cached port layout derived from renderer geometry.
+    pub fn replace_node_renderers<S: Into<String>>(
+        &mut self,
+        items: impl IntoIterator<Item = (S, Box<dyn node_renderer::NodeRenderer>)>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut renderers = RendererRegistry::new();
+        for (name, renderer) in items {
+            renderers.register_boxed(name, renderer);
+        }
+        self.renderers = renderers;
+        self.port_offset_cache.clear_all();
+        cx.notify();
+    }
+
     fn process_event_queue(&mut self, cx: &mut Context<Self>) {
         while let Some(event) = self.event_queue.pop() {
             if let Some(sync_plugin) = &mut self.sync_plugin {

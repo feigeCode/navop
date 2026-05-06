@@ -4,13 +4,15 @@ mod scroll_pan_plugin;
 
 use db::GlobalDbState;
 use ferrum_flow::{
-    BackgroundPlugin, EdgePlugin, FitAllGraphPlugin, FlowCanvas, Graph, MinimapPlugin,
+    BackgroundPlugin, EdgePlugin, FitAllGraphPlugin, FlowCanvas, FlowTheme, Graph, MinimapPlugin,
     NodeInteractionPlugin, NodePlugin, ViewportPlugin, ZoomControlsPlugin,
 };
 
 use crate::er_diagram::pan_mode_plugin::ErDiagramPanModePlugin;
 use crate::er_diagram::scroll_pan_plugin::ErDiagramScrollPanPlugin;
-use er_flow::{er_flow_theme_from_ui, er_node_renderers_from_theme, graph_from_diagram};
+use er_flow::{
+    ErCardTheme, er_flow_theme_from_ui, er_node_renderers_from_theme, graph_from_diagram,
+};
 use gpui::{
     App, AppContext as _, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Styled as _,
@@ -40,7 +42,14 @@ pub(crate) struct ErDiagramTab {
     canvas: Option<Entity<FlowCanvas>>,
     loading: bool,
     error: Option<String>,
+    theme_snapshot: Option<ErDiagramThemeSnapshot>,
     focus_handle: FocusHandle,
+}
+
+#[derive(Clone, PartialEq)]
+struct ErDiagramThemeSnapshot {
+    flow_theme: FlowTheme,
+    card_theme: ErCardTheme,
 }
 
 impl ErDiagramTab {
@@ -54,6 +63,7 @@ impl ErDiagramTab {
             canvas: None,
             loading: true,
             error: None,
+            theme_snapshot: None,
             focus_handle: cx.focus_handle(),
         };
         tab.reload(window, cx);
@@ -98,7 +108,25 @@ impl ErDiagramTab {
                 self.error = Some(err.to_string());
             }
         }
+        self.theme_snapshot = Some(current_theme_snapshot(cx));
         cx.notify();
+    }
+
+    fn sync_canvas_theme(&mut self, cx: &mut Context<Self>) {
+        let Some(canvas) = self.canvas.as_ref() else {
+            return;
+        };
+        let next_snapshot = current_theme_snapshot(cx);
+        if self.theme_snapshot.as_ref() == Some(&next_snapshot) {
+            return;
+        }
+        let theme = cx.theme();
+        let renderers = er_node_renderers_from_theme(theme);
+        canvas.update(cx, |canvas, cx| {
+            canvas.set_theme(next_snapshot.flow_theme.clone(), cx);
+            canvas.replace_node_renderers(renderers, cx);
+        });
+        self.theme_snapshot = Some(next_snapshot);
     }
 
     fn render_loading(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -220,6 +248,8 @@ fn build_canvas(
 
 impl Render for ErDiagramTab {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_canvas_theme(cx);
+
         div()
             .track_focus(&self.focus_handle)
             .size_full()
@@ -233,6 +263,14 @@ impl Render for ErDiagramTab {
                     None => this.child(div().size_full()),
                 }
             })
+    }
+}
+
+fn current_theme_snapshot(cx: &mut App) -> ErDiagramThemeSnapshot {
+    let theme = cx.theme();
+    ErDiagramThemeSnapshot {
+        flow_theme: er_flow_theme_from_ui(theme),
+        card_theme: ErCardTheme::from_ui_theme(theme),
     }
 }
 
