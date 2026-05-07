@@ -8,13 +8,17 @@ use crate::ipc::registry::IpcDriverManifest;
 use crate::{DatabasePlugin, SqlErrorInfo, truncate_str};
 use async_trait::async_trait;
 use one_core::storage::DbConnectionConfig;
+use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, error};
 
 pub struct ExternalDbConnection {
     config: DbConnectionConfig,
     driver: IpcDriverManifest,
-    client: Mutex<Option<JsonRpcClient>>,
+    /// `Arc` 让 `request` 能短锁拿 clone 后立刻释放,允许多 caller 并发调用
+    /// `JsonRpcClient::request`。`Mutex<Option<...>>` 处理 connect/disconnect 的
+    /// owner 切换。
+    client: Mutex<Option<Arc<JsonRpcClient>>>,
 }
 
 impl ExternalDbConnection {
@@ -30,9 +34,29 @@ impl ExternalDbConnection {
     where
         T: serde::de::DeserializeOwned,
     {
-        let mut guard = self.client.lock().await;
-        let client = guard.as_mut().ok_or(DbError::NotConnected)?;
-        client.request(method, params).await
+        // 短锁:仅在拿 Arc clone 时持锁,之后释放,允许多 caller 并发调用 client。
+        let client = {
+            let guard = self.client.lock().await;
+            guard.as_ref().cloned().ok_or(DbError::NotConnected)?
+        };
+
+        let result = client.request(method, params).await;
+
+        // P0-4:transport 已 fatal(reader task 退出),evict 当前 broken client
+        // 让下次 request 直接得到 NotConnected,触发上层重连逻辑。
+        // 用 Arc::ptr_eq 防止误踩 — 别的 caller 可能已经 evict + reconnect。
+        if client.is_closed() {
+            let mut guard = self.client.lock().await;
+            if let Some(current) = guard.as_ref() {
+                if Arc::ptr_eq(current, &client) {
+                    *guard = None;
+                    // 旧 Arc 在最后一个 in-flight reference drop 后才真正释放,
+                    // 由 JsonRpcClient::Drop 完成 reader_task abort + kill_on_drop child。
+                }
+            }
+        }
+
+        result
     }
 }
 
@@ -57,21 +81,27 @@ impl DbConnection for ExternalDbConnection {
     }
 
     async fn connect(&mut self) -> Result<(), DbError> {
-        let mut client = JsonRpcClient::start(&self.driver).await?;
+        let client = JsonRpcClient::start(&self.driver).await?;
+        // initialize / connect 走 `&self`,这里直接用 owned client(尚未 Arc),
+        // 任一步失败就把 client drop 掉 → reader_task abort + child kill_on_drop。
         let _: serde_json::Value = client.request("initialize", empty_params()).await?;
         let _: serde_json::Value = client
             .request("connect", connection_config_params(&self.config))
             .await?;
-        *self.client.lock().await = Some(client);
+        *self.client.lock().await = Some(Arc::new(client));
         Ok(())
     }
 
     async fn disconnect(&mut self) -> Result<(), DbError> {
-        let mut client = self.client.lock().await.take();
-        if let Some(client) = client.as_mut() {
+        let client_arc = self.client.lock().await.take();
+        if let Some(client_arc) = client_arc {
+            // 尽力发出 disconnect RPC(可能因连接已断而失败,允许)。
             let _: Result<serde_json::Value, DbError> =
-                client.request("disconnect", empty_params()).await;
-            client.shutdown().await;
+                client_arc.request("disconnect", empty_params()).await;
+            // 显式 abort reader + kill+wait child,确保返回前子进程已退出。
+            // 即便仍有 in-flight Arc clone(并发 query 未返回),它们会因 reader 关闭
+            // 而立即收到 disconnected 错误,然后 Arc 自然 drop。
+            client_arc.shutdown().await;
         }
         Ok(())
     }

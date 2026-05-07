@@ -6,9 +6,10 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let socket_name = std::env::args()
-        .nth(1)
-        .or_else(|| std::env::var("ONETCLI_DUCKDB_DRIVER_SOCKET").ok())
+    let socket_name = std::env::var("ONETCLI_IPC_SOCKET")
+        .or_else(|_| std::env::var("ONETCLI_DUCKDB_DRIVER_SOCKET"))
+        .ok()
+        .or_else(|| std::env::args().nth(1))
         .unwrap_or_else(|| "onetcli-duckdb-driver.sock".to_string());
 
     duckdb_driver::server::run(&socket_name).await

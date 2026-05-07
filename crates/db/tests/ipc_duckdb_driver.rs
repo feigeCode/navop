@@ -26,40 +26,27 @@ fn driver_binary() -> PathBuf {
     target_dir.join(name)
 }
 
-#[tokio::test]
-async fn duckdb_driver_ipc_full_integration() {
-    let binary = driver_binary();
-    if !binary.exists() {
-        eprintln!(
-            "SKIP: duckdb_driver binary not found at {:?}\n\
-             Build it first: cargo build -p duckdb_driver",
-            binary
-        );
-        return;
-    }
-
-    let temp = tempfile::tempdir().unwrap();
-    let socket = format!("onetcli-test-duckdb-{}.sock", uuid::Uuid::new_v4());
-    let db_path = temp.path().join("test.db");
-
-    let driver = IpcDriverManifest {
+fn make_driver(binary: &std::path::Path, manifest_dir: &std::path::Path) -> IpcDriverManifest {
+    IpcDriverManifest {
         id: "duckdb".into(),
         name: "DuckDB".into(),
         description: String::new(),
         version: String::new(),
         entry: IpcDriverEntry {
             command: binary.to_string_lossy().into_owned(),
-            args: vec![socket.clone()],
+            args: Vec::new(),
             working_dir: None,
         },
         dialect: Default::default(),
         ui: Default::default(),
-        transport: IpcDriverTransport::local_socket(socket),
-        manifest_dir: temp.path().to_path_buf(),
-    };
+        transport: IpcDriverTransport::local_socket("duckdb-driver.sock"),
+        manifest_dir: manifest_dir.to_path_buf(),
+    }
+}
 
-    let config = DbConnectionConfig {
-        id: "duckdb-test".into(),
+fn make_config(id: &str, db_path: &std::path::Path) -> DbConnectionConfig {
+    DbConnectionConfig {
+        id: id.into(),
         name: "DuckDB Test".into(),
         database_type: DatabaseType::External,
         host: db_path.to_string_lossy().into_owned(),
@@ -71,7 +58,32 @@ async fn duckdb_driver_ipc_full_integration() {
         sid: None,
         workspace_id: None,
         extra_params: HashMap::new(),
-    };
+    }
+}
+
+fn skip_if_missing_binary(binary: &std::path::Path) -> bool {
+    if binary.exists() {
+        return false;
+    }
+    eprintln!(
+        "SKIP: duckdb_driver binary not found at {:?}\n\
+         Build it first: cargo build -p duckdb_driver",
+        binary
+    );
+    true
+}
+
+#[tokio::test]
+async fn duckdb_driver_ipc_full_integration() {
+    let binary = driver_binary();
+    if skip_if_missing_binary(&binary) {
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let db_path = temp.path().join("test.db");
+    let driver = make_driver(&binary, temp.path());
+    let config = make_config("duckdb-test", &db_path);
 
     // ---- connect ----
     let mut conn = ExternalDbConnection::new(config.clone(), driver);
@@ -148,4 +160,38 @@ async fn duckdb_driver_ipc_full_integration() {
 
     // ---- disconnect ----
     conn.disconnect().await.expect("disconnect");
+}
+
+#[tokio::test]
+async fn same_duckdb_driver_can_open_multiple_connections_concurrently() {
+    let binary = driver_binary();
+    if skip_if_missing_binary(&binary) {
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut handles = Vec::new();
+    for idx in 0..3 {
+        let driver = make_driver(&binary, temp.path());
+        let db_path = temp.path().join(format!("multi-{idx}.db"));
+        let config = make_config(&format!("duckdb-multi-{idx}"), &db_path);
+        handles.push(tokio::spawn(async move {
+            let mut conn = ExternalDbConnection::new(config, driver);
+            conn.connect().await.expect("connect");
+            let result = conn.query(&format!("SELECT {idx} AS val")).await.unwrap();
+            match result {
+                SqlResult::Query(q) => {
+                    let expected = idx.to_string();
+                    assert_eq!(q.columns, vec!["val"]);
+                    assert_eq!(q.rows[0][0].as_deref(), Some(expected.as_str()));
+                }
+                other => panic!("expected query result, got {other:?}"),
+            }
+            conn.disconnect().await.expect("disconnect");
+        }));
+    }
+
+    for handle in handles {
+        handle.await.unwrap();
+    }
 }
