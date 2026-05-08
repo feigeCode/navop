@@ -802,7 +802,7 @@ impl DatabaseObjects {
         });
 
         let toolbar_buttons =
-            build_toolbar_buttons_for(database_type, node_type, data_db_node_type);
+            build_toolbar_buttons_for(database_type, node_type, data_db_node_type, cx);
 
         for btn_config in toolbar_buttons {
             let button = match btn_config.button_type {

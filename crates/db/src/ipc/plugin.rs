@@ -8,7 +8,7 @@ use crate::ipc::connection::ExternalDbConnection;
 use crate::ipc::protocol::{database_metadata_params, table_metadata_params};
 use crate::ipc::registry::{EXTERNAL_DRIVER_ID_PARAM, IpcDriverManifest, IpcDriverRegistry};
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
-use crate::plugin_manifest::DatabaseUiManifest;
+use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiCapabilities, DatabaseUiManifest};
 use crate::types::*;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -55,6 +55,22 @@ impl ExternalDatabasePlugin {
             SqlResult::Exec(_) => Err(anyhow!(
                 "external driver returned non-query metadata result"
             )),
+        }
+    }
+
+    async fn optional_metadata<T>(
+        &self,
+        connection: &dyn DbConnection,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<Option<T>>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        match self.metadata(connection, method, params).await {
+            Ok(value) => Ok(Some(value)),
+            Err(error) if is_not_supported(&error) => Ok(None),
+            Err(error) => Err(error),
         }
     }
 }
@@ -120,29 +136,20 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             .await
         {
             Ok(databases) => Ok(databases),
-            Err(_) => Ok(names_to_databases(self.list_databases(connection).await?)),
+            Err(error) if is_not_supported(&error) => {
+                Ok(names_to_databases(self.list_databases(connection).await?))
+            }
+            Err(error) => Err(error),
         }
     }
 
-    fn supports_schema(&self) -> bool {
-        self.registry
-            .drivers()
-            .iter()
-            .any(|driver| driver.dialect.supports_schema)
-    }
-
-    fn uses_schema_as_database(&self) -> bool {
-        self.registry
-            .drivers()
-            .iter()
-            .any(|driver| driver.dialect.uses_schema_as_database)
-    }
-
-    fn supports_sequences(&self) -> bool {
-        self.registry
-            .drivers()
-            .iter()
-            .any(|driver| driver.dialect.supports_sequences)
+    fn capabilities(&self) -> DatabaseCapabilities {
+        merge_capabilities(
+            self.registry
+                .drivers()
+                .iter()
+                .map(IpcDriverManifest::effective_capabilities),
+        )
     }
 
     fn sql_dialect(&self) -> Box<dyn Dialect> {
@@ -301,20 +308,89 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         ))
     }
 
+    async fn list_foreign_keys(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+        table: &str,
+    ) -> Result<Vec<ForeignKeyDefinition>> {
+        Ok(self
+            .optional_metadata(
+                connection,
+                "metadata.list_foreign_keys",
+                table_metadata_params(database, schema, table),
+            )
+            .await?
+            .unwrap_or_default())
+    }
+
+    async fn list_table_triggers(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+        table: &str,
+    ) -> Result<Vec<TriggerInfo>> {
+        Ok(self
+            .optional_metadata(
+                connection,
+                "metadata.list_table_triggers",
+                table_metadata_params(database, schema, table),
+            )
+            .await?
+            .unwrap_or_default())
+    }
+
+    async fn list_table_checks(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
+        table: &str,
+    ) -> Result<Vec<CheckInfo>> {
+        Ok(self
+            .optional_metadata(
+                connection,
+                "metadata.list_table_checks",
+                table_metadata_params(database, schema, table),
+            )
+            .await?
+            .unwrap_or_default())
+    }
+
     async fn list_functions(
         &self,
-        _connection: &dyn DbConnection,
-        _database: &str,
+        connection: &dyn DbConnection,
+        database: &str,
     ) -> Result<Vec<FunctionInfo>> {
-        Ok(Vec::new())
+        Ok(self
+            .optional_metadata(
+                connection,
+                "metadata.list_functions",
+                database_metadata_params(database, None),
+            )
+            .await?
+            .unwrap_or_default())
     }
 
     async fn list_functions_view(
         &self,
-        _connection: &dyn DbConnection,
-        _database: &str,
+        connection: &dyn DbConnection,
+        database: &str,
     ) -> Result<ObjectView> {
-        Ok(ObjectView::default())
+        let rows = self
+            .list_functions(connection, database)
+            .await?
+            .into_iter()
+            .map(|function| vec![function.name, function.return_type.unwrap_or_default()])
+            .collect();
+        Ok(object_view(
+            DbNodeType::Function,
+            "Functions",
+            vec!["Name", "Return Type"],
+            rows,
+        ))
     }
 
     fn ui_manifest(&self) -> DatabaseUiManifest {
@@ -327,51 +403,110 @@ impl DatabasePlugin for ExternalDatabasePlugin {
 
     async fn list_procedures(
         &self,
-        _connection: &dyn DbConnection,
-        _database: &str,
+        connection: &dyn DbConnection,
+        database: &str,
     ) -> Result<Vec<FunctionInfo>> {
-        Ok(Vec::new())
+        Ok(self
+            .optional_metadata(
+                connection,
+                "metadata.list_procedures",
+                database_metadata_params(database, None),
+            )
+            .await?
+            .unwrap_or_default())
     }
 
     async fn list_procedures_view(
         &self,
-        _connection: &dyn DbConnection,
-        _database: &str,
+        connection: &dyn DbConnection,
+        database: &str,
     ) -> Result<ObjectView> {
-        Ok(ObjectView::default())
+        let rows = self
+            .list_procedures(connection, database)
+            .await?
+            .into_iter()
+            .map(|procedure| vec![procedure.name, procedure.parameters.join(", ")])
+            .collect();
+        Ok(object_view(
+            DbNodeType::Procedure,
+            "Procedures",
+            vec!["Name", "Parameters"],
+            rows,
+        ))
     }
 
     async fn list_triggers(
         &self,
-        _connection: &dyn DbConnection,
-        _database: &str,
+        connection: &dyn DbConnection,
+        database: &str,
     ) -> Result<Vec<TriggerInfo>> {
-        Ok(Vec::new())
+        Ok(self
+            .optional_metadata(
+                connection,
+                "metadata.list_triggers",
+                database_metadata_params(database, None),
+            )
+            .await?
+            .unwrap_or_default())
     }
 
     async fn list_triggers_view(
         &self,
-        _connection: &dyn DbConnection,
-        _database: &str,
+        connection: &dyn DbConnection,
+        database: &str,
     ) -> Result<ObjectView> {
-        Ok(ObjectView::default())
+        let rows = self
+            .list_triggers(connection, database)
+            .await?
+            .into_iter()
+            .map(|trigger| vec![trigger.name, trigger.table_name, trigger.event])
+            .collect();
+        Ok(object_view(
+            DbNodeType::Trigger,
+            "Triggers",
+            vec!["Name", "Table", "Event"],
+            rows,
+        ))
     }
 
     async fn list_sequences(
         &self,
-        _connection: &dyn DbConnection,
-        _database: &str,
-        _schema: Option<String>,
+        connection: &dyn DbConnection,
+        database: &str,
+        schema: Option<String>,
     ) -> Result<Vec<SequenceInfo>> {
-        Ok(Vec::new())
+        Ok(self
+            .optional_metadata(
+                connection,
+                "metadata.list_sequences",
+                database_metadata_params(database, schema),
+            )
+            .await?
+            .unwrap_or_default())
     }
 
     async fn list_sequences_view(
         &self,
-        _connection: &dyn DbConnection,
-        _database: &str,
+        connection: &dyn DbConnection,
+        database: &str,
     ) -> Result<ObjectView> {
-        Ok(ObjectView::default())
+        let rows = self
+            .list_sequences(connection, database, None)
+            .await?
+            .into_iter()
+            .map(|sequence| {
+                vec![
+                    sequence.name,
+                    sequence.increment.unwrap_or_default().to_string(),
+                ]
+            })
+            .collect();
+        Ok(object_view(
+            DbNodeType::Sequence,
+            "Sequences",
+            vec!["Name", "Increment"],
+            rows,
+        ))
     }
 
     fn build_column_definition(&self, column: &ColumnInfo, include_name: bool) -> String {
@@ -514,6 +649,42 @@ fn names_to_databases(names: Vec<String>) -> Vec<DatabaseInfo> {
             comment: None,
         })
         .collect()
+}
+
+fn is_not_supported(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<DbError>()
+        .is_some_and(|error| matches!(error, DbError::NotSupported(_)))
+}
+
+fn merge_capabilities(
+    capabilities: impl IntoIterator<Item = DatabaseCapabilities>,
+) -> DatabaseCapabilities {
+    capabilities
+        .into_iter()
+        .fold(DatabaseUiCapabilities::default(), |mut merged, current| {
+            merged.supports_schema |= current.supports_schema;
+            merged.uses_schema_as_database |= current.uses_schema_as_database;
+            merged.supports_sequences |= current.supports_sequences;
+            merged.supports_functions |= current.supports_functions;
+            merged.supports_procedures |= current.supports_procedures;
+            merged.supports_triggers |= current.supports_triggers;
+            merged.supports_table_engine |= current.supports_table_engine;
+            merged.supports_table_charset |= current.supports_table_charset;
+            merged.supports_table_collation |= current.supports_table_collation;
+            merged.supports_auto_increment |= current.supports_auto_increment;
+            merged.supports_tablespace |= current.supports_tablespace;
+            merged.supports_unsigned |= current.supports_unsigned;
+            merged.supports_enum_values |= current.supports_enum_values;
+            merged.show_charset_in_column_detail |= current.show_charset_in_column_detail;
+            merged.show_collation_in_column_detail |= current.show_collation_in_column_detail;
+            for engine in current.table_engines {
+                if !merged.table_engines.contains(&engine) {
+                    merged.table_engines.push(engine);
+                }
+            }
+            merged
+        })
 }
 
 fn object_view(

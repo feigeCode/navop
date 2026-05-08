@@ -18,8 +18,8 @@ use crate::manifest_helpers::{
 use crate::plugin::{DatabaseOperationRequest, DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
-    DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest, DatabaseUiCapabilities,
-    DatabaseUiManifest,
+    DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
+    DatabaseUiCapabilities, DatabaseUiManifest,
 };
 use crate::types::*;
 
@@ -505,6 +505,15 @@ impl DatabasePlugin for ClickHousePlugin {
         format!("`{}`", identifier.replace("`", "``"))
     }
 
+    fn capabilities(&self) -> DatabaseCapabilities {
+        DatabaseUiCapabilities {
+            supports_functions: true,
+            supports_table_engine: true,
+            table_engines: self.engines(),
+            ..DatabaseUiCapabilities::default()
+        }
+    }
+
     fn ui_manifest(&self) -> DatabaseUiManifest {
         CLICKHOUSE_UI_MANIFEST.clone()
     }
@@ -686,10 +695,6 @@ impl DatabasePlugin for ClickHousePlugin {
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
-    }
-
-    fn supports_sequences(&self) -> bool {
-        false
     }
 
     // === Database/Schema Level Operations ===
@@ -1111,10 +1116,6 @@ impl DatabasePlugin for ClickHousePlugin {
     }
 
     // === Function Operations ===
-
-    fn supports_procedures(&self) -> bool {
-        false
-    }
 
     async fn list_procedures(
         &self,
@@ -1583,6 +1584,15 @@ mod tests {
         assert_eq!(plugin.quote_identifier("table_name"), "`table_name`");
         assert_eq!(plugin.quote_identifier("column"), "`column`");
         assert_eq!(plugin.quote_identifier("col`umn"), "`col``umn`");
+    }
+
+    #[test]
+    fn test_capabilities() {
+        let capabilities = create_plugin().capabilities();
+        assert!(capabilities.supports_functions);
+        assert!(!capabilities.supports_procedures);
+        assert!(!capabilities.supports_sequences);
+        assert_eq!(capabilities.table_engines, clickhouse_engine_names());
     }
 
     #[test]

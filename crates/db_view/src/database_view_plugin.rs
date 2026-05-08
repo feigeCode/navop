@@ -1,18 +1,10 @@
 use db::DbNodeType;
-use db::clickhouse::ClickHousePlugin;
-use db::duckdb::DuckDbPlugin;
-use db::ipc::ExternalDatabasePlugin;
 use db::ipc::{EXTERNAL_DRIVER_ID_PARAM, IpcDriverManifest, IpcDriverRegistry};
-use db::mssql::MsSqlPlugin;
-use db::mysql::MySqlPlugin;
-use db::oracle::OraclePlugin;
 use db::plugin::DatabasePlugin;
 use db::plugin_manifest::{
     DatabaseActionDescriptor, DatabaseActionId, DatabaseActionPlacement,
-    DatabaseActionToolbarScope, DatabaseFormKind, DatabaseUiManifest,
+    DatabaseActionToolbarScope, DatabaseCapabilities, DatabaseFormKind, DatabaseUiManifest,
 };
-use db::postgresql::PostgresPlugin;
-use db::sqlite::SqlitePlugin;
 use gpui::{App, AppContext, Entity, Window};
 use gpui_component::IconName;
 use one_core::storage::DatabaseType;
@@ -201,13 +193,15 @@ impl Default for ColumnEditorCapabilities {
 struct ManifestDatabaseViewPlugin {
     database_type: DatabaseType,
     manifest: DatabaseUiManifest,
+    capabilities: DatabaseCapabilities,
 }
 
 impl ManifestDatabaseViewPlugin {
-    fn new(database_type: DatabaseType) -> Self {
+    fn new(database_type: DatabaseType, plugin: &dyn DatabasePlugin) -> Self {
         Self {
             database_type,
-            manifest: build_ui_manifest(database_type),
+            manifest: plugin.ui_manifest(),
+            capabilities: plugin.capabilities(),
         }
     }
 
@@ -304,15 +298,15 @@ impl ManifestDatabaseViewPlugin {
     }
 
     fn get_table_designer_capabilities(&self) -> TableDesignerCapabilities {
-        to_table_designer_capabilities(&self.manifest.capabilities)
+        to_table_designer_capabilities(&self.capabilities)
     }
 
     fn get_engines(&self) -> Vec<String> {
-        self.manifest.capabilities.table_engines.clone()
+        self.capabilities.table_engines.clone()
     }
 
     fn get_column_editor_capabilities(&self) -> ColumnEditorCapabilities {
-        to_column_editor_capabilities(&self.manifest.capabilities)
+        to_column_editor_capabilities(&self.capabilities)
     }
 
     fn build_context_menu(&self, node_id: &str, node_type: DbNodeType) -> Vec<ContextMenuItem> {
@@ -404,8 +398,16 @@ impl ManifestDatabaseViewPlugin {
     }
 }
 
-fn manifest_plugin(database_type: DatabaseType) -> ManifestDatabaseViewPlugin {
-    ManifestDatabaseViewPlugin::new(database_type)
+fn manifest_plugin(
+    database_type: DatabaseType,
+    cx: &impl AppContext,
+) -> ManifestDatabaseViewPlugin {
+    let plugin = cx.read_global::<db::GlobalDbState, _>(|state, _| {
+        state
+            .get_plugin(&database_type)
+            .expect("database plugin should exist")
+    });
+    ManifestDatabaseViewPlugin::new(database_type, plugin.as_ref())
 }
 
 fn action_to_context_menu_item(
@@ -567,7 +569,7 @@ pub fn create_connection_form_for(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<DbConnectionForm> {
-    manifest_plugin(database_type).create_connection_form(window, cx)
+    manifest_plugin(database_type, cx).create_connection_form(window, cx)
 }
 
 pub fn create_external_connection_form_for(
@@ -654,7 +656,7 @@ pub fn create_database_editor_view_for_new(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<DatabaseEditorView> {
-    manifest_plugin(database_type).create_database_editor_view(connection_id, window, cx)
+    manifest_plugin(database_type, cx).create_database_editor_view(connection_id, window, cx)
 }
 
 pub fn create_database_editor_view_for_edit_type(
@@ -664,7 +666,7 @@ pub fn create_database_editor_view_for_edit_type(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<DatabaseEditorView> {
-    manifest_plugin(database_type).create_database_editor_view_for_edit(
+    manifest_plugin(database_type, cx).create_database_editor_view_for_edit(
         connection_id,
         database_name,
         window,
@@ -679,7 +681,7 @@ pub fn create_schema_editor_view_for(
     window: &mut Window,
     cx: &mut App,
 ) -> Option<Entity<SchemaEditorView>> {
-    manifest_plugin(database_type).create_schema_editor_view(
+    manifest_plugin(database_type, cx).create_schema_editor_view(
         connection_id,
         database_name,
         window,
@@ -691,8 +693,9 @@ pub fn build_context_menu_for(
     database_type: DatabaseType,
     node_id: &str,
     node_type: DbNodeType,
+    cx: &impl AppContext,
 ) -> Vec<ContextMenuItem> {
-    let mut items = manifest_plugin(database_type).build_context_menu(node_id, node_type);
+    let mut items = manifest_plugin(database_type, cx).build_context_menu(node_id, node_type);
     append_er_diagram_item(&mut items, node_id, node_type);
     items
 }
@@ -701,8 +704,9 @@ pub fn build_toolbar_buttons_for(
     database_type: DatabaseType,
     node_type: DbNodeType,
     data_node_type: DbNodeType,
+    cx: &impl AppContext,
 ) -> Vec<ToolbarButton> {
-    manifest_plugin(database_type).build_toolbar_buttons(node_type, data_node_type)
+    manifest_plugin(database_type, cx).build_toolbar_buttons(node_type, data_node_type)
 }
 
 fn append_er_diagram_item(items: &mut Vec<ContextMenuItem>, node_id: &str, node_type: DbNodeType) {
@@ -722,29 +726,20 @@ fn append_er_diagram_item(items: &mut Vec<ContextMenuItem>, node_id: &str, node_
 
 pub fn get_table_designer_capabilities_for(
     database_type: DatabaseType,
+    cx: &impl AppContext,
 ) -> TableDesignerCapabilities {
-    manifest_plugin(database_type).get_table_designer_capabilities()
+    manifest_plugin(database_type, cx).get_table_designer_capabilities()
 }
 
-pub fn get_column_editor_capabilities_for(database_type: DatabaseType) -> ColumnEditorCapabilities {
-    manifest_plugin(database_type).get_column_editor_capabilities()
+pub fn get_column_editor_capabilities_for(
+    database_type: DatabaseType,
+    cx: &impl AppContext,
+) -> ColumnEditorCapabilities {
+    manifest_plugin(database_type, cx).get_column_editor_capabilities()
 }
 
-pub fn get_engines_for(database_type: DatabaseType) -> Vec<String> {
-    manifest_plugin(database_type).get_engines()
-}
-
-fn build_ui_manifest(database_type: DatabaseType) -> DatabaseUiManifest {
-    match database_type {
-        DatabaseType::MySQL => MySqlPlugin::new().ui_manifest(),
-        DatabaseType::PostgreSQL => PostgresPlugin::new().ui_manifest(),
-        DatabaseType::MSSQL => MsSqlPlugin::new().ui_manifest(),
-        DatabaseType::Oracle => OraclePlugin::new().ui_manifest(),
-        DatabaseType::ClickHouse => ClickHousePlugin::new().ui_manifest(),
-        DatabaseType::SQLite => SqlitePlugin::new().ui_manifest(),
-        DatabaseType::DuckDB => DuckDbPlugin::new().ui_manifest(),
-        DatabaseType::External => ExternalDatabasePlugin::new().ui_manifest(),
-    }
+pub fn get_engines_for(database_type: DatabaseType, cx: &impl AppContext) -> Vec<String> {
+    manifest_plugin(database_type, cx).get_engines()
 }
 
 fn map_tree_event(action_id: DatabaseActionId, node_id: &str) -> Option<DbTreeViewEvent> {
@@ -902,6 +897,12 @@ fn action_id(action: &DatabaseActionDescriptor) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use db::mysql::MySqlPlugin;
+
+    fn mysql_manifest_plugin() -> ManifestDatabaseViewPlugin {
+        let plugin = MySqlPlugin::new();
+        ManifestDatabaseViewPlugin::new(DatabaseType::MySQL, &plugin)
+    }
 
     fn has_label(items: &[ContextMenuItem], expected: &str) -> bool {
         items.iter().any(|item| match item {
@@ -915,7 +916,7 @@ mod tests {
 
     #[test]
     fn mysql_table_context_menu_keeps_design_table_action() {
-        let items = build_context_menu_for(DatabaseType::MySQL, "node-1", DbNodeType::Table);
+        let items = mysql_manifest_plugin().build_context_menu("node-1", DbNodeType::Table);
 
         assert!(
             has_label(&items, &translate("Table.design_table")),
@@ -925,7 +926,7 @@ mod tests {
 
     #[test]
     fn mysql_table_context_menu_keeps_dump_sql_submenu() {
-        let items = build_context_menu_for(DatabaseType::MySQL, "node-1", DbNodeType::Table);
+        let items = mysql_manifest_plugin().build_context_menu("node-1", DbNodeType::Table);
 
         let dump_submenu = items.iter().find_map(|item| match item {
             ContextMenuItem::Submenu { label, items, .. }
@@ -956,7 +957,7 @@ mod tests {
 
     #[test]
     fn mysql_database_context_menu_restores_legacy_order_and_separators() {
-        let items = build_context_menu_for(DatabaseType::MySQL, "node-1", DbNodeType::Database);
+        let items = mysql_manifest_plugin().build_context_menu("node-1", DbNodeType::Database);
 
         let labels: Vec<String> = items
             .iter()

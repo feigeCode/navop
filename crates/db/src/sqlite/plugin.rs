@@ -15,8 +15,8 @@ use crate::manifest_helpers::{DatabaseActionDescriptorExt, action, action_with_s
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
-    DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest, DatabaseUiCapabilities,
-    DatabaseUiManifest,
+    DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
+    DatabaseUiCapabilities, DatabaseUiManifest,
 };
 use crate::sqlite::SqliteDbConnection;
 use crate::types::*;
@@ -572,6 +572,13 @@ impl DatabasePlugin for SqlitePlugin {
         DatabaseType::SQLite
     }
 
+    fn capabilities(&self) -> DatabaseCapabilities {
+        DatabaseUiCapabilities {
+            supports_auto_increment: true,
+            ..DatabaseUiCapabilities::default()
+        }
+    }
+
     fn ui_manifest(&self) -> DatabaseUiManifest {
         SQLITE_UI_MANIFEST.clone()
     }
@@ -1013,10 +1020,6 @@ impl DatabasePlugin for SqlitePlugin {
         })
     }
 
-    fn supports_functions(&self) -> bool {
-        false
-    }
-
     async fn list_functions(
         &self,
         _connection: &dyn DbConnection,
@@ -1040,10 +1043,6 @@ impl DatabasePlugin for SqlitePlugin {
             columns,
             rows: vec![],
         })
-    }
-
-    fn supports_procedures(&self) -> bool {
-        false
     }
 
     async fn list_procedures(
@@ -1458,6 +1457,15 @@ mod tests {
         assert_eq!(plugin.quote_identifier("table_name"), "\"table_name\"");
         assert_eq!(plugin.quote_identifier("column"), "\"column\"");
         assert_eq!(plugin.quote_identifier("col\"umn"), "\"col\"\"umn\"");
+    }
+
+    #[test]
+    fn test_capabilities() {
+        let capabilities = create_plugin().capabilities();
+        assert!(capabilities.supports_auto_increment);
+        assert!(!capabilities.supports_functions);
+        assert!(!capabilities.supports_procedures);
+        assert!(!capabilities.supports_sequences);
     }
 
     #[test]

@@ -39,6 +39,7 @@ fn make_manifest(socket_name: String) -> IpcDriverManifest {
             working_dir: None,
         },
         dialect: Default::default(),
+        capabilities: None,
         ui: Default::default(),
         transport: IpcDriverTransport::local_socket(socket_name),
         manifest_dir: PathBuf::new(),

@@ -81,8 +81,9 @@ impl SqlEditorTab {
             cx.new(|cx| SelectState::new(SearchableVec::new(vec![]), None, window, cx));
 
         let global_state = cx.global::<GlobalDbState>().clone();
-        let supports_schema = global_state.supports_schema(&database_type);
-        let uses_schema_as_database = global_state.uses_schema_as_database(&database_type);
+        let capabilities = global_state.capabilities(&database_type);
+        let supports_schema = capabilities.supports_schema;
+        let uses_schema_as_database = capabilities.uses_schema_as_database;
         let connection_id_str = connection_id.into();
 
         let should_load_file = file_path.is_some();

@@ -20,8 +20,8 @@ use crate::manifest_helpers::{
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
-    DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest, DatabaseUiCapabilities,
-    DatabaseUiManifest,
+    DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
+    DatabaseUiCapabilities, DatabaseUiManifest,
 };
 use crate::postgresql::connection::PostgresDbConnection;
 use crate::types::*;
@@ -681,6 +681,20 @@ impl DatabasePlugin for PostgresPlugin {
         format!("\"{}\"", identifier.replace("\"", "\"\""))
     }
 
+    fn capabilities(&self) -> DatabaseCapabilities {
+        DatabaseUiCapabilities {
+            supports_schema: true,
+            supports_sequences: true,
+            supports_functions: true,
+            supports_procedures: true,
+            supports_triggers: true,
+            supports_table_charset: true,
+            supports_table_collation: true,
+            supports_tablespace: true,
+            ..DatabaseUiCapabilities::default()
+        }
+    }
+
     fn ui_manifest(&self) -> DatabaseUiManifest {
         POSTGRESQL_UI_MANIFEST.clone()
     }
@@ -995,14 +1009,6 @@ impl DatabasePlugin for PostgresPlugin {
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
-    }
-
-    fn supports_schema(&self) -> bool {
-        true
-    }
-
-    fn supports_sequences(&self) -> bool {
-        true
     }
 
     fn sql_dialect(&self) -> Box<dyn sqlparser::dialect::Dialect> {
@@ -2226,15 +2232,15 @@ mod tests {
     }
 
     #[test]
-    fn test_supports_schema() {
+    fn test_capabilities_support_schema() {
         let plugin = create_plugin();
-        assert!(plugin.supports_schema());
+        assert!(plugin.capabilities().supports_schema);
     }
 
     #[test]
-    fn test_supports_sequences() {
+    fn test_capabilities_support_sequences() {
         let plugin = create_plugin();
-        assert!(plugin.supports_sequences());
+        assert!(plugin.capabilities().supports_sequences);
     }
 
     #[test]

@@ -17,7 +17,8 @@ use crate::manifest_helpers::{DatabaseActionDescriptorExt, action, action_with_s
 use crate::plugin::{DatabaseOperationRequest, DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
-    DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest, DatabaseUiManifest,
+    DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
+    DatabaseUiCapabilities, DatabaseUiManifest,
 };
 use crate::sqlite::SqlitePlugin;
 use crate::types::*;
@@ -753,6 +754,10 @@ impl DatabasePlugin for DuckDbPlugin {
         DatabaseType::DuckDB
     }
 
+    fn capabilities(&self) -> DatabaseCapabilities {
+        DatabaseUiCapabilities::default()
+    }
+
     fn ui_manifest(&self) -> DatabaseUiManifest {
         DUCKDB_UI_MANIFEST.clone()
     }
@@ -1192,10 +1197,6 @@ impl DatabasePlugin for DuckDbPlugin {
         })
     }
 
-    fn supports_functions(&self) -> bool {
-        false
-    }
-
     async fn list_functions(
         &self,
         connection: &dyn DbConnection,
@@ -1210,10 +1211,6 @@ impl DatabasePlugin for DuckDbPlugin {
         database: &str,
     ) -> Result<ObjectView> {
         self.sqlite.list_functions_view(connection, database).await
-    }
-
-    fn supports_procedures(&self) -> bool {
-        false
     }
 
     async fn list_procedures(
@@ -1464,6 +1461,14 @@ mod tests {
 
     fn create_plugin() -> DuckDbPlugin {
         DuckDbPlugin::new()
+    }
+
+    #[test]
+    fn test_capabilities() {
+        let capabilities = create_plugin().capabilities();
+        assert!(!capabilities.supports_functions);
+        assert!(!capabilities.supports_procedures);
+        assert!(!capabilities.supports_sequences);
     }
 
     #[test]

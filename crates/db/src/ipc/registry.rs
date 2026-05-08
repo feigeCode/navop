@@ -1,5 +1,5 @@
 use crate::connection::DbError;
-use crate::plugin_manifest::DatabaseUiManifest;
+use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use one_core::storage::get_config_dir;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -19,6 +19,8 @@ pub struct IpcDriverManifest {
     pub transport: IpcDriverTransport,
     #[serde(default)]
     pub dialect: IpcDriverDialect,
+    #[serde(default)]
+    pub capabilities: Option<DatabaseCapabilities>,
     #[serde(default)]
     pub ui: IpcDriverUi,
     #[serde(skip)]
@@ -101,6 +103,23 @@ impl IpcDriverManifest {
             .as_deref()
             .map(|dir| self.manifest_dir.join(dir))
             .unwrap_or_else(|| self.manifest_dir.clone())
+    }
+
+    pub fn effective_capabilities(&self) -> DatabaseCapabilities {
+        let mut capabilities = self
+            .ui
+            .form
+            .as_ref()
+            .map(|manifest| manifest.capabilities.clone())
+            .unwrap_or_else(|| DatabaseCapabilities {
+                supports_functions: true,
+                supports_procedures: true,
+                ..DatabaseCapabilities::default()
+            });
+        capabilities.supports_schema |= self.dialect.supports_schema;
+        capabilities.supports_sequences |= self.dialect.supports_sequences;
+        capabilities.uses_schema_as_database |= self.dialect.uses_schema_as_database;
+        self.capabilities.clone().unwrap_or(capabilities)
     }
 
     fn validate(&self) -> Result<(), DbError> {
@@ -243,5 +262,41 @@ mod tests {
         let registry = IpcDriverRegistry::load_from_dir(temp.path()).unwrap();
         assert_eq!(registry.drivers().len(), 1);
         assert_eq!(registry.find("demo").unwrap().name, "Demo");
+    }
+
+    #[test]
+    fn parses_top_level_capabilities() {
+        let manifest: IpcDriverManifest = serde_json::from_str(
+            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"dialect":{"supports_schema":false},"capabilities":{"supports_schema":true,"supports_functions":true}}"#,
+        )
+        .unwrap();
+
+        let capabilities = manifest.effective_capabilities();
+        assert!(capabilities.supports_schema);
+        assert!(capabilities.supports_functions);
+    }
+
+    #[test]
+    fn falls_back_to_legacy_dialect_capabilities() {
+        let manifest: IpcDriverManifest = serde_json::from_str(
+            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"dialect":{"supports_schema":true,"supports_sequences":true}}"#,
+        )
+        .unwrap();
+
+        let capabilities = manifest.effective_capabilities();
+        assert!(capabilities.supports_schema);
+        assert!(capabilities.supports_sequences);
+        assert!(capabilities.supports_functions);
+        assert!(capabilities.supports_procedures);
+    }
+
+    #[test]
+    fn falls_back_to_legacy_ui_form_capabilities() {
+        let manifest: IpcDriverManifest = serde_json::from_str(
+            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"ui":{"form":{"schema_version":1,"capabilities":{"supports_triggers":true},"forms":[],"actions":{"actions":[]}}}}"#,
+        )
+        .unwrap();
+
+        assert!(manifest.effective_capabilities().supports_triggers);
     }
 }

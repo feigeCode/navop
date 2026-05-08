@@ -15,10 +15,10 @@ use crate::mysql::connection::MysqlDbConnection;
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionDescriptor, DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement,
-    DatabaseActionTarget, DatabaseActionToolbarScope, DatabaseFormField, DatabaseFormFieldType,
-    DatabaseFormKind, DatabaseFormManifest, DatabaseFormTab, DatabaseUiCapabilities,
-    DatabaseUiManifest, FormDefaultRule, FormSelectOption, FormValueCondition, FormVisibilityRule,
-    ReferenceDataKind,
+    DatabaseActionTarget, DatabaseActionToolbarScope, DatabaseCapabilities, DatabaseFormField,
+    DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest, DatabaseFormTab,
+    DatabaseUiCapabilities, DatabaseUiManifest, FormDefaultRule, FormSelectOption,
+    FormValueCondition, FormVisibilityRule, ReferenceDataKind,
 };
 use crate::types::*;
 
@@ -1002,6 +1002,24 @@ impl DatabasePlugin for MySqlPlugin {
                 ("lj", "LEFT JOIN $1 ON $2.$3 = $4.$5", "Left join clause"),
             ],
         }.with_standard_sql()
+    }
+
+    fn capabilities(&self) -> DatabaseCapabilities {
+        DatabaseUiCapabilities {
+            supports_functions: true,
+            supports_procedures: true,
+            supports_triggers: true,
+            supports_table_engine: true,
+            supports_table_charset: true,
+            supports_table_collation: true,
+            supports_auto_increment: true,
+            supports_unsigned: true,
+            supports_enum_values: true,
+            show_charset_in_column_detail: true,
+            show_collation_in_column_detail: true,
+            table_engines: self.engines(),
+            ..DatabaseUiCapabilities::default()
+        }
     }
 
     fn ui_manifest(&self) -> DatabaseUiManifest {

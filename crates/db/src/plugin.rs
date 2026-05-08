@@ -9,7 +9,8 @@ use crate::import_export::{
     },
 };
 use crate::plugin_manifest::{
-    DatabaseUiCapabilities, DatabaseUiManifest, FormSelectOption, ReferenceDataKind,
+    DatabaseCapabilities, DatabaseUiCapabilities, DatabaseUiManifest, FormSelectOption,
+    ReferenceDataKind,
 };
 use crate::streaming_parser::StreamingSqlParser;
 use crate::types::*;
@@ -141,22 +142,6 @@ pub trait DatabasePlugin: Send + Sync {
         &self,
         connection: &dyn DbConnection,
     ) -> Result<Vec<DatabaseInfo>>;
-
-    /// Whether this database supports schemas (e.g., PostgreSQL, MSSQL)
-    fn supports_schema(&self) -> bool {
-        false
-    }
-
-    /// Whether this database uses schemas as top-level nodes instead of databases.
-    /// Oracle uses this because it connects via service_name and then lists schemas (users).
-    fn uses_schema_as_database(&self) -> bool {
-        false
-    }
-
-    /// Whether this database supports sequences (e.g., PostgreSQL, Oracle, MSSQL)
-    fn supports_sequences(&self) -> bool {
-        false
-    }
 
     /// Whether this database supports rowid for row identification (e.g., Oracle, SQLite)
     fn supports_rowid(&self) -> bool {
@@ -425,10 +410,6 @@ pub trait DatabasePlugin: Send + Sync {
 
     // === Function Operations ===
 
-    fn supports_functions(&self) -> bool {
-        true
-    }
-
     async fn list_functions(
         &self,
         connection: &dyn DbConnection,
@@ -441,23 +422,17 @@ pub trait DatabasePlugin: Send + Sync {
         database: &str,
     ) -> Result<ObjectView>;
 
-    fn supports_procedures(&self) -> bool {
-        true
+    fn capabilities(&self) -> DatabaseCapabilities {
+        DatabaseUiCapabilities {
+            supports_functions: true,
+            supports_procedures: true,
+            table_engines: self.engines(),
+            ..DatabaseUiCapabilities::default()
+        }
     }
 
     fn ui_manifest(&self) -> DatabaseUiManifest {
-        DatabaseUiManifest {
-            capabilities: DatabaseUiCapabilities {
-                supports_schema: self.supports_schema(),
-                uses_schema_as_database: self.uses_schema_as_database(),
-                supports_sequences: self.supports_sequences(),
-                supports_functions: self.supports_functions(),
-                supports_procedures: self.supports_procedures(),
-                table_engines: self.engines(),
-                ..DatabaseUiCapabilities::default()
-            },
-            ..DatabaseUiManifest::default()
-        }
+        DatabaseUiManifest::default()
     }
 
     fn resolve_reference_data(
@@ -569,7 +544,7 @@ pub trait DatabasePlugin: Send + Sync {
         let id = &node.id;
         let schemas;
         let mut metadata: HashMap<String, String> = HashMap::new();
-        if self.uses_schema_as_database() {
+        if self.capabilities().uses_schema_as_database {
             schemas = self.list_schemas(connection, "").await?;
             metadata.insert("database".to_string(), "".to_string());
         } else {
@@ -693,8 +668,10 @@ pub trait DatabasePlugin: Send + Sync {
         }
         nodes.push(views_folder);
 
+        let capabilities = self.capabilities();
+
         // Functions folder
-        if self.supports_functions() {
+        if capabilities.supports_functions {
             let functions = self
                 .list_functions(connection, database)
                 .await
@@ -730,7 +707,7 @@ pub trait DatabasePlugin: Send + Sync {
         }
 
         // Procedures folder
-        if self.supports_procedures() {
+        if capabilities.supports_procedures {
             let procedures = self
                 .list_procedures(connection, database)
                 .await
@@ -766,7 +743,7 @@ pub trait DatabasePlugin: Send + Sync {
         }
 
         // Sequences folder (only for databases that support sequences)
-        if self.supports_sequences() {
+        if capabilities.supports_sequences {
             let sequences = self
                 .list_sequences(connection, database, schema)
                 .await
@@ -848,14 +825,14 @@ pub trait DatabasePlugin: Send + Sync {
         let id = &node.id;
         match node.node_type {
             DbNodeType::Connection => {
-                if self.uses_schema_as_database() {
+                if self.capabilities().uses_schema_as_database {
                     self.build_schema_tree(connection, node).await
                 } else {
                     self.build_database_tree(connection, node).await
                 }
             }
             DbNodeType::Database => {
-                if self.supports_schema() {
+                if self.capabilities().supports_schema {
                     self.build_schema_tree(connection, node).await
                 } else {
                     self.build_database_or_schema_children(connection, node, None)
@@ -2813,6 +2790,16 @@ mod tests {
     use crate::mysql::MySqlPlugin;
     use sqlparser::dialect::MySqlDialect;
     use sqlparser::parser::Parser;
+
+    // ==================== capabilities tests ====================
+
+    #[test]
+    fn default_capabilities_support_functions_and_procedures() {
+        let plugin = MySqlPlugin::new();
+        let capabilities = DatabasePlugin::capabilities(&plugin);
+        assert!(capabilities.supports_functions);
+        assert!(capabilities.supports_procedures);
+    }
 
     // ==================== is_query_stmt tests (AST-based) ====================
 

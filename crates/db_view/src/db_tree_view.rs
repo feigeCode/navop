@@ -2614,7 +2614,7 @@ impl DbTreeView {
         let is_active =
             conn_active && (node.node_type != DbNodeType::Database || node.children_loaded);
 
-        let menu_items = build_context_menu_for(node.database_type, node_id, node.node_type);
+        let menu_items = build_context_menu_for(node.database_type, node_id, node.node_type, cx);
         if !menu_items.is_empty() {
             // 渲染 plugin 提供的菜单，传入连接激活状态
             menu = Self::render_context_menu_items(menu, menu_items, is_active, view, window, cx);

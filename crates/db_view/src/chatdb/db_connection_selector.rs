@@ -223,14 +223,6 @@ impl DbConnectionSelector {
         ))
     }
 
-    pub fn supports_schema(&self) -> bool {
-        self.supports_schema
-    }
-
-    pub fn uses_schema_as_database(&self) -> bool {
-        self.uses_schema_as_database
-    }
-
     fn snapshot(&self) -> DbConnectionSelectorSnapshot {
         DbConnectionSelectorSnapshot {
             connections: self.connections.clone(),
@@ -427,9 +419,9 @@ impl DbConnectionSelector {
         self.loading_schemas = false;
 
         let global_db_state = cx.global::<GlobalDbState>().clone();
-        self.supports_schema = global_db_state.supports_schema(&connection.database_type);
-        self.uses_schema_as_database =
-            global_db_state.uses_schema_as_database(&connection.database_type);
+        let capabilities = global_db_state.capabilities(&connection.database_type);
+        self.supports_schema = capabilities.supports_schema;
+        self.uses_schema_as_database = capabilities.uses_schema_as_database;
 
         self.register_connection(connection.id.clone(), cx);
         self.emit_selection(cx);

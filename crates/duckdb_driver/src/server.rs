@@ -45,7 +45,15 @@ async fn handle_connection(mut stream: Stream) -> Result<()> {
 
         let response = match handle_request(&mut session, &request) {
             Ok(result) => IpcResponse::result(request_id, result),
-            Err(error) => IpcResponse::error(request_id, IpcErrorCode::Internal, error.to_string()),
+            Err(error) => {
+                let message = error.to_string();
+                let code = if message.starts_with("unsupported method:") {
+                    IpcErrorCode::UnsupportedMethod
+                } else {
+                    IpcErrorCode::Internal
+                };
+                IpcResponse::error(request_id, code, message)
+            }
         };
 
         send_msg_async(&mut stream, &response).await?;
@@ -80,7 +88,8 @@ fn handle_request(session: &mut DuckDbSession, request: &IpcRequest) -> Result<V
             session.query(string_param(&request.params, "sql")?),
         )?),
         method if method.starts_with("metadata.") => {
-            crate::metadata::handle(session, method, &request.params)
+            crate::metadata::handle(session, method, &request.params)?
+                .ok_or_else(|| anyhow::anyhow!("unsupported method: {method}"))
         }
         method => anyhow::bail!("unsupported method: {method}"),
     }

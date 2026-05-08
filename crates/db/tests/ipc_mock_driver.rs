@@ -36,6 +36,7 @@ async fn external_connection_uses_mock_local_socket_driver() {
             working_dir: None,
         },
         dialect: Default::default(),
+        capabilities: None,
         ui: Default::default(),
         transport: IpcDriverTransport::local_socket(socket_name),
         manifest_dir: PathBuf::new(),

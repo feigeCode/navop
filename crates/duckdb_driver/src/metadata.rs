@@ -54,17 +54,24 @@ struct ViewInfo {
     comment: Option<String>,
 }
 
-pub fn handle(session: &DuckDbSession, method: &str, params: &Value) -> Result<Value> {
+pub fn handle(session: &DuckDbSession, method: &str, params: &Value) -> Result<Option<Value>> {
     let connection = session.connection()?;
     match method {
-        "metadata.list_databases" => Ok(json!(vec!["main"])),
-        "metadata.list_databases_detailed" => to_value(list_databases_detailed()),
-        "metadata.list_schemas" => to_value(list_schemas(connection)?),
-        "metadata.list_tables" => to_value(list_tables(connection, params)?),
-        "metadata.list_columns" => to_value(list_columns(connection, params)?),
-        "metadata.list_indexes" => to_value(list_indexes(connection, params)?),
-        "metadata.list_views" => to_value(list_views(connection, params)?),
-        _ => anyhow::bail!("unsupported metadata method: {method}"),
+        "metadata.list_databases" => Ok(Some(json!(vec!["main"]))),
+        "metadata.list_databases_detailed" => to_value(list_databases_detailed()).map(Some),
+        "metadata.list_schemas" => to_value(list_schemas(connection)?).map(Some),
+        "metadata.list_tables" => to_value(list_tables(connection, params)?).map(Some),
+        "metadata.list_columns" => to_value(list_columns(connection, params)?).map(Some),
+        "metadata.list_indexes" => to_value(list_indexes(connection, params)?).map(Some),
+        "metadata.list_views" => to_value(list_views(connection, params)?).map(Some),
+        "metadata.list_functions"
+        | "metadata.list_procedures"
+        | "metadata.list_triggers"
+        | "metadata.list_sequences"
+        | "metadata.list_foreign_keys"
+        | "metadata.list_table_triggers"
+        | "metadata.list_table_checks" => Ok(Some(json!([]))),
+        _ => Ok(None),
     }
 }
 

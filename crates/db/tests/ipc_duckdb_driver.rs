@@ -38,6 +38,7 @@ fn make_driver(binary: &std::path::Path, manifest_dir: &std::path::Path) -> IpcD
             working_dir: None,
         },
         dialect: Default::default(),
+        capabilities: None,
         ui: Default::default(),
         transport: IpcDriverTransport::local_socket("duckdb-driver.sock"),
         manifest_dir: manifest_dir.to_path_buf(),

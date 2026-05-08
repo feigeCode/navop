@@ -5,7 +5,7 @@ use interprocess::local_socket::{
     tokio::{Stream as LocalSocketStream, prelude::*},
 };
 use ipc::{
-    IpcRequest, IpcResponse,
+    IpcErrorCode, IpcRequest, IpcResponse,
     framing::{recv_msg_async, send_msg_async},
 };
 use serde::de::DeserializeOwned;
@@ -270,6 +270,9 @@ fn validate_response(response: IpcResponse, expected_id: u64) -> Result<Value, D
         )));
     }
     if let Some(error) = response.error {
+        if error.code == IpcErrorCode::UnsupportedMethod {
+            return Err(DbError::NotSupported(error.message));
+        }
         return Err(DbError::query(format!(
             "external driver error {:?}: {}",
             error.code, error.message
@@ -418,6 +421,13 @@ mod tests {
     }
 
     #[test]
+    fn maps_unsupported_method_to_not_supported() {
+        let response = IpcResponse::error(7, IpcErrorCode::UnsupportedMethod, "missing");
+        let result = validate_response(response, 7);
+        assert!(matches!(result, Err(DbError::NotSupported(message)) if message == "missing"));
+    }
+
+    #[test]
     fn make_socket_name_generates_distinct_names_with_manifest_prefix() {
         let driver = make_test_manifest("driver.sock");
         let first = make_socket_name(&driver);
@@ -443,6 +453,7 @@ mod tests {
             },
             transport: crate::ipc::registry::IpcDriverTransport::local_socket(socket_name),
             dialect: Default::default(),
+            capabilities: None,
             ui: Default::default(),
             manifest_dir: std::path::PathBuf::from("/tmp"),
         }
@@ -470,6 +481,7 @@ mod lifecycle_tests {
             },
             transport: IpcDriverTransport::local_socket("onetcli-lifecycle-test.sock"),
             dialect: Default::default(),
+            capabilities: None,
             ui: Default::default(),
             manifest_dir: PathBuf::from("/tmp"),
         }

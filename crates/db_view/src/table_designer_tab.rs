@@ -319,11 +319,11 @@ impl TableDesigner {
             Vec<EngineSelectItem>,
             ColumnEditorCapabilities,
         ) = {
-            let engines = get_engines_for(config.database_type)
+            let engines = get_engines_for(config.database_type, cx)
                 .into_iter()
                 .map(|name| EngineSelectItem { name })
                 .collect();
-            let capabilities = get_column_editor_capabilities_for(config.database_type);
+            let capabilities = get_column_editor_capabilities_for(config.database_type, cx);
             (engines, capabilities)
         };
 
@@ -1175,7 +1175,7 @@ impl TableDesigner {
     }
 
     fn render_options(&self, cx: &Context<Self>) -> AnyElement {
-        let capabilities = get_table_designer_capabilities_for(self.config.database_type);
+        let capabilities = get_table_designer_capabilities_for(self.config.database_type, cx);
 
         v_flex()
             .size_full()

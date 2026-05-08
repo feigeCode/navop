@@ -21,8 +21,8 @@ use crate::mssql::connection::MssqlDbConnection;
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
-    DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest, DatabaseUiCapabilities,
-    DatabaseUiManifest, FormSelectOption, ReferenceDataKind,
+    DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
+    DatabaseUiCapabilities, DatabaseUiManifest, FormSelectOption, ReferenceDataKind,
 };
 use crate::types::*;
 
@@ -588,6 +588,18 @@ impl DatabasePlugin for MsSqlPlugin {
         format!("[{}]", identifier.replace("]", "]]"))
     }
 
+    fn capabilities(&self) -> DatabaseCapabilities {
+        DatabaseUiCapabilities {
+            supports_schema: true,
+            supports_sequences: true,
+            supports_functions: true,
+            supports_procedures: true,
+            supports_triggers: true,
+            supports_table_collation: true,
+            ..DatabaseUiCapabilities::default()
+        }
+    }
+
     fn ui_manifest(&self) -> DatabaseUiManifest {
         MSSQL_UI_MANIFEST.clone()
     }
@@ -883,14 +895,6 @@ impl DatabasePlugin for MsSqlPlugin {
         } else {
             Ok(vec![])
         }
-    }
-
-    fn supports_schema(&self) -> bool {
-        true
-    }
-
-    fn supports_sequences(&self) -> bool {
-        true
     }
 
     fn sql_dialect(&self) -> Box<dyn sqlparser::dialect::Dialect> {
@@ -2555,15 +2559,15 @@ mod tests {
     }
 
     #[test]
-    fn test_supports_schema() {
+    fn test_capabilities_support_schema() {
         let plugin = create_plugin();
-        assert!(plugin.supports_schema());
+        assert!(plugin.capabilities().supports_schema);
     }
 
     #[test]
-    fn test_supports_sequences() {
+    fn test_capabilities_support_sequences() {
         let plugin = create_plugin();
-        assert!(plugin.supports_sequences());
+        assert!(plugin.capabilities().supports_sequences);
     }
 
     #[test]

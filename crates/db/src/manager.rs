@@ -11,6 +11,7 @@ use crate::mssql::MsSqlPlugin;
 use crate::mysql::MySqlPlugin;
 use crate::oracle::OraclePlugin;
 use crate::plugin::DatabasePlugin;
+use crate::plugin_manifest::DatabaseCapabilities;
 use crate::postgresql::PostgresPlugin;
 use crate::sqlite::SqlitePlugin;
 use crate::{
@@ -1630,20 +1631,11 @@ impl GlobalDbState {
         })
     }
 
-    /// Check if database type supports schemas
-    pub fn supports_schema(&self, database_type: &DatabaseType) -> bool {
+    pub fn capabilities(&self, database_type: &DatabaseType) -> DatabaseCapabilities {
         self.db_manager
             .get_plugin(database_type)
-            .map(|plugin| plugin.supports_schema())
-            .unwrap_or(false)
-    }
-
-    /// Check if database type uses schemas as top-level nodes (like Oracle)
-    pub fn uses_schema_as_database(&self, database_type: &DatabaseType) -> bool {
-        self.db_manager
-            .get_plugin(database_type)
-            .map(|plugin| plugin.uses_schema_as_database())
-            .unwrap_or(false)
+            .map(|plugin| plugin.capabilities())
+            .unwrap_or_default()
     }
 
     /// List schemas in a database (with caching)
@@ -2074,7 +2066,7 @@ impl GlobalDbState {
                 let view = match node.node_type {
                     DbNodeType::Connection => {
                         if node.children_loaded {
-                            if plugin.uses_schema_as_database() {
+                            if plugin.capabilities().uses_schema_as_database {
                                 plugin.list_schemas_view(&*conn, &database).await.ok()
                             } else {
                                 plugin.list_databases_view(&*conn).await.ok()
@@ -2084,7 +2076,7 @@ impl GlobalDbState {
                         }
                     }
                     DbNodeType::Database => {
-                        if plugin.supports_schema() {
+                        if plugin.capabilities().supports_schema {
                             plugin.list_schemas_view(&*conn, &database).await.ok()
                         } else {
                             plugin.list_tables_view(&*conn, &database, None).await.ok()

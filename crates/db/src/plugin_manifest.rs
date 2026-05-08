@@ -24,6 +24,7 @@ impl Default for DatabaseUiManifest {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DatabaseUiCapabilities {
     pub supports_schema: bool,
     pub uses_schema_as_database: bool,
@@ -42,6 +43,8 @@ pub struct DatabaseUiCapabilities {
     pub show_collation_in_column_detail: bool,
     pub table_engines: Vec<String>,
 }
+
+pub type DatabaseCapabilities = DatabaseUiCapabilities;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DatabaseFormKind {
