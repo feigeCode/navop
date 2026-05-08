@@ -69,6 +69,11 @@
 **Edit files directly from the app, with syntax highlighting and autocomplete.**
 ![remote_file_editor](remote_file_editor.png)
 
+**ER Diagram**
+![ER Diagram](er.png)
+
+Thanks to [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git).
+
 ## Platform Support
 
 | Platform | Architecture | Rendering |

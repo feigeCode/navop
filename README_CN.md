@@ -75,6 +75,11 @@
 **直接在应用程序中编辑文件，具备语法高亮显示和自动完成功能。**
 ![remote_file_editor](remote_file_editor.png)
 
+**ER 图**
+![ER 图](er.png)
+
+感谢 [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git)。
+
 ## 平台支持
 
 | 平台 | 架构 | 渲染后端 |
