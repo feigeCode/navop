@@ -31,6 +31,8 @@ impl Plugin for ErDiagramScrollPanPlugin {
             FlowEvent::DrawableBoundsReady => {
                 if !self.refresh_scheduled {
                     self.refresh_scheduled = true;
+                    ctx.cache_all_node_port_offset();
+                    ctx.notify();
                     ctx.schedule_after(Duration::from_millis(16));
                 }
                 EventResult::Continue
