@@ -3254,6 +3254,7 @@ dependencies = [
 [[package]]
 name = "ferrum-flow"
 version = "0.2.1"
+source = "git+https://github.com/tu6ge/ferrum-flow.git?rev=507cab7505b8dfa6a1e4a121e3c503e3f2f882d6#507cab7505b8dfa6a1e4a121e3c503e3f2f882d6"
 dependencies = [
  "anyhow",
  "futures",

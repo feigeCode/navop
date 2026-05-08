@@ -22,8 +22,7 @@ members = [
     "crates/er_flow",
     "crates/terminal",
     "crates/terminal_view",
-    "crates/ferrum-flow"
-    , "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor"]
+    "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor"]
 resolver = "2"
 
 [workspace.package]
@@ -151,7 +150,7 @@ interprocess = { version = "2.4.0", features = ["tokio"] }
 url = "2.5.4"
 percent-encoding = "2.3.1"
 global-hotkey = "0.7.0"
-ferrum-flow = { path = "crates/ferrum-flow" }
+ferrum-flow = { git = "https://github.com/tu6ge/ferrum-flow.git", rev = "507cab7505b8dfa6a1e4a121e3c503e3f2f882d6" }
 
 [patch.crates-io]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "8b5328ca" }
