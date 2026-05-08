@@ -1,6 +1,7 @@
 mod loader;
 mod pan_mode_plugin;
 mod scroll_pan_plugin;
+mod scrollbar_plugin;
 
 use db::GlobalDbState;
 use ferrum_flow::{

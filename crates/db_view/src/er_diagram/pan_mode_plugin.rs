@@ -90,9 +90,10 @@ impl Plugin for ErDiagramPanModePlugin {
         if let FlowEvent::Input(InputEvent::MouseDown(ev)) = event
             && ev.button == MouseButton::Left
         {
+            let pointer_position = ctx.window_pointer_to_canvas_local(ev.position);
             if self
                 .last_bounds
-                .is_some_and(|bounds| bounds.contains(&ev.position))
+                .is_some_and(|bounds| bounds.contains(&pointer_position))
             {
                 let active = ctx
                     .shared_state

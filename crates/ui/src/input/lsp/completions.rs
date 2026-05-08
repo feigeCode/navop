@@ -30,11 +30,19 @@ fn completion_menu_action(
     new_offset: usize,
     start_offset: usize,
 ) -> CompletionMenuAction {
+    if new_offset < start_offset {
+        return if has_existing_menu {
+            CompletionMenuAction::Hide
+        } else {
+            CompletionMenuAction::Ignore
+        };
+    }
+
     if !has_existing_menu && !is_trigger {
         return CompletionMenuAction::Ignore;
     }
 
-    if has_existing_menu && (full_text.trim().is_empty() || new_offset < start_offset) {
+    if has_existing_menu && full_text.trim().is_empty() {
         return CompletionMenuAction::Hide;
     }
 
@@ -152,7 +160,7 @@ impl InputState {
         // It will check if menu is open before showing the suggestion.
         self.schedule_inline_completion(window, cx);
 
-        let start = range.end;
+        let start = range.start;
         let new_offset = self.cursor();
         let existing_menu = match self.context_menu.as_ref() {
             Some(ContextMenu::Completion(menu)) => Some(menu),
@@ -387,6 +395,14 @@ mod tests {
         assert_eq!(
             completion_menu_action(true, false, "na", 0, 1),
             CompletionMenuAction::Hide
+        );
+    }
+
+    #[test]
+    fn ignores_trigger_without_existing_menu_when_cursor_is_before_trigger_start() {
+        assert_eq!(
+            completion_menu_action(false, true, "n", 1, 3),
+            CompletionMenuAction::Ignore
         );
     }
 
