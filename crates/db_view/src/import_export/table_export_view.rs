@@ -9,7 +9,7 @@ use gpui::{
     px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, IndexPath, Sizable, VirtualListScrollHandle,
+    ActiveTheme, Disableable, IconName, IndexPath, Sizable, TitleBar, VirtualListScrollHandle,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -876,12 +876,11 @@ impl Render for DataExportView {
         let logs = self.logs.read(cx).clone();
         let current_step = self.current_step;
 
-        v_flex()
+        let content = v_flex()
             .w_full()
             .h(px(540.0))
             .gap_2()
             .p_4()
-            .pt_8()
             .child(
                 div()
                     .text_sm()
@@ -1351,6 +1350,12 @@ impl Render for DataExportView {
                                 })
                         )
                     }),
-            )
+            );
+
+        v_flex()
+            .w_full()
+            .h(px(600.0))
+            .child(TitleBar::new())
+            .child(content)
     }
 }

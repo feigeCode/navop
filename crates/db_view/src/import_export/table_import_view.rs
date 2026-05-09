@@ -7,7 +7,7 @@ use gpui::{
     Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, IndexPath, VirtualListScrollHandle,
+    ActiveTheme, Disableable, IconName, IndexPath, TitleBar, VirtualListScrollHandle,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputState},
@@ -792,12 +792,11 @@ impl Render for TableImportView {
         let current_step = self.current_step;
         let validation_error = self.validation_error.read(cx).clone();
 
-        v_flex()
+        let content = v_flex()
             .w_full()
             .h(px(540.0))
             .gap_3()
             .p_4()
-            .pt_8()
             .child(
                 div()
                     .text_sm()
@@ -1371,6 +1370,12 @@ impl Render for TableImportView {
                             },
                         ))
                     }),
-            )
+            );
+
+        v_flex()
+            .w_full()
+            .h(px(600.0))
+            .child(TitleBar::new())
+            .child(content)
     }
 }

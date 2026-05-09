@@ -3,7 +3,7 @@ use gpui::{
     IntoElement, ParentElement, Render, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, VirtualListScrollHandle,
+    ActiveTheme, TitleBar, VirtualListScrollHandle,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex, v_virtual_list,
 };
@@ -506,12 +506,11 @@ impl Render for SqlDumpView {
         let elapsed = self.elapsed_time.read(cx).clone();
         let logs = self.logs.read(cx).clone();
 
-        v_flex()
+        let content = v_flex()
             .w_full()
             .h(px(450.0))
             .gap_3()
             .p_4()
-            .pt_8()
             .child(
                 v_flex()
                     .gap_1()
@@ -708,6 +707,12 @@ impl Render for SqlDumpView {
                                 }),
                         )
                     }),
-            )
+            );
+
+        v_flex()
+            .w_full()
+            .h(px(510.0))
+            .child(TitleBar::new())
+            .child(content)
     }
 }
