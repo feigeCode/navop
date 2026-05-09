@@ -106,17 +106,13 @@ fn take_whole_scroll_lines(scroll_lines_accumulated: &mut f32) -> i32 {
     lines
 }
 
-fn alt_screen_scroll_arrow(lines: i32, app_cursor: bool) -> Option<&'static str> {
+fn sgr_mouse_wheel_report(lines: i32, col: usize, row: usize) -> Option<String> {
     if lines == 0 {
         return None;
     }
 
-    Some(match (lines > 0, app_cursor) {
-        (true, true) => "\x1bOA",   // Up, application mode
-        (true, false) => "\x1b[A",  // Up, normal mode
-        (false, true) => "\x1bOB",  // Down, application mode
-        (false, false) => "\x1b[B", // Down, normal mode
-    })
+    let button = if lines > 0 { 64 } else { 65 };
+    Some(format!("\x1b[<{};{};{}M", button, col + 1, row + 1))
 }
 
 fn should_scroll_to_bottom_on_user_input(
@@ -2998,11 +2994,14 @@ impl TerminalView {
         }
 
         if mode.contains(TermMode::ALT_SCREEN) {
-            // ALT_SCREEN（vim、less 等）：累计到整行后再转为上下箭头，避免放大小幅滚轮输入
-            if let Some(arrow) = alt_screen_scroll_arrow(lines, mode.contains(TermMode::APP_CURSOR))
-            {
-                for _ in 0..lines.abs() {
-                    self.write_to_pty(arrow.as_bytes().to_vec(), cx);
+            if mode.contains(TermMode::SGR_MOUSE) && mode.intersects(TermMode::MOUSE_MODE) {
+                let point = self.pixel_to_point(event.position, self.terminal_bounds, cx);
+                if let Some(report) =
+                    sgr_mouse_wheel_report(lines, point.column.0, point.line.0 as usize)
+                {
+                    for _ in 0..lines.unsigned_abs() {
+                        self.write_to_pty(report.as_bytes().to_vec(), cx);
+                    }
                 }
             }
             return;
@@ -3798,10 +3797,10 @@ impl Element for ResizeEventHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        UnbracketedPasteHazard, alt_screen_scroll_arrow, detect_unbracketed_paste_hazard,
-        has_trailing_line_continuation, has_unterminated_shell_quote, history_prompt_available,
-        history_prompt_dropdown_origin, history_prompt_overlay_bounds,
-        multiline_non_empty_line_count, should_defer_inline_history_prompt_input_to_text_system,
+        UnbracketedPasteHazard, detect_unbracketed_paste_hazard, has_trailing_line_continuation,
+        has_unterminated_shell_quote, history_prompt_available, history_prompt_dropdown_origin,
+        history_prompt_overlay_bounds, multiline_non_empty_line_count, sgr_mouse_wheel_report,
+        should_defer_inline_history_prompt_input_to_text_system,
         should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
         should_dismiss_history_prompt_for_scroll, should_reset_history_prompt_for_terminal_event,
         should_scroll_to_bottom_on_user_input, take_whole_scroll_lines,
@@ -3858,16 +3857,20 @@ mod tests {
     }
 
     #[test]
-    fn alt_screen_scroll_arrow_maps_positive_lines_to_up() {
-        assert_eq!(alt_screen_scroll_arrow(1, false), Some("\x1b[A"));
-        assert_eq!(alt_screen_scroll_arrow(1, true), Some("\x1bOA"));
+    fn sgr_mouse_wheel_report_maps_positive_lines_to_wheel_up() {
+        assert_eq!(
+            sgr_mouse_wheel_report(1, 4, 2).as_deref(),
+            Some("\x1b[<64;5;3M")
+        );
     }
 
     #[test]
-    fn alt_screen_scroll_arrow_maps_negative_lines_to_down() {
-        assert_eq!(alt_screen_scroll_arrow(-1, false), Some("\x1b[B"));
-        assert_eq!(alt_screen_scroll_arrow(-1, true), Some("\x1bOB"));
-        assert_eq!(alt_screen_scroll_arrow(0, false), None);
+    fn sgr_mouse_wheel_report_maps_negative_lines_to_wheel_down() {
+        assert_eq!(
+            sgr_mouse_wheel_report(-1, 4, 2).as_deref(),
+            Some("\x1b[<65;5;3M")
+        );
+        assert_eq!(sgr_mouse_wheel_report(0, 4, 2), None);
     }
 
     #[test]
