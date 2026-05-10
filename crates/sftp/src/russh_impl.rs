@@ -980,7 +980,7 @@ impl SftpClient for RusshSftpClient {
 
         // 按路径深度倒序删除目录（先删子目录）
         let mut dirs: Vec<&FileEntry> = entries.iter().filter(|e| e.is_dir).collect();
-        dirs.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+        dirs.sort_by_key(|dir| std::cmp::Reverse(dir.path.len()));
         for dir in dirs {
             ensure_not_cancelled(&cancelled)?;
             progress(TransferProgress {
@@ -1177,7 +1177,7 @@ impl SftpClient for RusshSftpClient {
             .map_err(|e| anyhow!("Failed to create local directory {}: {}", local_path, e))?;
 
         let mut dirs: Vec<&FileEntry> = entries.iter().filter(|e| e.is_dir).collect();
-        dirs.sort_by(|a, b| a.path.len().cmp(&b.path.len()));
+        dirs.sort_by_key(|dir| dir.path.len());
         for dir_entry in dirs {
             ensure_not_cancelled(&cancelled)?;
             let relative = dir_entry
@@ -1380,7 +1380,7 @@ impl SftpClient for RusshSftpClient {
         let _ = self.sftp.create_dir(remote_path).await;
 
         let mut dirs: Vec<_> = entries.iter().filter(|(_, is_dir, _)| *is_dir).collect();
-        dirs.sort_by(|a, b| a.0.as_os_str().len().cmp(&b.0.as_os_str().len()));
+        dirs.sort_by_key(|dir| dir.0.as_os_str().len());
 
         for (dir_path, _, _) in dirs {
             ensure_not_cancelled(&cancelled)?;

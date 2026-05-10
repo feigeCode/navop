@@ -26,6 +26,10 @@ RemoteFileEditor:
       en: Soft Wrap
       zh-CN: 自动换行
       zh-HK: 自動換行
+    close_tab:
+      en: Close Tab
+      zh-CN: 关闭页签
+      zh-HK: 關閉頁籤
     discard:
       en: Discard
       zh-CN: 放弃更改
