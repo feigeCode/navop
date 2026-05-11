@@ -1936,6 +1936,9 @@ where
         let is_editing = row_ix.is_some() && self.editing_cell == Some((row_ix.unwrap(), col_ix));
         let selection_border_color = cx.theme().table_active_border;
 
+        let is_single_select_active =
+            (is_active_cell || is_select_cell) && !is_editing && !is_multi_selection;
+
         let mut cell = div()
             .id(cell_id)
             .w(col_width)
@@ -1964,10 +1967,9 @@ where
                 this.border_r_2().border_color(selection_border_color)
             })
             // 活动单元格额外添加完整边框（仅在单选时显示）
-            .when(
-                (is_active_cell || is_select_cell) && !is_editing && !is_multi_selection,
-                |this| this.border_2().border_color(selection_border_color),
-            )
+            .when(is_single_select_active, |this| {
+                this.border_2().border_color(selection_border_color)
+            })
             // 编辑状态的单元格
             .when(is_editing, |this| {
                 this.bg(cx.theme().background)
@@ -1984,14 +1986,29 @@ where
             }
         } else {
             cell = cell.table_cell_size(self.options.size);
-            cell = match col_padding {
-                Some(padding) => cell
-                    .pl(padding.left)
-                    .pr(padding.right)
-                    .pt(padding.top)
-                    .pb(padding.bottom),
-                None => cell,
+
+            let size_pad = self.options.size.table_cell_padding();
+            let (target_pt, target_pb, target_pl, target_pr) = match col_padding {
+                Some(p) => (p.top, p.bottom, p.left, p.right),
+                None => (
+                    size_pad.top,
+                    size_pad.bottom,
+                    size_pad.left,
+                    size_pad.right,
+                ),
             };
+
+            // 选中时 border 占用内部空间会挤压内容区，减少等量 padding 补偿
+            let has_t = border_top || is_single_select_active;
+            let has_b = border_bottom || is_single_select_active;
+            let has_l = border_left || is_single_select_active;
+            let has_r = border_right || is_single_select_active;
+            let b = px(2.);
+            cell = cell
+                .pt(if has_t { (target_pt - b).max(px(0.)) } else { target_pt })
+                .pb(if has_b { (target_pb - b).max(px(0.)) } else { target_pb })
+                .pl(if has_l { (target_pl - b).max(px(0.)) } else { target_pl })
+                .pr(if has_r { (target_pr - b).max(px(0.)) } else { target_pr });
         }
 
         cell
