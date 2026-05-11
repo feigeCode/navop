@@ -115,6 +115,44 @@ fn sgr_mouse_wheel_report(lines: i32, col: usize, row: usize) -> Option<String> 
     Some(format!("\x1b[<{};{};{}M", button, col + 1, row + 1))
 }
 
+/// 生成 SGR 鼠标按钮报告。
+///
+/// - `button`：xterm 按钮编码（0=左键、1=中键、2=右键，加上 shift/alt/ctrl/拖动等位）
+/// - `pressed`：true 用 `M` 表示按下，false 用 `m` 表示释放（SGR 协议规定）
+/// - `col` / `row`：0-based，输出转为 1-based
+///
+/// 抽出为独立纯函数，便于单元测试和后续扩展（拖动 32 位、wheel-with-modifiers 等）。
+fn sgr_mouse_button_report(button: u8, col: usize, row: usize, pressed: bool) -> String {
+    let suffix = if pressed { 'M' } else { 'm' };
+    format!("\x1b[<{};{};{}{}", button, col + 1, row + 1, suffix)
+}
+
+/// 将 GPUI 鼠标按钮映射为 xterm 按钮基础编码：左=0、中=1、右=2。
+/// 其它按钮（X1/X2 等）当前未在 SGR 报告中使用，返回 None。
+fn mouse_button_code(button: MouseButton) -> Option<u8> {
+    match button {
+        MouseButton::Left => Some(0),
+        MouseButton::Middle => Some(1),
+        MouseButton::Right => Some(2),
+        _ => None,
+    }
+}
+
+/// 将修饰键编码到 xterm 鼠标按钮的高位：shift=4、alt=8、control=16。
+fn encode_mouse_modifiers(modifiers: Modifiers) -> u8 {
+    let mut bits = 0u8;
+    if modifiers.shift {
+        bits |= 4;
+    }
+    if modifiers.alt {
+        bits |= 8;
+    }
+    if modifiers.control {
+        bits |= 16;
+    }
+    bits
+}
+
 fn should_scroll_to_bottom_on_user_input(
     display_offset: usize,
     pending_display_offset: &StdCell<Option<usize>>,
@@ -2695,7 +2733,6 @@ impl TerminalView {
 
             self.render_cache
                 .update(&mut term, &self.addon_manager, &self.current_theme);
-            term.reset_damage();
         }
 
         // 获取光标可见性
@@ -3068,6 +3105,31 @@ impl TerminalView {
         }
     }
 
+    /// 当终端启用 SGR 鼠标 + 任意鼠标报告模式时，把按钮按下/释放事件以 SGR 形式
+    /// 回报给 PTY。返回 true 表示已经处理，调用方应跳过 selection/dismiss/paste 等本地行为。
+    fn try_report_sgr_mouse_button(
+        &mut self,
+        button: MouseButton,
+        position: Point<Pixels>,
+        modifiers: Modifiers,
+        pressed: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let mode = self.terminal.read(cx).mode();
+        if !(mode.contains(TermMode::SGR_MOUSE) && mode.intersects(TermMode::MOUSE_MODE)) {
+            return false;
+        }
+        let Some(base) = mouse_button_code(button) else {
+            return false;
+        };
+        let point = self.pixel_to_point(position, self.terminal_bounds, cx);
+        let encoded = base | encode_mouse_modifiers(modifiers);
+        let report =
+            sgr_mouse_button_report(encoded, point.column.0, point.line.0 as usize, pressed);
+        self.write_to_pty(report.into_bytes(), cx);
+        true
+    }
+
     fn handle_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -3076,6 +3138,11 @@ impl TerminalView {
     ) {
         if self.terminal.read(cx).ssh_mfa_request().is_none() {
             window.focus(&self.focus_handle, cx);
+        }
+        // SGR 鼠标模式下把按钮按下事件交给 TUI，跳过 selection/URL/dismiss
+        if self.try_report_sgr_mouse_button(event.button, event.position, event.modifiers, true, cx)
+        {
+            return;
         }
         tracing::debug!(
             target: "terminal.history_prompt",
@@ -3156,10 +3223,20 @@ impl TerminalView {
 
     fn handle_middle_mouse_down(
         &mut self,
-        _event: &MouseDownEvent,
+        event: &MouseDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // SGR 鼠标模式下中键按下走 TUI 报告而不是 middle-click paste
+        if self.try_report_sgr_mouse_button(
+            MouseButton::Middle,
+            event.position,
+            event.modifiers,
+            true,
+            cx,
+        ) {
+            return;
+        }
         if !self.middle_click_paste {
             return;
         }
@@ -3220,6 +3297,16 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // SGR 鼠标模式下：先回报释放，然后跳过 selection 收尾
+        if self.try_report_sgr_mouse_button(
+            event.button,
+            event.position,
+            event.modifiers,
+            false,
+            cx,
+        ) {
+            return;
+        }
         if event.button != MouseButton::Left {
             return;
         }
@@ -3797,9 +3884,10 @@ impl Element for ResizeEventHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        UnbracketedPasteHazard, detect_unbracketed_paste_hazard, has_trailing_line_continuation,
-        has_unterminated_shell_quote, history_prompt_available, history_prompt_dropdown_origin,
-        history_prompt_overlay_bounds, multiline_non_empty_line_count, sgr_mouse_wheel_report,
+        UnbracketedPasteHazard, detect_unbracketed_paste_hazard, encode_mouse_modifiers,
+        has_trailing_line_continuation, has_unterminated_shell_quote, history_prompt_available,
+        history_prompt_dropdown_origin, history_prompt_overlay_bounds, mouse_button_code,
+        multiline_non_empty_line_count, sgr_mouse_button_report, sgr_mouse_wheel_report,
         should_defer_inline_history_prompt_input_to_text_system,
         should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
         should_dismiss_history_prompt_for_scroll, should_reset_history_prompt_for_terminal_event,
@@ -3807,7 +3895,7 @@ mod tests {
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::term::TermMode;
-    use gpui::{Bounds, Keystroke, MouseButton, Point, px, size};
+    use gpui::{Bounds, Keystroke, Modifiers, MouseButton, Point, px, size};
     use std::cell::Cell as StdCell;
     use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
 
@@ -3871,6 +3959,74 @@ mod tests {
             Some("\x1b[<65;5;3M")
         );
         assert_eq!(sgr_mouse_wheel_report(0, 4, 2), None);
+    }
+
+    #[test]
+    fn sgr_mouse_button_report_uses_capital_m_on_press() {
+        // 左键按下，列 0、行 0 -> 转 1-based
+        let s = sgr_mouse_button_report(0, 0, 0, true);
+        assert_eq!(s, "\x1b[<0;1;1M");
+    }
+
+    #[test]
+    fn sgr_mouse_button_report_uses_lowercase_m_on_release() {
+        let s = sgr_mouse_button_report(2, 9, 4, false);
+        // 右键 (button=2) 释放在 1-based col=10 row=5
+        assert_eq!(s, "\x1b[<2;10;5m");
+    }
+
+    #[test]
+    fn sgr_mouse_button_report_supports_modifier_encoded_buttons() {
+        // 左键 + shift (4) + ctrl (16) -> button=20
+        let s = sgr_mouse_button_report(20, 0, 0, true);
+        assert_eq!(s, "\x1b[<20;1;1M");
+    }
+
+    #[test]
+    fn sgr_mouse_button_report_supports_drag_button_codes() {
+        // 拖动事件：button + 32（xterm 拖动位）
+        // 左键拖动 = 32
+        let s = sgr_mouse_button_report(32, 7, 11, true);
+        assert_eq!(s, "\x1b[<32;8;12M");
+    }
+
+    #[test]
+    fn mouse_button_code_maps_three_main_buttons() {
+        assert_eq!(mouse_button_code(MouseButton::Left), Some(0));
+        assert_eq!(mouse_button_code(MouseButton::Middle), Some(1));
+        assert_eq!(mouse_button_code(MouseButton::Right), Some(2));
+    }
+
+    #[test]
+    fn encode_mouse_modifiers_packs_shift_alt_control() {
+        let none = Modifiers::default();
+        assert_eq!(encode_mouse_modifiers(none), 0);
+
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(encode_mouse_modifiers(shift), 4);
+
+        let alt = Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        assert_eq!(encode_mouse_modifiers(alt), 8);
+
+        let ctrl = Modifiers {
+            control: true,
+            ..Default::default()
+        };
+        assert_eq!(encode_mouse_modifiers(ctrl), 16);
+
+        let all = Modifiers {
+            shift: true,
+            alt: true,
+            control: true,
+            ..Default::default()
+        };
+        assert_eq!(encode_mouse_modifiers(all), 28);
     }
 
     #[test]

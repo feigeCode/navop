@@ -331,4 +331,160 @@ mod tests {
             "\x1ba"
         );
     }
+
+    #[test]
+    fn enter_emits_carriage_return() {
+        let enter = Keystroke::parse("enter").unwrap();
+        assert_eq!(
+            to_esc_str(&enter, &TermMode::NONE, false).unwrap().as_ref(),
+            "\x0d"
+        );
+    }
+
+    #[test]
+    fn backspace_emits_del_by_default() {
+        let bs = Keystroke::parse("backspace").unwrap();
+        assert_eq!(
+            to_esc_str(&bs, &TermMode::NONE, false).unwrap().as_ref(),
+            "\x7f"
+        );
+    }
+
+    #[test]
+    fn ctrl_backspace_emits_bs() {
+        let bs = Keystroke::parse("ctrl-backspace").unwrap();
+        assert_eq!(
+            to_esc_str(&bs, &TermMode::NONE, false).unwrap().as_ref(),
+            "\x08"
+        );
+    }
+
+    #[test]
+    fn shift_tab_emits_csi_z() {
+        let shift_tab = Keystroke::parse("shift-tab").unwrap();
+        assert_eq!(
+            to_esc_str(&shift_tab, &TermMode::NONE, false)
+                .unwrap()
+                .as_ref(),
+            "\x1b[Z"
+        );
+    }
+
+    #[test]
+    fn home_app_cursor_mode_emits_ss3() {
+        let home = Keystroke::parse("home").unwrap();
+        assert_eq!(
+            to_esc_str(&home, &TermMode::NONE, false).unwrap().as_ref(),
+            "\x1b[H"
+        );
+        assert_eq!(
+            to_esc_str(&home, &TermMode::APP_CURSOR, false)
+                .unwrap()
+                .as_ref(),
+            "\x1bOH"
+        );
+    }
+
+    #[test]
+    fn page_up_down_emit_csi_tilde() {
+        let pageup = Keystroke::parse("pageup").unwrap();
+        let pagedown = Keystroke::parse("pagedown").unwrap();
+        assert_eq!(
+            to_esc_str(&pageup, &TermMode::NONE, false)
+                .unwrap()
+                .as_ref(),
+            "\x1b[5~"
+        );
+        assert_eq!(
+            to_esc_str(&pagedown, &TermMode::NONE, false)
+                .unwrap()
+                .as_ref(),
+            "\x1b[6~"
+        );
+    }
+
+    #[test]
+    fn insert_delete_emit_csi_tilde() {
+        let ins = Keystroke::parse("insert").unwrap();
+        let del = Keystroke::parse("delete").unwrap();
+        assert_eq!(
+            to_esc_str(&ins, &TermMode::NONE, false).unwrap().as_ref(),
+            "\x1b[2~"
+        );
+        assert_eq!(
+            to_esc_str(&del, &TermMode::NONE, false).unwrap().as_ref(),
+            "\x1b[3~"
+        );
+    }
+
+    #[test]
+    fn ctrl_letter_covers_full_alphabet() {
+        // Ctrl-A => 0x01, Ctrl-Z => 0x1a
+        for (key, expected) in [("ctrl-a", 0x01u8), ("ctrl-m", 0x0d), ("ctrl-z", 0x1a)] {
+            let ks = Keystroke::parse(key).unwrap();
+            let seq = to_esc_str(&ks, &TermMode::NONE, false).unwrap();
+            assert_eq!(seq.as_ref().as_bytes(), &[expected], "{key}");
+        }
+    }
+
+    #[test]
+    fn ctrl_bracket_and_underscore_emit_c0() {
+        assert_eq!(
+            to_esc_str(&Keystroke::parse("ctrl-[").unwrap(), &TermMode::NONE, false)
+                .unwrap()
+                .as_ref()
+                .as_bytes(),
+            b"\x1b"
+        );
+        assert_eq!(
+            to_esc_str(&Keystroke::parse("ctrl-_").unwrap(), &TermMode::NONE, false)
+                .unwrap()
+                .as_ref()
+                .as_bytes(),
+            b"\x1f"
+        );
+    }
+
+    #[test]
+    fn ctrl_space_emits_nul() {
+        let ks = Keystroke::parse("ctrl-space").unwrap();
+        assert_eq!(
+            to_esc_str(&ks, &TermMode::NONE, false)
+                .unwrap()
+                .as_ref()
+                .as_bytes(),
+            b"\x00"
+        );
+    }
+
+    #[test]
+    fn shift_arrow_in_alt_screen_remains_none_in_normal_mode() {
+        // 锁定当前行为：normal screen 下 shift-arrow 不发送修饰序列
+        let shift_up = Keystroke::parse("shift-up").unwrap();
+        assert_eq!(to_esc_str(&shift_up, &TermMode::NONE, false), None);
+    }
+
+    #[test]
+    fn ctrl_arrow_emits_csi_with_modifier_param_5() {
+        // xterm modifier param: ctrl=4 => +1 = 5
+        let ctrl_right = Keystroke::parse("ctrl-right").unwrap();
+        assert_eq!(
+            to_esc_str(&ctrl_right, &TermMode::NONE, false)
+                .unwrap()
+                .as_ref(),
+            "\x1b[1;5C"
+        );
+    }
+
+    #[test]
+    fn alt_arrow_emits_csi_with_modifier_param_3() {
+        // alt=2 => +1 = 3
+        let alt_left = Keystroke::parse("alt-left").unwrap();
+        assert_eq!(
+            to_esc_str(&alt_left, &TermMode::NONE, false)
+                .unwrap()
+                .as_ref(),
+            "\x1b[1;3D"
+        );
+    }
 }

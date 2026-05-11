@@ -3,8 +3,10 @@ use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{ClipboardType, Term};
 use alacritty_terminal::tty::{self, Options as PtyOptions};
+use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
 use tokio::sync::mpsc::UnboundedSender;
@@ -80,6 +82,7 @@ impl PtyWriteBack {
 /// 3. Sends Wakeup event via EventListener
 pub struct LocalPtyBackend {
     event_loop_sender: EventLoopSender,
+    event_proxy: GpuiEventProxy,
     _event_loop_handle: JoinHandle<()>,
 }
 
@@ -110,6 +113,7 @@ impl LocalPtyBackend {
 
         // 设置 PtyWrite 回写通道，使 DA 等终端响应能写回 PTY
         event_proxy.set_write_back(PtyWriteBack::Local(event_loop_sender.clone()));
+        event_proxy.set_window_size(window_size);
 
         let handle = thread::spawn(move || {
             let _ = event_loop.spawn().join();
@@ -117,6 +121,7 @@ impl LocalPtyBackend {
 
         Ok(Self {
             event_loop_sender,
+            event_proxy,
             _event_loop_handle: handle,
         })
     }
@@ -149,6 +154,7 @@ impl LocalPtyBackend {
             size.pixel_width,
             size.pixel_height
         );
+        self.event_proxy.set_window_size(window_size);
         let _ = self.event_loop_sender.send(Msg::Resize(window_size));
     }
 
@@ -163,21 +169,7 @@ impl TerminalBackend for LocalPtyBackend {
     }
 
     fn resize(&self, size: TerminalSize) {
-        let window_size = WindowSize {
-            num_lines: size.rows,
-            num_cols: size.cols,
-            cell_width: if size.cols > 0 {
-                size.pixel_width / size.cols
-            } else {
-                8
-            },
-            cell_height: if size.rows > 0 {
-                size.pixel_height / size.rows
-            } else {
-                18
-            },
-        };
-        let _ = self.event_loop_sender.send(Msg::Resize(window_size));
+        LocalPtyBackend::resize(self, size);
     }
 
     fn shutdown(&self) {
@@ -192,14 +184,25 @@ impl TerminalBackend for LocalPtyBackend {
 pub struct GpuiEventProxy {
     event_tx: UnboundedSender<TerminalEvent>,
     /// PtyWrite 回写通道（在后端创建后设置）
-    write_back: Arc<std::sync::Mutex<Option<PtyWriteBack>>>,
+    write_back: Arc<Mutex<Option<PtyWriteBack>>>,
+    /// 共享窗口尺寸，供 TextAreaSizeRequest 真实回复使用
+    window_size: Arc<Mutex<WindowSize>>,
+    /// Wakeup 去重标记：true 表示已有未消费的 Wakeup 在事件队列里
+    wakeup_pending: Arc<AtomicBool>,
 }
 
 impl GpuiEventProxy {
     pub fn new(event_tx: UnboundedSender<TerminalEvent>) -> Self {
         Self {
             event_tx,
-            write_back: Arc::new(std::sync::Mutex::new(None)),
+            write_back: Arc::new(Mutex::new(None)),
+            window_size: Arc::new(Mutex::new(WindowSize {
+                num_lines: 24,
+                num_cols: 80,
+                cell_width: 8,
+                cell_height: 18,
+            })),
+            wakeup_pending: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -211,6 +214,26 @@ impl GpuiEventProxy {
     /// 设置 SSH 回写通道
     pub(crate) fn set_ssh_write_back(&self, sender: UnboundedSender<Vec<u8>>) {
         self.set_write_back(PtyWriteBack::Ssh(sender));
+    }
+
+    /// 同步当前真实窗口尺寸（含 cell 像素），后续 TextAreaSizeRequest 将以此回复
+    pub(crate) fn set_window_size(&self, size: WindowSize) {
+        *self.window_size.lock().unwrap() = size;
+    }
+
+    /// 当 UI 已经消费 Wakeup 后调用，允许下一次 Wakeup 入队
+    pub fn reset_wakeup_pending(&self) {
+        self.wakeup_pending.store(false, Ordering::Release);
+    }
+
+    /// 返回 Wakeup 去重标记的句柄，便于事件聚合任务在转发 Wakeup 后立即 reset，
+    /// 让下一次 PTY 输出能继续触发 Wakeup
+    pub fn wakeup_pending_handle(&self) -> Arc<AtomicBool> {
+        self.wakeup_pending.clone()
+    }
+
+    fn current_window_size(&self) -> WindowSize {
+        *self.window_size.lock().unwrap()
     }
 
     fn write_back(&self, data: Vec<u8>) {
@@ -227,22 +250,23 @@ impl EventListener for GpuiEventProxy {
                 self.write_back(text.into_bytes());
                 return;
             }
-            AlacTermEvent::ColorRequest(_index, format_fn) => {
-                let text = format_fn(alacritty_terminal::vte::ansi::Rgb { r: 0, g: 0, b: 0 });
+            AlacTermEvent::ColorRequest(index, format_fn) => {
+                let text = format_fn(default_color_for_index(index));
                 self.write_back(text.into_bytes());
                 return;
             }
             AlacTermEvent::TextAreaSizeRequest(format_fn) => {
-                let text = format_fn(WindowSize {
-                    num_lines: 24,
-                    num_cols: 80,
-                    cell_width: 8,
-                    cell_height: 18,
-                });
+                let text = format_fn(self.current_window_size());
                 self.write_back(text.into_bytes());
                 return;
             }
-            AlacTermEvent::Wakeup => TerminalEvent::Wakeup,
+            AlacTermEvent::Wakeup => {
+                // 去重：已有未消费 Wakeup 时直接丢弃，避免高速输出下事件堆积
+                if self.wakeup_pending.swap(true, Ordering::AcqRel) {
+                    return;
+                }
+                TerminalEvent::Wakeup
+            }
             AlacTermEvent::Title(title) => TerminalEvent::TitleChanged(title),
             AlacTermEvent::Bell => TerminalEvent::Bell,
             AlacTermEvent::ClipboardStore(ty, data) => TerminalEvent::ClipboardStore(ty, data),
@@ -251,5 +275,122 @@ impl EventListener for GpuiEventProxy {
             _ => return,
         };
         let _ = self.event_tx.send(terminal_event);
+    }
+}
+
+/// 为 OSC 4/10/11 等颜色查询提供合理的默认回复，避免一律返回黑色
+fn default_color_for_index(index: usize) -> Rgb {
+    match index {
+        // OSC 10：默认前景色 -> 接近白色
+        idx if idx == NamedColor::Foreground as usize => Rgb {
+            r: 0xE4,
+            g: 0xE4,
+            b: 0xE4,
+        },
+        // OSC 11：默认背景色 -> 接近深灰
+        idx if idx == NamedColor::Background as usize => Rgb {
+            r: 0x1E,
+            g: 0x1E,
+            b: 0x1E,
+        },
+        // OSC 12：光标颜色
+        idx if idx == NamedColor::Cursor as usize => Rgb {
+            r: 0xFF,
+            g: 0xFF,
+            b: 0xFF,
+        },
+        _ => Rgb { r: 0, g: 0, b: 0 },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn wakeup_dedup_collapses_repeated_wakeups_until_reset() {
+        let (tx, mut rx) = unbounded_channel::<TerminalEvent>();
+        let proxy = GpuiEventProxy::new(tx);
+
+        proxy.send_event(AlacTermEvent::Wakeup);
+        proxy.send_event(AlacTermEvent::Wakeup);
+        proxy.send_event(AlacTermEvent::Wakeup);
+
+        // 多次 Wakeup 只入队一次
+        let first = rx.try_recv();
+        assert!(matches!(first, Ok(TerminalEvent::Wakeup)));
+        assert!(rx.try_recv().is_err());
+
+        // reset 后允许新一轮 Wakeup 入队
+        proxy.reset_wakeup_pending();
+        proxy.send_event(AlacTermEvent::Wakeup);
+        let next = rx.try_recv();
+        assert!(matches!(next, Ok(TerminalEvent::Wakeup)));
+    }
+
+    #[test]
+    fn non_wakeup_events_are_not_swallowed_by_dedup() {
+        let (tx, mut rx) = unbounded_channel::<TerminalEvent>();
+        let proxy = GpuiEventProxy::new(tx);
+
+        // 先压一个 Wakeup 进去拉起去重标记
+        proxy.send_event(AlacTermEvent::Wakeup);
+        // 期间发生 Title/Bell/Exit 等事件，不应被去重逻辑吞掉
+        proxy.send_event(AlacTermEvent::Title("shell".to_string()));
+        proxy.send_event(AlacTermEvent::Bell);
+        proxy.send_event(AlacTermEvent::Exit);
+
+        let mut got = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            got.push(ev);
+        }
+        assert_eq!(got.len(), 4);
+        assert!(matches!(got[0], TerminalEvent::Wakeup));
+        assert!(matches!(got[1], TerminalEvent::TitleChanged(ref t) if t == "shell"));
+        assert!(matches!(got[2], TerminalEvent::Bell));
+        assert!(matches!(got[3], TerminalEvent::ChildExit(0)));
+    }
+
+    #[test]
+    fn text_area_size_request_uses_current_window_size() {
+        let (tx, _rx) = unbounded_channel::<TerminalEvent>();
+        let proxy = GpuiEventProxy::new(tx);
+
+        // 注入一个回写通道收集 reply 字节
+        let captured: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let (write_tx, mut write_rx) = unbounded_channel::<Vec<u8>>();
+        proxy.set_ssh_write_back(write_tx);
+
+        proxy.set_window_size(WindowSize {
+            num_lines: 40,
+            num_cols: 132,
+            cell_width: 9,
+            cell_height: 20,
+        });
+
+        proxy.send_event(AlacTermEvent::TextAreaSizeRequest(std::sync::Arc::new(
+            |size| format!("{}x{}", size.num_cols, size.num_lines),
+        )));
+
+        if let Ok(bytes) = write_rx.try_recv() {
+            captured.lock().unwrap().extend_from_slice(&bytes);
+        }
+        let reply = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
+        assert_eq!(reply, "132x40");
+    }
+
+    #[test]
+    fn color_request_returns_named_defaults_instead_of_black() {
+        let fg = default_color_for_index(NamedColor::Foreground as usize);
+        let bg = default_color_for_index(NamedColor::Background as usize);
+        let cursor = default_color_for_index(NamedColor::Cursor as usize);
+        let other = default_color_for_index(NamedColor::Red as usize);
+
+        assert_ne!((fg.r, fg.g, fg.b), (0, 0, 0));
+        assert_ne!((bg.r, bg.g, bg.b), (0, 0, 0));
+        assert_eq!((cursor.r, cursor.g, cursor.b), (0xFF, 0xFF, 0xFF));
+        assert_eq!((other.r, other.g, other.b), (0, 0, 0));
     }
 }
