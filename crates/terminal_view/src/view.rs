@@ -464,6 +464,12 @@ pub struct TerminalView {
     cell_width: Pixels,
 
     last_size: Option<(usize, usize)>,
+    /// 上一帧 alacritty 是否处于 alt screen 模式。
+    ///
+    /// 用于检测主屏与备用屏切换:进入 alt screen 时主动调用 nudge_resize
+    /// 重发当前尺寸给 PTY,触发 SIGWINCH,让 TUI 应用刷新整屏画面,
+    /// 避免出现底部残留上一次渲染内容的问题。
+    last_alt_screen: bool,
     scroll_lines_accumulated: f32,
 
     mouse_state: MouseState,
@@ -815,6 +821,7 @@ impl TerminalView {
             // 初始化为 None，确保首次渲染时会触发 resize，
             // 将正确的终端尺寸发送给 PTY
             last_size: None,
+            last_alt_screen: false,
             scroll_lines_accumulated: 0.0,
             mouse_state: MouseState::default(),
             addon_manager: Self::create_addon_manager(),
@@ -2680,6 +2687,16 @@ impl TerminalView {
 
         let new_size = (cols, rows);
         if self.last_size != Some(new_size) {
+            tracing::info!(
+                target: "terminal_residue",
+                old = ?self.last_size,
+                new = ?new_size,
+                bounds_w = ?bounds.size.width,
+                bounds_h = ?bounds.size.height,
+                cell_width = ?self.cell_width,
+                line_height = ?self.line_height,
+                "resize_if_needed -> Terminal::resize"
+            );
             self.last_size = Some(new_size);
             self.terminal.update(cx, |terminal, _| {
                 terminal.resize(
@@ -3515,6 +3532,27 @@ impl Render for TerminalView {
         let terminal_mode = self.terminal.read(cx).mode();
         let history_size = self.terminal.read(cx).term().lock().history_size();
         let show_scrollbar = !terminal_mode.contains(TermMode::ALT_SCREEN) && history_size > 0;
+
+        // 检测主屏 ↔ alt screen 切换。
+        // 进入 alt screen 时(opencode/lazygit/vim 等 TUI 启动),主动重发当前尺寸到 PTY,
+        // 触发 SIGWINCH 让 TUI 重新查询尺寸并刷新整屏,避免底部残留旧画面。
+        // 仅在 last_size 已就绪时(说明 PTY 已收到过正确尺寸)才 nudge,
+        // 避免覆盖即将到来的首次 resize_if_needed。
+        let alt_screen = terminal_mode.contains(TermMode::ALT_SCREEN);
+        if alt_screen != self.last_alt_screen {
+            tracing::info!(
+                target: "terminal_residue",
+                from = self.last_alt_screen,
+                to = alt_screen,
+                last_size = ?self.last_size,
+                "alt_screen mode transition"
+            );
+            self.last_alt_screen = alt_screen;
+            if alt_screen && self.last_size.is_some() {
+                tracing::info!(target: "terminal_residue", "nudge_resize fired on enter alt_screen");
+                self.terminal.update(cx, |terminal, _| terminal.nudge_resize());
+            }
+        }
 
         div()
             .size_full()

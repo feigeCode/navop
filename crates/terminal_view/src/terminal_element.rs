@@ -12,7 +12,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Colors;
-use alacritty_terminal::term::{RenderableContent, Term, TermDamage};
+use alacritty_terminal::term::{RenderableContent, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use gpui::*;
 use std::collections::HashMap;
@@ -387,6 +387,14 @@ impl RenderCache {
 
         // Handle resize
         if num_lines != self.num_lines || num_cols != self.num_cols {
+            tracing::info!(
+                target: "terminal_residue",
+                old_lines = self.num_lines,
+                old_cols = self.num_cols,
+                new_lines = num_lines,
+                new_cols = num_cols,
+                "RenderCache::resize"
+            );
             self.resize(num_lines, num_cols);
         }
 
@@ -423,6 +431,15 @@ impl RenderCache {
         // 主题颜色变化或存在装饰时保守全量重建。
         let has_decorations = !self.decoration_manager.decorations_by_line.is_empty();
         if fg_changed || bg_changed || colors_changed || has_decorations {
+            tracing::debug!(
+                target: "terminal_residue",
+                fg_changed,
+                bg_changed,
+                colors_changed,
+                has_decorations,
+                num_lines,
+                "rebuild_all (forced by theme/decoration)"
+            );
             self.rebuild_all_and_update_state(term);
             return;
         }
@@ -430,10 +447,23 @@ impl RenderCache {
         let mut dirty_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
         match damage {
             DamageSnapshot::Full => {
+                tracing::debug!(
+                    target: "terminal_residue",
+                    num_lines,
+                    "rebuild_all (TermDamage::Full)"
+                );
                 self.rebuild_all_and_update_state(term);
                 return;
             }
             DamageSnapshot::Partial(lines) => {
+                if !lines.is_empty() {
+                    tracing::debug!(
+                        target: "terminal_residue",
+                        damaged = ?lines,
+                        num_lines,
+                        "Partial damage"
+                    );
+                }
                 dirty_lines.extend(lines);
             }
         }
@@ -540,6 +570,34 @@ impl RenderCache {
         // Update cursor from a fresh content
         let content = term.renderable_content();
         self.update_cursor_from_content(&content);
+
+        // 调试日志:统计 cache 重建后各行的内容分布。
+        // 关注底部最后 8 行,若 TUI 仅画了上半部,底部 8 行的 text/bg 应该为空。
+        let total = self.lines.len();
+        let non_empty_lines = self
+            .lines
+            .iter()
+            .filter(|l| !l.text_runs.is_empty() || !l.background_rects.is_empty())
+            .count();
+        let mut tail_summary = Vec::new();
+        let tail_start = total.saturating_sub(8);
+        for idx in tail_start..total {
+            let l = &self.lines[idx];
+            tail_summary.push(format!(
+                "[{idx}] bg={} text={} chars={}",
+                l.background_rects.len(),
+                l.text_runs.len(),
+                l.text_runs.iter().map(|r| r.char_count).sum::<usize>(),
+            ));
+        }
+        tracing::debug!(
+            target: "terminal_residue",
+            total_lines = total,
+            non_empty_lines,
+            in_alt_screen = content.mode.contains(TermMode::ALT_SCREEN),
+            tail = tail_summary.join(" | "),
+            "rebuild_all done"
+        );
     }
 
     /// Rebuild specified lines
@@ -1093,6 +1151,16 @@ impl Element for TerminalElementImpl {
 
         let intersection = content_mask.intersect(&terminal_bounds);
         if intersection.size.height <= px(0.) || intersection.size.width <= px(0.) {
+            tracing::debug!(
+                target: "terminal_residue",
+                lines = self.lines.len(),
+                num_cols = self.num_cols,
+                cell_w = ?tb.cell_width,
+                cell_h = ?tb.cell_height,
+                origin = ?tb.origin,
+                content_mask = ?content_mask,
+                "paint skipped (no intersection)"
+            );
             return; // 完全不可见，跳过渲染
         }
 
@@ -1109,6 +1177,26 @@ impl Element for TerminalElementImpl {
             / tb.cell_height)
             .ceil() as usize;
         let visible_end = last_visible.min(self.lines.len());
+
+        // 仅在统计行数 / 像素差异时记录一次,避免每帧爆量
+        let cm_h: f32 = content_mask.size.height.into();
+        let tb_h: f32 = terminal_height.into();
+        if (cm_h - tb_h).abs() > 0.5 || self.lines.len() < visible_end {
+            tracing::debug!(
+                target: "terminal_residue",
+                lines = self.lines.len(),
+                num_cols = self.num_cols,
+                cell_w = ?tb.cell_width,
+                cell_h = ?tb.cell_height,
+                origin = ?tb.origin,
+                terminal_bounds_h = ?terminal_height,
+                content_mask = ?content_mask,
+                first_visible,
+                visible_end,
+                bg_alpha = self.custom_background.a,
+                "paint metrics"
+            );
+        }
 
         // Paint backgrounds (only visible lines)
         for line_idx in first_visible..visible_end {
