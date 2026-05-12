@@ -43,6 +43,7 @@ impl CellEditor {
                 .h_full()
                 .text_base()
                 .appearance(false)
+                .bare()
                 .into_any_element(),
             CellEditor::DatePicker(picker) => DatePicker::new(picker)
                 .w_full()
