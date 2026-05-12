@@ -169,6 +169,9 @@ pub struct SshFormWindow {
     // 云同步开关
     sync_enabled: bool,
 
+    // 关闭 shell integration 注入(走裸 request_shell,失去 OSC 集成)
+    disable_shell_integration: bool,
+
     is_testing: bool,
     test_result: Option<Result<(), String>>,
 }
@@ -335,6 +338,7 @@ impl SshFormWindow {
         let mut enable_proxy = false;
         let mut proxy_type = ProxyTypeSelection::default();
         let mut sync_enabled = true; // 默认启用云同步
+        let mut disable_shell_integration = false;
 
         if let Some(ref conn) = config.editing_connection {
             // 加载同步状态
@@ -392,6 +396,7 @@ impl SshFormWindow {
                 if let Some(ref script) = params.init_script {
                     init_script_input.update(cx, |s, cx| s.set_value(script, window, cx));
                 }
+                disable_shell_integration = params.disable_shell_integration.unwrap_or(false);
 
                 // 加载跳板机设置
                 if let Some(ref jump) = params.jump_server {
@@ -484,6 +489,7 @@ impl SshFormWindow {
             remark_input,
             last_tested_signature: None,
             sync_enabled,
+            disable_shell_integration,
             is_testing: false,
             test_result: None,
         }
@@ -648,6 +654,11 @@ impl SshFormWindow {
             keepalive_max,
             default_directory,
             init_script,
+            disable_shell_integration: if self.disable_shell_integration {
+                Some(true)
+            } else {
+                None
+            },
             jump_server,
             proxy,
         })
@@ -1061,7 +1072,7 @@ impl SshFormWindow {
     }
 
     /// 渲染初始化标签页
-    fn render_init_tab(&self) -> impl IntoElement {
+    fn render_init_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_2()
             .child(self.render_form_row(
@@ -1070,6 +1081,28 @@ impl SshFormWindow {
             ))
             .child(
                 self.render_form_row(&t!("SSH.init_script"), Input::new(&self.init_script_input)),
+            )
+            .child(
+                self.render_form_row(
+                    &t!("SSH.disable_shell_integration"),
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Checkbox::new("disable-shell-integration")
+                                .checked(self.disable_shell_integration)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.disable_shell_integration =
+                                        !this.disable_shell_integration;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.disable_shell_integration_desc").to_string()),
+                        ),
+                ),
             )
     }
 
@@ -1319,7 +1352,7 @@ impl Render for SshFormWindow {
                     .overflow_y_scroll()
                     .child(match active_tab {
                         0 => self.render_basic_tab(cx).into_any_element(),
-                        1 => self.render_init_tab().into_any_element(),
+                        1 => self.render_init_tab(cx).into_any_element(),
                         2 => self.render_jump_server_tab(cx).into_any_element(),
                         3 => self.render_proxy_tab(cx).into_any_element(),
                         4 => self.render_advanced_tab().into_any_element(),
@@ -1392,6 +1425,7 @@ mod tests {
             keepalive_max: Some(3),
             default_directory: Some("/tmp".to_string()),
             init_script: Some("pwd".to_string()),
+            disable_shell_integration: None,
             jump_server: None,
             proxy: None,
         }

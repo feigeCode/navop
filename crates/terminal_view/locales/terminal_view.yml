@@ -316,6 +316,14 @@ SSH:
     en: Default working directory
     zh-CN: 默认工作目录
     zh-HK: 默認工作目錄
+  disable_shell_integration:
+    en: Disable Shell Integration
+    zh-CN: 禁用 Shell 集成
+    zh-HK: 禁用 Shell 集成
+  disable_shell_integration_desc:
+    en: Run native login shell without OSC injection (no prompt hook, command recording, or vim mouse)
+    zh-CN: 走裸 login shell，不注入 OSC（失去命令记录 / prompt hook / vim 鼠标）
+    zh-HK: 走裸 login shell，不注入 OSC（失去命令記錄 / prompt hook / vim 鼠標）
   # 其他设置
   remark:
     en: Remark

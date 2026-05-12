@@ -3124,6 +3124,11 @@ impl TerminalView {
 
     /// 当终端启用 SGR 鼠标 + 任意鼠标报告模式时，把按钮按下/释放事件以 SGR 形式
     /// 回报给 PTY。返回 true 表示已经处理，调用方应跳过 selection/dismiss/paste 等本地行为。
+    ///
+    /// 特殊穿透:Shift+Left 永远走终端自身的文本选区,不向 TUI 转发 —— 这是 xterm/iTerm/
+    /// kitty/wezterm 等的通用约定,让用户在 vim/tmux 等捕获鼠标的应用里仍能复制文本。
+    /// 同理 mouse_up 时,如果当前正在终端选区(由 shift+drag 启动),也跳过 release 回报,
+    /// 避免在 release 阶段 shift 已松开就把 release 事件错发给 TUI、丢掉 selection 收尾。
     fn try_report_sgr_mouse_button(
         &mut self,
         button: MouseButton,
@@ -3132,6 +3137,11 @@ impl TerminalView {
         pressed: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        if button == MouseButton::Left
+            && (modifiers.shift || (!pressed && self.mouse_state.selecting))
+        {
+            return false;
+        }
         let mode = self.terminal.read(cx).mode();
         if !(mode.contains(TermMode::SGR_MOUSE) && mode.intersects(TermMode::MOUSE_MODE)) {
             return false;
@@ -3550,7 +3560,8 @@ impl Render for TerminalView {
             self.last_alt_screen = alt_screen;
             if alt_screen && self.last_size.is_some() {
                 tracing::info!(target: "terminal_residue", "nudge_resize fired on enter alt_screen");
-                self.terminal.update(cx, |terminal, _| terminal.nudge_resize());
+                self.terminal
+                    .update(cx, |terminal, _| terminal.nudge_resize());
             }
         }
 
