@@ -49,6 +49,7 @@ pub struct Input {
     focus_bordered: bool,
     tab_index: isize,
     selected: bool,
+    bare: bool,
 }
 
 impl Sizable for Input {
@@ -87,6 +88,7 @@ impl Input {
             focus_bordered: true,
             tab_index: 0,
             selected: false,
+            bare: false,
         }
     }
 
@@ -145,6 +147,13 @@ impl Input {
     /// Set to disable the input field.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// 纯编辑器模式：去掉 Input 自带的 padding、height、items_center 等布局样式，
+    /// 完全由父容器控制布局。用于嵌入表格单元格等场景。
+    pub fn bare(mut self) -> Self {
+        self.bare = true;
         self
     }
 
@@ -373,14 +382,14 @@ impl RenderOnce for Input {
             .on_mouse_move(window.listener_for(&self.state, InputState::on_mouse_move))
             .on_scroll_wheel(window.listener_for(&self.state, InputState::on_scroll_wheel))
             .size_full()
-            .line_height(LINE_HEIGHT)
-            .input_px(self.size)
-            .input_py(self.size)
-            .input_h(self.size)
+            .when(!self.bare, |this| this.line_height(LINE_HEIGHT))
             .input_text_size(self.size)
+            .when(!self.bare, |this| this.input_px(self.size))
+            .when(!self.bare, |this| this.input_py(self.size))
+            .when(!self.bare, |this| this.input_h(self.size))
             .when(!self.disabled, |this| this.cursor_text())
-            .items_center()
-            .when(state.mode.is_multi_line(), |this| {
+            .when(!self.bare, |this| this.items_center())
+            .when(state.mode.is_multi_line() && !self.bare, |this| {
                 this.h_auto()
                     .when_some(self.height, |this, height| this.h(height))
             })
@@ -398,7 +407,7 @@ impl RenderOnce for Input {
                             })
                     })
             })
-            .items_center()
+            .when(!self.bare, |this| this.items_center())
             .gap(gap_x)
             .refine_style(&self.style)
             .children(prefix)
