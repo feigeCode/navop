@@ -4,8 +4,8 @@ use db::{DbManager, GlobalDbState, format_sql};
 use gpui::prelude::*;
 use gpui::{
     App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context, Element, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
-    Point, Render, SharedString, Styled, Task, WeakEntity, Window, div, px,
+    FocusHandle, Focusable, IntoElement, KeyBinding, MouseMoveEvent, MouseUpEvent, ParentElement,
+    Pixels, Point, Render, SharedString, Styled, Task, WeakEntity, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{InputContextMenuItem, InputEvent};
@@ -29,6 +29,24 @@ use tracing::log::error;
 
 const PANEL_MIN_SIZE: Pixels = px(100.0);
 const RESULT_PANEL_DEFAULT_SIZE: Pixels = px(400.0);
+const SQL_EDITOR_CONTEXT: &str = "SqlEditor";
+const RUN_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-enter", "ctrl-enter"];
+
+gpui::actions!(sql_editor_view, [RunQuery]);
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys(
+        RUN_QUERY_KEY_BINDINGS.map(|key| KeyBinding::new(key, RunQuery, Some(SQL_EDITOR_CONTEXT))),
+    );
+}
+
+fn sql_text_for_run(editor_text: &str, selected_text: &str) -> String {
+    if selected_text.trim().is_empty() {
+        editor_text.to_string()
+    } else {
+        selected_text.to_string()
+    }
+}
 
 // Events emitted by SqlEditorTabContent
 #[derive(Debug, Clone)]
@@ -681,11 +699,18 @@ impl SqlEditorTab {
 
     fn handle_run_query(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let selected_text = self.editor.read(cx).get_selected_text(cx);
-        let sql = if selected_text.trim().is_empty() {
-            self.get_sql_text(cx)
-        } else {
-            selected_text
-        };
+        let sql = sql_text_for_run(&self.get_sql_text(cx), &selected_text);
+        self.execute_sql_text(sql, window, cx);
+    }
+
+    fn handle_run_query_action(
+        &mut self,
+        _: &RunQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected_text = self.editor.read(cx).get_selected_text(cx);
+        let sql = sql_text_for_run(&self.get_sql_text(cx), &selected_text);
         self.execute_sql_text(sql, window, cx);
     }
 
@@ -1010,9 +1035,16 @@ impl SqlEditorTab {
             )
             .child(
                 // Editor
-                v_flex().p_1().flex_1().child(editor.clone()).when(
-                    has_results && !results_visible,
-                    |this| {
+                v_flex()
+                    .p_1()
+                    .flex_1()
+                    .child(
+                        div()
+                            .size_full()
+                            .key_context(SQL_EDITOR_CONTEXT)
+                            .child(editor.clone()),
+                    )
+                    .when(has_results && !results_visible, |this| {
                         this.child(
                             h_flex().w_full().justify_end().child(
                                 Button::new("show-results")
@@ -1023,8 +1055,7 @@ impl SqlEditorTab {
                                     .on_click(cx.listener(Self::handle_show_results)),
                             ),
                         )
-                    },
-                ),
+                    }),
             )
     }
 }
@@ -1035,7 +1066,9 @@ impl Render for SqlEditorTab {
         let results_visible = self.sql_result_tab_container.read(cx).is_visible(cx);
         let view = cx.entity().clone();
 
-        let mut div = v_flex().size_full();
+        let mut div = v_flex()
+            .size_full()
+            .on_action(cx.listener(Self::handle_run_query_action));
         if has_results && results_visible {
             div = div
                 .child(self.render_has_results(window, cx))
@@ -1199,6 +1232,7 @@ impl Element for ResizeEventHandler {
 
 #[cfg(test)]
 mod tests {
+    use super::{RUN_QUERY_KEY_BINDINGS, sql_text_for_run};
     use db::DbManager;
     use one_core::storage::DatabaseType;
 
@@ -1207,6 +1241,26 @@ mod tests {
             .get_plugin(&database_type)
             .expect("plugin should exist");
         plugin.build_explain_sql(sql)
+    }
+
+    #[test]
+    fn run_query_text_prefers_selected_sql_when_present() {
+        let actual = sql_text_for_run("select * from users;", "select id from users;");
+
+        assert_eq!("select id from users;", actual);
+    }
+
+    #[test]
+    fn run_query_text_uses_editor_sql_when_selection_is_blank() {
+        let actual = sql_text_for_run("select * from users;", "   ");
+
+        assert_eq!("select * from users;", actual);
+    }
+
+    #[test]
+    fn run_query_key_bindings_include_platform_shortcuts() {
+        assert!(RUN_QUERY_KEY_BINDINGS.contains(&"cmd-enter"));
+        assert!(RUN_QUERY_KEY_BINDINGS.contains(&"ctrl-enter"));
     }
 
     #[test]
