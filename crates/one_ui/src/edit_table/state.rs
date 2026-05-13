@@ -23,6 +23,7 @@ use gpui_component::{
 };
 
 const SCROLLBAR_WIDTH: Pixels = px(16.);
+const COLUMN_SEPARATOR_WIDTH: Pixels = px(1.);
 
 gpui::actions!(
     edit_table_internal,
@@ -1938,14 +1939,27 @@ where
 
         let is_single_select_active =
             (is_active_cell || is_select_cell) && !is_editing && !is_multi_selection;
+        let show_column_separator = !is_editing && !border_right && !is_single_select_active;
 
         let mut cell = div()
             .id(cell_id)
             .w(col_width)
             .h_full()
+            .relative()
             .flex_shrink_0()
             .overflow_hidden()
             .whitespace_nowrap()
+            .when(show_column_separator, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .w(COLUMN_SEPARATOR_WIDTH)
+                        .bg(cx.theme().border),
+                )
+            })
             // 选区内的所有单元格使用背景色
             .when(is_in_selection && !is_editing, |this| {
                 this.bg(cx.theme().table_active)
