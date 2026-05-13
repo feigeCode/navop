@@ -503,6 +503,7 @@ fn legacy_terminal_settings(settings: &AppSettings) -> TerminalSettings {
         cursor_blink: settings.terminal_cursor_blink,
         confirm_multiline_paste: settings.terminal_confirm_multiline_paste,
         confirm_high_risk_command: settings.terminal_confirm_high_risk_command,
+        vim_scroll_to_arrow_keys: true,
         builtin_highlights_initialized: false,
         custom_highlights: Vec::new(),
     }

@@ -40,45 +40,6 @@ __onetcli_last_history_command() {
     fi
 }
 
-__onetcli_enable_vim_mouse() {
-    local editor="$1"
-    shift
-    if [[ "${ONETCLI_VIM_MOUSE:-1}" == "0" ]]; then
-        command "$editor" "$@"
-        return
-    fi
-    command "$editor" \
-        --cmd 'set mouse=a' \
-        --cmd 'nnoremap <ScrollWheelUp> gkzz' \
-        --cmd 'nnoremap <ScrollWheelDown> gjzz' \
-        --cmd 'inoremap <ScrollWheelUp> <C-o>gk<C-o>zz' \
-        --cmd 'inoremap <ScrollWheelDown> <C-o>gj<C-o>zz' \
-        "$@"
-}
-
-__onetcli_can_wrap_command() {
-    local name="$1"
-    if [[ -n "${ZSH_VERSION:-}" ]]; then
-        local command_type
-        command_type="$(whence -w "$name" 2>/dev/null)"
-        [[ "$command_type" == "$name: command" || "$command_type" == "$name: hashed" ]]
-    else
-        [[ "$(type -t "$name" 2>/dev/null)" == "file" ]]
-    fi
-}
-
-if __onetcli_can_wrap_command vim; then
-    function vim {
-        __onetcli_enable_vim_mouse vim "$@"
-    }
-fi
-
-if __onetcli_can_wrap_command nvim; then
-    function nvim {
-        __onetcli_enable_vim_mouse nvim "$@"
-    }
-fi
-
 __onetcli_emit_recorded_command() {
     local command_text encoded
     command_text="$(__onetcli_last_history_command)"

@@ -220,7 +220,7 @@ pub struct SshParams {
     /// 初始化脚本
     #[serde(skip_serializing_if = "Option::is_none")]
     pub init_script: Option<String>,
-    /// 关闭 shell integration 注入(走裸 request_shell,牺牲 prompt hook / 命令记录 / vim 鼠标)
+    /// 关闭 shell integration 注入(走裸 request_shell,牺牲 prompt hook / 命令记录)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_shell_integration: Option<bool>,
     /// 跳板机配置

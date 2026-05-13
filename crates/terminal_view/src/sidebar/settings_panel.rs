@@ -59,6 +59,8 @@ pub enum SettingsPanelEvent {
     AutocompleteChanged(bool),
     /// 中键粘贴开关
     MiddleClickPasteChanged(bool),
+    /// vim/TUI 滚轮转方向键开关
+    VimScrollToArrowKeysChanged(bool),
     /// 路径同步开关变更
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
@@ -93,6 +95,8 @@ pub struct SettingsPanel {
     autocomplete_enabled: bool,
     /// 中键粘贴
     middle_click_paste: bool,
+    /// vim/TUI 滚轮转方向键
+    vim_scroll_to_arrow_keys: bool,
     /// 路径与终端同步开关
     sync_path: bool,
     /// 全局自定义高亮规则
@@ -115,6 +119,7 @@ impl SettingsPanel {
         autocomplete_enabled: bool,
         middle_click_paste: bool,
         sync_path: bool,
+        vim_scroll_to_arrow_keys: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -236,6 +241,7 @@ impl SettingsPanel {
             autocomplete_enabled,
             middle_click_paste,
             sync_path,
+            vim_scroll_to_arrow_keys,
             custom_highlights: Vec::new(),
             has_file_manager,
             focus_handle: cx.focus_handle(),
@@ -276,6 +282,11 @@ impl SettingsPanel {
 
     pub fn set_middle_click_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.middle_click_paste = enabled;
+        cx.notify();
+    }
+
+    pub fn set_vim_scroll_to_arrow_keys(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.vim_scroll_to_arrow_keys = enabled;
         cx.notify();
     }
 
@@ -838,6 +849,7 @@ impl SettingsPanel {
         let auto_copy = self.auto_copy;
         let autocomplete_enabled = self.autocomplete_enabled;
         let middle_click_paste = self.middle_click_paste;
+        let vim_scroll_to_arrow_keys = self.vim_scroll_to_arrow_keys;
 
         v_flex()
             .gap_3()
@@ -940,6 +952,29 @@ impl SettingsPanel {
                                         cx.emit(SettingsPanelEvent::MiddleClickPasteChanged(
                                             *checked,
                                         ));
+                                    })),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(t!("Settings.vim_scroll_to_arrow_keys")),
+                            )
+                            .child(
+                                Switch::new("vim-scroll-to-arrow-keys-switch")
+                                    .checked(vim_scroll_to_arrow_keys)
+                                    .small()
+                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                                        this.vim_scroll_to_arrow_keys = *checked;
+                                        cx.emit(
+                                            SettingsPanelEvent::VimScrollToArrowKeysChanged(
+                                                *checked,
+                                            ),
+                                        );
                                     })),
                             ),
                     ),

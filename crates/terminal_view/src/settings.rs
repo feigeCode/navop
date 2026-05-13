@@ -41,10 +41,18 @@ pub struct TerminalSettings {
     pub cursor_blink: bool,
     pub confirm_multiline_paste: bool,
     pub confirm_high_risk_command: bool,
+    /// 在 alt-screen TUI(vim/less/man 等)中把鼠标滚轮事件转为方向键发送给 PTY,
+    /// 让 vim 等程序不开启鼠标报告也能滚动,同时保留终端原生选区/复制能力。
+    #[serde(default = "default_vim_scroll_to_arrow_keys")]
+    pub vim_scroll_to_arrow_keys: bool,
     #[serde(default)]
     pub builtin_highlights_initialized: bool,
     #[serde(default)]
     pub custom_highlights: Vec<TerminalHighlightRule>,
+}
+
+fn default_vim_scroll_to_arrow_keys() -> bool {
+    true
 }
 
 impl Default for TerminalSettings {
@@ -59,6 +67,7 @@ impl Default for TerminalSettings {
             cursor_blink: false,
             confirm_multiline_paste: true,
             confirm_high_risk_command: true,
+            vim_scroll_to_arrow_keys: default_vim_scroll_to_arrow_keys(),
             builtin_highlights_initialized: true,
             custom_highlights: builtin_highlight_rules(),
         }
@@ -237,6 +246,7 @@ mod tests {
             cursor_blink: true,
             confirm_multiline_paste: false,
             confirm_high_risk_command: false,
+            vim_scroll_to_arrow_keys: false,
             builtin_highlights_initialized: true,
             custom_highlights: Vec::new(),
         };

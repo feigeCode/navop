@@ -321,9 +321,9 @@ SSH:
     zh-CN: 禁用 Shell 集成
     zh-HK: 禁用 Shell 集成
   disable_shell_integration_desc:
-    en: Run native login shell without OSC injection (no prompt hook, command recording, or vim mouse)
-    zh-CN: 走裸 login shell，不注入 OSC（失去命令记录 / prompt hook / vim 鼠标）
-    zh-HK: 走裸 login shell，不注入 OSC（失去命令記錄 / prompt hook / vim 鼠標）
+    en: Run native login shell without OSC injection (no prompt hook or command recording)
+    zh-CN: 走裸 login shell，不注入 OSC（失去命令记录 / prompt hook）
+    zh-HK: 走裸 login shell，不注入 OSC（失去命令記錄 / prompt hook）
   # 其他设置
   remark:
     en: Remark
@@ -411,6 +411,10 @@ Settings:
     en: Middle click paste
     zh-CN: 中键粘贴
     zh-HK: 中鍵貼上
+  vim_scroll_to_arrow_keys:
+    en: Mouse wheel as arrow keys in vim/TUI
+    zh-CN: vim/TUI 中鼠标滚轮映射为方向键
+    zh-HK: vim/TUI 中滑鼠滾輪映射為方向鍵
   file_manager_section:
     en: FILE MANAGER
     zh-CN: 文件管理器

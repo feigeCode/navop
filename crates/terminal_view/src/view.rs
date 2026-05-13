@@ -514,6 +514,8 @@ pub struct TerminalView {
     autocomplete_enabled: bool,
     /// 中键粘贴
     middle_click_paste: bool,
+    /// 在 vim/less/man 等 alt-screen TUI 中,把鼠标滚轮转为方向键发送到 PTY
+    vim_scroll_to_arrow_keys: bool,
 
     /// 侧边栏面板大小
     sidebar_panel_size: Pixels,
@@ -846,6 +848,7 @@ impl TerminalView {
             auto_copy_on_select: true,
             autocomplete_enabled: true,
             middle_click_paste: true,
+            vim_scroll_to_arrow_keys: true,
             sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
             resizing: None,
             view_bounds: Bounds::default(),
@@ -943,6 +946,9 @@ impl TerminalView {
             }
             TerminalSidebarEvent::MiddleClickPasteChanged(enabled) => {
                 self.set_middle_click_paste(*enabled, cx);
+            }
+            TerminalSidebarEvent::VimScrollToArrowKeysChanged(enabled) => {
+                self.set_vim_scroll_to_arrow_keys(*enabled, cx);
             }
             TerminalSidebarEvent::SyncPathChanged(enabled) => {
                 let enabled = *enabled;
@@ -1741,6 +1747,7 @@ impl TerminalView {
         autocomplete_enabled: bool,
         middle_click_paste: bool,
         sync_path: bool,
+        vim_scroll_to_arrow_keys: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1760,6 +1767,7 @@ impl TerminalView {
             self.dismiss_history_prompt_matches();
         }
         self.middle_click_paste = middle_click_paste;
+        self.vim_scroll_to_arrow_keys = vim_scroll_to_arrow_keys;
 
         self.terminal.update(cx, |terminal, _cx| {
             terminal.set_sync_path_with_terminal(sync_path);
@@ -1771,6 +1779,7 @@ impl TerminalView {
             sidebar.set_font_size(clamped, window, cx);
             sidebar.set_auto_copy(auto_copy, cx);
             sidebar.set_middle_click_paste(middle_click_paste, cx);
+            sidebar.set_vim_scroll_to_arrow_keys(vim_scroll_to_arrow_keys, cx);
             sidebar.set_sync_path_enabled(sync_path, cx);
         });
 
@@ -1789,6 +1798,7 @@ impl TerminalView {
             settings.enable_autocomplete,
             settings.middle_click_paste,
             settings.sync_path_with_terminal,
+            settings.vim_scroll_to_arrow_keys,
             window,
             cx,
         );
@@ -1920,6 +1930,15 @@ impl TerminalView {
         }
         let _ = update_settings(cx, move |settings| {
             settings.middle_click_paste = enabled;
+        });
+    }
+
+    pub fn set_vim_scroll_to_arrow_keys(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.vim_scroll_to_arrow_keys == enabled {
+            return;
+        }
+        let _ = update_settings(cx, move |settings| {
+            settings.vim_scroll_to_arrow_keys = enabled;
         });
     }
 
@@ -3056,6 +3075,19 @@ impl TerminalView {
                     for _ in 0..lines.unsigned_abs() {
                         self.write_to_pty(report.as_bytes().to_vec(), cx);
                     }
+                }
+            } else if self.vim_scroll_to_arrow_keys && lines != 0 {
+                // alt-screen TUI(vim/less/man 等)未启用鼠标报告:
+                // 把滚轮转为方向键发给 PTY,既能滚动又不会触发 vim 的 VISUAL 选区
+                let seq: &[u8] = if mode.contains(TermMode::APP_CURSOR) {
+                    if lines > 0 { b"\x1bOA" } else { b"\x1bOB" }
+                } else if lines > 0 {
+                    b"\x1b[A"
+                } else {
+                    b"\x1b[B"
+                };
+                for _ in 0..lines.unsigned_abs() {
+                    self.write_to_pty(seq.to_vec(), cx);
                 }
             }
             return;
