@@ -352,10 +352,21 @@ impl CloudSyncService {
         team_id: Option<&str>,
         teams: &[Team],
     ) -> Result<CloudSyncData, SyncError> {
+        self.prepare_sync_data_upload_with_workspace_cloud_id(conn, team_id, teams, None)
+    }
+
+    /// 准备上传连接到 sync_data，并携带关联工作空间的云端 ID。
+    pub fn prepare_sync_data_upload_with_workspace_cloud_id(
+        &self,
+        conn: &StoredConnection,
+        team_id: Option<&str>,
+        teams: &[Team],
+        workspace_cloud_id: Option<String>,
+    ) -> Result<CloudSyncData, SyncError> {
         let plain_data = ConnectionPlainData {
             name: conn.name.clone(),
             connection_type: conn.connection_type.to_string(),
-            workspace_cloud_id: None, // 由调用者设置
+            workspace_cloud_id,
             selected_databases: conn.selected_databases.clone(),
             remark: conn.remark.clone(),
             params: serde_json::from_str(&conn.params)
@@ -423,6 +434,14 @@ impl CloudSyncService {
         &self,
         cloud_data: &CloudSyncData,
     ) -> Result<StoredConnection, SyncError> {
+        self.decrypt_sync_data_connection_with_workspace_cloud_id(cloud_data)
+            .map(|(conn, _)| conn)
+    }
+
+    pub fn decrypt_sync_data_connection_with_workspace_cloud_id(
+        &self,
+        cloud_data: &CloudSyncData,
+    ) -> Result<(StoredConnection, Option<String>), SyncError> {
         let plaintext =
             self.decrypt_blob(&cloud_data.encrypted_data, cloud_data.team_id.as_deref())?;
         let plain_data: ConnectionPlainData = serde_json::from_str(&plaintext)
@@ -431,22 +450,27 @@ impl CloudSyncService {
         let connection_type = ConnectionType::from_str(&plain_data.connection_type);
         let params = serde_json::to_string(&plain_data.params).unwrap_or_else(|_| "{}".to_string());
 
-        Ok(StoredConnection {
-            id: None,
-            name: plain_data.name,
-            connection_type,
-            workspace_id: None, // 由调用者根据 workspace_cloud_id 解析
-            params,
-            selected_databases: plain_data.selected_databases,
-            remark: plain_data.remark,
-            sync_enabled: true,
-            cloud_id: Some(cloud_data.id.clone()),
-            last_synced_at: Some(cloud_data.updated_at),
-            created_at: None,
-            updated_at: None,
-            team_id: cloud_data.team_id.clone(),
-            owner_id: plain_data.owner_id,
-        })
+        let workspace_cloud_id = plain_data.workspace_cloud_id.clone();
+
+        Ok((
+            StoredConnection {
+                id: None,
+                name: plain_data.name,
+                connection_type,
+                workspace_id: None, // 由调用者根据 workspace_cloud_id 解析
+                params,
+                selected_databases: plain_data.selected_databases,
+                remark: plain_data.remark,
+                sync_enabled: true,
+                cloud_id: Some(cloud_data.id.clone()),
+                last_synced_at: Some(cloud_data.updated_at),
+                created_at: None,
+                updated_at: None,
+                team_id: cloud_data.team_id.clone(),
+                owner_id: plain_data.owner_id,
+            },
+            workspace_cloud_id,
+        ))
     }
 
     /// 解密 sync_data 中的工作空间数据
@@ -548,5 +572,44 @@ mod tests {
         let encrypted = service.encrypt_blob(plaintext, Some("team-1")).unwrap();
         let decrypted = service.decrypt_blob(&encrypted, Some("team-1")).unwrap();
         assert_eq!(plaintext, decrypted);
+    }
+
+    #[test]
+    fn connection_sync_data_preserves_workspace_cloud_id() {
+        let mut service = CloudSyncService::new();
+        service.set_master_key_directly("test_blob_key".to_string());
+
+        let conn = StoredConnection {
+            id: Some(1),
+            name: "db".to_string(),
+            connection_type: ConnectionType::Database,
+            params: r#"{"host":"localhost","port":5432}"#.to_string(),
+            workspace_id: Some(7),
+            selected_databases: None,
+            remark: None,
+            sync_enabled: true,
+            cloud_id: None,
+            last_synced_at: None,
+            created_at: None,
+            updated_at: None,
+            team_id: None,
+            owner_id: None,
+        };
+
+        let cloud_data = service
+            .prepare_sync_data_upload_with_workspace_cloud_id(
+                &conn,
+                None,
+                &[],
+                Some("workspace-cloud-1".to_string()),
+            )
+            .unwrap();
+        let (decrypted, workspace_cloud_id) = service
+            .decrypt_sync_data_connection_with_workspace_cloud_id(&cloud_data)
+            .unwrap();
+
+        assert_eq!(Some("workspace-cloud-1".to_string()), workspace_cloud_id);
+        assert_eq!("db", decrypted.name);
+        assert_eq!(None, decrypted.workspace_id);
     }
 }

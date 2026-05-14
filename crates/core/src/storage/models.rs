@@ -1046,7 +1046,7 @@ mod serial_tests {
 
     #[test]
     fn connection_type_serial_methods() {
-        assert_eq!(ConnectionType::Serial.label(), "串口");
+        assert_eq!(ConnectionType::Serial.label(), "Serial");
         assert_eq!(ConnectionType::from_str("Serial"), ConnectionType::Serial);
         assert_eq!(format!("{}", ConnectionType::Serial), "Serial");
         assert!(ConnectionType::all().contains(&ConnectionType::Serial));

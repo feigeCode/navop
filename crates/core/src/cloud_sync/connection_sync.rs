@@ -5,7 +5,9 @@ use crate::cloud_sync::models::{
 use crate::cloud_sync::queue::SyncOperation;
 use crate::cloud_sync::service::SyncError;
 use crate::storage::traits::Repository;
-use crate::storage::{ConnectionRepository, PendingCloudDeletionRepository, StoredConnection};
+use crate::storage::{
+    ConnectionRepository, PendingCloudDeletionRepository, StoredConnection, WorkspaceRepository,
+};
 use std::collections::{HashMap, HashSet};
 
 const CONNECTION_QUEUE_KEY: &str = "connection";
@@ -660,12 +662,18 @@ impl SyncEngine {
 
     async fn upload_connection(&self, conn: &StoredConnection) -> Result<String, SyncError> {
         let teams = self.get_cached_teams();
+        let workspace_cloud_id = self.workspace_cloud_id_for_local_id(conn.workspace_id)?;
         let cloud_data = {
             let service = self
                 .crypto_service
                 .read()
                 .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
-            service.prepare_sync_data_upload(conn, conn.team_id.as_deref(), &teams)?
+            service.prepare_sync_data_upload_with_workspace_cloud_id(
+                conn,
+                conn.team_id.as_deref(),
+                &teams,
+                workspace_cloud_id,
+            )?
         };
         let created = self
             .cloud_client
@@ -682,15 +690,17 @@ impl SyncEngine {
         cloud_data: &CloudSyncData,
     ) -> Result<(), SyncError> {
         let teams = self.get_cached_teams();
+        let workspace_cloud_id = self.workspace_cloud_id_for_local_id(local_conn.workspace_id)?;
         let updated_data = {
             let service = self
                 .crypto_service
                 .read()
                 .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
-            let mut data = service.prepare_sync_data_upload(
+            let mut data = service.prepare_sync_data_upload_with_workspace_cloud_id(
                 local_conn,
                 local_conn.team_id.as_deref(),
                 &teams,
+                workspace_cloud_id,
             )?;
             data.id = cloud_data.id.clone();
             data.version = cloud_data.version;
@@ -711,9 +721,13 @@ impl SyncEngine {
             .read()
             .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
 
-        let mut local_conn = service.decrypt_sync_data_connection(cloud_data)?;
+        let (mut local_conn, workspace_cloud_id) =
+            service.decrypt_sync_data_connection_with_workspace_cloud_id(cloud_data)?;
+        drop(service);
         local_conn.id = None;
         local_conn.cloud_id = Some(cloud_data.id.clone());
+        local_conn.workspace_id =
+            self.local_workspace_id_for_cloud_id(workspace_cloud_id.as_deref())?;
         local_conn.last_synced_at = Some(Self::current_timestamp());
 
         let repo = self
@@ -737,9 +751,13 @@ impl SyncEngine {
             .read()
             .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
 
-        let mut updated = service.decrypt_sync_data_connection(cloud_data)?;
+        let (mut updated, workspace_cloud_id) =
+            service.decrypt_sync_data_connection_with_workspace_cloud_id(cloud_data)?;
+        drop(service);
         updated.id = local_conn.id;
         updated.cloud_id = Some(cloud_data.id.clone());
+        updated.workspace_id =
+            self.local_workspace_id_for_cloud_id(workspace_cloud_id.as_deref())?;
         updated.last_synced_at = Some(Self::current_timestamp());
 
         let repo = self
@@ -859,6 +877,45 @@ impl SyncEngine {
             Ok(list) => list.into_iter().map(|p| p.cloud_id).collect(),
             Err(_) => HashSet::new(),
         }
+    }
+
+    pub(crate) fn workspace_cloud_id_for_local_id(
+        &self,
+        workspace_id: Option<i64>,
+    ) -> Result<Option<String>, SyncError> {
+        let Some(workspace_id) = workspace_id else {
+            return Ok(None);
+        };
+        let repo = self
+            .storage
+            .get::<WorkspaceRepository>()
+            .ok_or_else(|| SyncError::StorageError("WorkspaceRepository not found".to_string()))?;
+
+        let workspace = repo
+            .get(workspace_id)
+            .map_err(|e| SyncError::StorageError(e.to_string()))?;
+        Ok(workspace.and_then(|workspace| workspace.cloud_id))
+    }
+
+    pub(crate) fn local_workspace_id_for_cloud_id(
+        &self,
+        workspace_cloud_id: Option<&str>,
+    ) -> Result<Option<i64>, SyncError> {
+        let Some(workspace_cloud_id) = workspace_cloud_id else {
+            return Ok(None);
+        };
+        let repo = self
+            .storage
+            .get::<WorkspaceRepository>()
+            .ok_or_else(|| SyncError::StorageError("WorkspaceRepository not found".to_string()))?;
+
+        let workspaces = repo
+            .list()
+            .map_err(|e| SyncError::StorageError(e.to_string()))?;
+        Ok(workspaces
+            .into_iter()
+            .find(|workspace| workspace.cloud_id.as_deref() == Some(workspace_cloud_id))
+            .and_then(|workspace| workspace.id))
     }
 }
 

@@ -363,9 +363,15 @@ impl SyncEngine {
                     .read()
                     .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
 
-                let mut updated = service.decrypt_sync_data_connection(&resolved.conflict.cloud)?;
+                let (mut updated, workspace_cloud_id) = service
+                    .decrypt_sync_data_connection_with_workspace_cloud_id(
+                        &resolved.conflict.cloud,
+                    )?;
+                drop(service);
                 updated.id = resolved.conflict.local.id;
                 updated.cloud_id = Some(resolved.conflict.cloud.id.clone());
+                updated.workspace_id =
+                    self.local_workspace_id_for_cloud_id(workspace_cloud_id.as_deref())?;
                 updated.last_synced_at = Some(Self::current_timestamp());
 
                 let repo = self.storage.get::<ConnectionRepository>().ok_or_else(|| {
@@ -380,15 +386,18 @@ impl SyncEngine {
             ConflictResolution::UseLocal => {
                 // 更新云端连接
                 let teams = self.get_cached_teams();
+                let workspace_cloud_id =
+                    self.workspace_cloud_id_for_local_id(resolved.conflict.local.workspace_id)?;
                 let updated_data = {
                     let service = self
                         .crypto_service
                         .read()
                         .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
-                    let mut data = service.prepare_sync_data_upload(
+                    let mut data = service.prepare_sync_data_upload_with_workspace_cloud_id(
                         &resolved.conflict.local,
                         resolved.conflict.local.team_id.as_deref(),
                         &teams,
+                        workspace_cloud_id,
                     )?;
                     data.id = resolved.conflict.cloud.id.clone();
                     data.version = resolved.conflict.cloud.version;
@@ -420,9 +429,15 @@ impl SyncEngine {
                     .read()
                     .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
 
-                let mut updated = service.decrypt_sync_data_connection(&resolved.conflict.cloud)?;
+                let (mut updated, workspace_cloud_id) = service
+                    .decrypt_sync_data_connection_with_workspace_cloud_id(
+                        &resolved.conflict.cloud,
+                    )?;
+                drop(service);
                 updated.id = resolved.conflict.local.id;
                 updated.cloud_id = Some(resolved.conflict.cloud.id.clone());
+                updated.workspace_id =
+                    self.local_workspace_id_for_cloud_id(workspace_cloud_id.as_deref())?;
                 updated.last_synced_at = Some(Self::current_timestamp());
 
                 let repo = self.storage.get::<ConnectionRepository>().ok_or_else(|| {
