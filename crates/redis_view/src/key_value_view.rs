@@ -441,12 +441,15 @@ impl KeyValueView {
         let global_state = cx.global::<GlobalRedisState>().clone();
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let result = Tokio::spawn_result(cx, {
-                let connection_id = connection_id.clone();
-                let key = key.clone();
-                async move { Self::fetch_key_value(&global_state, &connection_id, &key).await }
-            })
-            .await;
+            let result =
+                Tokio::spawn_result(cx, {
+                    let connection_id = connection_id.clone();
+                    let key = key.clone();
+                    async move {
+                        Self::fetch_key_value(&global_state, &connection_id, db_index, &key).await
+                    }
+                })
+                .await;
 
             _ = this.update(cx, |view, cx| {
                 match result {
@@ -482,6 +485,7 @@ impl KeyValueView {
     async fn fetch_key_value(
         global_state: &GlobalRedisState,
         connection_id: &str,
+        db_index: u8,
         key: &str,
     ) -> anyhow::Result<KeyValueDetail> {
         let conn = global_state
@@ -490,7 +494,7 @@ impl KeyValueView {
 
         let guard = conn.read().await;
         guard
-            .get_key_value_detail(key)
+            .get_key_value_detail_in_db(db_index, key)
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))
     }
