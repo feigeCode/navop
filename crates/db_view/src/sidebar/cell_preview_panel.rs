@@ -1,17 +1,17 @@
 use crate::table_data::data_grid::{DataGrid, DataGridEvent, LargeTextCellTarget};
-use crate::table_data::multi_text_editor::{
-    MultiTextEditor, MultiTextEditorEvent, create_multi_text_editor_with_content,
-    large_text_values_equivalent,
-};
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled,
     Subscription, WeakEntity, Window, div,
 };
 use gpui_component::{ActiveTheme, StyledExt, WindowExt, h_flex, v_flex};
+use one_ui::{
+    LargeTextEditor, LargeTextEditorEvent, create_large_text_editor_with_content,
+    large_text_values_equivalent,
+};
 use rust_i18n::t;
 
 pub struct CellPreviewPanel {
-    editor: Entity<MultiTextEditor>,
+    editor: Entity<LargeTextEditor>,
     data_grid: Option<WeakEntity<DataGrid>>,
     current_target: Option<LargeTextCellTarget>,
     _grid_sub: Option<Subscription>,
@@ -21,12 +21,12 @@ pub struct CellPreviewPanel {
 
 impl CellPreviewPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let editor = create_multi_text_editor_with_content(None, window, cx);
+        let editor = create_large_text_editor_with_content(None, window, cx);
         let editor_sub = cx.subscribe_in(
             &editor,
             window,
-            |this, _, event: &MultiTextEditorEvent, _window, cx| match event {
-                MultiTextEditorEvent::ActiveEditorBlurred(value) => {
+            |this, _, event: &LargeTextEditorEvent, _window, cx| match event {
+                LargeTextEditorEvent::ActiveEditorBlurred(value) => {
                     this.write_back_value(value.clone(), cx);
                 }
             },
@@ -266,7 +266,7 @@ impl Render for CellPreviewPanel {
 
 #[cfg(test)]
 mod tests {
-    use crate::table_data::multi_text_editor::large_text_values_equivalent;
+    use one_ui::large_text_values_equivalent;
 
     #[test]
     fn skips_writeback_for_identical_plain_text() {

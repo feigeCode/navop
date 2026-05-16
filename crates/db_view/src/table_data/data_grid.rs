@@ -9,6 +9,7 @@ use gpui_component::{
     h_flex, v_flex,
 };
 use one_ui::edit_table::{Column, EditTable, EditTableEvent, EditTableState};
+use one_ui::{create_large_text_editor_with_content, large_text_values_equivalent};
 use rust_i18n::t;
 use rust_xlsxwriter::Workbook;
 use tracing::{error, log::trace};
@@ -18,9 +19,6 @@ use crate::settings::{LargeTextEditorOpenMode, current_settings as current_db_vi
 use crate::sql_editor::SqlEditor;
 use crate::table_data::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
 use crate::table_data::filter_editor::{FilterEditorEvent, TableFilterEditor, TableSchema};
-use crate::table_data::multi_text_editor::{
-    create_multi_text_editor_with_content, large_text_values_equivalent,
-};
 use crate::table_data::results_delegate::{EditorTableDelegate, RowChange};
 use chrono::Local;
 use db::{
@@ -1335,7 +1333,7 @@ impl DataGrid {
         cx: &mut App,
     ) {
         let dialog_text_editor =
-            create_multi_text_editor_with_content(Some(initial_text.clone()), window, cx);
+            create_large_text_editor_with_content(Some(initial_text.clone()), window, cx);
         let data_grid = self.clone();
         let title = title.to_string();
 

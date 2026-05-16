@@ -296,6 +296,10 @@ KeyValueView:
     en: "Add set member"
     zh-CN: "添加集合成员"
     zh-HK: "添加集合成員"
+  edit_set_member:
+    en: "Edit set member"
+    zh-CN: "编辑集合成员"
+    zh-HK: "編輯集合成員"
   member_label:
     en: "Member:"
     zh-CN: "成员:"

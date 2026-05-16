@@ -475,7 +475,8 @@ impl RedisEventHandler {
 
             dialog
                 .title(t!("RedisTree.create_key_title").to_string())
-                .w(px(500.))
+                .w(px(800.))
+                .h(px(720.))
                 .child(create_key_dialog.clone())
                 .confirm()
                 .button_props(
@@ -484,7 +485,13 @@ impl RedisEventHandler {
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
                 .on_ok(move |_, window, cx: &mut App| {
-                    let form_data = create_key_dialog_for_ok.read(cx).form_data(cx);
+                    let form_data = match create_key_dialog_for_ok.read(cx).form_data(cx) {
+                        Ok(form_data) => form_data,
+                        Err(error) => {
+                            window.push_notification(Notification::error(error).autohide(true), cx);
+                            return false;
+                        }
+                    };
                     let key = form_data.key;
                     if key.is_empty() {
                         window.push_notification(

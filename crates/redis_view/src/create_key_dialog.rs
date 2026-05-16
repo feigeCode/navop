@@ -16,6 +16,7 @@ use gpui_component::{
 use rust_i18n::t;
 
 use crate::RedisKeyType;
+use one_ui::{LargeTextEditor, create_large_text_editor_with_content};
 
 /// 创建键表单数据
 pub struct CreateKeyFormData {
@@ -49,7 +50,7 @@ pub struct CreateKeyDialog {
     selected_type: RedisKeyType,
     key_input: Entity<InputState>,
     ttl_input: Entity<InputState>,
-    value_input: Entity<InputState>,
+    value_editor: Entity<LargeTextEditor>,
     hash_field_input: Entity<InputState>,
     zset_score_input: Entity<InputState>,
     type_select: Entity<SelectState<Vec<KeyTypeOption>>>,
@@ -66,12 +67,7 @@ impl CreateKeyDialog {
             state.set_value("-1", window, cx);
             state
         });
-        let value_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder(t!("CreateKey.value_placeholder").to_string())
-                .multi_line(true)
-                .auto_grow(3, 8)
-        });
+        let value_editor = create_large_text_editor_with_content(None, window, cx);
         let hash_field_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t!("CreateKey.hash_field_placeholder").to_string())
@@ -102,16 +98,20 @@ impl CreateKeyDialog {
             selected_type: RedisKeyType::String,
             key_input,
             ttl_input,
-            value_input,
+            value_editor,
             hash_field_input,
             zset_score_input,
             type_select,
         }
     }
 
-    pub fn form_data(&self, cx: &App) -> CreateKeyFormData {
+    pub fn form_data(&self, cx: &App) -> Result<CreateKeyFormData, String> {
         let key = self.key_input.read(cx).text().to_string();
-        let value = self.value_input.read(cx).text().to_string();
+        let value = self
+            .value_editor
+            .read(cx)
+            .get_writeback_text(cx)
+            .map_err(|err| err.to_string())?;
         let hash_field = self.hash_field_input.read(cx).text().to_string();
         let zset_score_str = self.zset_score_input.read(cx).text().to_string();
         let zset_score = zset_score_str.parse().unwrap_or(0.0);
@@ -128,14 +128,14 @@ impl CreateKeyDialog {
             .cloned()
             .unwrap_or(RedisKeyType::String);
 
-        CreateKeyFormData {
+        Ok(CreateKeyFormData {
             key,
             key_type,
             value,
             hash_field,
             zset_score,
             ttl,
-        }
+        })
     }
 
     fn on_type_changed(
@@ -158,6 +158,7 @@ impl Render for CreateKeyDialog {
         let show_zset = self.selected_type == RedisKeyType::ZSet;
 
         v_flex()
+            .size_full()
             .gap_3()
             // 键名
             .child(
@@ -225,13 +226,21 @@ impl Render for CreateKeyDialog {
             // 值
             .child(
                 v_flex()
+                    .flex_1()
+                    .min_h_0()
                     .gap_1()
                     .child(
                         div()
                             .text_sm()
                             .child(t!("CreateKey.label_value").to_string()),
                     )
-                    .child(Input::new(&self.value_input).w_full()),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .w_full()
+                            .child(self.value_editor.clone()),
+                    ),
             )
             // Hash 字段名（Hash 类型专用）
             .when(show_hash, |this| {
