@@ -310,7 +310,7 @@ impl TabContent for RedisTabView {
                         global_state
                             .remove_connection(&connection_id_clone)
                             .await
-                            .map_err(|e| anyhow::anyhow!("{}", e))
+                            .map_err(anyhow::Error::new)
                     }
                 })
                 .await;

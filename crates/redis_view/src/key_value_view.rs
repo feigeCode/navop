@@ -462,7 +462,7 @@ impl KeyValueView {
                         view.load_state = LoadState::Loaded;
                     }
                     Err(e) => {
-                        view.load_state = LoadState::Error(e.to_string());
+                        view.load_state = LoadState::Error(format!("{e:#}"));
                     }
                 }
                 cx.notify();
@@ -496,7 +496,7 @@ impl KeyValueView {
         guard
             .get_key_value_detail_in_db(db_index, key)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .map_err(anyhow::Error::new)
     }
 
     /// 获取编辑器内容
@@ -962,6 +962,7 @@ impl KeyValueView {
             return;
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -976,15 +977,15 @@ impl KeyValueView {
                     match position {
                         ListInsertPosition::Head => {
                             guard
-                                .lpush(&key, &[value.as_str()])
+                                .lpush_in_db(db_index, &key, &[value.as_str()])
                                 .await
-                                .map_err(|e| anyhow::anyhow!("{}", e))?;
+                                .map_err(anyhow::Error::new)?;
                         }
                         ListInsertPosition::Tail => {
                             guard
-                                .rpush(&key, &[value.as_str()])
+                                .rpush_in_db(db_index, &key, &[value.as_str()])
                                 .await
-                                .map_err(|e| anyhow::anyhow!("{}", e))?;
+                                .map_err(anyhow::Error::new)?;
                         }
                     }
                     Ok::<(), anyhow::Error>(())
@@ -1011,6 +1012,7 @@ impl KeyValueView {
             return;
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -1023,9 +1025,9 @@ impl KeyValueView {
                     })?;
                     let guard = conn.read().await;
                     guard
-                        .lset(&key, index as i64, &new_value)
+                        .lset_in_db(db_index, &key, index as i64, &new_value)
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map_err(anyhow::Error::new)
                 }
             })
             .await;
@@ -1103,6 +1105,7 @@ impl KeyValueView {
             return;
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -1115,9 +1118,9 @@ impl KeyValueView {
                     })?;
                     let guard = conn.read().await;
                     guard
-                        .sadd(&key, &[member.as_str()])
+                        .sadd_in_db(db_index, &key, &[member.as_str()])
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map_err(anyhow::Error::new)
                 }
             })
             .await;
@@ -1303,6 +1306,7 @@ impl KeyValueView {
             return;
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -1315,9 +1319,9 @@ impl KeyValueView {
                     })?;
                     let guard = conn.read().await;
                     guard
-                        .zadd(&key, &[(score, member.as_str())])
+                        .zadd_in_db(db_index, &key, &[(score, member.as_str())])
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map_err(anyhow::Error::new)
                 }
             })
             .await;
@@ -1347,6 +1351,7 @@ impl KeyValueView {
             return;
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -1362,14 +1367,14 @@ impl KeyValueView {
                     // 如果成员名变了，先删除旧的
                     if old_member != new_member {
                         guard
-                            .zrem(&key, &[old_member.as_str()])
+                            .zrem_in_db(db_index, &key, &[old_member.as_str()])
                             .await
-                            .map_err(|e| anyhow::anyhow!("{}", e))?;
+                            .map_err(anyhow::Error::new)?;
                     }
                     guard
-                        .zadd(&key, &[(score, new_member.as_str())])
+                        .zadd_in_db(db_index, &key, &[(score, new_member.as_str())])
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))?;
+                        .map_err(anyhow::Error::new)?;
                     Ok::<(), anyhow::Error>(())
                 }
             })
@@ -1562,6 +1567,7 @@ impl KeyValueView {
             return;
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -1575,9 +1581,9 @@ impl KeyValueView {
                     })?;
                     let guard = conn.read().await;
                     guard
-                        .hset(&key, &field, &value)
+                        .hset_in_db(db_index, &key, &field, &value)
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map_err(anyhow::Error::new)
                 }
             })
             .await;
@@ -1607,6 +1613,7 @@ impl KeyValueView {
             return;
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -1618,13 +1625,13 @@ impl KeyValueView {
                     })?;
                     let guard = conn.read().await;
                     guard
-                        .hdel(&key, &[old_field.as_str()])
+                        .hdel_in_db(db_index, &key, &[old_field.as_str()])
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))?;
+                        .map_err(anyhow::Error::new)?;
                     guard
-                        .hset(&key, &new_field, &value)
+                        .hset_in_db(db_index, &key, &new_field, &value)
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))?;
+                        .map_err(anyhow::Error::new)?;
                     Ok::<(), anyhow::Error>(())
                 }
             })
@@ -1725,6 +1732,7 @@ impl KeyValueView {
             return;
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -1738,15 +1746,15 @@ impl KeyValueView {
                     match ttl {
                         Some(seconds) if seconds > 0 => {
                             guard
-                                .expire(&key, seconds)
+                                .expire_in_db(db_index, &key, seconds)
                                 .await
-                                .map_err(|e| anyhow::anyhow!("{}", e))?;
+                                .map_err(anyhow::Error::new)?;
                         }
                         _ => {
                             guard
-                                .persist(&key)
+                                .persist_in_db(db_index, &key)
                                 .await
-                                .map_err(|e| anyhow::anyhow!("{}", e))?;
+                                .map_err(anyhow::Error::new)?;
                         }
                     }
                     Ok::<(), anyhow::Error>(())
@@ -1844,9 +1852,9 @@ impl KeyValueView {
                     })?;
                     let guard = conn.read().await;
                     guard
-                        .rename(&old_name, &new_name)
+                        .rename_in_db(db_index, &old_name, &new_name)
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map_err(anyhow::Error::new)
                 }
             })
             .await;
@@ -1872,6 +1880,7 @@ impl KeyValueView {
         };
         let value = self.get_editor_content(cx);
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -1884,9 +1893,9 @@ impl KeyValueView {
                     })?;
                     let guard = conn.read().await;
                     guard
-                        .set(&key, &value, None)
+                        .set_in_db(db_index, &key, &value, None)
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map_err(anyhow::Error::new)
                 }
             })
             .await;
@@ -1919,6 +1928,7 @@ impl KeyValueView {
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
         let delete_marker = "__DELETED_ELEMENT_MARKER__";
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -1930,13 +1940,16 @@ impl KeyValueView {
                     })?;
                     let guard = conn.read().await;
                     guard
-                        .lset(&key, index as i64, delete_marker)
+                        .lset_in_db(db_index, &key, index as i64, delete_marker)
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))?;
+                        .map_err(anyhow::Error::new)?;
                     guard
-                        .execute_command(&format!("LREM {} 1 {}", key, delete_marker))
+                        .execute_command_in_db(
+                            db_index,
+                            &format!("LREM {} 1 {}", key, delete_marker),
+                        )
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))?;
+                        .map_err(anyhow::Error::new)?;
                     Ok::<(), anyhow::Error>(())
                 }
             })
@@ -1961,6 +1974,7 @@ impl KeyValueView {
             return;
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -1973,9 +1987,9 @@ impl KeyValueView {
                     })?;
                     let guard = conn.read().await;
                     guard
-                        .srem(&key, &[member.as_str()])
+                        .srem_in_db(db_index, &key, &[member.as_str()])
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map_err(anyhow::Error::new)
                 }
             })
             .await;
@@ -1999,6 +2013,7 @@ impl KeyValueView {
             return;
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -2011,9 +2026,9 @@ impl KeyValueView {
                     })?;
                     let guard = conn.read().await;
                     guard
-                        .zrem(&key, &[member.as_str()])
+                        .zrem_in_db(db_index, &key, &[member.as_str()])
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map_err(anyhow::Error::new)
                 }
             })
             .await;
@@ -2037,6 +2052,7 @@ impl KeyValueView {
             return;
         };
         let global_state = cx.global::<GlobalRedisState>().clone();
+        let db_index = self.db_index;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let result = Tokio::spawn_result(cx, {
@@ -2049,9 +2065,9 @@ impl KeyValueView {
                     })?;
                     let guard = conn.read().await;
                     guard
-                        .hdel(&key, &[field.as_str()])
+                        .hdel_in_db(db_index, &key, &[field.as_str()])
                         .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                        .map_err(anyhow::Error::new)
                 }
             })
             .await;

@@ -304,7 +304,7 @@ impl RedisTreeView {
             let config = match RedisManager::config_from_stored(&connection) {
                 Ok(config) => config,
                 Err(e) => {
-                    let error_msg = e.to_string();
+                    let error_msg = format!("{e:#}");
                     _ = this.update(cx, |view, cx| {
                         view.loading_nodes.remove(&node_id);
                         view.error_nodes.insert(node_id.clone(), error_msg);
@@ -368,10 +368,7 @@ impl RedisTreeView {
                         .get_connection(&connection_id)
                         .ok_or_else(|| anyhow::anyhow!(t!("RedisTree.connection_missing")))?;
                     let guard = conn.read().await;
-                    guard
-                        .get_databases_info()
-                        .await
-                        .map_err(|e| anyhow::anyhow!("{}", e))
+                    guard.get_databases_info().await.map_err(anyhow::Error::new)
                 }
             })
             .await
@@ -537,7 +534,7 @@ impl RedisTreeView {
                         let result = guard
                             .scan_in_db(db_index, current_cursor, &pattern_for_scan, SCAN_BATCH_SIZE)
                             .await
-                            .map_err(|e| anyhow::anyhow!("{}", e))?;
+                            .map_err(anyhow::Error::new)?;
                         all_keys.extend(result.keys);
                         current_cursor = if result.finished { 0 } else { result.cursor };
                         if current_cursor == 0 || all_keys.len() >= SCAN_TARGET_KEYS {
