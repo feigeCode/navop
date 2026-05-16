@@ -1423,6 +1423,11 @@ impl DataGrid {
         });
     }
 
+    fn clear_changes_and_refresh(&self, cx: &mut App) {
+        self.clear_changes(cx);
+        self.handle_refresh(cx);
+    }
+
     pub fn revert_changes(&self, cx: &mut App) {
         self.table.update(cx, |state, cx| {
             state.delegate_mut().revert_all_changes();
@@ -1958,7 +1963,7 @@ impl DataGrid {
                             t!("TableDataGrid.save_changes_failed", error = err_msg).to_string(),
                         );
                     } else {
-                        this.clear_changes(cx);
+                        this.clear_changes_and_refresh(cx);
                         notification(
                             cx,
                             t!("TableDataGrid.save_changes_success", count = change_count)
@@ -2180,7 +2185,7 @@ impl DataGrid {
                     cx.update(|cx| {
                         if let Some(window_id) = cx.active_window() {
                             let _ = cx.update_window(window_id, |_entity, window, cx| {
-                                data_grid.clear_changes(cx);
+                                data_grid.clear_changes_and_refresh(cx);
                                 window.close_dialog(cx);
                                 window.push_notification(
                                     t!("TableDataGrid.execute_success").to_string(),

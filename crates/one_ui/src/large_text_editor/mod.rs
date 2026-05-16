@@ -260,7 +260,7 @@ fn build_editor(
             tab_size: 2,
             hard_tabs: false,
         })
-        .soft_wrap(false)
+        .soft_wrap(true)
         .placeholder(match tab {
             LargeTextEditorTab::Text => "Enter your text here...",
             LargeTextEditorTab::Json => "Enter JSON here...",
