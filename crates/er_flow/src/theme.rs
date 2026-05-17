@@ -3,17 +3,16 @@ use gpui::Hsla;
 use gpui_component::{Colorize as _, Theme};
 
 pub fn er_flow_theme() -> FlowTheme {
-    FlowTheme {
-        node_card_background: 0x00ffffff,
-        node_card_border: 0x0031485f,
-        node_caption_text: 0x00182739,
-        default_port_fill: 0x000f766e,
-        background: 0x00f8fafc,
-        background_grid_dot: 0x00cbd5e1,
-        edge_stroke: 0x0064748b,
-        minimap_node_stroke: 0x0031485f,
-        ..FlowTheme::light()
-    }
+    let mut theme = FlowTheme::light();
+    theme.node_card_background = 0x00ffffff;
+    theme.node_card_border = 0x0031485f;
+    theme.node_caption_text = 0x00182739;
+    theme.default_port_fill = 0x000f766e;
+    theme.background = 0x00f8fafc;
+    theme.background_grid_dot = 0x00cbd5e1;
+    theme.edge_stroke = 0x0064748b;
+    theme.minimap_node_stroke = 0x0031485f;
+    theme
 }
 
 /// 从应用的 GPUI 主题映射创建 FlowTheme，使画布自适应亮/暗模式。
@@ -22,45 +21,46 @@ pub fn er_flow_theme_from_ui(ui: &Theme) -> FlowTheme {
     let muted_line = blend_to_u32(ui.background, ui.muted_foreground, 0.45);
     let minimap_node_fill = blend_to_u32(ui.background, ui.muted, 0.5);
 
-    FlowTheme {
-        node_card_background: hsla_to_u32(ui.background),
-        node_card_border: hsla_to_u32(ui.border),
-        node_card_border_selected: hsla_to_u32(ui.primary),
-        undefined_node_background: hsla_to_u32(ui.muted),
-        undefined_node_border: hsla_to_u32(ui.border),
-        node_caption_text: hsla_to_u32(ui.foreground),
-        undefined_node_caption_text: hsla_to_u32(ui.muted_foreground),
-        default_port_fill: hsla_to_u32(ui.primary),
-        background: hsla_to_u32(ui.background),
-        background_grid_dot: grid_dot,
-        edge_stroke: muted_line,
-        edge_stroke_selected: hsla_to_u32(ui.primary),
-        selection_rect_border: hsla_to_u32(ui.primary),
-        selection_rect_fill_rgba: hsla_to_u32_rgba(Hsla {
-            a: 0.3,
-            ..ui.primary
-        }),
-        port_preview_line: hsla_to_u32(ui.primary),
-        port_preview_dot: hsla_to_u32(ui.muted_foreground),
-        minimap_background: hsla_to_u32(ui.popover),
-        minimap_border: hsla_to_u32(ui.border),
-        minimap_edge: muted_line,
-        minimap_node_fill,
-        minimap_node_stroke: hsla_to_u32(ui.border),
-        minimap_viewport_stroke: hsla_to_u32(ui.primary),
-        zoom_controls_background: hsla_to_u32(ui.popover),
-        zoom_controls_border: hsla_to_u32(ui.border),
-        zoom_controls_text: hsla_to_u32(ui.foreground),
-        context_menu_background: hsla_to_u32(ui.popover),
-        context_menu_border: hsla_to_u32(ui.border),
-        context_menu_text: hsla_to_u32(ui.foreground),
-        context_menu_shortcut_text: hsla_to_u32(ui.muted_foreground),
-        context_menu_separator: hsla_to_u32(ui.border),
-        error: hsla_to_u32(ui.danger),
-        info: hsla_to_u32(ui.info),
-        success: hsla_to_u32(ui.success),
-        warning: hsla_to_u32(ui.warning),
-    }
+    let mut theme = FlowTheme::light();
+    theme.node_card_background = hsla_to_u32(ui.background);
+    theme.node_card_border = hsla_to_u32(ui.border);
+    theme.node_card_border_selected = hsla_to_u32(ui.primary);
+    theme.undefined_node_background = hsla_to_u32(ui.muted);
+    theme.undefined_node_border = hsla_to_u32(ui.border);
+    theme.node_caption_text = hsla_to_u32(ui.foreground);
+    theme.undefined_node_caption_text = hsla_to_u32(ui.muted_foreground);
+    theme.default_port_fill = hsla_to_u32(ui.primary);
+    theme.background = hsla_to_u32(ui.background);
+    theme.background_grid_dot = grid_dot;
+    theme.edge_stroke = muted_line;
+    theme.edge_stroke_selected = hsla_to_u32(ui.primary);
+    theme.selection_rect_border = hsla_to_u32(ui.primary);
+    theme.selection_rect_fill_rgba = hsla_to_u32_rgba(Hsla {
+        a: 0.3,
+        ..ui.primary
+    });
+    theme.snap_guide_stroke = hsla_to_u32(ui.primary);
+    theme.port_preview_line = hsla_to_u32(ui.primary);
+    theme.port_preview_dot = hsla_to_u32(ui.muted_foreground);
+    theme.minimap_background = hsla_to_u32(ui.popover);
+    theme.minimap_border = hsla_to_u32(ui.border);
+    theme.minimap_edge = muted_line;
+    theme.minimap_node_fill = minimap_node_fill;
+    theme.minimap_node_stroke = hsla_to_u32(ui.border);
+    theme.minimap_viewport_stroke = hsla_to_u32(ui.primary);
+    theme.zoom_controls_background = hsla_to_u32(ui.popover);
+    theme.zoom_controls_border = hsla_to_u32(ui.border);
+    theme.zoom_controls_text = hsla_to_u32(ui.foreground);
+    theme.context_menu_background = hsla_to_u32(ui.popover);
+    theme.context_menu_border = hsla_to_u32(ui.border);
+    theme.context_menu_text = hsla_to_u32(ui.foreground);
+    theme.context_menu_shortcut_text = hsla_to_u32(ui.muted_foreground);
+    theme.context_menu_separator = hsla_to_u32(ui.border);
+    theme.error = hsla_to_u32(ui.danger);
+    theme.info = hsla_to_u32(ui.info);
+    theme.success = hsla_to_u32(ui.success);
+    theme.warning = hsla_to_u32(ui.warning);
+    theme
 }
 
 fn blend_to_u32(background: Hsla, foreground: Hsla, background_weight: f32) -> u32 {

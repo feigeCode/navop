@@ -2,14 +2,16 @@
 
 use crate::types::*;
 use async_trait::async_trait;
-use redis_client::aio::MultiplexedConnection;
+use redis_client::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis_client::{AsyncCommands, Client, RedisResult};
 use rust_i18n::t;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 const MAX_COLLECTION_ELEMENTS: i64 = 1000;
+const DEFAULT_CONNECTION_TIMEOUT_SECONDS: u64 = 10;
 
 /// Redis 连接 trait
 #[async_trait]
@@ -265,7 +267,7 @@ pub trait RedisConnection: Send + Sync {
 pub struct RedisConnectionImpl {
     config: RedisConnectionConfig,
     client: Option<Client>,
-    db_connections: Arc<RwLock<HashMap<u8, MultiplexedConnection>>>,
+    db_connections: Arc<RwLock<HashMap<u8, ConnectionManager>>>,
 }
 
 impl RedisConnectionImpl {
@@ -277,11 +279,11 @@ impl RedisConnectionImpl {
         }
     }
 
-    async fn get_conn(&self) -> Result<MultiplexedConnection, RedisError> {
+    async fn get_conn(&self) -> Result<ConnectionManager, RedisError> {
         self.get_db_conn(self.config.db_index).await
     }
 
-    async fn get_db_conn(&self, db: u8) -> Result<MultiplexedConnection, RedisError> {
+    async fn get_db_conn(&self, db: u8) -> Result<ConnectionManager, RedisError> {
         if self.client.is_none() {
             return Err(RedisError::NotConnected);
         }
@@ -300,10 +302,20 @@ impl RedisConnectionImpl {
         Ok(conn)
     }
 
+    async fn reconnect_db_conn(&self, db: u8) -> Result<ConnectionManager, RedisError> {
+        if self.client.is_none() {
+            return Err(RedisError::NotConnected);
+        }
+
+        let (_, conn) = Self::open_connection_for_db(&self.config, db).await?;
+        self.db_connections.write().await.insert(db, conn.clone());
+        Ok(conn)
+    }
+
     async fn open_connection_for_db(
         config: &RedisConnectionConfig,
         db: u8,
-    ) -> Result<(Client, MultiplexedConnection), RedisError> {
+    ) -> Result<(Client, ConnectionManager), RedisError> {
         let db_config = Self::connection_config_for_db(config, db)?;
         let client = Client::open(db_config.to_url().as_str()).map_err(|e| {
             RedisError::connection_with_source(
@@ -312,8 +324,8 @@ impl RedisConnectionImpl {
             )
         })?;
 
-        let conn = client
-            .get_multiplexed_async_connection()
+        let manager_config = Self::connection_manager_config(&db_config);
+        let conn = ConnectionManager::new_with_config(client.clone(), manager_config)
             .await
             .map_err(|e| {
                 RedisError::connection_with_source(
@@ -323,6 +335,24 @@ impl RedisConnectionImpl {
             })?;
 
         Ok((client, conn))
+    }
+
+    fn connection_timeout_duration(config: &RedisConnectionConfig) -> Duration {
+        let timeout = if config.timeout == 0 {
+            DEFAULT_CONNECTION_TIMEOUT_SECONDS
+        } else {
+            config.timeout
+        };
+        Duration::from_secs(timeout)
+    }
+
+    fn connection_manager_config(config: &RedisConnectionConfig) -> ConnectionManagerConfig {
+        let timeout = Self::connection_timeout_duration(config);
+        ConnectionManagerConfig::new()
+            .set_connection_timeout(timeout)
+            .set_response_timeout(timeout)
+            .set_number_of_retries(3)
+            .set_max_delay(1_000)
     }
 
     fn connection_config_for_db(
@@ -357,6 +387,26 @@ impl RedisConnectionImpl {
         type_str.parse().unwrap_or(RedisKeyType::None)
     }
 
+    fn is_reconnectable_redis_error(error: &redis_client::RedisError) -> bool {
+        error.is_connection_dropped() || error.is_unrecoverable_error()
+    }
+
+    fn should_reconnect_after_redis_error(error: &RedisError) -> bool {
+        match error {
+            RedisError::Connection {
+                source: Some(source),
+                ..
+            }
+            | RedisError::Command {
+                source: Some(source),
+                ..
+            } => source
+                .downcast_ref::<redis_client::RedisError>()
+                .is_some_and(Self::is_reconnectable_redis_error),
+            _ => false,
+        }
+    }
+
     fn is_select_command(parts: &[String]) -> bool {
         parts
             .first()
@@ -374,8 +424,79 @@ impl RedisConnectionImpl {
         Ok(())
     }
 
+    fn can_retry_raw_command(parts: &[String]) -> bool {
+        parts.first().is_some_and(|command| {
+            matches!(
+                command.to_ascii_uppercase().as_str(),
+                "PING"
+                    | "GET"
+                    | "MGET"
+                    | "EXISTS"
+                    | "TYPE"
+                    | "TTL"
+                    | "PTTL"
+                    | "SCAN"
+                    | "SSCAN"
+                    | "HSCAN"
+                    | "ZSCAN"
+                    | "KEYS"
+                    | "HLEN"
+                    | "HGET"
+                    | "HGETALL"
+                    | "LLEN"
+                    | "LRANGE"
+                    | "SCARD"
+                    | "SMEMBERS"
+                    | "ZCARD"
+                    | "ZRANGE"
+                    | "XRANGE"
+                    | "XLEN"
+                    | "INFO"
+                    | "DBSIZE"
+            )
+        })
+    }
+
+    async fn execute_parsed_command_with_conn(
+        conn: &mut ConnectionManager,
+        parts: &[String],
+    ) -> Result<RedisValue, RedisError> {
+        let mut cmd = redis_client::cmd(parts[0].as_str());
+        for arg in &parts[1..] {
+            cmd.arg(arg.as_str());
+        }
+
+        let result: redis_client::Value = cmd.query_async(conn).await.map_err(|e| {
+            RedisError::command_with_source(
+                t!("RedisConnection.command_execute_failed").to_string(),
+                e,
+            )
+        })?;
+
+        Ok(convert_redis_value(result))
+    }
+
+    async fn execute_parsed_command_in_db(
+        &self,
+        db: u8,
+        parts: &[String],
+    ) -> Result<RedisValue, RedisError> {
+        let mut conn = self.get_db_conn(db).await?;
+        match Self::execute_parsed_command_with_conn(&mut conn, parts).await {
+            Ok(value) => Ok(value),
+            Err(err)
+                if Self::can_retry_raw_command(parts)
+                    && Self::should_reconnect_after_redis_error(&err) =>
+            {
+                let mut conn = self.reconnect_db_conn(db).await?;
+                Self::execute_parsed_command_with_conn(&mut conn, parts).await
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     async fn key_type_with_conn(
-        conn: &mut MultiplexedConnection,
+        conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<RedisKeyType, RedisError> {
         let type_str: String = redis_client::cmd("TYPE")
@@ -391,7 +512,19 @@ impl RedisConnectionImpl {
         Ok(Self::parse_key_type(&type_str))
     }
 
-    async fn ttl_with_conn(conn: &mut MultiplexedConnection, key: &str) -> Result<i64, RedisError> {
+    async fn key_types_batch_with_conn(
+        conn: &mut ConnectionManager,
+        keys: &[String],
+    ) -> RedisResult<Vec<String>> {
+        let mut pipe = redis_client::pipe();
+        for key in keys {
+            pipe.cmd("TYPE").arg(key);
+        }
+
+        pipe.query_async(conn).await
+    }
+
+    async fn ttl_with_conn(conn: &mut ConnectionManager, key: &str) -> Result<i64, RedisError> {
         redis_client::cmd("TTL")
             .arg(key)
             .query_async(&mut *conn)
@@ -405,7 +538,7 @@ impl RedisConnectionImpl {
     }
 
     async fn key_size_with_conn(
-        conn: &mut MultiplexedConnection,
+        conn: &mut ConnectionManager,
         key: &str,
         key_type: RedisKeyType,
     ) -> Option<i64> {
@@ -426,7 +559,7 @@ impl RedisConnectionImpl {
     }
 
     async fn key_info_with_conn(
-        conn: &mut MultiplexedConnection,
+        conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<KeyInfo, RedisError> {
         let key_type = Self::key_type_with_conn(conn, key).await?;
@@ -447,7 +580,7 @@ impl RedisConnectionImpl {
     }
 
     async fn scan_set_members(
-        conn: &mut MultiplexedConnection,
+        conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<Vec<String>, RedisError> {
         let mut cursor: u64 = 0;
@@ -477,7 +610,7 @@ impl RedisConnectionImpl {
     }
 
     async fn scan_hash_fields(
-        conn: &mut MultiplexedConnection,
+        conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<Vec<HashField>, RedisError> {
         let mut cursor: u64 = 0;
@@ -511,7 +644,7 @@ impl RedisConnectionImpl {
     }
 
     async fn zrange_with_scores_conn(
-        conn: &mut MultiplexedConnection,
+        conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<Vec<ZSetMember>, RedisError> {
         let result: Vec<(String, f64)> = conn
@@ -530,7 +663,7 @@ impl RedisConnectionImpl {
     }
 
     async fn xrange_conn(
-        conn: &mut MultiplexedConnection,
+        conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<Vec<StreamEntry>, RedisError> {
         let result: Vec<(String, Vec<(String, String)>)> = redis_client::cmd("XRANGE")
@@ -557,7 +690,7 @@ impl RedisConnectionImpl {
     }
 
     async fn key_value_detail_with_conn(
-        conn: &mut MultiplexedConnection,
+        conn: &mut ConnectionManager,
         key: &str,
     ) -> Result<KeyValueDetail, RedisError> {
         let key_info = Self::key_info_with_conn(conn, key).await?;
@@ -768,7 +901,14 @@ impl RedisConnection for RedisConnectionImpl {
 
     async fn key_type(&self, key: &str) -> Result<RedisKeyType, RedisError> {
         let mut conn = self.get_conn().await?;
-        Self::key_type_with_conn(&mut conn, key).await
+        match Self::key_type_with_conn(&mut conn, key).await {
+            Ok(key_type) => Ok(key_type),
+            Err(err) if Self::should_reconnect_after_redis_error(&err) => {
+                let mut conn = self.reconnect_db_conn(self.config.db_index).await?;
+                Self::key_type_with_conn(&mut conn, key).await
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn key_types_batch(
@@ -780,17 +920,27 @@ impl RedisConnection for RedisConnectionImpl {
         }
 
         let mut conn = self.get_conn().await?;
-        let mut pipe = redis_client::pipe();
-        for key in keys {
-            pipe.cmd("TYPE").arg(key);
-        }
-
-        let results: Vec<String> = pipe.query_async(&mut conn).await.map_err(|e| {
-            RedisError::command_with_source(
-                t!("RedisConnection.command_failed", command = "TYPE (batch)").to_string(),
-                e,
-            )
-        })?;
+        let results = match Self::key_types_batch_with_conn(&mut conn, keys).await {
+            Ok(results) => results,
+            Err(err) if Self::is_reconnectable_redis_error(&err) => {
+                let mut conn = self.reconnect_db_conn(self.config.db_index).await?;
+                Self::key_types_batch_with_conn(&mut conn, keys)
+                    .await
+                    .map_err(|e| {
+                        RedisError::command_with_source(
+                            t!("RedisConnection.command_failed", command = "TYPE (batch)")
+                                .to_string(),
+                            e,
+                        )
+                    })?
+            }
+            Err(err) => {
+                return Err(RedisError::command_with_source(
+                    t!("RedisConnection.command_failed", command = "TYPE (batch)").to_string(),
+                    err,
+                ));
+            }
+        };
 
         Ok(keys
             .iter()
@@ -809,17 +959,27 @@ impl RedisConnection for RedisConnectionImpl {
         }
 
         let mut conn = self.get_db_conn(db).await?;
-        let mut pipe = redis_client::pipe();
-        for key in keys {
-            pipe.cmd("TYPE").arg(key);
-        }
-
-        let results: Vec<String> = pipe.query_async(&mut conn).await.map_err(|e| {
-            RedisError::command_with_source(
-                t!("RedisConnection.command_failed", command = "TYPE (batch)").to_string(),
-                e,
-            )
-        })?;
+        let results = match Self::key_types_batch_with_conn(&mut conn, keys).await {
+            Ok(results) => results,
+            Err(err) if Self::is_reconnectable_redis_error(&err) => {
+                let mut conn = self.reconnect_db_conn(db).await?;
+                Self::key_types_batch_with_conn(&mut conn, keys)
+                    .await
+                    .map_err(|e| {
+                        RedisError::command_with_source(
+                            t!("RedisConnection.command_failed", command = "TYPE (batch)")
+                                .to_string(),
+                            e,
+                        )
+                    })?
+            }
+            Err(err) => {
+                return Err(RedisError::command_with_source(
+                    t!("RedisConnection.command_failed", command = "TYPE (batch)").to_string(),
+                    err,
+                ));
+            }
+        };
 
         Ok(keys
             .iter()
@@ -1211,7 +1371,6 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn execute_command(&self, command: &str) -> Result<RedisValue, RedisError> {
-        let mut conn = self.get_conn().await?;
         let parts = parse_command_args(command);
         if parts.is_empty() {
             return Err(RedisError::command(
@@ -1220,19 +1379,8 @@ impl RedisConnection for RedisConnectionImpl {
         }
         Self::reject_select_command(&parts)?;
 
-        let mut cmd = redis_client::cmd(parts[0].as_str());
-        for arg in &parts[1..] {
-            cmd.arg(arg.as_str());
-        }
-
-        let result: redis_client::Value = cmd.query_async(&mut conn).await.map_err(|e| {
-            RedisError::command_with_source(
-                t!("RedisConnection.command_execute_failed").to_string(),
-                e,
-            )
-        })?;
-
-        Ok(convert_redis_value(result))
+        self.execute_parsed_command_in_db(self.config.db_index, &parts)
+            .await
     }
 
     async fn execute_command_in_db(&self, db: u8, command: &str) -> Result<RedisValue, RedisError> {
@@ -1244,30 +1392,31 @@ impl RedisConnection for RedisConnectionImpl {
         }
         Self::reject_select_command(&parts)?;
 
-        let mut conn = self.get_db_conn(db).await?;
-        let mut cmd = redis_client::cmd(parts[0].as_str());
-        for arg in &parts[1..] {
-            cmd.arg(arg.as_str());
-        }
-
-        let result: redis_client::Value = cmd.query_async(&mut conn).await.map_err(|e| {
-            RedisError::command_with_source(
-                t!("RedisConnection.command_execute_failed").to_string(),
-                e,
-            )
-        })?;
-
-        Ok(convert_redis_value(result))
+        self.execute_parsed_command_in_db(db, &parts).await
     }
 
     async fn get_key_info(&self, key: &str) -> Result<KeyInfo, RedisError> {
         let mut conn = self.get_conn().await?;
-        Self::key_info_with_conn(&mut conn, key).await
+        match Self::key_info_with_conn(&mut conn, key).await {
+            Ok(info) => Ok(info),
+            Err(err) if Self::should_reconnect_after_redis_error(&err) => {
+                let mut conn = self.reconnect_db_conn(self.config.db_index).await?;
+                Self::key_info_with_conn(&mut conn, key).await
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn get_key_value_detail(&self, key: &str) -> Result<KeyValueDetail, RedisError> {
         let mut conn = self.get_conn().await?;
-        Self::key_value_detail_with_conn(&mut conn, key).await
+        match Self::key_value_detail_with_conn(&mut conn, key).await {
+            Ok(detail) => Ok(detail),
+            Err(err) if Self::should_reconnect_after_redis_error(&err) => {
+                let mut conn = self.reconnect_db_conn(self.config.db_index).await?;
+                Self::key_value_detail_with_conn(&mut conn, key).await
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn get_key_value_detail_in_db(
@@ -1276,7 +1425,14 @@ impl RedisConnection for RedisConnectionImpl {
         key: &str,
     ) -> Result<KeyValueDetail, RedisError> {
         let mut conn = self.get_db_conn(db).await?;
-        Self::key_value_detail_with_conn(&mut conn, key).await
+        match Self::key_value_detail_with_conn(&mut conn, key).await {
+            Ok(detail) => Ok(detail),
+            Err(err) if Self::should_reconnect_after_redis_error(&err) => {
+                let mut conn = self.reconnect_db_conn(db).await?;
+                Self::key_value_detail_with_conn(&mut conn, key).await
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn get_databases_info(&self) -> Result<Vec<RedisDatabaseInfo>, RedisError> {
@@ -1414,6 +1570,52 @@ mod tests {
     }
 
     #[test]
+    fn reconnect_check_detects_dropped_redis_connection() {
+        let redis_error = redis_client::RedisError::from(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "broken pipe",
+        ));
+        let error = RedisError::command_with_source("TYPE failed", redis_error);
+
+        assert!(RedisConnectionImpl::should_reconnect_after_redis_error(
+            &error
+        ));
+    }
+
+    #[test]
+    fn reconnect_check_ignores_non_connection_command_errors() {
+        let redis_error =
+            redis_client::RedisError::from((redis_client::ErrorKind::ResponseError, "WRONGTYPE"));
+        let error = RedisError::command_with_source("TYPE failed", redis_error);
+
+        assert!(!RedisConnectionImpl::should_reconnect_after_redis_error(
+            &error
+        ));
+    }
+
+    #[test]
+    fn connection_timeout_duration_uses_config_timeout_seconds() {
+        let mut base = config(RedisConnectionMode::Standalone, 0);
+        base.timeout = 3;
+
+        assert_eq!(
+            std::time::Duration::from_secs(3),
+            RedisConnectionImpl::connection_timeout_duration(&base)
+        );
+    }
+
+    #[test]
+    fn connection_timeout_duration_falls_back_when_timeout_is_zero() {
+        let mut base = config(RedisConnectionMode::Standalone, 0);
+        base.timeout = 0;
+
+        assert_eq!(
+            std::time::Duration::from_secs(10),
+            RedisConnectionImpl::connection_timeout_duration(&base)
+        );
+    }
+
+    #[test]
     fn command_name_detects_select_case_insensitively() {
         assert!(RedisConnectionImpl::is_select_command(&[
             "select".to_string()
@@ -1425,6 +1627,27 @@ mod tests {
             &["get".to_string()]
         ));
         assert!(!RedisConnectionImpl::is_select_command(&[]));
+    }
+
+    #[test]
+    fn raw_command_retry_is_limited_to_readonly_commands() {
+        assert!(RedisConnectionImpl::can_retry_raw_command(&[
+            "get".to_string(),
+            "key".to_string()
+        ]));
+        assert!(RedisConnectionImpl::can_retry_raw_command(&[
+            "INFO".to_string()
+        ]));
+        assert!(!RedisConnectionImpl::can_retry_raw_command(&[
+            "set".to_string(),
+            "key".to_string(),
+            "value".to_string()
+        ]));
+        assert!(!RedisConnectionImpl::can_retry_raw_command(&[
+            "incr".to_string(),
+            "counter".to_string()
+        ]));
+        assert!(!RedisConnectionImpl::can_retry_raw_command(&[]));
     }
 }
 

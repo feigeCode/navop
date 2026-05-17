@@ -99,8 +99,7 @@ pub fn graph_from_diagram_with_options(
                 "comment": entity.comment,
                 "fields": fields.collect::<Vec<_>>(),
             }))
-            .build()
-            .ok_or_else(|| anyhow::anyhow!("failed to create node for entity `{}`", entity.id))?;
+            .build();
 
         let node = graph
             .get_node(&node_id)
@@ -125,10 +124,7 @@ pub fn graph_from_diagram_with_options(
             .create_edge()
             .source(source)
             .target(target)
-            .build()
-            .ok_or_else(|| {
-                anyhow::anyhow!("failed to create relationship `{}`", relationship.id)
-            })?;
+            .build();
     }
 
     Ok(graph)

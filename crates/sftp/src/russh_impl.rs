@@ -250,10 +250,10 @@ impl RusshSftpClient {
         // 尝试查询 limits@openssh.com 扩展并设置限制
         if let Ok(limits_ext) = raw.limits().await {
             let limits: Limits = limits_ext.into();
-            raw.set_limits(Arc::new(limits));
+            raw.set_limits(limits);
         }
 
-        raw.set_timeout(300).await;
+        raw.set_timeout(300);
 
         let raw = Arc::new(raw);
         self.raw_sftp = Some(Arc::clone(&raw));

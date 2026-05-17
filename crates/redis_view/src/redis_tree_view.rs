@@ -9,12 +9,12 @@ use gpui::{
     prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size,
+    ActiveTheme, Disableable, Icon, IconName, Side, Sizable, Size,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     h_flex,
     input::{Input, InputEvent, InputState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
     popover::Popover,
     scroll::ScrollableElement,
     spinner::Spinner,
@@ -25,11 +25,15 @@ use one_core::storage::{ActiveConnections, StoredConnection};
 use rust_i18n::t;
 use tracing::{error, info, warn};
 
-use crate::{GlobalRedisState, RedisKeyType, RedisManager, RedisNode, RedisNodeType};
+use crate::{
+    GlobalRedisState, RedisConnectionMode, RedisDatabaseInfo, RedisKeyType, RedisManager,
+    RedisNode, RedisNodeType,
+};
 
 const SCAN_BATCH_SIZE: usize = 500;
 const SCAN_TARGET_KEYS: usize = 500;
 const KEY_TYPES_BATCH_SIZE: usize = 200;
+const DEFAULT_REDIS_DATABASE_COUNT: usize = 16;
 
 /// 树形视图事件
 #[derive(Clone, Debug)]
@@ -103,6 +107,10 @@ pub struct RedisTreeView {
     search_tokens: HashMap<String, u64>,
     /// 数据库总键数（db_node_id -> total）
     db_total_key_counts: HashMap<String, i64>,
+    /// 当前每个连接显示的数据库（connection_id -> db_index）
+    selected_databases: HashMap<String, u8>,
+    /// Redis 数据库信息缓存（connection_id -> db_index -> info）
+    database_infos: HashMap<String, HashMap<u8, RedisDatabaseInfo>>,
     /// SCAN 游标（db_node_id -> cursor）
     scan_cursors: HashMap<String, u64>,
     /// SCAN 模式（db_node_id -> pattern）
@@ -167,6 +175,8 @@ impl RedisTreeView {
             search_keyword: String::new(),
             search_tokens: HashMap::new(),
             db_total_key_counts: HashMap::new(),
+            selected_databases: HashMap::new(),
+            database_infos: HashMap::new(),
             scan_cursors: HashMap::new(),
             scan_patterns: HashMap::new(),
             scroll_handle: UniformListScrollHandle::new(),
@@ -261,6 +271,128 @@ impl RedisTreeView {
         );
     }
 
+    fn db_node_id(connection_id: &str, db_index: u8) -> String {
+        format!("{}:db{}", connection_id, db_index)
+    }
+
+    fn normalize_database_for_mode(mode: RedisConnectionMode, db_index: u8) -> u8 {
+        if mode == RedisConnectionMode::Cluster {
+            0
+        } else {
+            db_index
+        }
+    }
+
+    fn database_count_for_infos(
+        mode: RedisConnectionMode,
+        infos: Option<&HashMap<u8, RedisDatabaseInfo>>,
+    ) -> usize {
+        if mode == RedisConnectionMode::Cluster {
+            return 1;
+        }
+
+        infos
+            .and_then(|values| values.keys().max().copied())
+            .map(|max_index| (max_index as usize + 1).max(DEFAULT_REDIS_DATABASE_COUNT))
+            .unwrap_or(DEFAULT_REDIS_DATABASE_COUNT)
+    }
+
+    fn mode_for_connection(&self, connection_id: &str) -> RedisConnectionMode {
+        self.stored_connections
+            .get(connection_id)
+            .and_then(|stored| RedisManager::config_from_stored(stored).ok())
+            .map(|config| config.mode)
+            .unwrap_or(RedisConnectionMode::Standalone)
+    }
+
+    fn default_db_for_connection(&self, connection_id: &str) -> u8 {
+        let mode = self.mode_for_connection(connection_id);
+        let db_index = self
+            .selected_databases
+            .get(connection_id)
+            .copied()
+            .or_else(|| {
+                self.stored_connections
+                    .get(connection_id)
+                    .and_then(|stored| RedisManager::config_from_stored(stored).ok())
+                    .map(|config| config.db_index)
+            })
+            .unwrap_or(0);
+        Self::normalize_database_for_mode(mode, db_index)
+    }
+
+    fn db_info_for_connection(&self, connection_id: &str, db_index: u8) -> RedisDatabaseInfo {
+        self.database_infos
+            .get(connection_id)
+            .and_then(|infos| infos.get(&db_index))
+            .cloned()
+            .unwrap_or(RedisDatabaseInfo {
+                index: db_index,
+                keys: 0,
+                expires: 0,
+                avg_ttl: 0,
+            })
+    }
+
+    fn available_databases_for_connection(&self, connection_id: &str) -> Vec<RedisDatabaseInfo> {
+        let infos = self.database_infos.get(connection_id);
+        let mode = self.mode_for_connection(connection_id);
+        let count = Self::database_count_for_infos(mode, infos);
+
+        (0..count)
+            .map(|db_index| {
+                let db_index = db_index as u8;
+                infos
+                    .and_then(|values| values.get(&db_index))
+                    .cloned()
+                    .unwrap_or(RedisDatabaseInfo {
+                        index: db_index,
+                        keys: 0,
+                        expires: 0,
+                        avg_ttl: 0,
+                    })
+            })
+            .collect()
+    }
+
+    fn set_current_database_node(
+        &mut self,
+        connection_id: &str,
+        db_index: u8,
+        cx: &mut Context<Self>,
+    ) -> String {
+        let mode = self.mode_for_connection(connection_id);
+        let db_index = Self::normalize_database_for_mode(mode, db_index);
+        let db_info = self.db_info_for_connection(connection_id, db_index);
+        let db_node_id = Self::db_node_id(connection_id, db_index);
+        let db_node = RedisNode::new(
+            db_node_id.clone(),
+            format!("db{}", db_index),
+            RedisNodeType::Database(db_index),
+            connection_id.to_string(),
+            db_index,
+        )
+        .with_key_count(db_info.keys);
+
+        self.selected_databases
+            .insert(connection_id.to_string(), db_index);
+        self.db_total_key_counts
+            .insert(db_node_id.clone(), db_info.keys);
+        self.set_node_children(connection_id, vec![db_node], cx);
+        db_node_id
+    }
+
+    pub fn switch_database(&mut self, connection_id: &str, db_index: u8, cx: &mut Context<Self>) {
+        if !self.connected_nodes.contains(connection_id) {
+            return;
+        }
+
+        let db_node_id = self.set_current_database_node(connection_id, db_index, cx);
+        self.expanded_nodes.insert(connection_id.to_string());
+        self.set_selected_node(&db_node_id);
+        self.refresh_keys(db_node_id, cx);
+    }
+
     /// 激活连接并自动连接
     pub fn active_connection(&mut self, connection_id: String, cx: &mut Context<Self>) {
         if !self.nodes.contains_key(&connection_id) {
@@ -328,9 +460,13 @@ impl RedisTreeView {
 
             match connect_result {
                 Ok(_conn_id) => {
+                    let default_db_index = config.db_index;
                     _ = this.update(cx, |view, cx| {
                         view.loading_nodes.remove(&node_id);
                         view.connected_nodes.insert(node_id.clone());
+                        view.selected_databases
+                            .entry(node_id.clone())
+                            .or_insert(default_db_index);
                         if let Some(conn_id) = connection_id {
                             cx.global_mut::<ActiveConnections>().add(conn_id);
                         }
@@ -355,7 +491,7 @@ impl RedisTreeView {
         .detach();
     }
 
-    /// 加载数据库列表
+    /// 加载数据库信息，并只显示当前选中的数据库
     fn load_databases(&mut self, connection_id: String, cx: &mut Context<Self>) {
         let global_state = cx.global::<GlobalRedisState>().clone();
 
@@ -377,25 +513,16 @@ impl RedisTreeView {
                 Err(_) => return,
             };
 
-            let db_nodes: Vec<RedisNode> = databases
-                .into_iter()
-                .map(|db| {
-                    let node_id = format!("{}:db{}", connection_id, db.index);
-                    let name = format!("db{}", db.index);
-                    RedisNode::new(
-                        node_id,
-                        name,
-                        RedisNodeType::Database(db.index),
-                        connection_id.clone(),
-                        db.index,
-                    )
-                    .with_key_count(db.keys)
-                })
-                .collect();
-
             _ = this.update(cx, |view, cx| {
-                view.set_node_children(&connection_id, db_nodes, cx);
+                let db_infos = databases
+                    .into_iter()
+                    .map(|db| (db.index, db))
+                    .collect::<HashMap<_, _>>();
+                view.database_infos.insert(connection_id.clone(), db_infos);
+                let db_index = view.default_db_for_connection(&connection_id);
+                let db_node_id = view.set_current_database_node(&connection_id, db_index, cx);
                 view.expand_node(&connection_id, cx);
+                view.refresh_keys(db_node_id, cx);
             });
         })
         .detach();
@@ -842,6 +969,8 @@ impl RedisTreeView {
         self.connected_nodes.remove(connection_id);
         self.expanded_nodes.remove(connection_id);
         self.error_nodes.remove(connection_id);
+        self.selected_databases.remove(connection_id);
+        self.database_infos.remove(connection_id);
         if let Ok(conn_id) = connection_id.parse::<i64>() {
             cx.global_mut::<ActiveConnections>().remove(conn_id);
         }
@@ -877,6 +1006,8 @@ impl RedisTreeView {
             self.stored_connections.remove(&node_id);
             self.connected_nodes.remove(&node_id);
             self.error_nodes.remove(&node_id);
+            self.selected_databases.remove(&node_id);
+            self.database_infos.remove(&node_id);
         }
         if let Ok(conn_id) = connection_id.parse::<i64>() {
             cx.global_mut::<ActiveConnections>().remove(conn_id);
@@ -894,6 +1025,7 @@ impl RedisTreeView {
         self.search_tokens.remove(node_id);
         self.scan_cursors.remove(node_id);
         self.scan_patterns.remove(node_id);
+        self.db_total_key_counts.remove(node_id);
         if self.selected_node.as_ref() == Some(&node.id) {
             self.selected_node = None;
         }
@@ -1550,10 +1682,19 @@ impl RedisTreeView {
         }
 
         match &node.node_type {
-            RedisNodeType::Database(_) | RedisNodeType::Connection => Some(node.id.clone()),
+            RedisNodeType::Database(_) => Some(node.id.clone()),
+            RedisNodeType::Connection => {
+                let db_index = self.default_db_for_connection(&node.connection_id);
+                let db_node_id = Self::db_node_id(&node.connection_id, db_index);
+                Some(if self.nodes.contains_key(&db_node_id) {
+                    db_node_id
+                } else {
+                    node.id.clone()
+                })
+            }
             RedisNodeType::Key(_) | RedisNodeType::Namespace => {
                 // 如果选中的是键，返回其所在数据库节点
-                let db_node_id = format!("{}:db{}", node.connection_id, node.db_index);
+                let db_node_id = Self::db_node_id(&node.connection_id, node.db_index);
                 if self.nodes.contains_key(&db_node_id) {
                     Some(db_node_id)
                 } else {
@@ -1579,7 +1720,11 @@ impl RedisTreeView {
             RedisNodeType::Key(_) | RedisNodeType::Namespace => {
                 Some((node.connection_id.clone(), node.db_index))
             }
-            RedisNodeType::Connection | RedisNodeType::LoadMore => None,
+            RedisNodeType::Connection => Some((
+                node.connection_id.clone(),
+                self.default_db_for_connection(&node.connection_id),
+            )),
+            RedisNodeType::LoadMore => None,
         }
     }
 
@@ -1646,6 +1791,63 @@ impl RedisTreeView {
             )
     }
 
+    fn render_database_switcher_menu(
+        mut menu: PopupMenu,
+        view: Entity<Self>,
+        connection_id: &str,
+        current_db: u8,
+        cx: &mut App,
+    ) -> PopupMenu {
+        let databases = view
+            .read(cx)
+            .available_databases_for_connection(connection_id);
+        let connection_id = connection_id.to_string();
+
+        menu = menu
+            .min_w(px(176.0))
+            .max_w(px(220.0))
+            .max_h(px(220.0))
+            .scrollable(true)
+            .check_side(Side::Right);
+
+        for db in databases {
+            let db_index = db.index;
+            let db_keys = db.keys;
+            let selected = db_index == current_db;
+            menu = menu.item(
+                PopupMenuItem::element({
+                    move |_window, cx| {
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .justify_between()
+                            .gap_3()
+                            .child(div().text_sm().child(format!("db{}", db_index)))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!("{}", db_keys)),
+                            )
+                    }
+                })
+                .icon(IconName::Database.color())
+                .checked(selected)
+                .on_click({
+                    let view = view.clone();
+                    let connection_id = connection_id.clone();
+                    move |_, _, cx| {
+                        view.update(cx, |tree, cx| {
+                            tree.switch_database(&connection_id, db_index, cx);
+                        });
+                    }
+                }),
+            );
+        }
+
+        menu
+    }
+
     fn render_item(&self, ix: usize, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(entry) = self.flat_entries.get(ix) else {
             return div().into_any_element();
@@ -1659,6 +1861,7 @@ impl RedisTreeView {
         let is_selected = self.selected_node.as_ref() == Some(&node_id);
         let is_expanded = self.expanded_nodes.contains(&node_id);
         let is_connection = matches!(node.node_type, RedisNodeType::Connection);
+        let is_database = matches!(node.node_type, RedisNodeType::Database(_));
         let is_connected = self.connected_nodes.contains(&node_id);
         let is_load_more = matches!(node.node_type, RedisNodeType::LoadMore);
         let is_loading = if is_load_more {
@@ -1681,11 +1884,18 @@ impl RedisTreeView {
         let show_arrow = self.should_show_arrow(&node_id);
         let node_connection_id = node.connection_id.clone();
         let node_db_index = node.db_index;
+        let current_connection_db = if is_connection {
+            Some(self.default_db_for_connection(&node_connection_id))
+        } else {
+            None
+        };
         let view = cx.entity().clone();
+        let view_for_db_switch = cx.entity().clone();
         let view_for_context = cx.entity().clone();
         let view_for_dbl = cx.entity().clone();
         let node_id_for_context = node_id.clone();
         let node_id_for_dbl = node_id.clone();
+        let connection_id_for_load_more = node_connection_id.clone();
 
         let view_for_arrow = cx.entity().clone();
         let node_id_for_arrow = entry.node_id.clone();
@@ -1721,7 +1931,7 @@ impl RedisTreeView {
                 if is_load_more {
                     view_for_dbl.update(cx, |_view, cx| {
                         _view.load_more_keys(
-                            format!("{}:db{}", node_connection_id, node_db_index),
+                            format!("{}:db{}", connection_id_for_load_more, node_db_index),
                             cx,
                         );
                     });
@@ -1810,7 +2020,7 @@ impl RedisTreeView {
                         .when(is_connection && is_connected, |icon| {
                             icon.text_color(cx.theme().success)
                         })
-                        .when(!is_connection, |icon| {
+                        .when(!is_connection && !is_database, |icon| {
                             icon.text_color(cx.theme().muted_foreground)
                         }),
                 )
@@ -1827,6 +2037,28 @@ impl RedisTreeView {
                     )
                     .child(display_name),
             )
+            .when(is_connection && is_connected, |this| {
+                let current_db = current_connection_db.unwrap_or(0);
+                let connection_id_for_menu = node_connection_id.clone();
+                let view_for_menu = view_for_db_switch.clone();
+
+                this.child(
+                    Button::new(SharedString::from(format!("redis-db-switch-btn-{}", ix)))
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::Database.color())
+                        .label(format!("db{}", current_db))
+                        .dropdown_menu(move |menu, _window, cx| {
+                            Self::render_database_switcher_menu(
+                                menu,
+                                view_for_menu.clone(),
+                                &connection_id_for_menu,
+                                current_db,
+                                cx,
+                            )
+                        }),
+                )
+            })
             // 加载中指示器
             .when(is_loading, |this| {
                 this.child(
@@ -1959,8 +2191,11 @@ impl RedisTreeView {
                         let view_for_refresh = view.clone();
                         let view_for_disconnect = view.clone();
                         let connection_id_for_cli = node.connection_id.clone();
+                        let db_index_for_cli =
+                            view.read(cx).default_db_for_connection(&node.connection_id);
                         let stored_for_cli = view.read(cx).stored_connections.get(node_id).cloned();
-                        let node_id_for_create = node_id.to_string();
+                        let node_id_for_create =
+                            Self::db_node_id(&node.connection_id, db_index_for_cli);
                         let node_id_for_refresh = node_id.to_string();
                         let node_id_for_disconnect = node_id.to_string();
                         menu.item(
@@ -1969,7 +2204,7 @@ impl RedisTreeView {
                                     if let Some(stored_connection) = stored_for_cli.clone() {
                                         cx.emit(RedisTreeViewEvent::OpenCli {
                                             connection_id: connection_id_for_cli.clone(),
-                                            db_index: 0,
+                                            db_index: db_index_for_cli,
                                             stored_connection,
                                         });
                                     }
@@ -2198,5 +2433,69 @@ mod tests {
 
         assert_eq!(selected_node.as_deref(), Some("node-2"));
         assert_eq!(context_menu_node_id, None);
+    }
+
+    #[test]
+    fn database_count_for_cluster_mode_is_db0_only() {
+        let mut infos = HashMap::new();
+        infos.insert(
+            0,
+            RedisDatabaseInfo {
+                index: 0,
+                keys: 5,
+                expires: 0,
+                avg_ttl: 0,
+            },
+        );
+        infos.insert(
+            3,
+            RedisDatabaseInfo {
+                index: 3,
+                keys: 2,
+                expires: 0,
+                avg_ttl: 0,
+            },
+        );
+
+        assert_eq!(
+            1,
+            RedisTreeView::database_count_for_infos(RedisConnectionMode::Cluster, Some(&infos))
+        );
+    }
+
+    #[test]
+    fn database_count_for_standalone_keeps_default_and_known_highest_db() {
+        assert_eq!(
+            DEFAULT_REDIS_DATABASE_COUNT,
+            RedisTreeView::database_count_for_infos(RedisConnectionMode::Standalone, None)
+        );
+
+        let mut infos = HashMap::new();
+        infos.insert(
+            20,
+            RedisDatabaseInfo {
+                index: 20,
+                keys: 1,
+                expires: 0,
+                avg_ttl: 0,
+            },
+        );
+
+        assert_eq!(
+            21,
+            RedisTreeView::database_count_for_infos(RedisConnectionMode::Standalone, Some(&infos))
+        );
+    }
+
+    #[test]
+    fn cluster_mode_normalizes_selected_database_to_zero() {
+        assert_eq!(
+            0,
+            RedisTreeView::normalize_database_for_mode(RedisConnectionMode::Cluster, 5)
+        );
+        assert_eq!(
+            5,
+            RedisTreeView::normalize_database_for_mode(RedisConnectionMode::Standalone, 5)
+        );
     }
 }

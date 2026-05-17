@@ -121,11 +121,11 @@ dashmap = "5.5.3"
 moka = { version = "0.12", features = ["sync"] }
 thiserror="2.0.14"
 llm-connector = { version = "1.1.14", features = ["streaming"] }
-redis_client = { package = "redis", version = "0.27", features = ["tokio-comp", "cluster-async"] }
+redis_client = { package = "redis", version = "0.27", features = ["tokio-comp", "cluster-async", "connection-manager"] }
 
 # SSH and SFTP
-russh = "0.60"
-russh-sftp = "2.1.1"
+russh = "0.60.3"
+russh-sftp = "2.1.2"
 tokio-socks = "0.5"
 
 # Encryption
@@ -150,7 +150,7 @@ interprocess = { version = "2.4.0", features = ["tokio"] }
 url = "2.5.4"
 percent-encoding = "2.3.1"
 global-hotkey = "0.7.0"
-ferrum-flow = { git = "https://github.com/tu6ge/ferrum-flow.git", rev = "507cab7505b8dfa6a1e4a121e3c503e3f2f882d6" }
+ferrum-flow = { git = "https://github.com/tu6ge/ferrum-flow.git", branch = "master" }
 
 [patch.crates-io]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "8b5328ca" }
