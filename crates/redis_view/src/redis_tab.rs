@@ -163,8 +163,10 @@ impl RedisTabView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Subscription {
-        cx.subscribe_in(tree_view, window, |this, tree, event, window, cx| {
-            match event {
+        cx.subscribe_in(
+            tree_view,
+            window,
+            |this, tree, event, window, cx| match event {
                 RedisTreeViewEvent::NodeSelected { node_id }
                 | RedisTreeViewEvent::KeySelected { node_id }
                 | RedisTreeViewEvent::ConnectionEstablished { node_id } => {
@@ -199,8 +201,8 @@ impl RedisTabView {
                     this.open_tool_view(*kind, connection_id, db_index, window, cx);
                 }
                 _ => {}
-            }
-        })
+            },
+        )
     }
 
     fn subscribe_tab_events(
@@ -242,9 +244,8 @@ impl RedisTabView {
             });
             existing
         } else {
-            let new_view = cx.new(|cx| {
-                RedisToolView::new(kind, Some(connection_id), db_index, window, cx)
-            });
+            let new_view =
+                cx.new(|cx| RedisToolView::new(kind, Some(connection_id), db_index, window, cx));
             new_view.update(cx, |view, cx| view.refresh(cx));
             self.tool_views.push(new_view.clone());
             new_view

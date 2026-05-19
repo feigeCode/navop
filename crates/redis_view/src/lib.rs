@@ -22,6 +22,7 @@ pub mod redis_chart_view;
 pub mod redis_cli_element;
 pub mod redis_cli_view;
 pub mod redis_form_window;
+mod redis_pubsub;
 pub mod redis_tab;
 mod redis_tool_actions;
 pub(crate) mod redis_tool_data;

@@ -1,5 +1,6 @@
 //! Redis 连接实现
 
+use crate::redis_pubsub::{self, RedisPubSubHandle};
 use crate::types::*;
 use async_trait::async_trait;
 use redis_client::aio::{ConnectionManager, ConnectionManagerConfig};
@@ -261,6 +262,13 @@ pub trait RedisConnection: Send + Sync {
 
     /// 获取服务器摘要信息
     async fn get_server_info(&self) -> Result<RedisServerInfo, RedisError>;
+
+    /// 打开一条独立的 Pub/Sub 监听连接。
+    ///
+    /// 返回的句柄绑定了一条**专用的** Redis 连接(订阅会让连接进入 pub/sub
+    /// 模式,无法再发普通命令,因此不能复用主连接池)。句柄 drop 时,后台
+    /// 监听任务会优雅停止。
+    async fn open_pubsub(&self) -> Result<RedisPubSubHandle, RedisError>;
 }
 
 /// Redis 连接实现
@@ -1521,11 +1529,25 @@ impl RedisConnection for RedisConnectionImpl {
                 .unwrap_or(0),
         })
     }
+
+    async fn open_pubsub(&self) -> Result<RedisPubSubHandle, RedisError> {
+        if self.client.is_none() {
+            return Err(RedisError::NotConnected);
+        }
+        redis_pubsub::start_pubsub_listener(self.config.clone())
+            .await
+            .map_err(|e| RedisError::command(e.to_string()))
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// 暴露给跨模块测试使用的私有解析函数。
+    pub(crate) fn parse_command_args_for_test(command: &str) -> Vec<String> {
+        parse_command_args(command)
+    }
 
     fn config(mode: RedisConnectionMode, db_index: u8) -> RedisConnectionConfig {
         RedisConnectionConfig {
@@ -1660,7 +1682,19 @@ fn parse_command_args(command: &str) -> Vec<String> {
 
     for ch in command.chars() {
         if escaped {
-            current.push(ch);
+            // 在引号内识别常见控制字符转义,使其与 quote_command_arg 的转义反向一致。
+            // 引号外的 \X 仍按原样保留为 X,沿用旧行为兼容已有用法。
+            let decoded = if in_single || in_double {
+                match ch {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    other => other,
+                }
+            } else {
+                ch
+            };
+            current.push(decoded);
             escaped = false;
             continue;
         }

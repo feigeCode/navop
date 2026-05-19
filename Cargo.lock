@@ -8515,6 +8515,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dashmap 5.5.3",
+ "futures",
  "gpui",
  "gpui-component",
  "one-core",

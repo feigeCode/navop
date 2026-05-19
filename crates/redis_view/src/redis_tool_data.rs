@@ -96,23 +96,39 @@ async fn load_monitor_rows(conn: &dyn RedisConnection) -> anyhow::Result<Vec<Too
     Ok(rows)
 }
 
+const PUBSUB_NUMSUB_BATCH_SIZE: usize = 256;
+
 async fn load_pubsub_rows(conn: &dyn RedisConnection) -> anyhow::Result<Vec<ToolRow>> {
+    // CHANNELS / NUMPAT 是基础命令,失败直接传播错误
     let channels = conn.execute_command("PUBSUB CHANNELS").await?;
     let patterns = conn.execute_command("PUBSUB NUMPAT").await?;
     let channel_names = string_list(&channels);
+
+    // 大量频道时分批查询 NUMSUB,避免单条命令过长触碰协议/代理上限
     let subscribers = if channel_names.is_empty() {
         RedisValue::Bulk(Vec::new())
     } else {
-        let command = format!(
-            "PUBSUB NUMSUB {}",
-            channel_names
-                .iter()
-                .map(|channel| quote_command_arg(channel))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        conn.execute_command(&command).await?
+        let mut merged: Vec<RedisValue> = Vec::with_capacity(channel_names.len() * 2);
+        for chunk in channel_names.chunks(PUBSUB_NUMSUB_BATCH_SIZE) {
+            let command = format!(
+                "PUBSUB NUMSUB {}",
+                chunk
+                    .iter()
+                    .map(|channel| quote_command_arg(channel))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+            // 任一分批失败时降级为 0(与 SHARDNUMSUB 行为对称),
+            // 而不是让整个页签报错——这能容忍代理/插件部分屏蔽 NUMSUB。
+            match conn.execute_command(&command).await {
+                Ok(RedisValue::Bulk(items)) => merged.extend(items),
+                _ => {}
+            }
+        }
+        RedisValue::Bulk(merged)
     };
+
+    // SHARDCHANNELS / SHARDNUMSUB 仅在 Redis 7+ 上存在,失败时降级为空。
     let shard_channels = conn
         .execute_command("PUBSUB SHARDCHANNELS")
         .await
@@ -121,17 +137,22 @@ async fn load_pubsub_rows(conn: &dyn RedisConnection) -> anyhow::Result<Vec<Tool
     let shard_subscribers = if shard_names.is_empty() {
         crate::RedisValue::Bulk(Vec::new())
     } else {
-        let command = format!(
-            "PUBSUB SHARDNUMSUB {}",
-            shard_names
-                .iter()
-                .map(|channel| quote_command_arg(channel))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        conn.execute_command(&command)
-            .await
-            .unwrap_or_else(|_| crate::RedisValue::Bulk(Vec::new()))
+        let mut merged: Vec<RedisValue> = Vec::with_capacity(shard_names.len() * 2);
+        for chunk in shard_names.chunks(PUBSUB_NUMSUB_BATCH_SIZE) {
+            let command = format!(
+                "PUBSUB SHARDNUMSUB {}",
+                chunk
+                    .iter()
+                    .map(|channel| quote_command_arg(channel))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+            match conn.execute_command(&command).await {
+                Ok(RedisValue::Bulk(items)) => merged.extend(items),
+                _ => {}
+            }
+        }
+        crate::RedisValue::Bulk(merged)
     };
     Ok(rows_from_pubsub_values(
         channels,

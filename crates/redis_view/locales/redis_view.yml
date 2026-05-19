@@ -692,6 +692,204 @@ RedisTTL:
     zh-CN: "%{seconds}秒"
     zh-HK: "%{seconds}秒"
 
+# Redis 工具页签通用
+RedisTool:
+  filter_placeholder:
+    en: "Filter key / value"
+    zh-CN: "筛选键/值"
+    zh-HK: "篩選鍵/值"
+  auto_refresh_label:
+    en: "Auto %{seconds}s"
+    zh-CN: "自动刷新 %{seconds}s"
+    zh-HK: "自動刷新 %{seconds}s"
+  connection_required:
+    en: "Please select and connect to a Redis instance"
+    zh-CN: "请选择并连接一个 Redis 连接"
+    zh-HK: "請選擇並連線一個 Redis 連線"
+  empty_info_title:
+    en: "Info has no data"
+    zh-CN: "Info 暂无数据"
+    zh-HK: "Info 暫無資料"
+  empty_info_detail:
+    en: "INFO output not yet loaded"
+    zh-CN: "尚未读取到 INFO 输出"
+    zh-HK: "尚未讀取到 INFO 輸出"
+  empty_memory_title:
+    en: "Memory has no data"
+    zh-CN: "Memory 暂无数据"
+    zh-HK: "Memory 暫無資料"
+  empty_memory_detail:
+    en: "Memory section not yet loaded"
+    zh-CN: "尚未读取到 Memory 区段"
+    zh-HK: "尚未讀取到 Memory 區段"
+  empty_slowlog_title:
+    en: "No slow log entries"
+    zh-CN: "暂无慢查询记录"
+    zh-HK: "暫無慢查詢記錄"
+  empty_slowlog_detail:
+    en: "Redis has not recorded any slow commands yet"
+    zh-CN: "Redis 还没有记录慢查询命令"
+    zh-HK: "Redis 還沒有記錄慢查詢命令"
+  empty_monitor_title:
+    en: "No command stats"
+    zh-CN: "暂无命令统计"
+    zh-HK: "暫無命令統計"
+  empty_monitor_detail:
+    en: "Run some commands and come back"
+    zh-CN: "运行一些命令后再回来查看"
+    zh-HK: "執行一些命令後再回來查看"
+  slowlog_clearing:
+    en: "Clearing slow log..."
+    zh-CN: "正在清空慢查询日志..."
+    zh-HK: "正在清空慢查詢日誌..."
+  slowlog_cleared:
+    en: "Slow log cleared"
+    zh-CN: "慢查询日志已清空"
+    zh-HK: "慢查詢日誌已清空"
+  connection_not_ready:
+    en: "Redis connection is not ready yet"
+    zh-CN: "Redis 连接尚未建立"
+    zh-HK: "Redis 連線尚未建立"
+
+# Redis 发布订阅
+RedisPubSub:
+  channel_placeholder:
+    en: "Channel"
+    zh-CN: "频道"
+    zh-HK: "頻道"
+  message_placeholder:
+    en: "Message"
+    zh-CN: "消息内容"
+    zh-HK: "訊息內容"
+  publish:
+    en: "Publish"
+    zh-CN: "发布"
+    zh-HK: "發佈"
+  publish_invalid:
+    en: "Please enter a channel before publishing"
+    zh-CN: "请输入频道后再发布"
+    zh-HK: "請輸入頻道後再發佈"
+  publish_pending:
+    en: "Publishing message..."
+    zh-CN: "正在发布消息..."
+    zh-HK: "正在發佈訊息..."
+  publish_success:
+    en: "Published, delivered to %{count} subscriber(s)"
+    zh-CN: "已发布，送达 %{count} 个订阅者"
+    zh-HK: "已發佈，送達 %{count} 個訂閱者"
+  subscribe_placeholder:
+    en: "Channel name or pattern (*?[])"
+    zh-CN: "频道名或匹配模式 (*?[])"
+    zh-HK: "頻道名或匹配模式 (*?[])"
+  subscribe:
+    en: "Subscribe"
+    zh-CN: "订阅"
+    zh-HK: "訂閱"
+  psubscribe:
+    en: "PSubscribe"
+    zh-CN: "模式订阅"
+    zh-HK: "模式訂閱"
+  unsubscribe_all:
+    en: "Unsubscribe all"
+    zh-CN: "全部取消"
+    zh-HK: "全部取消"
+  subscribed_label:
+    en: "Subscribed:"
+    zh-CN: "已订阅:"
+    zh-HK: "已訂閱:"
+  subscribed_empty:
+    en: "No active subscriptions"
+    zh-CN: "尚未订阅任何频道"
+    zh-HK: "尚未訂閱任何頻道"
+  subscription_failed:
+    en: "Subscription failed: %{error}"
+    zh-CN: "订阅失败: %{error}"
+    zh-HK: "訂閱失敗: %{error}"
+  subscription_unsupported_cluster:
+    en: "Cluster mode does not support pub/sub subscription yet. Please use Standalone or Sentinel."
+    zh-CN: "集群模式暂不支持订阅，请使用 Standalone 或 Sentinel 连接。"
+    zh-HK: "叢集模式暫不支援訂閱，請使用 Standalone 或 Sentinel 連線。"
+  subscription_closed:
+    en: "Subscription closed"
+    zh-CN: "订阅已断开"
+    zh-HK: "訂閱已斷開"
+  subscription_already_active:
+    en: "Already subscribed to %{name}"
+    zh-CN: "已经订阅了 %{name}"
+    zh-HK: "已經訂閱了 %{name}"
+  tab_channels:
+    en: "Channels"
+    zh-CN: "频道列表"
+    zh-HK: "頻道列表"
+  tab_messages:
+    en: "Messages (%{count})"
+    zh-CN: "消息流 (%{count})"
+    zh-HK: "訊息流 (%{count})"
+  messages_empty_title:
+    en: "No messages yet"
+    zh-CN: "暂无消息"
+    zh-HK: "暫無訊息"
+  messages_empty_detail:
+    en: "Subscribe to a channel and messages will appear here"
+    zh-CN: "订阅一个频道后这里会显示推送消息"
+    zh-HK: "訂閱一個頻道後這裡會顯示推送訊息"
+  empty_no_channels_title:
+    en: "No active channels"
+    zh-CN: "暂无活跃频道"
+    zh-HK: "暫無活躍頻道"
+  empty_no_channels_detail:
+    en: "Try publishing or subscribing from another client"
+    zh-CN: "尝试发布消息或在其它客户端订阅频道"
+    zh-HK: "嘗試發佈訊息或在其它客戶端訂閱頻道"
+  clear_messages:
+    en: "Clear"
+    zh-CN: "清空"
+    zh-HK: "清空"
+  column_time:
+    en: "Time"
+    zh-CN: "时间"
+    zh-HK: "時間"
+  column_type:
+    en: "Type"
+    zh-CN: "类型"
+    zh-HK: "類型"
+  column_channel:
+    en: "Channel"
+    zh-CN: "频道"
+    zh-HK: "頻道"
+  column_pattern:
+    en: "Pattern"
+    zh-CN: "模式"
+    zh-HK: "模式"
+  column_payload:
+    en: "Payload"
+    zh-CN: "内容"
+    zh-HK: "內容"
+  column_kind:
+    en: "Type"
+    zh-CN: "类型"
+    zh-HK: "類型"
+  column_name:
+    en: "Name"
+    zh-CN: "名称"
+    zh-HK: "名稱"
+  column_subscribers:
+    en: "Subscribers"
+    zh-CN: "订阅数"
+    zh-HK: "訂閱數"
+  category_channel:
+    en: "channel"
+    zh-CN: "频道"
+    zh-HK: "頻道"
+  category_pattern:
+    en: "pattern"
+    zh-CN: "模式"
+    zh-HK: "模式"
+  category_shard_channel:
+    en: "shard channel"
+    zh-CN: "分片频道"
+    zh-HK: "分片頻道"
+
 # 团队同步
 TeamSync:
   personal:

@@ -6,6 +6,7 @@ use gpui_component::{
     ActiveTheme, h_flex,
     table::{Column, ColumnFixed, TableDelegate, TableState},
 };
+use rust_i18n::t;
 
 /// 通用单元格,字段为 SharedString 以共享底层缓冲。
 pub type Cells = Vec<SharedString>;
@@ -70,30 +71,26 @@ impl TableDelegate for RedisToolTableDelegate {
     ) -> impl IntoElement {
         let title = self.empty_title.clone();
         let detail = self.empty_detail.clone();
-        h_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_base()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().muted_foreground)
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground.opacity(0.7))
-                            .child(detail),
-                    ),
-            )
+        h_flex().size_full().items_center().justify_center().child(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_base()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(cx.theme().muted_foreground)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground.opacity(0.7))
+                        .child(detail),
+                ),
+        )
     }
 }
 
@@ -187,20 +184,23 @@ fn columns_for(kind: RedisToolKind) -> Vec<Column> {
                 .text_right(),
         ],
         RedisToolKind::PubSub => vec![
-            Column::new("kind", "Type")
+            Column::new("kind", t!("RedisPubSub.column_kind").to_string())
                 .width(px(150.0))
                 .min_width(px(100.0))
                 .max_width(px(220.0))
                 .fixed(ColumnFixed::Left),
-            Column::new("name", "Name")
+            Column::new("name", t!("RedisPubSub.column_name").to_string())
                 .width(px(360.0))
                 .min_width(px(160.0))
                 .max_width(px(640.0)),
-            Column::new("subscribers", "Subscribers")
-                .width(px(160.0))
-                .min_width(px(100.0))
-                .max_width(px(240.0))
-                .text_right(),
+            Column::new(
+                "subscribers",
+                t!("RedisPubSub.column_subscribers").to_string(),
+            )
+            .width(px(160.0))
+            .min_width(px(100.0))
+            .max_width(px(240.0))
+            .text_right(),
         ],
         // Chart 实际上不会使用本 delegate,但保留一个占位避免 panic。
         RedisToolKind::Chart => vec![Column::new("info", "Info").width(px(200.0))],
@@ -209,22 +209,27 @@ fn columns_for(kind: RedisToolKind) -> Vec<Column> {
 
 fn empty_message(kind: RedisToolKind) -> (SharedString, SharedString) {
     match kind {
-        RedisToolKind::Info => ("Info 暂无数据".into(), "尚未读取到 INFO 输出".into()),
+        RedisToolKind::Info => (
+            t!("RedisTool.empty_info_title").to_string().into(),
+            t!("RedisTool.empty_info_detail").to_string().into(),
+        ),
         RedisToolKind::Memory => (
-            "Memory 暂无数据".into(),
-            "尚未读取到 Memory 区段".into(),
+            t!("RedisTool.empty_memory_title").to_string().into(),
+            t!("RedisTool.empty_memory_detail").to_string().into(),
         ),
         RedisToolKind::SlowLog => (
-            "No slow log entries".into(),
-            "Redis 还没有记录慢查询命令".into(),
+            t!("RedisTool.empty_slowlog_title").to_string().into(),
+            t!("RedisTool.empty_slowlog_detail").to_string().into(),
         ),
         RedisToolKind::Monitor => (
-            "No command stats".into(),
-            "运行一些命令后再回来查看".into(),
+            t!("RedisTool.empty_monitor_title").to_string().into(),
+            t!("RedisTool.empty_monitor_detail").to_string().into(),
         ),
         RedisToolKind::PubSub => (
-            "No active channels".into(),
-            "尝试发布消息或在其它客户端订阅频道".into(),
+            t!("RedisPubSub.empty_no_channels_title").to_string().into(),
+            t!("RedisPubSub.empty_no_channels_detail")
+                .to_string()
+                .into(),
         ),
         RedisToolKind::Chart => ("--".into(), "".into()),
     }

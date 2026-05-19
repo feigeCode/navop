@@ -19,6 +19,7 @@ one-ui.workspace = true
 one-core.workspace = true
 rust-i18n.workspace = true
 dashmap.workspace = true
+futures.workspace = true
 redis_client.workspace = true
 
 [lints]

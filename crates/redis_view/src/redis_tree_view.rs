@@ -27,8 +27,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     GlobalRedisState, RedisConnectionMode, RedisDatabaseInfo, RedisKeyType, RedisManager,
-    RedisNode, RedisNodeType,
-    redis_tool_data::RedisToolKind,
+    RedisNode, RedisNodeType, redis_tool_data::RedisToolKind,
 };
 
 const SCAN_BATCH_SIZE: usize = 500;
@@ -62,7 +61,10 @@ pub enum RedisTreeViewEvent {
         stored_connection: StoredConnection,
     },
     /// 打开工具页签(Info/Memory/SlowLog/Monitor/PubSub/Chart)
-    OpenToolView { node_id: String, kind: RedisToolKind },
+    OpenToolView {
+        node_id: String,
+        kind: RedisToolKind,
+    },
 }
 
 /// 扁平化的树条目
@@ -2177,17 +2179,14 @@ impl RedisTreeView {
         ] {
             let view = view.clone();
             let node_id = node_id.to_string();
-            menu = menu.item(
-                PopupMenuItem::new(tool_menu_label(kind)).on_click(window.listener_for(
-                    &view,
-                    move |_view, _, _, cx| {
-                        cx.emit(RedisTreeViewEvent::OpenToolView {
-                            node_id: node_id.clone(),
-                            kind,
-                        });
-                    },
-                )),
-            );
+            menu = menu.item(PopupMenuItem::new(tool_menu_label(kind)).on_click(
+                window.listener_for(&view, move |_view, _, _, cx| {
+                    cx.emit(RedisTreeViewEvent::OpenToolView {
+                        node_id: node_id.clone(),
+                        kind,
+                    });
+                }),
+            ));
         }
         menu
     }

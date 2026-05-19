@@ -79,7 +79,22 @@ pub(crate) fn quote_command_arg(value: &str) -> String {
     {
         return value.to_string();
     }
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    // 加双引号包裹,并把反斜杠 / 双引号 / 常见控制字符转义,
+    // 保证命令字符串单行可读,且与 parse_command_args 的反向解析保持往返一致。
+    let mut buf = String::with_capacity(value.len() + 2);
+    buf.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => buf.push_str("\\\\"),
+            '"' => buf.push_str("\\\""),
+            '\n' => buf.push_str("\\n"),
+            '\r' => buf.push_str("\\r"),
+            '\t' => buf.push_str("\\t"),
+            other => buf.push(other),
+        }
+    }
+    buf.push('"');
+    buf
 }
 
 pub(crate) fn build_publish_command(channel: &str, message: &str) -> String {

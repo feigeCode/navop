@@ -162,10 +162,7 @@ fn slowlog_rows(rows: &[ToolRow]) -> Vec<Cells> {
                 row.category.clone().into(),
                 row.key.clone().into(),
                 SharedString::from(format_timestamp(parts.first().copied().unwrap_or_default())),
-                SharedString::from(format!(
-                    "{} us",
-                    parts.get(1).copied().unwrap_or_default()
-                )),
+                SharedString::from(format!("{} us", parts.get(1).copied().unwrap_or_default())),
                 SharedString::from(parts.get(2).copied().unwrap_or_default().to_string()),
             ]
         })
@@ -245,8 +242,9 @@ fn pubsub_header(rows: &[ToolRow], cx: &App) -> AnyElement {
 }
 
 fn pubsub_rows(rows: &[ToolRow]) -> Vec<Cells> {
+    // 保留所有行(channel / pattern / shard_channel),让 numpat 也作为一行可见,
+    // 与表头汇总指标保持一致。category 列展示行类别,过滤器可以按类别筛选。
     rows.iter()
-        .filter(|row| row.category != "pattern")
         .map(|row| {
             vec![
                 row.category.clone().into(),
