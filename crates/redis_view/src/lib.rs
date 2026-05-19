@@ -18,10 +18,22 @@ pub mod types;
 // 视图模块
 pub(crate) mod create_key_dialog;
 pub mod key_value_view;
+pub mod redis_chart_view;
 pub mod redis_cli_element;
 pub mod redis_cli_view;
 pub mod redis_form_window;
 pub mod redis_tab;
+mod redis_tool_actions;
+pub(crate) mod redis_tool_data;
+#[cfg(test)]
+mod redis_tool_data_tests;
+mod redis_tool_layout;
+mod redis_tool_page_data;
+pub mod redis_tool_pages;
+mod redis_tool_parsers;
+mod redis_tool_table;
+pub mod redis_tool_view;
+mod redis_tool_widgets;
 mod redis_tree_event;
 pub mod redis_tree_view;
 pub mod sidebar;
@@ -36,6 +48,8 @@ pub use key_value_view::{KeyValueView, KeyValueViewEvent};
 pub use redis_cli_view::{RedisCliView, RedisCliViewEvent};
 pub use redis_form_window::{RedisFormWindow, RedisFormWindowConfig};
 pub use redis_tab::RedisTabView;
+pub use redis_tool_data::RedisToolKind;
+pub use redis_tool_view::RedisToolView;
 pub use redis_tree_view::{RedisTreeView, RedisTreeViewEvent};
 pub use sidebar::{RedisSidebar, RedisSidebarEvent};
 

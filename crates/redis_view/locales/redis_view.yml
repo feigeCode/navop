@@ -505,6 +505,30 @@ RedisTree:
     en: "Open CLI"
     zh-CN: "打开 CLI"
     zh-HK: "開啟 CLI"
+  menu_open_info:
+    en: "Server Info"
+    zh-CN: "服务器信息"
+    zh-HK: "伺服器資訊"
+  menu_open_memory:
+    en: "Memory Stats"
+    zh-CN: "内存统计"
+    zh-HK: "記憶體統計"
+  menu_open_slowlog:
+    en: "Slow Log"
+    zh-CN: "慢查询日志"
+    zh-HK: "慢查詢日誌"
+  menu_open_monitor:
+    en: "Command Stats"
+    zh-CN: "命令统计"
+    zh-HK: "命令統計"
+  menu_open_pubsub:
+    en: "Pub/Sub Channels"
+    zh-CN: "发布订阅"
+    zh-HK: "發佈訂閱"
+  menu_open_chart:
+    en: "Realtime Chart"
+    zh-CN: "实时图表"
+    zh-HK: "即時圖表"
   menu_create_key:
     en: "New Key"
     zh-CN: "新建 Key"

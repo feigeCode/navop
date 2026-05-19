@@ -126,6 +126,9 @@ impl RedisEventHandler {
                     RedisTreeViewEvent::ConnectionEstablished { .. } => {
                         // 连接建立事件，不需要特殊处理
                     }
+                    RedisTreeViewEvent::OpenToolView { .. } => {
+                        // 工具页签由 RedisTabView 自己处理
+                    }
                     RedisTreeViewEvent::OpenCli {
                         connection_id,
                         db_index,

@@ -3258,10 +3258,14 @@ impl TabContent for KeyValueView {
     }
 
     fn title(&self, _cx: &App) -> SharedString {
-        self.current_key
-            .clone()
-            .unwrap_or_else(|| t!("KeyValueView.tab_title_default").to_string())
-            .into()
+        if self.closeable {
+            self.current_key
+                .clone()
+                .unwrap_or_else(|| t!("KeyValueView.tab_title_default").to_string())
+                .into()
+        } else {
+            "Value".into()
+        }
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {

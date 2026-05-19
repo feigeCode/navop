@@ -4,9 +4,12 @@ use std::ops::Deref;
 
 use crate::GlobalRedisState;
 use crate::key_value_view::KeyValueView;
+use crate::redis_tool_data::RedisToolKind;
+use crate::redis_tool_view::RedisToolView;
 use crate::redis_tree_event::RedisEventHandler;
-use crate::redis_tree_view::RedisTreeView;
+use crate::redis_tree_view::{RedisTreeView, RedisTreeViewEvent};
 use crate::sidebar::{RedisSidebar, RedisSidebarEvent};
+use crate::{RedisNode, RedisNodeType};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Axis, Bounds, Context, Element, Entity, EventEmitter, FocusHandle, Focusable,
@@ -19,7 +22,9 @@ use one_core::layout::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
 };
 use one_core::storage::{ActiveConnections, StoredConnection, Workspace};
-use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem};
+use one_core::tab_container::{
+    TabContainer, TabContainerEvent, TabContent, TabContentEvent, TabItem,
+};
 use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
 use tracing::warn;
 
@@ -44,8 +49,10 @@ pub struct RedisTabView {
     tab_container: Entity<TabContainer>,
     /// 侧边栏
     sidebar: Entity<RedisSidebar>,
-    /// 键值视图
+    /// 键值视图(默认页签)
     _key_value_view: Entity<KeyValueView>,
+    /// 通过右键菜单按需打开的工具页签(Info/Memory/SlowLog/Monitor/PubSub/Chart)
+    tool_views: Vec<Entity<RedisToolView>>,
     /// 事件处理器
     _event_handler: Entity<RedisEventHandler>,
     /// 工作区信息
@@ -72,19 +79,11 @@ impl RedisTabView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // 使用新的 API 创建树视图，显示所有连接（未连接状态）
         let tree_view = cx.new(|cx| RedisTreeView::new_with_connections(&connections, window, cx));
 
         let tab_container = cx.new(|cx| TabContainer::new(window, cx));
         let key_value_view = cx.new(|cx| KeyValueView::new(window, cx));
         let sidebar = cx.new(|cx| RedisSidebar::new(window, cx));
-
-        // 将 key_value_view 添加到 tab_container
-        tab_container.update(cx, |container, cx| {
-            let view = key_value_view.clone();
-            let tab = TabItem::new("key-value", "redis", view);
-            container.add_and_activate_tab_with_focus(tab, window, cx);
-        });
 
         let active_connection = connections
             .iter()
@@ -94,6 +93,15 @@ impl RedisTabView {
 
         let active_connection_id =
             active_conn_id.or_else(|| active_connection.as_ref().and_then(|conn| conn.id));
+
+        // 默认只创建键值页签,其余工具页签和 CLI 通过右键菜单按需打开
+        tab_container.update(cx, |container, cx| {
+            container.add_and_activate_tab_with_focus(
+                TabItem::new("key-value", "redis", key_value_view.clone()),
+                window,
+                cx,
+            );
+        });
 
         // 事件处理器负责处理树视图事件，包括连接建立后创建 CLI 视图
         let event_handler = cx.new(|cx| {
@@ -107,6 +115,8 @@ impl RedisTabView {
         });
 
         let mut subscriptions = Vec::new();
+        subscriptions.push(Self::subscribe_tree_events(&tree_view, window, cx));
+        subscriptions.push(Self::subscribe_tab_events(&tab_container, cx));
         subscriptions.push(
             cx.subscribe(
                 &sidebar,
@@ -131,6 +141,7 @@ impl RedisTabView {
             tab_container,
             sidebar,
             _key_value_view: key_value_view,
+            tool_views: Vec::new(),
             _event_handler: event_handler,
             workspace,
             focus_handle: cx.focus_handle(),
@@ -145,6 +156,118 @@ impl RedisTabView {
     pub fn new(connection: StoredConnection, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let active_conn_id = connection.id;
         Self::new_with_active_conn(None, vec![connection], active_conn_id, window, cx)
+    }
+
+    fn subscribe_tree_events(
+        tree_view: &Entity<RedisTreeView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.subscribe_in(tree_view, window, |this, tree, event, window, cx| {
+            match event {
+                RedisTreeViewEvent::NodeSelected { node_id }
+                | RedisTreeViewEvent::KeySelected { node_id }
+                | RedisTreeViewEvent::ConnectionEstablished { node_id } => {
+                    let Some(node) = tree.read(cx).get_node(node_id).cloned() else {
+                        return;
+                    };
+                    let Some((connection_id, db_index)) = Self::node_connection_context(&node)
+                    else {
+                        return;
+                    };
+
+                    this.active_connection_id = connection_id.parse().ok();
+                    let should_refresh =
+                        matches!(event, RedisTreeViewEvent::ConnectionEstablished { .. });
+                    for view in &this.tool_views {
+                        view.update(cx, |view, cx| {
+                            view.set_connection(Some(connection_id.clone()), db_index);
+                            if should_refresh {
+                                view.refresh(cx);
+                            }
+                        });
+                    }
+                }
+                RedisTreeViewEvent::OpenToolView { node_id, kind } => {
+                    let Some(node) = tree.read(cx).get_node(node_id).cloned() else {
+                        return;
+                    };
+                    let Some((connection_id, db_index)) = Self::node_connection_context(&node)
+                    else {
+                        return;
+                    };
+                    this.open_tool_view(*kind, connection_id, db_index, window, cx);
+                }
+                _ => {}
+            }
+        })
+    }
+
+    fn subscribe_tab_events(
+        tab_container: &Entity<TabContainer>,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.subscribe(
+            tab_container,
+            |this, _container, event: &TabContainerEvent, cx| {
+                if let TabContainerEvent::TabClosed { id } = event {
+                    let closed_id = id.clone();
+                    this.tool_views
+                        .retain(|view| view.read(cx).kind.tab_id() != closed_id.as_str());
+                }
+            },
+        )
+    }
+
+    fn open_tool_view(
+        &mut self,
+        kind: RedisToolKind,
+        connection_id: String,
+        db_index: u8,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_id = kind.tab_id();
+
+        let existing = self
+            .tool_views
+            .iter()
+            .find(|v| v.read(cx).kind == kind)
+            .cloned();
+
+        let view = if let Some(existing) = existing {
+            existing.update(cx, |view, cx| {
+                view.set_connection(Some(connection_id), db_index);
+                view.refresh(cx);
+            });
+            existing
+        } else {
+            let new_view = cx.new(|cx| {
+                RedisToolView::new(kind, Some(connection_id), db_index, window, cx)
+            });
+            new_view.update(cx, |view, cx| view.refresh(cx));
+            self.tool_views.push(new_view.clone());
+            new_view
+        };
+
+        self.tab_container.update(cx, |container, cx| {
+            container.activate_or_add_tab_lazy(
+                tab_id,
+                move |_window, _cx| TabItem::new(tab_id, "redis", view),
+                window,
+                cx,
+            );
+        });
+    }
+
+    fn node_connection_context(node: &RedisNode) -> Option<(String, u8)> {
+        match node.node_type {
+            RedisNodeType::Connection | RedisNodeType::Database(_) | RedisNodeType::Key(_) => {
+                Some((node.connection_id.clone(), node.db_index))
+            }
+            RedisNodeType::Namespace => Some((node.connection_id.clone(), node.db_index)),
+            RedisNodeType::LoadMore => None,
+        }
     }
 
     fn active_connection(&self) -> Option<&StoredConnection> {

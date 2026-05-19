@@ -224,33 +224,27 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let open_mode = if cx.has_global::<AppSettings>() {
-            AppSettings::global(cx).database_open_mode
-        } else {
-            DatabaseOpenMode::default()
-        };
-
         let workspace_id = workspace.as_ref().and_then(|ws| ws.id);
         let active_conn_id = conn.id;
 
-        let (tab_id, connections, workspace_for_tab) = match open_mode {
-            DatabaseOpenMode::Workspace if workspace_id.is_some() => {
-                let connections = self
-                    .connections
-                    .iter()
-                    .filter(|connection| connection.workspace_id == workspace_id)
-                    .filter(|connection| connection.connection_type == ConnectionType::Redis)
-                    .cloned()
-                    .collect();
-                let tab_id = format!("workspace-redis-tab-{}", workspace_id.unwrap_or(0));
-                (tab_id, connections, workspace)
-            }
-            _ => {
-                let conn_id = conn.id.unwrap_or(0);
-                let tab_id = format!("redis-{}", conn_id);
-                (tab_id, vec![conn.clone()], None)
-            }
-        };
+        let mut connections: Vec<StoredConnection> = self
+            .connections
+            .iter()
+            .filter(|connection| connection.connection_type == ConnectionType::Redis)
+            .filter(|connection| {
+                workspace_id
+                    .map(|id| connection.workspace_id == Some(id))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+        if connections.is_empty() {
+            connections.push(conn.clone());
+        }
+        let tab_id = workspace_id
+            .map(|id| format!("workspace-redis-tab-{id}"))
+            .unwrap_or_else(|| "redis-workbench".to_string());
+        let workspace_for_tab = workspace;
 
         let tab_container = self.tab_container.clone();
         window.defer(cx, move |window, cx| {

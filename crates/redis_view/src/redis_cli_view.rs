@@ -442,6 +442,21 @@ impl RedisCliView {
         this
     }
 
+    pub fn set_connection(&mut self, connection_id: String, db_index: u8, cx: &mut Context<Self>) {
+        if self.connection_id == connection_id && self.db_index == db_index {
+            return;
+        }
+        self.connection_id = connection_id;
+        self.db_index = db_index;
+        self.input_text.clear();
+        self.cursor_pos = 0;
+        self.history_index = None;
+        self.temp_input.clear();
+        self.output_entries.clear();
+        self.is_executing = false;
+        cx.notify();
+    }
+
     /// 更新字符宽度（精确计算）
     /// 复用 terminal_view 的方法：使用 text_system().advance() 获取精确的字符宽度
     fn update_cell_width(&mut self, window: &mut Window) {
@@ -1759,11 +1774,11 @@ impl TabContent for RedisCliView {
     }
 
     fn title(&self, _cx: &App) -> SharedString {
-        "CLI".into()
+        "Terminal".into()
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
-        Some(Icon::new(IconName::Terminal).with_size(Size::Medium))
+        Some(Icon::new(IconName::SquareTerminal).with_size(Size::Medium))
     }
 
     fn closeable(&self, _cx: &App) -> bool {
