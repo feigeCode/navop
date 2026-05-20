@@ -53,9 +53,28 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           df -h
-          sudo rm -rf /usr/local/lib/node_modules
-          sudo rm -rf ~/.npm ~/.nvm ~/Library/Caches
-          sudo rm -rf /System/Library/Frameworks/Python.framework
+
+          remove_path() {
+            local path="$1"
+            if [ -e "$path" ]; then
+              sudo rm -rf "$path" || echo "::warning::Failed to remove $path"
+            fi
+          }
+
+          remove_directory_contents() {
+            local path="$1"
+            if [ -d "$path" ]; then
+              sudo find "$path" -mindepth 1 -maxdepth 1 -exec rm -rf {} + \
+                || echo "::warning::Failed to remove some entries under $path"
+            fi
+          }
+
+          remove_path /usr/local/lib/node_modules
+          remove_path "$HOME/.npm"
+          remove_path "$HOME/.nvm"
+          remove_directory_contents "$HOME/Library/Caches"
+          remove_path /System/Library/Frameworks/Python.framework
+
           df -h
 
       - name: Install system dependencies (Linux)
