@@ -34,6 +34,9 @@ if [ "$attempts" -eq 1 ]; then
 fi
 
 output="${@: -1}"
+if [[ "$output" != *.dmg ]]; then
+    output="${output}.dmg"
+fi
 printf 'fake dmg' > "$output"
 HDIUTIL
 chmod +x "${FAKE_BIN_DIR}/hdiutil"

@@ -29,7 +29,7 @@ create_dmg() {
     local tmp_dmg
 
     for attempt in $(seq 1 "$DMG_RETRIES"); do
-        tmp_dmg="${PROJECT_DIR}/target/${DMG_NAME}.tmp.${attempt}.$$"
+        tmp_dmg="${PROJECT_DIR}/target/${DMG_NAME}.tmp.${attempt}.$$.dmg"
         rm -f "$tmp_dmg" "$DMG_PATH"
 
         if hdiutil create \
