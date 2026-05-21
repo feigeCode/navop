@@ -515,18 +515,35 @@ impl ConnectionManager {
     }
 
     pub async fn release_session(&self, session_id: &str) -> Result<(), DbError> {
+        self.release_session_internal(session_id, true).await
+    }
+
+    async fn release_session_for_reuse(&self, session_id: &str) -> Result<(), DbError> {
+        self.release_session_internal(session_id, false).await
+    }
+
+    async fn release_session_internal(
+        &self,
+        session_id: &str,
+        close_idle_file_connection: bool,
+    ) -> Result<(), DbError> {
         let mut sessions = self.sessions.write().await;
 
-        // First, find and verify the session
-        let mut should_close = false;
-        let mut found_config_id: Option<String> = None;
+        let mut removed_session: Option<ConnectionSession> = None;
+        let mut empty_config_id: Option<String> = None;
 
         for (config_id, session_list) in sessions.iter_mut() {
-            if let Some(session) = session_list.iter_mut().find(|s| s.session_id == session_id) {
-                // Verify database consistency before release
+            if let Some(pos) = session_list.iter().position(|s| s.session_id == session_id) {
+                let session = &mut session_list[pos];
                 match session.verify_and_sync_database().await {
                     Ok(_) => {
-                        // Check passed (consistent or updated), release normally
+                        if close_idle_file_connection && session.connection.close_on_release() {
+                            removed_session = Some(session_list.remove(pos));
+                            if session_list.is_empty() {
+                                empty_config_id = Some(config_id.clone());
+                            }
+                            break;
+                        }
                         session.release();
                         debug!("Session {} released", session_id);
                         return Ok(());
@@ -537,31 +554,24 @@ impl ConnectionManager {
                             "Session {} database check failed: {}, closing connection",
                             session_id, e
                         );
-                        should_close = true;
-                        found_config_id = Some(config_id.clone());
+                        removed_session = Some(session_list.remove(pos));
+                        if session_list.is_empty() {
+                            empty_config_id = Some(config_id.clone());
+                        }
                         break;
                     }
                 }
             }
         }
 
-        // If check failed, close and remove the session
-        if should_close {
-            if let Some(config_id) = found_config_id {
-                if let Some(session_list) = sessions.get_mut(&config_id) {
-                    if let Some(pos) = session_list.iter().position(|s| s.session_id == session_id)
-                    {
-                        let mut session = session_list.remove(pos);
-                        session.close().await;
+        if let Some(config_id) = empty_config_id {
+            sessions.remove(&config_id);
+        }
 
-                        // Remove empty config entry
-                        if session_list.is_empty() {
-                            sessions.remove(&config_id);
-                        }
-                        return Ok(());
-                    }
-                }
-            }
+        if let Some(mut session) = removed_session {
+            session.release();
+            session.close().await;
+            return Ok(());
         }
 
         Err(DbError::Internal(format!(
@@ -1103,7 +1113,7 @@ impl GlobalDbState {
                 // Release but don't close - session can be reused later
                 clone_self
                     .connection_manager
-                    .release_session(&session_id)
+                    .release_session_for_reuse(&session_id)
                     .await?;
             } else {
                 // Close session completely
@@ -2476,16 +2486,37 @@ mod tests {
     use crate::executor::{ExecOptions, ExecResult, SqlErrorInfo, SqlSource};
     use async_trait::async_trait;
     use one_core::storage::DatabaseType;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use tokio::sync::mpsc;
 
     struct MockConnection {
         config: DbConnectionConfig,
         healthy: bool,
+        disconnect_count: Arc<AtomicUsize>,
     }
 
     impl MockConnection {
         fn new(config: DbConnectionConfig, healthy: bool) -> Self {
-            Self { config, healthy }
+            Self {
+                config,
+                healthy,
+                disconnect_count: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn with_disconnect_count(
+            config: DbConnectionConfig,
+            healthy: bool,
+            disconnect_count: Arc<AtomicUsize>,
+        ) -> Self {
+            Self {
+                config,
+                healthy,
+                disconnect_count,
+            }
         }
     }
 
@@ -2504,6 +2535,7 @@ mod tests {
         }
 
         async fn disconnect(&mut self) -> Result<(), DbError> {
+            self.disconnect_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -2634,5 +2666,75 @@ mod tests {
 
         assert!(acquired.is_none());
         assert!(remaining.is_empty());
+    }
+
+    #[tokio::test]
+    async fn release_session_closes_duckdb_sessions_instead_of_idling() {
+        let manager =
+            ConnectionManager::with_config(Duration::from_secs(300), Duration::from_secs(1800));
+        let mut config = test_config("duckdb-conn");
+        config.database_type = DatabaseType::DuckDB;
+        let disconnect_count = Arc::new(AtomicUsize::new(0));
+        let mut session = ConnectionSession::new(
+            Box::new(MockConnection::with_disconnect_count(
+                config.clone(),
+                true,
+                Arc::clone(&disconnect_count),
+            )),
+            "duckdb-conn:session:1".to_string(),
+        );
+        session.mark_in_use();
+
+        manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(session);
+
+        manager
+            .release_session("duckdb-conn:session:1")
+            .await
+            .unwrap();
+
+        assert_eq!(1, disconnect_count.load(Ordering::SeqCst));
+        assert!(manager.list_sessions(&config.id).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn release_session_for_reuse_keeps_duckdb_transaction_session_idle() {
+        let manager =
+            ConnectionManager::with_config(Duration::from_secs(300), Duration::from_secs(1800));
+        let mut config = test_config("duckdb-transaction");
+        config.database_type = DatabaseType::DuckDB;
+        let disconnect_count = Arc::new(AtomicUsize::new(0));
+        let mut session = ConnectionSession::new(
+            Box::new(MockConnection::with_disconnect_count(
+                config.clone(),
+                true,
+                Arc::clone(&disconnect_count),
+            )),
+            "duckdb-transaction:session:1".to_string(),
+        );
+        session.mark_in_use();
+
+        manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(session);
+
+        manager
+            .release_session_for_reuse("duckdb-transaction:session:1")
+            .await
+            .unwrap();
+
+        let sessions = manager.list_sessions(&config.id).await;
+        assert_eq!(0, disconnect_count.load(Ordering::SeqCst));
+        assert_eq!(1, sessions.len());
+        assert!(!sessions[0].in_use);
     }
 }
