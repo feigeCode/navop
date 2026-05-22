@@ -995,6 +995,49 @@ impl DbTreeView {
         Some(node_id)
     }
 
+    /// 确保 Schema 节点存在于树中并展开。
+    pub fn ensure_schema_node_expanded(
+        &mut self,
+        connection_id: &str,
+        database_name: &str,
+        schema_name: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        if schema_name.is_empty() || !self.db_nodes.contains_key(connection_id) {
+            return None;
+        }
+
+        let schema_node_id = if database_name.is_empty() {
+            format!("{}:{}", connection_id, schema_name)
+        } else {
+            let db_node_id =
+                self.ensure_database_node_expanded(connection_id, database_name, cx)?;
+            format!("{}:{}", db_node_id, schema_name)
+        };
+
+        self.expanded_nodes.insert(connection_id.to_string());
+        if !database_name.is_empty() {
+            self.expanded_nodes
+                .insert(format!("{}:{}", connection_id, database_name));
+        }
+        self.expanded_nodes.insert(schema_node_id.clone());
+        self.selected_node_id = Some(schema_node_id.clone());
+
+        self.lazy_load_children(connection_id.to_string(), cx);
+        if !database_name.is_empty() {
+            self.lazy_load_children(format!("{}:{}", connection_id, database_name), cx);
+        }
+        if self.db_nodes.contains_key(&schema_node_id) {
+            self.lazy_load_children(schema_node_id.clone(), cx);
+            cx.emit(DbTreeViewEvent::NodeSelected {
+                node_id: schema_node_id.clone(),
+            });
+        }
+
+        self.rebuild_tree(cx);
+        Some(schema_node_id)
+    }
+
     /// 保存数据库筛选状态到存储
     fn save_database_filter(&self, connection_id: &str, cx: &mut Context<Self>) {
         let selected_dbs: Option<Vec<String>> = match self.selected_databases.get(connection_id) {

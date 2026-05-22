@@ -223,15 +223,23 @@ impl DatabaseObjects {
             return;
         };
 
-        let event = match node.node_type {
-            DbNodeType::Table => DatabaseObjectsEvent::OpenTableData { node },
-            DbNodeType::View => DatabaseObjectsEvent::OpenViewData { node },
-            DbNodeType::NamedQuery => DatabaseObjectsEvent::OpenNamedQuery { node },
-            DbNodeType::Database => DatabaseObjectsEvent::AddDatabaseToTree { node },
-            _ => return,
+        let Some(event) = Self::event_for_double_click_node(node) else {
+            return;
         };
 
         cx.emit(event);
+    }
+
+    fn event_for_double_click_node(node: DbNode) -> Option<DatabaseObjectsEvent> {
+        Some(match node.node_type {
+            DbNodeType::Table => DatabaseObjectsEvent::OpenTableData { node },
+            DbNodeType::View => DatabaseObjectsEvent::OpenViewData { node },
+            DbNodeType::NamedQuery => DatabaseObjectsEvent::OpenNamedQuery { node },
+            DbNodeType::Database | DbNodeType::Schema => {
+                DatabaseObjectsEvent::AddDatabaseToTree { node }
+            }
+            _ => return None,
+        })
     }
 
     pub fn handle_node_selected(
@@ -464,13 +472,21 @@ impl DatabaseObjects {
 
     fn build_node_for_row(&self, row_ix: usize) -> Option<DbNode> {
         let db_node_type = self.db_node_type.clone();
-
         let original_row = self.filtered_rows.get(row_ix).copied()?;
         let row_data = self.rows.get(original_row)?;
+
+        Self::build_node_from_object_row(db_node_type, self.current_node.as_ref(), row_data)
+    }
+
+    fn build_node_from_object_row(
+        db_node_type: DbNodeType,
+        current_node: Option<&DbNode>,
+        row_data: &[String],
+    ) -> Option<DbNode> {
         let name = row_data.first().cloned()?;
 
         // 特殊处理：当 current_node 为 None 且显示连接列表时
-        if self.current_node.is_none() && db_node_type == DbNodeType::Connection {
+        if current_node.is_none() && db_node_type == DbNodeType::Connection {
             let connection_id = row_data.get(1).cloned().unwrap_or_default();
             let db_type_str = row_data.get(2).cloned().unwrap_or_default();
             let database_type = DatabaseType::from_str(&db_type_str).unwrap_or(DatabaseType::MySQL);
@@ -484,7 +500,7 @@ impl DatabaseObjects {
             ));
         }
 
-        let current_node = self.current_node.as_ref()?;
+        let current_node = current_node?;
         let connection_id = current_node.connection_id.clone();
         let database_type = current_node.database_type;
 
@@ -546,6 +562,18 @@ impl DatabaseObjects {
                 if current_node.node_type == DbNodeType::Connection {
                     metadata.insert("schema".to_string(), name.clone());
                     (format!("{}:{}", connection_id, name), DbNodeType::Schema)
+                } else if current_node.node_type == DbNodeType::Database {
+                    let db = if database.is_empty() {
+                        current_node.name.clone()
+                    } else {
+                        database.clone()
+                    };
+                    metadata.insert("database".to_string(), db.clone());
+                    metadata.insert("schema".to_string(), name.clone());
+                    (
+                        format!("{}:{}:{}", connection_id, db, name),
+                        DbNodeType::Schema,
+                    )
                 } else {
                     let db = metadata
                         .get("database")
@@ -1082,6 +1110,106 @@ impl TabContent for DatabaseObjectsPanel {
 
     fn width_size(&self, _cx: &App) -> Option<Size> {
         Some(Size::XSmall)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn database_node() -> DbNode {
+        let mut metadata = HashMap::new();
+        metadata.insert("database".to_string(), "app_db".to_string());
+        DbNode::new(
+            "conn1:app_db",
+            "app_db",
+            DbNodeType::Database,
+            "conn1".to_string(),
+            DatabaseType::PostgreSQL,
+        )
+        .with_metadata(metadata)
+    }
+
+    fn schema_node() -> DbNode {
+        let mut metadata = HashMap::new();
+        metadata.insert("database".to_string(), "app_db".to_string());
+        metadata.insert("schema".to_string(), "public".to_string());
+        DbNode::new(
+            "conn1:app_db:public",
+            "public",
+            DbNodeType::Schema,
+            "conn1".to_string(),
+            DatabaseType::PostgreSQL,
+        )
+        .with_metadata(metadata)
+    }
+
+    #[test]
+    fn database_object_schema_row_builds_schema_node() {
+        let row = vec![
+            "public".to_string(),
+            "owner".to_string(),
+            "3".to_string(),
+            String::new(),
+        ];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Schema,
+            Some(&database_node()),
+            &row,
+        )
+        .expect("schema row should produce a node");
+
+        assert_eq!(DbNodeType::Schema, node.node_type);
+        assert_eq!("public", node.name);
+        assert_eq!(
+            Some("app_db"),
+            node.metadata.get("database").map(String::as_str)
+        );
+        assert_eq!(
+            Some("public"),
+            node.metadata.get("schema").map(String::as_str)
+        );
+        assert_eq!("conn1:app_db:public", node.id);
+    }
+
+    #[test]
+    fn schema_object_table_row_builds_table_node() {
+        let row = vec!["users".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::Schema,
+            Some(&schema_node()),
+            &row,
+        )
+        .expect("table row under schema should produce a node");
+
+        assert_eq!(DbNodeType::Table, node.node_type);
+        assert_eq!("users", node.name);
+        assert_eq!(
+            Some("app_db"),
+            node.metadata.get("database").map(String::as_str)
+        );
+        assert_eq!(
+            Some("public"),
+            node.metadata.get("schema").map(String::as_str)
+        );
+        assert_eq!(
+            Some("users"),
+            node.metadata.get("table").map(String::as_str)
+        );
+    }
+
+    #[test]
+    fn schema_double_click_adds_node_to_tree() {
+        let event = DatabaseObjects::event_for_double_click_node(schema_node())
+            .expect("schema double click should emit an event");
+
+        assert!(matches!(
+            event,
+            DatabaseObjectsEvent::AddDatabaseToTree { node }
+                if node.node_type == DbNodeType::Schema && node.name == "public"
+        ));
     }
 }
 

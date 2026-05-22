@@ -528,6 +528,19 @@ impl DatabaseEventHandler {
         cx: &mut App,
     ) {
         let connection_id = node.connection_id.clone();
+        if node.node_type == DbNodeType::Schema {
+            let database_name = node.get_database_name().unwrap_or_default();
+            let schema_name = node.get_schema_name().unwrap_or_else(|| node.name.clone());
+            let node_id = tree_view.update(cx, |tree, cx| {
+                tree.ensure_schema_node_expanded(&connection_id, &database_name, &schema_name, cx)
+            });
+
+            if node_id.is_none() {
+                Self::show_error(window, t!("Common.error_info").to_string(), cx);
+            }
+            return;
+        }
+
         let database_name = node
             .get_database_name()
             .unwrap_or_else(|| node.name.clone());
