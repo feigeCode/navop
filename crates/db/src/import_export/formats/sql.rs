@@ -250,9 +250,14 @@ impl FormatHandler for SqlFormatHandler {
                             schema_output.push_str(&schema_sql);
                             schema_output.push_str(";\n\n");
                         }
+                        let progress_data = if is_streaming {
+                            std::mem::take(&mut schema_output)
+                        } else {
+                            schema_output.clone()
+                        };
                         send_progress(ExportProgressEvent::StructureExported {
                             table: table.clone(),
-                            data: schema_output.clone(),
+                            data: progress_data,
                         });
                         if !is_streaming {
                             output.push_str(&schema_output);
@@ -301,10 +306,15 @@ impl FormatHandler for SqlFormatHandler {
                             0
                         };
                         total_rows += rows_count;
+                        let progress_data = if is_streaming {
+                            std::mem::take(&mut data_output)
+                        } else {
+                            data_output.clone()
+                        };
                         send_progress(ExportProgressEvent::DataExported {
                             table: table.clone(),
                             rows: rows_count,
-                            data: data_output.clone(),
+                            data: progress_data,
                         });
                         if !is_streaming {
                             output.push_str(&data_output);

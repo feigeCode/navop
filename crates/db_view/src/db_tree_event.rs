@@ -3495,19 +3495,21 @@ impl DatabaseEventHandler {
         node: DbNode,
         mode: SqlDumpMode,
         global_state: GlobalDbState,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) {
+        use crate::import_export::sql_dump_target::resolve_sql_dump_target;
         use crate::import_export::sql_dump_view::SqlDumpView;
         use std::path::PathBuf;
 
         let connection_id = node.connection_id.clone();
-        let (database, table) = if node.node_type == DbNodeType::Table {
-            let db = node.metadata.get("database").cloned().unwrap_or_default();
-            (db, Some(node.name.clone()))
-        } else {
-            (node.name.clone(), None)
+        let Some(target) = resolve_sql_dump_target(&node) else {
+            Self::show_error(window, t!("Common.error_info").to_string(), cx);
+            return;
         };
+        let database = target.database;
+        let schema = target.schema;
+        let table = target.table;
 
         let window_id = cx.active_window();
 
@@ -3537,6 +3539,7 @@ impl DatabaseEventHandler {
                     let config_id = config.id.clone();
                     let server_info = config.server_info();
                     let database = database.clone();
+                    let schema = schema.clone();
                     let table = table.clone();
 
                     cx.update_window(window_id, |_entity, _window, cx| {
@@ -3548,7 +3551,7 @@ impl DatabaseEventHandler {
                                     config_id,
                                     server_info,
                                     database,
-                                    None, // schema
+                                    schema,
                                     table,
                                     output_path,
                                     mode,

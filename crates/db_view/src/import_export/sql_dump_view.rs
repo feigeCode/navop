@@ -10,10 +10,11 @@ use gpui_component::{
 use std::rc::Rc;
 
 use crate::db_tree_view::SqlDumpMode;
+use crate::import_export::sql_dump_target::sql_dump_filename;
 use db::{DataFormat, ExportConfig, ExportProgressEvent, GlobalDbState};
 use rust_i18n::t;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::sync::mpsc;
 
@@ -104,6 +105,23 @@ impl SqlDumpView {
         });
     }
 
+    fn append_dump_chunk(path: &Path, data: &str, file_created: &mut bool) -> std::io::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        if *file_created {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(path)?
+                .write_all(data.as_bytes())
+        } else {
+            std::fs::write(path, data)?;
+            *file_created = true;
+            Ok(())
+        }
+    }
+
     fn start_dump(&mut self, _window: &mut Window, cx: &mut App) {
         if *self.is_running.read(cx) {
             return;
@@ -137,11 +155,12 @@ impl SqlDumpView {
 
         let now = chrono::Local::now();
         let datetime_str = now.format("%Y-%m-%d_%H-%M-%S").to_string();
-        let filename = if let Some(ref table) = single_table {
-            format!("{}_{}_{}.sql", database, table, datetime_str)
-        } else {
-            format!("{}_{}.sql", database, datetime_str)
-        };
+        let filename = sql_dump_filename(
+            &database,
+            schema.as_deref(),
+            single_table.as_deref(),
+            &datetime_str,
+        );
         let full_path = output_path.join(&filename);
 
         cx.spawn(async move |mut cx| {
@@ -248,7 +267,6 @@ impl SqlDumpView {
             let mut file_created = false;
 
             while let Some(event) = progress_rx.recv().await {
-                let event_clone = event.clone();
                 let logs_clone = logs.clone();
                 let scroll_handle_clone = scroll_handle.clone();
                 let processed_records_clone = processed_records.clone();
@@ -257,41 +275,34 @@ impl SqlDumpView {
                 let elapsed_time_clone = elapsed_time.clone();
                 let progress_clone = progress.clone();
 
-                match &event_clone {
+                let write_error = match &event {
                     ExportProgressEvent::StructureExported { data, .. }
                     | ExportProgressEvent::DataExported { data, .. } => {
-                        if !data.is_empty() {
-                            let write_result = if !file_created {
-                                file_created = true;
-                                std::fs::write(&file_path_for_write, data)
-                            } else {
-                                std::fs::OpenOptions::new()
-                                    .append(true)
-                                    .open(&file_path_for_write)
-                                    .and_then(|mut f| f.write_all(data.as_bytes()))
-                            };
-                            if let Err(e) = write_result {
-                                let logs_for_error = logs_clone.clone();
-                                let scroll_for_error = scroll_handle_clone.clone();
-                                let error_count_for_error = error_count_clone.clone();
-                                let _ = cx.update(|cx| {
-                                    logs_for_error.update(cx, |l, cx| {
-                                        l.push(LogEntry {
-                                            table: "".to_string(),
-                                            message: format!("File write error: {}", e),
-                                        });
-                                        cx.notify();
-                                    });
-                                    error_count_for_error.update(cx, |e, cx| {
-                                        *e += 1;
-                                        cx.notify();
-                                    });
-                                    scroll_for_error.scroll_to_bottom();
-                                });
-                            }
-                        }
+                        Self::append_dump_chunk(&file_path_for_write, data, &mut file_created)
+                            .err()
+                            .map(|e| format!("File write error: {}", e))
                     }
-                    _ => {}
+                    _ => None,
+                };
+
+                if let Some(message) = write_error {
+                    let logs_for_error = logs_clone.clone();
+                    let scroll_for_error = scroll_handle_clone.clone();
+                    let error_count_for_error = error_count_clone.clone();
+                    let _ = cx.update(|cx| {
+                        logs_for_error.update(cx, |l, cx| {
+                            l.push(LogEntry {
+                                table: "".to_string(),
+                                message,
+                            });
+                            cx.notify();
+                        });
+                        error_count_for_error.update(cx, |e, cx| {
+                            *e += 1;
+                            cx.notify();
+                        });
+                        scroll_for_error.scroll_to_bottom();
+                    });
                 }
 
                 let _ = cx.update(|cx| {
@@ -302,7 +313,7 @@ impl SqlDumpView {
                         cx.notify();
                     });
 
-                    match event_clone {
+                    match event {
                         ExportProgressEvent::TableStart {
                             table,
                             table_index,
@@ -310,7 +321,7 @@ impl SqlDumpView {
                         } => {
                             logs_clone.update(cx, |l, cx| {
                                 l.push(LogEntry {
-                                    table: table.clone(),
+                                    table,
                                     message: format!(
                                         "Starting ({}/{})",
                                         table_index + 1,
@@ -328,7 +339,7 @@ impl SqlDumpView {
                         ExportProgressEvent::GettingStructure { table } => {
                             logs_clone.update(cx, |l, cx| {
                                 l.push(LogEntry {
-                                    table: table.clone(),
+                                    table,
                                     message: "Getting table structure".to_string(),
                                 });
                                 cx.notify();
@@ -337,7 +348,7 @@ impl SqlDumpView {
                         ExportProgressEvent::StructureExported { table, .. } => {
                             logs_clone.update(cx, |l, cx| {
                                 l.push(LogEntry {
-                                    table: table.clone(),
+                                    table,
                                     message: "Create table".to_string(),
                                 });
                                 cx.notify();
@@ -346,7 +357,7 @@ impl SqlDumpView {
                         ExportProgressEvent::FetchingData { table } => {
                             logs_clone.update(cx, |l, cx| {
                                 l.push(LogEntry {
-                                    table: table.clone(),
+                                    table,
                                     message: "Fetching records".to_string(),
                                 });
                                 cx.notify();
@@ -363,7 +374,7 @@ impl SqlDumpView {
                             });
                             logs_clone.update(cx, |l, cx| {
                                 l.push(LogEntry {
-                                    table: table.clone(),
+                                    table,
                                     message: format!("Transferring records ({})", rows),
                                 });
                                 cx.notify();
@@ -374,7 +385,7 @@ impl SqlDumpView {
                                 start_time.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
                             logs_clone.update(cx, |l, cx| {
                                 l.push(LogEntry {
-                                    table: table.clone(),
+                                    table,
                                     message: format!("Finished ({:.3} s)", elapsed),
                                 });
                                 cx.notify();
@@ -387,7 +398,7 @@ impl SqlDumpView {
                             });
                             logs_clone.update(cx, |l, cx| {
                                 l.push(LogEntry {
-                                    table: table.clone(),
+                                    table,
                                     message: format!("Error: {}", message),
                                 });
                                 cx.notify();
