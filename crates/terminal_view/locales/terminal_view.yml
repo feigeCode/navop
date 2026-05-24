@@ -663,6 +663,14 @@ ContextMenu:
     en: "Select All (%{shortcut})"
     zh-CN: "全选（%{shortcut}）"
     zh-HK: "全選（%{shortcut}）"
+  clear_screen:
+    en: Clear Screen
+    zh-CN: 清屏
+    zh-HK: 清屏
+  clear_screen_with_shortcut:
+    en: "Clear Screen (%{shortcut})"
+    zh-CN: "清屏（%{shortcut}）"
+    zh-HK: "清屏（%{shortcut}）"
   clear_selection:
     en: Clear Selection
     zh-CN: 清除选择

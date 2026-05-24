@@ -48,6 +48,7 @@ use std::ops::Deref;
 use terminal::LocalConfig;
 use terminal::terminal::{
     ConnectionState, Terminal, TerminalConnectionKind, TerminalModelEvent, TerminalScrollProxy,
+    resolve_local_working_dir,
 };
 use tokio::sync::Mutex;
 
@@ -60,6 +61,7 @@ actions!(
         Paste,
         SelectAll,
         ClearSelection,
+        ClearScreen,
         SearchForward,
         SearchBackward,
         ToggleViMode,
@@ -84,6 +86,10 @@ const TERMINAL_PASTE_SHORTCUT: &str = "ctrl-shift-v";
 const TERMINAL_SELECT_ALL_SHORTCUT: &str = "cmd-a";
 #[cfg(not(target_os = "macos"))]
 const TERMINAL_SELECT_ALL_SHORTCUT: &str = "ctrl-shift-a";
+#[cfg(target_os = "macos")]
+const TERMINAL_CLEAR_SCREEN_SHORTCUT: &str = "cmd-k";
+#[cfg(not(target_os = "macos"))]
+const TERMINAL_CLEAR_SCREEN_SHORTCUT: &str = "ctrl-l";
 #[cfg(target_os = "macos")]
 const TERMINAL_SEARCH_FORWARD_SHORTCUT: &str = "cmd-f";
 #[cfg(not(target_os = "macos"))]
@@ -416,6 +422,11 @@ pub fn init(cx: &mut App) {
             SelectAll,
             Some(TERMINAL_CONTEXT),
         ),
+        KeyBinding::new(
+            TERMINAL_CLEAR_SCREEN_SHORTCUT,
+            ClearScreen,
+            Some(TERMINAL_CONTEXT),
+        ),
         KeyBinding::new("escape", ClearSelection, Some(TERMINAL_CONTEXT)),
         KeyBinding::new(
             TERMINAL_SEARCH_FORWARD_SHORTCUT,
@@ -657,7 +668,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         // 创建 Terminal Entity
-        let local_working_dir = config.working_dir.clone().map(PathBuf::from);
+        let local_working_dir = resolve_local_working_dir(config.working_dir.clone());
         let init_error = Rc::new(RefCell::new(None));
         let init_error_clone = init_error.clone();
         let terminal = cx.new(move |cx| {
@@ -2641,6 +2652,25 @@ impl TerminalView {
         cx.notify();
     }
 
+    fn clear_screen(&mut self, _: &ClearScreen, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_history_prompt();
+        self.terminal.update(cx, |terminal, cx| {
+            terminal.clear_screen(cx);
+        });
+        self.reset_render_cache(cx);
+        self.focus_terminal(window, cx);
+        cx.notify();
+    }
+
+    fn reset_render_cache(&mut self, cx: &mut Context<Self>) {
+        let (screen_lines, columns, colors) = {
+            let terminal = self.terminal.read(cx);
+            let term = terminal.term().lock();
+            (term.screen_lines(), term.columns(), term.colors().clone())
+        };
+        self.render_cache = RenderCache::new(screen_lines, columns, colors);
+    }
+
     fn clear_selection(&mut self, _: &ClearSelection, window: &mut Window, cx: &mut Context<Self>) {
         // 如果侧边栏有激活的面板，按 Escape 关闭它
         if self.sidebar.read(cx).active_panel().is_some() {
@@ -2827,10 +2857,12 @@ impl TerminalView {
         let view_copy = view.clone();
         let view_paste = view.clone();
         let view_select_all = view.clone();
+        let view_clear_screen = view.clone();
         let view_clear = view.clone();
         let copy_shortcut = terminal_shortcut_label(TERMINAL_COPY_SHORTCUT);
         let paste_shortcut = terminal_shortcut_label(TERMINAL_PASTE_SHORTCUT);
         let select_all_shortcut = terminal_shortcut_label(TERMINAL_SELECT_ALL_SHORTCUT);
+        let clear_screen_shortcut = terminal_shortcut_label(TERMINAL_CLEAR_SCREEN_SHORTCUT);
 
         let mut menu = menu
             // 复制
@@ -2858,6 +2890,20 @@ impl TerminalView {
                 .on_click(move |_, window, cx| {
                     let _ = view_paste.update(cx, |this, cx| {
                         this.paste(&Paste, window, cx);
+                    });
+                }),
+            )
+            .separator()
+            .item(
+                PopupMenuItem::new(t!(
+                    "ContextMenu.clear_screen_with_shortcut",
+                    shortcut = clear_screen_shortcut
+                ))
+                .icon(IconName::Delete)
+                .action(Box::new(ClearScreen))
+                .on_click(move |_, window, cx| {
+                    let _ = view_clear_screen.update(cx, |this, cx| {
+                        this.clear_screen(&ClearScreen, window, cx);
                     });
                 }),
             )
@@ -3715,6 +3761,7 @@ impl Render for TerminalView {
                     .on_action(cx.listener(Self::copy))
                     .on_action(cx.listener(Self::paste))
                     .on_action(cx.listener(Self::select_all))
+                    .on_action(cx.listener(Self::clear_screen))
                     .on_action(cx.listener(Self::clear_selection))
                     .on_action(cx.listener(Self::search_forward))
                     .on_action(cx.listener(Self::search_backward))
@@ -4109,6 +4156,22 @@ mod tests {
         let binding = format!("{}{}", r#"KeyBinding::new("ctrl-0", "#, "ResetFont");
 
         assert!(source.contains(&binding));
+    }
+
+    #[test]
+    fn terminal_keybindings_bind_clear_screen_shortcut() {
+        let source = include_str!("view.rs");
+
+        assert!(source.contains("TERMINAL_CLEAR_SCREEN_SHORTCUT"));
+        assert!(source.contains("ClearScreen"));
+    }
+
+    #[test]
+    fn terminal_context_menu_exposes_clear_screen() {
+        let source = include_str!("view.rs");
+
+        assert!(source.contains("ContextMenu.clear_screen_with_shortcut"));
+        assert!(source.contains("this.clear_screen(&ClearScreen, window, cx)"));
     }
 
     #[test]
