@@ -9,12 +9,13 @@ use gpui::{
     prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt, WindowExt as _,
+    ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, Size, StyledExt, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
     notification::Notification,
+    scroll::ScrollableElement,
     spinner::Spinner,
     tab::{Tab, TabBar},
     v_flex,
@@ -36,6 +37,10 @@ const TAB_AGGREGATIONS: usize = 1;
 const TAB_SCHEMA: usize = 2;
 const TAB_INDEXES: usize = 3;
 const TAB_VALIDATION: usize = 4;
+const TABLE_MAX_COLUMNS: usize = 24;
+const TABLE_ROW_NUMBER_WIDTH: f32 = 48.0;
+const TABLE_ID_COLUMN_WIDTH: f32 = 220.0;
+const TABLE_FIELD_COLUMN_WIDTH: f32 = 160.0;
 
 #[derive(Clone)]
 struct DocumentItem {
@@ -58,6 +63,12 @@ enum EditorMode {
     View,
     Create,
     Update,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DocumentViewMode {
+    List,
+    Table,
 }
 
 #[derive(Clone)]
@@ -212,6 +223,57 @@ fn documents_to_pretty_json(documents: &[Document]) -> Result<String, MongoError
     serde_json::to_string_pretty(&bson).map_err(|e| MongoError::Serialization(e.to_string()))
 }
 
+fn collect_table_columns<'a>(documents: impl Iterator<Item = &'a Document>) -> Vec<String> {
+    let mut columns = Vec::new();
+    for document in documents {
+        for key in document.keys() {
+            if !columns.iter().any(|column| column == key) {
+                columns.push(key.clone());
+            }
+        }
+    }
+
+    if let Some(index) = columns.iter().position(|column| column == "_id") {
+        columns.remove(index);
+    }
+    columns.insert(0, "_id".to_string());
+    columns.truncate(TABLE_MAX_COLUMNS);
+    columns
+}
+
+#[cfg(test)]
+fn table_columns(documents: &[Document]) -> Vec<String> {
+    collect_table_columns(documents.iter())
+}
+
+fn document_item_table_columns(items: &[DocumentItem]) -> Vec<String> {
+    collect_table_columns(items.iter().map(|item| &item.document))
+}
+
+fn table_cell_text(value: Option<&Bson>) -> String {
+    let Some(value) = value else {
+        return String::new();
+    };
+
+    match value {
+        Bson::String(value) => value.clone(),
+        Bson::Int32(_)
+        | Bson::Int64(_)
+        | Bson::Double(_)
+        | Bson::Boolean(_)
+        | Bson::ObjectId(_) => bson_to_string(value),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| format!("{:?}", value)),
+    }
+}
+
+fn table_column_width(column: &str) -> gpui::Pixels {
+    if column == "_id" {
+        px(TABLE_ID_COLUMN_WIDTH)
+    } else {
+        px(TABLE_FIELD_COLUMN_WIDTH)
+    }
+}
+
 fn bson_type_name(value: &Bson) -> &'static str {
     match value {
         Bson::String(_) => "string",
@@ -319,6 +381,7 @@ pub struct CollectionView {
     pending_validation_value: Option<String>,
     pending_reload: bool,
     pending_select_id: Option<Bson>,
+    document_view_mode: DocumentViewMode,
     aggregation_loading: bool,
     aggregation_error: Option<String>,
     aggregation_count: Option<usize>,
@@ -489,6 +552,7 @@ impl CollectionView {
             pending_validation_value: None,
             pending_reload: false,
             pending_select_id: None,
+            document_view_mode: DocumentViewMode::List,
             aggregation_loading: false,
             aggregation_error: None,
             aggregation_count: None,
@@ -707,6 +771,14 @@ impl CollectionView {
             TAB_VALIDATION => self.load_validation(cx),
             _ => {}
         }
+        cx.notify();
+    }
+
+    fn set_document_view_mode(&mut self, mode: DocumentViewMode, cx: &mut Context<Self>) {
+        if self.document_view_mode == mode {
+            return;
+        }
+        self.document_view_mode = mode;
         cx.notify();
     }
 
@@ -1983,6 +2055,33 @@ impl CollectionView {
             .gap_2()
             .items_center()
             .child(
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        Button::new("mongo-list-view")
+                            .small()
+                            .outline()
+                            .icon(IconName::File)
+                            .selected(self.document_view_mode == DocumentViewMode::List)
+                            .tooltip(t!("MongoCollection.list_view").to_string())
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.set_document_view_mode(DocumentViewMode::List, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("mongo-table-view")
+                            .small()
+                            .outline()
+                            .icon(IconName::TableData)
+                            .selected(self.document_view_mode == DocumentViewMode::Table)
+                            .tooltip(t!("MongoCollection.table_view").to_string())
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.set_document_view_mode(DocumentViewMode::Table, cx);
+                            })),
+                    ),
+            )
+            .child(
                 Button::new("mongo-add")
                     .small()
                     .outline()
@@ -2040,6 +2139,23 @@ impl CollectionView {
     }
 
     fn render_documents_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let data_view = match self.document_view_mode {
+            DocumentViewMode::List => h_flex()
+                .flex_1()
+                .min_h_0()
+                .h_full()
+                .child(self.render_document_list(cx))
+                .child(self.render_detail_panel(cx))
+                .into_any_element(),
+            DocumentViewMode::Table => h_flex()
+                .flex_1()
+                .min_h_0()
+                .h_full()
+                .child(self.render_document_table(cx))
+                .child(self.render_detail_panel(cx))
+                .into_any_element(),
+        };
+
         v_flex()
             .flex_1()
             .min_h_0()
@@ -2047,14 +2163,7 @@ impl CollectionView {
             .child(self.render_query_bar(cx))
             .child(self.render_options_panel(cx))
             .child(self.render_action_bar(cx))
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .h_full()
-                    .child(self.render_document_list(cx))
-                    .child(self.render_detail_panel(cx)),
-            )
+            .child(data_view)
             .child(self.render_pagination_bar(cx))
     }
 
@@ -2601,6 +2710,158 @@ impl CollectionView {
             )
     }
 
+    fn render_table_header_cell(column: &str, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .w(table_column_width(column))
+            .flex_shrink_0()
+            .px_2()
+            .py_1()
+            .border_r_1()
+            .border_color(cx.theme().border)
+            .text_xs()
+            .font_semibold()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .child(column.to_string())
+            .into_any_element()
+    }
+
+    fn render_table_cell(text: String, column: &str, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .w(table_column_width(column))
+            .flex_shrink_0()
+            .px_2()
+            .py_1()
+            .border_r_1()
+            .border_color(cx.theme().border)
+            .text_xs()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .child(text)
+            .into_any_element()
+    }
+
+    fn render_document_table_row(
+        &self,
+        index: usize,
+        columns: &[String],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(item) = self.documents.get(index) else {
+            return div().into_any_element();
+        };
+        let is_selected = Some(index) == self.selected_index;
+
+        h_flex()
+            .id(SharedString::from(format!("mongo-doc-table-row-{}", index)))
+            .w_full()
+            .cursor_pointer()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .when(is_selected, |this| this.bg(cx.theme().list_active))
+            .hover(|style| style.bg(cx.theme().list_active))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.select_document(index, window, cx);
+            }))
+            .child(
+                div()
+                    .w(px(TABLE_ROW_NUMBER_WIDTH))
+                    .flex_shrink_0()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child((index + 1).to_string()),
+            )
+            .children(columns.iter().map(|column| {
+                Self::render_table_cell(table_cell_text(item.document.get(column)), column, cx)
+            }))
+            .into_any_element()
+    }
+
+    fn render_table_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.is_loading {
+            return Self::render_table_loading();
+        }
+        if let Some(error) = &self.error_message {
+            return Self::render_table_error(error, cx);
+        }
+        if self.documents.is_empty() {
+            return self.render_empty_state(t!("MongoCollection.no_documents").as_ref(), cx);
+        }
+
+        let columns = document_item_table_columns(&self.documents);
+        self.render_table_content(&columns, cx)
+    }
+
+    fn render_table_loading() -> AnyElement {
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(Spinner::new())
+            .into_any_element()
+    }
+
+    fn render_table_error(error: &str, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(cx.theme().danger)
+            .child(error.to_string())
+            .into_any_element()
+    }
+
+    fn render_table_content(&self, columns: &[String], cx: &mut Context<Self>) -> AnyElement {
+        let header = h_flex()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().muted)
+            .child(
+                div()
+                    .w(px(TABLE_ROW_NUMBER_WIDTH))
+                    .flex_shrink_0()
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .font_semibold()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("#"),
+            )
+            .children(
+                columns
+                    .iter()
+                    .map(|column| Self::render_table_header_cell(column, cx)),
+            );
+
+        div()
+            .size_full()
+            .overflow_scrollbar()
+            .child(
+                v_flex().min_w(px(720.0)).child(header).children(
+                    (0..self.documents.len())
+                        .map(|index| self.render_document_table_row(index, &columns, cx)),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn render_document_table(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .flex_1()
+            .h_full()
+            .min_h_0()
+            .min_w(px(520.0))
+            .border_r_1()
+            .border_color(cx.theme().border)
+            .child(self.render_table_body(cx))
+    }
+
     fn render_detail_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let is_editing = matches!(self.editor_mode, EditorMode::Create | EditorMode::Update);
         let header_title = if self.show_explain {
@@ -2930,5 +3191,44 @@ impl Render for CollectionView {
                 .child(self.render_tab_bar(cx))
                 .child(body)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mongodb::bson::doc;
+
+    #[test]
+    fn table_columns_put_id_first_and_keep_first_seen_fields() {
+        let documents = vec![
+            doc! { "_id": 1, "name": "Alice", "age": 20 },
+            doc! { "email": "alice@example.com", "name": "Alice Updated" },
+        ];
+
+        assert_eq!(
+            vec![
+                "_id".to_string(),
+                "name".to_string(),
+                "age".to_string(),
+                "email".to_string()
+            ],
+            table_columns(&documents)
+        );
+    }
+
+    #[test]
+    fn table_cell_text_formats_nested_values_and_missing_cells() {
+        let nested = Bson::Document(doc! { "enabled": true, "count": 2 });
+
+        assert_eq!("", table_cell_text(None));
+        assert_eq!(
+            "plain",
+            table_cell_text(Some(&Bson::String("plain".to_string())))
+        );
+        assert_eq!(
+            "{\"enabled\":true,\"count\":2}",
+            table_cell_text(Some(&nested))
+        );
     }
 }

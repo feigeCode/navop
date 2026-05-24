@@ -755,6 +755,14 @@ MongoCollection:
     en: "Export Code"
     zh-CN: "导出代码"
     zh-HK: "匯出程式碼"
+  list_view:
+    en: "List view"
+    zh-CN: "列表视图"
+    zh-HK: "列表檢視"
+  table_view:
+    en: "Table view"
+    zh-CN: "表格视图"
+    zh-HK: "表格檢視"
   result_count:
     en: "Returned %{count} results"
     zh-CN: "返回 %{count} 条结果"
