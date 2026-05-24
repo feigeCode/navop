@@ -11,6 +11,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 pub mod collection_view;
 pub mod connection;
+pub mod document_table_delegate;
 pub mod manager;
 pub mod mongo_form_window;
 pub mod mongo_tab;

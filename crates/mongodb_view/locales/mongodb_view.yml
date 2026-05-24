@@ -301,6 +301,10 @@ MongoConnection:
     en: "Failed to update document."
     zh-CN: "更新文档失败。"
     zh-HK: "更新文件失敗。"
+  update_document_failed:
+    en: "Failed to update document fields."
+    zh-CN: "更新文档字段失败。"
+    zh-HK: "更新文件欄位失敗。"
   delete_document_failed:
     en: "Failed to delete document."
     zh-CN: "删除文档失败。"
@@ -623,6 +627,18 @@ MongoCollection:
     en: "Document updated."
     zh-CN: "文档已更新。"
     zh-HK: "文件已更新。"
+  edit_field:
+    en: "Edit field: %{field}"
+    zh-CN: "编辑字段：%{field}"
+    zh-HK: "編輯欄位：%{field}"
+  field_updated:
+    en: "Field updated."
+    zh-CN: "字段已更新。"
+    zh-HK: "欄位已更新。"
+  save_or_revert_changes_first:
+    en: "Save or revert table changes first."
+    zh-CN: "请先保存或撤销表格更改。"
+    zh-HK: "請先保存或撤銷表格更改。"
   operation_done:
     en: "Operation completed."
     zh-CN: "操作完成。"
@@ -747,6 +763,18 @@ MongoCollection:
     en: "Update"
     zh-CN: "更新"
     zh-HK: "更新"
+  save_changes:
+    en: "Save Changes"
+    zh-CN: "保存更改"
+    zh-HK: "保存更改"
+  revert_changes:
+    en: "Revert Changes"
+    zh-CN: "撤销更改"
+    zh-HK: "撤銷更改"
+  table_changes_saved:
+    en: "Saved %{count} field changes."
+    zh-CN: "已保存 %{count} 个字段更改。"
+    zh-HK: "已保存 %{count} 個欄位更改。"
   export_data:
     en: "Export Data"
     zh-CN: "导出数据"

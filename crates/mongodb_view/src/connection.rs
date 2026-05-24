@@ -1,5 +1,6 @@
 //! MongoDB 连接实现
 
+use crate::document_table_delegate::build_set_update_document_from_fields;
 use crate::types::{MongoConnectionConfig, MongoError};
 use async_trait::async_trait;
 use futures_util::stream::TryStreamExt;
@@ -103,6 +104,14 @@ pub trait MongoConnection: Send + Sync {
         collection_name: &str,
         id: Bson,
         document: Document,
+    ) -> Result<(), MongoError>;
+
+    async fn update_document_fields(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+        id: Bson,
+        set_fields: Document,
     ) -> Result<(), MongoError>;
 
     async fn delete_document(
@@ -710,6 +719,32 @@ impl MongoConnection for MongoConnectionImpl {
             .map_err(|e| {
                 MongoError::command_with_source(
                     t!("MongoConnection.replace_document_failed").to_string(),
+                    e,
+                )
+            })?;
+        Ok(())
+    }
+
+    async fn update_document_fields(
+        &self,
+        database_name: &str,
+        collection_name: &str,
+        id: Bson,
+        set_fields: Document,
+    ) -> Result<(), MongoError> {
+        let client = self.client()?;
+        let collection = client
+            .database(database_name)
+            .collection::<Document>(collection_name);
+        collection
+            .update_one(
+                doc! { "_id": id },
+                build_set_update_document_from_fields(set_fields),
+            )
+            .await
+            .map_err(|e| {
+                MongoError::command_with_source(
+                    t!("MongoConnection.update_document_failed").to_string(),
                     e,
                 )
             })?;
