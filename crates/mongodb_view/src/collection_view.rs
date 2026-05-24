@@ -5,11 +5,10 @@ use std::collections::HashMap;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
     FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, UniformListScrollHandle, Window, div,
-    prelude::FluentBuilder, px, uniform_list,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, Size, StyledExt, WindowExt as _,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::DialogButtonProps,
     h_flex,
@@ -46,7 +45,6 @@ const TABLE_FIELD_COLUMN_WIDTH: f32 = 160.0;
 struct DocumentItem {
     id: String,
     id_bson: Option<Bson>,
-    summary: String,
     document: Document,
     pretty_json: String,
 }
@@ -65,12 +63,6 @@ enum EditorMode {
     Update,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DocumentViewMode {
-    List,
-    Table,
-}
-
 #[derive(Clone)]
 struct QueryInputs {
     filter: Option<Document>,
@@ -84,14 +76,6 @@ impl QueryInputs {
     fn skip(&self, page_index: i64) -> i64 {
         self.skip_base + page_index * self.page_size
     }
-}
-
-fn truncate_summary(value: &str, max_len: usize) -> String {
-    let mut summary = value.chars().take(max_len).collect::<String>();
-    if value.chars().count() > max_len {
-        summary.push_str("...");
-    }
-    summary
 }
 
 fn parse_optional_document(text: &str, label: &str) -> Result<Option<Document>, MongoError> {
@@ -262,6 +246,9 @@ fn table_cell_text(value: Option<&Bson>) -> String {
         | Bson::Double(_)
         | Bson::Boolean(_)
         | Bson::ObjectId(_) => bson_to_string(value),
+        Bson::DateTime(value) => value
+            .try_to_rfc3339_string()
+            .unwrap_or_else(|_| value.timestamp_millis().to_string()),
         _ => serde_json::to_string(value).unwrap_or_else(|_| format!("{:?}", value)),
     }
 }
@@ -381,7 +368,7 @@ pub struct CollectionView {
     pending_validation_value: Option<String>,
     pending_reload: bool,
     pending_select_id: Option<Bson>,
-    document_view_mode: DocumentViewMode,
+    detail_panel_collapsed: bool,
     aggregation_loading: bool,
     aggregation_error: Option<String>,
     aggregation_count: Option<usize>,
@@ -393,7 +380,6 @@ pub struct CollectionView {
     indexes_count: Option<usize>,
     validation_loading: bool,
     validation_error: Option<String>,
-    list_scroll_handle: UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
     focus_handle: FocusHandle,
 }
@@ -552,7 +538,7 @@ impl CollectionView {
             pending_validation_value: None,
             pending_reload: false,
             pending_select_id: None,
-            document_view_mode: DocumentViewMode::List,
+            detail_panel_collapsed: false,
             aggregation_loading: false,
             aggregation_error: None,
             aggregation_count: None,
@@ -564,7 +550,6 @@ impl CollectionView {
             indexes_count: None,
             validation_loading: false,
             validation_error: None,
-            list_scroll_handle: UniformListScrollHandle::new(),
             _subscriptions: subscriptions,
             focus_handle: cx.focus_handle(),
         }
@@ -774,11 +759,8 @@ impl CollectionView {
         cx.notify();
     }
 
-    fn set_document_view_mode(&mut self, mode: DocumentViewMode, cx: &mut Context<Self>) {
-        if self.document_view_mode == mode {
-            return;
-        }
-        self.document_view_mode = mode;
+    fn toggle_detail_panel(&mut self, cx: &mut Context<Self>) {
+        self.detail_panel_collapsed = !self.detail_panel_collapsed;
         cx.notify();
     }
 
@@ -799,6 +781,7 @@ impl CollectionView {
         self.editor_mode = EditorMode::Create;
         self.editing_id = None;
         self.show_explain = false;
+        self.detail_panel_collapsed = false;
         self.set_editor_value("{\n  \n}".to_string());
         self.apply_pending_editor_value(window, cx);
         cx.notify();
@@ -814,28 +797,10 @@ impl CollectionView {
         self.editor_mode = EditorMode::Update;
         self.editing_id = item.id_bson.clone();
         self.show_explain = false;
+        self.detail_panel_collapsed = false;
         self.set_editor_value(item.pretty_json);
         self.apply_pending_editor_value(window, cx);
         cx.notify();
-    }
-
-    fn start_clone(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item) = self.documents.get(index).cloned() else {
-            return;
-        };
-        let mut cloned = item.document.clone();
-        cloned.remove("_id");
-        match document_to_pretty_json(&cloned) {
-            Ok(content) => {
-                self.editor_mode = EditorMode::Create;
-                self.editing_id = None;
-                self.show_explain = false;
-                self.set_editor_value(content);
-                self.apply_pending_editor_value(window, cx);
-                cx.notify();
-            }
-            Err(error) => self.set_error(error.to_string(), cx),
-        }
     }
 
     fn cancel_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1195,6 +1160,7 @@ impl CollectionView {
         self.is_loading = true;
         self.error_message = None;
         self.show_explain = true;
+        self.detail_panel_collapsed = false;
         cx.notify();
 
         let global_state = cx.global::<GlobalMongoState>().clone();
@@ -1831,12 +1797,9 @@ impl CollectionView {
                                     .map(bson_to_string)
                                     .unwrap_or_else(|| format!("#{}", index + 1));
                                 let json = document_to_pretty_json(&document)?;
-                                let summary =
-                                    truncate_summary(json.lines().next().unwrap_or(""), 120);
                                 Ok(DocumentItem {
                                     id,
                                     id_bson,
-                                    summary,
                                     document,
                                     pretty_json: json,
                                 })
@@ -2055,33 +2018,6 @@ impl CollectionView {
             .gap_2()
             .items_center()
             .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .child(
-                        Button::new("mongo-list-view")
-                            .small()
-                            .outline()
-                            .icon(IconName::File)
-                            .selected(self.document_view_mode == DocumentViewMode::List)
-                            .tooltip(t!("MongoCollection.list_view").to_string())
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.set_document_view_mode(DocumentViewMode::List, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("mongo-table-view")
-                            .small()
-                            .outline()
-                            .icon(IconName::TableData)
-                            .selected(self.document_view_mode == DocumentViewMode::Table)
-                            .tooltip(t!("MongoCollection.table_view").to_string())
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.set_document_view_mode(DocumentViewMode::Table, cx);
-                            })),
-                    ),
-            )
-            .child(
                 Button::new("mongo-add")
                     .small()
                     .outline()
@@ -2139,23 +2075,6 @@ impl CollectionView {
     }
 
     fn render_documents_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let data_view = match self.document_view_mode {
-            DocumentViewMode::List => h_flex()
-                .flex_1()
-                .min_h_0()
-                .h_full()
-                .child(self.render_document_list(cx))
-                .child(self.render_detail_panel(cx))
-                .into_any_element(),
-            DocumentViewMode::Table => h_flex()
-                .flex_1()
-                .min_h_0()
-                .h_full()
-                .child(self.render_document_table(cx))
-                .child(self.render_detail_panel(cx))
-                .into_any_element(),
-        };
-
         v_flex()
             .flex_1()
             .min_h_0()
@@ -2163,7 +2082,19 @@ impl CollectionView {
             .child(self.render_query_bar(cx))
             .child(self.render_options_panel(cx))
             .child(self.render_action_bar(cx))
-            .child(data_view)
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .h_full()
+                    .child(self.render_document_table(cx))
+                    .when(self.detail_panel_collapsed, |this| {
+                        this.child(self.render_collapsed_detail_panel(cx))
+                    })
+                    .when(!self.detail_panel_collapsed, |this| {
+                        this.child(self.render_detail_panel(cx))
+                    }),
+            )
             .child(self.render_pagination_bar(cx))
     }
 
@@ -2553,163 +2484,6 @@ impl CollectionView {
             .into_any_element()
     }
 
-    fn render_document_row(
-        &mut self,
-        index: usize,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let Some(item) = self.documents.get(index).cloned() else {
-            return div().into_any_element();
-        };
-        let is_selected = Some(index) == self.selected_index;
-        let label = format!("{} {}", item.id, item.summary);
-
-        h_flex()
-            .id(SharedString::from(format!("mongo-doc-{}", index)))
-            .w_full()
-            .px_2()
-            .py_1()
-            .rounded(px(6.0))
-            .group("mongo-doc-row")
-            .cursor_pointer()
-            .when(is_selected, |this| this.bg(cx.theme().list_active))
-            .when(!is_selected, |this| this.text_color(cx.theme().foreground))
-            .hover(|style| style.bg(cx.theme().list_active))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.select_document(index, window, cx);
-            }))
-            .child(div().flex_1().text_sm().truncate().child(label))
-            .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .invisible()
-                    .group_hover("mongo-doc-row", |style| style.visible())
-                    .child(
-                        Button::new(SharedString::from(format!("mongo-doc-edit-{}", index)))
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Edit)
-                            .tooltip(t!("Common.edit").to_string())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.select_document(index, window, cx);
-                                this.start_update(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("mongo-doc-delete-{}", index)))
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Remove)
-                            .tooltip(t!("Common.delete").to_string())
-                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                cx.stop_propagation();
-                                this.selected_index = Some(index);
-                                this.delete_selected(cx);
-                            })),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("mongo-doc-copy-{}", index)))
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Copy)
-                            .tooltip(t!("Common.copy").to_string())
-                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                cx.stop_propagation();
-                                this.selected_index = Some(index);
-                                this.copy_selected(cx);
-                            })),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("mongo-doc-clone-{}", index)))
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Plus)
-                            .tooltip(t!("MongoCollection.clone").to_string())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.start_clone(index, window, cx);
-                            })),
-                    ),
-            )
-            .into_any_element()
-    }
-
-    fn render_list_body(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.is_loading {
-            return div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(Spinner::new())
-                .into_any_element();
-        }
-
-        if let Some(error) = &self.error_message {
-            return div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(cx.theme().danger)
-                .child(error.clone())
-                .into_any_element();
-        }
-
-        let item_count = self.documents.len();
-        if item_count == 0 {
-            return self.render_empty_state(t!("MongoCollection.no_documents").as_ref(), cx);
-        }
-
-        uniform_list(
-            "mongo-documents-list",
-            item_count,
-            cx.processor(
-                move |view: &mut Self, visible_range: std::ops::Range<usize>, window, cx| {
-                    visible_range
-                        .map(|index| view.render_document_row(index, window, cx))
-                        .collect()
-                },
-            ),
-        )
-        .size_full()
-        .track_scroll(&self.list_scroll_handle)
-        .into_any_element()
-    }
-
-    fn render_document_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let total = self.total_count.unwrap_or(self.documents.len() as i64);
-        let title = t!("MongoCollection.documents_title", total = total).to_string();
-
-        v_flex()
-            .flex_1()
-            .h_full()
-            .min_h_0()
-            .min_w(px(280.0))
-            .max_w(px(420.0))
-            .border_r_1()
-            .border_color(cx.theme().border)
-            .child(
-                h_flex().items_center().px_2().py_1().child(
-                    div()
-                        .text_sm()
-                        .font_semibold()
-                        .text_color(cx.theme().foreground)
-                        .child(title),
-                ),
-            )
-            .child(
-                div()
-                    .id("mongo-document-list-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.render_list_body(cx)),
-            )
-    }
-
     fn render_table_header_cell(column: &str, cx: &mut Context<Self>) -> AnyElement {
         div()
             .w(table_column_width(column))
@@ -2862,6 +2636,27 @@ impl CollectionView {
             .child(self.render_table_body(cx))
     }
 
+    fn render_collapsed_detail_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .h_full()
+            .w(px(32.0))
+            .flex_shrink_0()
+            .items_center()
+            .py_1()
+            .border_l_1()
+            .border_color(cx.theme().border)
+            .child(
+                Button::new("mongo-expand-preview")
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::ChevronLeft)
+                    .tooltip(t!("MongoCollection.expand_preview").to_string())
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.toggle_detail_panel(cx);
+                    })),
+            )
+    }
+
     fn render_detail_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let is_editing = matches!(self.editor_mode, EditorMode::Create | EditorMode::Update);
         let header_title = if self.show_explain {
@@ -2899,64 +2694,95 @@ impl CollectionView {
             self.render_empty_state(t!("MongoCollection.select_document").as_ref(), cx)
         };
 
-        v_flex()
+        h_flex()
             .flex_1()
             .h_full()
             .min_h_0()
             .min_w(px(320.0))
-            .px_2()
-            .gap_2()
+            .border_l_1()
+            .border_color(cx.theme().border)
             .child(
-                h_flex()
+                v_flex()
+                    .h_full()
+                    .w(px(32.0))
+                    .flex_shrink_0()
                     .items_center()
-                    .justify_between()
+                    .py_1()
+                    .border_r_1()
+                    .border_color(cx.theme().border)
                     .child(
-                        div()
-                            .text_sm()
-                            .font_semibold()
-                            .text_color(cx.theme().foreground)
-                            .child(header_title),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .when(is_editing, |this| {
-                                this.child(
-                                    Button::new("mongo-save")
-                                        .small()
-                                        .primary()
-                                        .label(t!("Common.save").to_string())
-                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                            this.save_edit(cx);
-                                        })),
-                                )
-                                .child(
-                                    Button::new("mongo-cancel")
-                                        .small()
-                                        .outline()
-                                        .label(t!("Common.cancel").to_string())
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.cancel_edit(window, cx);
-                                        })),
-                                )
-                            })
-                            .when(!is_editing, |this| {
-                                this.child(
-                                    Button::new("mongo-copy")
-                                        .small()
-                                        .outline()
-                                        .icon(IconName::Copy)
-                                        .label(t!("Common.copy").to_string())
-                                        .disabled(self.selected_index.is_none())
-                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                            this.copy_selected(cx);
-                                        })),
-                                )
-                            }),
+                        Button::new("mongo-collapse-preview")
+                            .xsmall()
+                            .ghost()
+                            .icon(IconName::ChevronRight)
+                            .tooltip(t!("MongoCollection.collapse_preview").to_string())
+                            .on_click(cx.listener(|this, _, _window, cx| {
+                                this.toggle_detail_panel(cx);
+                            })),
                     ),
             )
-            .child(body)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .h_full()
+                    .min_h_0()
+                    .px_2()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_sm()
+                                    .font_semibold()
+                                    .text_color(cx.theme().foreground)
+                                    .child(header_title),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .when(is_editing, |this| {
+                                        this.child(
+                                            Button::new("mongo-save")
+                                                .small()
+                                                .primary()
+                                                .label(t!("Common.save").to_string())
+                                                .on_click(cx.listener(|this, _, _window, cx| {
+                                                    this.save_edit(cx);
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("mongo-cancel")
+                                                .small()
+                                                .outline()
+                                                .label(t!("Common.cancel").to_string())
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.cancel_edit(window, cx);
+                                                })),
+                                        )
+                                    })
+                                    .when(!is_editing, |this| {
+                                        this.child(
+                                            Button::new("mongo-copy")
+                                                .small()
+                                                .outline()
+                                                .icon(IconName::Copy)
+                                                .label(t!("Common.copy").to_string())
+                                                .disabled(self.selected_index.is_none())
+                                                .on_click(cx.listener(|this, _, _window, cx| {
+                                                    this.copy_selected(cx);
+                                                })),
+                                        )
+                                    }),
+                            ),
+                    )
+                    .child(body),
+            )
     }
 
     fn render_pagination_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3220,11 +3046,16 @@ mod tests {
     #[test]
     fn table_cell_text_formats_nested_values_and_missing_cells() {
         let nested = Bson::Document(doc! { "enabled": true, "count": 2 });
+        let datetime = mongodb::bson::DateTime::parse_rfc3339_str("2026-05-24T08:00:00Z").unwrap();
 
         assert_eq!("", table_cell_text(None));
         assert_eq!(
             "plain",
             table_cell_text(Some(&Bson::String("plain".to_string())))
+        );
+        assert_eq!(
+            "2026-05-24T08:00:00Z",
+            table_cell_text(Some(&Bson::DateTime(datetime)))
         );
         assert_eq!(
             "{\"enabled\":true,\"count\":2}",
