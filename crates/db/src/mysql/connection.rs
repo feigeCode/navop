@@ -15,9 +15,14 @@ use crate::executor::{
     ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
 };
 use crate::rustls_provider::ensure_rustls_crypto_provider;
-use crate::ssh_tunnel::resolve_connection_target;
+use crate::ssh_tunnel::{resolve_connection_target, resolve_tunnel_destination};
 use crate::{DatabasePlugin, format_message, truncate_str};
 use ssh::LocalPortForwardTunnel;
+
+fn is_mysql_access_denied(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("access denied for user")
+}
 
 pub struct MysqlDbConnection {
     config: DbConnectionConfig,
@@ -118,6 +123,18 @@ impl MysqlDbConnection {
             "invalid MySQL {}: only letters, numbers, and underscores are allowed",
             field_name
         )))
+    }
+
+    fn enrich_connect_error_message(config: &DbConnectionConfig, message: &str) -> String {
+        if !config.get_param_bool("ssh_tunnel_enabled") || !is_mysql_access_denied(message) {
+            return message.to_string();
+        }
+
+        let destination = resolve_tunnel_destination(config);
+        format!(
+            "{message}. SSH tunnel target is {}:{}. Check that the MySQL user host grants allow this source, for example `{}@localhost`, `{}@127.0.0.1`, or `{}@%`.",
+            destination.host, destination.port, config.username, config.username, config.username
+        )
     }
 
     /// Extract value from mysql_async::Value
@@ -378,7 +395,11 @@ impl DbConnection for MysqlDbConnection {
             Ok(Ok(conn)) => conn,
             Ok(Err(e)) => {
                 error!("[MySQL] Connection failed: {}", e);
-                return Err(DbError::connection_with_source("failed to connect", e));
+                let message = Self::enrich_connect_error_message(config, &e.to_string());
+                return Err(DbError::Connection {
+                    message: format!("failed to connect: {message}"),
+                    source: Some(Box::new(e)),
+                });
             }
             Err(_) => {
                 error!(
@@ -1007,5 +1028,46 @@ mod tests {
             .expect_err("invalid charset should fail");
 
         assert!(error.to_string().contains("invalid MySQL charset"));
+    }
+
+    #[test]
+    fn enrich_connect_error_mentions_ssh_target_for_access_denied() {
+        let config = build_config(&[
+            ("ssh_tunnel_enabled", "true"),
+            ("ssh_target_host", "127.0.0.1"),
+            ("ssh_target_port", "3306"),
+        ]);
+
+        let message = MysqlDbConnection::enrich_connect_error_message(
+            &config,
+            "Access denied for user 'root'@'localhost' (using password: YES)",
+        );
+
+        assert!(message.contains("Access denied for user 'root'@'localhost'"));
+        assert!(message.contains("SSH tunnel target is 127.0.0.1:3306"));
+        assert!(message.contains("MySQL user host grants"));
+        assert!(!message.contains("Navicat"));
+    }
+
+    #[test]
+    fn enrich_connect_error_keeps_non_tunnel_errors_unchanged() {
+        let config = build_config(&[]);
+        let message = "Access denied for user 'root'@'localhost'";
+
+        assert_eq!(
+            message,
+            MysqlDbConnection::enrich_connect_error_message(&config, message)
+        );
+    }
+
+    #[test]
+    fn enrich_connect_error_keeps_non_access_denied_tunnel_errors_unchanged() {
+        let config = build_config(&[("ssh_tunnel_enabled", "true")]);
+        let message = "Lost connection to MySQL server during query";
+
+        assert_eq!(
+            message,
+            MysqlDbConnection::enrich_connect_error_message(&config, message)
+        );
     }
 }

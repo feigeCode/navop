@@ -27,12 +27,28 @@ pub struct ResolvedConnectionTarget {
     pub tunnel: Option<LocalPortForwardTunnel>,
 }
 
+pub struct TunnelDestination {
+    pub host: String,
+    pub port: u16,
+}
+
 fn normalize_direct_host(host: &str) -> String {
     if host.eq_ignore_ascii_case("localhost") {
         return "127.0.0.1".to_string();
     }
 
     host.to_string()
+}
+
+pub fn resolve_tunnel_destination(config: &DbConnectionConfig) -> TunnelDestination {
+    let host = config
+        .get_param(SSH_TARGET_HOST)
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.trim().to_string())
+        .unwrap_or_else(|| config.host.clone());
+    let port = optional_u16_param(config, SSH_TARGET_PORT).unwrap_or(config.port);
+
+    TunnelDestination { host, port }
 }
 
 pub async fn resolve_connection_target(
@@ -50,12 +66,7 @@ pub async fn resolve_connection_target(
     let ssh_port = optional_u16_param(config, SSH_PORT).unwrap_or(22);
     let ssh_username = required_param(config, SSH_USERNAME)?;
     let auth = build_auth(config)?;
-    let target_host = config
-        .get_param(SSH_TARGET_HOST)
-        .filter(|value| !value.trim().is_empty())
-        .cloned()
-        .unwrap_or_else(|| config.host.clone());
-    let target_port = optional_u16_param(config, SSH_TARGET_PORT).unwrap_or(config.port);
+    let destination = resolve_tunnel_destination(config);
 
     // Read the SSH connection timeout from config.
     let ssh_timeout_secs = config
@@ -78,7 +89,7 @@ pub async fn resolve_connection_target(
     // Wrap tunnel setup with an explicit timeout.
     let tunnel_result = timeout(
         Duration::from_secs(ssh_timeout_secs),
-        start_local_port_forward(ssh_config, target_host, target_port),
+        start_local_port_forward(ssh_config, destination.host, destination.port),
     )
     .await;
 
@@ -184,5 +195,28 @@ mod tests {
         let auth = build_auth(&config).expect("agent auth type should parse successfully");
 
         assert!(matches!(auth, SshAuth::Agent));
+    }
+
+    #[test]
+    fn resolve_tunnel_destination_uses_explicit_target_host_and_port() {
+        let mut extra_params = HashMap::new();
+        extra_params.insert(SSH_TARGET_HOST.to_string(), "db.internal".to_string());
+        extra_params.insert(SSH_TARGET_PORT.to_string(), "3307".to_string());
+        let config = build_config(extra_params);
+
+        let destination = resolve_tunnel_destination(&config);
+
+        assert_eq!("db.internal", destination.host);
+        assert_eq!(3307, destination.port);
+    }
+
+    #[test]
+    fn resolve_tunnel_destination_falls_back_to_database_host_and_port() {
+        let config = build_config(HashMap::new());
+
+        let destination = resolve_tunnel_destination(&config);
+
+        assert_eq!("127.0.0.1", destination.host);
+        assert_eq!(3306, destination.port);
     }
 }
