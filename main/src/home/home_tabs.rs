@@ -14,6 +14,106 @@ use terminal_view::{
     TerminalConnectionKind, TerminalView, current_settings as current_terminal_settings,
 };
 
+fn redis_tab_open_context(
+    open_mode: DatabaseOpenMode,
+    conn: &StoredConnection,
+    workspace: Option<Workspace>,
+    all_connections: &[StoredConnection],
+) -> (String, Vec<StoredConnection>, Option<Workspace>) {
+    let workspace_id = workspace.as_ref().and_then(|ws| ws.id);
+
+    match (open_mode, workspace_id) {
+        (DatabaseOpenMode::Workspace, Some(id)) => {
+            let mut connections: Vec<StoredConnection> = all_connections
+                .iter()
+                .filter(|connection| connection.connection_type == ConnectionType::Redis)
+                .filter(|connection| connection.workspace_id == Some(id))
+                .cloned()
+                .collect();
+            if connections.is_empty() {
+                connections.push(conn.clone());
+            }
+            (format!("workspace-redis-tab-{id}"), connections, workspace)
+        }
+        _ => {
+            let conn_id = conn.id.unwrap_or(0);
+            (format!("redis-{conn_id}"), vec![conn.clone()], None)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use one_core::storage::{RedisMode, RedisParams};
+
+    fn redis_connection(id: i64, name: &str, workspace_id: Option<i64>) -> StoredConnection {
+        let params = RedisParams {
+            host: "localhost".to_string(),
+            port: 6379,
+            password: None,
+            username: None,
+            db_index: 0,
+            mode: RedisMode::Standalone,
+            use_tls: false,
+            connect_timeout: None,
+            sentinel: None,
+            cluster: None,
+        };
+        let mut connection = StoredConnection::new_redis(name.to_string(), params, workspace_id);
+        connection.id = Some(id);
+        connection
+    }
+
+    fn workspace(id: i64, name: &str) -> Workspace {
+        let mut workspace = Workspace::new(name.to_string());
+        workspace.id = Some(id);
+        workspace
+    }
+
+    #[test]
+    fn redis_single_mode_opens_connection_tab_without_workspace() {
+        let connection = redis_connection(42, "redis-prod", Some(7));
+        let all_connections = vec![connection.clone()];
+
+        let (tab_id, connections, workspace_for_tab) = redis_tab_open_context(
+            DatabaseOpenMode::Single,
+            &connection,
+            Some(workspace(7, "backend")),
+            &all_connections,
+        );
+
+        assert_eq!("redis-42", tab_id);
+        assert_eq!(
+            vec![Some(42)],
+            connections.iter().map(|c| c.id).collect::<Vec<_>>()
+        );
+        assert!(workspace_for_tab.is_none());
+    }
+
+    #[test]
+    fn redis_workspace_mode_groups_workspace_connections() {
+        let active = redis_connection(1, "redis-a", Some(7));
+        let peer = redis_connection(2, "redis-b", Some(7));
+        let other = redis_connection(3, "redis-c", Some(8));
+        let all_connections = vec![active.clone(), peer, other];
+
+        let (tab_id, connections, workspace_for_tab) = redis_tab_open_context(
+            DatabaseOpenMode::Workspace,
+            &active,
+            Some(workspace(7, "backend")),
+            &all_connections,
+        );
+
+        assert_eq!("workspace-redis-tab-7", tab_id);
+        assert_eq!(
+            vec![Some(1), Some(2)],
+            connections.iter().map(|c| c.id).collect::<Vec<_>>()
+        );
+        assert_eq!("backend", workspace_for_tab.unwrap().name);
+    }
+}
+
 impl HomePage {
     fn terminal_sync_path_enabled(cx: &App) -> bool {
         current_terminal_settings(cx).sync_path_with_terminal
@@ -224,27 +324,15 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let workspace_id = workspace.as_ref().and_then(|ws| ws.id);
+        let open_mode = if cx.has_global::<AppSettings>() {
+            AppSettings::global(cx).database_open_mode
+        } else {
+            DatabaseOpenMode::default()
+        };
         let active_conn_id = conn.id;
 
-        let mut connections: Vec<StoredConnection> = self
-            .connections
-            .iter()
-            .filter(|connection| connection.connection_type == ConnectionType::Redis)
-            .filter(|connection| {
-                workspace_id
-                    .map(|id| connection.workspace_id == Some(id))
-                    .unwrap_or(true)
-            })
-            .cloned()
-            .collect();
-        if connections.is_empty() {
-            connections.push(conn.clone());
-        }
-        let tab_id = workspace_id
-            .map(|id| format!("workspace-redis-tab-{id}"))
-            .unwrap_or_else(|| "redis-workbench".to_string());
-        let workspace_for_tab = workspace;
+        let (tab_id, connections, workspace_for_tab) =
+            redis_tab_open_context(open_mode, &conn, workspace, &self.connections);
 
         let tab_container = self.tab_container.clone();
         window.defer(cx, move |window, cx| {
