@@ -88,6 +88,37 @@ impl TableVisibleRange {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct DeletedRowSelectionCleanup {
+    clear_selection: bool,
+    clear_drag_end: bool,
+    clear_drag_start: bool,
+}
+
+fn deleted_row_selection_cleanup(
+    selected_row: Option<usize>,
+    selected_cell: Option<CellCoord>,
+    selection: &TableSelection,
+    drag_end_cell: Option<CellCoord>,
+    drag_start: Option<(usize, usize, bool)>,
+    row_ix: usize,
+) -> DeletedRowSelectionCleanup {
+    let selected_deleted_row = selected_row == Some(row_ix);
+    let selected_deleted_cell = selected_cell.is_some_and(|(row, _)| row == row_ix);
+    let selection_contains_deleted_row = selection
+        .ranges
+        .iter()
+        .any(|range| range.row_range().contains(&row_ix));
+
+    DeletedRowSelectionCleanup {
+        clear_selection: selected_deleted_row
+            || selected_deleted_cell
+            || selection_contains_deleted_row,
+        clear_drag_end: drag_end_cell.is_some_and(|(row, _)| row == row_ix),
+        clear_drag_start: drag_start.is_some_and(|(row, _, _)| row == row_ix),
+    }
+}
+
 pub struct EditTableState<D: EditTableDelegate> {
     focus_handle: FocusHandle,
     delegate: D,
@@ -1178,10 +1209,41 @@ where
     pub fn delete_row(&mut self, row_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.delegate.on_row_deleted(row_ix, window, cx);
         cx.emit(EditTableEvent::RowDeleted(row_ix));
-        if self.selected_row == Some(row_ix) {
-            self.selected_row = None;
-        }
+        self.clear_deleted_row_selection(row_ix);
         self.refresh(cx);
+        cx.notify();
+    }
+
+    fn clear_deleted_row_selection(&mut self, row_ix: usize) {
+        let cleanup = deleted_row_selection_cleanup(
+            self.selected_row,
+            self.selected_cell,
+            &self.selection,
+            self.drag_end_cell,
+            self.drag_start,
+            row_ix,
+        );
+
+        if cleanup.clear_selection {
+            self.clear_selection_fields();
+        }
+
+        if cleanup.clear_drag_end {
+            self.drag_end_cell = None;
+        }
+
+        if cleanup.clear_drag_start {
+            self.drag_start = None;
+            self.is_selecting = false;
+        }
+    }
+
+    fn clear_selection_fields(&mut self) {
+        self.selection_state = SelectionState::Row;
+        self.selected_row = None;
+        self.selected_col = None;
+        self.selected_cell = None;
+        self.selection.clear();
     }
 
     fn on_col_head_click(&mut self, col_ix: usize, _: &mut Window, cx: &mut Context<Self>) {
@@ -2858,6 +2920,52 @@ where
     }
 }
 impl<D> EventEmitter<EditTableEvent> for EditTableState<D> where D: EditTableDelegate {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deleted_row_cleanup_clears_cell_selection_and_drag_state() {
+        let mut selection = TableSelection::new();
+        selection.select_single((1, 1));
+
+        let cleanup = deleted_row_selection_cleanup(
+            None,
+            Some((1, 1)),
+            &selection,
+            Some((1, 1)),
+            Some((1, 1, false)),
+            1,
+        );
+
+        assert_eq!(
+            DeletedRowSelectionCleanup {
+                clear_selection: true,
+                clear_drag_end: true,
+                clear_drag_start: true,
+            },
+            cleanup
+        );
+    }
+
+    #[test]
+    fn deleted_row_cleanup_preserves_unrelated_selection() {
+        let mut selection = TableSelection::new();
+        selection.select_single((2, 1));
+
+        let cleanup = deleted_row_selection_cleanup(
+            Some(2),
+            Some((2, 1)),
+            &selection,
+            Some((2, 1)),
+            Some((2, 1, false)),
+            1,
+        );
+
+        assert_eq!(DeletedRowSelectionCleanup::default(), cleanup);
+    }
+}
 
 impl<D> Render for EditTableState<D>
 where
