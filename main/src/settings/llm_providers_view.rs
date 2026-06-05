@@ -184,6 +184,42 @@ impl LlmProvidersView {
         }
     }
 
+    fn confirm_delete_provider(
+        &mut self,
+        provider_id: i64,
+        provider_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.entity().clone();
+
+        window.open_dialog(cx, move |dialog, _, _| {
+            let view_clone = view.clone();
+            dialog
+                .title(t!("LlmProviders.delete_confirm_title").to_string())
+                .child(
+                    t!(
+                        "LlmProviders.delete_confirm_message",
+                        provider_name = provider_name
+                    )
+                    .to_string(),
+                )
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t!("Common.delete"))
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text(t!("Common.cancel")),
+                )
+                .on_ok(move |_, _, cx| {
+                    _ = view_clone.update(cx, |view, cx| {
+                        view.delete_provider(provider_id, cx);
+                    });
+                    true
+                })
+        });
+    }
+
     fn toggle_default(&mut self, provider: &ProviderConfig, cx: &mut Context<Self>) {
         let repo = self
             .storage_manager
@@ -497,6 +533,7 @@ impl LlmProvidersView {
     ) -> impl IntoElement {
         let toggle_clone = provider_for_toggle.clone();
         let default_clone = provider_for_default.clone();
+        let provider_name = provider_for_toggle.name.clone();
         let is_enabled = provider_for_toggle.enabled;
         let is_default = provider_for_default.is_default;
 
@@ -541,10 +578,15 @@ impl LlmProvidersView {
             )
             .child(
                 Button::new(SharedString::from(format!("delete-{}", provider_id)))
-                    .with_variant(ButtonVariant::Secondary)
+                    .danger()
                     .label(t!("LlmProviders.action_delete"))
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.delete_provider(provider_id, cx);
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.confirm_delete_provider(
+                            provider_id,
+                            provider_name.clone(),
+                            window,
+                            cx,
+                        );
                     })),
             )
     }

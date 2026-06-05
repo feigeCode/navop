@@ -1170,6 +1170,14 @@ LlmProviders:
     en: Delete
     zh-CN: 删除
     zh-HK: 刪除
+  delete_confirm_title:
+    en: Delete provider
+    zh-CN: 删除提供商
+    zh-HK: 刪除提供商
+  delete_confirm_message:
+    en: "Delete provider %{provider_name}? This action cannot be undone."
+    zh-CN: "确定删除提供商 %{provider_name} 吗？此操作不可撤销。"
+    zh-HK: "確定刪除提供商 %{provider_name} 嗎？此操作不可撤銷。"
   action_set_default:
     en: Set Default
     zh-CN: 设为默认
@@ -1242,6 +1250,10 @@ LlmProviders:
     en: Loading...
     zh-CN: 加载中...
     zh-HK: 載入中...
+  model_load_success:
+    en: "Loaded %{count} models. They are now available in the dropdown above."
+    zh-CN: "已加载 %{count} 个模型，已更新到上方下拉列表。"
+    zh-HK: "已載入 %{count} 個模型，已更新到上方下拉列表。"
   set_default:
     en: Set as default provider
     zh-CN: 设为默认提供商
@@ -1250,6 +1262,10 @@ LlmProviders:
     en: Model list is empty
     zh-CN: 模型列表为空
     zh-HK: 模型列表為空
+  model_load_empty_inline:
+    en: No models were returned. Check the provider configuration and try again.
+    zh-CN: 未返回模型，请检查提供商配置后重试。
+    zh-HK: 未返回模型，請檢查提供商配置後重試。
   model_load_failed:
     en: "Failed to load models: %{error}"
     zh-CN: "模型加载失败: %{error}"
