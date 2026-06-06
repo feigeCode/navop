@@ -109,6 +109,10 @@ impl SqlRunView {
         });
     }
 
+    fn should_show_start_button(is_running: bool) -> bool {
+        !is_running
+    }
+
     fn select_file(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let pending = self.pending_file_path.clone();
         let logs = self.logs.clone();
@@ -155,6 +159,10 @@ impl SqlRunView {
 
         self.is_running.update(cx, |r, cx| {
             *r = true;
+            cx.notify();
+        });
+        self.is_finished.update(cx, |f, cx| {
+            *f = false;
             cx.notify();
         });
 
@@ -657,7 +665,7 @@ impl Render for SqlRunView {
                     .pt_2()
                     .gap_2()
                     .justify_end()
-                    .when(!is_running && !is_finished, |this| {
+                    .when(Self::should_show_start_button(is_running), |this| {
                         this.child(
                             Button::new("start")
                                 .primary()
@@ -693,5 +701,20 @@ impl Render for SqlRunView {
             .h(px(520.0))
             .child(TitleBar::new())
             .child(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_button_is_visible_after_sql_run_finishes() {
+        assert!(SqlRunView::should_show_start_button(false));
+    }
+
+    #[test]
+    fn start_button_is_hidden_while_sql_run_is_running() {
+        assert!(!SqlRunView::should_show_start_button(true));
     }
 }

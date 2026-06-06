@@ -296,6 +296,10 @@ impl TableImportView {
         });
     }
 
+    fn should_show_start_button(current_step: ImportStep, is_running: bool) -> bool {
+        current_step == ImportStep::Execute && !is_running
+    }
+
     fn select_file(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let pending = self.pending_file_path.clone();
         let future = cx.prompt_for_paths(PathPromptOptions {
@@ -375,6 +379,10 @@ impl TableImportView {
 
         self.is_running.update(cx, |r, cx| {
             *r = true;
+            cx.notify();
+        });
+        self.is_finished.update(cx, |f, cx| {
+            *f = false;
             cx.notify();
         });
 
@@ -1350,25 +1358,35 @@ impl Render for TableImportView {
                             }),
                         ))
                     })
-                    .when(
-                        current_step == ImportStep::Execute && !is_running && !is_finished,
-                        |this| {
-                            this.child(Button::new("start").primary().child(t!("ImportExport.start_import").to_string()).on_click(
-                                window.listener_for(&cx.entity(), |view, _, window, cx| {
-                                    view.confirm_start_import(window, cx);
-                                }),
-                            ))
-                        },
-                    )
+                    .when(Self::should_show_start_button(current_step, is_running), |this| {
+                        this.child(
+                            Button::new("start")
+                                .primary()
+                                .child(t!("ImportExport.start_import").to_string())
+                                .on_click(window.listener_for(
+                                    &cx.entity(),
+                                    |view, _, window, cx| {
+                                        view.confirm_start_import(window, cx);
+                                    },
+                                )),
+                        )
+                    })
                     .when(is_running, |this| {
-                        this.child(Button::new("running").loading(true).child(t!("ImportExport.importing").to_string()))
+                        this.child(
+                            Button::new("running")
+                                .loading(true)
+                                .child(t!("ImportExport.importing").to_string()),
+                        )
                     })
                     .when(is_finished, |this| {
-                        this.child(Button::new("close").primary().child(t!("Common.finish").to_string()).on_click(
-                            |_, window, _cx| {
-                                window.remove_window();
-                            },
-                        ))
+                        this.child(
+                            Button::new("close")
+                                .primary()
+                                .child(t!("Common.finish").to_string())
+                                .on_click(|_, window, _cx| {
+                                    window.remove_window();
+                                }),
+                        )
                     }),
             );
 
@@ -1377,5 +1395,30 @@ impl Render for TableImportView {
             .h(px(600.0))
             .child(TitleBar::new())
             .child(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_button_is_visible_on_execute_step_after_import_finishes() {
+        assert!(TableImportView::should_show_start_button(
+            ImportStep::Execute,
+            false
+        ));
+    }
+
+    #[test]
+    fn start_button_is_hidden_while_import_is_running_or_not_ready() {
+        assert!(!TableImportView::should_show_start_button(
+            ImportStep::Execute,
+            true
+        ));
+        assert!(!TableImportView::should_show_start_button(
+            ImportStep::Config,
+            false
+        ));
     }
 }

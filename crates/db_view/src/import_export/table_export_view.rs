@@ -437,6 +437,10 @@ impl DataExportView {
         });
     }
 
+    fn should_show_start_button(current_step: ExportStep, is_running: bool) -> bool {
+        current_step == ExportStep::Execute && !is_running
+    }
+
     fn select_all_columns(&mut self, _window: &mut Window, cx: &mut App) {
         self.column_list.update(cx, |list, cx| {
             list.delegate_mut().select_all();
@@ -499,6 +503,10 @@ impl DataExportView {
 
         self.is_running.update(cx, |r, cx| {
             *r = true;
+            cx.notify();
+        });
+        self.is_finished.update(cx, |f, cx| {
+            *f = false;
             cx.notify();
         });
 
@@ -1323,7 +1331,7 @@ impl Render for DataExportView {
                                 }))
                         )
                     })
-                    .when(current_step == ExportStep::Execute && !is_running && !is_finished, |this| {
+                    .when(Self::should_show_start_button(current_step, is_running), |this| {
                         this.child(
                             Button::new("start")
                                 .primary()
@@ -1357,5 +1365,30 @@ impl Render for DataExportView {
             .h(px(600.0))
             .child(TitleBar::new())
             .child(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_button_is_visible_on_execute_step_after_export_finishes() {
+        assert!(DataExportView::should_show_start_button(
+            ExportStep::Execute,
+            false
+        ));
+    }
+
+    #[test]
+    fn start_button_is_hidden_while_export_is_running_or_not_ready() {
+        assert!(!DataExportView::should_show_start_button(
+            ExportStep::Execute,
+            true
+        ));
+        assert!(!DataExportView::should_show_start_button(
+            ExportStep::Config,
+            false
+        ));
     }
 }
