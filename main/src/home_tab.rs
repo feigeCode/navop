@@ -678,10 +678,15 @@ impl HomePage {
                 this.syncing = false;
                 let sync_requested = this.sync_requested;
                 match result {
-                    Ok(_stats) => {
-                        tracing::info!("冲突解决完成");
-                        this.pending_conflicts.clear();
-                        this.refresh_local_home_data(cx);
+                    Ok(stats) => {
+                        if stats.errors.is_empty() {
+                            tracing::info!("冲突解决完成");
+                            this.pending_conflicts.clear();
+                            this.refresh_local_home_data(cx);
+                        } else {
+                            tracing::error!("冲突解决存在错误: {}", stats.errors.join("; "));
+                            this.cloud_error = Some(stats.errors.join("; "));
+                        }
                     }
                     Err(e) => {
                         tracing::error!("冲突解决失败: {}", e);

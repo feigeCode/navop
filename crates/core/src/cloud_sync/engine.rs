@@ -335,6 +335,7 @@ impl SyncEngine {
                 let mut copy = conflict.local.clone();
                 copy.id = None;
                 copy.cloud_id = None;
+                copy.last_synced_at = None;
                 let timestamp = Self::current_timestamp();
                 copy.name = format!("{} (冲突副本 {})", copy.name, timestamp);
 
@@ -357,6 +358,11 @@ impl SyncEngine {
 
         match resolved.resolution {
             ConflictResolution::UseCloud => {
+                if resolved.conflict.conflict_type
+                    == crate::cloud_sync::models::ConflictType::LocalModifiedCloudDeleted
+                {
+                    return self.apply_cloud_deleted_connection_conflict(&resolved.conflict, false);
+                }
                 // 更新本地连接
                 let service = self
                     .crypto_service
@@ -384,34 +390,15 @@ impl SyncEngine {
                 Ok(())
             }
             ConflictResolution::UseLocal => {
-                // 更新云端连接
-                let teams = self.get_cached_teams();
-                let workspace_cloud_id =
-                    self.workspace_cloud_id_for_local_id(resolved.conflict.local.workspace_id)?;
-                let updated_data = {
-                    let service = self
-                        .crypto_service
-                        .read()
-                        .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?;
-                    let mut data = service.prepare_sync_data_upload_with_workspace_cloud_id(
-                        &resolved.conflict.local,
-                        resolved.conflict.local.team_id.as_deref(),
-                        &teams,
-                        workspace_cloud_id,
-                    )?;
-                    data.id = resolved.conflict.cloud.id.clone();
-                    data.version = resolved.conflict.cloud.version;
-                    data
-                };
-
-                self.cloud_client
-                    .update_sync_data(&updated_data)
+                self.apply_use_local_connection_conflict(&resolved.conflict)
                     .await
-                    .map_err(|e| SyncError::NetworkError(e.to_string()))?;
-
-                Ok(())
             }
             ConflictResolution::KeepBoth => {
+                if resolved.conflict.conflict_type
+                    == crate::cloud_sync::models::ConflictType::LocalModifiedCloudDeleted
+                {
+                    return self.apply_cloud_deleted_connection_conflict(&resolved.conflict, true);
+                }
                 // 创建本地副本
                 if let Some(copy) = &resolved.result_connection {
                     let repo = self.storage.get::<ConnectionRepository>().ok_or_else(|| {
