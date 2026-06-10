@@ -610,6 +610,8 @@ impl FileListPanel {
         let path_for_copy = full_path.to_string();
         let name_for_delete = name.to_string();
         let path_for_delete = full_path.to_string();
+        let path_for_upload_file = full_path.to_string();
+        let path_for_upload_folder = full_path.to_string();
 
         let view_ref = view.clone();
 
@@ -688,7 +690,8 @@ impl FileListPanel {
             menu = menu.item(
                 PopupMenuItem::new(t!("Common.upload").to_string())
                     .icon(IconName::Upload)
-                    .on_click(window.listener_for(&view_upload, move |_this, _, _, cx| {
+                    .on_click(window.listener_for(&view_upload, move |this, _, _, cx| {
+                        this.select_context_target(filtered_ix, cx);
                         cx.emit(FileListPanelEvent::UploadFile);
                     })),
             );
@@ -804,7 +807,9 @@ impl FileListPanel {
                         .on_click(window.listener_for(
                             &view_upload_file,
                             move |_this, _, _, cx| {
-                                cx.emit(FileListPanelEvent::UploadFile);
+                                cx.emit(FileListPanelEvent::UploadFileTo {
+                                    full_path: path_for_upload_file.clone(),
+                                });
                             },
                         )),
                 )
@@ -814,7 +819,9 @@ impl FileListPanel {
                         .on_click(window.listener_for(
                             &view_upload_folder,
                             move |_this, _, _, cx| {
-                                cx.emit(FileListPanelEvent::UploadFolder);
+                                cx.emit(FileListPanelEvent::UploadFolderTo {
+                                    full_path: path_for_upload_folder.clone(),
+                                });
                             },
                         )),
                 );
@@ -904,6 +911,14 @@ pub enum FileListPanelEvent {
     UploadFile,
     /// 上传文件夹
     UploadFolder,
+    /// 上传文件到指定远程目录
+    UploadFileTo {
+        full_path: String,
+    },
+    /// 上传文件夹到指定远程目录
+    UploadFolderTo {
+        full_path: String,
+    },
     /// 刷新列表
     Refresh,
     /// 显示隐藏文件

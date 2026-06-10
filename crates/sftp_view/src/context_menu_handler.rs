@@ -16,6 +16,74 @@ use rust_i18n::t;
 use sftp::SftpClient;
 use std::path::PathBuf;
 
+impl SftpView {
+    fn select_and_upload_files_to(
+        &mut self,
+        remote_path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.sftp_client.clone() else {
+            return;
+        };
+
+        let view = cx.entity().clone();
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            multiple: true,
+            directories: false,
+            prompt: Some(t!("FilePicker.select_upload_files").to_string().into()),
+        });
+
+        window
+            .spawn(cx, async move |cx| {
+                if let Ok(Ok(Some(paths))) = future.await {
+                    if paths.is_empty() {
+                        return;
+                    }
+
+                    let _ = view.update_in(cx, |this, window, cx| {
+                        this.upload_paths_to_remote(paths, remote_path, client, window, cx);
+                    });
+                }
+            })
+            .detach();
+    }
+
+    fn select_and_upload_folder_to(
+        &mut self,
+        remote_path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.sftp_client.clone() else {
+            return;
+        };
+
+        let view = cx.entity().clone();
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            multiple: true,
+            directories: true,
+            prompt: Some(t!("FilePicker.select_upload_folder").to_string().into()),
+        });
+
+        window
+            .spawn(cx, async move |cx| {
+                if let Ok(Ok(Some(paths))) = future.await {
+                    if paths.is_empty() {
+                        return;
+                    }
+
+                    let _ = view.update_in(cx, |this, window, cx| {
+                        this.upload_paths_to_remote(paths, remote_path, client, window, cx);
+                    });
+                }
+            })
+            .detach();
+    }
+}
+
 fn is_valid_entry_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -230,6 +298,12 @@ impl ContextMenuHandler for SftpView {
             }
             FileListPanelEvent::UploadFolder => {
                 self.select_and_upload_folder(window, cx);
+            }
+            FileListPanelEvent::UploadFileTo { full_path } => {
+                self.select_and_upload_files_to(full_path.clone(), window, cx);
+            }
+            FileListPanelEvent::UploadFolderTo { full_path } => {
+                self.select_and_upload_folder_to(full_path.clone(), window, cx);
             }
             FileListPanelEvent::Refresh => {
                 self.refresh_remote_dir_with_window(window, cx);
@@ -686,66 +760,10 @@ impl ContextMenuHandler for SftpView {
     }
 
     fn select_and_upload_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(client) = self.sftp_client.clone() else {
-            return;
-        };
-
-        let remote_path = self.remote_current_path.clone();
-        let view = cx.entity().clone();
-
-        // 打开文件选择对话框
-        let future = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            multiple: true,
-            directories: false,
-            prompt: Some(t!("FilePicker.select_upload_files").to_string().into()),
-        });
-
-        window
-            .spawn(cx, async move |cx| {
-                if let Ok(Ok(Some(paths))) = future.await {
-                    if paths.is_empty() {
-                        return;
-                    }
-
-                    // 上传选中的文件
-                    let _ = view.update_in(cx, |this, window, cx| {
-                        this.upload_paths_to_remote(paths, remote_path, client, window, cx);
-                    });
-                }
-            })
-            .detach();
+        self.select_and_upload_files_to(self.remote_current_path.clone(), window, cx);
     }
 
     fn select_and_upload_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(client) = self.sftp_client.clone() else {
-            return;
-        };
-
-        let remote_path = self.remote_current_path.clone();
-        let view = cx.entity().clone();
-
-        // 打开文件夹选择对话框
-        let future = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            multiple: true,
-            directories: true,
-            prompt: Some(t!("FilePicker.select_upload_folder").to_string().into()),
-        });
-
-        window
-            .spawn(cx, async move |cx| {
-                if let Ok(Ok(Some(paths))) = future.await {
-                    if paths.is_empty() {
-                        return;
-                    }
-
-                    // 上传选中的文件夹
-                    let _ = view.update_in(cx, |this, window, cx| {
-                        this.upload_paths_to_remote(paths, remote_path, client, window, cx);
-                    });
-                }
-            })
-            .detach();
+        self.select_and_upload_folder_to(self.remote_current_path.clone(), window, cx);
     }
 }
