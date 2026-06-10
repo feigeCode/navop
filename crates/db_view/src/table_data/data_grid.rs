@@ -104,6 +104,7 @@ pub struct LargeTextCellTarget {
 pub enum DataGridEvent {
     LargeTextSelectionChanged,
     ToggleLargeTextEditorRequested,
+    OpenTableDesignerRequested,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1227,6 +1228,15 @@ impl DataGrid {
         self.open_large_text_editor(window, cx);
     }
 
+    fn handle_open_table_designer(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(DataGridEvent::OpenTableDesignerRequested);
+    }
+
     fn handle_toolbar_refresh(
         &mut self,
         _: &ClickEvent,
@@ -2305,6 +2315,19 @@ impl DataGrid {
                 )
             })
             .child(div().flex_1())
+            .when(
+                self.config.usage == DataGridUsage::TableData && editable,
+                |this| {
+                    this.child(
+                        Button::new("open-table-designer")
+                            .with_size(Size::Medium)
+                            .icon(IconName::TableDesignTool)
+                            .tooltip(t!("TableDataGrid.open_table_designer").to_string())
+                            .disabled(loading)
+                            .on_click(cx.listener(Self::handle_open_table_designer)),
+                    )
+                },
+            )
             .child(
                 Button::new("toggle-editor")
                     .with_size(Size::Medium)

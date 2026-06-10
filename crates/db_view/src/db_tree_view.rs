@@ -8,8 +8,8 @@ use std::time::Duration;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement, Render,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
-    UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
+    RenderOnce, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    Task, UniformListScrollHandle, Window, div, prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, IndexPath, Selectable, Sizable, Size as ComponentSize,
@@ -351,6 +351,8 @@ pub enum DbTreeViewEvent {
     TruncateTable { node_id: String },
     /// 删除视图
     DeleteView { node_id: String },
+    /// 定位到当前激活的标签页对应的节点
+    LocateActiveTab,
     /// 运行SQL文件
     RunSqlFile { node_id: String },
     /// 转储SQL文件（导出结构和/或数据）
@@ -1036,6 +1038,73 @@ impl DbTreeView {
 
         self.rebuild_tree(cx);
         Some(schema_node_id)
+    }
+
+    pub fn locate_and_select_node(&mut self, node_id: &str, cx: &mut Context<Self>) {
+        if node_id.is_empty() {
+            return;
+        }
+
+        for ancestor_id in self.resolve_locate_ancestors(node_id) {
+            self.expanded_nodes.insert(ancestor_id.clone());
+            self.lazy_load_children(ancestor_id, cx);
+        }
+
+        self.selected_node_id = Some(node_id.to_string());
+        self.context_menu_node_id = None;
+        self.rebuild_tree(cx);
+        self.selected_ix = self
+            .flat_entries
+            .iter()
+            .position(|entry| entry.node_id == node_id);
+        if let Some(ix) = self.selected_ix {
+            self.scroll_handle
+                .scroll_to_item(ix, ScrollStrategy::Center);
+        }
+
+        if self.db_nodes.contains_key(node_id) {
+            cx.emit(DbTreeViewEvent::NodeSelected {
+                node_id: node_id.to_string(),
+            });
+        }
+        cx.notify();
+    }
+
+    fn resolve_locate_ancestors(&self, node_id: &str) -> Vec<String> {
+        if let Some(node) = self.db_nodes.get(node_id) {
+            return self.loaded_parent_chain(node);
+        }
+
+        Self::fallback_parent_chain(node_id)
+    }
+
+    fn loaded_parent_chain(&self, node: &DbNode) -> Vec<String> {
+        let mut ancestors = Vec::new();
+        let mut parent = node.parent_context.as_deref();
+        while let Some(parent_id) = parent {
+            ancestors.push(parent_id.to_string());
+            parent = self
+                .db_nodes
+                .get(parent_id)
+                .and_then(|node| node.parent_context.as_deref());
+        }
+        ancestors.reverse();
+        ancestors
+    }
+
+    fn fallback_parent_chain(node_id: &str) -> Vec<String> {
+        let mut ancestors = Vec::new();
+        let mut current = String::new();
+
+        for segment in node_id.split(':').take_while(|segment| !segment.is_empty()) {
+            if !current.is_empty() {
+                ancestors.push(current.clone());
+                current.push(':');
+            }
+            current.push_str(segment);
+        }
+
+        ancestors
     }
 
     /// 保存数据库筛选状态到存储
@@ -2180,6 +2249,7 @@ impl Render for DbTreeView {
             .bg(cx.theme().sidebar)
             .child({
                 let view_for_collapse = cx.entity();
+                let view_for_locate = cx.entity();
                 h_flex()
                     .w_full()
                     .p_1()
@@ -2198,6 +2268,18 @@ impl Render for DbTreeView {
                                 .small()
                                 .w_full(),
                         ),
+                    )
+                    .child(
+                        Button::new("locate-active-tab")
+                            .icon(IconName::LocateActiveTab)
+                            .ghost()
+                            .small()
+                            .tooltip(t!("DbTreeView.locate_active_tab"))
+                            .on_click(move |_, _, cx| {
+                                view_for_locate.update(cx, |_this, cx| {
+                                    cx.emit(DbTreeViewEvent::LocateActiveTab);
+                                });
+                            }),
                     )
                     .child(
                         Button::new("collapse-all")

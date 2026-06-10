@@ -2133,6 +2133,10 @@ TableDataGrid:
     en: Commit Changes
     zh-CN: 提交更改
     zh-HK: 提交變更
+  open_table_designer:
+    en: Open table designer
+    zh-CN: 打开表设计
+    zh-HK: 開啟表設計
   large_text_editor:
     en: Large Text Editor
     zh-CN: 大文本编辑器
@@ -2361,6 +2365,10 @@ DbTreeView:
     en: "Failed to parse connection config %{id}: %{error}"
     zh-CN: "无法解析连接配置 %{id}: %{error}"
     zh-HK: "無法解析連線設定 %{id}: %{error}"
+  locate_active_tab:
+    en: Locate active tab in tree
+    zh-CN: 在树中定位当前标签
+    zh-HK: 在樹中定位目前標籤
 ChatDbSelector:
   select_source:
     en: Select data source

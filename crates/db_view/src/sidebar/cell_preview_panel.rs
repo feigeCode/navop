@@ -63,7 +63,8 @@ impl CellPreviewPanel {
                 DataGridEvent::LargeTextSelectionChanged => {
                     this.handle_selection_changed(window, cx);
                 }
-                DataGridEvent::ToggleLargeTextEditorRequested => {}
+                DataGridEvent::ToggleLargeTextEditorRequested
+                | DataGridEvent::OpenTableDesignerRequested => {}
             },
         ));
         self.load_selected_cell(window, cx);

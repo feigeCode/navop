@@ -3,7 +3,7 @@ use crate::table_data::data_grid::{DataGrid, DataGridConfig};
 use futures::channel::oneshot;
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, SharedString, Styled, Task, Window,
+    ParentElement, Render, SharedString, Styled, Subscription, Task, Window,
 };
 use gpui_component::button::Button;
 use gpui_component::{Icon, IconName, WindowExt, button::ButtonVariants, v_flex};
@@ -11,12 +11,18 @@ use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone, Debug)]
+pub enum TableDataTabEvent {
+    OpenTableDesignerRequested,
+}
+
 pub struct TableDataTabContent {
     pub data_grid: Entity<DataGrid>,
     content: Entity<CellPreviewHost>,
     database_name: String,
     table_name: String,
     focus_handle: FocusHandle,
+    _data_grid_sub: Option<Subscription>,
 }
 
 impl TableDataTabContent {
@@ -46,6 +52,16 @@ impl TableDataTabContent {
         let data_grid = cx.new(|cx| DataGrid::new(config, window, cx));
         let content = cx.new(|cx| CellPreviewHost::new(data_grid.clone(), window, cx));
         let focus_handle = cx.focus_handle();
+        let data_grid_sub = cx.subscribe_in(
+            &data_grid,
+            window,
+            |_this, _, event: &crate::table_data::data_grid::DataGridEvent, _, cx| match event {
+                crate::table_data::data_grid::DataGridEvent::OpenTableDesignerRequested => {
+                    cx.emit(TableDataTabEvent::OpenTableDesignerRequested);
+                }
+                _ => {}
+            },
+        );
 
         Self {
             data_grid,
@@ -53,6 +69,7 @@ impl TableDataTabContent {
             database_name,
             table_name,
             focus_handle,
+            _data_grid_sub: Some(data_grid_sub),
         }
     }
 }
@@ -70,6 +87,8 @@ impl Focusable for TableDataTabContent {
 }
 
 impl EventEmitter<TabContentEvent> for TableDataTabContent {}
+
+impl EventEmitter<TableDataTabEvent> for TableDataTabContent {}
 
 impl TabContent for TableDataTabContent {
     fn content_key(&self) -> &'static str {
@@ -174,6 +193,7 @@ impl Clone for TableDataTabContent {
             database_name: self.database_name.clone(),
             table_name: self.table_name.clone(),
             focus_handle: self.focus_handle.clone(),
+            _data_grid_sub: None,
         }
     }
 }
