@@ -30,4 +30,4 @@ pub use terminal::terminal::{
 pub use theme::{
     DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, default_font_fallbacks,
 };
-pub use view::{TerminalView, init};
+pub use view::{TerminalView, init, refresh_keybindings};

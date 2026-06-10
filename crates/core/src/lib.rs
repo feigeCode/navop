@@ -10,6 +10,7 @@ pub mod connection_notifier;
 pub mod crypto;
 pub mod gpui_tokio;
 pub mod key_storage;
+pub mod keybindings;
 pub mod layout;
 pub mod license;
 pub mod llm;

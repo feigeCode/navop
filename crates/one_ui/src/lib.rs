@@ -8,6 +8,7 @@ pub use edit_table::{
     CellCoord, CellEditor, CellRange, Column, ColumnFixed, ColumnSort, EditTable,
     EditTableDelegate, EditTableEvent, EditTableState, FilterState, FilterValue, ScrollbarVisible,
     SelectNextColumn, SelectPrevColumn, TableOptions, TableSelection, TableVisibleRange,
+    refresh_keybindings,
 };
 use gpui::App;
 pub use large_text_editor::{

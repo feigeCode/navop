@@ -29,6 +29,7 @@ use one_core::cloud_sync::{
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use one_core::crypto;
 use one_core::key_storage;
+use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::license::Feature;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::traits::Repository;
@@ -54,16 +55,67 @@ use crate::user_avatar::render_user_avatar;
 actions!(home_tab, [OpenConnectionQuickOpen, NewConnectionShortcut]);
 
 pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-o", OpenConnectionQuickOpen, None),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("alt-o", OpenConnectionQuickOpen, None),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-n", NewConnectionShortcut, None),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("alt-n", NewConnectionShortcut, None),
-    ]);
+    cx.bind_keys(init_keybindings(cx));
+}
+
+pub fn refresh_keybindings(cx: &mut App) {
+    cx.bind_keys(refreshable_keybindings(cx));
+}
+
+fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
+    let quick_open_default = if cfg!(target_os = "macos") {
+        "cmd-o"
+    } else {
+        "alt-o"
+    };
+    let new_connection_default = if cfg!(target_os = "macos") {
+        "cmd-n"
+    } else {
+        "alt-n"
+    };
+    let mut keybindings = Vec::new();
+    keybindings.extend(
+        shortcuts_for(cx, action_id::HOME_QUICK_OPEN, &[quick_open_default])
+            .into_iter()
+            .map(|key| KeyBinding::new(&key, OpenConnectionQuickOpen, None)),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::HOME_NEW_CONNECTION,
+            &[new_connection_default],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, NewConnectionShortcut, None)),
+    );
+    keybindings
+}
+
+fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
+    let mut keybindings = Vec::new();
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::HOME_QUICK_OPEN,
+        &[home_default_shortcut("cmd-o", "alt-o")],
+        None,
+        OpenConnectionQuickOpen,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::HOME_NEW_CONNECTION,
+        &[home_default_shortcut("cmd-n", "alt-n")],
+        None,
+        NewConnectionShortcut,
+    ));
+    keybindings
+}
+
+fn home_default_shortcut(macos: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        macos
+    } else {
+        other
+    }
 }
 
 // HomePage Entity - 管理 home 页面的所有状态

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -6,8 +7,8 @@ use gpui::http_client::{AsyncBody, Method, Request, Url};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, InteractiveElement, IntoElement, Keystroke, ParentElement, PathPromptOptions,
-    Render, SharedString, Styled, WeakEntity, Window, div,
+    FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement,
+    PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window, div,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, Theme, ThemeMode, TitleBar,
@@ -27,6 +28,7 @@ use gpui_component::{
 use one_core::cloud_sync::GlobalCloudUser;
 use one_core::cloud_sync::UserInfo;
 use one_core::gpui_tokio::Tokio;
+use one_core::keybindings::action_id;
 use one_core::llm::manager::GlobalProviderState;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::manager::get_config_dir;
@@ -300,6 +302,8 @@ pub struct AppSettings {
     /// 表格行高（像素），默认44
     #[serde(default = "default_table_row_height")]
     pub table_row_height: u32,
+    #[serde(default)]
+    pub custom_keybindings: HashMap<String, Vec<String>>,
 }
 
 pub(crate) const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
@@ -368,6 +372,7 @@ impl Default for AppSettings {
             system_hotkey_macos: default_system_hotkey_macos(),
             system_hotkey_other: default_system_hotkey_other(),
             table_row_height: default_table_row_height(),
+            custom_keybindings: HashMap::new(),
         }
     }
 }
@@ -476,6 +481,7 @@ impl AppSettings {
             cx,
             one_ui::TableDisplaySettings::new(self.table_row_height),
         );
+        one_core::keybindings::set_overrides(self.custom_keybindings.clone(), cx);
     }
 
     /// 同步自动保存配置到全局状态
@@ -885,57 +891,9 @@ impl SettingsPanel {
                 ]),
             // 快捷键页面
             SettingPage::new(t!("Settings.Shortcuts.title")).group(
-                SettingGroup::new()
-                    .item(
-                        SettingItem::new(
-                            t!("Settings.Shortcuts.system_hotkey"),
-                            SettingField::input(
-                                |cx: &App| {
-                                    SharedString::from(
-                                        AppSettings::global(cx).current_system_hotkey().to_string(),
-                                    )
-                                },
-                                |val: SharedString, cx: &mut App| {
-                                    let spec = val.trim().to_string();
-                                    if spec.is_empty() {
-                                        let settings = AppSettings::global_mut(cx);
-                                        #[cfg(target_os = "macos")]
-                                        {
-                                            settings.system_hotkey_macos =
-                                                DEFAULT_SYSTEM_HOTKEY_MACOS.to_string();
-                                        }
-                                        #[cfg(not(target_os = "macos"))]
-                                        {
-                                            settings.system_hotkey_other =
-                                                DEFAULT_SYSTEM_HOTKEY_OTHER.to_string();
-                                        }
-                                        settings.save();
-                                        return;
-                                    }
-
-                                    if !is_valid_system_hotkey(&spec) {
-                                        return;
-                                    }
-
-                                    let settings = AppSettings::global_mut(cx);
-                                    #[cfg(target_os = "macos")]
-                                    {
-                                        settings.system_hotkey_macos = spec;
-                                    }
-                                    #[cfg(not(target_os = "macos"))]
-                                    {
-                                        settings.system_hotkey_other = spec;
-                                    }
-                                    settings.save();
-                                },
-                            )
-                            .default_value(SharedString::from(default_system_hotkey)),
-                        )
-                        .description(t!("Settings.Shortcuts.system_hotkey_desc").to_string()),
-                    )
-                    .item(SettingItem::render(move |_options, _window, cx| {
-                        render_shortcuts_section(cx)
-                    })),
+                SettingGroup::new().item(SettingItem::render(move |_options, window, cx| {
+                    render_shortcuts_section(default_system_hotkey.clone(), window, cx)
+                })),
             ),
             SettingPage::new(t!("LlmProviders.title")).group(SettingGroup::new().item(
                 SettingItem::render(move |_options, _window, _cx| {
@@ -1651,11 +1609,15 @@ fn render_account_section(_window: &mut Window, cx: &App) -> gpui::AnyElement {
 /// 快捷键条目
 struct ShortcutEntry {
     /// macOS 快捷键字符串（Keystroke::parse 格式）
-    key_macos: &'static str,
+    keys_macos: &'static [&'static str],
     /// Windows/Linux 快捷键字符串（Keystroke::parse 格式）
-    key_other: &'static str,
+    keys_other: &'static [&'static str],
     /// 国际化翻译 key
     label_key: &'static str,
+    /// 绑定层 action id；为空表示只展示，不支持自定义
+    action_id: Option<&'static str>,
+    /// 是否为系统级热键
+    system_hotkey: bool,
 }
 
 /// 快捷键分组
@@ -1666,95 +1628,317 @@ struct ShortcutGroup {
 
 const WINDOW_SHORTCUTS: &[ShortcutEntry] = &[
     ShortcutEntry {
-        key_macos: "cmd-q",
-        key_other: "alt-f4",
+        keys_macos: &["cmd-q"],
+        keys_other: &["alt-f4"],
         label_key: "Settings.Shortcuts.quit_app",
+        action_id: Some(action_id::APP_QUIT),
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: DEFAULT_SYSTEM_HOTKEY_MACOS,
-        key_other: DEFAULT_SYSTEM_HOTKEY_OTHER,
+        keys_macos: &[DEFAULT_SYSTEM_HOTKEY_MACOS],
+        keys_other: &[DEFAULT_SYSTEM_HOTKEY_OTHER],
         label_key: "Settings.Shortcuts.minimize_window",
+        action_id: None,
+        system_hotkey: true,
     },
     ShortcutEntry {
-        key_macos: "ctrl-cmd-f",
-        key_other: "alt-enter",
+        keys_macos: &["ctrl-cmd-f"],
+        keys_other: &["alt-enter"],
         label_key: "Settings.Shortcuts.toggle_fullscreen",
+        action_id: Some(action_id::WINDOW_TOGGLE_FULLSCREEN),
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: "shift-escape",
-        key_other: "shift-escape",
+        keys_macos: &["shift-escape"],
+        keys_other: &["shift-escape"],
         label_key: "Settings.Shortcuts.toggle_zoom",
+        action_id: Some(action_id::WINDOW_TOGGLE_ZOOM),
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: "ctrl-w",
-        key_other: "ctrl-w",
+        keys_macos: &["ctrl-w"],
+        keys_other: &["ctrl-w"],
         label_key: "Settings.Shortcuts.close_panel",
+        action_id: Some(action_id::WINDOW_CLOSE_PANEL),
+        system_hotkey: false,
     },
 ];
 
 const TAB_SHORTCUTS: &[ShortcutEntry] = &[
     ShortcutEntry {
-        key_macos: "cmd-1",
-        key_other: "alt-1",
+        keys_macos: &["cmd-1"],
+        keys_other: &["alt-1"],
         label_key: "Settings.Shortcuts.switch_tab_n",
+        action_id: None,
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: "shift-cmd-t",
-        key_other: "alt-shift-t",
+        keys_macos: &["shift-cmd-t"],
+        keys_other: &["alt-shift-t"],
         label_key: "Settings.Shortcuts.duplicate_tab",
+        action_id: Some(action_id::APP_DUPLICATE_TAB),
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: "cmd-o",
-        key_other: "alt-o",
+        keys_macos: &["cmd-o"],
+        keys_other: &["alt-o"],
         label_key: "Settings.Shortcuts.quick_open",
+        action_id: Some(action_id::HOME_QUICK_OPEN),
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: "cmd-n",
-        key_other: "alt-n",
+        keys_macos: &["cmd-n"],
+        keys_other: &["alt-n"],
         label_key: "Settings.Shortcuts.new_connection",
+        action_id: Some(action_id::HOME_NEW_CONNECTION),
+        system_hotkey: false,
+    },
+];
+
+const CONNECTION_SHORTCUTS: &[ShortcutEntry] = &[
+    ShortcutEntry {
+        keys_macos: &["up", "left"],
+        keys_other: &["up", "left"],
+        label_key: "Settings.Shortcuts.connection_previous_type",
+        action_id: None,
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["down", "right"],
+        keys_other: &["down", "right"],
+        label_key: "Settings.Shortcuts.connection_next_type",
+        action_id: None,
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["enter"],
+        keys_other: &["enter"],
+        label_key: "Settings.Shortcuts.connection_open_type",
+        action_id: None,
+        system_hotkey: false,
     },
 ];
 
 const TERMINAL_SHORTCUTS: &[ShortcutEntry] = &[
     ShortcutEntry {
-        key_macos: "cmd-c",
-        key_other: "ctrl-shift-c",
+        keys_macos: &["tab"],
+        keys_other: &["tab"],
+        label_key: "Settings.Shortcuts.terminal_send_tab",
+        action_id: Some(action_id::TERMINAL_SEND_TAB),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["shift-tab"],
+        keys_other: &["shift-tab"],
+        label_key: "Settings.Shortcuts.terminal_send_shift_tab",
+        action_id: Some(action_id::TERMINAL_SEND_SHIFT_TAB),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-c"],
+        keys_other: &["ctrl-shift-c"],
         label_key: "Settings.Shortcuts.terminal_copy",
+        action_id: Some(action_id::TERMINAL_COPY),
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: "cmd-v",
-        key_other: "ctrl-shift-v",
+        keys_macos: &["cmd-v"],
+        keys_other: &["ctrl-shift-v", "shift-insert"],
         label_key: "Settings.Shortcuts.terminal_paste",
+        action_id: Some(action_id::TERMINAL_PASTE),
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: "cmd-f",
-        key_other: "ctrl-shift-f",
-        label_key: "Settings.Shortcuts.terminal_search",
-    },
-    ShortcutEntry {
-        key_macos: "cmd-a",
-        key_other: "ctrl-shift-a",
+        keys_macos: &["cmd-a"],
+        keys_other: &["ctrl-shift-a"],
         label_key: "Settings.Shortcuts.terminal_select_all",
+        action_id: Some(action_id::TERMINAL_SELECT_ALL),
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: "cmd-+",
-        key_other: "ctrl-+",
+        keys_macos: &["cmd-k"],
+        keys_other: &["ctrl-l"],
+        label_key: "Settings.Shortcuts.terminal_clear_screen",
+        action_id: Some(action_id::TERMINAL_CLEAR_SCREEN),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["escape"],
+        keys_other: &["escape"],
+        label_key: "Settings.Shortcuts.terminal_clear_selection",
+        action_id: Some(action_id::TERMINAL_CLEAR_SELECTION),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-f"],
+        keys_other: &["ctrl-shift-f"],
+        label_key: "Settings.Shortcuts.terminal_search",
+        action_id: Some(action_id::TERMINAL_SEARCH_FORWARD),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-g"],
+        keys_other: &["ctrl-shift-g"],
+        label_key: "Settings.Shortcuts.terminal_search_previous",
+        action_id: Some(action_id::TERMINAL_SEARCH_BACKWARD),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-+", "cmd-="],
+        keys_other: &["ctrl-+", "ctrl-="],
         label_key: "Settings.Shortcuts.terminal_zoom_in",
+        action_id: Some(action_id::TERMINAL_INCREASE_FONT),
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: "cmd--",
-        key_other: "ctrl--",
+        keys_macos: &["cmd--"],
+        keys_other: &["ctrl--"],
         label_key: "Settings.Shortcuts.terminal_zoom_out",
+        action_id: Some(action_id::TERMINAL_DECREASE_FONT),
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: "cmd-0",
-        key_other: "ctrl-0",
+        keys_macos: &["cmd-0"],
+        keys_other: &["ctrl-0"],
         label_key: "Settings.Shortcuts.terminal_zoom_reset",
+        action_id: Some(action_id::TERMINAL_RESET_FONT),
+        system_hotkey: false,
     },
     ShortcutEntry {
-        key_macos: "f7",
-        key_other: "f7",
+        keys_macos: &["f7"],
+        keys_other: &["f7"],
         label_key: "Settings.Shortcuts.terminal_toggle_vi",
+        action_id: Some(action_id::TERMINAL_TOGGLE_VI_MODE),
+        system_hotkey: false,
+    },
+];
+
+const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[ShortcutEntry {
+    keys_macos: &["cmd-enter", "ctrl-enter"],
+    keys_other: &["cmd-enter", "ctrl-enter"],
+    label_key: "Settings.Shortcuts.sql_run_query",
+    action_id: Some(action_id::SQL_RUN_QUERY),
+    system_hotkey: false,
+}];
+
+const TABLE_SHORTCUTS: &[ShortcutEntry] = &[
+    ShortcutEntry {
+        keys_macos: &["up", "down", "left", "right"],
+        keys_other: &["up", "down", "left", "right"],
+        label_key: "Settings.Shortcuts.table_move_selection",
+        action_id: None,
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["home", "end"],
+        keys_other: &["home", "end"],
+        label_key: "Settings.Shortcuts.table_first_last",
+        action_id: None,
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["pageup", "pagedown"],
+        keys_other: &["pageup", "pagedown"],
+        label_key: "Settings.Shortcuts.table_page",
+        action_id: None,
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["tab", "shift-tab"],
+        keys_other: &["tab", "shift-tab"],
+        label_key: "Settings.Shortcuts.table_next_previous_cell",
+        action_id: None,
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-c"],
+        keys_other: &["ctrl-c"],
+        label_key: "Settings.Shortcuts.table_copy",
+        action_id: Some(action_id::TABLE_COPY),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-v"],
+        keys_other: &["ctrl-v"],
+        label_key: "Settings.Shortcuts.table_paste",
+        action_id: Some(action_id::TABLE_PASTE),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-a"],
+        keys_other: &["ctrl-a"],
+        label_key: "Settings.Shortcuts.table_select_all",
+        action_id: Some(action_id::TABLE_SELECT_ALL),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["escape"],
+        keys_other: &["escape"],
+        label_key: "Settings.Shortcuts.table_cancel",
+        action_id: Some(action_id::TABLE_CANCEL),
+        system_hotkey: false,
+    },
+];
+
+const REMOTE_EDITOR_SHORTCUTS: &[ShortcutEntry] = &[
+    ShortcutEntry {
+        keys_macos: &["cmd-f"],
+        keys_other: &["ctrl-f"],
+        label_key: "Settings.Shortcuts.remote_editor_search",
+        action_id: Some(action_id::REMOTE_EDITOR_SEARCH),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-r"],
+        keys_other: &["ctrl-r"],
+        label_key: "Settings.Shortcuts.remote_editor_replace",
+        action_id: Some(action_id::REMOTE_EDITOR_REPLACE),
+        system_hotkey: false,
+    },
+];
+
+const REDIS_CLI_SHORTCUTS: &[ShortcutEntry] = &[
+    ShortcutEntry {
+        keys_macos: &["ctrl-l"],
+        keys_other: &["ctrl-l"],
+        label_key: "Settings.Shortcuts.redis_clear_output",
+        action_id: Some(action_id::REDIS_CLEAR_OUTPUT),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-c"],
+        keys_other: &["ctrl-c"],
+        label_key: "Settings.Shortcuts.redis_copy",
+        action_id: Some(action_id::REDIS_COPY),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-v"],
+        keys_other: &["ctrl-v"],
+        label_key: "Settings.Shortcuts.redis_paste",
+        action_id: Some(action_id::REDIS_PASTE),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-a"],
+        keys_other: &["ctrl-a"],
+        label_key: "Settings.Shortcuts.redis_select_all",
+        action_id: Some(action_id::REDIS_SELECT_ALL),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["escape"],
+        keys_other: &["escape"],
+        label_key: "Settings.Shortcuts.redis_clear_selection",
+        action_id: Some(action_id::REDIS_CLEAR_SELECTION),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["tab"],
+        keys_other: &["tab"],
+        label_key: "Settings.Shortcuts.redis_complete_command",
+        action_id: Some(action_id::REDIS_COMPLETE_COMMAND),
+        system_hotkey: false,
     },
 ];
 
@@ -1768,21 +1952,56 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
         entries: TAB_SHORTCUTS,
     },
     ShortcutGroup {
+        title_key: "Settings.Shortcuts.connection_dialog",
+        entries: CONNECTION_SHORTCUTS,
+    },
+    ShortcutGroup {
         title_key: "Settings.Shortcuts.terminal",
         entries: TERMINAL_SHORTCUTS,
     },
+    ShortcutGroup {
+        title_key: "Settings.Shortcuts.database",
+        entries: DATABASE_SHORTCUTS,
+    },
+    ShortcutGroup {
+        title_key: "Settings.Shortcuts.table",
+        entries: TABLE_SHORTCUTS,
+    },
+    ShortcutGroup {
+        title_key: "Settings.Shortcuts.remote_editor",
+        entries: REMOTE_EDITOR_SHORTCUTS,
+    },
+    ShortcutGroup {
+        title_key: "Settings.Shortcuts.redis_cli",
+        entries: REDIS_CLI_SHORTCUTS,
+    },
 ];
 
-fn shortcut_spec_for_entry(entry: &ShortcutEntry, cx: &App) -> String {
-    if entry.label_key == "Settings.Shortcuts.minimize_window" {
-        return AppSettings::global(cx).current_system_hotkey().to_string();
+#[derive(Clone)]
+struct ShortcutCaptureState {
+    active_editor_id: Option<&'static str>,
+    invalid_capture: bool,
+    focus_handle: FocusHandle,
+}
+
+fn shortcut_specs_for_entry(entry: &ShortcutEntry, cx: &App) -> Vec<String> {
+    if entry.system_hotkey {
+        return vec![AppSettings::global(cx).current_system_hotkey().to_string()];
+    }
+    if let Some(action_id) = entry.action_id {
+        if let Some(shortcuts) = AppSettings::global(cx).custom_keybindings.get(action_id) {
+            if !shortcuts.is_empty() {
+                return shortcuts.clone();
+            }
+        }
     }
 
-    if cfg!(target_os = "macos") {
-        entry.key_macos.to_string()
+    let specs = if cfg!(target_os = "macos") {
+        entry.keys_macos
     } else {
-        entry.key_other.to_string()
-    }
+        entry.keys_other
+    };
+    specs.iter().map(|spec| spec.to_string()).collect()
 }
 
 fn render_shortcut_value(key_str: &str, cx: &App) -> gpui::AnyElement {
@@ -1796,9 +2015,262 @@ fn render_shortcut_value(key_str: &str, cx: &App) -> gpui::AnyElement {
     }
 }
 
+fn render_shortcut_values(key_specs: &[String], cx: &App) -> gpui::AnyElement {
+    h_flex()
+        .gap_1()
+        .flex_wrap()
+        .justify_end()
+        .children(key_specs.iter().map(|key| render_shortcut_value(key, cx)))
+        .into_any_element()
+}
+
+fn set_current_system_hotkey(spec: String, cx: &mut App) {
+    let settings = AppSettings::global_mut(cx);
+    #[cfg(target_os = "macos")]
+    {
+        settings.system_hotkey_macos = spec;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        settings.system_hotkey_other = spec;
+    }
+    settings.save();
+    crate::app_init::refresh_system_hotkey(cx);
+}
+
+fn set_custom_keybinding(action_id: &str, spec: String, cx: &mut App) {
+    let overrides = {
+        let settings = AppSettings::global_mut(cx);
+        settings
+            .custom_keybindings
+            .insert(action_id.to_string(), vec![spec]);
+        settings.save();
+        settings.custom_keybindings.clone()
+    };
+    one_core::keybindings::set_overrides(overrides, cx);
+    crate::onetcli_app::refresh_keybindings(cx);
+}
+
+fn reset_custom_keybinding(action_id: &str, cx: &mut App) {
+    let overrides = {
+        let settings = AppSettings::global_mut(cx);
+        settings.custom_keybindings.remove(action_id);
+        settings.save();
+        settings.custom_keybindings.clone()
+    };
+    one_core::keybindings::set_overrides(overrides, cx);
+    crate::onetcli_app::refresh_keybindings(cx);
+}
+
+fn shortcut_spec_from_keystroke(keystroke: &Keystroke) -> Option<String> {
+    let key = keystroke.key.as_str();
+    if matches!(key, "ctrl" | "control" | "alt" | "shift" | "cmd" | "win") {
+        return None;
+    }
+
+    let mut tokens: Vec<&str> = Vec::with_capacity(5);
+    if keystroke.modifiers.control {
+        tokens.push("ctrl");
+    }
+    if keystroke.modifiers.alt {
+        tokens.push("alt");
+    }
+    if keystroke.modifiers.shift {
+        tokens.push("shift");
+    }
+    if keystroke.modifiers.platform {
+        tokens.push("cmd");
+    }
+    tokens.push(key);
+    Some(tokens.join("-"))
+}
+
+fn capture_shortcut(
+    event: &KeyDownEvent,
+    action_id: Option<&'static str>,
+    system_hotkey: bool,
+    state: &Entity<ShortcutCaptureState>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.prevent_default();
+    cx.stop_propagation();
+
+    if event.keystroke.key == "escape" {
+        state.update(cx, |state, cx| {
+            state.active_editor_id = None;
+            state.invalid_capture = false;
+            cx.notify();
+        });
+        return;
+    }
+
+    let Some(spec) = shortcut_spec_from_keystroke(&event.keystroke) else {
+        return;
+    };
+
+    let is_valid = if system_hotkey {
+        is_valid_system_hotkey(&spec)
+    } else {
+        Keystroke::parse(&spec).is_ok()
+    };
+
+    if !is_valid {
+        state.update(cx, |state, cx| {
+            state.invalid_capture = true;
+            cx.notify();
+        });
+        return;
+    }
+
+    if system_hotkey {
+        set_current_system_hotkey(spec, cx);
+    } else if let Some(action_id) = action_id {
+        set_custom_keybinding(action_id, spec, cx);
+    }
+    state.update(cx, |state, cx| {
+        state.active_editor_id = None;
+        state.invalid_capture = false;
+        cx.notify();
+    });
+}
+
+fn render_shortcut_editor(
+    entry: &'static ShortcutEntry,
+    key_specs: &[String],
+    default_system_hotkey: String,
+    state: Entity<ShortcutCaptureState>,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let editor_id = entry.label_key;
+    let editing = state.read(cx).active_editor_id == Some(editor_id);
+    let invalid_capture = state.read(cx).invalid_capture;
+    let focus_handle = state.read(cx).focus_handle.clone();
+
+    if editing {
+        return h_flex()
+            .gap_2()
+            .items_center()
+            .track_focus(&focus_handle)
+            .on_key_down({
+                let state = state.clone();
+                move |event, window, cx| {
+                    capture_shortcut(
+                        event,
+                        entry.action_id,
+                        entry.system_hotkey,
+                        &state,
+                        window,
+                        cx,
+                    )
+                }
+            })
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(if invalid_capture {
+                        cx.theme().danger
+                    } else {
+                        cx.theme().border
+                    })
+                    .text_sm()
+                    .text_color(if invalid_capture {
+                        cx.theme().danger
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .child(if invalid_capture {
+                        t!("Settings.Shortcuts.invalid_hotkey").to_string()
+                    } else {
+                        t!("Settings.Shortcuts.press_shortcut").to_string()
+                    }),
+            )
+            .child(
+                Button::new("system-hotkey-cancel")
+                    .label(t!("Common.cancel").to_string())
+                    .ghost()
+                    .xsmall()
+                    .on_click({
+                        let state = state.clone();
+                        move |_, _, cx| {
+                            state.update(cx, |state, cx| {
+                                state.active_editor_id = None;
+                                state.invalid_capture = false;
+                                cx.notify();
+                            });
+                        }
+                    }),
+            )
+            .into_any_element();
+    }
+
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(render_shortcut_values(key_specs, cx))
+        .child(
+            h_flex()
+                .gap_1()
+                .invisible()
+                .group_hover("shortcut-row", |this| this.visible())
+                .child(
+                    Button::new("system-hotkey-edit")
+                        .icon(IconName::Edit)
+                        .ghost()
+                        .xsmall()
+                        .tooltip(t!("Common.edit").to_string())
+                        .on_click({
+                            let state = state.clone();
+                            let focus_handle = focus_handle.clone();
+                            move |_, window, cx| {
+                                state.update(cx, |state, cx| {
+                                    state.active_editor_id = Some(editor_id);
+                                    state.invalid_capture = false;
+                                    cx.notify();
+                                });
+                                focus_handle.focus(window, cx);
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("system-hotkey-reset")
+                        .icon(IconName::Refresh)
+                        .ghost()
+                        .xsmall()
+                        .tooltip(t!("Settings.Shortcuts.reset").to_string())
+                        .on_click(move |_, _, cx| {
+                            if entry.system_hotkey {
+                                set_current_system_hotkey(default_system_hotkey.clone(), cx);
+                            } else if let Some(action_id) = entry.action_id {
+                                reset_custom_keybinding(action_id, cx);
+                            }
+                        }),
+                ),
+        )
+        .into_any_element()
+}
+
 /// 渲染快捷键说明页面
-fn render_shortcuts_section(cx: &App) -> gpui::AnyElement {
-    let mut container = v_flex().gap_4().p_4();
+fn render_shortcuts_section(
+    default_system_hotkey: String,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let capture_state =
+        window.use_keyed_state("system-hotkey-capture", cx, |_, cx| ShortcutCaptureState {
+            active_editor_id: None,
+            invalid_capture: false,
+            focus_handle: cx.focus_handle(),
+        });
+    let mut container = v_flex().gap_4().p_4().child(
+        div()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(t!("Settings.Shortcuts.system_hotkey_desc").to_string()),
+    );
 
     for group in SHORTCUT_GROUPS {
         let mut group_container = v_flex().gap_2();
@@ -1815,20 +2287,34 @@ fn render_shortcuts_section(cx: &App) -> gpui::AnyElement {
         let mut list = v_flex().gap_1().pl_2();
 
         for entry in group.entries {
-            let key_str = shortcut_spec_for_entry(entry, cx);
+            let key_specs = shortcut_specs_for_entry(entry, cx);
+            let value = if entry.system_hotkey || entry.action_id.is_some() {
+                render_shortcut_editor(
+                    entry,
+                    &key_specs,
+                    default_system_hotkey.clone(),
+                    capture_state.clone(),
+                    cx,
+                )
+            } else {
+                render_shortcut_values(&key_specs, cx)
+            };
 
             list = list.child(
                 h_flex()
+                    .group("shortcut-row")
                     .items_center()
                     .justify_between()
+                    .gap_3()
                     .py_1()
                     .child(
                         div()
+                            .flex_1()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(t!(entry.label_key).to_string()),
                     )
-                    .child(render_shortcut_value(&key_str, cx)),
+                    .child(value),
             );
         }
 
@@ -1882,6 +2368,13 @@ mod tests {
             proxy_url.as_str(),
             "http://demo-user:demo-pass@proxy.example.com:8080/"
         );
+    }
+
+    #[test]
+    fn app_settings_defaults_custom_keybindings_for_legacy_config() {
+        let settings: AppSettings = serde_json::from_str("{}").unwrap();
+
+        assert!(settings.custom_keybindings.is_empty());
     }
 
     #[test]

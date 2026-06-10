@@ -20,6 +20,7 @@ use gpui_component::{
 };
 use one_core::{
     gpui_tokio::Tokio,
+    keybindings::{action_id, rebind_keybindings, shortcuts_for},
     popup_window::{PopupWindowOptions, open_popup_window},
 };
 use rust_i18n::t;
@@ -133,19 +134,46 @@ fn clear_editor_window() {
 
 fn init_keybindings(cx: &mut App) {
     REMOTE_EDITOR_KEYBINDINGS_INIT.call_once(|| {
-        cx.bind_keys([
-            KeyBinding::new(
-                search_shortcut(),
-                OpenSearch,
-                Some(REMOTE_FILE_EDITOR_CONTEXT),
-            ),
-            KeyBinding::new(
-                replace_shortcut(),
-                OpenReplace,
-                Some(REMOTE_FILE_EDITOR_CONTEXT),
-            ),
-        ]);
+        cx.bind_keys(init_keybinding_items(cx));
     });
+}
+
+pub fn refresh_keybindings(cx: &mut App) {
+    cx.bind_keys(refreshable_keybindings(cx));
+}
+
+fn init_keybinding_items(cx: &App) -> Vec<KeyBinding> {
+    let mut keybindings = Vec::new();
+    keybindings.extend(
+        shortcuts_for(cx, action_id::REMOTE_EDITOR_SEARCH, &[search_shortcut()])
+            .into_iter()
+            .map(|key| KeyBinding::new(&key, OpenSearch, Some(REMOTE_FILE_EDITOR_CONTEXT))),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::REMOTE_EDITOR_REPLACE, &[replace_shortcut()])
+            .into_iter()
+            .map(|key| KeyBinding::new(&key, OpenReplace, Some(REMOTE_FILE_EDITOR_CONTEXT))),
+    );
+    keybindings
+}
+
+fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
+    let mut keybindings = Vec::new();
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::REMOTE_EDITOR_SEARCH,
+        &[search_shortcut()],
+        Some(REMOTE_FILE_EDITOR_CONTEXT),
+        OpenSearch,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::REMOTE_EDITOR_REPLACE,
+        &[replace_shortcut()],
+        Some(REMOTE_FILE_EDITOR_CONTEXT),
+        OpenReplace,
+    ));
+    keybindings
 }
 
 fn search_shortcut() -> &'static str {

@@ -5,6 +5,7 @@ use gpui::{
     Window, actions, div,
 };
 use gpui_component::WindowExt;
+use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 
 actions!(
     onetcli_app,
@@ -118,6 +119,14 @@ fn quit_app(cx: &mut App) {
     cx.quit();
 }
 
+fn default_shortcut(macos: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        macos
+    } else {
+        other
+    }
+}
+
 fn init_tracing(settings: &AppSettings) {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
@@ -182,6 +191,7 @@ fn log_file_appender(path: &Path) -> std::io::Result<std::fs::File> {
 pub fn init(cx: &mut App) {
     let settings = AppSettings::load();
     init_tracing(&settings);
+    one_core::keybindings::set_overrides(settings.custom_keybindings.clone(), cx);
     let http_client = build_app_http_client(&settings.global_proxy).expect("HTTP 客户端初始化失败");
     cx.set_http_client(http_client);
     gpui_component::init(cx);
@@ -205,9 +215,38 @@ pub fn init(cx: &mut App) {
     redis_view::init(cx);
     mongodb_view::init(cx);
     crate::home_tab::init(cx);
-    let keybindings = vec![
-        KeyBinding::new("shift-escape", ToggleZoom, None),
-        KeyBinding::new("ctrl-w", ClosePanel, None),
+    cx.bind_keys(init_keybindings(cx));
+    init_action_handlers(cx);
+
+    let registry = TabContentRegistry::new();
+    cx.set_global(registry);
+
+    cx.activate(true);
+}
+
+pub fn refresh_keybindings(cx: &mut App) {
+    cx.bind_keys(refreshable_keybindings(cx));
+    crate::home_tab::refresh_keybindings(cx);
+    db_view::sql_editor_view::refresh_keybindings(cx);
+    terminal_view::refresh_keybindings(cx);
+    redis_view::refresh_keybindings(cx);
+    one_ui::refresh_keybindings(cx);
+    remote_file_editor::refresh_keybindings(cx);
+}
+
+fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
+    let mut keybindings = vec![];
+    keybindings.extend(
+        shortcuts_for(cx, action_id::WINDOW_TOGGLE_ZOOM, &["shift-escape"])
+            .into_iter()
+            .map(|key| KeyBinding::new(&key, ToggleZoom, None)),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::WINDOW_CLOSE_PANEL, &["ctrl-w"])
+            .into_iter()
+            .map(|key| KeyBinding::new(&key, ClosePanel, None)),
+    );
+    keybindings.extend(vec![
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-1", ActivateTab1, None),
         #[cfg(target_os = "macos")]
@@ -244,22 +283,79 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("alt-8", ActivateTab8, None),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("alt-9", ActivateTab9, None),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("ctrl-cmd-f", ToggleFullscreen, None),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("alt-enter", ToggleFullscreen, None),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-shift-t", DuplicateTab, None),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("alt-shift-t", DuplicateTab, None),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-q", QuitApp, None),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("alt-f4", QuitApp, None),
-    ];
+    ]);
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::WINDOW_TOGGLE_FULLSCREEN,
+            &[default_shortcut("ctrl-cmd-f", "alt-enter")],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, ToggleFullscreen, None)),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::APP_DUPLICATE_TAB,
+            &[default_shortcut("cmd-shift-t", "alt-shift-t")],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, DuplicateTab, None)),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::APP_QUIT,
+            &[default_shortcut("cmd-q", "alt-f4")],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, QuitApp, None)),
+    );
 
-    cx.bind_keys(keybindings);
+    keybindings
+}
 
+fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
+    let mut keybindings = Vec::new();
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::WINDOW_TOGGLE_ZOOM,
+        &["shift-escape"],
+        None,
+        ToggleZoom,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::WINDOW_CLOSE_PANEL,
+        &["ctrl-w"],
+        None,
+        ClosePanel,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::WINDOW_TOGGLE_FULLSCREEN,
+        &[default_shortcut("ctrl-cmd-f", "alt-enter")],
+        None,
+        ToggleFullscreen,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::APP_DUPLICATE_TAB,
+        &[default_shortcut("cmd-shift-t", "alt-shift-t")],
+        None,
+        DuplicateTab,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::APP_QUIT,
+        &[default_shortcut("cmd-q", "alt-f4")],
+        None,
+        QuitApp,
+    ));
+    keybindings
+}
+
+fn init_action_handlers(cx: &mut App) {
     cx.on_action(|_: &ActivateTab1, cx| activate_tab_by_number(1, cx));
     cx.on_action(|_: &ActivateTab2, cx| activate_tab_by_number(2, cx));
     cx.on_action(|_: &ActivateTab3, cx| activate_tab_by_number(3, cx));
@@ -310,11 +406,6 @@ pub fn init(cx: &mut App) {
             });
         });
     });
-
-    let registry = TabContentRegistry::new();
-    cx.set_global(registry);
-
-    cx.activate(true);
 }
 
 pub struct OnetCliApp {

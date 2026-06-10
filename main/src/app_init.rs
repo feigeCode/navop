@@ -32,6 +32,14 @@ pub(crate) fn is_valid_system_hotkey(_spec: &str) -> bool {
     false
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub(crate) fn refresh_system_hotkey(cx: &mut App) {
+    system_hotkey::refresh(cx);
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+pub(crate) fn refresh_system_hotkey(_cx: &mut App) {}
+
 fn pick_toggle_target<T: Copy>(
     registered: Option<T>,
     stacked: Option<&[T]>,
@@ -51,11 +59,13 @@ mod system_hotkey {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     use crate::setting_tab::DEFAULT_SYSTEM_HOTKEY_OTHER;
     use gpui::{AppContext, AsyncApp, Keystroke, Window};
-    use std::sync::{OnceLock, mpsc};
+    use std::sync::{Mutex, OnceLock, mpsc};
 
     const HOTKEY_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
-    static TOGGLE_HOTKEY_ID: OnceLock<u32> = OnceLock::new();
+    static TOGGLE_HOTKEY: OnceLock<Mutex<Option<HotKey>>> = OnceLock::new();
+    static TOGGLE_HOTKEY_ID: OnceLock<Mutex<Option<u32>>> = OnceLock::new();
+    static HOTKEY_MANAGER: OnceLock<Option<GlobalHotKeyManager>> = OnceLock::new();
     static TOGGLE_REQUEST_TX: OnceLock<mpsc::Sender<()>> = OnceLock::new();
     static REGISTERED: OnceLock<()> = OnceLock::new();
 
@@ -68,13 +78,10 @@ mod system_hotkey {
 
         install_toggle_dispatcher(cx);
 
-        // ✅ 关键：局部创建（不能 static）
-        let manager = GlobalHotKeyManager::new()
-            .map_err(|err| {
-                tracing::warn!("系统级热键管理器初始化失败: {err:?}");
-            })
-            .ok()
-            .expect("GlobalHotKeyManager 初始化失败");
+        let manager = hotkey_manager();
+        let Some(manager) = manager.as_ref() else {
+            return;
+        };
 
         let hotkey = build_toggle_hotkey(cx);
         let hotkey_id = hotkey.id();
@@ -84,16 +91,36 @@ mod system_hotkey {
             return;
         }
 
-        let _ = TOGGLE_HOTKEY_ID.set(hotkey_id);
+        set_registered_hotkey(Some(hotkey), Some(hotkey_id));
 
         GlobalHotKeyEvent::set_event_handler(Some(handle_hotkey_event));
+    }
 
-        // ⚠️ 防止 drop（否则热键失效）
-        std::mem::forget(manager);
+    pub fn refresh(cx: &mut App) {
+        let manager = hotkey_manager();
+        let Some(manager) = manager.as_ref() else {
+            return;
+        };
+
+        if let Some(old_hotkey) = current_hotkey() {
+            if let Err(err) = manager.unregister(old_hotkey) {
+                tracing::warn!("系统级热键注销失败: {err:?}");
+            }
+        }
+
+        let hotkey = build_toggle_hotkey(cx);
+        let hotkey_id = hotkey.id();
+        if let Err(err) = manager.register(hotkey) {
+            tracing::warn!("系统级热键刷新注册失败: {err:?}");
+            set_registered_hotkey(None, None);
+            return;
+        }
+
+        set_registered_hotkey(Some(hotkey), Some(hotkey_id));
     }
 
     fn handle_hotkey_event(event: GlobalHotKeyEvent) {
-        let Some(&registered_id) = TOGGLE_HOTKEY_ID.get() else {
+        let Some(registered_id) = current_hotkey_id() else {
             return;
         };
 
@@ -103,6 +130,41 @@ mod system_hotkey {
                     tracing::warn!("主窗口热键事件派发失败: {err}");
                 }
             }
+        }
+    }
+
+    fn hotkey_manager() -> &'static Option<GlobalHotKeyManager> {
+        HOTKEY_MANAGER.get_or_init(|| {
+            GlobalHotKeyManager::new()
+                .map_err(|err| {
+                    tracing::warn!("系统级热键管理器初始化失败: {err:?}");
+                })
+                .ok()
+        })
+    }
+
+    fn current_hotkey() -> Option<HotKey> {
+        TOGGLE_HOTKEY
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .ok()
+            .and_then(|hotkey| *hotkey)
+    }
+
+    fn current_hotkey_id() -> Option<u32> {
+        TOGGLE_HOTKEY_ID
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .ok()
+            .and_then(|id| *id)
+    }
+
+    fn set_registered_hotkey(hotkey: Option<HotKey>, hotkey_id: Option<u32>) {
+        if let Ok(mut current) = TOGGLE_HOTKEY.get_or_init(|| Mutex::new(None)).lock() {
+            *current = hotkey;
+        }
+        if let Ok(mut current_id) = TOGGLE_HOTKEY_ID.get_or_init(|| Mutex::new(None)).lock() {
+            *current_id = hotkey_id;
         }
     }
 

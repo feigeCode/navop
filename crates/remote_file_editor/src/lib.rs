@@ -7,7 +7,7 @@ mod file_policy;
 mod language;
 
 #[cfg(feature = "ui")]
-pub use editor_window::open_remote_file_editor;
+pub use editor_window::{open_remote_file_editor, refresh_keybindings};
 
 pub use close_guard::{
     CloseIntercept, active_index_after_close, active_index_after_open, decide_close_intercept,

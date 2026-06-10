@@ -13,6 +13,7 @@ use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, WindowExt, h_flex, v_flex,
 };
+use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::storage::DatabaseType;
 use one_core::storage::manager::get_queries_dir;
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
@@ -35,9 +36,28 @@ const RUN_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-enter", "ctrl-enter"];
 gpui::actions!(sql_editor_view, [RunQuery]);
 
 pub fn init(cx: &mut App) {
-    cx.bind_keys(
-        RUN_QUERY_KEY_BINDINGS.map(|key| KeyBinding::new(key, RunQuery, Some(SQL_EDITOR_CONTEXT))),
-    );
+    cx.bind_keys(init_keybindings(cx));
+}
+
+pub fn refresh_keybindings(cx: &mut App) {
+    cx.bind_keys(refreshable_keybindings(cx));
+}
+
+fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
+    shortcuts_for(cx, action_id::SQL_RUN_QUERY, &RUN_QUERY_KEY_BINDINGS)
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, RunQuery, Some(SQL_EDITOR_CONTEXT)))
+        .collect()
+}
+
+fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
+    rebind_keybindings(
+        cx,
+        action_id::SQL_RUN_QUERY,
+        &RUN_QUERY_KEY_BINDINGS,
+        Some(SQL_EDITOR_CONTEXT),
+        RunQuery,
+    )
 }
 
 fn sql_text_for_run(editor_text: &str, selected_text: &str) -> String {

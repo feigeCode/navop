@@ -8,6 +8,7 @@ mod state;
 
 use gpui::{App, KeyBinding};
 use gpui_component::Size;
+use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 
 pub(crate) use column::{ColGroup, DragColumn, DragSelectCell, ResizeColumn};
 pub use column::{Column, ColumnFixed, ColumnSort};
@@ -27,8 +28,21 @@ gpui::actions!(edit_table, [SelectPrevColumn, SelectNextColumn]);
 
 /// 初始化 EditTable 的键盘绑定
 pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("escape", Cancel, Some(CONTEXT)),
+    cx.bind_keys(init_keybindings(cx));
+}
+
+pub fn refresh_keybindings(cx: &mut App) {
+    cx.bind_keys(refreshable_keybindings(cx));
+}
+
+fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
+    let mut keybindings = Vec::new();
+    keybindings.extend(
+        shortcuts_for(cx, action_id::TABLE_CANCEL, &["escape"])
+            .into_iter()
+            .map(|key| KeyBinding::new(&key, Cancel, Some(CONTEXT))),
+    );
+    keybindings.extend([
         KeyBinding::new("up", SelectUp, Some(CONTEXT)),
         KeyBinding::new("down", SelectDown, Some(CONTEXT)),
         KeyBinding::new("left", SelectPrevColumn, Some(CONTEXT)),
@@ -37,25 +51,80 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("end", SelectLast, Some(CONTEXT)),
         KeyBinding::new("pageup", SelectPageUp, Some(CONTEXT)),
         KeyBinding::new("pagedown", SelectPageDown, Some(CONTEXT)),
-        // 复制 (Ctrl+C / Cmd+C)
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-c", Copy, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-c", Copy, Some(CONTEXT)),
-        // 粘贴 (Ctrl+V / Cmd+V)
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-v", Paste, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-v", Paste, Some(CONTEXT)),
-        // 全选 (Ctrl+A / Cmd+A)
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-a", SelectAll, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-a", SelectAll, Some(CONTEXT)),
-        // 单元格导航
+    ]);
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::TABLE_COPY,
+            &[table_platform_shortcut("cmd-c", "ctrl-c")],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, Copy, Some(CONTEXT))),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::TABLE_PASTE,
+            &[table_platform_shortcut("cmd-v", "ctrl-v")],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, Paste, Some(CONTEXT))),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::TABLE_SELECT_ALL,
+            &[table_platform_shortcut("cmd-a", "ctrl-a")],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, SelectAll, Some(CONTEXT))),
+    );
+    keybindings.extend([
         KeyBinding::new("tab", SelectNextColumn, Some(CONTEXT)),
         KeyBinding::new("shift-tab", SelectPrevColumn, Some(CONTEXT)),
     ]);
+    keybindings
+}
+
+fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
+    let mut keybindings = Vec::new();
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::TABLE_CANCEL,
+        &["escape"],
+        Some(CONTEXT),
+        Cancel,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::TABLE_COPY,
+        &[table_platform_shortcut("cmd-c", "ctrl-c")],
+        Some(CONTEXT),
+        Copy,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::TABLE_PASTE,
+        &[table_platform_shortcut("cmd-v", "ctrl-v")],
+        Some(CONTEXT),
+        Paste,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::TABLE_SELECT_ALL,
+        &[table_platform_shortcut("cmd-a", "ctrl-a")],
+        Some(CONTEXT),
+        SelectAll,
+    ));
+    keybindings
+}
+
+fn table_platform_shortcut(macos: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        macos
+    } else {
+        other
+    }
 }
 
 #[derive(Clone, Copy, Default)]

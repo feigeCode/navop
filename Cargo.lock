@@ -6058,6 +6058,7 @@ dependencies = [
  "one-core",
  "one-ui",
  "redis_view",
+ "remote_file_editor",
  "reqwest_client",
  "rust-i18n",
  "semver",
@@ -7112,6 +7113,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "json5",
+ "one-core",
  "serde_json",
  "tracing",
 ]

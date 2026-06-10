@@ -803,9 +803,21 @@ Settings:
       zh-CN: 系统热键
       zh-HK: 系統熱鍵
     system_hotkey_desc:
-      en: Customize the global window toggle hotkey with keystroke syntax like cmd-alt-m or ctrl-space. Changes take effect after restarting the app, and invalid input is ignored.
-      zh-CN: 使用类似 cmd-alt-m 或 ctrl-space 的快捷键格式自定义全局窗口切换热键。修改后需重启应用生效，非法输入不会保存。
-      zh-HK: 使用類似 cmd-alt-m 或 ctrl-space 的快捷鍵格式自定義全域視窗切換熱鍵。修改後需重新啟動應用生效，非法輸入不會保存。
+      en: Customize shortcuts with keystroke syntax like cmd-alt-m or ctrl-space. Invalid input is ignored.
+      zh-CN: 使用类似 cmd-alt-m 或 ctrl-space 的快捷键格式自定义快捷键。非法输入不会保存。
+      zh-HK: 使用類似 cmd-alt-m 或 ctrl-space 的快捷鍵格式自定義快捷鍵。非法輸入不會保存。
+    press_shortcut:
+      en: Press shortcut
+      zh-CN: 按下快捷键
+      zh-HK: 按下快捷鍵
+    invalid_hotkey:
+      en: Invalid shortcut
+      zh-CN: 快捷键不可用
+      zh-HK: 快捷鍵不可用
+    reset:
+      en: Reset
+      zh-CN: 重置
+      zh-HK: 重置
     window:
       en: Window Management
       zh-CN: 窗口管理
@@ -818,10 +830,30 @@ Settings:
       en: Tabs
       zh-CN: 标签页
       zh-HK: 標籤頁
+    connection_dialog:
+      en: New Connection Dialog
+      zh-CN: 新建连接弹窗
+      zh-HK: 新建連線彈窗
     terminal:
       en: Terminal
       zh-CN: 终端
       zh-HK: 終端
+    database:
+      en: SQL Editor
+      zh-CN: SQL 编辑器
+      zh-HK: SQL 編輯器
+    table:
+      en: Data Table
+      zh-CN: 数据表格
+      zh-HK: 數據表格
+    remote_editor:
+      en: Remote File Editor
+      zh-CN: 远程文件编辑器
+      zh-HK: 遠端檔案編輯器
+    redis_cli:
+      en: Redis CLI
+      zh-CN: Redis CLI
+      zh-HK: Redis CLI
     minimize_window:
       en: Minimize / Activate Window
       zh-CN: 最小化 / 激活窗口
@@ -854,6 +886,26 @@ Settings:
       en: New Connection
       zh-CN: 新建连接
       zh-HK: 新建連線
+    connection_previous_type:
+      en: Previous Connection Type
+      zh-CN: 上一个连接类型
+      zh-HK: 上一個連線類型
+    connection_next_type:
+      en: Next Connection Type
+      zh-CN: 下一个连接类型
+      zh-HK: 下一個連線類型
+    connection_open_type:
+      en: Open Selected Type
+      zh-CN: 打开选中类型
+      zh-HK: 打開選中類型
+    terminal_send_tab:
+      en: Send Tab
+      zh-CN: 发送 Tab
+      zh-HK: 發送 Tab
+    terminal_send_shift_tab:
+      en: Send Shift+Tab
+      zh-CN: 发送 Shift+Tab
+      zh-HK: 發送 Shift+Tab
     terminal_copy:
       en: Copy
       zh-CN: 复制
@@ -866,10 +918,22 @@ Settings:
       en: Search
       zh-CN: 搜索
       zh-HK: 搜尋
+    terminal_search_previous:
+      en: Previous Search Match
+      zh-CN: 上一个搜索结果
+      zh-HK: 上一個搜尋結果
     terminal_select_all:
       en: Select All
       zh-CN: 全选
       zh-HK: 全選
+    terminal_clear_screen:
+      en: Clear Screen
+      zh-CN: 清屏
+      zh-HK: 清屏
+    terminal_clear_selection:
+      en: Clear Selection
+      zh-CN: 清除选区
+      zh-HK: 清除選區
     terminal_zoom_in:
       en: Zoom In
       zh-CN: 放大字体
@@ -886,6 +950,74 @@ Settings:
       en: Toggle Vi Mode
       zh-CN: 切换 Vi 模式
       zh-HK: 切換 Vi 模式
+    sql_run_query:
+      en: Run Query
+      zh-CN: 执行查询
+      zh-HK: 執行查詢
+    table_move_selection:
+      en: Move Selection
+      zh-CN: 移动选区
+      zh-HK: 移動選區
+    table_first_last:
+      en: First / Last Row
+      zh-CN: 首行 / 末行
+      zh-HK: 首行 / 末行
+    table_page:
+      en: Page Up / Down
+      zh-CN: 上下翻页
+      zh-HK: 上下翻頁
+    table_next_previous_cell:
+      en: Next / Previous Cell
+      zh-CN: 下一个 / 上一个单元格
+      zh-HK: 下一個 / 上一個儲存格
+    table_copy:
+      en: Copy
+      zh-CN: 复制
+      zh-HK: 複製
+    table_paste:
+      en: Paste
+      zh-CN: 粘贴
+      zh-HK: 貼上
+    table_select_all:
+      en: Select All
+      zh-CN: 全选
+      zh-HK: 全選
+    table_cancel:
+      en: Cancel Selection
+      zh-CN: 取消选择
+      zh-HK: 取消選擇
+    remote_editor_search:
+      en: Search
+      zh-CN: 搜索
+      zh-HK: 搜尋
+    remote_editor_replace:
+      en: Replace
+      zh-CN: 替换
+      zh-HK: 取代
+    redis_clear_output:
+      en: Clear Output
+      zh-CN: 清空输出
+      zh-HK: 清空輸出
+    redis_copy:
+      en: Copy
+      zh-CN: 复制
+      zh-HK: 複製
+    redis_paste:
+      en: Paste
+      zh-CN: 粘贴
+      zh-HK: 貼上
+    redis_select_all:
+      en: Select All
+      zh-CN: 全选
+      zh-HK: 全選
+    redis_clear_selection:
+      en: Clear Selection
+      zh-CN: 清除选区
+      zh-HK: 清除選區
+    redis_complete_command:
+      en: Complete Command
+      zh-CN: 补全命令
+      zh-HK: 補全命令
 
   # 关于页面
   About:

@@ -22,6 +22,7 @@ use gpui_component::{
     scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow},
 };
 use one_core::gpui_tokio::Tokio;
+use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use rust_i18n::t;
 use std::cell::{Cell, RefCell};
@@ -275,21 +276,53 @@ impl ScrollbarHandle for RedisCliScrollbarHandle {
 
 /// 注册键绑定
 pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        gpui::KeyBinding::new("ctrl-l", ClearOutput, Some(REDIS_CLI_CONTEXT)),
-        #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-c", Copy, Some(REDIS_CLI_CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-c", Copy, Some(REDIS_CLI_CONTEXT)),
-        #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-v", Paste, Some(REDIS_CLI_CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-v", Paste, Some(REDIS_CLI_CONTEXT)),
-        #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-a", SelectAll, Some(REDIS_CLI_CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-a", SelectAll, Some(REDIS_CLI_CONTEXT)),
-        gpui::KeyBinding::new("escape", ClearSelection, Some(REDIS_CLI_CONTEXT)),
+    cx.bind_keys(init_keybindings(cx));
+}
+
+pub fn refresh_keybindings(cx: &mut App) {
+    cx.bind_keys(refreshable_keybindings(cx));
+}
+
+fn init_keybindings(cx: &App) -> Vec<gpui::KeyBinding> {
+    let mut keybindings = Vec::new();
+    keybindings.extend(
+        shortcuts_for(cx, action_id::REDIS_CLEAR_OUTPUT, &["ctrl-l"])
+            .into_iter()
+            .map(|key| gpui::KeyBinding::new(&key, ClearOutput, Some(REDIS_CLI_CONTEXT))),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::REDIS_COPY,
+            &[redis_platform_shortcut("cmd-c", "ctrl-c")],
+        )
+        .into_iter()
+        .map(|key| gpui::KeyBinding::new(&key, Copy, Some(REDIS_CLI_CONTEXT))),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::REDIS_PASTE,
+            &[redis_platform_shortcut("cmd-v", "ctrl-v")],
+        )
+        .into_iter()
+        .map(|key| gpui::KeyBinding::new(&key, Paste, Some(REDIS_CLI_CONTEXT))),
+    );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::REDIS_SELECT_ALL,
+            &[redis_platform_shortcut("cmd-a", "ctrl-a")],
+        )
+        .into_iter()
+        .map(|key| gpui::KeyBinding::new(&key, SelectAll, Some(REDIS_CLI_CONTEXT))),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::REDIS_CLEAR_SELECTION, &["escape"])
+            .into_iter()
+            .map(|key| gpui::KeyBinding::new(&key, ClearSelection, Some(REDIS_CLI_CONTEXT))),
+    );
+    keybindings.extend([
         // 光标移动
         gpui::KeyBinding::new("left", MoveLeft, Some(REDIS_CLI_CONTEXT)),
         gpui::KeyBinding::new("right", MoveRight, Some(REDIS_CLI_CONTEXT)),
@@ -313,8 +346,68 @@ pub fn init(cx: &mut App) {
         gpui::KeyBinding::new("shift-cmd-right", SelectToEnd, Some(REDIS_CLI_CONTEXT)),
         gpui::KeyBinding::new("shift-ctrl-a", SelectToStart, Some(REDIS_CLI_CONTEXT)),
         gpui::KeyBinding::new("shift-ctrl-e", SelectToEnd, Some(REDIS_CLI_CONTEXT)),
-        gpui::KeyBinding::new("tab", CompleteCommand, Some(REDIS_CLI_CONTEXT)),
     ]);
+    keybindings.extend(
+        shortcuts_for(cx, action_id::REDIS_COMPLETE_COMMAND, &["tab"])
+            .into_iter()
+            .map(|key| gpui::KeyBinding::new(&key, CompleteCommand, Some(REDIS_CLI_CONTEXT))),
+    );
+    keybindings
+}
+
+fn refreshable_keybindings(cx: &App) -> Vec<gpui::KeyBinding> {
+    let mut keybindings = Vec::new();
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::REDIS_CLEAR_OUTPUT,
+        &["ctrl-l"],
+        Some(REDIS_CLI_CONTEXT),
+        ClearOutput,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::REDIS_COPY,
+        &[redis_platform_shortcut("cmd-c", "ctrl-c")],
+        Some(REDIS_CLI_CONTEXT),
+        Copy,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::REDIS_PASTE,
+        &[redis_platform_shortcut("cmd-v", "ctrl-v")],
+        Some(REDIS_CLI_CONTEXT),
+        Paste,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::REDIS_SELECT_ALL,
+        &[redis_platform_shortcut("cmd-a", "ctrl-a")],
+        Some(REDIS_CLI_CONTEXT),
+        SelectAll,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::REDIS_CLEAR_SELECTION,
+        &["escape"],
+        Some(REDIS_CLI_CONTEXT),
+        ClearSelection,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::REDIS_COMPLETE_COMMAND,
+        &["tab"],
+        Some(REDIS_CLI_CONTEXT),
+        CompleteCommand,
+    ));
+    keybindings
+}
+
+fn redis_platform_shortcut(macos: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        macos
+    } else {
+        other
+    }
 }
 
 /// 命令执行结果条目
