@@ -294,6 +294,16 @@ impl FileListPanel {
         }
     }
 
+    fn select_context_target(&mut self, filtered_ix: usize, cx: &mut Context<Self>) {
+        if self.selected_indices.contains(&filtered_ix) {
+            return;
+        }
+
+        self.selected_indices.clear();
+        self.selected_indices.insert(filtered_ix);
+        cx.notify();
+    }
+
     fn set_sort(&mut self, column: SortColumn, cx: &mut Context<Self>) {
         if self.sort_column == column {
             self.sort_order = match self.sort_order {
@@ -578,6 +588,7 @@ impl FileListPanel {
     /// 根据 is_remote（远程/本地）和 is_dir（文件夹/文件）显示不同的菜单项
     fn build_file_context_menu(
         menu: PopupMenu,
+        filtered_ix: usize,
         name: &str,
         full_path: &str,
         is_dir: bool,
@@ -648,7 +659,8 @@ impl FileListPanel {
             menu = menu.item(
                 PopupMenuItem::new(t!("Common.download").to_string())
                     .icon(IconName::ArrowDown)
-                    .on_click(window.listener_for(&view_download, move |_this, _, _, cx| {
+                    .on_click(window.listener_for(&view_download, move |this, _, _, cx| {
+                        this.select_context_target(filtered_ix, cx);
                         cx.emit(FileListPanelEvent::Download {
                             name: name_for_download.clone(),
                             full_path: path_for_download.clone(),
@@ -770,7 +782,8 @@ impl FileListPanel {
         menu = menu.separator().item(
             PopupMenuItem::new(t!("Common.delete").to_string())
                 .icon(IconName::Remove)
-                .on_click(window.listener_for(&view_delete, move |_this, _, _, cx| {
+                .on_click(window.listener_for(&view_delete, move |this, _, _, cx| {
+                    this.select_context_target(filtered_ix, cx);
                     cx.emit(FileListPanelEvent::Delete {
                         name: name_for_delete.clone(),
                         full_path: path_for_delete.clone(),
@@ -1173,6 +1186,7 @@ impl Render for FileListPanel {
                                     .context_menu(move |menu, window, cx| {
                                         Self::build_file_context_menu(
                                             menu,
+                                            filtered_ix,
                                             &ctx_name,
                                             &ctx_full_path,
                                             ctx_is_dir,

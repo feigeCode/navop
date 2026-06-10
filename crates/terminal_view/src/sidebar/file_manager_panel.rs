@@ -124,6 +124,13 @@ struct DeleteTarget {
     is_dir: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DownloadTarget {
+    name: String,
+    path: String,
+    is_dir: bool,
+}
+
 /// 传输队列（单任务串行执行）
 struct TransferQueue {
     tasks: Vec<TransferTask>,
@@ -475,6 +482,33 @@ fn delete_targets_for_selection(
             })
         })
         .collect()
+}
+
+fn download_targets_for_selection(
+    current_path: &str,
+    items: &[RemoteFileItem],
+    filtered_indices: &[usize],
+    selected_indices: &HashSet<usize>,
+) -> Vec<DownloadTarget> {
+    let mut selected: Vec<_> = selected_indices.iter().copied().collect();
+    selected.sort_unstable();
+
+    selected
+        .into_iter()
+        .filter_map(|filtered_ix| {
+            let real_ix = *filtered_indices.get(filtered_ix)?;
+            let item = items.get(real_ix)?;
+            Some(DownloadTarget {
+                name: item.name.clone(),
+                path: join_remote_path(current_path, &item.name),
+                is_dir: item.is_dir,
+            })
+        })
+        .collect()
+}
+
+fn should_use_context_selection(selected_indices: &HashSet<usize>, filtered_ix: usize) -> bool {
+    selected_indices.contains(&filtered_ix) && selected_indices.len() > 1
 }
 
 fn delete_target_preview(targets: &[DeleteTarget]) -> String {
@@ -2346,6 +2380,22 @@ impl FileManagerPanel {
         self.show_delete_confirmation(vec![DeleteTarget { name, path, is_dir }], window, cx);
     }
 
+    fn delete_context_item_or_selection(
+        &mut self,
+        filtered_ix: usize,
+        name: String,
+        path: String,
+        is_dir: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if should_use_context_selection(&self.selected_indices, filtered_ix) {
+            self.delete_selected(window, cx);
+        } else {
+            self.delete_item(name, path, is_dir, window, cx);
+        }
+    }
+
     fn show_delete_confirmation(
         &mut self,
         targets: Vec<DeleteTarget>,
@@ -2413,15 +2463,62 @@ impl FileManagerPanel {
         &mut self,
         remote_path: String,
         is_dir: bool,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let view = cx.entity().clone();
         let remote_name = remote_path
             .rsplit('/')
             .next()
             .unwrap_or(&remote_path)
             .to_string();
+
+        self.download_targets(
+            vec![DownloadTarget {
+                name: remote_name,
+                path: remote_path,
+                is_dir,
+            }],
+            window,
+            cx,
+        );
+    }
+
+    fn download_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let targets = download_targets_for_selection(
+            &self.current_path,
+            &self.items,
+            &self.filtered_indices,
+            &self.selected_indices,
+        );
+        self.download_targets(targets, window, cx);
+    }
+
+    fn download_context_item_or_selection(
+        &mut self,
+        filtered_ix: usize,
+        remote_path: String,
+        is_dir: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if should_use_context_selection(&self.selected_indices, filtered_ix) {
+            self.download_selected(window, cx);
+        } else {
+            self.download_item(remote_path, is_dir, window, cx);
+        }
+    }
+
+    fn download_targets(
+        &mut self,
+        targets: Vec<DownloadTarget>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if targets.is_empty() {
+            return;
+        }
+
+        let view = cx.entity().clone();
 
         let future = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -2433,9 +2530,15 @@ impl FileManagerPanel {
         cx.spawn(async move |_this, cx| {
             if let Ok(Ok(Some(paths))) = future.await {
                 if let Some(dir) = paths.first() {
-                    let local_path = dir.join(&remote_name);
                     view.update(cx, |this, cx| {
-                        this.enqueue_download(remote_path, local_path, is_dir, cx);
+                        for target in &targets {
+                            this.enqueue_download(
+                                target.path.clone(),
+                                dir.join(&target.name),
+                                target.is_dir,
+                                cx,
+                            );
+                        }
                     });
                 }
             }
@@ -2570,6 +2673,17 @@ impl FileManagerPanel {
                             .tooltip(t!("FileManager.new_folder"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.show_new_folder_dialog(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("fm-download")
+                            .ghost()
+                            .small()
+                            .icon(IconName::ArrowDown)
+                            .tooltip(t!("FileManager.download"))
+                            .disabled(!has_selection)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.download_selected(window, cx);
                             })),
                     )
                     .child(
@@ -3144,6 +3258,7 @@ impl FileManagerPanel {
     /// 构建文件项右键菜单
     fn build_context_menu(
         menu: PopupMenu,
+        filtered_ix: usize,
         name: &str,
         full_path: &str,
         is_dir: bool,
@@ -3171,7 +3286,8 @@ impl FileManagerPanel {
                 .icon(IconName::ArrowDown)
                 .on_click(
                     window.listener_for(&view_download, move |this, _, window, cx| {
-                        this.download_item(
+                        this.download_context_item_or_selection(
+                            filtered_ix,
                             path_for_download.clone(),
                             is_dir_for_download,
                             window,
@@ -3250,7 +3366,8 @@ impl FileManagerPanel {
                     .icon(IconName::Remove)
                     .on_click(
                         window.listener_for(&view_delete, move |this, _, window, cx| {
-                            this.delete_item(
+                            this.delete_context_item_or_selection(
+                                filtered_ix,
                                 name_for_delete.clone(),
                                 path_for_delete.clone(),
                                 is_dir_for_delete,
@@ -3688,6 +3805,7 @@ impl FileManagerPanel {
                                                         move |menu, window, cx| {
                                                             Self::build_context_menu(
                                                                 menu,
+                                                                filtered_ix,
                                                                 &ctx_name,
                                                                 &ctx_full_path,
                                                                 ctx_is_dir,
@@ -3880,5 +3998,66 @@ mod tests {
         assert_eq!("data.db", targets[1].name);
         assert_eq!("/srv/app/data.db", targets[1].path);
         assert!(!targets[1].is_dir);
+    }
+
+    #[test]
+    fn download_targets_follow_filtered_selection_order() {
+        let items = vec![
+            super::RemoteFileItem {
+                name: "app.log".to_string(),
+                size: 10,
+                modified: std::time::UNIX_EPOCH,
+                is_dir: false,
+            },
+            super::RemoteFileItem {
+                name: "conf".to_string(),
+                size: 0,
+                modified: std::time::UNIX_EPOCH,
+                is_dir: true,
+            },
+            super::RemoteFileItem {
+                name: "data.db".to_string(),
+                size: 20,
+                modified: std::time::UNIX_EPOCH,
+                is_dir: false,
+            },
+        ];
+        let filtered_indices = vec![1, 0, 2];
+        let selected_indices = HashSet::from([0usize, 2usize]);
+
+        let targets = super::download_targets_for_selection(
+            "/srv/app",
+            &items,
+            &filtered_indices,
+            &selected_indices,
+        );
+
+        assert_eq!(
+            vec![
+                super::DownloadTarget {
+                    name: "conf".to_string(),
+                    path: "/srv/app/conf".to_string(),
+                    is_dir: true,
+                },
+                super::DownloadTarget {
+                    name: "data.db".to_string(),
+                    path: "/srv/app/data.db".to_string(),
+                    is_dir: false,
+                },
+            ],
+            targets
+        );
+    }
+
+    #[test]
+    fn context_menu_uses_selection_only_for_selected_multi_item() {
+        let selected_indices = HashSet::from([0usize, 2usize]);
+
+        assert!(super::should_use_context_selection(&selected_indices, 0));
+        assert!(super::should_use_context_selection(&selected_indices, 2));
+        assert!(!super::should_use_context_selection(&selected_indices, 1));
+
+        let single_selection = HashSet::from([0usize]);
+        assert!(!super::should_use_context_selection(&single_selection, 0));
     }
 }
