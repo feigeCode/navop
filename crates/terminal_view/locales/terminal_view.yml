@@ -1111,6 +1111,102 @@ FileManager:
     en: Download
     zh-CN: 下载
     zh-HK: 下載
+  delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  delete_n_items:
+    en: "Delete %{count} items"
+    zh-CN: "删除 %{count} 个项目"
+    zh-HK: "刪除 %{count} 個項目"
+  confirm_delete_title:
+    en: Confirm Delete
+    zh-CN: 确认删除
+    zh-HK: 確認刪除
+  confirm_delete_file:
+    en: Delete this file?
+    zh-CN: 确定删除这个文件吗？
+    zh-HK: 確定刪除這個文件嗎？
+  confirm_delete_files:
+    en: "Delete %{count} files?"
+    zh-CN: "确定删除 %{count} 个文件吗？"
+    zh-HK: "確定刪除 %{count} 個文件嗎？"
+  confirm_delete_folder:
+    en: Delete this folder and all of its contents?
+    zh-CN: 确定删除这个文件夹及其全部内容吗？
+    zh-HK: 確定刪除這個文件夾及其全部內容嗎？
+  confirm_delete_folders:
+    en: "Delete %{count} folders and all of their contents?"
+    zh-CN: "确定删除 %{count} 个文件夹及其全部内容吗？"
+    zh-HK: "確定刪除 %{count} 個文件夾及其全部內容嗎？"
+  confirm_delete_mixed:
+    en: "Delete %{files} files and %{dirs} folders?"
+    zh-CN: "确定删除 %{files} 个文件和 %{dirs} 个文件夹吗？"
+    zh-HK: "確定刪除 %{files} 個文件和 %{dirs} 個文件夾嗎？"
+  and_more:
+    en: "...and %{count} more"
+    zh-CN: "...以及另外 %{count} 项"
+    zh-HK: "...以及另外 %{count} 項"
+  favorite_add_current:
+    en: Add current path to favorites
+    zh-CN: 收藏当前路径
+    zh-HK: 收藏當前路徑
+  favorite_add_path:
+    en: Add path to favorites
+    zh-CN: 收藏路径
+    zh-HK: 收藏路徑
+  favorite_remove_current:
+    en: Remove current path from favorites
+    zh-CN: 取消收藏当前路径
+    zh-HK: 取消收藏當前路徑
+  favorite_open:
+    en: Open favorite paths
+    zh-CN: 打开收藏路径
+    zh-HK: 打開收藏路徑
+  favorite_added:
+    en: Path added to favorites
+    zh-CN: 已收藏路径
+    zh-HK: 已收藏路徑
+  favorite_removed:
+    en: Path removed from favorites
+    zh-CN: 已取消收藏路径
+    zh-HK: 已取消收藏路徑
+  favorite_updated:
+    en: Favorite path updated
+    zh-CN: 已更新收藏路径
+    zh-HK: 已更新收藏路徑
+  favorite_search_placeholder:
+    en: Search paths
+    zh-CN: 搜索路径
+    zh-HK: 搜索路徑
+  favorite_edit_placeholder:
+    en: Edit path
+    zh-CN: 修改路径
+    zh-HK: 修改路徑
+  favorite_no_results:
+    en: No matching paths
+    zh-CN: 没有匹配的路径
+    zh-HK: 沒有匹配的路徑
+  favorite_edit:
+    en: Edit path
+    zh-CN: 修改路径
+    zh-HK: 修改路徑
+  favorite_delete:
+    en: Delete path
+    zh-CN: 删除路径
+    zh-HK: 刪除路徑
+  favorite_save:
+    en: Save
+    zh-CN: 保存
+    zh-HK: 保存
+  favorite_cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  favorite_save_failed:
+    en: "Failed to save favorite path: %{error}"
+    zh-CN: "保存收藏路径失败：%{error}"
+    zh-HK: "保存收藏路徑失敗：%{error}"
   upload_file:
     en: Upload File
     zh-CN: 上传文件

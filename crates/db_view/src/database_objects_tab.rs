@@ -737,7 +737,7 @@ impl DatabaseObjects {
         cx: &App,
     ) -> impl IntoElement {
         let mut row = h_flex()
-            .h(px(44.))
+            .h(one_ui::table_row_height(cx))
             .px_2()
             .items_center()
             .when(is_selected, |el| el.bg(cx.theme().selection));

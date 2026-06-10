@@ -297,6 +297,9 @@ pub struct AppSettings {
     pub system_hotkey_macos: String,
     #[serde(default = "default_system_hotkey_other")]
     pub system_hotkey_other: String,
+    /// 表格行高（像素），默认44
+    #[serde(default = "default_table_row_height")]
+    pub table_row_height: u32,
 }
 
 pub(crate) const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
@@ -334,6 +337,10 @@ fn default_system_hotkey_other() -> String {
     DEFAULT_SYSTEM_HOTKEY_OTHER.to_string()
 }
 
+fn default_table_row_height() -> u32 {
+    44
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -360,6 +367,7 @@ impl Default for AppSettings {
             sql_auto_save_interval: default_auto_save_interval(),
             system_hotkey_macos: default_system_hotkey_macos(),
             system_hotkey_other: default_system_hotkey_other(),
+            table_row_height: default_table_row_height(),
         }
     }
 }
@@ -463,6 +471,10 @@ impl AppSettings {
             DbViewSettings {
                 large_text_editor_open_mode: self.large_text_cell_editor_open_mode.into(),
             },
+        );
+        one_ui::init_table_display_settings(
+            cx,
+            one_ui::TableDisplaySettings::new(self.table_row_height),
         );
     }
 
@@ -798,6 +810,28 @@ impl SettingsPanel {
                             )
                             .description(
                                 t!("Settings.General.Database.auto_save_interval_desc").to_string(),
+                            ),
+                            SettingItem::new(
+                                t!("Settings.General.Database.table_row_height"),
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 24.0,
+                                        max: 100.0,
+                                        step: 2.0,
+                                    },
+                                    |cx: &App| AppSettings::global(cx).table_row_height as f64,
+                                    |val: f64, cx: &mut App| {
+                                        let height = val as u32;
+                                        let settings = AppSettings::global_mut(cx);
+                                        settings.table_row_height = height;
+                                        settings.save();
+                                        one_ui::set_table_row_height(height, cx);
+                                    },
+                                )
+                                .default_value(default_settings.table_row_height as f64),
+                            )
+                            .description(
+                                t!("Settings.General.Database.table_row_height_desc").to_string(),
                             ),
                         ]),
                     SettingGroup::new()

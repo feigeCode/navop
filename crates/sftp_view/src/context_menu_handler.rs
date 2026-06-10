@@ -157,6 +157,9 @@ impl ContextMenuHandler for SftpView {
             } => {
                 self.delete_local_selected(window, cx);
             }
+            FileListPanelEvent::FavoritePath { full_path } => {
+                self.add_local_favorite_path(full_path, window, cx);
+            }
             FileListPanelEvent::UploadFile => {
                 self.upload_selected(window, cx);
             }
@@ -218,6 +221,9 @@ impl ContextMenuHandler for SftpView {
                 full_path: _,
             } => {
                 self.delete_remote_selected(window, cx);
+            }
+            FileListPanelEvent::FavoritePath { full_path } => {
+                self.add_remote_favorite_path(full_path, window, cx);
             }
             FileListPanelEvent::UploadFile => {
                 self.select_and_upload_files(window, cx);

@@ -10,8 +10,8 @@ pub use file_list_panel::{
 
 use gpui::{
     App, AsyncApp, Context, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable,
-    FontWeight, Hsla, IntoElement, ParentElement, Render, SharedString, Styled, WeakEntity, Window,
-    actions, div, prelude::*, px,
+    FontWeight, Hsla, IntoElement, MouseButton, ParentElement, Render, SharedString, Styled,
+    WeakEntity, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
@@ -19,9 +19,11 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     dialog::DialogButtonProps,
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputEvent, InputState},
     notification::Notification,
+    popover::{Popover, PopoverState},
     progress::Progress,
+    scroll::ScrollableElement,
     spinner::Spinner,
     tooltip::Tooltip,
     v_flex,
@@ -29,6 +31,10 @@ use gpui_component::{
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::models::{
     ActiveConnections, ProxyType as StorageProxyType, SshAuthMethod, StoredConnection,
+};
+use one_core::storage::{
+    GlobalStorageState, SftpFavoritePathRepository, normalize_sftp_favorite_path,
+    sftp_favorite_connection_key,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_file_editor::open_remote_file_editor;
@@ -80,8 +86,15 @@ enum PanelSide {
     Remote,
 }
 
+#[derive(Clone, PartialEq)]
+struct FavoritePathEdit {
+    side: PanelSide,
+    original_path: String,
+}
+
 const MAX_CONCURRENT_TRANSFERS: usize = 2;
 const BREADCRUMB_ITEM_MAX_WIDTH: f32 = 180.0;
+const LOCAL_FAVORITE_CONNECTION_KEY: &str = "local-file-list:global";
 
 struct TransferClientPool {
     config: SshConnectConfig,
@@ -439,6 +452,12 @@ pub struct SftpView {
     remote_path_editing: bool,
     local_path_input: Entity<InputState>,
     remote_path_input: Entity<InputState>,
+    local_favorite_popover_open: bool,
+    remote_favorite_popover_open: bool,
+    local_favorite_search_input: Entity<InputState>,
+    remote_favorite_search_input: Entity<InputState>,
+    favorite_edit_input: Entity<InputState>,
+    favorite_editing: Option<FavoritePathEdit>,
 
     transfer_queue: TransferQueue,
     next_task_id: usize,
@@ -450,6 +469,11 @@ pub struct SftpView {
     is_dragging_over_remote: bool,
 
     remote_loading: bool,
+    local_favorite_paths: Vec<String>,
+    local_favorite_connection_key: String,
+    favorite_paths: Vec<String>,
+    favorite_connection_id: Option<i64>,
+    favorite_connection_key: String,
 
     progress_refresh_task: Option<gpui::Task<()>>,
     _subscriptions: Vec<gpui::Subscription>,
@@ -552,6 +576,19 @@ impl SftpView {
             cx.new(|cx| InputState::new(window, cx).placeholder("Enter path..."));
         let remote_path_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Enter path..."));
+        let local_favorite_search_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("FavoritePath.search_placeholder"))
+        });
+        let remote_favorite_search_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("FavoritePath.search_placeholder"))
+        });
+        let favorite_edit_input = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("FavoritePath.edit_placeholder")));
+        let favorite_connection_id = conn.id;
+        let favorite_connection_key = sftp_favorite_connection_key(&conn);
+        let local_favorite_connection_key = LOCAL_FAVORITE_CONNECTION_KEY.to_string();
+        let local_favorite_paths = Self::load_favorite_paths(&local_favorite_connection_key, cx);
+        let favorite_paths = Self::load_favorite_paths(&favorite_connection_key, cx);
 
         let mut subscriptions = Vec::new();
 
@@ -629,6 +666,32 @@ impl SftpView {
             },
         ));
 
+        subscriptions.push(cx.subscribe(
+            &local_favorite_search_input,
+            |_this, _, event: &InputEvent, cx| {
+                if let InputEvent::Change = event {
+                    cx.notify();
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe(
+            &remote_favorite_search_input,
+            |_this, _, event: &InputEvent, cx| {
+                if let InputEvent::Change = event {
+                    cx.notify();
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &favorite_edit_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    this.save_editing_favorite_path(window, cx);
+                }
+            },
+        ));
+
         let transfer_client_pool = Arc::new(Mutex::new(TransferClientPool::new(
             config.clone(),
             MAX_CONCURRENT_TRANSFERS,
@@ -651,6 +714,12 @@ impl SftpView {
             remote_path_editing: false,
             local_path_input,
             remote_path_input,
+            local_favorite_popover_open: false,
+            remote_favorite_popover_open: false,
+            local_favorite_search_input,
+            remote_favorite_search_input,
+            favorite_edit_input,
+            favorite_editing: None,
             transfer_queue: TransferQueue::new(MAX_CONCURRENT_TRANSFERS),
             next_task_id: 0,
             transfer_client_pool,
@@ -658,6 +727,11 @@ impl SftpView {
             is_dragging_over_local: false,
             is_dragging_over_remote: false,
             remote_loading: false,
+            local_favorite_paths,
+            local_favorite_connection_key,
+            favorite_paths,
+            favorite_connection_id,
+            favorite_connection_key,
             progress_refresh_task: None,
             _subscriptions: subscriptions,
             connection_name: conn.name,
@@ -1054,6 +1128,584 @@ impl SftpView {
 
     fn can_go_forward_remote(&self) -> bool {
         self.remote_history_index + 1 < self.remote_history.len()
+    }
+
+    fn is_current_remote_path_favorite(&self) -> bool {
+        let Some(path) = normalize_sftp_favorite_path(&self.remote_current_path) else {
+            return false;
+        };
+        self.favorite_paths.iter().any(|existing| existing == &path)
+    }
+
+    fn is_current_local_path_favorite(&self) -> bool {
+        let path = self.local_current_path.to_string_lossy();
+        let Some(path) = normalize_sftp_favorite_path(&path) else {
+            return false;
+        };
+        self.local_favorite_paths
+            .iter()
+            .any(|existing| existing == &path)
+    }
+
+    fn remote_favorite_paths(&self) -> Vec<String> {
+        self.favorite_paths.clone()
+    }
+
+    fn local_favorite_paths(&self) -> Vec<String> {
+        self.local_favorite_paths.clone()
+    }
+
+    fn toggle_current_remote_favorite(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = normalize_sftp_favorite_path(&self.remote_current_path) else {
+            return;
+        };
+        let Some(repo) = Self::favorite_path_repository(cx) else {
+            window.push_notification(
+                Notification::error(
+                    t!(
+                        "FavoritePath.save_failed",
+                        error = "SftpFavoritePathRepository not found"
+                    )
+                    .to_string(),
+                ),
+                cx,
+            );
+            return;
+        };
+
+        let is_favorite = self.is_current_remote_path_favorite();
+        let result = if is_favorite {
+            repo.remove_path(&self.favorite_connection_key, &path)
+        } else {
+            repo.add_path(
+                self.favorite_connection_id,
+                &self.favorite_connection_key,
+                &path,
+            )
+        };
+
+        match result {
+            Ok(false) => return,
+            Ok(true) => {}
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(t!("FavoritePath.save_failed", error = error).to_string()),
+                    cx,
+                );
+                return;
+            }
+        }
+
+        self.refresh_remote_favorite_paths(cx);
+        let message = if is_favorite {
+            t!("FavoritePath.removed").to_string()
+        } else {
+            t!("FavoritePath.added").to_string()
+        };
+        window.push_notification(Notification::success(message), cx);
+        cx.notify();
+    }
+
+    fn toggle_current_local_favorite(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let path = self.local_current_path.to_string_lossy().to_string();
+        let is_favorite = self.is_current_local_path_favorite();
+        let result = if is_favorite {
+            self.remove_favorite_path(&self.local_favorite_connection_key, &path, cx)
+        } else {
+            self.insert_favorite_path(&self.local_favorite_connection_key, &path, cx)
+        };
+
+        match result {
+            Ok(false) => return,
+            Ok(true) => {}
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(t!("FavoritePath.save_failed", error = error).to_string()),
+                    cx,
+                );
+                return;
+            }
+        }
+
+        self.refresh_local_favorite_paths(cx);
+        let message = if is_favorite {
+            t!("FavoritePath.removed").to_string()
+        } else {
+            t!("FavoritePath.added").to_string()
+        };
+        window.push_notification(Notification::success(message), cx);
+        cx.notify();
+    }
+
+    fn add_remote_favorite_path(
+        &mut self,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = normalize_sftp_favorite_path(path) else {
+            return;
+        };
+        let Some(repo) = Self::favorite_path_repository(cx) else {
+            window.push_notification(
+                Notification::error(
+                    t!(
+                        "FavoritePath.save_failed",
+                        error = "SftpFavoritePathRepository not found"
+                    )
+                    .to_string(),
+                ),
+                cx,
+            );
+            return;
+        };
+
+        match repo.add_path(
+            self.favorite_connection_id,
+            &self.favorite_connection_key,
+            &path,
+        ) {
+            Ok(false) => return,
+            Ok(true) => {
+                self.refresh_remote_favorite_paths(cx);
+                window.push_notification(
+                    Notification::success(t!("FavoritePath.added").to_string()),
+                    cx,
+                );
+                cx.notify();
+            }
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(t!("FavoritePath.save_failed", error = error).to_string()),
+                    cx,
+                );
+            }
+        }
+    }
+
+    fn add_local_favorite_path(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        match self.insert_favorite_path(&self.local_favorite_connection_key, path, cx) {
+            Ok(false) => return,
+            Ok(true) => {
+                self.refresh_local_favorite_paths(cx);
+                window.push_notification(
+                    Notification::success(t!("FavoritePath.added").to_string()),
+                    cx,
+                );
+                cx.notify();
+            }
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(t!("FavoritePath.save_failed", error = error).to_string()),
+                    cx,
+                );
+            }
+        }
+    }
+
+    fn refresh_remote_favorite_paths(&mut self, cx: &mut Context<Self>) {
+        self.favorite_paths = Self::load_favorite_paths(&self.favorite_connection_key, cx);
+    }
+
+    fn refresh_local_favorite_paths(&mut self, cx: &mut Context<Self>) {
+        self.local_favorite_paths =
+            Self::load_favorite_paths(&self.local_favorite_connection_key, cx);
+    }
+
+    fn load_favorite_paths(connection_key: &str, cx: &mut Context<Self>) -> Vec<String> {
+        let Some(repo) = Self::favorite_path_repository(cx) else {
+            tracing::error!("SftpFavoritePathRepository not found");
+            return Vec::new();
+        };
+
+        match repo.list_paths(connection_key) {
+            Ok(paths) => paths,
+            Err(error) => {
+                tracing::error!("Failed to load SFTP favorite paths: {}", error);
+                Vec::new()
+            }
+        }
+    }
+
+    fn favorite_path_repository(cx: &mut Context<Self>) -> Option<Arc<SftpFavoritePathRepository>> {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        storage.get::<SftpFavoritePathRepository>()
+    }
+
+    fn insert_favorite_path(
+        &self,
+        connection_key: &str,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<bool> {
+        let Some(repo) = Self::favorite_path_repository(cx) else {
+            return Err(anyhow::anyhow!("SftpFavoritePathRepository not found"));
+        };
+        let connection_id = if connection_key == self.local_favorite_connection_key {
+            None
+        } else {
+            self.favorite_connection_id
+        };
+        repo.add_path(connection_id, connection_key, path)
+    }
+
+    fn remove_favorite_path(
+        &self,
+        connection_key: &str,
+        path: &str,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<bool> {
+        let Some(repo) = Self::favorite_path_repository(cx) else {
+            return Err(anyhow::anyhow!("SftpFavoritePathRepository not found"));
+        };
+        repo.remove_path(connection_key, path)
+    }
+
+    fn update_favorite_path(
+        &self,
+        connection_key: &str,
+        old_path: &str,
+        new_path: &str,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<bool> {
+        let Some(repo) = Self::favorite_path_repository(cx) else {
+            return Err(anyhow::anyhow!("SftpFavoritePathRepository not found"));
+        };
+        repo.update_path(connection_key, old_path, new_path)
+    }
+
+    fn favorite_connection_key_for_side(&self, side: PanelSide) -> &str {
+        match side {
+            PanelSide::Local => &self.local_favorite_connection_key,
+            PanelSide::Remote => &self.favorite_connection_key,
+        }
+    }
+
+    fn refresh_favorite_paths_for_side(&mut self, side: PanelSide, cx: &mut Context<Self>) {
+        match side {
+            PanelSide::Local => self.refresh_local_favorite_paths(cx),
+            PanelSide::Remote => self.refresh_remote_favorite_paths(cx),
+        }
+    }
+
+    fn remove_favorite_path_for_side(
+        &mut self,
+        side: PanelSide,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let connection_key = self.favorite_connection_key_for_side(side).to_string();
+        match self.remove_favorite_path(&connection_key, path, cx) {
+            Ok(false) => return,
+            Ok(true) => {
+                self.refresh_favorite_paths_for_side(side, cx);
+                if self
+                    .favorite_editing
+                    .as_ref()
+                    .is_some_and(|editing| editing.side == side && editing.original_path == path)
+                {
+                    self.favorite_editing = None;
+                }
+                window.push_notification(
+                    Notification::success(t!("FavoritePath.removed").to_string()),
+                    cx,
+                );
+                cx.notify();
+            }
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(t!("FavoritePath.save_failed", error = error).to_string()),
+                    cx,
+                );
+            }
+        }
+    }
+
+    fn start_favorite_path_editing(
+        &mut self,
+        side: PanelSide,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.favorite_editing = Some(FavoritePathEdit {
+            side,
+            original_path: path.clone(),
+        });
+        self.favorite_edit_input.update(cx, |state, cx| {
+            state.set_value(&path, window, cx);
+            state.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn cancel_favorite_path_editing(&mut self, cx: &mut Context<Self>) {
+        if self.favorite_editing.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn save_editing_favorite_path(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editing) = self.favorite_editing.clone() else {
+            return;
+        };
+        let new_path = self.favorite_edit_input.read(cx).text().to_string();
+        let connection_key = self
+            .favorite_connection_key_for_side(editing.side)
+            .to_string();
+
+        match self.update_favorite_path(&connection_key, &editing.original_path, &new_path, cx) {
+            Ok(false) => return,
+            Ok(true) => {
+                self.favorite_editing = None;
+                self.refresh_favorite_paths_for_side(editing.side, cx);
+                window.push_notification(
+                    Notification::success(t!("FavoritePath.updated").to_string()),
+                    cx,
+                );
+                cx.notify();
+            }
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(t!("FavoritePath.save_failed", error = error).to_string()),
+                    cx,
+                );
+            }
+        }
+    }
+
+    fn render_remote_favorites_menu(
+        &self,
+        favorite_paths: Vec<String>,
+        is_connected: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        self.render_favorite_paths_popover(PanelSide::Remote, favorite_paths, is_connected, cx)
+    }
+
+    fn render_local_favorites_menu(
+        &self,
+        favorite_paths: Vec<String>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        self.render_favorite_paths_popover(PanelSide::Local, favorite_paths, true, cx)
+    }
+
+    fn render_favorite_paths_popover(
+        &self,
+        side: PanelSide,
+        favorite_paths: Vec<String>,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let popover_id = match side {
+            PanelSide::Local => "local_favorite_paths_popover",
+            PanelSide::Remote => "remote_favorite_paths_popover",
+        };
+        let button_id = match side {
+            PanelSide::Local => "local_favorite_paths",
+            PanelSide::Remote => "remote_favorite_paths",
+        };
+        let open = match side {
+            PanelSide::Local => self.local_favorite_popover_open,
+            PanelSide::Remote => self.remote_favorite_popover_open,
+        };
+        let search_input = match side {
+            PanelSide::Local => self.local_favorite_search_input.clone(),
+            PanelSide::Remote => self.remote_favorite_search_input.clone(),
+        };
+        let edit_input = self.favorite_edit_input.clone();
+        let editing = self.favorite_editing.clone();
+        let view = cx.entity().clone();
+        let query = search_input.read(cx).text().to_string().to_lowercase();
+        let query = query.trim().to_string();
+        let has_favorites = !favorite_paths.is_empty();
+        let filtered_paths: Vec<String> = favorite_paths
+            .into_iter()
+            .filter(|path| query.is_empty() || path.to_lowercase().contains(&query))
+            .collect();
+        let disabled = !enabled || !has_favorites;
+
+        Popover::new(popover_id)
+            .open(open)
+            .on_open_change(cx.listener(move |this, open, _window, cx| {
+                match side {
+                    PanelSide::Local => this.local_favorite_popover_open = *open,
+                    PanelSide::Remote => this.remote_favorite_popover_open = *open,
+                }
+                if !*open
+                    && this
+                        .favorite_editing
+                        .as_ref()
+                        .is_some_and(|editing| editing.side == side)
+                {
+                    this.favorite_editing = None;
+                }
+                cx.notify();
+            }))
+            .trigger(
+                Button::new(button_id)
+                    .icon(IconName::FolderOpen)
+                    .ghost()
+                    .small()
+                    .tooltip(t!("FavoritePath.open").to_string())
+                    .disabled(disabled),
+            )
+            .content(move |_state, window, cx| {
+                let mut list = v_flex().gap_1().max_h(px(320.0)).overflow_y_scrollbar();
+                if filtered_paths.is_empty() {
+                    list = list.child(
+                        div()
+                            .px_2()
+                            .py_3()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("FavoritePath.no_results").to_string()),
+                    );
+                }
+
+                for path in filtered_paths.iter().cloned() {
+                    let is_editing = editing
+                        .as_ref()
+                        .is_some_and(|state| state.side == side && state.original_path == path);
+                    list = list.child(Self::render_favorite_path_row(
+                        side,
+                        path,
+                        is_editing,
+                        edit_input.clone(),
+                        view.clone(),
+                        window,
+                        cx,
+                    ));
+                }
+
+                v_flex()
+                    .w(px(360.0))
+                    .max_h(px(420.0))
+                    .gap_2()
+                    .p_2()
+                    .child(
+                        Input::new(&search_input)
+                            .small()
+                            .prefix(Icon::new(IconName::Search).small())
+                            .cleanable(true)
+                            .w_full(),
+                    )
+                    .child(list)
+            })
+    }
+
+    fn render_favorite_path_row(
+        side: PanelSide,
+        path: String,
+        is_editing: bool,
+        edit_input: Entity<InputState>,
+        view: Entity<SftpView>,
+        window: &mut Window,
+        cx: &mut Context<PopoverState>,
+    ) -> impl IntoElement {
+        if is_editing {
+            let save_path = path.clone();
+            let cancel_path = path.clone();
+            return h_flex()
+                .id(SharedString::from(format!("favorite-edit-row-{path}")))
+                .gap_1()
+                .items_center()
+                .child(Input::new(&edit_input).small().cleanable(false).flex_1())
+                .child(
+                    Button::new(SharedString::from(format!("favorite-save-{save_path}")))
+                        .icon(IconName::Check)
+                        .ghost()
+                        .small()
+                        .tooltip(t!("FavoritePath.save").to_string())
+                        .on_click(window.listener_for(&view, |this, _, window, cx| {
+                            this.save_editing_favorite_path(window, cx);
+                        })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("favorite-cancel-{cancel_path}")))
+                        .icon(IconName::Close)
+                        .ghost()
+                        .small()
+                        .tooltip(t!("FavoritePath.cancel").to_string())
+                        .on_click(window.listener_for(&view, |this, _, _window, cx| {
+                            this.cancel_favorite_path_editing(cx);
+                        })),
+                )
+                .into_any_element();
+        }
+
+        let navigate_path = path.clone();
+        let edit_path = path.clone();
+        let remove_path = path.clone();
+
+        h_flex()
+            .id(SharedString::from(format!("favorite-row-{path}")))
+            .items_center()
+            .gap_1()
+            .h_9()
+            .px_1()
+            .rounded_sm()
+            .border_1()
+            .border_color(cx.theme().border)
+            .hover(|style| style.bg(cx.theme().list_active))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .gap_2()
+                    .items_center()
+                    .px_2()
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        window.listener_for(&view, move |this, _, _window, cx| match side {
+                            PanelSide::Local => {
+                                this.navigate_local_to(PathBuf::from(&navigate_path), cx)
+                            }
+                            PanelSide::Remote => this.navigate_remote_to(navigate_path.clone(), cx),
+                        }),
+                    )
+                    .child(
+                        Icon::new(IconName::Folder)
+                            .with_size(Size::Small)
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .overflow_hidden()
+                            .child(path),
+                    ),
+            )
+            .child(
+                Button::new(SharedString::from(format!("favorite-edit-{edit_path}")))
+                    .icon(IconName::Edit)
+                    .ghost()
+                    .small()
+                    .tooltip(t!("FavoritePath.edit").to_string())
+                    .on_click(window.listener_for(&view, move |this, _, window, cx| {
+                        this.start_favorite_path_editing(side, edit_path.clone(), window, cx);
+                    })),
+            )
+            .child(
+                Button::new(SharedString::from(format!("favorite-remove-{remove_path}")))
+                    .icon(IconName::Remove)
+                    .ghost()
+                    .small()
+                    .tooltip(t!("FavoritePath.delete").to_string())
+                    .on_click(window.listener_for(&view, move |this, _, window, cx| {
+                        this.remove_favorite_path_for_side(side, &remove_path, window, cx);
+                    })),
+            )
+            .into_any_element()
     }
 
     fn start_local_path_editing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3535,6 +4187,8 @@ impl SftpView {
         let is_dragging = self.is_dragging_over_local;
         let can_go_back = self.can_go_back_local();
         let can_go_forward = self.can_go_forward_local();
+        let is_favorite = self.is_current_local_path_favorite();
+        let favorite_paths = self.local_favorite_paths();
 
         v_flex()
             .flex_1()
@@ -3612,6 +4266,25 @@ impl SftpView {
                         h_flex()
                             .gap_1()
                             .child(
+                                Button::new("local_toggle_favorite")
+                                    .icon(if is_favorite {
+                                        IconName::StarFill
+                                    } else {
+                                        IconName::Star
+                                    })
+                                    .ghost()
+                                    .small()
+                                    .tooltip(if is_favorite {
+                                        t!("FavoritePath.remove_current").to_string()
+                                    } else {
+                                        t!("FavoritePath.add_current").to_string()
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_current_local_favorite(window, cx);
+                                    })),
+                            )
+                            .child(self.render_local_favorites_menu(favorite_paths, cx))
+                            .child(
                                 Button::new("refresh_local")
                                     .icon(IconName::Refresh)
                                     .ghost()
@@ -3684,6 +4357,8 @@ impl SftpView {
         let is_dragging = self.is_dragging_over_remote;
         let can_go_back = self.can_go_back_remote();
         let can_go_forward = self.can_go_forward_remote();
+        let is_favorite = self.is_current_remote_path_favorite();
+        let favorite_paths = self.remote_favorite_paths();
 
         v_flex()
             .flex_1()
@@ -3758,6 +4433,30 @@ impl SftpView {
                     .child(
                         h_flex()
                             .gap_1()
+                            .child(
+                                Button::new("remote_toggle_favorite")
+                                    .icon(if is_favorite {
+                                        IconName::StarFill
+                                    } else {
+                                        IconName::Star
+                                    })
+                                    .ghost()
+                                    .small()
+                                    .tooltip(if is_favorite {
+                                        t!("FavoritePath.remove_current").to_string()
+                                    } else {
+                                        t!("FavoritePath.add_current").to_string()
+                                    })
+                                    .disabled(!is_connected)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_current_remote_favorite(window, cx);
+                                    })),
+                            )
+                            .child(self.render_remote_favorites_menu(
+                                favorite_paths,
+                                is_connected,
+                                cx,
+                            ))
                             .child(
                                 Button::new("refresh_remote")
                                     .icon(IconName::Refresh)

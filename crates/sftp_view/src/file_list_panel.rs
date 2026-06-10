@@ -594,6 +594,7 @@ impl FileListPanel {
         let name_for_permissions = name.to_string();
         let path_for_permissions = full_path.to_string();
         let path_for_terminal = full_path.to_string();
+        let path_for_favorite = full_path.to_string();
         let name_for_copy = name.to_string();
         let path_for_copy = full_path.to_string();
         let name_for_delete = name.to_string();
@@ -702,9 +703,19 @@ impl FileListPanel {
         if is_dir {
             let view_terminal_at = view_ref.clone();
             let view_terminal = view_ref.clone();
+            let view_favorite = view_ref.clone();
 
             menu = menu
                 .separator()
+                .item(
+                    PopupMenuItem::new(t!("FavoritePath.add_path").to_string())
+                        .icon(IconName::Star)
+                        .on_click(window.listener_for(&view_favorite, move |_this, _, _, cx| {
+                            cx.emit(FileListPanelEvent::FavoritePath {
+                                full_path: path_for_favorite.clone(),
+                            });
+                        })),
+                )
                 .item(
                     PopupMenuItem::new(t!("Terminal.open_here").to_string())
                         .icon(IconName::Terminal)
@@ -870,6 +881,10 @@ pub enum FileListPanelEvent {
     /// 删除文件/文件夹
     Delete {
         name: String,
+        full_path: String,
+    },
+    /// 收藏远程路径
+    FavoritePath {
         full_path: String,
     },
     /// 上传文件

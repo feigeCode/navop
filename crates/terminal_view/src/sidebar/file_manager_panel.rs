@@ -12,7 +12,7 @@ use gpui::{
     uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
+    ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
     dialog::DialogButtonProps,
@@ -20,13 +20,19 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     notification::Notification,
+    popover::{Popover, PopoverState},
     progress::Progress,
+    scroll::ScrollableElement,
     spinner::Spinner,
     tooltip::Tooltip,
     v_flex,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::models::StoredConnection;
+use one_core::storage::{
+    GlobalStorageState, SftpFavoritePathRepository, normalize_sftp_favorite_path,
+    sftp_favorite_connection_key,
+};
 use remote_file_editor::open_remote_file_editor;
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
@@ -53,6 +59,10 @@ enum TransferOperation {
         remote_path: String,
         local_path: PathBuf,
         is_dir: bool,
+    },
+    Delete {
+        targets: Vec<DeleteTarget>,
+        remote_dir: String,
     },
 }
 
@@ -105,6 +115,13 @@ struct PendingUpload {
     remote_path: String,
     is_dir: bool,
     has_conflict: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DeleteTarget {
+    name: String,
+    path: String,
+    is_dir: bool,
 }
 
 /// 传输队列（单任务串行执行）
@@ -344,6 +361,10 @@ fn should_refresh_after_upload(current_path: &str, remote_path: &str) -> bool {
     current_path == remote_path_parent(remote_path)
 }
 
+fn should_refresh_after_delete(current_path: &str, remote_dir: &str) -> bool {
+    current_path == remote_dir
+}
+
 fn is_valid_entry_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
@@ -433,6 +454,117 @@ fn rename_conflicting_uploads(
     uploads
 }
 
+fn delete_targets_for_selection(
+    current_path: &str,
+    items: &[RemoteFileItem],
+    filtered_indices: &[usize],
+    selected_indices: &HashSet<usize>,
+) -> Vec<DeleteTarget> {
+    let mut selected: Vec<_> = selected_indices.iter().copied().collect();
+    selected.sort_unstable();
+
+    selected
+        .into_iter()
+        .filter_map(|filtered_ix| {
+            let real_ix = *filtered_indices.get(filtered_ix)?;
+            let item = items.get(real_ix)?;
+            Some(DeleteTarget {
+                name: item.name.clone(),
+                path: join_remote_path(current_path, &item.name),
+                is_dir: item.is_dir,
+            })
+        })
+        .collect()
+}
+
+fn delete_target_preview(targets: &[DeleteTarget]) -> String {
+    let mut lines: Vec<String> = targets
+        .iter()
+        .take(5)
+        .map(|target| {
+            let prefix = if target.is_dir { "[dir]" } else { "[file]" };
+            format!("{} {}", prefix, target.name)
+        })
+        .collect();
+
+    if targets.len() > 5 {
+        lines.push(t!("FileManager.and_more", count = targets.len() - 5).to_string());
+    }
+
+    lines.join("\n")
+}
+
+fn update_delete_progress(progress: &SharedProgress, name: &str, transferred: u64, total: u64) {
+    if let Ok(mut guard) = progress.current_file.write() {
+        *guard = Some(name.to_string());
+    }
+    progress.total.store(total, Ordering::Relaxed);
+    progress.transferred.store(transferred, Ordering::Relaxed);
+}
+
+async fn delete_remote_target(
+    client: &mut RusshSftpClient,
+    target: &DeleteTarget,
+    cancelled: Arc<AtomicBool>,
+    progress: Arc<SharedProgress>,
+) -> anyhow::Result<()> {
+    if target.is_dir {
+        let callback_progress = progress;
+        client
+            .delete_recursive(
+                &target.path,
+                cancelled,
+                Box::new(move |progress: TransferProgress| {
+                    callback_progress
+                        .transferred
+                        .store(progress.transferred, Ordering::Relaxed);
+                    callback_progress
+                        .total
+                        .store(progress.total, Ordering::Relaxed);
+                    if let Some(file) = progress.current_file {
+                        if let Ok(mut guard) = callback_progress.current_file.write() {
+                            *guard = Some(file);
+                        }
+                    }
+                }),
+            )
+            .await
+    } else {
+        client.delete(&target.path, false).await
+    }
+}
+
+async fn delete_targets_with_progress(
+    client: Arc<Mutex<RusshSftpClient>>,
+    targets: Vec<DeleteTarget>,
+    progress: Arc<SharedProgress>,
+) -> anyhow::Result<()> {
+    let cancelled = progress.cancelled.clone();
+    let total = targets.len() as u64;
+    let mut client = client.lock().await;
+    let mut errors = Vec::new();
+
+    for (index, target) in targets.iter().enumerate() {
+        if cancelled.load(Ordering::Relaxed) {
+            return Err(anyhow::Error::new(TransferCancelled));
+        }
+
+        update_delete_progress(&progress, &target.name, index as u64, total);
+        match delete_remote_target(&mut client, target, cancelled.clone(), progress.clone()).await {
+            Ok(()) => {}
+            Err(error) if is_transfer_cancelled(&error) => return Err(error),
+            Err(error) => errors.push(format!("{}: {}", target.name, error)),
+        }
+        update_delete_progress(&progress, &target.name, (index + 1) as u64, total);
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("{}", errors.join("; ")))
+    }
+}
+
 /// 从 StoredConnection 构建 SshConnectConfig
 // ── FileManagerPanel ──────────────────────────────────────────
 
@@ -476,6 +608,13 @@ pub struct FileManagerPanel {
     focus_handle: FocusHandle,
     /// 是否正在加载目录
     loading: bool,
+    favorite_paths: Vec<String>,
+    favorite_connection_id: Option<i64>,
+    favorite_connection_key: String,
+    favorite_popover_open: bool,
+    favorite_search_input: Entity<InputState>,
+    favorite_edit_input: Entity<InputState>,
+    favorite_editing_path: Option<String>,
     /// 订阅
     _subscriptions: Vec<gpui::Subscription>,
 
@@ -496,7 +635,7 @@ pub struct FileManagerPanel {
 
 impl FileManagerPanel {
     pub fn new(
-        _stored_connection: StoredConnection,
+        stored_connection: StoredConnection,
         session_manager: Arc<SshSessionManager>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -507,6 +646,15 @@ impl FileManagerPanel {
         });
         let path_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(t!("FileManager.path_placeholder")));
+        let favorite_search_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("FileManager.favorite_search_placeholder"))
+        });
+        let favorite_edit_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("FileManager.favorite_edit_placeholder"))
+        });
+        let favorite_connection_id = stored_connection.id;
+        let favorite_connection_key = sftp_favorite_connection_key(&stored_connection);
+        let favorite_paths = Self::load_favorite_paths(&favorite_connection_key, cx);
 
         let mut subscriptions = Vec::new();
         subscriptions.push(
@@ -533,6 +681,23 @@ impl FileManagerPanel {
                 _ => {}
             },
         ));
+        subscriptions.push(cx.subscribe(
+            &favorite_search_input,
+            |_this, _, event: &InputEvent, cx| {
+                if let InputEvent::Change = event {
+                    cx.notify();
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &favorite_edit_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    this.save_editing_favorite_path(window, cx);
+                }
+            },
+        ));
 
         Self {
             session_manager,
@@ -554,6 +719,13 @@ impl FileManagerPanel {
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle,
             loading: false,
+            favorite_paths,
+            favorite_connection_id,
+            favorite_connection_key,
+            favorite_popover_open: false,
+            favorite_search_input,
+            favorite_edit_input,
+            favorite_editing_path: None,
             _subscriptions: subscriptions,
             transfer_client: None,
             transfer_queue: TransferQueue::new(),
@@ -767,6 +939,233 @@ impl FileManagerPanel {
         if self.path_editing {
             self.path_editing = false;
             cx.notify();
+        }
+    }
+
+    fn is_current_path_favorite(&self) -> bool {
+        let Some(path) = normalize_sftp_favorite_path(&self.current_path) else {
+            return false;
+        };
+        self.favorite_paths.iter().any(|existing| existing == &path)
+    }
+
+    fn toggle_current_favorite(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = normalize_sftp_favorite_path(&self.current_path) else {
+            return;
+        };
+        let Some(repo) = Self::favorite_path_repository(cx) else {
+            window.push_notification(
+                Notification::error(
+                    t!(
+                        "FileManager.favorite_save_failed",
+                        error = "SftpFavoritePathRepository not found"
+                    )
+                    .to_string(),
+                ),
+                cx,
+            );
+            return;
+        };
+
+        let is_favorite = self.is_current_path_favorite();
+        let result = if is_favorite {
+            repo.remove_path(&self.favorite_connection_key, &path)
+        } else {
+            repo.add_path(
+                self.favorite_connection_id,
+                &self.favorite_connection_key,
+                &path,
+            )
+        };
+
+        match result {
+            Ok(false) => return,
+            Ok(true) => {}
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(
+                        t!("FileManager.favorite_save_failed", error = error).to_string(),
+                    ),
+                    cx,
+                );
+                return;
+            }
+        }
+
+        self.refresh_favorite_paths(cx);
+        let message = if is_favorite {
+            t!("FileManager.favorite_removed").to_string()
+        } else {
+            t!("FileManager.favorite_added").to_string()
+        };
+        window.push_notification(Notification::success(message), cx);
+        cx.notify();
+    }
+
+    fn add_favorite_path(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = normalize_sftp_favorite_path(path) else {
+            return;
+        };
+        let Some(repo) = Self::favorite_path_repository(cx) else {
+            window.push_notification(
+                Notification::error(
+                    t!(
+                        "FileManager.favorite_save_failed",
+                        error = "SftpFavoritePathRepository not found"
+                    )
+                    .to_string(),
+                ),
+                cx,
+            );
+            return;
+        };
+
+        match repo.add_path(
+            self.favorite_connection_id,
+            &self.favorite_connection_key,
+            &path,
+        ) {
+            Ok(false) => return,
+            Ok(true) => {
+                self.refresh_favorite_paths(cx);
+                window.push_notification(
+                    Notification::success(t!("FileManager.favorite_added").to_string()),
+                    cx,
+                );
+                cx.notify();
+            }
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(
+                        t!("FileManager.favorite_save_failed", error = error).to_string(),
+                    ),
+                    cx,
+                );
+            }
+        }
+    }
+
+    fn refresh_favorite_paths(&mut self, cx: &mut Context<Self>) {
+        self.favorite_paths = Self::load_favorite_paths(&self.favorite_connection_key, cx);
+    }
+
+    fn load_favorite_paths(connection_key: &str, cx: &mut Context<Self>) -> Vec<String> {
+        let Some(repo) = Self::favorite_path_repository(cx) else {
+            tracing::error!("SftpFavoritePathRepository not found");
+            return Vec::new();
+        };
+
+        match repo.list_paths(connection_key) {
+            Ok(paths) => paths,
+            Err(error) => {
+                tracing::error!("Failed to load SFTP favorite paths: {}", error);
+                Vec::new()
+            }
+        }
+    }
+
+    fn favorite_path_repository(cx: &mut Context<Self>) -> Option<Arc<SftpFavoritePathRepository>> {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        storage.get::<SftpFavoritePathRepository>()
+    }
+
+    fn remove_favorite_path(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(repo) = Self::favorite_path_repository(cx) else {
+            window.push_notification(
+                Notification::error(
+                    t!(
+                        "FileManager.favorite_save_failed",
+                        error = "SftpFavoritePathRepository not found"
+                    )
+                    .to_string(),
+                ),
+                cx,
+            );
+            return;
+        };
+
+        match repo.remove_path(&self.favorite_connection_key, path) {
+            Ok(false) => return,
+            Ok(true) => {
+                self.refresh_favorite_paths(cx);
+                if self.favorite_editing_path.as_deref() == Some(path) {
+                    self.favorite_editing_path = None;
+                }
+                window.push_notification(
+                    Notification::success(t!("FileManager.favorite_removed").to_string()),
+                    cx,
+                );
+                cx.notify();
+            }
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(
+                        t!("FileManager.favorite_save_failed", error = error).to_string(),
+                    ),
+                    cx,
+                );
+            }
+        }
+    }
+
+    fn start_favorite_path_editing(
+        &mut self,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.favorite_editing_path = Some(path.clone());
+        self.favorite_edit_input.update(cx, |state, cx| {
+            state.set_value(&path, window, cx);
+            state.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn cancel_favorite_path_editing(&mut self, cx: &mut Context<Self>) {
+        if self.favorite_editing_path.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn save_editing_favorite_path(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(old_path) = self.favorite_editing_path.clone() else {
+            return;
+        };
+        let new_path = self.favorite_edit_input.read(cx).text().to_string();
+        let Some(repo) = Self::favorite_path_repository(cx) else {
+            window.push_notification(
+                Notification::error(
+                    t!(
+                        "FileManager.favorite_save_failed",
+                        error = "SftpFavoritePathRepository not found"
+                    )
+                    .to_string(),
+                ),
+                cx,
+            );
+            return;
+        };
+
+        match repo.update_path(&self.favorite_connection_key, &old_path, &new_path) {
+            Ok(false) => return,
+            Ok(true) => {
+                self.favorite_editing_path = None;
+                self.refresh_favorite_paths(cx);
+                window.push_notification(
+                    Notification::success(t!("FileManager.favorite_updated").to_string()),
+                    cx,
+                );
+                cx.notify();
+            }
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(
+                        t!("FileManager.favorite_save_failed", error = error).to_string(),
+                    ),
+                    cx,
+                );
+            }
         }
     }
 
@@ -1133,6 +1532,12 @@ impl FileManagerPanel {
                     cx,
                 );
             }
+            TransferOperation::Delete {
+                targets,
+                remote_dir,
+            } => {
+                self.start_delete_task(task.id, targets, remote_dir, task.shared_progress, cx);
+            }
         }
 
         self.start_progress_refresh(cx);
@@ -1304,6 +1709,47 @@ impl FileManagerPanel {
             let _ = this.update(cx, |this, cx| {
                 this.update_task_state(task_id, result);
                 this.schedule_transfers(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn start_delete_task(
+        &mut self,
+        task_id: usize,
+        targets: Vec<DeleteTarget>,
+        remote_dir: String,
+        shared_progress: Arc<SharedProgress>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.transfer_client.clone() else {
+            return;
+        };
+
+        let delete_task = Tokio::spawn(
+            cx,
+            delete_targets_with_progress(client, targets, shared_progress),
+        );
+
+        cx.spawn(async move |this, cx| {
+            let result = match delete_task.await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(e),
+                Err(e) => Err(anyhow::Error::new(e)),
+            };
+            let should_refresh = match &result {
+                Ok(()) => true,
+                Err(error) => !is_transfer_cancelled(error),
+            };
+
+            let _ = this.update(cx, |this, cx| {
+                this.update_task_state(task_id, result);
+                this.schedule_transfers(cx);
+                if should_refresh && should_refresh_after_delete(&this.current_path, &remote_dir) {
+                    this.selected_indices.clear();
+                    this.refresh_dir(cx);
+                }
                 cx.notify();
             });
         })
@@ -1704,6 +2150,39 @@ impl FileManagerPanel {
         self.ensure_transfer_client_and_schedule(cx);
     }
 
+    fn enqueue_delete(
+        &mut self,
+        targets: Vec<DeleteTarget>,
+        remote_dir: String,
+        cx: &mut Context<Self>,
+    ) {
+        if targets.is_empty() {
+            return;
+        }
+
+        let first_file = targets.first().map(|target| target.name.clone());
+        let shared_progress = Arc::new(SharedProgress {
+            transferred: AtomicU64::new(0),
+            total: AtomicU64::new(targets.len() as u64),
+            speed: AtomicU64::new(0),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            current_file: std::sync::RwLock::new(first_file),
+        });
+
+        let task = TransferTask {
+            id: self.alloc_task_id(),
+            operation: TransferOperation::Delete {
+                targets,
+                remote_dir,
+            },
+            state: TransferTaskState::Pending,
+            shared_progress,
+            error: None,
+        };
+        self.transfer_queue.enqueue(task);
+        self.ensure_transfer_client_and_schedule(cx);
+    }
+
     /// 通过文件选择器上传文件
     fn select_and_upload_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let remote_dir = self.current_path.clone();
@@ -1846,6 +2325,89 @@ impl FileManagerPanel {
         });
     }
 
+    fn delete_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let targets = delete_targets_for_selection(
+            &self.current_path,
+            &self.items,
+            &self.filtered_indices,
+            &self.selected_indices,
+        );
+        self.show_delete_confirmation(targets, window, cx);
+    }
+
+    fn delete_item(
+        &mut self,
+        name: String,
+        path: String,
+        is_dir: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_delete_confirmation(vec![DeleteTarget { name, path, is_dir }], window, cx);
+    }
+
+    fn show_delete_confirmation(
+        &mut self,
+        targets: Vec<DeleteTarget>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if targets.is_empty() {
+            return;
+        }
+
+        let remote_dir = self.current_path.clone();
+        let view = cx.entity().downgrade();
+        let file_count = targets.iter().filter(|target| !target.is_dir).count();
+        let dir_count = targets.iter().filter(|target| target.is_dir).count();
+        let confirm_msg = match (file_count, dir_count) {
+            (0, 1) => t!("FileManager.confirm_delete_folder").to_string(),
+            (0, d) => t!("FileManager.confirm_delete_folders", count = d).to_string(),
+            (1, 0) => t!("FileManager.confirm_delete_file").to_string(),
+            (f, 0) => t!("FileManager.confirm_delete_files", count = f).to_string(),
+            (f, d) => t!("FileManager.confirm_delete_mixed", files = f, dirs = d).to_string(),
+        };
+        let target_list = delete_target_preview(&targets);
+
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let view_confirm = view.clone();
+            let targets_confirm = targets.clone();
+            let remote_dir_confirm = remote_dir.clone();
+
+            dialog
+                .title(t!("FileManager.confirm_delete_title").to_string())
+                .w(px(400.))
+                .child(
+                    v_flex().gap_2().child(confirm_msg.clone()).child(
+                        div()
+                            .p_2()
+                            .bg(cx.theme().secondary)
+                            .rounded_md()
+                            .text_sm()
+                            .overflow_hidden()
+                            .child(target_list.clone()),
+                    ),
+                )
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t!("FileManager.delete").to_string())
+                        .cancel_text(t!("Common.cancel").to_string()),
+                )
+                .on_ok(move |_, window, cx| {
+                    window.close_dialog(cx);
+                    let _ = view_confirm.update(cx, |this, cx| {
+                        this.enqueue_delete(
+                            targets_confirm.clone(),
+                            remote_dir_confirm.clone(),
+                            cx,
+                        );
+                    });
+                    true
+                })
+        });
+    }
+
     /// 通过保存目录选择器下载远程文件/文件夹
     fn download_item(
         &mut self,
@@ -1899,6 +2461,10 @@ impl FileManagerPanel {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let can_go_back = self.history_index > 0;
         let breadcrumb = self.render_path_breadcrumb(cx);
+        let has_selection = !self.selected_indices.is_empty();
+        let is_connected = self.connection_state == ConnectionState::Connected;
+        let is_favorite = self.is_current_path_favorite();
+        let favorite_paths = self.favorite_paths.clone();
 
         v_flex()
             .border_b_1()
@@ -2006,6 +2572,18 @@ impl FileManagerPanel {
                                 this.show_new_folder_dialog(window, cx);
                             })),
                     )
+                    .child(
+                        Button::new("fm-delete")
+                            .ghost()
+                            .small()
+                            .danger()
+                            .icon(IconName::Remove)
+                            .tooltip(t!("FileManager.delete"))
+                            .disabled(!has_selection)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.delete_selected(window, cx);
+                            })),
+                    )
                     .child(div().flex_1())
                     // 同步终端工作目录按钮
                     .child(
@@ -2109,6 +2687,7 @@ impl FileManagerPanel {
                     .h_8()
                     .px_2()
                     .pb_2()
+                    .gap_1()
                     .items_center()
                     .child(if self.path_editing {
                         h_flex()
@@ -2149,8 +2728,222 @@ impl FileManagerPanel {
                                     .build(window, cx)
                             })
                             .into_any_element()
-                    }),
+                    })
+                    .child(
+                        Button::new("fm-toggle-favorite")
+                            .ghost()
+                            .small()
+                            .icon(if is_favorite {
+                                IconName::StarFill
+                            } else {
+                                IconName::Star
+                            })
+                            .tooltip(if is_favorite {
+                                t!("FileManager.favorite_remove_current").to_string()
+                            } else {
+                                t!("FileManager.favorite_add_current").to_string()
+                            })
+                            .disabled(!is_connected)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_current_favorite(window, cx);
+                            })),
+                    )
+                    .child(self.render_favorites_menu(favorite_paths, is_connected, cx)),
             )
+    }
+
+    fn render_favorites_menu(
+        &self,
+        favorite_paths: Vec<String>,
+        is_connected: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let has_favorites = !favorite_paths.is_empty();
+        let search_input = self.favorite_search_input.clone();
+        let edit_input = self.favorite_edit_input.clone();
+        let editing_path = self.favorite_editing_path.clone();
+        let view = cx.entity().clone();
+        let query = search_input.read(cx).text().to_string().to_lowercase();
+        let query = query.trim().to_string();
+        let filtered_paths: Vec<String> = favorite_paths
+            .into_iter()
+            .filter(|path| query.is_empty() || path.to_lowercase().contains(&query))
+            .collect();
+
+        Popover::new("fm-favorite-paths-popover")
+            .open(self.favorite_popover_open)
+            .on_open_change(cx.listener(|this, open, _window, cx| {
+                this.favorite_popover_open = *open;
+                if !*open {
+                    this.favorite_editing_path = None;
+                }
+                cx.notify();
+            }))
+            .trigger(
+                Button::new("fm-favorite-paths")
+                    .ghost()
+                    .small()
+                    .icon(IconName::FolderOpen)
+                    .tooltip(t!("FileManager.favorite_open").to_string())
+                    .disabled(!is_connected || !has_favorites),
+            )
+            .content(move |_state, window, cx| {
+                let mut list = v_flex().gap_1().max_h(px(320.0)).overflow_y_scrollbar();
+                if filtered_paths.is_empty() {
+                    list = list.child(
+                        div()
+                            .px_2()
+                            .py_3()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("FileManager.favorite_no_results").to_string()),
+                    );
+                }
+
+                for path in filtered_paths.iter().cloned() {
+                    let is_editing = editing_path.as_deref() == Some(path.as_str());
+                    list = list.child(Self::render_favorite_path_row(
+                        path,
+                        is_editing,
+                        edit_input.clone(),
+                        view.clone(),
+                        window,
+                        cx,
+                    ));
+                }
+
+                v_flex()
+                    .w(px(360.0))
+                    .max_h(px(420.0))
+                    .gap_2()
+                    .p_2()
+                    .child(
+                        Input::new(&search_input)
+                            .small()
+                            .prefix(Icon::new(IconName::Search).small())
+                            .cleanable(true)
+                            .w_full(),
+                    )
+                    .child(list)
+            })
+    }
+
+    fn render_favorite_path_row(
+        path: String,
+        is_editing: bool,
+        edit_input: Entity<InputState>,
+        view: Entity<FileManagerPanel>,
+        window: &mut Window,
+        cx: &mut Context<PopoverState>,
+    ) -> impl IntoElement {
+        if is_editing {
+            let save_path = path.clone();
+            let cancel_path = path.clone();
+            return h_flex()
+                .id(SharedString::from(format!("fm-favorite-edit-row-{path}")))
+                .gap_1()
+                .items_center()
+                .child(Input::new(&edit_input).small().cleanable(false).flex_1())
+                .child(
+                    Button::new(SharedString::from(format!("fm-favorite-save-{save_path}")))
+                        .icon(IconName::Check)
+                        .ghost()
+                        .small()
+                        .tooltip(t!("FileManager.favorite_save").to_string())
+                        .on_click(window.listener_for(&view, |this, _, window, cx| {
+                            this.save_editing_favorite_path(window, cx);
+                        })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!(
+                        "fm-favorite-cancel-{cancel_path}"
+                    )))
+                    .icon(IconName::Close)
+                    .ghost()
+                    .small()
+                    .tooltip(t!("FileManager.favorite_cancel").to_string())
+                    .on_click(window.listener_for(
+                        &view,
+                        |this, _, _window, cx| {
+                            this.cancel_favorite_path_editing(cx);
+                        },
+                    )),
+                )
+                .into_any_element();
+        }
+
+        let navigate_path = path.clone();
+        let edit_path = path.clone();
+        let remove_path = path.clone();
+
+        h_flex()
+            .id(SharedString::from(format!("fm-favorite-row-{path}")))
+            .items_center()
+            .gap_1()
+            .h_9()
+            .px_1()
+            .rounded_sm()
+            .border_1()
+            .border_color(cx.theme().border)
+            .hover(|style| style.bg(cx.theme().list_active))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .gap_2()
+                    .items_center()
+                    .px_2()
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        window.listener_for(&view, move |this, _, _window, cx| {
+                            this.navigate_to(navigate_path.clone(), cx);
+                        }),
+                    )
+                    .child(
+                        Icon::new(IconName::Folder)
+                            .with_size(Size::Small)
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .overflow_hidden()
+                            .child(path),
+                    ),
+            )
+            .child(
+                Button::new(SharedString::from(format!("fm-favorite-edit-{edit_path}")))
+                    .icon(IconName::Edit)
+                    .ghost()
+                    .small()
+                    .tooltip(t!("FileManager.favorite_edit").to_string())
+                    .on_click(window.listener_for(&view, move |this, _, window, cx| {
+                        this.start_favorite_path_editing(edit_path.clone(), window, cx);
+                    })),
+            )
+            .child(
+                Button::new(SharedString::from(format!(
+                    "fm-favorite-remove-{remove_path}"
+                )))
+                .icon(IconName::Remove)
+                .ghost()
+                .small()
+                .tooltip(t!("FileManager.favorite_delete").to_string())
+                .on_click(window.listener_for(
+                    &view,
+                    move |this, _, window, cx| {
+                        this.remove_favorite_path(&remove_path, window, cx);
+                    },
+                )),
+            )
+            .into_any_element()
     }
 
     /// 渲染搜索栏
@@ -2364,6 +3157,10 @@ impl FileManagerPanel {
         let path_for_download = full_path.to_string();
         let is_dir_for_download = is_dir;
         let path_for_edit = full_path.to_string();
+        let path_for_favorite = full_path.to_string();
+        let name_for_delete = name.to_string();
+        let path_for_delete = full_path.to_string();
+        let is_dir_for_delete = is_dir;
 
         let mut menu = menu;
 
@@ -2398,12 +3195,22 @@ impl FileManagerPanel {
         // 文件夹：在终端中 CD
         if is_dir {
             let view_cd = view.clone();
+            let view_favorite = view.clone();
             menu = menu.item(
                 PopupMenuItem::new(t!("FileManager.cd_to_terminal"))
                     .icon(IconName::SquareTerminal)
                     .on_click(window.listener_for(&view_cd, move |_this, _, _, cx| {
                         cx.emit(FileManagerPanelEvent::CdToTerminal(path_for_cd.clone()));
                     })),
+            );
+            menu = menu.item(
+                PopupMenuItem::new(t!("FileManager.favorite_add_path"))
+                    .icon(IconName::Star)
+                    .on_click(
+                        window.listener_for(&view_favorite, move |this, _, window, cx| {
+                            this.add_favorite_path(&path_for_favorite, window, cx);
+                        }),
+                    ),
             );
         }
 
@@ -2434,8 +3241,25 @@ impl FileManagerPanel {
         // 分隔线 + 上传文件 + 上传文件夹 + 刷新
         let view_upload_files = view.clone();
         let view_upload_folder = view.clone();
+        let view_delete = view.clone();
         let view_refresh = view.clone();
         menu = menu
+            .separator()
+            .item(
+                PopupMenuItem::new(t!("FileManager.delete"))
+                    .icon(IconName::Remove)
+                    .on_click(
+                        window.listener_for(&view_delete, move |this, _, window, cx| {
+                            this.delete_item(
+                                name_for_delete.clone(),
+                                path_for_delete.clone(),
+                                is_dir_for_delete,
+                                window,
+                                cx,
+                            );
+                        }),
+                    ),
+            )
             .separator()
             .item(
                 PopupMenuItem::new(t!("FileManager.upload_file"))
@@ -2487,6 +3311,10 @@ impl FileManagerPanel {
                 let name = remote_path.rsplit('/').next().unwrap_or(remote_path);
                 (IconName::ArrowDown, name.to_string())
             }
+            TransferOperation::Delete { targets, .. } => (
+                IconName::Remove,
+                t!("FileManager.delete_n_items", count = targets.len()).to_string(),
+            ),
         };
 
         let transferred = task.shared_progress.transferred.load(Ordering::Relaxed);
@@ -3011,5 +3839,46 @@ mod tests {
             "/srv/other",
             "/srv/app/file.txt"
         ));
+    }
+
+    #[test]
+    fn delete_targets_follow_filtered_selection_order() {
+        let items = vec![
+            super::RemoteFileItem {
+                name: "app.log".to_string(),
+                size: 10,
+                modified: std::time::UNIX_EPOCH,
+                is_dir: false,
+            },
+            super::RemoteFileItem {
+                name: "conf".to_string(),
+                size: 0,
+                modified: std::time::UNIX_EPOCH,
+                is_dir: true,
+            },
+            super::RemoteFileItem {
+                name: "data.db".to_string(),
+                size: 20,
+                modified: std::time::UNIX_EPOCH,
+                is_dir: false,
+            },
+        ];
+        let filtered_indices = vec![1, 0, 2];
+        let selected_indices = HashSet::from([0usize, 2usize]);
+
+        let targets = super::delete_targets_for_selection(
+            "/srv/app",
+            &items,
+            &filtered_indices,
+            &selected_indices,
+        );
+
+        assert_eq!(2, targets.len());
+        assert_eq!("conf", targets[0].name);
+        assert_eq!("/srv/app/conf", targets[0].path);
+        assert!(targets[0].is_dir);
+        assert_eq!("data.db", targets[1].name);
+        assert_eq!("/srv/app/data.db", targets[1].path);
+        assert!(!targets[1].is_dir);
     }
 }

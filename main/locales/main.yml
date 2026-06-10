@@ -673,6 +673,14 @@ Settings:
         en: Set the interval for automatic saving (1-60 seconds)
         zh-CN: 设置自动保存的时间间隔（1-60秒）
         zh-HK: 設置自動保存的時間間隔（1-60秒）
+      table_row_height:
+        en: Table Row Height (px)
+        zh-CN: 表格行高（像素）
+        zh-HK: 表格行高（像素）
+      table_row_height_desc:
+        en: Set the height of database table and editable grid rows (24-100 pixels)
+        zh-CN: 设置数据库表和可编辑表格的行高（24-100像素）
+        zh-HK: 設置資料庫表和可編輯表格的行高（24-100像素）
 
     Log:
       group_title:

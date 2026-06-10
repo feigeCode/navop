@@ -232,6 +232,69 @@ Terminal:
     zh-CN: 在当前目录打开终端
     zh-HK: 在當前目錄打開終端
 
+# 常用路径
+FavoritePath:
+  add_current:
+    en: Add Current Path to Favorites
+    zh-CN: 收藏当前路径
+    zh-HK: 收藏當前路徑
+  add_path:
+    en: Add Path to Favorites
+    zh-CN: 收藏路径
+    zh-HK: 收藏路徑
+  remove_current:
+    en: Remove Current Path from Favorites
+    zh-CN: 取消收藏当前路径
+    zh-HK: 取消收藏當前路徑
+  open:
+    en: Favorite Paths
+    zh-CN: 常用路径
+    zh-HK: 常用路徑
+  added:
+    en: Favorite path added
+    zh-CN: 已收藏当前路径
+    zh-HK: 已收藏當前路徑
+  removed:
+    en: Favorite path removed
+    zh-CN: 已取消收藏当前路径
+    zh-HK: 已取消收藏當前路徑
+  updated:
+    en: Favorite path updated
+    zh-CN: 已更新收藏路径
+    zh-HK: 已更新收藏路徑
+  search_placeholder:
+    en: Search paths
+    zh-CN: 搜索路径
+    zh-HK: 搜索路徑
+  edit_placeholder:
+    en: Edit path
+    zh-CN: 修改路径
+    zh-HK: 修改路徑
+  no_results:
+    en: No matching paths
+    zh-CN: 没有匹配的路径
+    zh-HK: 沒有匹配的路徑
+  edit:
+    en: Edit path
+    zh-CN: 修改路径
+    zh-HK: 修改路徑
+  delete:
+    en: Delete path
+    zh-CN: 删除路径
+    zh-HK: 刪除路徑
+  save:
+    en: Save
+    zh-CN: 保存
+    zh-HK: 保存
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  save_failed:
+    en: "Failed to save favorite paths: %{error}"
+    zh-CN: "保存常用路径失败: %{error}"
+    zh-HK: "保存常用路徑失敗: %{error}"
+
 # 提示信息
 Notification:
   copied_filename:

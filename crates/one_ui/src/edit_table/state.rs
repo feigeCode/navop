@@ -1016,8 +1016,8 @@ where
             .count()
     }
 
-    fn page_item_count(&self) -> usize {
-        let row_height = self.options.size.table_row_height();
+    fn page_item_count(&self, cx: &gpui::App) -> usize {
+        let row_height = crate::table_row_height_or(cx, self.options.size.table_row_height());
         let height = self.bounds.size.height;
         let count = (height / row_height).floor() as usize;
         count.saturating_sub(1).max(1)
@@ -1439,7 +1439,7 @@ where
             return;
         }
 
-        let step = self.page_item_count();
+        let step = self.page_item_count(cx);
         if self.has_cell_selection() {
             let first_col_ix = self.first_data_col_ix(cx);
             if let Some((row_ix, col_ix)) = self.current_cell_for_navigation() {
@@ -1467,7 +1467,7 @@ where
             return;
         }
 
-        let step = self.page_item_count();
+        let step = self.page_item_count(cx);
         if self.has_cell_selection() {
             let first_col_ix = self.first_data_col_ix(cx);
             if let Some((row_ix, col_ix)) = self.current_cell_for_navigation() {
@@ -2062,12 +2062,7 @@ where
         let size_pad = self.options.size.table_cell_padding();
         let (target_pt, target_pb, target_pl, target_pr) = match col_padding {
             Some(p) => (p.top, p.bottom, p.left, p.right),
-            None => (
-                size_pad.top,
-                size_pad.bottom,
-                size_pad.left,
-                size_pad.right,
-            ),
+            None => (size_pad.top, size_pad.bottom, size_pad.left, size_pad.right),
         };
 
         // 边框补偿：编辑态始终有 border_2；显示态仅选中时有
@@ -2083,10 +2078,26 @@ where
         };
         let b = px(2.);
         cell = cell
-            .pt(if has_t { (target_pt - b).max(px(0.)) } else { target_pt })
-            .pb(if has_b { (target_pb - b).max(px(0.)) } else { target_pb })
-            .pl(if has_l { (target_pl - b).max(px(0.)) } else { target_pl })
-            .pr(if has_r { (target_pr - b).max(px(0.)) } else { target_pr });
+            .pt(if has_t {
+                (target_pt - b).max(px(0.))
+            } else {
+                target_pt
+            })
+            .pb(if has_b {
+                (target_pb - b).max(px(0.))
+            } else {
+                target_pb
+            })
+            .pl(if has_l {
+                (target_pl - b).max(px(0.))
+            } else {
+                target_pl
+            })
+            .pr(if has_r {
+                (target_pr - b).max(px(0.))
+            } else {
+                target_pr
+            });
 
         // 编辑模式：嵌入轻量编辑器（无自带样式，由容器控制布局）
         if is_editing {
@@ -2596,7 +2607,10 @@ where
         header
             .h_flex()
             .w_full()
-            .h(self.options.size.table_row_height())
+            .h(crate::table_row_height_or(
+                cx,
+                self.options.size.table_row_height(),
+            ))
             .flex_shrink_0()
             .border_b_1()
             .border_color(cx.theme().border)
@@ -2684,7 +2698,7 @@ where
         let is_row_deleted = self.delegate.is_row_deleted(row_ix, cx);
         let is_row_added = self.delegate.is_row_added(row_ix, cx);
         let _view = cx.entity().clone();
-        let row_height = self.options.size.table_row_height();
+        let row_height = crate::table_row_height_or(cx, self.options.size.table_row_height());
 
         if row_ix < rows_count {
             let is_last_row = row_ix + 1 == rows_count;
@@ -2873,21 +2887,31 @@ where
             col_ix
         };
 
-        self.delegate
-            .render_td(row_ix, delegate_col_ix, window, cx)
+        h_flex()
+            .size_full()
+            .items_center()
+            .overflow_hidden()
+            .child(
+                self.delegate
+                    .render_td(row_ix, delegate_col_ix, window, cx)
+                    .into_any_element(),
+            )
             .into_any_element()
     }
 
     fn render_vertical_scrollbar(
         &mut self,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
         Some(
             div()
                 .occlude()
                 .absolute()
-                .top(self.options.size.table_row_height())
+                .top(crate::table_row_height_or(
+                    cx,
+                    self.options.size.table_row_height(),
+                ))
                 .right_0()
                 .bottom_0()
                 .w(SCROLLBAR_WIDTH)
@@ -2981,7 +3005,7 @@ where
         let rows_count = self.delegate.rows_count(cx);
         let loading = self.delegate.loading(cx);
 
-        let row_height = self.options.size.table_row_height();
+        let row_height = crate::table_row_height_or(cx, self.options.size.table_row_height());
         let total_height = self
             .vertical_scroll_handle
             .0
