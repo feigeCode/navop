@@ -36,14 +36,26 @@ pub enum CellEditor {
 }
 
 impl CellEditor {
-    pub fn render(&self, _window: &mut Window, cx: &mut App) -> AnyElement {
+    pub fn render(&self, window: &mut Window, cx: &mut App) -> AnyElement {
         match self {
-            CellEditor::Input(input) => Input::new(input)
-                .w_full()
-                .h_full()
-                .text_base()
-                .appearance(false)
-                .bare()
+            CellEditor::Input(input) => h_flex()
+                .size_full()
+                .items_center()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .w_full()
+                        .h(window.line_height())
+                        .overflow_hidden()
+                        .child(
+                            Input::new(input)
+                                .w_full()
+                                .h_full()
+                                .text_base()
+                                .appearance(false)
+                                .bare(),
+                        ),
+                )
                 .into_any_element(),
             CellEditor::DatePicker(picker) => DatePicker::new(picker)
                 .w_full()
