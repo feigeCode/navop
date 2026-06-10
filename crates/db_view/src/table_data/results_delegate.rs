@@ -1332,7 +1332,12 @@ impl EditTableDelegate for EditorTableDelegate {
                 .text_color(cx.theme().muted_foreground.opacity(0.5))
                 .italic()
                 .child("NULL"),
-            Some(s) => div().child(s),
+            Some(s) => div()
+                .w_full()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(s),
         }
     }
 
