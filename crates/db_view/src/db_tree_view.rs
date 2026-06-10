@@ -1482,7 +1482,13 @@ impl DbTreeView {
         }
 
         // 检查当前节点是否匹配搜索
-        let self_matches = query.is_empty() || node.name.to_lowercase().contains(query);
+        let self_matches = query.is_empty()
+            || node.name.to_lowercase().contains(query)
+            || node
+                .metadata
+                .get("comment")
+                .map(|c| c.to_lowercase().contains(query))
+                .unwrap_or(false);
 
         // 检查子节点是否有匹配的
         let mut has_matching_children = false;
@@ -1562,7 +1568,13 @@ impl DbTreeView {
         }
 
         // 检查当前节点是否匹配
-        let self_matches = query.is_empty() || node.name.to_lowercase().contains(query);
+        let self_matches = query.is_empty()
+            || node.name.to_lowercase().contains(query)
+            || node
+                .metadata
+                .get("comment")
+                .map(|c| c.to_lowercase().contains(query))
+                .unwrap_or(false);
         if self_matches {
             return true;
         }
@@ -2310,11 +2322,11 @@ impl DbTreeView {
         // 获取图标
         let icon = self.get_icon_for_node(&node_id, is_expanded, cx).color();
 
-        // 获取节点名称
-        let label_text = node
+        // 获取节点名称和备注
+        let (label_text, label_comment) = node
             .as_ref()
             .map(|n| {
-                if matches!(
+                let name = if matches!(
                     n.node_type,
                     DbNodeType::TablesFolder
                         | DbNodeType::ViewsFolder
@@ -2331,7 +2343,13 @@ impl DbTreeView {
                     t!(&n.name).to_string()
                 } else {
                     n.name.clone()
-                }
+                };
+                let comment = if n.node_type == DbNodeType::Table {
+                    n.metadata.get("comment").cloned()
+                } else {
+                    None
+                };
+                (name, comment)
             })
             .unwrap_or_default();
         let label_for_tooltip = if let Some(ref error) = error_msg {
@@ -2493,15 +2511,41 @@ impl DbTreeView {
                             .flex_1()
                             .min_w(px(0.))
                             .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .when(is_folder_type && !is_selected, |this| {
-                                this.text_color(folder_text_color)
-                            })
                             .child(
-                                Label::new(label_text)
-                                    .highlights(search_query)
-                                    .into_any_element(),
+                                h_flex()
+                                    .gap_0()
+                                    .items_center()
+                                    .overflow_hidden()
+                                    .when(is_folder_type && !is_selected, |this| {
+                                        this.text_color(folder_text_color)
+                                    })
+                                    .child(
+                                        div()
+                                            .max_w(px(180.))
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .child(
+                                                Label::new(label_text)
+                                                    .highlights(search_query.clone())
+                                                    .into_any_element(),
+                                            ),
+                                    )
+                                    .when_some(label_comment, |this, comment| {
+                                        this.child(
+                                            div()
+                                                .ml_1()
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_ellipsis()
+                                                .child(
+                                                    Label::new(comment)
+                                                        .highlights(search_query)
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .into_any_element(),
+                                                ),
+                                        )
+                                    }),
                             )
                             .tooltip(move |window, cx| {
                                 Tooltip::new(label_for_tooltip.clone()).build(window, cx)
