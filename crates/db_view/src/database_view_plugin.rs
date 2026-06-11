@@ -697,6 +697,7 @@ pub fn build_context_menu_for(
 ) -> Vec<ContextMenuItem> {
     let mut items = manifest_plugin(database_type, cx).build_context_menu(node_id, node_type);
     append_er_diagram_item(&mut items, node_id, node_type);
+    append_compare_items(&mut items, node_id, node_type);
     items
 }
 
@@ -722,6 +723,34 @@ fn append_er_diagram_item(items: &mut Vec<ContextMenuItem>, node_id: &str, node_
             node_id: node_id.to_string(),
         },
     ));
+}
+
+fn append_compare_items(items: &mut Vec<ContextMenuItem>, node_id: &str, node_type: DbNodeType) {
+    // 数据比较：仅对表显示
+    if matches!(node_type, DbNodeType::Table) {
+        if !items.is_empty() {
+            items.push(ContextMenuItem::separator());
+        }
+        items.push(ContextMenuItem::item(
+            "数据比较",
+            DbTreeViewEvent::CompareData {
+                node_id: node_id.to_string(),
+            },
+        ));
+    }
+
+    // 结构比较：对数据库和 Schema 显示
+    if matches!(node_type, DbNodeType::Database | DbNodeType::Schema) {
+        if items.is_empty() || !matches!(items.last(), Some(ContextMenuItem::Separator)) {
+            items.push(ContextMenuItem::separator());
+        }
+        items.push(ContextMenuItem::item(
+            "结构比较",
+            DbTreeViewEvent::CompareSchema {
+                node_id: node_id.to_string(),
+            },
+        ));
+    }
 }
 
 pub fn get_table_designer_capabilities_for(

@@ -367,15 +367,13 @@ impl DatabaseEventHandler {
                         }
                     }
                     DbTreeViewEvent::CompareData { node_id } => {
-                        if let Some(_node) = get_node(&node_id, cx) {
-                            // TODO: 实现数据比较功能
-                            Self::show_error(window, "数据比较功能即将推出", cx);
+                        if let Some(node) = get_node(&node_id, cx) {
+                            Self::handle_compare_data(node, window, cx);
                         }
                     }
                     DbTreeViewEvent::CompareSchema { node_id } => {
-                        if let Some(_node) = get_node(&node_id, cx) {
-                            // TODO: 实现结构比较功能
-                            Self::show_error(window, "结构比较功能即将推出", cx);
+                        if let Some(node) = get_node(&node_id, cx) {
+                            Self::handle_compare_schema(node, window, cx);
                         }
                     }
                     DbTreeViewEvent::LocateActiveTab => {
@@ -3702,5 +3700,23 @@ impl DatabaseEventHandler {
         tree_view.update(cx, |tree, cx| {
             tree.locate_and_select_node(&node_id, cx);
         });
+    }
+
+    /// 处理数据比较事件
+    fn handle_compare_data(node: DbNode, window: &mut Window, cx: &mut App) {
+        window.push_notification(
+            Notification::info(format!("数据比较: {}", node.name)).autohide(true),
+            cx,
+        );
+        // TODO: 打开数据比较窗口
+    }
+
+    /// 处理结构比较事件
+    fn handle_compare_schema(node: DbNode, window: &mut Window, cx: &mut App) {
+        window.push_notification(
+            Notification::info(format!("结构比较: {}", node.name)).autohide(true),
+            cx,
+        );
+        // TODO: 打开结构比较窗口
     }
 }
