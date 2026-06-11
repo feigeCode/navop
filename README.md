@@ -1,91 +1,173 @@
-<p align="center">
-  <img src="logo.svg" alt="OnetCli" width="120" />
-</p>
+<div align="center">
+  <p>
+    <img src="logo.svg" alt="OnetCli" width="120" />
+  </p>
 
-<h1 align="center">OnetCli</h1>
+  <h1>OnetCli</h1>
 
-<p align="center">
-  <strong>One</strong> Ne<strong>t</strong> <strong>Cl</strong>ient — A cross-platform desktop client for databases, SSH, terminals & AI, all in one place.
-</p>
+  <p><strong>Native all-in-one workspace for databases, SSH, SFTP, terminals, monitoring, and AI.</strong></p>
 
-<p align="center">
-  Built with <a href="https://gpui.rs">GPUI</a> · GPU-accelerated · Native performance
-</p>
+  <p>
+    Built with <a href="https://gpui.rs">GPUI</a> · Rust native desktop · GPU-accelerated rendering
+  </p>
 
-<p align="center">
-  <a href="README_CN.md">中文</a> ·
-  <a href="#installation">Installation</a> ·
-  <a href="https://github.com/feigeCode/onetcli/releases">Releases</a> ·
-  <a href="#features">Features</a> ·
-  <a href="#screenshots">Screenshots</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a>
-</p>
+  <p>
+    <a href="https://github.com/feigeCode/onetcli/releases"><img src="https://img.shields.io/github/downloads/feigeCode/onetcli/total?style=for-the-badge&color=blue" alt="Downloads" /></a>
+    <a href="https://github.com/feigeCode/onetcli/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/feigeCode/onetcli/ci.yml?branch=main&style=for-the-badge" alt="CI" /></a>
+    <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20Supplementary-blue?style=for-the-badge" alt="License" /></a>
+    <a href="https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605"><img src="https://img.shields.io/badge/QQ%20Group-860670605-EB1923?style=for-the-badge&logo=tencentqq&logoColor=white" alt="QQ Group 860670605" /></a>
+    <a href="https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD"><img src="https://img.shields.io/badge/WeChat%20Group-Join-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="Join WeChat Group" /></a>
+  </p>
 
----
+  <p>
+    <img src="https://img.shields.io/badge/MySQL-4479A1?logo=mysql&logoColor=white" alt="MySQL" />
+    <img src="https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL" />
+    <img src="https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white" alt="SQLite" />
+    <img src="https://img.shields.io/badge/DuckDB-FFF000?logo=duckdb&logoColor=black" alt="DuckDB" />
+    <img src="https://img.shields.io/badge/ClickHouse-FFCC01?logo=clickhouse&logoColor=black" alt="ClickHouse" />
+    <img src="https://img.shields.io/badge/SQL%20Server-CC2927?logo=microsoftsqlserver&logoColor=white" alt="SQL Server" />
+    <img src="https://img.shields.io/badge/Oracle-F80000?logo=oracle&logoColor=white" alt="Oracle" />
+    <img src="https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white" alt="Redis" />
+    <img src="https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white" alt="MongoDB" />
+    <img src="https://img.shields.io/badge/SSH-111827?logo=gnubash&logoColor=white" alt="SSH" />
+    <img src="https://img.shields.io/badge/SFTP-2563EB?logo=filezilla&logoColor=white" alt="SFTP" />
+  </p>
 
-<!-- Replace with actual screenshot -->
-<p align="center">
-  <img src="app.png" alt="OnetCli Overview" width="800" />
-</p>
+  <p>
+    <a href="README_CN.md">中文</a> ·
+    <a href="#install">Install</a> ·
+    <a href="https://github.com/feigeCode/onetcli/releases/latest">Latest Release</a> ·
+    <a href="#features">Features</a> ·
+    <a href="#screenshots">Screenshots</a> ·
+    <a href="CONTRIBUTING.md">Contributing</a>
+  </p>
+
+  <p>
+    <img src="app.png" alt="OnetCli overview" width="820" />
+  </p>
+</div>
+
+## Why OnetCli?
+
+<table>
+  <tr>
+    <td width="50%">
+      <h3>Native desktop, not a browser shell</h3>
+      <p>OnetCli is built with Rust and GPUI for a native desktop experience with GPU-accelerated rendering.</p>
+    </td>
+    <td width="50%">
+      <h3>One workspace for daily ops</h3>
+      <p>Database management, SSH terminals, SFTP file transfer, serial connections, and local terminals live in one app.</p>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <h3>AI next to your data</h3>
+      <p>Use the built-in AI assistant for natural language to SQL, query explanation, BI-style analysis, and chart generation.</p>
+    </td>
+    <td>
+      <h3>Remote work without context switching</h3>
+      <p>Open a remote terminal, browse files through SFTP, drag files into the sidebar, and edit remote files with syntax highlighting.</p>
+    </td>
+  </tr>
+</table>
 
 ## Features
 
-**Database Management** — Connect to PostgreSQL, MySQL, SQLite, SQL Server, Oracle, ClickHouse, and DuckDB from a single interface.
+### Database Workspace
 
-**Redis** — Dedicated Redis viewer with key browsing, value inspection, and cluster support.
+Connect to MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse from a single interface. Browse schemas, tables, columns, indexes, foreign keys, procedures, functions, triggers, and sequences where supported.
 
-**MongoDB** — MongoDB explorer with collection browsing, document viewing, and query support.
+### SQL Editor & Schema Tools
 
-**SSH, SFTP & Serial** — Integrated SSH terminal, SFTP file manager, and serial connection support in one workspace.
+Work with a SQL editor backed by syntax tooling, schema-aware browsing, table structure editing, query execution, explain support, and ER diagrams.
 
-**Terminal** — Built-in local terminal with multi-tab workflows.
+### Redis & MongoDB
 
-**AI Assistant** — Chat with AI directly inside the app. Supports natural language to SQL, query explanation, BI-style data analysis, and chart generation — powered by streaming LLM integration.
+Use the dedicated Redis viewer for key browsing, value inspection, and cluster connections. Explore MongoDB collections, inspect documents, and run queries from the same workspace.
 
-**Cloud Sync** — Sync connections and settings across devices with encrypted key storage (AES-GCM, Ed25519).
+### SSH, SFTP, Serial & Terminal
 
-**Themes & i18n** — Light / dark mode. Supports English, Simplified Chinese, and Traditional Chinese.
+Open integrated SSH sessions, manage SFTP files, connect to serial devices, and keep local terminals in multi-tab sessions. The terminal includes an SFTP sidebar with drag-and-drop upload support, path favorites, and quick jumps to frequently used directories.
+
+### Remote File Editing
+
+Edit remote files directly inside OnetCli with syntax highlighting and autocomplete. No need to open another editor or switch back and forth between terminal and file tools.
+
+### Monitoring & Charts
+
+Use built-in server monitoring and native rendered charts to inspect remote machine status and data analysis output.
+
+### AI Assistant
+
+Chat with AI inside the app. OnetCli supports natural language to SQL, query explanation, BI-style data analysis, chart generation, and streaming LLM responses. It can also generate terminal commands that you can quickly paste into a terminal session and run.
+
+### Sync, Security & i18n
+
+Sync connections and settings across devices with encrypted key storage based on AES-GCM and Ed25519. OnetCli supports light and dark themes, English, Simplified Chinese, and Traditional Chinese.
 
 ## Screenshots
 
 | Database | SSH |
 |:-:|:-:|
-| ![Database](database.png) | ![SSH](ssh.png) |
+| [![Database](database.png)](database.png) | [![SSH](ssh.png)](ssh.png) |
 
 | SFTP | Redis |
 |:-:|:-:|
-| ![SFTP](sftp.png) | ![Redis](redis.png) |
+| [![SFTP](sftp.png)](sftp.png) | [![Redis](redis.png)](redis.png) |
 
 | MongoDB | AI Chat |
 |:-:|:-:|
-| ![MongoDB](mongodb.png) | ![AI Chat](chatdb.png) |
+| [![MongoDB](mongodb.png)](mongodb.png) | [![AI Chat](chatdb.png)](chatdb.png) |
 
-**Built-in Simple Server Monitoring, Native Rendered Charts**
-![monitor.png](monitor.png)
+| Monitoring | SFTP Sidebar |
+|:-:|:-:|
+| [![Monitoring](monitor.png)](monitor.png) | [![SFTP Sidebar](sftp_sidebar.png)](sftp_sidebar.png) |
 
-**The terminal comes with an SFTP sidebar that supports file drag-and-drop upload.**    
-![sftp_sidebar.png](sftp_sidebar.png)
+| Remote File Editor | ER Diagram |
+|:-:|:-:|
+| [![Remote File Editor](remote_file_editor.png)](remote_file_editor.png) | [![ER Diagram](er.png)](er.png) |
 
-**Edit files directly from the app, with syntax highlighting and autocomplete.**
-![remote_file_editor](remote_file_editor.png)
+## Install
 
-**ER Diagram**
-![ER Diagram](er.png)
+Download the latest build from the [Releases](https://github.com/feigeCode/onetcli/releases/latest) page.
 
-Thanks to [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git).
+Release artifacts are currently published by platform:
 
-## Platform Support
+| Platform | Architecture | Artifact |
+|----------|--------------|----------|
+| macOS | Apple Silicon, Intel | `.dmg`, `.tar.gz` |
+| Linux | x86_64 | `.tar.gz` |
+| Windows | x86_64 | `.zip` |
 
-| Platform | Architecture | Rendering |
-|----------|-------------|-----------|
-| macOS | aarch64, x86_64 | Metal |
-| Linux | x86_64 | Vulkan |
-| Windows | x86_64 | — |
+Checksums are published as `sha256sums.txt` in each release.
+
+### macOS Gatekeeper
+
+If macOS blocks the app after installing the DMG with "Apple cannot check it for malicious software", run:
+
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/OnetCli.app
+```
+
+### Oracle Support
+
+Oracle connections require [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html) (Basic package). Download the version matching your platform and ensure the libraries are in your library search path.
+
+## Getting Started
+
+1. Open OnetCli and create your first database connection.
+2. Add an SSH host and open a remote terminal.
+3. Open SFTP file management to browse remote directories or transfer files.
+4. Try Redis key browsing or MongoDB document browsing.
+5. Use the AI assistant in SQL or data analysis workflows.
+
+## Build From Source
 
 ### Prerequisites
 
-- Rust (2024 edition)
-- Platform-specific dependencies (see below)
+- Rust 2024 edition
+- Platform-specific system dependencies
 
 ### System Dependencies
 
@@ -101,25 +183,13 @@ Thanks to [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git).
 .\script\install-window.ps1
 ```
 
-### Build & Run
+### Run
 
 ```bash
 cargo run -p main
 ```
 
-### macOS Troubleshooting
-
-If macOS blocks the app from opening after installing the DMG ("Apple cannot check it for malicious software"), run:
-
-```bash
-sudo xattr -rd com.apple.quarantine /Applications/OnetCli.app
-```
-
-### Oracle Support
-
-Oracle connections require [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html) (Basic package) to be installed on your system. Download the version matching your platform and ensure the libraries are in your library search path.
-
-## Development
+### Development Checks
 
 ```bash
 # Build
@@ -129,7 +199,7 @@ cargo build
 cargo test --all
 
 # Lint
-cargo clippy -- --deny warnings
+cargo clippy --workspace --all-targets
 
 # Format check
 cargo fmt --check
@@ -140,15 +210,68 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 ## Tech Stack
 
 | Category | Technologies |
-|----------|-------------|
-| UI Framework | [GPUI](https://gpui.rs) (from Zed editor) |
-| Databases | tokio-postgres, mysql_async, rusqlite, tiberius, oracle, clickhouse, redis, mongodb |
-| SSH/SFTP | russh, russh-sftp |
+|----------|--------------|
+| UI Framework | [GPUI](https://gpui.rs) |
+| Language | Rust |
+| Databases | tokio-postgres, mysql_async, rusqlite, tiberius, oracle, clickhouse |
+| Redis / MongoDB | redis, mongodb |
+| SSH / SFTP | russh, russh-sftp |
 | Terminal | alacritty_terminal |
 | Text Editing | ropey, tree-sitter, sqlparser |
-| AI | llm-connector (streaming) |
+| AI | llm-connector |
 | Encryption | aes-gcm, sha2, ed25519 |
 | i18n | rust-i18n |
+
+## FAQ
+
+<details>
+<summary><strong>Which databases are supported?</strong></summary>
+
+OnetCli has built-in database support for MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse. It also includes dedicated Redis and MongoDB views.
+</details>
+
+<details>
+<summary><strong>Does Oracle need extra setup?</strong></summary>
+
+Yes. Oracle connections require Oracle Instant Client to be installed and available through your system library search path.
+</details>
+
+<details>
+<summary><strong>Where can I download OnetCli?</strong></summary>
+
+Use the GitHub [Releases](https://github.com/feigeCode/onetcli/releases/latest) page. The current release workflow publishes macOS, Linux, and Windows artifacts with checksums.
+</details>
+
+<details>
+<summary><strong>Is OnetCli free?</strong></summary>
+
+All features are available without sponsorship. The source is licensed under Apache License 2.0, and distribution or product use is also subject to the OnetCli Supplementary License.
+</details>
+
+<details>
+<summary><strong>How do I report bugs or request features?</strong></summary>
+
+Open an issue on [GitHub Issues](https://github.com/feigeCode/onetcli/issues). For code changes, please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+</details>
+
+## Support
+
+OnetCli is maintained by one person over the long term. If it saves you time, you can support the project through donations, stars, bug reports, or focused pull requests.
+
+### Donation
+
+Donation is optional and does not unlock or restrict any features. See [DONATE.md](DONATE.md) for WeChat Pay, Alipay, and PayPal options.
+
+### Community Contacts
+
+Official community channels:
+
+- QQ Group: [860670605](https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605)
+- WeChat Group: [Join](https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD)
+
+## Credits
+
+ER diagram rendering is based on [ferrum-flow](https://github.com/tu6ge/ferrum-flow.git).
 
 ## License
 
@@ -161,7 +284,6 @@ The distribution and use of the OnetCli application are additionally subject to 
 - No hosting on unauthorized distribution platforms
 
 For licensing inquiries, contact xiaofei.hf@gmail.com.
-
 
 ## Star History
 
