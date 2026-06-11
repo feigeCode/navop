@@ -61,12 +61,12 @@ pub(super) fn load_databases<T: 'static>(
 ) {
     let connection_id = selected_connection_id(&connection_select, &connection_fallback, cx);
     if connection_id.trim().is_empty() {
-        set_status(&status, "Target connection is required", cx);
+        set_status(&status, "请先选择目标连接", cx);
         return;
     }
     let db_state = cx.global::<GlobalDbState>().clone();
     let preferred = selected_string(&database_select, &database_fallback, cx);
-    set_status(&status, "Loading target databases...", cx);
+    set_status(&status, "正在加载目标数据库…", cx);
 
     cx.spawn(async move |_, cx: &mut AsyncApp| {
         let result = db_state.list_databases(cx, connection_id).await;
@@ -85,12 +85,12 @@ pub(super) fn load_schemas<T: 'static>(
     let connection_id = selected_connection_id(&connection.select, &connection.fallback, cx);
     let database_name = selected_string(&database.select, &database.fallback, cx);
     if connection_id.trim().is_empty() || database_name.trim().is_empty() {
-        set_status(&status, "Target connection and database are required", cx);
+        set_status(&status, "请先选择目标连接和数据库", cx);
         return;
     }
     let db_state = cx.global::<GlobalDbState>().clone();
     let preferred = selected_string(&schema.select, &schema.fallback, cx);
-    set_status(&status, "Loading target schemas...", cx);
+    set_status(&status, "正在加载目标 Schema…", cx);
 
     cx.spawn(async move |_, cx: &mut AsyncApp| {
         let result = db_state
@@ -112,13 +112,13 @@ pub(super) fn load_tables<T: 'static>(
     let connection_id = selected_connection_id(&connection.select, &connection.fallback, cx);
     let database_name = selected_string(&database.select, &database.fallback, cx);
     if connection_id.trim().is_empty() || database_name.trim().is_empty() {
-        set_status(&status, "Target connection and database are required", cx);
+        set_status(&status, "请先选择目标连接和数据库", cx);
         return;
     }
     let schema_name = empty_to_none(selected_string(&schema.select, &schema.fallback, cx));
     let preferred = selected_string(&table.select, &table.fallback, cx);
     let db_state = cx.global::<GlobalDbState>().clone();
-    set_status(&status, "Loading target tables...", cx);
+    set_status(&status, "正在加载目标表…", cx);
 
     cx.spawn(async move |_, cx: &mut AsyncApp| {
         let result = db_state
@@ -164,7 +164,7 @@ fn update_string_select_async(
 ) {
     let message = match result {
         Ok(items) => update_select_items(select, items, preferred, cx),
-        Err(error) => format!("Load failed: {error}"),
+        Err(error) => format!("加载失败:{error}"),
     };
     let _ = cx.update(|cx| {
         status.update(cx, |status, cx| {
@@ -192,7 +192,7 @@ fn update_select_items(
             });
         }
     });
-    format!("Loaded {count} item(s)")
+    format!("已加载 {count} 项")
 }
 
 fn preferred_index(items: &[String], preferred: &str) -> Option<IndexPath> {

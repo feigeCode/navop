@@ -4,7 +4,7 @@ use std::sync::Arc;
 use db::{DbNode, GlobalDbState};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, Styled, Window, div,
+    Render, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     ActiveTheme, Disableable, StyledExt,
@@ -13,6 +13,7 @@ use gpui_component::{
     select::SelectState,
     v_flex,
 };
+use tokio::sync::mpsc;
 
 use crate::compare::sync_statement_picker::{
     default_selected_statement_ids, selected_sync_sql_text_for_ids,
@@ -21,10 +22,11 @@ use crate::compare::target_picker::{StringSelect, selected_string, string_select
 use crate::compare::window_params::schema_compare_params;
 use crate::compare::window_ui::{
     ConnectionSelectItem, close_button, connection_select_state, detail_row, section_title,
-    selected_connection_id, start_sync_sql_execution,
+    selected_connection_id, start_sync_sql_execution, sync_sql_editor_state,
 };
 use crate::compare::{
-    CompareTargetScope, SchemaCompareParams, execute_schema_compare, generate_schema_sync_plan,
+    CompareProgress, CompareTargetScope, SchemaCompareParams, execute_schema_compare,
+    generate_schema_sync_plan,
 };
 use db::compare::{SchemaCompareResult, SyncPlan};
 
@@ -40,11 +42,15 @@ pub struct SchemaCompareWindow {
     pub(super) result: Entity<Option<SchemaCompareResult>>,
     pub(super) sync_plan: Entity<Option<SyncPlan>>,
     pub(super) selected_statement_ids: Entity<HashSet<String>>,
+    pub(super) sync_sql_editor: Entity<InputState>,
+    pub(super) progress: Entity<Option<CompareProgress>>,
     compare_target: Entity<Option<CompareTargetScope>>,
     pub(super) status: Entity<String>,
     is_running: Entity<bool>,
     is_executing: Entity<bool>,
+    compare_task: Option<Task<()>>,
     focus_handle: FocusHandle,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl SchemaCompareWindow {
@@ -71,23 +77,40 @@ impl SchemaCompareWindow {
             window,
             cx,
         );
+        let sync_sql_editor = sync_sql_editor_state(window, cx);
 
-        cx.new(|cx| Self {
-            source_node,
-            target_connection_id,
-            target_connection_select,
-            target_database,
-            target_database_select,
-            target_schema,
-            target_schema_select,
-            result: cx.new(|_| None),
-            sync_plan: cx.new(|_| None),
-            selected_statement_ids: cx.new(|_| HashSet::new()),
-            compare_target: cx.new(|_| None),
-            status: cx.new(|_| "Ready".to_string()),
-            is_running: cx.new(|_| false),
-            is_executing: cx.new(|_| false),
-            focus_handle: cx.focus_handle(),
+        cx.new(|cx: &mut Context<Self>| {
+            let mut window_state = Self {
+                source_node,
+                target_connection_id,
+                target_connection_select,
+                target_database,
+                target_database_select,
+                target_schema,
+                target_schema_select,
+                sync_sql_editor,
+                result: cx.new(|_| None),
+                sync_plan: cx.new(|_| None),
+                selected_statement_ids: cx.new(|_| HashSet::new()),
+                progress: cx.new(|_| None),
+                compare_target: cx.new(|_| None),
+                status: cx.new(|_| "就绪".to_string()),
+                is_running: cx.new(|_| false),
+                is_executing: cx.new(|_| false),
+                compare_task: None,
+                focus_handle: cx.focus_handle(),
+                _subscriptions: Vec::new(),
+            };
+            // 选中语句变化时(比较完成、勾选、批量选择)刷新 SQL 编辑器内容
+            let sub = cx.observe_in(
+                &window_state.selected_statement_ids,
+                window,
+                |this, _, window, cx| {
+                    this.refresh_sync_editor(window, cx);
+                },
+            );
+            window_state._subscriptions.push(sub);
+            window_state
         })
     }
 
@@ -109,15 +132,32 @@ impl SchemaCompareWindow {
             *running = true;
             cx.notify();
         });
-        self.set_status("Comparing schema...", cx);
+        self.set_progress(Some(CompareProgress::phase("正在准备比较…")), cx);
+        self.set_status("正在比较结构…", cx);
 
+        let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<CompareProgress>();
+
+        // 进度接收循环:随执行器任务结束(发送端关闭)而退出
         cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let result = execute_schema_compare(params, db_state, cx).await;
+            while let Some(progress) = progress_rx.recv().await {
+                if this
+                    .update(cx, |view, cx| view.set_progress(Some(progress), cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        let task = cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let result = execute_schema_compare(params, db_state, progress_tx, cx).await;
             let _ = this.update(cx, |view, cx| {
                 view.is_running.update(cx, |running, cx| {
                     *running = false;
                     cx.notify();
                 });
+                view.set_progress(None, cx);
                 match result {
                     Ok(result) => {
                         let plan = generate_schema_sync_plan(&result, "generic");
@@ -138,14 +178,34 @@ impl SchemaCompareWindow {
                             *slot = Some(compare_target);
                             cx.notify();
                         });
-                        view.set_status("Schema compare finished", cx);
+                        view.set_status("结构比较完成", cx);
                     }
-                    Err(error) => view.set_status(format!("Compare failed: {error}"), cx),
+                    Err(error) => view.set_status(format!("比较失败:{error}"), cx),
                 }
                 cx.notify();
             });
-        })
-        .detach();
+        });
+        self.compare_task = Some(task);
+    }
+
+    fn cancel_compare(&mut self, cx: &mut Context<Self>) {
+        // 丢弃任务句柄即取消执行器 future,并关闭进度通道
+        self.compare_task = None;
+        self.is_running.update(cx, |running, cx| {
+            *running = false;
+            cx.notify();
+        });
+        self.set_progress(None, cx);
+        self.set_status("已取消", cx);
+        cx.notify();
+    }
+
+    /// 根据当前选中的语句刷新 SQL 编辑器内容(可被用户后续手动编辑)
+    fn refresh_sync_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let sql = self.selected_sync_sql(cx);
+        self.sync_sql_editor.update(cx, |state, cx| {
+            state.set_value(sql, window, cx);
+        });
     }
 
     fn build_params(&self, cx: &mut Context<Self>) -> Result<SchemaCompareParams, &'static str> {
@@ -165,25 +225,38 @@ impl SchemaCompareWindow {
     fn start_execute_sync_sql(&mut self, cx: &mut Context<Self>) {
         start_sync_sql_execution(
             self.compare_target.read(cx).clone(),
-            self.selected_sync_sql(cx),
+            self.editor_sql(cx),
             self.status.clone(),
             self.is_executing.clone(),
             cx,
         );
     }
 
-    fn selected_sync_sql(&self, cx: &mut Context<Self>) -> String {
+    /// 编辑器中实际待执行的 SQL(用户可能已手动修改)
+    fn editor_sql(&self, cx: &Context<Self>) -> String {
+        self.sync_sql_editor.read(cx).text().to_string()
+    }
+
+    /// 由选中语句生成的 SQL,用于填充编辑器
+    fn selected_sync_sql(&self, cx: &Context<Self>) -> String {
         let selected_ids = self.selected_statement_ids.read(cx);
         self.sync_plan
             .read(cx)
             .as_ref()
             .map_or_else(String::new, |plan| {
-                selected_sync_sql_text_for_ids(plan, &selected_ids)
+                selected_sync_sql_text_for_ids(plan, selected_ids)
             })
     }
 
-    fn has_selected_sync_sql(&self, cx: &mut Context<Self>) -> bool {
-        !self.selected_sync_sql(cx).trim().is_empty()
+    fn has_editor_sql(&self, cx: &Context<Self>) -> bool {
+        !self.editor_sql(cx).trim().is_empty()
+    }
+
+    fn set_progress(&self, progress: Option<CompareProgress>, cx: &mut Context<Self>) {
+        self.progress.update(cx, |slot, cx| {
+            *slot = progress;
+            cx.notify();
+        });
     }
 
     fn set_status(&self, status: impl Into<String>, cx: &mut Context<Self>) {
@@ -200,13 +273,10 @@ impl SchemaCompareWindow {
             .border_1()
             .border_color(cx.theme().border)
             .rounded_md()
-            .child(section_title("Source"))
+            .child(section_title("源"))
+            .child(detail_row("连接", self.source_node.connection_id.clone()))
             .child(detail_row(
-                "Connection",
-                self.source_node.connection_id.clone(),
-            ))
-            .child(detail_row(
-                "Database",
+                "数据库",
                 self.source_node.get_database_name().unwrap_or_default(),
             ))
             .child(detail_row(
@@ -226,7 +296,7 @@ impl Render for SchemaCompareWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_running = *self.is_running.read(cx);
         let is_executing = *self.is_executing.read(cx);
-        let has_sync_sql = self.has_selected_sync_sql(cx);
+        let has_sync_sql = self.has_editor_sql(cx);
         v_flex()
             .size_full()
             .p_4()
@@ -242,9 +312,19 @@ impl Render for SchemaCompareWindow {
                     .justify_end()
                     .gap_2()
                     .child(close_button())
+                    .when(is_running, |this| {
+                        this.child(
+                            Button::new("cancel-compare")
+                                .danger()
+                                .child("取消")
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.cancel_compare(cx);
+                                })),
+                        )
+                    })
                     .child(
                         Button::new("execute-sync-sql")
-                            .child("Execute SQL")
+                            .child("执行 SQL")
                             .loading(is_executing)
                             .disabled(is_running || is_executing || !has_sync_sql)
                             .on_click(cx.listener(move |view, _, _, cx| {
@@ -256,7 +336,7 @@ impl Render for SchemaCompareWindow {
                             .primary()
                             .loading(is_running)
                             .disabled(is_running || is_executing)
-                            .child("Compare")
+                            .child("开始比较")
                             .on_click(cx.listener(move |view, _, _, cx| {
                                 view.start_compare(cx);
                             })),

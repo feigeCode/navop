@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
 use db::GlobalDbState;
-use db::compare::{DataCompareResult, SchemaCompareResult};
+use db::compare::DataCompareResult;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, Hsla, IntoElement, ParentElement, Styled, div, px,
+    App, AppContext, AsyncApp, Context, Entity, Hsla, IntoElement, ParentElement, Styled, Window,
+    div, px,
 };
 use gpui_component::{
-    IndexPath, Sizable, StyledExt,
+    ActiveTheme, IndexPath, Sizable, StyledExt,
     button::Button,
     clipboard::Clipboard,
     h_flex,
+    highlighter::Language,
     input::{Input, InputState},
-    scroll::ScrollableElement,
+    progress::Progress,
     select::{Select, SelectItem, SelectState},
     v_flex,
 };
@@ -19,7 +21,7 @@ use one_core::storage::{
     ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection, traits::Repository,
 };
 
-use crate::compare::{CompareTargetScope, execute_sync_sql};
+use crate::compare::{CompareProgress, CompareTargetScope, execute_sync_sql};
 
 #[derive(Clone, Debug)]
 pub(super) struct ConnectionSelectItem {
@@ -91,33 +93,65 @@ pub(super) fn selected_connection_id(
         .unwrap_or_else(|| fallback.read(cx).text().to_string())
 }
 
-pub(super) fn data_summary(result: &DataCompareResult) -> String {
-    format!(
-        "Rows: +{} / -{} / ~{}{}{}",
-        result.added.len(),
-        result.removed.len(),
-        result.modified.len(),
-        if result.source_truncated {
-            " | source truncated"
-        } else {
-            ""
-        },
-        if result.target_truncated {
-            " | target truncated"
-        } else {
-            ""
-        },
-    )
+pub(super) fn data_truncation_note(result: &DataCompareResult) -> Option<String> {
+    match (result.source_truncated, result.target_truncated) {
+        (true, true) => Some("源/目标数据均已截断,仅比较前若干行".to_string()),
+        (true, false) => Some("源数据已截断,仅比较前若干行".to_string()),
+        (false, true) => Some("目标数据已截断,仅比较前若干行".to_string()),
+        (false, false) => None,
+    }
 }
 
-pub(super) fn schema_summary(result: &SchemaCompareResult) -> String {
-    format!(
-        "Tables: +{} / -{} / ~{} ({} diff item(s))",
-        result.added_count,
-        result.removed_count,
-        result.modified_count,
-        result.table_diffs.len()
-    )
+/// 比较结果统计卡片(新增/删除/修改)
+pub(super) fn stat_cards_row(
+    added: usize,
+    removed: usize,
+    modified: usize,
+    cx: &App,
+) -> impl IntoElement {
+    h_flex()
+        .gap_2()
+        .child(stat_card("+", added, "新增", cx.theme().success, cx))
+        .child(stat_card("−", removed, "删除", cx.theme().danger, cx))
+        .child(stat_card("~", modified, "修改", cx.theme().warning, cx))
+}
+
+fn stat_card(sign: &str, count: usize, label: &str, color: Hsla, cx: &App) -> impl IntoElement {
+    v_flex()
+        .flex_1()
+        .px_3()
+        .py_2()
+        .gap_1()
+        .border_1()
+        .border_color(cx.theme().border)
+        .rounded_md()
+        .bg(cx.theme().secondary)
+        .child(
+            div()
+                .text_color(color)
+                .font_semibold()
+                .child(format!("{sign}{count}")),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label.to_string()),
+        )
+}
+
+/// 进度视图:阶段文本 +(确定型时)进度条
+pub(super) fn compare_progress_view(progress: &CompareProgress, cx: &App) -> impl IntoElement {
+    let mut col = v_flex().gap_1().child(
+        div()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(progress.label()),
+    );
+    if let Some(value) = progress.percentage() {
+        col = col.child(Progress::new("compare-progress").value(value));
+    }
+    col
 }
 
 pub(super) fn start_sync_sql_execution<T: 'static>(
@@ -128,11 +162,11 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
     cx: &mut Context<T>,
 ) {
     let Some(target) = target else {
-        set_status(&status, "Run compare before executing sync SQL", cx);
+        set_status(&status, "请先执行比较,再执行同步 SQL", cx);
         return;
     };
     if sql.trim().is_empty() {
-        set_status(&status, "No selected sync SQL to execute", cx);
+        set_status(&status, "没有可执行的同步 SQL", cx);
         return;
     }
 
@@ -141,7 +175,7 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
         *executing = true;
         cx.notify();
     });
-    set_status(&status, "Executing selected sync SQL...", cx);
+    set_status(&status, "正在执行同步 SQL…", cx);
 
     cx.spawn(async move |_, cx: &mut AsyncApp| {
         let result = execute_sync_sql(target, sql, db_state, cx).await;
@@ -152,9 +186,9 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
             });
             match result {
                 Ok(count) => {
-                    set_status_app(&status, format!("Sync SQL executed: {count} result(s)"), cx)
+                    set_status_app(&status, format!("同步 SQL 执行完成:{count} 条结果"), cx)
                 }
-                Err(error) => set_status_app(&status, format!("Execute failed: {error}"), cx),
+                Err(error) => set_status_app(&status, format!("执行失败:{error}"), cx),
             }
         });
     })
@@ -221,29 +255,41 @@ pub(super) fn detail_row(label: &'static str, value: String) -> impl IntoElement
         }))
 }
 
-pub(super) fn sql_preview(
+/// 创建用于「同步 SQL」的代码编辑器(SQL 语法高亮 + 行号,可编辑)
+pub(super) fn sync_sql_editor_state(window: &mut Window, cx: &mut App) -> Entity<InputState> {
+    cx.new(|cx| {
+        InputState::new(window, cx)
+            .code_editor(Language::from_str("sql"))
+            .line_number(true)
+            .multi_line(true)
+            .soft_wrap(false)
+            .placeholder("比较完成后,选中的同步语句将在此生成,可手动编辑后执行")
+    })
+}
+
+/// 同步 SQL 编辑器面板:标题 + 复制按钮 + 可编辑代码编辑器
+pub(super) fn sql_editor_panel(
     copy_id: &'static str,
-    sql: String,
-    border_color: Hsla,
+    editor: &Entity<InputState>,
+    copy_value: String,
+    cx: &App,
 ) -> impl IntoElement {
-    let sql_for_copy = sql.clone();
     v_flex()
+        .flex_1()
         .gap_1()
         .child(
             h_flex()
                 .justify_between()
-                .child(div().text_sm().font_semibold().child("Sync SQL"))
-                .child(Clipboard::new(copy_id).value(sql_for_copy)),
+                .child(div().text_sm().font_semibold().child("同步 SQL"))
+                .child(Clipboard::new(copy_id).value(copy_value)),
         )
         .child(
             div()
-                .max_h(px(220.0))
-                .overflow_y_scrollbar()
-                .p_3()
+                .flex_1()
+                .min_h(px(180.0))
                 .border_1()
-                .border_color(border_color)
+                .border_color(cx.theme().border)
                 .rounded_md()
-                .text_sm()
-                .child(sql),
+                .child(Input::new(editor).size_full()),
         )
 }

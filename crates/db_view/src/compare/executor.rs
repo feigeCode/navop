@@ -10,8 +10,19 @@ use db::{
 use gpui::AsyncApp;
 use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::sync::mpsc;
+
+use crate::compare::CompareProgress;
 
 const DATA_COMPARE_PAGE_SIZE: usize = 10_000;
+
+/// 数据比较的阶段总数(加载源列、目标列、源数据、目标数据、比较)
+const DATA_COMPARE_TOTAL_STEPS: usize = 5;
+
+fn report(progress_tx: &mpsc::UnboundedSender<CompareProgress>, progress: CompareProgress) {
+    // 接收端可能因取消而提前关闭,忽略发送错误
+    let _ = progress_tx.send(progress);
+}
 
 /// 数据比较任务参数
 #[derive(Debug, Clone)]
@@ -42,8 +53,13 @@ pub struct SchemaCompareParams {
 pub async fn execute_data_compare(
     params: DataCompareParams,
     db_state: Arc<GlobalDbState>,
+    progress_tx: mpsc::UnboundedSender<CompareProgress>,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<DataCompareResult> {
+    report(
+        &progress_tx,
+        CompareProgress::steps("正在读取源表结构", 1, DATA_COMPARE_TOTAL_STEPS),
+    );
     let source_columns = load_table_columns(
         &db_state,
         cx,
@@ -53,6 +69,10 @@ pub async fn execute_data_compare(
         &params.source_table,
     )
     .await?;
+    report(
+        &progress_tx,
+        CompareProgress::steps("正在读取目标表结构", 2, DATA_COMPARE_TOTAL_STEPS),
+    );
     let target_columns = load_table_columns(
         &db_state,
         cx,
@@ -64,11 +84,23 @@ pub async fn execute_data_compare(
     .await?;
     let key_columns = resolve_key_columns(&params.key_columns, &source_columns, &target_columns)?;
 
+    report(
+        &progress_tx,
+        CompareProgress::steps("正在加载源表数据", 3, DATA_COMPARE_TOTAL_STEPS),
+    );
     let source_response =
         load_table_data(&db_state, cx, SourceSide::Source, &params, &key_columns).await?;
+    report(
+        &progress_tx,
+        CompareProgress::steps("正在加载目标表数据", 4, DATA_COMPARE_TOTAL_STEPS),
+    );
     let target_response =
         load_table_data(&db_state, cx, SourceSide::Target, &params, &key_columns).await?;
 
+    report(
+        &progress_tx,
+        CompareProgress::steps("正在比较数据", 5, DATA_COMPARE_TOTAL_STEPS),
+    );
     build_data_compare_result(params, key_columns, source_response, target_response)
 }
 
@@ -81,6 +113,7 @@ pub fn generate_data_sync_plan(result: &DataCompareResult) -> SyncPlan {
 pub async fn execute_schema_compare(
     params: SchemaCompareParams,
     db_state: Arc<GlobalDbState>,
+    progress_tx: mpsc::UnboundedSender<CompareProgress>,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<SchemaCompareResult> {
     let options = SchemaCompareOptions::default();
@@ -90,6 +123,8 @@ pub async fn execute_schema_compare(
         params.source_connection_id,
         params.source_database,
         params.source_schema,
+        &progress_tx,
+        "源",
     )
     .await?;
     let target_tables = load_schema_tables(
@@ -98,8 +133,11 @@ pub async fn execute_schema_compare(
         params.target_connection_id,
         params.target_database,
         params.target_schema,
+        &progress_tx,
+        "目标",
     )
     .await?;
+    report(&progress_tx, CompareProgress::phase("正在比较结构"));
     let result = compare_schemas(source_tables, target_tables, options)?;
     Ok(result)
 }
@@ -200,13 +238,24 @@ async fn load_schema_tables(
     connection_id: String,
     database: String,
     schema: Option<String>,
+    progress_tx: &mpsc::UnboundedSender<CompareProgress>,
+    side_label: &str,
 ) -> anyhow::Result<Vec<TableSchema>> {
+    report(
+        progress_tx,
+        CompareProgress::phase(format!("正在加载{side_label}表列表")),
+    );
     let tables = db_state
         .list_tables(cx, connection_id.clone(), database.clone(), schema.clone())
         .await?;
-    let mut schemas = Vec::with_capacity(tables.len());
+    let total = tables.len();
+    let mut schemas = Vec::with_capacity(total);
 
-    for table in tables {
+    for (index, table) in tables.into_iter().enumerate() {
+        report(
+            progress_tx,
+            CompareProgress::steps(format!("正在读取{side_label}表结构"), index + 1, total),
+        );
         schemas.push(
             load_single_table_schema(
                 db_state,
