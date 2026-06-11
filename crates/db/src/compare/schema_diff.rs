@@ -1,7 +1,6 @@
 use super::{
-    ColumnDiff, ColumnSchema, DiffStatus, ForeignKeyDiff, ForeignKeySchema, IndexDiff,
-    IndexSchema, SchemaCompareError, SchemaCompareOptions, SchemaCompareResult, TableDiff,
-    TableSchema,
+    ColumnDiff, ColumnSchema, DiffStatus, ForeignKeyDiff, ForeignKeySchema, IndexDiff, IndexSchema,
+    SchemaCompareError, SchemaCompareOptions, SchemaCompareResult, TableDiff, TableSchema,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -11,10 +10,14 @@ pub fn compare_schemas(
     target_tables: Vec<TableSchema>,
     options: SchemaCompareOptions,
 ) -> Result<SchemaCompareResult, SchemaCompareError> {
-    let source_map: HashMap<String, TableSchema> =
-        source_tables.into_iter().map(|t| (t.name.clone(), t)).collect();
-    let target_map: HashMap<String, TableSchema> =
-        target_tables.into_iter().map(|t| (t.name.clone(), t)).collect();
+    let source_map: HashMap<String, TableSchema> = source_tables
+        .into_iter()
+        .map(|t| (t.name.clone(), t))
+        .collect();
+    let target_map: HashMap<String, TableSchema> = target_tables
+        .into_iter()
+        .map(|t| (t.name.clone(), t))
+        .collect();
 
     let source_names: HashSet<_> = source_map.keys().collect();
     let target_names: HashSet<_> = target_map.keys().collect();
@@ -26,6 +29,8 @@ pub fn compare_schemas(
         table_diffs.push(TableDiff {
             name: (*name).clone(),
             status: DiffStatus::Added,
+            source: source_map.get(*name).cloned(),
+            target: None,
             column_diffs: vec![],
             index_diffs: vec![],
             foreign_key_diffs: vec![],
@@ -38,6 +43,8 @@ pub fn compare_schemas(
         table_diffs.push(TableDiff {
             name: (*name).clone(),
             status: DiffStatus::Removed,
+            source: None,
+            target: target_map.get(*name).cloned(),
             column_diffs: vec![],
             index_diffs: vec![],
             foreign_key_diffs: vec![],
@@ -55,9 +62,18 @@ pub fn compare_schemas(
         }
     }
 
-    let added_count = table_diffs.iter().filter(|d| matches!(d.status, DiffStatus::Added)).count();
-    let removed_count = table_diffs.iter().filter(|d| matches!(d.status, DiffStatus::Removed)).count();
-    let modified_count = table_diffs.iter().filter(|d| matches!(d.status, DiffStatus::Modified)).count();
+    let added_count = table_diffs
+        .iter()
+        .filter(|d| matches!(d.status, DiffStatus::Added))
+        .count();
+    let removed_count = table_diffs
+        .iter()
+        .filter(|d| matches!(d.status, DiffStatus::Removed))
+        .count();
+    let modified_count = table_diffs
+        .iter()
+        .filter(|d| matches!(d.status, DiffStatus::Modified))
+        .count();
 
     Ok(SchemaCompareResult {
         table_diffs,
@@ -92,6 +108,8 @@ fn compare_table(
         Some(TableDiff {
             name: source.name.clone(),
             status: DiffStatus::Modified,
+            source: Some(source.clone()),
+            target: Some(target.clone()),
             column_diffs,
             index_diffs,
             foreign_key_diffs,
@@ -155,8 +173,11 @@ fn compare_columns(source: &[ColumnSchema], target: &[ColumnSchema]) -> Vec<Colu
 
 /// 比较索引
 fn compare_indexes(source: &[IndexSchema], target: &[IndexSchema]) -> Vec<IndexDiff> {
-    let source_names: HashSet<_> = source.iter().map(|i| &i.name).collect();
-    let target_names: HashSet<_> = target.iter().map(|i| &i.name).collect();
+    let source_map: HashMap<_, _> = source.iter().map(|i| (&i.name, i)).collect();
+    let target_map: HashMap<_, _> = target.iter().map(|i| (&i.name, i)).collect();
+
+    let source_names: HashSet<_> = source_map.keys().collect();
+    let target_names: HashSet<_> = target_map.keys().collect();
 
     let mut diffs = Vec::new();
 
@@ -164,6 +185,8 @@ fn compare_indexes(source: &[IndexSchema], target: &[IndexSchema]) -> Vec<IndexD
         diffs.push(IndexDiff {
             name: (*name).to_string(),
             status: DiffStatus::Added,
+            source: Some((*source_map[*name]).clone()),
+            target: None,
         });
     }
 
@@ -171,7 +194,22 @@ fn compare_indexes(source: &[IndexSchema], target: &[IndexSchema]) -> Vec<IndexD
         diffs.push(IndexDiff {
             name: (*name).to_string(),
             status: DiffStatus::Removed,
+            source: None,
+            target: Some((*target_map[*name]).clone()),
         });
+    }
+
+    for name in source_names.intersection(&target_names) {
+        let source_index = source_map[*name];
+        let target_index = target_map[*name];
+        if source_index != target_index {
+            diffs.push(IndexDiff {
+                name: (*name).to_string(),
+                status: DiffStatus::Modified,
+                source: Some((*source_index).clone()),
+                target: Some((*target_index).clone()),
+            });
+        }
     }
 
     diffs
@@ -182,8 +220,11 @@ fn compare_foreign_keys(
     source: &[ForeignKeySchema],
     target: &[ForeignKeySchema],
 ) -> Vec<ForeignKeyDiff> {
-    let source_names: HashSet<_> = source.iter().map(|fk| &fk.name).collect();
-    let target_names: HashSet<_> = target.iter().map(|fk| &fk.name).collect();
+    let source_map: HashMap<_, _> = source.iter().map(|fk| (&fk.name, fk)).collect();
+    let target_map: HashMap<_, _> = target.iter().map(|fk| (&fk.name, fk)).collect();
+
+    let source_names: HashSet<_> = source_map.keys().collect();
+    let target_names: HashSet<_> = target_map.keys().collect();
 
     let mut diffs = Vec::new();
 
@@ -191,6 +232,8 @@ fn compare_foreign_keys(
         diffs.push(ForeignKeyDiff {
             name: (*name).to_string(),
             status: DiffStatus::Added,
+            source: Some((*source_map[*name]).clone()),
+            target: None,
         });
     }
 
@@ -198,7 +241,22 @@ fn compare_foreign_keys(
         diffs.push(ForeignKeyDiff {
             name: (*name).to_string(),
             status: DiffStatus::Removed,
+            source: None,
+            target: Some((*target_map[*name]).clone()),
         });
+    }
+
+    for name in source_names.intersection(&target_names) {
+        let source_fk = source_map[*name];
+        let target_fk = target_map[*name];
+        if source_fk != target_fk {
+            diffs.push(ForeignKeyDiff {
+                name: (*name).to_string(),
+                status: DiffStatus::Modified,
+                source: Some((*source_fk).clone()),
+                target: Some((*target_fk).clone()),
+            });
+        }
     }
 
     diffs
@@ -218,12 +276,25 @@ mod tests {
         }
     }
 
+    fn table(name: &str, columns: Vec<ColumnSchema>) -> TableSchema {
+        TableSchema {
+            name: name.to_string(),
+            columns,
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        }
+    }
+
     #[test]
     fn test_compare_schemas_detects_added_removed_modified() {
         let source = vec![
             TableSchema {
                 name: "users".to_string(),
-                columns: vec![column("id", "int", false), column("name", "varchar(64)", false)],
+                columns: vec![
+                    column("id", "int", false),
+                    column("name", "varchar(64)", false),
+                ],
                 indexes: vec![],
                 foreign_keys: vec![],
                 comment: None,
@@ -263,7 +334,11 @@ mod tests {
         assert_eq!(result.removed_count, 1);
         assert_eq!(result.modified_count, 1);
 
-        let users_diff = result.table_diffs.iter().find(|d| d.name == "users").unwrap();
+        let users_diff = result
+            .table_diffs
+            .iter()
+            .find(|d| d.name == "users")
+            .unwrap();
         assert_eq!(users_diff.status, DiffStatus::Modified);
         assert_eq!(users_diff.column_diffs.len(), 1);
     }
@@ -284,8 +359,78 @@ mod tests {
         let diffs = compare_columns(&source, &target);
 
         assert_eq!(diffs.len(), 3);
-        assert!(diffs.iter().any(|d| d.name == "email" && d.status == DiffStatus::Added));
-        assert!(diffs.iter().any(|d| d.name == "phone" && d.status == DiffStatus::Removed));
-        assert!(diffs.iter().any(|d| d.name == "name" && d.status == DiffStatus::Modified));
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.name == "email" && d.status == DiffStatus::Added)
+        );
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.name == "phone" && d.status == DiffStatus::Removed)
+        );
+        assert!(
+            diffs
+                .iter()
+                .any(|d| d.name == "name" && d.status == DiffStatus::Modified)
+        );
+    }
+
+    #[test]
+    fn test_added_table_diff_keeps_source_schema() {
+        let source = vec![table("users", vec![column("id", "int", false)])];
+
+        let result = compare_schemas(source, vec![], SchemaCompareOptions::default()).unwrap();
+
+        let diff = result
+            .table_diffs
+            .iter()
+            .find(|d| d.name == "users")
+            .unwrap();
+        assert_eq!(diff.status, DiffStatus::Added);
+        assert_eq!(
+            diff.source.as_ref().unwrap().columns[0].name,
+            "id".to_string()
+        );
+        assert!(diff.target.is_none());
+    }
+
+    #[test]
+    fn test_index_and_foreign_key_property_changes_are_modified() {
+        let mut source = table("orders", vec![column("id", "int", false)]);
+        source.indexes = vec![IndexSchema {
+            name: "idx_orders_user".to_string(),
+            columns: vec!["user_id".to_string()],
+            unique: true,
+        }];
+        source.foreign_keys = vec![ForeignKeySchema {
+            name: "fk_orders_user".to_string(),
+            columns: vec!["user_id".to_string()],
+            ref_table: "users".to_string(),
+            ref_columns: vec!["id".to_string()],
+        }];
+
+        let mut target = source.clone();
+        target.indexes[0].unique = false;
+        target.foreign_keys[0].ref_columns = vec!["legacy_id".to_string()];
+
+        let result =
+            compare_schemas(vec![source], vec![target], SchemaCompareOptions::default()).unwrap();
+
+        let diff = result
+            .table_diffs
+            .iter()
+            .find(|d| d.name == "orders")
+            .unwrap();
+        assert!(
+            diff.index_diffs
+                .iter()
+                .any(|d| d.name == "idx_orders_user" && d.status == DiffStatus::Modified)
+        );
+        assert!(
+            diff.foreign_key_diffs
+                .iter()
+                .any(|d| d.name == "fk_orders_user" && d.status == DiffStatus::Modified)
+        );
     }
 }

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// 列定义
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnSchema {
     pub name: String,
     pub data_type: String,
@@ -11,7 +11,7 @@ pub struct ColumnSchema {
 }
 
 /// 索引定义
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexSchema {
     pub name: String,
     pub columns: Vec<String>,
@@ -19,7 +19,7 @@ pub struct IndexSchema {
 }
 
 /// 外键定义
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForeignKeySchema {
     pub name: String,
     pub columns: Vec<String>,
@@ -28,7 +28,7 @@ pub struct ForeignKeySchema {
 }
 
 /// 表结构
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TableSchema {
     pub name: String,
     pub columns: Vec<ColumnSchema>,
@@ -60,6 +60,8 @@ pub struct ColumnDiff {
 pub struct IndexDiff {
     pub name: String,
     pub status: DiffStatus,
+    pub source: Option<IndexSchema>,
+    pub target: Option<IndexSchema>,
 }
 
 /// 外键差异
@@ -67,6 +69,8 @@ pub struct IndexDiff {
 pub struct ForeignKeyDiff {
     pub name: String,
     pub status: DiffStatus,
+    pub source: Option<ForeignKeySchema>,
+    pub target: Option<ForeignKeySchema>,
 }
 
 /// 表差异
@@ -74,6 +78,8 @@ pub struct ForeignKeyDiff {
 pub struct TableDiff {
     pub name: String,
     pub status: DiffStatus,
+    pub source: Option<TableSchema>,
+    pub target: Option<TableSchema>,
     pub column_diffs: Vec<ColumnDiff>,
     pub index_diffs: Vec<IndexDiff>,
     pub foreign_key_diffs: Vec<ForeignKeyDiff>,

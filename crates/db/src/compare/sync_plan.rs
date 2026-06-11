@@ -1,4 +1,7 @@
-use super::{CellValue, DataCompareResult, DiffStatus, RowData, SchemaCompareResult};
+use super::{
+    CellValue, ColumnSchema, DataCompareResult, DiffStatus, RowData, SchemaCompareResult,
+    TableSchema,
+};
 use serde::{Deserialize, Serialize};
 
 /// 同步计划类型
@@ -146,9 +149,9 @@ pub fn build_data_sync_plan(result: &DataCompareResult) -> SyncPlan {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
             ),
-            destructive: true,  // 破坏性操作
+            destructive: true, // 破坏性操作
             transactional_safe: true,
-            selected_by_default: false,  // P0: 默认不选中
+            selected_by_default: false, // P0: 默认不选中
             warnings: vec!["此操作将删除目标表中的数据".to_string()],
         });
     }
@@ -168,7 +171,11 @@ pub fn build_data_sync_plan(result: &DataCompareResult) -> SyncPlan {
     };
 
     // 生成完整 SQL 文本
-    let sql_text = statements.iter().map(|s| s.sql.as_str()).collect::<Vec<_>>().join("\n");
+    let sql_text = statements
+        .iter()
+        .map(|s| s.sql.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
 
     SyncPlan {
         id: plan_id,
@@ -208,13 +215,16 @@ fn generate_update_sql(
         .collect::<Vec<_>>()
         .join(", ");
 
-    let where_clause = key_values
-        .iter()
-        .map(|(col, val)| format!("{} = {}", col, format_value(val.clone())))
+    let where_clause = sorted_key_values(key_values)
+        .into_iter()
+        .map(|(col, val)| format_where_condition(col, val))
         .collect::<Vec<_>>()
         .join(" AND ");
 
-    format!("UPDATE {} SET {} WHERE {};", table, set_clause, where_clause)
+    format!(
+        "UPDATE {} SET {} WHERE {};",
+        table, set_clause, where_clause
+    )
 }
 
 /// 生成 DELETE SQL
@@ -222,13 +232,47 @@ fn generate_delete_sql(
     table: &str,
     key_values: &std::collections::HashMap<String, CellValue>,
 ) -> String {
-    let where_clause = key_values
-        .iter()
-        .map(|(col, val)| format!("{} = {}", col, format_value(val.clone())))
+    let where_clause = sorted_key_values(key_values)
+        .into_iter()
+        .map(|(col, val)| format_where_condition(col, val))
         .collect::<Vec<_>>()
         .join(" AND ");
 
     format!("DELETE FROM {} WHERE {};", table, where_clause)
+}
+
+/// 生成 CREATE TABLE SQL
+fn generate_create_table_sql(table: &TableSchema) -> String {
+    let columns = table
+        .columns
+        .iter()
+        .map(generate_column_definition)
+        .collect::<Vec<_>>()
+        .join(",\n");
+
+    format!("CREATE TABLE {} (\n{}\n);", table.name, columns)
+}
+
+/// 生成列定义 SQL
+fn generate_column_definition(column: &ColumnSchema) -> String {
+    let nullable = if column.nullable { "NULL" } else { "NOT NULL" };
+    let mut definition = format!("  {} {} {}", column.name, column.data_type, nullable);
+    if let Some(default_value) = &column.default_value {
+        definition.push_str(" DEFAULT ");
+        definition.push_str(default_value);
+    }
+    definition
+}
+
+fn generate_create_index_sql(table_name: &str, index: &super::IndexSchema) -> String {
+    let unique = if index.unique { "UNIQUE " } else { "" };
+    format!(
+        "CREATE {}INDEX {} ON {} ({});",
+        unique,
+        index.name,
+        table_name,
+        index.columns.join(", ")
+    )
 }
 
 /// 格式化值为 SQL 字面量
@@ -238,7 +282,28 @@ fn format_value(value: CellValue) -> String {
         CellValue::Bool(b) => if b { "TRUE" } else { "FALSE" }.to_string(),
         CellValue::Number(n) => n.to_string(),
         CellValue::String(s) => format!("'{}'", s.replace('\'', "''")),
-        _ => format!("'{}'", serde_json::to_string(&value).unwrap_or_else(|_| "NULL".to_string()).replace('\'', "''")),
+        _ => format!(
+            "'{}'",
+            serde_json::to_string(&value)
+                .unwrap_or_else(|_| "NULL".to_string())
+                .replace('\'', "''")
+        ),
+    }
+}
+
+fn sorted_key_values(
+    key_values: &std::collections::HashMap<String, CellValue>,
+) -> Vec<(&String, &CellValue)> {
+    let mut values = key_values.iter().collect::<Vec<_>>();
+    values.sort_by(|left, right| left.0.cmp(right.0));
+    values
+}
+
+fn format_where_condition(column: &str, value: &CellValue) -> String {
+    if value.is_null() {
+        format!("{column} IS NULL")
+    } else {
+        format!("{} = {}", column, format_value(value.clone()))
     }
 }
 
@@ -253,11 +318,7 @@ fn extract_row_key(
             map.insert(col.clone(), val.clone());
         }
     }
-    if map.is_empty() {
-        None
-    } else {
-        Some(map)
-    }
+    if map.is_empty() { None } else { Some(map) }
 }
 
 /// 从行中提取键值对
@@ -284,7 +345,20 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
     for table_diff in &result.table_diffs {
         match table_diff.status {
             DiffStatus::Added => {
-                // 新增表 - 需要 DDL（暂时跳过，第一版不生成 CREATE TABLE）
+                if let Some(source_table) = &table_diff.source {
+                    let stmt_id = uuid::Uuid::new_v4().to_string();
+                    statements.push(SyncStatement {
+                        id: stmt_id,
+                        sql: generate_create_table_sql(source_table),
+                        kind: SyncStatementKind::CreateTable,
+                        object_name: Some(table_diff.name.clone()),
+                        row_key: None,
+                        destructive: false,
+                        transactional_safe: true,
+                        selected_by_default: true,
+                        warnings: vec![],
+                    });
+                }
             }
             DiffStatus::Removed => {
                 // 删除表 - P0 安全保护：默认不选中
@@ -347,17 +421,18 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
                             // 修改列 - P0 安全保护：默认不选中（可能导致数据丢失）
                             if let Some(src) = &col_diff.source {
                                 let nullable = if src.nullable { "NULL" } else { "NOT NULL" };
-                                let sql = if target_db_type == "mysql" || target_db_type == "mariadb" {
-                                    format!(
-                                        "ALTER TABLE {} MODIFY COLUMN {} {} {};",
-                                        table_diff.name, src.name, src.data_type, nullable
-                                    )
-                                } else {
-                                    format!(
-                                        "ALTER TABLE {} ALTER COLUMN {} TYPE {};",
-                                        table_diff.name, src.name, src.data_type
-                                    )
-                                };
+                                let sql =
+                                    if target_db_type == "mysql" || target_db_type == "mariadb" {
+                                        format!(
+                                            "ALTER TABLE {} MODIFY COLUMN {} {} {};",
+                                            table_diff.name, src.name, src.data_type, nullable
+                                        )
+                                    } else {
+                                        format!(
+                                            "ALTER TABLE {} ALTER COLUMN {} TYPE {};",
+                                            table_diff.name, src.name, src.data_type
+                                        )
+                                    };
 
                                 statements.push(SyncStatement {
                                     id: stmt_id,
@@ -368,7 +443,9 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
                                     destructive: true,
                                     transactional_safe: true,
                                     selected_by_default: false,
-                                    warnings: vec!["此操作可能导致数据类型转换失败或数据丢失".to_string()],
+                                    warnings: vec![
+                                        "此操作可能导致数据类型转换失败或数据丢失".to_string(),
+                                    ],
                                 });
                             }
                         }
@@ -381,17 +458,19 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
 
                     match idx_diff.status {
                         DiffStatus::Added => {
-                            statements.push(SyncStatement {
-                                id: stmt_id,
-                                sql: format!("-- CREATE INDEX {} (详细信息需要索引列)", idx_diff.name),
-                                kind: SyncStatementKind::CreateIndex,
-                                object_name: Some(idx_diff.name.clone()),
-                                row_key: None,
-                                destructive: false,
-                                transactional_safe: true,
-                                selected_by_default: true,
-                                warnings: vec![],
-                            });
+                            if let Some(index) = &idx_diff.source {
+                                statements.push(SyncStatement {
+                                    id: stmt_id,
+                                    sql: generate_create_index_sql(&table_diff.name, index),
+                                    kind: SyncStatementKind::CreateIndex,
+                                    object_name: Some(idx_diff.name.clone()),
+                                    row_key: None,
+                                    destructive: false,
+                                    transactional_safe: true,
+                                    selected_by_default: true,
+                                    warnings: vec![],
+                                });
+                            }
                         }
                         DiffStatus::Removed => {
                             statements.push(SyncStatement {
@@ -406,7 +485,24 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
                                 warnings: vec![],
                             });
                         }
-                        _ => {}
+                        DiffStatus::Modified => {
+                            if let Some(index) = &idx_diff.source {
+                                statements.push(SyncStatement {
+                                    id: stmt_id,
+                                    sql: generate_create_index_sql(&table_diff.name, index),
+                                    kind: SyncStatementKind::CreateIndex,
+                                    object_name: Some(idx_diff.name.clone()),
+                                    row_key: None,
+                                    destructive: false,
+                                    transactional_safe: true,
+                                    selected_by_default: false,
+                                    warnings: vec![
+                                        "此操作会重建目标索引，请先确认现有索引可被替换"
+                                            .to_string(),
+                                    ],
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -414,7 +510,11 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
     }
 
     let ddl_count = statements.len();
-    let sql_text = statements.iter().map(|s| s.sql.as_str()).collect::<Vec<_>>().join("\n");
+    let sql_text = statements
+        .iter()
+        .map(|s| s.sql.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
 
     SyncPlan {
         id: plan_id,
@@ -548,13 +648,29 @@ mod tests {
 
     #[test]
     fn test_build_schema_sync_plan_marks_destructive_unselected() {
-        use super::super::{ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff};
+        use super::super::{ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema};
+
+        let users = TableSchema {
+            name: "users".to_string(),
+            columns: vec![ColumnSchema {
+                name: "id".to_string(),
+                data_type: "int".to_string(),
+                nullable: false,
+                default_value: None,
+                comment: None,
+            }],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
 
         let result = SchemaCompareResult {
             table_diffs: vec![
                 TableDiff {
                     name: "users".to_string(),
                     status: DiffStatus::Modified,
+                    source: Some(users.clone()),
+                    target: Some(users),
                     column_diffs: vec![
                         super::super::ColumnDiff {
                             name: "email".to_string(),
@@ -588,6 +704,14 @@ mod tests {
                 TableDiff {
                     name: "audit".to_string(),
                     status: DiffStatus::Removed,
+                    source: None,
+                    target: Some(TableSchema {
+                        name: "audit".to_string(),
+                        columns: vec![],
+                        indexes: vec![],
+                        foreign_keys: vec![],
+                        comment: None,
+                    }),
                     column_diffs: vec![],
                     index_diffs: vec![],
                     foreign_key_diffs: vec![],
@@ -629,5 +753,118 @@ mod tests {
         assert!(!drop_table.selected_by_default);
         assert!(drop_table.destructive);
         assert!(!drop_table.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_schema_sync_plan_generates_create_table_for_added_table() {
+        use super::super::{ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema};
+
+        let source = TableSchema {
+            name: "users".to_string(),
+            columns: vec![
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: "int".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+                ColumnSchema {
+                    name: "name".to_string(),
+                    data_type: "varchar(64)".to_string(),
+                    nullable: true,
+                    default_value: Some("'anonymous'".to_string()),
+                    comment: None,
+                },
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Added,
+                source: Some(source),
+                target: None,
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 1,
+            removed_count: 0,
+            modified_count: 0,
+        };
+
+        let plan = build_schema_sync_plan(&result, "postgresql");
+
+        let statement = plan.statements.first().unwrap();
+        assert!(matches!(statement.kind, SyncStatementKind::CreateTable));
+        assert_eq!(
+            statement.sql,
+            "CREATE TABLE users (\n  id int NOT NULL,\n  name varchar(64) NULL DEFAULT 'anonymous'\n);"
+        );
+        assert!(statement.selected_by_default);
+        assert!(!statement.destructive);
+    }
+
+    #[test]
+    fn test_where_clause_uses_is_null_for_null_key_values() {
+        let mut key_values = HashMap::new();
+        key_values.insert("tenant_id".to_string(), CellValue::Null);
+        key_values.insert("id".to_string(), json!(1));
+
+        let sql = generate_delete_sql("users", &key_values);
+
+        assert!(sql.contains("id = 1"));
+        assert!(sql.contains("tenant_id IS NULL"));
+        assert!(!sql.contains("tenant_id = NULL"));
+    }
+
+    #[test]
+    fn test_schema_sync_plan_uses_index_details_for_create_index() {
+        use super::super::{
+            DiffStatus, IndexDiff, IndexSchema, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let table = TableSchema {
+            name: "users".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(table.clone()),
+                target: Some(table),
+                column_diffs: vec![],
+                index_diffs: vec![IndexDiff {
+                    name: "idx_users_email".to_string(),
+                    status: DiffStatus::Added,
+                    source: Some(IndexSchema {
+                        name: "idx_users_email".to_string(),
+                        columns: vec!["email".to_string()],
+                        unique: true,
+                    }),
+                    target: None,
+                }],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+
+        let plan = build_schema_sync_plan(&result, "postgresql");
+
+        assert_eq!(
+            plan.statements.first().unwrap().sql,
+            "CREATE UNIQUE INDEX idx_users_email ON users (email);"
+        );
     }
 }
