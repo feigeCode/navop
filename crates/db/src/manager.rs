@@ -2469,6 +2469,22 @@ impl GlobalDbState {
         self.connection_manager.close_session(&session_id).await?;
         result.map_err(|e| anyhow::anyhow!("{}", e))
     }
+
+    /// 获取数据库的比较能力
+    pub fn get_compare_capabilities(
+        &self,
+        database_type: &DatabaseType,
+    ) -> crate::compare::CompareCapabilities {
+        use crate::compare::CompareCapabilities;
+        match database_type {
+            DatabaseType::PostgreSQL => CompareCapabilities::postgresql(),
+            DatabaseType::MySQL => CompareCapabilities::mysql(),
+            DatabaseType::SQLite => CompareCapabilities::sqlite(),
+            DatabaseType::MSSQL => CompareCapabilities::sqlserver(),
+            DatabaseType::ClickHouse => CompareCapabilities::clickhouse(),
+            _ => CompareCapabilities::default(),
+        }
+    }
 }
 
 impl Default for GlobalDbState {

@@ -366,6 +366,16 @@ impl DatabaseEventHandler {
                             Self::handle_dump_sql_file(node, *mode, global_state, window, cx);
                         }
                     }
+                    DbTreeViewEvent::CompareData { node_id } => {
+                        if let Some(node) = get_node(&node_id, cx) {
+                            Self::handle_compare_data(node, window, cx);
+                        }
+                    }
+                    DbTreeViewEvent::CompareSchema { node_id } => {
+                        if let Some(node) = get_node(&node_id, cx) {
+                            Self::handle_compare_schema(node, window, cx);
+                        }
+                    }
                     DbTreeViewEvent::LocateActiveTab => {
                         Self::handle_locate_active_tab(
                             tab_container.clone(),
@@ -3690,5 +3700,29 @@ impl DatabaseEventHandler {
         tree_view.update(cx, |tree, cx| {
             tree.locate_and_select_node(&node_id, cx);
         });
+    }
+
+    /// 处理数据比较事件
+    fn handle_compare_data(node: DbNode, window: &mut Window, cx: &mut App) {
+        use crate::compare::DataCompareWindow;
+
+        let _compare_window = DataCompareWindow::new(node.clone());
+        window.push_notification(
+            Notification::info(format!("数据比较: {}", node.name)).autohide(true),
+            cx,
+        );
+        // TODO: 打开数据比较窗口，连接选择器，参数输入
+    }
+
+    /// 处理结构比较事件
+    fn handle_compare_schema(node: DbNode, window: &mut Window, cx: &mut App) {
+        use crate::compare::SchemaCompareWindow;
+
+        let _compare_window = SchemaCompareWindow::new(node.clone());
+        window.push_notification(
+            Notification::info(format!("结构比较: {}", node.name)).autohide(true),
+            cx,
+        );
+        // TODO: 打开结构比较窗口，连接选择器
     }
 }
