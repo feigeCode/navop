@@ -2,17 +2,12 @@
     <main class="home-page">
         <section class="hero">
             <div class="hero-copy">
-                <p class="eyebrow">OnetCli / 桌面工作台</p>
-                <h1>把数据库、SSH / SFTP 和终端收进一个真正顺手的桌面客户端</h1>
+                <p class="eyebrow">Pure Rust · GPUI · GPU Rendered · No WebView</p>
+                <h1>纯 Rust 构建的高性能一体化运维工作台</h1>
                 <p class="hero-description">
-                    OnetCli 是一个跨平台桌面工作台，用来统一处理数据库连接、远程访问、文件传输和本地终端操作。
-                    AI 主要用于辅助数据分析、快速生成 SQL 和解释查询，帮助你更高效地完成日常工作。
+                    OnetCli 基于 GPUI 与 Rust 原生技术栈开发，走 GPU 加速渲染路线，不依赖 WebView。
+                    数据库、Redis、MongoDB、SSH/SFTP、终端会话和 AI 助手，在一个高性能桌面工作台里连续完成。
                 </p>
-                <div class="hero-note">
-                    <span>多数据库支持</span>
-                    <span>原生 SSH / SFTP</span>
-                    <span>内置终端</span>
-                </div>
                 <div class="hero-actions">
                     <a class="primary-action" href="https://github.com/feigeCode/onetcli/releases" target="_blank" rel="noreferrer">
                         <span>下载 OnetCli</span>
@@ -21,173 +16,265 @@
                         <span>查看文档</span>
                     </a>
                 </div>
-                <dl class="hero-metrics">
-                    <div>
-                        <dt>聚焦任务</dt>
-                        <dd>连接、查询、排查、传输、执行</dd>
-                    </div>
-                    <div>
-                        <dt>适用平台</dt>
-                        <dd>macOS、Windows、Linux</dd>
-                    </div>
-                </dl>
-            </div>
-            <div class="hero-visual">
-                <img :src="heroImage" alt="OnetCli 应用主界面截图" />
-            </div>
-        </section>
-
-        <section class="section-block screenshots">
-            <div class="section-heading">
-                <p class="section-label">真实界面</p>
-                <h2>直接展示你每天会用到的工作界面</h2>
-                <p>
-                    不是一张抽象插画，而是数据库管理、SSH 会话、SFTP 文件传输和查询辅助的真实桌面界面。
-                </p>
-            </div>
-            <div class="screenshot-grid">
-                <article class="screenshot-card">
-                    <img :src="databaseImage" alt="OnetCli 数据库界面截图" />
-                    <h3>多数据库管理</h3>
-                    <p>在同一个客户端里处理 PostgreSQL、MySQL、SQLite、SQL Server、Oracle、ClickHouse。</p>
-                </article>
-                <article class="screenshot-card">
-                    <img :src="sshImage" alt="OnetCli SSH 与 SFTP 界面截图" />
-                    <h3>SSH 与 SFTP</h3>
-                    <p>从远程终端到文件传输，用一套连接信息覆盖排查、部署和日常维护。</p>
-                </article>
-                <article class="screenshot-card">
-                    <img :src="chatdbImage" alt="OnetCli 查询与分析辅助界面截图" />
-                    <h3>查询与分析辅助</h3>
-                    <p>用自然语言辅助生成 SQL、解释查询结果，并在数据分析场景里提升处理效率。</p>
-                </article>
-            </div>
-        </section>
-
-        <section class="section-block capability-section">
-            <div class="section-heading">
-                <p class="section-label">核心能力</p>
-                <h2>把数据库、远程连接和终端收成一个工作台</h2>
-            </div>
-            <div class="capability-grid">
-                <article class="capability-card">
-                    <h3>数据库</h3>
-                    <p>在同一界面管理多种数据库连接，查看数据、执行 SQL、浏览对象结构。</p>
-                </article>
-                <article class="capability-card">
-                    <h3>SSH / SFTP</h3>
-                    <p>一套连接信息同时覆盖远程终端与文件管理，让排查和运维动作保持连贯。</p>
-                </article>
-                <article class="capability-card">
-                    <h3>本地终端</h3>
-                    <p>内置终端支持多标签页工作流，适合数据库调试、脚本执行和部署操作。</p>
-                </article>
-                <article class="capability-card">
-                    <h3>智能辅助</h3>
-                    <p>支持生成 SQL、解释查询和辅助数据分析，作为数据库工作的提效能力使用。</p>
-                </article>
-            </div>
-        </section>
-
-        <section class="section-block value-section">
-            <div class="section-heading">
-                <p class="section-label">为什么选择 OnetCli</p>
-                <h2>更少切换，更快进入真正的工作状态</h2>
-            </div>
-            <div class="value-list">
-                <article>
-                    <h3>统一工作流</h3>
-                    <p>数据库、远程连接和终端不再分散在多个工具里，常用操作可以在同一个桌面工作台里连续完成。</p>
-                </article>
-                <article>
-                    <h3>桌面体验</h3>
-                    <p>作为跨平台桌面应用，OnetCli 更适合重度日常使用，也更贴近工程师的实际工作节奏。</p>
-                </article>
-                <article>
-                    <h3>面向真实任务</h3>
-                    <p>AI 在这里围绕 SQL 生成、查询理解和数据分析提供辅助，服务真实高频任务，而不是喧宾夺主地占据产品主叙事。</p>
-                </article>
-            </div>
-        </section>
-
-        <section class="section-block download-section">
-            <div class="section-heading">
-                <p class="section-label">下载</p>
-                <h2>先从 GitHub Releases 获取最新版本</h2>
-                <p>
-                    当前下载入口统一使用 GitHub Releases，便于快速上线和版本管理。
-                </p>
-            </div>
-            <div class="download-panel">
-                <div>
-                    <h3>支持平台</h3>
-                    <p>macOS、Windows、Linux</p>
+                <div class="hero-chips">
+                    <span>多数据库连接</span>
+                    <span>Redis / MongoDB</span>
+                    <span>SSH / SFTP</span>
+                    <span>本地与远程终端</span>
+                    <span>AI SQL 助手</span>
+                    <span>纯 Rust 原生渲染</span>
                 </div>
-                <a class="primary-action" href="https://github.com/feigeCode/onetcli/releases" target="_blank" rel="noreferrer">
-                    <span>前往 GitHub Releases</span>
-                </a>
+            </div>
+
+            <div class="product-shell">
+                <img :src="heroImage" alt="OnetCli 主应用工作台总览" />
+            </div>
+        </section>
+
+        <section class="metrics" aria-label="OnetCli product highlights">
+            <article>
+                <strong>1 个</strong>
+                <span>统一工作台覆盖数据库、远程连接、文件传输和终端</span>
+            </article>
+            <article>
+                <strong>Rust</strong>
+                <span>GPUI 原生桌面界面，GPU 加速渲染，无 WebView 外壳</span>
+            </article>
+            <article>
+                <strong>Redis</strong>
+                <span>Key 浏览、值查看、集群场景和日常缓存排查</span>
+            </article>
+            <article>
+                <strong>MongoDB</strong>
+                <span>集合浏览、文档查看、查询支持和 NoSQL 数据探索</span>
+            </article>
+        </section>
+
+        <section class="section-block">
+            <div class="section-heading">
+                <h2>用户第一眼就能看到真实产品，而不是抽象概念</h2>
+                <p>页面大部分面积用于展示实际界面。每张图都对应一个明确场景，用户扫一眼就知道 OnetCli 能解决什么问题。</p>
+            </div>
+            <div class="image-grid">
+                <article class="shot large">
+                    <img :src="databaseImage" alt="OnetCli 数据库对象浏览与 SQL 助手" />
+                    <div class="caption">
+                        <h3>数据库对象浏览 + SQL 助手</h3>
+                        <p>
+                            左侧浏览库表结构，中间查看对象和数据，右侧由 AI 辅助理解字段、生成 SQL、解释操作建议，
+                            例如根据业务需求生成 <code>ALTER TABLE login_user ADD COLUMN email VARCHAR(255)</code> 这类变更语句。
+                        </p>
+                    </div>
+                </article>
+                <article class="shot">
+                    <img :src="sshImage" alt="OnetCli SSH 远程终端与 AI 助手" />
+                    <div class="caption">
+                        <h3>远程终端排查</h3>
+                        <p>SSH 会话与 AI 助手并排，适合查看磁盘、日志、进程、服务状态等日常运维动作。</p>
+                    </div>
+                </article>
+                <article class="shot">
+                    <img :src="chatdbImage" alt="OnetCli 查询结果分析界面" />
+                    <div class="caption">
+                        <h3>查询结果分析</h3>
+                        <p>让 AI 围绕查询结果输出结论、图表和下一步建议，把数据分析放回实际数据库工作流。</p>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section class="section-block">
+            <div class="section-heading">
+                <h2>把高频工具合成一条原生工作路径</h2>
+                <p>OnetCli 的重点不是用网页壳堆功能，而是用 Rust 与 GPUI 做真正的桌面体验，让常见任务从连接到执行都保持上下文和性能。</p>
+            </div>
+            <div class="feature-grid">
+                <article class="feature-card"><span>DB</span><h3>数据库连接管理</h3><p>按项目或环境组织连接，快速进入 MySQL、PostgreSQL、SQLite、SQL Server、Oracle、ClickHouse、DuckDB 等数据库工作区。</p></article>
+                <article class="feature-card"><span>SQL</span><h3>SQL 编辑与对象浏览</h3><p>浏览表、视图、函数和字段信息，执行 SQL，查看结果，并在同一界面理解结构和数据。</p></article>
+                <article class="feature-card"><span>RS</span><h3>纯 Rust 原生桌面</h3><p>基于 GPUI 构建，采用 GPU 渲染，不依赖 WebView，目标是更低资源占用、更快响应和更稳定的桌面体验。</p></article>
+                <article class="feature-card"><span>KV</span><h3>Redis 工作台</h3><p>提供 Redis Key 浏览、值查看、缓存排查和集群场景支持，让缓存数据也纳入统一工作流。</p></article>
+                <article class="feature-card"><span>MO</span><h3>MongoDB Explorer</h3><p>支持集合浏览、文档查看和查询操作，关系型数据库与 NoSQL 数据源可以在同一个客户端里处理。</p></article>
+                <article class="feature-card"><span>SSH</span><h3>SSH 远程终端</h3><p>连接服务器后直接进入远程 Shell，适合线上排查、部署确认、日志查看和临时命令执行。</p></article>
+                <article class="feature-card"><span>SFTP</span><h3>SFTP 文件传输</h3><p>远程文件操作与 SSH 连接复用同一上下文，传输配置、脚本、日志和备份文件更自然。</p></article>
+                <article class="feature-card"><span>AI</span><h3>AI 数据库助手</h3><p>用自然语言生成 SQL、解释字段含义、分析查询结果，把智能能力放在数据任务旁边。</p></article>
+                <article class="feature-card"><span>CLI</span><h3>本地终端工作流</h3><p>终端、数据库和远程会话都在桌面应用内管理，更适合高频、多窗口、长时间使用。</p></article>
+            </div>
+        </section>
+
+        <section class="section-block">
+            <div class="spotlight">
+                <div class="spotlight-copy">
+                    <h2>不是网页套壳，是原生 Rust 应用</h2>
+                    <p>
+                        OnetCli 使用 GPUI 构建界面，沿用 Zed 生态的高性能原生 UI 路线。
+                        桌面端通过 GPU 加速渲染，而不是把一个 Web 应用塞进 WebView。
+                    </p>
+                    <div class="check-list">
+                        <div><b>✓</b><span>Rust 2024 技术栈，界面、终端、数据库连接和远程能力都更贴近原生桌面。</span></div>
+                        <div><b>✓</b><span>macOS 使用 Metal 渲染，Linux 使用 Vulkan 渲染，强调高性能与低延迟交互。</span></div>
+                        <div><b>✓</b><span>适合长时间打开、频繁切换连接和处理大量工程上下文的重度用户。</span></div>
+                    </div>
+                </div>
+                <article class="shot">
+                    <img :src="monitorImage" alt="OnetCli 原生渲染监控图表" />
+                    <div class="caption">
+                        <h3>原生渲染图表与监控</h3>
+                        <p>内置简易服务器监控和原生渲染图表，用桌面应用的方式呈现运行状态和关键指标。</p>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section class="section-block">
+            <div class="section-heading">
+                <h2>Redis 和 MongoDB 不是补充功能，而是完整入口</h2>
+                <p>很多用户会先看自己常用的数据源是否被支持。这里直接展示 Redis 与 MongoDB，避免只在文字里一笔带过。</p>
+            </div>
+            <div class="split-gallery">
+                <article class="shot">
+                    <img :src="redisImage" alt="OnetCli Redis 管理界面" />
+                    <div class="caption">
+                        <h3>Redis Key 浏览与值查看</h3>
+                        <p>用于缓存排查、Key 检索、值检查和集群场景管理，和数据库、SSH 工作流共用同一个桌面入口。</p>
+                    </div>
+                </article>
+                <article class="shot">
+                    <img :src="mongodbImage" alt="OnetCli MongoDB 管理界面" />
+                    <div class="caption">
+                        <h3>MongoDB 集合与文档浏览</h3>
+                        <p>浏览集合、查看文档、执行查询，让 NoSQL 数据源和关系型数据库一起纳入 OnetCli 的统一工作台。</p>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section class="section-block">
+            <div class="section-heading">
+                <h2>更多真实界面，覆盖完整运维链路</h2>
+                <p>继续展示 SFTP、远程编辑、ER 图和服务器监控，减少纯文字介绍带来的疲劳。</p>
+            </div>
+            <div class="split-gallery">
+                <article class="shot">
+                    <img :src="sftpImage" alt="OnetCli SFTP 文件管理界面" />
+                    <div class="caption">
+                        <h3>SFTP 文件管理</h3>
+                        <p>远程目录浏览、文件传输和服务器排查可以放在同一套连接上下文里完成。</p>
+                    </div>
+                </article>
+                <article class="shot">
+                    <img :src="sftpSidebarImage" alt="OnetCli 终端内置 SFTP 侧栏" />
+                    <div class="caption">
+                        <h3>终端内置 SFTP 侧栏</h3>
+                        <p>终端操作时可以直接打开 SFTP 侧栏，并支持文件拖拽上传，排查和传输不再割裂。</p>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section class="section-block">
+            <div class="image-grid">
+                <article class="shot large">
+                    <img :src="remoteEditorImage" alt="OnetCli 远程文件编辑器" />
+                    <div class="caption">
+                        <h3>远程文件直接编辑</h3>
+                        <p>从应用内打开远程文件，支持语法高亮和自动补全。对配置文件、脚本和日志片段的处理更接近完整 IDE 体验。</p>
+                    </div>
+                </article>
+                <article class="shot">
+                    <img :src="erImage" alt="OnetCli ER Diagram" />
+                    <div class="caption">
+                        <h3>ER Diagram</h3>
+                        <p>通过 ER 图理解表关系，适合接手新系统、梳理业务数据结构和沟通数据库设计。</p>
+                    </div>
+                </article>
+                <article class="shot">
+                    <img :src="monitorImage" alt="OnetCli 服务器监控界面" />
+                    <div class="caption">
+                        <h3>服务器监控</h3>
+                        <p>查看基础服务器状态和趋势图，把远程连接后的常见检查动作产品化。</p>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section class="section-block">
+            <div class="section-heading">
+                <h2>典型工作流更短，用户更容易对号入座</h2>
+                <p>围绕“连接、定位、执行、解释”四步来讲，让产品和日常运维、开发、数据工作自然对应起来。</p>
+            </div>
+            <div class="workflow">
+                <article><b>1</b><h3>打开工作区</h3><p>从保存的连接进入数据库、服务器或本地终端，快速回到上次工作的环境。</p></article>
+                <article><b>2</b><h3>定位对象</h3><p>查看库表、字段、远程目录或终端输出，把问题定位到具体数据和系统上下文。</p></article>
+                <article><b>3</b><h3>执行操作</h3><p>运行 SQL、执行命令、传输文件或查看日志，核心操作在同一桌面应用内完成。</p></article>
+                <article><b>4</b><h3>AI 辅助</h3><p>生成查询、解释结果、建议命令或整理排查思路，让下一步动作更明确。</p></article>
+            </div>
+        </section>
+
+        <section class="section-block">
+            <div class="section-heading">
+                <h2>面向这些高频用户场景</h2>
+                <p>比起只说“功能强大”，直接告诉用户可以用它完成哪些真实工作，更容易形成下载意愿。</p>
+            </div>
+            <div class="use-grid">
+                <article><h3>后端开发</h3><p>本地开发时同时查看数据库、执行迁移脚本、连接测试服务器和分析接口数据。</p></article>
+                <article><h3>运维排查</h3><p>SSH 登录服务器、查看磁盘和日志、传输配置文件，并把命令说明交给 AI 辅助整理。</p></article>
+                <article><h3>缓存排查</h3><p>进入 Redis 查看 Key、值和集群状态，快速确认缓存数据是否符合预期。</p></article>
+                <article><h3>NoSQL 探索</h3><p>在 MongoDB 中浏览集合和文档，结合查询能力快速定位业务数据。</p></article>
+                <article><h3>数据库管理</h3><p>管理多种数据库连接，查看对象结构、执行查询、维护表字段和日常数据检查。</p></article>
+                <article><h3>项目交付</h3><p>跨环境切换时减少工具切换，把连接、命令、文件和数据操作统一到一个桌面入口。</p></article>
             </div>
         </section>
 
         <section class="section-block faq-section">
             <div class="section-heading">
-                <p class="section-label">FAQ</p>
-                <h2>关于 OnetCli 的几个高频问题</h2>
+                <h2>FAQ</h2>
+                <p>在首屏和截图之后继续消除疑虑：支持什么、怎么开始、AI 在哪里发挥作用。</p>
             </div>
-            <div class="faq-list">
-                <article>
-                    <h3>OnetCli 是什么？</h3>
-                    <p>OnetCli 是一个跨平台桌面客户端，用来统一处理数据库、SSH / SFTP 与终端操作，并提供面向数据库场景的智能辅助能力。</p>
-                </article>
-                <article>
-                    <h3>OnetCli 支持哪些数据库？</h3>
-                    <p>当前仓库文档中明确提到 PostgreSQL、MySQL、SQLite、SQL Server、Oracle、ClickHouse、Redis 和 MongoDB。</p>
-                </article>
-                <article>
-                    <h3>OnetCli 是否支持 SSH 和 SFTP？</h3>
-                    <p>支持。OnetCli 内置 SSH 终端与 SFTP 文件管理器，适合远程排查与文件操作。</p>
-                </article>
-                <article>
-                    <h3>OnetCli 是否支持 AI 生成 SQL？</h3>
-                    <p>支持。智能辅助能力可用于自然语言生成 SQL、解释查询以及数据分析提效，核心目标是让数据库工作更快、更顺。</p>
-                </article>
+            <div class="faq-grid">
+                <article><h3>OnetCli 是数据库客户端吗？</h3><p>它包含数据库客户端能力，但定位更大：数据库、Redis、MongoDB、SSH/SFTP、终端和 AI 工作流统一在一个桌面工作台里。</p></article>
+                <article><h3>为什么强调 Rust 和无 WebView？</h3><p>这说明 OnetCli 不是网页套壳。它基于 GPUI 构建，走 GPU 加速的原生桌面渲染路线，更适合追求性能和长期稳定使用的用户。</p></article>
+                <article><h3>AI 会不会喧宾夺主？</h3><p>不会。AI 作为辅助层贴近 SQL、查询结果和终端排查场景，核心操作仍然围绕真实工程任务。</p></article>
             </div>
         </section>
 
-        <section class="section-block updates-section">
-            <div class="section-heading">
-                <p class="section-label">最近更新</p>
-                <h2>保持持续迭代，而不是一次性发布</h2>
-            </div>
-            <div class="update-list">
-                <article>
-                    <h3>数据库体验持续增强</h3>
-                    <p>围绕表设计器、数据库树和数据操作流持续改进，降低日常管理成本。</p>
-                </article>
-                <article>
-                    <h3>终端与远程连接能力迭代</h3>
-                    <p>在终端、SSH、SFTP 等模块持续补齐高频交互细节。</p>
-                </article>
-                <article>
-                    <h3>查看完整版本记录</h3>
-                    <p><a :href="withBase('/changelog')">进入更新日志</a></p>
-                </article>
+        <section class="section-block download-section">
+            <div class="download-panel">
+                <div>
+                    <h2>先下载桌面版，5 分钟跑通第一个连接</h2>
+                    <p>
+                        体验纯 Rust 原生性能，将数据库、Redis、MongoDB、SSH/SFTP、远程编辑和 AI 工作流统一到一个桌面入口。
+                    </p>
+                </div>
+                <div class="download-actions">
+                    <a class="primary-action" href="https://github.com/feigeCode/onetcli/releases" target="_blank" rel="noreferrer">
+                        <span>前往 GitHub Releases</span>
+                    </a>
+                    <a class="secondary-action" :href="withBase('/guide')">
+                        <span>阅读快速开始</span>
+                    </a>
+                </div>
             </div>
         </section>
 
-        <script type="application/ld+json">
-            {{ structuredData }}
-        </script>
     </main>
 </template>
 
 <script setup>
 import { withBase } from "vitepress";
+import { onMounted, onUnmounted } from "vue";
 
 const heroImage = withBase("/screenshots/app.png");
 const databaseImage = withBase("/screenshots/database.png");
 const sshImage = withBase("/screenshots/ssh.png");
 const chatdbImage = withBase("/screenshots/chatdb.png");
+const redisImage = withBase("/screenshots/redis.png");
+const mongodbImage = withBase("/screenshots/mongodb.png");
+const sftpImage = withBase("/screenshots/sftp.png");
+const sftpSidebarImage = withBase("/screenshots/sftp_sidebar.png");
+const remoteEditorImage = withBase("/screenshots/remote_file_editor.png");
+const erImage = withBase("/screenshots/er.png");
+const monitorImage = withBase("/screenshots/monitor.png");
+
 const structuredData = JSON.stringify(
     [
         {
@@ -197,8 +284,17 @@ const structuredData = JSON.stringify(
             applicationCategory: "DeveloperApplication",
             operatingSystem: "macOS, Windows, Linux",
             description:
-                "OnetCli 是一个统一管理数据库、SSH / SFTP 与终端操作，并提供 SQL 生成与数据分析辅助能力的跨平台桌面客户端。",
+                "OnetCli 是一个纯 Rust 构建、基于 GPUI 和 GPU 渲染的一体化运维工作台，用于统一管理数据库、Redis、MongoDB、SSH/SFTP、终端与 AI 工作流。",
             downloadUrl: "https://github.com/feigeCode/onetcli/releases",
+            featureList: [
+                "Pure Rust GPUI desktop application",
+                "GPU rendered native UI without WebView",
+                "Database management",
+                "Redis key browsing",
+                "MongoDB document browsing",
+                "SSH and SFTP",
+                "AI SQL assistant",
+            ],
         },
         {
             "@context": "https://schema.org",
@@ -206,26 +302,26 @@ const structuredData = JSON.stringify(
             mainEntity: [
                 {
                     "@type": "Question",
-                    name: "OnetCli 是什么？",
+                    name: "OnetCli 是数据库客户端吗？",
                     acceptedAnswer: {
                         "@type": "Answer",
-                        text: "OnetCli 是一个跨平台桌面客户端，用来统一处理数据库、SSH / SFTP 与终端操作，并提供面向数据库场景的智能辅助能力。",
+                        text: "OnetCli 包含数据库客户端能力，但定位更大：数据库、Redis、MongoDB、SSH/SFTP、终端和 AI 工作流统一在一个桌面工作台里。",
                     },
                 },
                 {
                     "@type": "Question",
-                    name: "OnetCli 是否支持 SSH 和 SFTP？",
+                    name: "为什么强调 Rust 和无 WebView？",
                     acceptedAnswer: {
                         "@type": "Answer",
-                        text: "支持。OnetCli 内置 SSH 终端与 SFTP 文件管理器，适合远程排查与文件操作。",
+                        text: "OnetCli 基于 GPUI 构建，走 GPU 加速的原生桌面渲染路线，不依赖 WebView，更适合追求性能和长期稳定使用的用户。",
                     },
                 },
                 {
                     "@type": "Question",
-                    name: "OnetCli 是否支持 AI 生成 SQL？",
+                    name: "OnetCli 是否支持 Redis 和 MongoDB？",
                     acceptedAnswer: {
                         "@type": "Answer",
-                        text: "支持。智能辅助能力可用于自然语言生成 SQL、解释查询以及辅助数据分析，核心目标是让数据库工作更快、更顺。",
+                        text: "支持。OnetCli 提供 Redis Key 浏览、值查看、集群场景支持，也提供 MongoDB 集合浏览、文档查看和查询能力。",
                     },
                 },
             ],
@@ -234,205 +330,514 @@ const structuredData = JSON.stringify(
     null,
     2,
 );
+
+let structuredDataElement;
+
+onMounted(() => {
+    structuredDataElement = document.createElement("script");
+    structuredDataElement.type = "application/ld+json";
+    structuredDataElement.textContent = structuredData;
+    document.head.appendChild(structuredDataElement);
+});
+
+onUnmounted(() => {
+    structuredDataElement?.remove();
+});
 </script>
 
 <style lang="scss">
 @reference "./.vitepress/theme/style.css";
 
 .home-page {
-    @apply flex flex-col gap-8 pb-16;
+    position: relative;
+    min-height: 100vh;
+    margin: -48px calc(50% - 50vw) 0;
+    padding: 72px max(24px, calc((100vw - 1200px) / 2)) 96px;
+    overflow: hidden;
+    color: #f8fafc;
     background:
-        radial-gradient(circle at top left, rgba(39, 130, 103, 0.12), transparent 28%),
-        radial-gradient(circle at top right, rgba(242, 184, 72, 0.12), transparent 24%);
+        radial-gradient(circle at 50% -8%, rgba(224, 90, 71, 0.14), transparent 34rem),
+        radial-gradient(circle at 76% 10%, rgba(99, 102, 241, 0.12), transparent 32rem),
+        radial-gradient(circle at 16% 36%, rgba(224, 90, 71, 0.055), transparent 30rem),
+        linear-gradient(180deg, #0b0d13 0%, #0b0d13 42%, #07090f 100%);
+
+    &::before {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: -120px;
+        width: 720px;
+        height: 360px;
+        transform: translateX(-50%);
+        background: radial-gradient(circle, rgba(224, 90, 71, 0.11) 0%, rgba(99, 102, 241, 0.07) 48%, transparent 100%);
+        filter: blur(78px);
+        pointer-events: none;
+    }
 }
 
 .hero,
+.metrics,
 .section-block {
-    @apply border border-(--border) rounded-[28px] overflow-hidden;
-}
-
-.hero {
-    @apply grid gap-8 px-6 py-8 shadow-[0_20px_60px_rgba(17,24,39,0.08)] lg:grid-cols-[1.02fr_0.98fr] lg:px-10 lg:py-12;
-    background:
-        radial-gradient(circle at top left, rgba(39, 130, 103, 0.22), transparent 30%),
-        radial-gradient(circle at right center, rgba(242, 184, 72, 0.22), transparent 24%),
-        linear-gradient(135deg, #fdfcf8 0%, #f7f5ee 52%, #f4efe4 100%);
-    color: #18212f;
-
-    .hero-copy {
-        @apply flex flex-col justify-center gap-5;
-    }
-
-    .eyebrow,
-    .section-label {
-        @apply text-xs tracking-[0.28em] uppercase text-[#4d6b60];
-    }
-
-    h1 {
-        @apply m-0 max-w-3xl text-4xl leading-tight font-semibold lg:text-[3.8rem];
-        font-family: "Space Grotesk", "PingFang SC", "Microsoft YaHei", sans-serif;
-        letter-spacing: -0.04em;
-    }
-
-    .hero-description {
-        @apply m-0 max-w-2xl text-base leading-7 text-[#52606d] lg:text-lg;
-    }
-
-    .hero-note {
-        @apply flex flex-wrap gap-2;
-
-        span {
-            @apply inline-flex items-center rounded-full border border-[#d5ddd4] bg-white/70 px-3 py-1 text-sm font-medium text-[#29473e];
-        }
-    }
-
-    .hero-actions {
-        @apply flex flex-wrap gap-3;
-    }
-
-    .hero-metrics {
-        @apply grid gap-4 pt-3 md:grid-cols-2;
-
-        div {
-            @apply rounded-2xl border border-[#d9e1d7] bg-white/72 px-4 py-4 backdrop-blur;
-        }
-
-        dt {
-            @apply text-sm text-[#6a737d];
-        }
-
-        dd {
-            @apply mt-2 text-base font-medium text-[#18212f];
-        }
-    }
-
-    .hero-visual {
-        @apply flex items-center justify-center;
-
-        img {
-            @apply w-full rounded-[24px] border border-white/80 bg-white p-2 shadow-[0_28px_80px_rgba(17,24,39,0.12)];
-        }
-    }
-}
-
-.primary-action,
-.secondary-action {
-    @apply inline-flex items-center justify-center rounded-full px-5 py-3 text-sm font-medium no-underline transition-all duration-200;
-}
-
-.primary-action span,
-.secondary-action span {
     position: relative;
     z-index: 1;
 }
 
-.primary-action {
-    @apply bg-[#18212f] shadow-[0_16px_32px_rgba(24,33,47,0.18)] hover:-translate-y-0.5 hover:bg-[#0f1722];
+.hero {
+    display: grid;
+    gap: 42px;
+    text-align: center;
+}
+
+.hero-copy {
+    max-width: 980px;
+    margin: 0 auto;
+}
+
+.eyebrow {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+    border: 1px solid rgba(224, 90, 71, 0.28);
+    border-radius: 999px;
+    padding: 0 14px;
+    background: rgba(19, 22, 34, 0.82);
+    color: #f08b79;
+    font-size: 13px;
+    font-weight: 680;
+}
+
+h1 {
+    max-width: 980px;
+    margin: 24px auto 0;
+    font-size: clamp(42px, 7vw, 84px);
+    line-height: 0.98;
+    font-weight: 880;
+    letter-spacing: -0.025em;
     color: #ffffff;
+    text-shadow: 0 20px 80px rgba(0, 0, 0, 0.45);
+}
 
-    &:visited,
-    &:hover,
-    &:active {
-        color: #ffffff;
-    }
+.hero-description {
+    max-width: 800px;
+    margin: 24px auto 0;
+    color: #a8b0c0;
+    font-size: clamp(16px, 2vw, 20px);
+    line-height: 1.72;
+}
 
-    span {
-        color: #ffffff !important;
-        text-shadow: 0 1px 1px rgba(0, 0, 0, 0.16);
+.hero-actions,
+.download-actions {
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    margin-top: 34px;
+    flex-wrap: wrap;
+}
+
+.primary-action,
+.secondary-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px;
+    border-radius: 12px;
+    padding: 0 22px;
+    font-size: 14px;
+    font-weight: 740;
+    text-decoration: none !important;
+    transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+
+    &:hover {
+        transform: translateY(-1px);
     }
 }
 
+.primary-action {
+    background: #ffffff;
+    color: #0b0d13 !important;
+    box-shadow: 0 18px 46px rgba(255, 255, 255, 0.08), 0 0 42px rgba(224, 90, 71, 0.12);
+}
+
 .secondary-action {
-    @apply border border-[#c9d4cb] bg-white/78 text-[#1d4d41] hover:-translate-y-0.5 hover:border-[#9fbaa9] hover:bg-white;
+    border: 1px solid rgba(34, 38, 56, 0.92);
+    background: rgba(19, 22, 34, 0.86);
+    color: #d5d9e4 !important;
+}
+
+.hero-chips {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 24px;
 
     span {
-        color: #1d4d41;
+        border: 1px solid rgba(34, 38, 56, 0.9);
+        border-radius: 999px;
+        padding: 8px 12px;
+        background: rgba(19, 22, 34, 0.72);
+        color: #aeb6c6;
+        font-size: 13px;
+    }
+}
+
+.product-shell {
+    border: 1px solid rgba(34, 38, 56, 0.92);
+    border-radius: 22px;
+    overflow: hidden;
+    background: linear-gradient(180deg, #131622, #0d1018);
+    box-shadow: 0 42px 120px rgba(0, 0, 0, 0.68), 0 0 90px rgba(224, 90, 71, 0.08);
+}
+
+.product-shell img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    object-position: left top;
+}
+
+.metrics {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin: 34px 0 84px;
+
+    article {
+        min-height: 118px;
+        border: 1px solid rgba(34, 38, 56, 0.92);
+        border-radius: 16px;
+        padding: 20px;
+        background: rgba(19, 22, 34, 0.82);
+        backdrop-filter: blur(16px);
+    }
+
+    strong {
+        display: block;
+        margin-bottom: 8px;
+        color: #ffffff;
+        font-size: 28px;
+    }
+
+    span {
+        color: #8f98aa;
+        font-size: 13px;
+        line-height: 1.5;
     }
 }
 
 .section-block {
-    @apply bg-(--background) px-6 py-8 shadow-[0_18px_50px_rgba(17,24,39,0.05)] lg:px-10;
+    padding-bottom: 92px;
 }
 
 .section-heading {
-    @apply mb-6 flex flex-col gap-3;
-
-    .section-label {
-        @apply text-xs tracking-[0.28em] uppercase text-(--muted-foreground);
-    }
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 32px;
+    margin-bottom: 24px;
 
     h2 {
-        @apply m-0 text-3xl font-semibold text-(--foreground);
-        font-family: "Space Grotesk", "PingFang SC", "Microsoft YaHei", sans-serif;
+        max-width: 720px;
+        margin: 0;
+        color: #ffffff;
+        font-size: clamp(30px, 4vw, 48px);
+        line-height: 1.08;
+        font-weight: 820;
     }
 
     p {
-        @apply m-0 max-w-3xl text-base leading-7 text-(--muted-foreground);
+        max-width: 430px;
+        margin: 0;
+        color: #8f98aa;
+        line-height: 1.7;
     }
 }
 
-.screenshot-grid,
-.capability-grid,
-.value-list,
-.faq-list,
-.update-list {
-    @apply grid gap-4;
+.image-grid {
+    display: grid;
+    grid-template-columns: 1.12fr 0.88fr;
+    gap: 16px;
 }
 
-.screenshot-grid {
-    @apply lg:grid-cols-3;
+.split-gallery {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
 }
 
-.capability-grid {
-    @apply md:grid-cols-2;
-}
-
-.value-list {
-    @apply lg:grid-cols-3;
-}
-
-.faq-list,
-.update-list {
-    @apply md:grid-cols-2;
-}
-
-.screenshot-card,
-.capability-card,
-.value-list article,
-.faq-list article,
-.update-list article,
+.shot,
+.feature-card,
+.workflow article,
+.use-grid article,
+.faq-grid article,
 .download-panel {
-    @apply rounded-[24px] border border-(--border) bg-(--secondary) p-5 shadow-[0_12px_30px_rgba(17,24,39,0.04)];
+    border: 1px solid rgba(34, 38, 56, 0.92);
+    background: rgba(19, 22, 34, 0.86);
+    box-shadow: 0 26px 90px rgba(0, 0, 0, 0.38);
 }
 
-.screenshot-card {
-    @apply flex flex-col gap-4;
+.shot,
+.feature-card,
+.workflow article,
+.use-grid article,
+.faq-grid article {
+    border-radius: 18px;
+    transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
+
+    &:hover {
+        transform: translateY(-2px);
+        border-color: rgba(224, 90, 71, 0.34);
+        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45), 0 0 52px rgba(224, 90, 71, 0.055);
+    }
+}
+
+.shot {
+    overflow: hidden;
+
+    &.large {
+        grid-row: span 2;
+    }
 
     img {
-        @apply aspect-[16/10] w-full rounded-[18px] object-cover;
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 10;
+        object-fit: cover;
+        object-position: left top;
     }
+
+    &.large img {
+        aspect-ratio: 16 / 12.3;
+    }
+}
+
+.caption {
+    padding: 18px;
+    border-top: 1px solid rgba(34, 38, 56, 0.78);
+    background: linear-gradient(180deg, rgba(19, 22, 34, 0.98), rgba(15, 18, 28, 0.98));
+
+    h3 {
+        margin: 0 0 8px;
+        color: #ffffff;
+        font-size: 18px;
+    }
+
+    p {
+        margin: 0;
+        color: #8f98aa;
+        font-size: 14px;
+        line-height: 1.66;
+    }
+
+    code {
+        color: #f08b79;
+        font-size: 13px;
+    }
+}
+
+.feature-grid,
+.use-grid,
+.faq-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+}
+
+.feature-card,
+.use-grid article,
+.faq-grid article {
+    padding: 22px;
+
+    h3 {
+        margin: 0 0 12px;
+        color: #ffffff;
+        font-size: 18px;
+    }
+
+    p {
+        margin: 0;
+        color: #8f98aa;
+        font-size: 14px;
+        line-height: 1.7;
+    }
+}
+
+.feature-card {
+    min-height: 214px;
+
+    span {
+        width: 42px;
+        height: 42px;
+        border: 1px solid rgba(224, 90, 71, 0.16);
+        border-radius: 13px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 18px;
+        background: rgba(224, 90, 71, 0.1);
+        color: #f08b79;
+        font-size: 13px;
+        font-weight: 840;
+    }
+}
+
+.spotlight {
+    display: grid;
+    grid-template-columns: 0.9fr 1.1fr;
+    gap: 18px;
+    align-items: stretch;
+}
+
+.spotlight-copy {
+    border: 1px solid rgba(34, 38, 56, 0.92);
+    border-radius: 20px;
+    padding: 28px;
+    background:
+        radial-gradient(circle at 0% 0%, rgba(224, 90, 71, 0.12), transparent 18rem),
+        radial-gradient(circle at 100% 100%, rgba(99, 102, 241, 0.09), transparent 16rem),
+        rgba(19, 22, 34, 0.86);
+    box-shadow: 0 26px 90px rgba(0, 0, 0, 0.36);
+
+    h2 {
+        margin: 0 0 16px;
+        color: #ffffff;
+        font-size: clamp(30px, 4vw, 48px);
+        line-height: 1.08;
+    }
+
+    p {
+        margin: 0 0 18px;
+        color: #c6ccda;
+        line-height: 1.72;
+    }
+}
+
+.check-list {
+    display: grid;
+    gap: 12px;
+    margin-top: 22px;
+
+    div {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        color: #cbd5e1;
+        font-size: 14px;
+        line-height: 1.55;
+    }
+
+    b {
+        flex: 0 0 auto;
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        background: rgba(224, 90, 71, 0.14);
+        color: #f08b79;
+        font-size: 12px;
+    }
+}
+
+.workflow {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+
+    article {
+        min-height: 190px;
+        padding: 20px;
+    }
+
+    b {
+        width: 34px;
+        height: 34px;
+        border: 1px solid rgba(99, 102, 241, 0.18);
+        border-radius: 11px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 18px;
+        background: rgba(99, 102, 241, 0.12);
+        color: #b8b9ff;
+    }
+
+    h3 {
+        margin: 0 0 10px;
+        color: #ffffff;
+        font-size: 17px;
+    }
+
+    p {
+        margin: 0;
+        color: #8f98aa;
+        font-size: 14px;
+        line-height: 1.65;
+    }
+}
+
+.use-grid article {
+    min-height: 170px;
 }
 
 .download-panel {
-    @apply flex flex-col gap-4 md:flex-row md:items-center md:justify-between;
-}
+    border-radius: 22px;
+    padding: 34px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 28px;
+    background:
+        radial-gradient(circle at 10% 0%, rgba(224, 90, 71, 0.14), transparent 24rem),
+        radial-gradient(circle at 86% 40%, rgba(99, 102, 241, 0.11), transparent 22rem),
+        linear-gradient(180deg, rgba(19, 22, 34, 0.98), rgba(22, 26, 41, 0.98));
 
-.section-block h3 {
-    @apply m-0 text-xl font-semibold text-(--foreground);
-}
-
-.section-block p,
-.section-block li {
-    @apply text-(--muted-foreground);
-}
-
-@media (max-width: 767px) {
-    .hero {
-        @apply rounded-[24px];
+    h2 {
+        margin: 0 0 12px;
+        color: #ffffff;
+        font-size: clamp(28px, 4vw, 42px);
+        line-height: 1.1;
     }
 
-    .section-block {
-        @apply rounded-[24px];
+    p {
+        max-width: 720px;
+        margin: 0;
+        color: #8f98aa;
+        line-height: 1.7;
+    }
+}
+
+.download-actions {
+    margin-top: 0;
+}
+
+@media (max-width: 920px) {
+    .home-page {
+        margin-top: -24px;
+        padding-top: 48px;
+    }
+
+    .metrics,
+    .image-grid,
+    .feature-grid,
+    .spotlight,
+    .workflow,
+    .split-gallery,
+    .use-grid,
+    .faq-grid,
+    .download-panel {
+        grid-template-columns: 1fr;
+    }
+
+    .metrics {
+        margin-top: 24px;
+    }
+
+    .section-heading {
+        display: block;
+
+        p {
+            margin-top: 14px;
+        }
     }
 }
 </style>

@@ -31,8 +31,21 @@ test("官网最小页面集合已经创建", async () => {
   const guide = await readText("guide.md");
 
   assert.match(features, /# 功能/);
+  assert.match(features, /纯 Rust/);
+  assert.match(features, /GPUI/);
+  assert.match(features, /Redis/);
+  assert.match(features, /MongoDB/);
   assert.match(download, /# 下载/);
+  assert.match(download, /Metal/);
+  assert.match(download, /Vulkan/);
   assert.match(changelog, /# 更新日志/);
+  assert.match(changelog, /高性能一体化运维工作台/);
+  assert.match(changelog, /本地 `git tag`/);
+  assert.match(changelog, /v0\.4\.8/);
+  assert.match(changelog, /Redis/);
+  assert.match(changelog, /MongoDB/);
   assert.match(guide, /# 文档/);
   assert.match(guide, /GitHub Releases/);
+  assert.match(guide, /No WebView/);
+  assert.match(guide, /SFTP/);
 });

@@ -21,7 +21,7 @@ const config: UserConfig = {
     "OnetCli 是一个统一管理数据库、SSH、终端与 AI 工作流的跨平台桌面客户端。",
   cleanUrls: true,
   head: [
-    ["meta", { name: "theme-color", content: "#12071f" }],
+    ["meta", { name: "theme-color", content: "#0B0D13" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:title", content: "OnetCli" }],
     [
