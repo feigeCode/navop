@@ -1,4 +1,4 @@
-use super::{CellValue, DataCompareResult, RowData};
+use super::{CellValue, DataCompareResult, DiffStatus, RowData, SchemaCompareResult};
 use serde::{Deserialize, Serialize};
 
 /// 同步计划类型
@@ -271,6 +271,167 @@ fn extract_key_values_from_row(
         .collect()
 }
 
+/// 从结构比较结果生成同步计划
+///
+/// # P0 安全保护
+/// - DROP TABLE 默认不选中
+/// - DROP COLUMN 默认不选中
+/// - 列类型修改默认不选中（可能导致数据丢失）
+pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str) -> SyncPlan {
+    let mut statements = Vec::new();
+    let plan_id = uuid::Uuid::new_v4().to_string();
+
+    for table_diff in &result.table_diffs {
+        match table_diff.status {
+            DiffStatus::Added => {
+                // 新增表 - 需要 DDL（暂时跳过，第一版不生成 CREATE TABLE）
+            }
+            DiffStatus::Removed => {
+                // 删除表 - P0 安全保护：默认不选中
+                let stmt_id = uuid::Uuid::new_v4().to_string();
+                statements.push(SyncStatement {
+                    id: stmt_id,
+                    sql: format!("DROP TABLE IF EXISTS {};", table_diff.name),
+                    kind: SyncStatementKind::DropTable,
+                    object_name: Some(table_diff.name.clone()),
+                    row_key: None,
+                    destructive: true,
+                    transactional_safe: false,
+                    selected_by_default: false,
+                    warnings: vec!["此操作将删除表及其所有数据".to_string()],
+                });
+            }
+            DiffStatus::Modified => {
+                // 修改表
+                for col_diff in &table_diff.column_diffs {
+                    let stmt_id = uuid::Uuid::new_v4().to_string();
+
+                    match col_diff.status {
+                        DiffStatus::Added => {
+                            if let Some(src) = &col_diff.source {
+                                let nullable = if src.nullable { "NULL" } else { "NOT NULL" };
+                                statements.push(SyncStatement {
+                                    id: stmt_id,
+                                    sql: format!(
+                                        "ALTER TABLE {} ADD COLUMN {} {} {};",
+                                        table_diff.name, src.name, src.data_type, nullable
+                                    ),
+                                    kind: SyncStatementKind::AlterTable,
+                                    object_name: Some(table_diff.name.clone()),
+                                    row_key: None,
+                                    destructive: false,
+                                    transactional_safe: true,
+                                    selected_by_default: true,
+                                    warnings: vec![],
+                                });
+                            }
+                        }
+                        DiffStatus::Removed => {
+                            // 删除列 - P0 安全保护：默认不选中
+                            statements.push(SyncStatement {
+                                id: stmt_id,
+                                sql: format!(
+                                    "ALTER TABLE {} DROP COLUMN {};",
+                                    table_diff.name, col_diff.name
+                                ),
+                                kind: SyncStatementKind::AlterTable,
+                                object_name: Some(table_diff.name.clone()),
+                                row_key: None,
+                                destructive: true,
+                                transactional_safe: true,
+                                selected_by_default: false,
+                                warnings: vec!["此操作将删除列及其所有数据".to_string()],
+                            });
+                        }
+                        DiffStatus::Modified => {
+                            // 修改列 - P0 安全保护：默认不选中（可能导致数据丢失）
+                            if let Some(src) = &col_diff.source {
+                                let nullable = if src.nullable { "NULL" } else { "NOT NULL" };
+                                let sql = if target_db_type == "mysql" || target_db_type == "mariadb" {
+                                    format!(
+                                        "ALTER TABLE {} MODIFY COLUMN {} {} {};",
+                                        table_diff.name, src.name, src.data_type, nullable
+                                    )
+                                } else {
+                                    format!(
+                                        "ALTER TABLE {} ALTER COLUMN {} TYPE {};",
+                                        table_diff.name, src.name, src.data_type
+                                    )
+                                };
+
+                                statements.push(SyncStatement {
+                                    id: stmt_id,
+                                    sql,
+                                    kind: SyncStatementKind::AlterTable,
+                                    object_name: Some(table_diff.name.clone()),
+                                    row_key: None,
+                                    destructive: true,
+                                    transactional_safe: true,
+                                    selected_by_default: false,
+                                    warnings: vec!["此操作可能导致数据类型转换失败或数据丢失".to_string()],
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // 索引差异
+                for idx_diff in &table_diff.index_diffs {
+                    let stmt_id = uuid::Uuid::new_v4().to_string();
+
+                    match idx_diff.status {
+                        DiffStatus::Added => {
+                            statements.push(SyncStatement {
+                                id: stmt_id,
+                                sql: format!("-- CREATE INDEX {} (详细信息需要索引列)", idx_diff.name),
+                                kind: SyncStatementKind::CreateIndex,
+                                object_name: Some(idx_diff.name.clone()),
+                                row_key: None,
+                                destructive: false,
+                                transactional_safe: true,
+                                selected_by_default: true,
+                                warnings: vec![],
+                            });
+                        }
+                        DiffStatus::Removed => {
+                            statements.push(SyncStatement {
+                                id: stmt_id,
+                                sql: format!("DROP INDEX IF EXISTS {};", idx_diff.name),
+                                kind: SyncStatementKind::DropIndex,
+                                object_name: Some(idx_diff.name.clone()),
+                                row_key: None,
+                                destructive: false,
+                                transactional_safe: true,
+                                selected_by_default: true,
+                                warnings: vec![],
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    let ddl_count = statements.len();
+    let sql_text = statements.iter().map(|s| s.sql.as_str()).collect::<Vec<_>>().join("\n");
+
+    SyncPlan {
+        id: plan_id,
+        target_table: "".to_string(),
+        statements,
+        summary: SyncPlanSummary {
+            insert_count: 0,
+            update_count: 0,
+            delete_count: 0,
+            ddl_count,
+            total_count: ddl_count,
+        },
+        warnings: vec![],
+        sql_text,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,5 +544,90 @@ mod tests {
 
         assert!(sql.contains("DELETE FROM users"));
         assert!(sql.contains("WHERE id = 1"));
+    }
+
+    #[test]
+    fn test_build_schema_sync_plan_marks_destructive_unselected() {
+        use super::super::{ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff};
+
+        let result = SchemaCompareResult {
+            table_diffs: vec![
+                TableDiff {
+                    name: "users".to_string(),
+                    status: DiffStatus::Modified,
+                    column_diffs: vec![
+                        super::super::ColumnDiff {
+                            name: "email".to_string(),
+                            status: DiffStatus::Added,
+                            source: Some(ColumnSchema {
+                                name: "email".to_string(),
+                                data_type: "text".to_string(),
+                                nullable: true,
+                                default_value: None,
+                                comment: None,
+                            }),
+                            target: None,
+                        },
+                        super::super::ColumnDiff {
+                            name: "legacy".to_string(),
+                            status: DiffStatus::Removed,
+                            source: None,
+                            target: Some(ColumnSchema {
+                                name: "legacy".to_string(),
+                                data_type: "text".to_string(),
+                                nullable: true,
+                                default_value: None,
+                                comment: None,
+                            }),
+                        },
+                    ],
+                    index_diffs: vec![],
+                    foreign_key_diffs: vec![],
+                    comment_changed: false,
+                },
+                TableDiff {
+                    name: "audit".to_string(),
+                    status: DiffStatus::Removed,
+                    column_diffs: vec![],
+                    index_diffs: vec![],
+                    foreign_key_diffs: vec![],
+                    comment_changed: false,
+                },
+            ],
+            added_count: 0,
+            removed_count: 1,
+            modified_count: 1,
+        };
+
+        let plan = build_schema_sync_plan(&result, "postgresql");
+
+        // 检查新增列（应该默认选中）
+        let add_col = plan
+            .statements
+            .iter()
+            .find(|s| s.sql.contains("ADD COLUMN email"))
+            .unwrap();
+        assert!(add_col.selected_by_default);
+        assert!(!add_col.destructive);
+
+        // 检查删除列（P0: 应该默认不选中）
+        let drop_col = plan
+            .statements
+            .iter()
+            .find(|s| s.sql.contains("DROP COLUMN legacy"))
+            .unwrap();
+        assert!(!drop_col.selected_by_default);
+        assert!(drop_col.destructive);
+        assert!(!drop_col.warnings.is_empty());
+
+        // 检查删除表（P0: 应该默认不选中）
+        let drop_table = plan
+            .statements
+            .iter()
+            .find(|s| s.sql.contains("DROP TABLE"))
+            .unwrap();
+        assert!(!drop_table.selected_by_default);
+        assert!(drop_table.destructive);
+        assert!(!drop_table.warnings.is_empty());
     }
 }
