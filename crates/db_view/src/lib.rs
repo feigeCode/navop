@@ -2,6 +2,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 pub mod chatdb;
 pub mod common;
+pub mod compare;
 pub mod connection_form_window;
 pub mod database_objects_tab;
 pub mod database_tab;
