@@ -3704,19 +3704,25 @@ impl DatabaseEventHandler {
 
     /// 处理数据比较事件
     fn handle_compare_data(node: DbNode, window: &mut Window, cx: &mut App) {
+        use crate::compare::DataCompareWindow;
+
+        let _compare_window = DataCompareWindow::new(node.clone());
         window.push_notification(
             Notification::info(format!("数据比较: {}", node.name)).autohide(true),
             cx,
         );
-        // TODO: 打开数据比较窗口
+        // TODO: 打开数据比较窗口，连接选择器，参数输入
     }
 
     /// 处理结构比较事件
     fn handle_compare_schema(node: DbNode, window: &mut Window, cx: &mut App) {
+        use crate::compare::SchemaCompareWindow;
+
+        let _compare_window = SchemaCompareWindow::new(node.clone());
         window.push_notification(
             Notification::info(format!("结构比较: {}", node.name)).autohide(true),
             cx,
         );
-        // TODO: 打开结构比较窗口
+        // TODO: 打开结构比较窗口，连接选择器
     }
 }
