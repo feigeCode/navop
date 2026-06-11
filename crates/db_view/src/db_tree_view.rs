@@ -357,6 +357,10 @@ pub enum DbTreeViewEvent {
     RunSqlFile { node_id: String },
     /// 转储SQL文件（导出结构和/或数据）
     DumpSqlFile { node_id: String, mode: SqlDumpMode },
+    /// 数据比较
+    CompareData { node_id: String },
+    /// 结构比较
+    CompareSchema { node_id: String },
 }
 
 /// 根据节点类型获取图标（公共函数，可被其他模块复用）

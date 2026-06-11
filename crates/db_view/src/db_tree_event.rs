@@ -366,6 +366,18 @@ impl DatabaseEventHandler {
                             Self::handle_dump_sql_file(node, *mode, global_state, window, cx);
                         }
                     }
+                    DbTreeViewEvent::CompareData { node_id } => {
+                        if let Some(_node) = get_node(&node_id, cx) {
+                            // TODO: 实现数据比较功能
+                            Self::show_error(window, "数据比较功能即将推出", cx);
+                        }
+                    }
+                    DbTreeViewEvent::CompareSchema { node_id } => {
+                        if let Some(_node) = get_node(&node_id, cx) {
+                            // TODO: 实现结构比较功能
+                            Self::show_error(window, "结构比较功能即将推出", cx);
+                        }
+                    }
                     DbTreeViewEvent::LocateActiveTab => {
                         Self::handle_locate_active_tab(
                             tab_container.clone(),
