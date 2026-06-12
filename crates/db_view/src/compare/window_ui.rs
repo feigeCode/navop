@@ -242,19 +242,6 @@ pub(super) fn connection_select_row(
         .child(Select::new(select).small().w_full())
 }
 
-pub(super) fn detail_row(label: &'static str, value: String) -> impl IntoElement {
-    div()
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(div().w(px(120.0)).text_sm().child(label))
-        .child(div().text_sm().child(if value.is_empty() {
-            "-".to_string()
-        } else {
-            value
-        }))
-}
-
 /// 创建用于「同步 SQL」的代码编辑器(SQL 语法高亮 + 行号,可编辑)
 pub(super) fn sync_sql_editor_state(window: &mut Window, cx: &mut App) -> Entity<InputState> {
     cx.new(|cx| {

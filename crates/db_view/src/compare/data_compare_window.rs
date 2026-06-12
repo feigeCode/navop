@@ -11,7 +11,6 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::InputState,
-    scroll::ScrollableElement,
     select::{SearchableVec, SelectEvent, SelectState},
     v_flex,
 };
@@ -21,7 +20,7 @@ use crate::compare::sync_statement_picker::{
     default_selected_statement_ids, selected_sync_sql_text_for_ids,
 };
 use crate::compare::target_picker::{StringSelect, selected_string, string_select_state};
-use crate::compare::window_params::data_compare_params;
+use crate::compare::window_params::{DataCompareSelection, data_compare_params};
 use crate::compare::window_ui::{
     ConnectionSelectItem, close_button, connection_select_state, selected_connection_id,
     sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
@@ -33,7 +32,14 @@ use crate::compare::{
 use db::compare::{DataCompareResult, SyncPlan};
 
 pub struct DataCompareWindow {
-    pub(super) source_node: DbNode,
+    pub(super) source_connection_id: Entity<InputState>,
+    pub(super) source_connection_select: Entity<SelectState<Vec<ConnectionSelectItem>>>,
+    pub(super) source_database: Entity<InputState>,
+    pub(super) source_database_select: StringSelect,
+    pub(super) source_schema: Entity<InputState>,
+    pub(super) source_schema_select: StringSelect,
+    pub(super) source_table: Entity<InputState>,
+    pub(super) source_table_select: StringSelect,
     pub(super) target_connection_id: Entity<InputState>,
     pub(super) target_connection_select: Entity<SelectState<Vec<ConnectionSelectItem>>>,
     pub(super) target_database: Entity<InputState>,
@@ -59,37 +65,51 @@ pub struct DataCompareWindow {
 
 impl DataCompareWindow {
     pub fn new(source_node: DbNode, window: &mut Window, cx: &mut App) -> Entity<Self> {
+        let default_database = source_node.get_database_name().unwrap_or_default();
+        let default_schema = source_node.get_schema_name().unwrap_or_default();
+        let default_table = source_node
+            .get_table_name()
+            .unwrap_or_else(|| source_node.name.clone());
+
+        let source_connection_id = cx
+            .new(|cx| InputState::new(window, cx).default_value(source_node.connection_id.clone()));
+        let source_connection_select =
+            connection_select_state(&source_node.connection_id, window, cx);
+        let source_database =
+            cx.new(|cx| InputState::new(window, cx).default_value(default_database.clone()));
+        let source_database_select = string_select_state(default_database.clone(), window, cx);
+        let source_schema =
+            cx.new(|cx| InputState::new(window, cx).default_value(default_schema.clone()));
+        let source_schema_select = string_select_state(default_schema.clone(), window, cx);
+        let source_table =
+            cx.new(|cx| InputState::new(window, cx).default_value(default_table.clone()));
+        let source_table_select = string_select_state(default_table.clone(), window, cx);
         let target_connection_id = cx
             .new(|cx| InputState::new(window, cx).default_value(source_node.connection_id.clone()));
         let target_connection_select =
             connection_select_state(&source_node.connection_id, window, cx);
-        let target_database = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(source_node.get_database_name().unwrap_or_default())
-        });
-        let target_database_select = string_select_state(
-            source_node.get_database_name().unwrap_or_default(),
-            window,
-            cx,
-        );
-        let target_schema = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(source_node.get_schema_name().unwrap_or_default())
-        });
-        let target_schema_select = string_select_state(
-            source_node.get_schema_name().unwrap_or_default(),
-            window,
-            cx,
-        );
+        let target_database =
+            cx.new(|cx| InputState::new(window, cx).default_value(default_database.clone()));
+        let target_database_select = string_select_state(default_database.clone(), window, cx);
+        let target_schema =
+            cx.new(|cx| InputState::new(window, cx).default_value(default_schema.clone()));
+        let target_schema_select = string_select_state(default_schema.clone(), window, cx);
         let target_table =
-            cx.new(|cx| InputState::new(window, cx).default_value(source_node.name.clone()));
-        let target_table_select = string_select_state(source_node.name.clone(), window, cx);
+            cx.new(|cx| InputState::new(window, cx).default_value(default_table.clone()));
+        let target_table_select = string_select_state(default_table.clone(), window, cx);
         let key_columns = cx.new(|cx| InputState::new(window, cx).placeholder("id, tenant_id"));
         let sync_sql_editor = sync_sql_editor_state(window, cx);
 
         let view = cx.new(|cx: &mut Context<Self>| {
             let mut window_state = Self {
-                source_node,
+                source_connection_id,
+                source_connection_select,
+                source_database,
+                source_database_select,
+                source_schema,
+                source_schema_select,
+                source_table,
+                source_table_select,
                 target_connection_id,
                 target_connection_select,
                 target_database,
@@ -121,6 +141,25 @@ impl DataCompareWindow {
                 },
             );
             window_state._subscriptions.push(sub);
+            // 源级联:连接 → 数据库 → Schema → 表
+            window_state._subscriptions.push(cx.subscribe(
+                &window_state.source_connection_select,
+                |this, _, _event: &SelectEvent<Vec<ConnectionSelectItem>>, cx| {
+                    this.load_source_databases(cx);
+                },
+            ));
+            window_state._subscriptions.push(cx.subscribe(
+                &window_state.source_database_select,
+                |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
+                    this.load_source_schemas(cx);
+                },
+            ));
+            window_state._subscriptions.push(cx.subscribe(
+                &window_state.source_schema_select,
+                |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
+                    this.load_source_tables(cx);
+                },
+            ));
             // 目标级联:连接 → 数据库 → Schema → 表
             window_state._subscriptions.push(cx.subscribe(
                 &window_state.target_connection_select,
@@ -142,8 +181,11 @@ impl DataCompareWindow {
             ));
             window_state
         });
-        // 打开时按默认连接预加载目标数据库,后续逐级联动
-        view.update(cx, |this, cx| this.load_target_databases(cx));
+        // 打开时按默认连接预加载源/目标数据库,后续逐级联动
+        view.update(cx, |this, cx| {
+            this.load_source_databases(cx);
+            this.load_target_databases(cx);
+        });
         view
     }
 
@@ -242,17 +284,9 @@ impl DataCompareWindow {
     }
 
     fn build_params(&self, cx: &mut Context<Self>) -> Result<DataCompareParams, &'static str> {
-        let target_connection_id = selected_connection_id(
-            &self.target_connection_select,
-            &self.target_connection_id,
-            cx,
-        );
         data_compare_params(
-            &self.source_node,
-            target_connection_id,
-            selected_string(&self.target_database_select, &self.target_database, cx),
-            selected_string(&self.target_schema_select, &self.target_schema, cx),
-            selected_string(&self.target_table_select, &self.target_table, cx),
+            self.source_selection(cx),
+            self.target_selection(cx),
             self.key_columns.read(cx).text().to_string(),
         )
     }
@@ -300,6 +334,32 @@ impl DataCompareWindow {
             cx.notify();
         });
     }
+
+    fn source_selection(&self, cx: &Context<Self>) -> DataCompareSelection {
+        DataCompareSelection {
+            connection_id: selected_connection_id(
+                &self.source_connection_select,
+                &self.source_connection_id,
+                cx,
+            ),
+            database: selected_string(&self.source_database_select, &self.source_database, cx),
+            schema: selected_string(&self.source_schema_select, &self.source_schema, cx),
+            table: selected_string(&self.source_table_select, &self.source_table, cx),
+        }
+    }
+
+    fn target_selection(&self, cx: &Context<Self>) -> DataCompareSelection {
+        DataCompareSelection {
+            connection_id: selected_connection_id(
+                &self.target_connection_select,
+                &self.target_connection_id,
+                cx,
+            ),
+            database: selected_string(&self.target_database_select, &self.target_database, cx),
+            schema: selected_string(&self.target_schema_select, &self.target_schema, cx),
+            table: selected_string(&self.target_table_select, &self.target_table, cx),
+        }
+    }
 }
 
 impl Focusable for DataCompareWindow {
@@ -327,12 +387,11 @@ impl Render for DataCompareWindow {
                     .min_h_0()
                     .gap_4()
                     .child(
-                        // 左栏:配置 + 结果摘要 + 语句列表(整体可滚动)
+                        // 左栏:配置固定,同步语句列表单独滚动
                         div().w(px(360.0)).h_full().min_h_0().child(
                             v_flex()
                                 .size_full()
                                 .gap_3()
-                                .overflow_y_scrollbar()
                                 .child(self.render_source(cx))
                                 .child(self.render_target(cx))
                                 .child(self.render_result_meta(cx)),

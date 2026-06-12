@@ -3,7 +3,10 @@ use db::{DbNode, DbNodeType};
 use one_core::storage::DatabaseType;
 
 use crate::compare::sync_statement_picker::selected_sync_sql_text_for_ids;
-use crate::compare::window_params::split_columns;
+use crate::compare::window_params::{
+    DataCompareSelection, SchemaCompareSelection, data_compare_params, schema_compare_params,
+    split_columns,
+};
 use crate::compare::{DataCompareWindow, SchemaCompareWindow};
 
 #[test]
@@ -44,6 +47,53 @@ fn split_columns_ignores_empty_segments() {
         split_columns("id, tenant_id, , ".to_string()),
         vec!["id".to_string(), "tenant_id".to_string()]
     );
+}
+
+#[test]
+fn schema_compare_params_use_editable_source_selection() {
+    let params = schema_compare_params(
+        SchemaCompareSelection {
+            connection_id: "source-2".to_string(),
+            database: "source_db".to_string(),
+            schema: "source_schema".to_string(),
+        },
+        SchemaCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: "target_schema".to_string(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(params.source_connection_id, "source-2");
+    assert_eq!(params.source_database, "source_db");
+    assert_eq!(params.source_schema.as_deref(), Some("source_schema"));
+}
+
+#[test]
+fn data_compare_params_use_editable_source_selection() {
+    let params = data_compare_params(
+        DataCompareSelection {
+            connection_id: "source-2".to_string(),
+            database: "source_db".to_string(),
+            schema: "source_schema".to_string(),
+            table: "source_table".to_string(),
+        },
+        DataCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: "target_schema".to_string(),
+            table: "target_table".to_string(),
+        },
+        "id, tenant_id".to_string(),
+    )
+    .unwrap();
+
+    assert_eq!(params.source_connection_id, "source-2");
+    assert_eq!(params.source_database, "source_db");
+    assert_eq!(params.source_schema.as_deref(), Some("source_schema"));
+    assert_eq!(params.source_table, "source_table");
+    assert_eq!(params.key_columns, vec!["id", "tenant_id"]);
 }
 
 #[test]

@@ -7,6 +7,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     h_flex,
+    scroll::ScrollableElement,
     tag::Tag,
     v_flex,
 };
@@ -62,11 +63,16 @@ pub(super) fn sync_statement_picker(
         .collect();
 
     v_flex()
+        .flex_1()
+        .min_h_0()
         .gap_2()
         .child(picker_toolbar(all_ids, safe_ids, selected_ids.clone()))
         .child(
             v_flex()
+                .flex_1()
+                .min_h_0()
                 .gap_1()
+                .overflow_y_scrollbar()
                 .children(plan.statements.into_iter().map(|statement| {
                     statement_row(statement, selected_snapshot.clone(), selected_ids.clone())
                 })),

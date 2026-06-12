@@ -1,58 +1,69 @@
-use db::DbNode;
-
 use crate::compare::{DataCompareParams, SchemaCompareParams};
 
+#[derive(Debug, Clone)]
+pub(super) struct DataCompareSelection {
+    pub connection_id: String,
+    pub database: String,
+    pub schema: String,
+    pub table: String,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct SchemaCompareSelection {
+    pub connection_id: String,
+    pub database: String,
+    pub schema: String,
+}
+
 pub(super) fn data_compare_params(
-    source_node: &DbNode,
-    target_connection_id: String,
-    target_database: String,
-    target_schema: String,
-    target_table: String,
+    source: DataCompareSelection,
+    target: DataCompareSelection,
     key_columns: String,
 ) -> Result<DataCompareParams, &'static str> {
-    let Some(source_database) = source_node.get_database_name() else {
-        return Err("Source database is required");
-    };
-    if target_connection_id.trim().is_empty()
-        || target_database.trim().is_empty()
-        || target_table.trim().is_empty()
+    if source.connection_id.trim().is_empty()
+        || source.database.trim().is_empty()
+        || source.table.trim().is_empty()
+    {
+        return Err("Source connection, database and table are required");
+    }
+    if target.connection_id.trim().is_empty()
+        || target.database.trim().is_empty()
+        || target.table.trim().is_empty()
     {
         return Err("Target connection, database and table are required");
     }
 
     Ok(DataCompareParams {
-        source_connection_id: source_node.connection_id.clone(),
-        source_database,
-        source_schema: source_node.get_schema_name(),
-        source_table: source_node.name.clone(),
-        target_connection_id,
-        target_database,
-        target_schema: empty_to_none(target_schema),
-        target_table,
+        source_connection_id: source.connection_id,
+        source_database: source.database,
+        source_schema: empty_to_none(source.schema),
+        source_table: source.table,
+        target_connection_id: target.connection_id,
+        target_database: target.database,
+        target_schema: empty_to_none(target.schema),
+        target_table: target.table,
         key_columns: split_columns(key_columns),
     })
 }
 
 pub(super) fn schema_compare_params(
-    source_node: &DbNode,
-    target_connection_id: String,
-    target_database: String,
-    target_schema: String,
+    source: SchemaCompareSelection,
+    target: SchemaCompareSelection,
 ) -> Result<SchemaCompareParams, &'static str> {
-    let Some(source_database) = source_node.get_database_name() else {
-        return Err("Source database is required");
-    };
-    if target_connection_id.trim().is_empty() || target_database.trim().is_empty() {
+    if source.connection_id.trim().is_empty() || source.database.trim().is_empty() {
+        return Err("Source connection and database are required");
+    }
+    if target.connection_id.trim().is_empty() || target.database.trim().is_empty() {
         return Err("Target connection and database are required");
     }
 
     Ok(SchemaCompareParams {
-        source_connection_id: source_node.connection_id.clone(),
-        source_database,
-        source_schema: source_node.get_schema_name(),
-        target_connection_id,
-        target_database,
-        target_schema: empty_to_none(target_schema),
+        source_connection_id: source.connection_id,
+        source_database: source.database,
+        source_schema: empty_to_none(source.schema),
+        target_connection_id: target.connection_id,
+        target_database: target.database,
+        target_schema: empty_to_none(target.schema),
     })
 }
 

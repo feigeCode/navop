@@ -10,29 +10,58 @@ use crate::compare::target_picker::{
     string_select_row,
 };
 use crate::compare::window_ui::{
-    compare_progress_view, connection_select_row, data_truncation_note, detail_row, input_row,
-    section_title, stat_cards_row,
+    compare_progress_view, connection_select_row, data_truncation_note, input_row, section_title,
+    stat_cards_row,
 };
 
 impl DataCompareWindow {
     pub(super) fn render_source(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
-            .gap_1()
+            .gap_2()
             .p_3()
             .border_1()
             .border_color(cx.theme().border)
             .rounded_md()
             .child(section_title("源"))
-            .child(detail_row("连接", self.source_node.connection_id.clone()))
-            .child(detail_row(
-                "数据库",
-                self.source_node.get_database_name().unwrap_or_default(),
+            .child(connection_select_row(
+                "连接",
+                &self.source_connection_select,
             ))
-            .child(detail_row(
-                "Schema",
-                self.source_node.get_schema_name().unwrap_or_default(),
-            ))
-            .child(detail_row("表", self.source_node.name.clone()))
+            .child(string_select_row("数据库", &self.source_database_select))
+            .child(string_select_row("Schema", &self.source_schema_select))
+            .child(string_select_row("表", &self.source_table_select))
+    }
+
+    pub(super) fn load_source_databases(&mut self, cx: &mut Context<Self>) {
+        load_databases(
+            self.source_connection_select.clone(),
+            self.source_connection_id.clone(),
+            self.source_database_select.clone(),
+            self.source_database.clone(),
+            self.status.clone(),
+            cx,
+        );
+    }
+
+    pub(super) fn load_source_schemas(&mut self, cx: &mut Context<Self>) {
+        load_schemas(
+            self.source_connection_controls(),
+            self.source_database_controls(),
+            self.source_schema_controls(),
+            self.status.clone(),
+            cx,
+        );
+    }
+
+    pub(super) fn load_source_tables(&mut self, cx: &mut Context<Self>) {
+        load_tables(
+            self.source_connection_controls(),
+            self.source_database_controls(),
+            self.source_schema_controls(),
+            self.source_table_controls(),
+            self.status.clone(),
+            cx,
+        );
     }
 
     pub(super) fn load_target_databases(&mut self, cx: &mut Context<Self>) {
@@ -96,6 +125,8 @@ impl DataCompareWindow {
             .map(|plan| selected_sync_sql_summary_for_ids(plan, &selected_ids));
 
         v_flex()
+            .flex_1()
+            .min_h_0()
             .gap_2()
             .child(section_title("结果"))
             .when_some(progress, |this, progress| {
@@ -117,6 +148,34 @@ impl DataCompareWindow {
                     selected_ids,
                 ))
             })
+    }
+
+    fn source_connection_controls(&self) -> TargetConnectionControls {
+        TargetConnectionControls {
+            select: self.source_connection_select.clone(),
+            fallback: self.source_connection_id.clone(),
+        }
+    }
+
+    fn source_database_controls(&self) -> TargetStringControls {
+        TargetStringControls {
+            select: self.source_database_select.clone(),
+            fallback: self.source_database.clone(),
+        }
+    }
+
+    fn source_schema_controls(&self) -> TargetStringControls {
+        TargetStringControls {
+            select: self.source_schema_select.clone(),
+            fallback: self.source_schema.clone(),
+        }
+    }
+
+    fn source_table_controls(&self) -> TargetStringControls {
+        TargetStringControls {
+            select: self.source_table_select.clone(),
+            fallback: self.source_table.clone(),
+        }
     }
 
     fn connection_controls(&self) -> TargetConnectionControls {

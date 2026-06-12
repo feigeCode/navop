@@ -13,6 +13,27 @@ use crate::compare::window_ui::{
 };
 
 impl SchemaCompareWindow {
+    pub(super) fn load_source_databases(&mut self, cx: &mut Context<Self>) {
+        load_databases(
+            self.source_connection_select.clone(),
+            self.source_connection_id.clone(),
+            self.source_database_select.clone(),
+            self.source_database.clone(),
+            self.status.clone(),
+            cx,
+        );
+    }
+
+    pub(super) fn load_source_schemas(&mut self, cx: &mut Context<Self>) {
+        load_schemas(
+            self.source_connection_controls(),
+            self.source_database_controls(),
+            self.source_schema_controls(),
+            self.status.clone(),
+            cx,
+        );
+    }
+
     pub(super) fn load_target_databases(&mut self, cx: &mut Context<Self>) {
         load_databases(
             self.target_connection_select.clone(),
@@ -60,6 +81,8 @@ impl SchemaCompareWindow {
             .map(|plan| selected_sync_sql_summary_for_ids(plan, &selected_ids));
 
         v_flex()
+            .flex_1()
+            .min_h_0()
             .gap_2()
             .child(section_title("结果"))
             .when_some(progress, |this, progress| {
@@ -78,6 +101,27 @@ impl SchemaCompareWindow {
                     selected_ids,
                 ))
             })
+    }
+
+    fn source_connection_controls(&self) -> TargetConnectionControls {
+        TargetConnectionControls {
+            select: self.source_connection_select.clone(),
+            fallback: self.source_connection_id.clone(),
+        }
+    }
+
+    fn source_database_controls(&self) -> TargetStringControls {
+        TargetStringControls {
+            select: self.source_database_select.clone(),
+            fallback: self.source_database.clone(),
+        }
+    }
+
+    fn source_schema_controls(&self) -> TargetStringControls {
+        TargetStringControls {
+            select: self.source_schema_select.clone(),
+            fallback: self.source_schema.clone(),
+        }
     }
 
     fn connection_controls(&self) -> TargetConnectionControls {
