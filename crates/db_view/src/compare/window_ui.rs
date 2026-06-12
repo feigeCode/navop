@@ -267,7 +267,7 @@ pub(super) fn sync_sql_editor_state(window: &mut Window, cx: &mut App) -> Entity
     })
 }
 
-/// 同步 SQL 编辑器面板:标题 + 复制按钮 + 可编辑代码编辑器
+/// 同步 SQL 编辑器面板:标题 + 复制按钮 + 可编辑代码编辑器(填满所在列并内部滚动)
 pub(super) fn sql_editor_panel(
     copy_id: &'static str,
     editor: &Entity<InputState>,
@@ -275,7 +275,8 @@ pub(super) fn sql_editor_panel(
     cx: &App,
 ) -> impl IntoElement {
     v_flex()
-        .flex_1()
+        .size_full()
+        .min_h_0()
         .gap_1()
         .child(
             h_flex()
@@ -286,7 +287,7 @@ pub(super) fn sql_editor_panel(
         .child(
             div()
                 .flex_1()
-                .min_h(px(180.0))
+                .min_h_0()
                 .border_1()
                 .border_color(cx.theme().border)
                 .rounded_md()

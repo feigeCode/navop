@@ -1,5 +1,5 @@
 use gpui::{Context, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder};
-use gpui_component::{button::Button, h_flex, v_flex};
+use gpui_component::v_flex;
 
 use crate::compare::schema_compare_window::SchemaCompareWindow;
 use crate::compare::sync_statement_picker::{
@@ -9,7 +9,7 @@ use crate::compare::target_picker::{
     TargetConnectionControls, TargetStringControls, load_databases, load_schemas, string_select_row,
 };
 use crate::compare::window_ui::{
-    compare_progress_view, connection_select_row, section_title, sql_editor_panel, stat_cards_row,
+    compare_progress_view, connection_select_row, section_title, stat_cards_row,
 };
 
 impl SchemaCompareWindow {
@@ -34,7 +34,7 @@ impl SchemaCompareWindow {
         );
     }
 
-    pub(super) fn render_target(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_target(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_2()
             .child(section_title("目标"))
@@ -44,29 +44,9 @@ impl SchemaCompareWindow {
             ))
             .child(string_select_row("数据库", &self.target_database_select))
             .child(string_select_row("Schema", &self.target_schema_select))
-            .child(
-                h_flex()
-                    .justify_end()
-                    .gap_2()
-                    .child(
-                        Button::new("load-target-databases")
-                            .child("加载库")
-                            .on_click(
-                                cx.listener(move |view, _, _, cx| view.load_target_databases(cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("load-target-schemas")
-                            .child("加载 Schema")
-                            .on_click(
-                                cx.listener(move |view, _, _, cx| view.load_target_schemas(cx)),
-                            ),
-                    ),
-            )
     }
 
-    pub(super) fn render_result(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let status = self.status.read(cx).clone();
+    pub(super) fn render_result_meta(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let stats = self
             .result
             .read(cx)
@@ -78,14 +58,10 @@ impl SchemaCompareWindow {
         let sync_summary = plan
             .as_ref()
             .map(|plan| selected_sync_sql_summary_for_ids(plan, &selected_ids));
-        let has_plan = plan.is_some();
-        let editor_sql = self.sync_sql_editor.read(cx).text().to_string();
 
         v_flex()
             .gap_2()
-            .flex_1()
             .child(section_title("结果"))
-            .child(div().text_sm().child(status))
             .when_some(progress, |this, progress| {
                 this.child(compare_progress_view(&progress, cx))
             })
@@ -100,14 +76,6 @@ impl SchemaCompareWindow {
                     plan,
                     self.selected_statement_ids.clone(),
                     selected_ids,
-                ))
-            })
-            .when(has_plan, |this| {
-                this.child(sql_editor_panel(
-                    "schema-compare-copy-sql",
-                    &self.sync_sql_editor,
-                    editor_sql,
-                    cx,
                 ))
             })
     }

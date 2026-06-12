@@ -1,5 +1,5 @@
 use gpui::{Context, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder};
-use gpui_component::{ActiveTheme, button::Button, h_flex, v_flex};
+use gpui_component::{ActiveTheme, v_flex};
 
 use crate::compare::data_compare_window::DataCompareWindow;
 use crate::compare::sync_statement_picker::{
@@ -11,7 +11,7 @@ use crate::compare::target_picker::{
 };
 use crate::compare::window_ui::{
     compare_progress_view, connection_select_row, data_truncation_note, detail_row, input_row,
-    section_title, sql_editor_panel, stat_cards_row,
+    section_title, stat_cards_row,
 };
 
 impl DataCompareWindow {
@@ -67,7 +67,7 @@ impl DataCompareWindow {
         );
     }
 
-    pub(super) fn render_target(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_target(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_2()
             .child(section_title("目标"))
@@ -79,34 +79,9 @@ impl DataCompareWindow {
             .child(string_select_row("Schema", &self.target_schema_select))
             .child(string_select_row("表", &self.target_table_select))
             .child(input_row("主键列", &self.key_columns))
-            .child(
-                h_flex()
-                    .justify_end()
-                    .gap_2()
-                    .child(
-                        Button::new("load-target-databases")
-                            .child("加载库")
-                            .on_click(
-                                cx.listener(move |view, _, _, cx| view.load_target_databases(cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("load-target-schemas")
-                            .child("加载 Schema")
-                            .on_click(
-                                cx.listener(move |view, _, _, cx| view.load_target_schemas(cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("load-target-tables").child("加载表").on_click(
-                            cx.listener(move |view, _, _, cx| view.load_target_tables(cx)),
-                        ),
-                    ),
-            )
     }
 
-    pub(super) fn render_result(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let status = self.status.read(cx).clone();
+    pub(super) fn render_result_meta(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let stats = self
             .result
             .read(cx)
@@ -119,14 +94,10 @@ impl DataCompareWindow {
         let sync_summary = plan
             .as_ref()
             .map(|plan| selected_sync_sql_summary_for_ids(plan, &selected_ids));
-        let has_plan = plan.is_some();
-        let editor_sql = self.sync_sql_editor.read(cx).text().to_string();
 
         v_flex()
             .gap_2()
-            .flex_1()
             .child(section_title("结果"))
-            .child(div().text_sm().child(status))
             .when_some(progress, |this, progress| {
                 this.child(compare_progress_view(&progress, cx))
             })
@@ -144,14 +115,6 @@ impl DataCompareWindow {
                     plan,
                     self.selected_statement_ids.clone(),
                     selected_ids,
-                ))
-            })
-            .when(has_plan, |this| {
-                this.child(sql_editor_panel(
-                    "data-compare-copy-sql",
-                    &self.sync_sql_editor,
-                    editor_sql,
-                    cx,
                 ))
             })
     }

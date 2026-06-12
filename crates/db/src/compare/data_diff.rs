@@ -56,9 +56,12 @@ pub fn compare_data_rows(
     for (key, source_row) in &source_map {
         if let Some(target_row) = target_map.get(key) {
             // 两端都存在，比较非键列值
-            if let Some(modified_row) =
-                compare_row_values(source_row, target_row, &options.key_columns, &options.columns)
-            {
+            if let Some(modified_row) = compare_row_values(
+                source_row,
+                target_row,
+                &options.key_columns,
+                &options.columns,
+            ) {
                 modified.push(modified_row);
             }
         } else {

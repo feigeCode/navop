@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
 use db::compare::{SyncPlan, SyncStatement, SyncStatementKind};
-use gpui::{Entity, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder, px};
+use gpui::{Entity, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder};
 use gpui_component::{
     Sizable,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     h_flex,
-    scroll::ScrollableElement,
     tag::Tag,
     v_flex,
 };
@@ -68,8 +67,6 @@ pub(super) fn sync_statement_picker(
         .child(
             v_flex()
                 .gap_1()
-                .max_h(px(200.0))
-                .overflow_y_scrollbar()
                 .children(plan.statements.into_iter().map(|statement| {
                     statement_row(statement, selected_snapshot.clone(), selected_ids.clone())
                 })),

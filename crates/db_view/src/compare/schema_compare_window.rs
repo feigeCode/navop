@@ -4,13 +4,15 @@ use std::sync::Arc;
 use db::{DbNode, GlobalDbState};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
+    Render, Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, StyledExt,
     button::{Button, ButtonVariants as _},
+    h_flex,
     input::InputState,
-    select::SelectState,
+    scroll::ScrollableElement,
+    select::{SearchableVec, SelectEvent, SelectState},
     v_flex,
 };
 use tokio::sync::mpsc;
@@ -22,7 +24,7 @@ use crate::compare::target_picker::{StringSelect, selected_string, string_select
 use crate::compare::window_params::schema_compare_params;
 use crate::compare::window_ui::{
     ConnectionSelectItem, close_button, connection_select_state, detail_row, section_title,
-    selected_connection_id, start_sync_sql_execution, sync_sql_editor_state,
+    selected_connection_id, sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
 };
 use crate::compare::{
     CompareProgress, CompareTargetScope, SchemaCompareParams, execute_schema_compare,
@@ -79,7 +81,7 @@ impl SchemaCompareWindow {
         );
         let sync_sql_editor = sync_sql_editor_state(window, cx);
 
-        cx.new(|cx: &mut Context<Self>| {
+        let view = cx.new(|cx: &mut Context<Self>| {
             let mut window_state = Self {
                 source_node,
                 target_connection_id,
@@ -110,8 +112,24 @@ impl SchemaCompareWindow {
                 },
             );
             window_state._subscriptions.push(sub);
+            // 目标级联:连接 → 数据库 → Schema
+            window_state._subscriptions.push(cx.subscribe(
+                &window_state.target_connection_select,
+                |this, _, _event: &SelectEvent<Vec<ConnectionSelectItem>>, cx| {
+                    this.load_target_databases(cx);
+                },
+            ));
+            window_state._subscriptions.push(cx.subscribe(
+                &window_state.target_database_select,
+                |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
+                    this.load_target_schemas(cx);
+                },
+            ));
             window_state
-        })
+        });
+        // 打开时按默认连接预加载目标数据库,后续逐级联动
+        view.update(cx, |this, cx| this.load_target_databases(cx));
+        view
     }
 
     pub fn popup_title_for(source_node: &DbNode) -> String {
@@ -297,49 +315,86 @@ impl Render for SchemaCompareWindow {
         let is_running = *self.is_running.read(cx);
         let is_executing = *self.is_executing.read(cx);
         let has_sync_sql = self.has_editor_sql(cx);
+        let status = self.status.read(cx).clone();
+        let editor_sql = self.sync_sql_editor.read(cx).text().to_string();
+
         v_flex()
             .size_full()
             .p_4()
-            .gap_4()
+            .gap_3()
             .child(div().font_semibold().child("结构比较"))
-            .child(self.render_source(cx))
-            .child(self.render_target(cx))
-            .child(self.render_result(cx))
-            .child(div().flex_1().child(""))
             .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap_2()
-                    .child(close_button())
-                    .when(is_running, |this| {
-                        this.child(
-                            Button::new("cancel-compare")
-                                .danger()
-                                .child("取消")
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.cancel_compare(cx);
-                                })),
-                        )
-                    })
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .gap_4()
                     .child(
-                        Button::new("execute-sync-sql")
-                            .child("执行 SQL")
-                            .loading(is_executing)
-                            .disabled(is_running || is_executing || !has_sync_sql)
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.start_execute_sync_sql(cx);
-                            })),
+                        // 左栏:配置 + 结果摘要 + 语句列表(整体可滚动)
+                        div().w(px(360.0)).h_full().min_h_0().child(
+                            v_flex()
+                                .size_full()
+                                .gap_3()
+                                .overflow_y_scrollbar()
+                                .child(self.render_source(cx))
+                                .child(self.render_target(cx))
+                                .child(self.render_result_meta(cx)),
+                        ),
                     )
                     .child(
-                        Button::new("compare")
-                            .primary()
-                            .loading(is_running)
-                            .disabled(is_running || is_executing)
-                            .child("开始比较")
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.start_compare(cx);
-                            })),
+                        // 右栏:可编辑 SQL 编辑器(填满高度,内部滚动)
+                        div().flex_1().h_full().min_h_0().child(sql_editor_panel(
+                            "schema-compare-copy-sql",
+                            &self.sync_sql_editor,
+                            editor_sql,
+                            cx,
+                        )),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(status),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(close_button())
+                            .when(is_running, |this| {
+                                this.child(
+                                    Button::new("cancel-compare")
+                                        .danger()
+                                        .child("取消")
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.cancel_compare(cx);
+                                        })),
+                                )
+                            })
+                            .child(
+                                Button::new("execute-sync-sql")
+                                    .child("执行 SQL")
+                                    .loading(is_executing)
+                                    .disabled(is_running || is_executing || !has_sync_sql)
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.start_execute_sync_sql(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("compare")
+                                    .primary()
+                                    .loading(is_running)
+                                    .disabled(is_running || is_executing)
+                                    .child("开始比较")
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.start_compare(cx);
+                                    })),
+                            ),
                     ),
             )
     }

@@ -16,13 +16,9 @@ pub enum CompareTaskEvent {
         total_tables: usize,
     },
     /// 加载元数据
-    LoadingMetadata {
-        table: Option<String>,
-    },
+    LoadingMetadata { table: Option<String> },
     /// 计数行数
-    CountingRows {
-        table: String,
-    },
+    CountingRows { table: String },
     /// 读取行
     FetchingRows {
         table: String,
@@ -37,9 +33,7 @@ pub enum CompareTaskEvent {
         total_rows: Option<usize>,
     },
     /// 生成同步计划
-    PlanningSql {
-        table: Option<String>,
-    },
+    PlanningSql { table: Option<String> },
     /// 表完成
     TableFinished {
         table: String,
@@ -53,9 +47,7 @@ pub enum CompareTaskEvent {
         message: String,
     },
     /// 任务完成
-    Finished {
-        elapsed_ms: u64,
-    },
+    Finished { elapsed_ms: u64 },
 }
 
 /// 比较的源端或目标端
