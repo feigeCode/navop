@@ -4,10 +4,10 @@ use std::sync::Arc;
 use db::{DbNode, GlobalDbState};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, Styled, Subscription, Task, Window, div, prelude::FluentBuilder, px,
+    Render, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, StyledExt,
+    ActiveTheme, Disableable, IconName, StyledExt,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::InputState,
@@ -17,23 +17,26 @@ use gpui_component::{
 use tokio::sync::mpsc;
 
 use crate::compare::sync_statement_picker::{
-    default_selected_statement_ids, selected_sync_sql_text_for_ids,
+    SyncStatementListState, default_selected_statement_ids, refresh_sync_statement_list,
+    selected_sync_sql_text_for_ids, sync_statement_list_state,
 };
-use crate::compare::target_picker::{StringSelect, selected_string, string_select_state};
+use crate::compare::target_picker::{
+    StringSelect, selected_string, set_connection_select, set_string_select, string_select_state,
+};
 use crate::compare::window_params::{DataCompareSelection, data_compare_params};
 use crate::compare::window_ui::{
-    ConnectionSelectItem, close_button, connection_select_state, selected_connection_id,
-    sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
+    ConnectionSelectItem, close_button, connection_select_state, register_connection_for_compare,
+    selected_connection_id, sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
 };
 use crate::compare::{
     CompareProgress, CompareTargetScope, DataCompareParams, execute_data_compare,
-    generate_data_sync_plan,
+    generate_data_sync_plan_for_target,
 };
 use db::compare::{DataCompareResult, SyncPlan};
 
 pub struct DataCompareWindow {
     pub(super) source_connection_id: Entity<InputState>,
-    pub(super) source_connection_select: Entity<SelectState<Vec<ConnectionSelectItem>>>,
+    pub(super) source_connection_select: Entity<SelectState<SearchableVec<ConnectionSelectItem>>>,
     pub(super) source_database: Entity<InputState>,
     pub(super) source_database_select: StringSelect,
     pub(super) source_schema: Entity<InputState>,
@@ -41,7 +44,7 @@ pub struct DataCompareWindow {
     pub(super) source_table: Entity<InputState>,
     pub(super) source_table_select: StringSelect,
     pub(super) target_connection_id: Entity<InputState>,
-    pub(super) target_connection_select: Entity<SelectState<Vec<ConnectionSelectItem>>>,
+    pub(super) target_connection_select: Entity<SelectState<SearchableVec<ConnectionSelectItem>>>,
     pub(super) target_database: Entity<InputState>,
     pub(super) target_database_select: StringSelect,
     pub(super) target_schema: Entity<InputState>,
@@ -52,6 +55,7 @@ pub struct DataCompareWindow {
     pub(super) result: Entity<Option<DataCompareResult>>,
     pub(super) sync_plan: Entity<Option<SyncPlan>>,
     pub(super) selected_statement_ids: Entity<HashSet<String>>,
+    pub(super) sync_statement_list: SyncStatementListState,
     pub(super) sync_sql_editor: Entity<InputState>,
     pub(super) progress: Entity<Option<CompareProgress>>,
     compare_target: Entity<Option<CompareTargetScope>>,
@@ -101,6 +105,9 @@ impl DataCompareWindow {
         let sync_sql_editor = sync_sql_editor_state(window, cx);
 
         let view = cx.new(|cx: &mut Context<Self>| {
+            let selected_statement_ids = cx.new(|_| HashSet::new());
+            let sync_statement_list =
+                sync_statement_list_state(selected_statement_ids.clone(), window, cx);
             let mut window_state = Self {
                 source_connection_id,
                 source_connection_select,
@@ -122,7 +129,8 @@ impl DataCompareWindow {
                 sync_sql_editor,
                 result: cx.new(|_| None),
                 sync_plan: cx.new(|_| None),
-                selected_statement_ids: cx.new(|_| HashSet::new()),
+                selected_statement_ids,
+                sync_statement_list,
                 progress: cx.new(|_| None),
                 compare_target: cx.new(|_| None),
                 status: cx.new(|_| "就绪".to_string()),
@@ -138,13 +146,14 @@ impl DataCompareWindow {
                 window,
                 |this, _, window, cx| {
                     this.refresh_sync_editor(window, cx);
+                    this.sync_statement_list.update(cx, |_, cx| cx.notify());
                 },
             );
             window_state._subscriptions.push(sub);
             // 源级联:连接 → 数据库 → Schema → 表
             window_state._subscriptions.push(cx.subscribe(
                 &window_state.source_connection_select,
-                |this, _, _event: &SelectEvent<Vec<ConnectionSelectItem>>, cx| {
+                |this, _, _event: &SelectEvent<SearchableVec<ConnectionSelectItem>>, cx| {
                     this.load_source_databases(cx);
                 },
             ));
@@ -152,6 +161,7 @@ impl DataCompareWindow {
                 &window_state.source_database_select,
                 |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
                     this.load_source_schemas(cx);
+                    this.load_source_tables(cx);
                 },
             ));
             window_state._subscriptions.push(cx.subscribe(
@@ -163,7 +173,7 @@ impl DataCompareWindow {
             // 目标级联:连接 → 数据库 → Schema → 表
             window_state._subscriptions.push(cx.subscribe(
                 &window_state.target_connection_select,
-                |this, _, _event: &SelectEvent<Vec<ConnectionSelectItem>>, cx| {
+                |this, _, _event: &SelectEvent<SearchableVec<ConnectionSelectItem>>, cx| {
                     this.load_target_databases(cx);
                 },
             ));
@@ -171,6 +181,7 @@ impl DataCompareWindow {
                 &window_state.target_database_select,
                 |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
                     this.load_target_schemas(cx);
+                    this.load_target_tables(cx);
                 },
             ));
             window_state._subscriptions.push(cx.subscribe(
@@ -181,10 +192,27 @@ impl DataCompareWindow {
             ));
             window_state
         });
-        // 打开时按默认连接预加载源/目标数据库,后续逐级联动
         view.update(cx, |this, cx| {
-            this.load_source_databases(cx);
-            this.load_target_databases(cx);
+            if !selected_connection_id(
+                &this.source_connection_select,
+                &this.source_connection_id,
+                cx,
+            )
+            .trim()
+            .is_empty()
+            {
+                this.load_source_databases(cx);
+            }
+            if !selected_connection_id(
+                &this.target_connection_select,
+                &this.target_connection_id,
+                cx,
+            )
+            .trim()
+            .is_empty()
+            {
+                this.load_target_databases(cx);
+            }
         });
         view
     }
@@ -202,6 +230,11 @@ impl DataCompareWindow {
             }
         };
         let compare_target = CompareTargetScope::from_data_params(&params);
+        register_connection_for_compare(&params.source_connection_id, cx);
+        register_connection_for_compare(&params.target_connection_id, cx);
+        let target_connection_id = params.target_connection_id.clone();
+        let target_database = params.target_database.clone();
+        let target_schema = params.target_schema.clone();
         let db_state = Arc::new(cx.global::<GlobalDbState>().clone());
         self.is_running.update(cx, |running, cx| {
             *running = true;
@@ -226,7 +259,18 @@ impl DataCompareWindow {
         .detach();
 
         let task = cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let result = execute_data_compare(params, db_state, progress_tx, cx).await;
+            let result = match execute_data_compare(params, db_state.clone(), progress_tx, cx).await
+            {
+                Ok(result) => generate_data_sync_plan_for_target(
+                    &result,
+                    &db_state,
+                    &target_connection_id,
+                    &target_database,
+                    target_schema.as_deref(),
+                )
+                .map(|plan| (result, plan)),
+                Err(error) => Err(error),
+            };
             let _ = this.update(cx, |view, cx| {
                 view.is_running.update(cx, |running, cx| {
                     *running = false;
@@ -234,9 +278,9 @@ impl DataCompareWindow {
                 });
                 view.set_progress(None, cx);
                 match result {
-                    Ok(result) => {
-                        let plan = generate_data_sync_plan(&result);
+                    Ok((result, plan)) => {
                         let selected_ids = default_selected_statement_ids(&plan);
+                        refresh_sync_statement_list(&view.sync_statement_list, &plan, cx);
                         view.result.update(cx, |slot, cx| {
                             *slot = Some(result);
                             cx.notify();
@@ -261,6 +305,80 @@ impl DataCompareWindow {
             });
         });
         self.compare_task = Some(task);
+    }
+
+    fn swap_source_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let source = self.source_selection(cx);
+        let target = self.target_selection(cx);
+
+        set_connection_select(
+            &self.source_connection_select,
+            &target.connection_id,
+            window,
+            cx,
+        );
+        set_connection_select(
+            &self.target_connection_select,
+            &source.connection_id,
+            window,
+            cx,
+        );
+        set_string_select(
+            &self.source_database_select,
+            &self.source_database,
+            target.database,
+            window,
+            cx,
+        );
+        set_string_select(
+            &self.target_database_select,
+            &self.target_database,
+            source.database,
+            window,
+            cx,
+        );
+        set_string_select(
+            &self.source_schema_select,
+            &self.source_schema,
+            target.schema,
+            window,
+            cx,
+        );
+        set_string_select(
+            &self.target_schema_select,
+            &self.target_schema,
+            source.schema,
+            window,
+            cx,
+        );
+        set_string_select(
+            &self.source_table_select,
+            &self.source_table,
+            target.table,
+            window,
+            cx,
+        );
+        set_string_select(
+            &self.target_table_select,
+            &self.target_table,
+            source.table,
+            window,
+            cx,
+        );
+
+        self.result.update(cx, |slot, cx| {
+            *slot = None;
+            cx.notify();
+        });
+        self.sync_plan.update(cx, |slot, cx| {
+            *slot = None;
+            cx.notify();
+        });
+        self.compare_target.update(cx, |slot, cx| {
+            *slot = None;
+            cx.notify();
+        });
+        self.set_status("已交换源和目标", cx);
     }
 
     fn cancel_compare(&mut self, cx: &mut Context<Self>) {
@@ -382,29 +500,46 @@ impl Render for DataCompareWindow {
             .gap_3()
             .child(div().font_semibold().child("数据比较"))
             .child(
-                h_flex()
+                v_flex()
                     .flex_1()
                     .min_h_0()
                     .gap_4()
                     .child(
-                        // 左栏:配置固定,同步语句列表单独滚动
-                        div().w(px(360.0)).h_full().min_h_0().child(
-                            v_flex()
-                                .size_full()
-                                .gap_3()
-                                .child(self.render_source(cx))
-                                .child(self.render_target(cx))
-                                .child(self.render_result_meta(cx)),
-                        ),
+                        // 第一排:源和目标并排
+                        h_flex()
+                            .gap_4()
+                            .child(div().flex_1().child(self.render_source(cx)))
+                            .child(
+                                div().pt_10().child(
+                                    Button::new("swap-data-compare-source-target")
+                                        .icon(IconName::Replace)
+                                        .tooltip("交换源和目标")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.swap_source_target(window, cx);
+                                        })),
+                                ),
+                            )
+                            .child(div().flex_1().child(self.render_target(cx))),
                     )
                     .child(
-                        // 右栏:可编辑 SQL 编辑器(填满高度,内部滚动)
-                        div().flex_1().h_full().min_h_0().child(sql_editor_panel(
-                            "data-compare-copy-sql",
-                            &self.sync_sql_editor,
-                            editor_sql,
-                            cx,
-                        )),
+                        // 第二排:比较结果和 SQL 并排,各自内部滚动
+                        h_flex()
+                            .flex_1()
+                            .min_h_0()
+                            .gap_4()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .h_full()
+                                    .min_h_0()
+                                    .child(self.render_result_meta(cx)),
+                            )
+                            .child(div().flex_1().h_full().min_h_0().child(sql_editor_panel(
+                                "data-compare-copy-sql",
+                                &self.sync_sql_editor,
+                                editor_sql,
+                                cx,
+                            ))),
                     ),
             )
             .child(

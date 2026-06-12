@@ -1,16 +1,33 @@
 use std::collections::HashSet;
 
 use db::compare::{SyncPlan, SyncStatement, SyncStatementKind};
-use gpui::{Entity, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder};
+use gpui::{
+    App, AppContext, Context, Entity, IntoElement, ParentElement, Styled, Task, Window, div,
+    prelude::FluentBuilder, px,
+};
 use gpui_component::{
-    Sizable,
+    ActiveTheme, IndexPath, Sizable, StyledExt,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     h_flex,
-    scroll::ScrollableElement,
+    list::{List, ListDelegate, ListItem, ListState},
     tag::Tag,
     v_flex,
 };
+
+pub(super) type SyncStatementListState = Entity<ListState<SyncStatementListDelegate>>;
+
+const SYNC_STATEMENT_ROW_HEIGHT: f32 = 54.0;
+
+pub(super) fn sync_statement_list_state<T: 'static>(
+    selected_ids: Entity<HashSet<String>>,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) -> SyncStatementListState {
+    cx.new(|cx| {
+        ListState::new(SyncStatementListDelegate::new(selected_ids), window, cx).selectable(false)
+    })
+}
 
 pub(super) fn default_selected_statement_ids(plan: &SyncPlan) -> HashSet<String> {
     plan.statements
@@ -18,6 +35,17 @@ pub(super) fn default_selected_statement_ids(plan: &SyncPlan) -> HashSet<String>
         .filter(|statement| statement.selected_by_default)
         .map(|statement| statement.id.clone())
         .collect()
+}
+
+pub(super) fn refresh_sync_statement_list<T: 'static>(
+    list_state: &SyncStatementListState,
+    plan: &SyncPlan,
+    cx: &mut Context<T>,
+) {
+    list_state.update(cx, |list, cx| {
+        list.delegate_mut().set_statements(plan.statements.clone());
+        cx.notify();
+    });
 }
 
 pub(super) fn selected_sync_sql_text_for_ids(
@@ -52,7 +80,8 @@ pub(super) fn selected_sync_sql_summary_for_ids(
 pub(super) fn sync_statement_picker(
     plan: SyncPlan,
     selected_ids: Entity<HashSet<String>>,
-    selected_snapshot: HashSet<String>,
+    list_state: SyncStatementListState,
+    cx: &App,
 ) -> impl IntoElement {
     let all_ids: Vec<String> = plan.statements.iter().map(|s| s.id.clone()).collect();
     let safe_ids: Vec<String> = plan
@@ -65,107 +94,212 @@ pub(super) fn sync_statement_picker(
     v_flex()
         .flex_1()
         .min_h_0()
-        .gap_2()
-        .child(picker_toolbar(all_ids, safe_ids, selected_ids.clone()))
+        .gap_1()
+        .child(picker_header(all_ids, safe_ids, selected_ids.clone()))
         .child(
             v_flex()
                 .flex_1()
                 .min_h_0()
-                .gap_1()
-                .overflow_y_scrollbar()
-                .children(plan.statements.into_iter().map(|statement| {
-                    statement_row(statement, selected_snapshot.clone(), selected_ids.clone())
-                })),
+                .border_1()
+                .border_color(cx.theme().border)
+                .rounded_md()
+                .overflow_hidden()
+                .child(List::new(&list_state).size_full()),
         )
 }
 
-fn picker_toolbar(
+fn picker_header(
     all_ids: Vec<String>,
     safe_ids: Vec<String>,
     selected_ids: Entity<HashSet<String>>,
 ) -> impl IntoElement {
     h_flex()
-        .gap_2()
+        .justify_between()
+        .child(div().text_sm().font_semibold().child("同步语句"))
         .child(
-            Button::new("sync-select-all")
-                .small()
-                .ghost()
-                .child("全选")
-                .on_click({
-                    let all = all_ids;
-                    let sel = selected_ids.clone();
-                    move |_, _, cx| {
-                        sel.update(cx, |ids, cx| {
-                            *ids = all.iter().cloned().collect();
-                            cx.notify();
-                        });
-                    }
-                }),
-        )
-        .child(
-            Button::new("sync-select-none")
-                .small()
-                .ghost()
-                .child("全不选")
-                .on_click({
-                    let sel = selected_ids.clone();
-                    move |_, _, cx| {
-                        sel.update(cx, |ids, cx| {
-                            ids.clear();
-                            cx.notify();
-                        });
-                    }
-                }),
-        )
-        .child(
-            Button::new("sync-select-safe")
-                .small()
-                .ghost()
-                .child("仅安全")
-                .on_click({
-                    let safe = safe_ids;
-                    let sel = selected_ids;
-                    move |_, _, cx| {
-                        sel.update(cx, |ids, cx| {
-                            *ids = safe.iter().cloned().collect();
-                            cx.notify();
-                        });
-                    }
-                }),
+            h_flex()
+                .gap_1()
+                .child(
+                    Button::new("sync-select-all")
+                        .small()
+                        .child("全选")
+                        .on_click({
+                            let all = all_ids;
+                            let sel = selected_ids.clone();
+                            move |_, _, cx| {
+                                sel.update(cx, |ids, cx| {
+                                    *ids = all.iter().cloned().collect();
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("sync-select-none")
+                        .small()
+                        .child("全不选")
+                        .on_click({
+                            let sel = selected_ids.clone();
+                            move |_, _, cx| {
+                                sel.update(cx, |ids, cx| {
+                                    ids.clear();
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("sync-select-safe")
+                        .small()
+                        .ghost()
+                        .child("仅安全")
+                        .on_click({
+                            let safe = safe_ids;
+                            let sel = selected_ids;
+                            move |_, _, cx| {
+                                sel.update(cx, |ids, cx| {
+                                    *ids = safe.iter().cloned().collect();
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                ),
         )
 }
 
-fn statement_row(
-    statement: SyncStatement,
-    selected_snapshot: HashSet<String>,
+pub(super) struct SyncStatementListDelegate {
+    statements: Vec<SyncStatement>,
     selected_ids: Entity<HashSet<String>>,
-) -> impl IntoElement {
-    let checked = selected_snapshot.contains(&statement.id);
-    let id = statement.id.clone();
-    let object = statement.object_name.clone().unwrap_or_default();
-    let destructive = statement.destructive;
+    selected_index: Option<IndexPath>,
+}
 
-    h_flex()
+impl SyncStatementListDelegate {
+    fn new(selected_ids: Entity<HashSet<String>>) -> Self {
+        Self {
+            statements: Vec::new(),
+            selected_ids,
+            selected_index: None,
+        }
+    }
+
+    pub(super) fn set_statements(&mut self, statements: Vec<SyncStatement>) {
+        self.statements = statements;
+        self.selected_index = None;
+    }
+}
+
+impl ListDelegate for SyncStatementListDelegate {
+    type Item = ListItem;
+
+    fn items_count(&self, _section: usize, _cx: &App) -> usize {
+        self.statements.len()
+    }
+
+    fn render_item(
+        &mut self,
+        ix: IndexPath,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<Self::Item> {
+        let statement = self.statements.get(ix.row)?;
+        let checked = self.selected_ids.read(cx).contains(&statement.id);
+        Some(statement_row(
+            statement,
+            checked,
+            self.selected_ids.clone(),
+            cx,
+        ))
+    }
+
+    fn render_empty(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        div()
+            .size_full()
+            .p_3()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child("暂无同步语句")
+    }
+
+    fn perform_search(
+        &mut self,
+        _query: &str,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) -> Task<()> {
+        Task::ready(())
+    }
+
+    fn set_selected_index(
+        &mut self,
+        ix: Option<IndexPath>,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) {
+        self.selected_index = ix;
+    }
+}
+
+fn statement_row(
+    statement: &SyncStatement,
+    checked: bool,
+    selected_ids: Entity<HashSet<String>>,
+    cx: &App,
+) -> ListItem {
+    let id = statement.id.clone();
+    let object = statement
+        .object_name
+        .clone()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "未命名对象".to_string());
+    let destructive = statement.destructive;
+    let sql_preview = sql_preview(&statement.sql);
+
+    let row = h_flex()
+        .w_full()
         .gap_2()
-        .items_center()
+        .items_start()
+        .child(Checkbox::new(format!("sync-statement-{id}")).checked(checked))
         .child(
-            Checkbox::new(format!("sync-statement-{id}"))
-                .checked(checked)
-                .on_click(move |checked, _, cx| {
-                    selected_ids.update(cx, |ids, cx| {
-                        if *checked {
-                            ids.insert(id.clone());
-                        } else {
-                            ids.remove(&id);
-                        }
-                        cx.notify();
-                    });
-                }),
-        )
-        .child(kind_tag(&statement.kind))
-        .child(div().text_sm().child(object))
-        .when(destructive, |this| {
-            this.child(Tag::danger().small().outline().child("破坏性"))
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(kind_tag(&statement.kind))
+                        .child(div().flex_1().min_w_0().truncate().text_sm().child(object))
+                        .when(destructive, |this| {
+                            this.child(Tag::danger().small().outline().child("破坏性"))
+                        }),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(sql_preview),
+                ),
+        );
+
+    ListItem::new(format!("sync-statement-row-{id}"))
+        .h(px(SYNC_STATEMENT_ROW_HEIGHT))
+        .child(row)
+        .when(checked, |this| this.bg(cx.theme().list_active))
+        .on_click(move |_, _, cx| {
+            selected_ids.update(cx, |ids, cx| {
+                if ids.contains(&id) {
+                    ids.remove(&id);
+                } else {
+                    ids.insert(id.clone());
+                }
+                cx.notify();
+            });
         })
 }
 
@@ -184,4 +318,8 @@ fn kind_tag(kind: &SyncStatementKind) -> impl IntoElement {
         Unknown => (Tag::secondary(), "其他"),
     };
     tag.small().child(label)
+}
+
+fn sql_preview(sql: &str) -> String {
+    sql.split_whitespace().collect::<Vec<_>>().join(" ")
 }

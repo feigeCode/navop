@@ -14,7 +14,7 @@ use gpui_component::{
     highlighter::Language,
     input::{Input, InputState},
     progress::Progress,
-    select::{Select, SelectItem, SelectState},
+    select::{SearchableVec, Select, SelectItem, SelectState},
     v_flex,
 };
 use one_core::storage::{
@@ -47,10 +47,16 @@ impl ConnectionSelectItem {
             return None;
         }
         let id = connection.id?.to_string();
-        Some(Self {
-            label: format!("{} ({id})", connection.name),
-            id,
-        })
+        let host = connection
+            .to_db_connection()
+            .ok()
+            .map(|config| config.host)
+            .filter(|host| !host.trim().is_empty());
+        let label = match host {
+            Some(host) => format!("{} ({host})", connection.name),
+            None => connection.name,
+        };
+        Some(Self { label, id })
     }
 }
 
@@ -58,13 +64,15 @@ pub(super) fn connection_select_state(
     current_connection_id: &str,
     window: &mut gpui::Window,
     cx: &mut App,
-) -> Entity<SelectState<Vec<ConnectionSelectItem>>> {
+) -> Entity<SelectState<SearchableVec<ConnectionSelectItem>>> {
     let items = connection_select_items(cx);
     let selected_index = items
         .iter()
         .position(|item| item.id == current_connection_id)
         .map(IndexPath::new);
-    cx.new(|cx| SelectState::new(items, selected_index, window, cx))
+    cx.new(|cx| {
+        SelectState::new(SearchableVec::new(items), selected_index, window, cx).searchable(true)
+    })
 }
 
 fn connection_select_items(cx: &mut App) -> Vec<ConnectionSelectItem> {
@@ -82,15 +90,35 @@ fn connection_select_items(cx: &mut App) -> Vec<ConnectionSelectItem> {
 }
 
 pub(super) fn selected_connection_id(
-    select: &Entity<SelectState<Vec<ConnectionSelectItem>>>,
-    fallback: &Entity<InputState>,
+    select: &Entity<SelectState<SearchableVec<ConnectionSelectItem>>>,
+    _fallback: &Entity<InputState>,
     cx: &App,
 ) -> String {
     select
         .read(cx)
         .selected_value()
         .cloned()
-        .unwrap_or_else(|| fallback.read(cx).text().to_string())
+        .unwrap_or_default()
+}
+
+pub(super) fn register_connection_for_compare<T>(connection_id: &str, cx: &mut Context<T>) {
+    let Some(storage_state) = cx.try_global::<GlobalStorageState>() else {
+        return;
+    };
+    let Some(repo) = storage_state.storage.get::<ConnectionRepository>() else {
+        return;
+    };
+    let Ok(id) = connection_id.parse::<i64>() else {
+        return;
+    };
+    let Ok(Some(connection)) = repo.get(id) else {
+        return;
+    };
+    let Ok(config) = connection.to_db_connection() else {
+        return;
+    };
+    let mut db_state = cx.global::<GlobalDbState>().clone();
+    db_state.register_connection(config);
 }
 
 pub(super) fn data_truncation_note(result: &DataCompareResult) -> Option<String> {
@@ -232,14 +260,19 @@ pub(super) fn input_row(label: &'static str, input: &Entity<InputState>) -> impl
 
 pub(super) fn connection_select_row(
     label: &'static str,
-    select: &Entity<SelectState<Vec<ConnectionSelectItem>>>,
+    select: &Entity<SelectState<SearchableVec<ConnectionSelectItem>>>,
 ) -> impl IntoElement {
     div()
         .flex()
         .items_center()
         .gap_2()
         .child(div().w(px(120.0)).text_sm().child(label))
-        .child(Select::new(select).small().w_full())
+        .child(
+            Select::new(select)
+                .small()
+                .search_placeholder("搜索连接")
+                .w_full(),
+        )
 }
 
 /// 创建用于「同步 SQL」的代码编辑器(SQL 语法高亮 + 行号,可编辑)

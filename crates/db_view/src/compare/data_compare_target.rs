@@ -6,8 +6,8 @@ use crate::compare::sync_statement_picker::{
     selected_sync_sql_summary_for_ids, sync_statement_picker,
 };
 use crate::compare::target_picker::{
-    TargetConnectionControls, TargetStringControls, load_databases, load_schemas, load_tables,
-    string_select_row,
+    TargetConnectionControls, TargetStringControls, clear_string_select, load_databases,
+    load_schemas, load_tables, string_select_row,
 };
 use crate::compare::window_ui::{
     compare_progress_view, connection_select_row, data_truncation_note, input_row, section_title,
@@ -33,9 +33,10 @@ impl DataCompareWindow {
     }
 
     pub(super) fn load_source_databases(&mut self, cx: &mut Context<Self>) {
+        clear_string_select(&self.source_schema_select, cx);
+        clear_string_select(&self.source_table_select, cx);
         load_databases(
             self.source_connection_select.clone(),
-            self.source_connection_id.clone(),
             self.source_database_select.clone(),
             self.source_database.clone(),
             self.status.clone(),
@@ -44,6 +45,7 @@ impl DataCompareWindow {
     }
 
     pub(super) fn load_source_schemas(&mut self, cx: &mut Context<Self>) {
+        clear_string_select(&self.source_table_select, cx);
         load_schemas(
             self.source_connection_controls(),
             self.source_database_controls(),
@@ -65,9 +67,10 @@ impl DataCompareWindow {
     }
 
     pub(super) fn load_target_databases(&mut self, cx: &mut Context<Self>) {
+        clear_string_select(&self.target_schema_select, cx);
+        clear_string_select(&self.target_table_select, cx);
         load_databases(
             self.target_connection_select.clone(),
-            self.target_connection_id.clone(),
             self.target_database_select.clone(),
             self.target_database.clone(),
             self.status.clone(),
@@ -76,6 +79,7 @@ impl DataCompareWindow {
     }
 
     pub(super) fn load_target_schemas(&mut self, cx: &mut Context<Self>) {
+        clear_string_select(&self.target_table_select, cx);
         load_schemas(
             self.connection_controls(),
             self.database_controls(),
@@ -96,9 +100,13 @@ impl DataCompareWindow {
         );
     }
 
-    pub(super) fn render_target(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_target(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap_2()
+            .p_3()
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded_md()
             .child(section_title("目标"))
             .child(connection_select_row(
                 "连接",
@@ -125,7 +133,7 @@ impl DataCompareWindow {
             .map(|plan| selected_sync_sql_summary_for_ids(plan, &selected_ids));
 
         v_flex()
-            .flex_1()
+            .size_full()
             .min_h_0()
             .gap_2()
             .child(section_title("结果"))
@@ -145,7 +153,8 @@ impl DataCompareWindow {
                 this.child(sync_statement_picker(
                     plan,
                     self.selected_statement_ids.clone(),
-                    selected_ids,
+                    self.sync_statement_list.clone(),
+                    cx,
                 ))
             })
     }
@@ -153,7 +162,6 @@ impl DataCompareWindow {
     fn source_connection_controls(&self) -> TargetConnectionControls {
         TargetConnectionControls {
             select: self.source_connection_select.clone(),
-            fallback: self.source_connection_id.clone(),
         }
     }
 
@@ -181,7 +189,6 @@ impl DataCompareWindow {
     fn connection_controls(&self) -> TargetConnectionControls {
         TargetConnectionControls {
             select: self.target_connection_select.clone(),
-            fallback: self.target_connection_id.clone(),
         }
     }
 

@@ -2,6 +2,8 @@ use super::{
     CellValue, ColumnSchema, DataCompareResult, DiffStatus, RowData, SchemaCompareResult,
     TableSchema,
 };
+use crate::plugin::DatabasePlugin;
+use crate::types::{ColumnDefinition, IndexDefinition, TableDesign};
 use serde::{Deserialize, Serialize};
 
 /// 同步计划类型
@@ -75,19 +77,147 @@ pub struct SyncPlan {
     pub sql_text: String,
 }
 
+trait SyncSqlDialect {
+    fn quote_identifier(&self, identifier: &str) -> String;
+    fn format_table_reference(&self, database: &str, schema: Option<&str>, table: &str) -> String;
+    fn drop_table(&self, database: &str, schema: Option<&str>, table: &str) -> String;
+    fn build_column_def(&self, column: &ColumnDefinition) -> String;
+    fn build_create_table_sql(&self, design: &TableDesign) -> String;
+}
+
+impl<T> SyncSqlDialect for T
+where
+    T: DatabasePlugin + ?Sized,
+{
+    fn quote_identifier(&self, identifier: &str) -> String {
+        DatabasePlugin::quote_identifier(self, identifier)
+    }
+
+    fn format_table_reference(&self, database: &str, schema: Option<&str>, table: &str) -> String {
+        DatabasePlugin::format_table_reference(self, database, schema, table)
+    }
+
+    fn drop_table(&self, database: &str, schema: Option<&str>, table: &str) -> String {
+        DatabasePlugin::drop_table(self, database, schema, table)
+    }
+
+    fn build_column_def(&self, column: &ColumnDefinition) -> String {
+        DatabasePlugin::build_column_def(self, column)
+    }
+
+    fn build_create_table_sql(&self, design: &TableDesign) -> String {
+        DatabasePlugin::build_create_table_sql(self, design)
+    }
+}
+
+struct RawSyncSqlDialect;
+
+struct PluginSyncSqlDialect<'a>(&'a dyn DatabasePlugin);
+
+impl SyncSqlDialect for PluginSyncSqlDialect<'_> {
+    fn quote_identifier(&self, identifier: &str) -> String {
+        self.0.quote_identifier(identifier)
+    }
+
+    fn format_table_reference(&self, database: &str, schema: Option<&str>, table: &str) -> String {
+        self.0.format_table_reference(database, schema, table)
+    }
+
+    fn drop_table(&self, database: &str, schema: Option<&str>, table: &str) -> String {
+        self.0.drop_table(database, schema, table)
+    }
+
+    fn build_column_def(&self, column: &ColumnDefinition) -> String {
+        self.0.build_column_def(column)
+    }
+
+    fn build_create_table_sql(&self, design: &TableDesign) -> String {
+        self.0.build_create_table_sql(design)
+    }
+}
+
+impl SyncSqlDialect for RawSyncSqlDialect {
+    fn quote_identifier(&self, identifier: &str) -> String {
+        identifier.to_string()
+    }
+
+    fn format_table_reference(&self, _database: &str, schema: Option<&str>, table: &str) -> String {
+        match schema {
+            Some(schema) if !schema.trim().is_empty() => format!("{schema}.{table}"),
+            _ => table.to_string(),
+        }
+    }
+
+    fn drop_table(&self, _database: &str, schema: Option<&str>, table: &str) -> String {
+        format!(
+            "DROP TABLE IF EXISTS {}",
+            self.format_table_reference("", schema, table)
+        )
+    }
+
+    fn build_column_def(&self, column: &ColumnDefinition) -> String {
+        let nullable = if column.is_nullable {
+            "NULL"
+        } else {
+            "NOT NULL"
+        };
+        let mut definition = format!("{} {} {}", column.name, column.data_type, nullable);
+        if let Some(default_value) = &column.default_value {
+            definition.push_str(" DEFAULT ");
+            definition.push_str(default_value);
+        }
+        definition
+    }
+
+    fn build_create_table_sql(&self, design: &TableDesign) -> String {
+        let columns = design
+            .columns
+            .iter()
+            .map(|column| format!("  {}", self.build_column_def(column)))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        format!("CREATE TABLE {} (\n{}\n);", design.table_name, columns)
+    }
+}
+
 /// 从数据比较结果生成同步计划
 ///
 /// # P0 安全保护
 /// - DELETE 语句默认不选中（`selected_by_default = false`）
 /// - 所有 DELETE 标记为破坏性操作（`destructive = true`）
 pub fn build_data_sync_plan(result: &DataCompareResult) -> SyncPlan {
+    build_data_sync_plan_with_dialect(result, "", None, &RawSyncSqlDialect)
+}
+
+pub fn build_data_sync_plan_with_plugin(
+    result: &DataCompareResult,
+    target_database: &str,
+    target_schema: Option<&str>,
+    plugin: &dyn DatabasePlugin,
+) -> SyncPlan {
+    build_data_sync_plan_with_dialect(
+        result,
+        target_database,
+        target_schema,
+        &PluginSyncSqlDialect(plugin),
+    )
+}
+
+fn build_data_sync_plan_with_dialect(
+    result: &DataCompareResult,
+    target_database: &str,
+    target_schema: Option<&str>,
+    dialect: &dyn SyncSqlDialect,
+) -> SyncPlan {
     let mut statements = Vec::new();
     let plan_id = uuid::Uuid::new_v4().to_string();
+    let target_table_ref =
+        dialect.format_table_reference(target_database, target_schema, &result.target_table);
 
     // 生成 INSERT 语句（新增行）
     for row in &result.added {
         let stmt_id = uuid::Uuid::new_v4().to_string();
-        let sql = generate_insert_sql(&result.target_table, row, &result.columns);
+        let sql = generate_insert_sql(&target_table_ref, row, &result.columns, dialect);
 
         statements.push(SyncStatement {
             id: stmt_id,
@@ -106,10 +236,11 @@ pub fn build_data_sync_plan(result: &DataCompareResult) -> SyncPlan {
     for modified in &result.modified {
         let stmt_id = uuid::Uuid::new_v4().to_string();
         let sql = generate_update_sql(
-            &result.target_table,
+            &target_table_ref,
             &modified.source_values,
             &modified.key_values,
             &modified.changes,
+            dialect,
         );
 
         statements.push(SyncStatement {
@@ -136,7 +267,7 @@ pub fn build_data_sync_plan(result: &DataCompareResult) -> SyncPlan {
     for row in &result.removed {
         let stmt_id = uuid::Uuid::new_v4().to_string();
         let key_values = extract_key_values_from_row(row, &result.key_columns);
-        let sql = generate_delete_sql(&result.target_table, &key_values);
+        let sql = generate_delete_sql(&target_table_ref, &key_values, dialect);
 
         statements.push(SyncStatement {
             id: stmt_id,
@@ -188,8 +319,17 @@ pub fn build_data_sync_plan(result: &DataCompareResult) -> SyncPlan {
 }
 
 /// 生成 INSERT SQL
-fn generate_insert_sql(table: &str, row: &RowData, columns: &[String]) -> String {
-    let cols = columns.join(", ");
+fn generate_insert_sql(
+    table: &str,
+    row: &RowData,
+    columns: &[String],
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let cols = columns
+        .iter()
+        .map(|column| dialect.quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
     let values = columns
         .iter()
         .map(|col| format_value(row.get(col).cloned().unwrap_or(CellValue::Null)))
@@ -205,19 +345,24 @@ fn generate_update_sql(
     source_values: &RowData,
     key_values: &std::collections::HashMap<String, CellValue>,
     changes: &std::collections::HashMap<String, (CellValue, CellValue)>,
+    dialect: &dyn SyncSqlDialect,
 ) -> String {
     let set_clause = changes
         .keys()
         .map(|col| {
             let value = source_values.get(col).cloned().unwrap_or(CellValue::Null);
-            format!("{} = {}", col, format_value(value))
+            format!(
+                "{} = {}",
+                dialect.quote_identifier(col),
+                format_value(value)
+            )
         })
         .collect::<Vec<_>>()
         .join(", ");
 
     let where_clause = sorted_key_values(key_values)
         .into_iter()
-        .map(|(col, val)| format_where_condition(col, val))
+        .map(|(col, val)| format_where_condition(col, val, dialect))
         .collect::<Vec<_>>()
         .join(" AND ");
 
@@ -231,47 +376,34 @@ fn generate_update_sql(
 fn generate_delete_sql(
     table: &str,
     key_values: &std::collections::HashMap<String, CellValue>,
+    dialect: &dyn SyncSqlDialect,
 ) -> String {
     let where_clause = sorted_key_values(key_values)
         .into_iter()
-        .map(|(col, val)| format_where_condition(col, val))
+        .map(|(col, val)| format_where_condition(col, val, dialect))
         .collect::<Vec<_>>()
         .join(" AND ");
 
     format!("DELETE FROM {} WHERE {};", table, where_clause)
 }
 
-/// 生成 CREATE TABLE SQL
-fn generate_create_table_sql(table: &TableSchema) -> String {
-    let columns = table
-        .columns
-        .iter()
-        .map(generate_column_definition)
-        .collect::<Vec<_>>()
-        .join(",\n");
-
-    format!("CREATE TABLE {} (\n{}\n);", table.name, columns)
-}
-
-/// 生成列定义 SQL
-fn generate_column_definition(column: &ColumnSchema) -> String {
-    let nullable = if column.nullable { "NULL" } else { "NOT NULL" };
-    let mut definition = format!("  {} {} {}", column.name, column.data_type, nullable);
-    if let Some(default_value) = &column.default_value {
-        definition.push_str(" DEFAULT ");
-        definition.push_str(default_value);
-    }
-    definition
-}
-
-fn generate_create_index_sql(table_name: &str, index: &super::IndexSchema) -> String {
+fn generate_create_index_sql(
+    table_name: &str,
+    index: &super::IndexSchema,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
     let unique = if index.unique { "UNIQUE " } else { "" };
     format!(
         "CREATE {}INDEX {} ON {} ({});",
         unique,
-        index.name,
+        dialect.quote_identifier(&index.name),
         table_name,
-        index.columns.join(", ")
+        index
+            .columns
+            .iter()
+            .map(|column| dialect.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ")
     )
 }
 
@@ -299,7 +431,8 @@ fn sorted_key_values(
     values
 }
 
-fn format_where_condition(column: &str, value: &CellValue) -> String {
+fn format_where_condition(column: &str, value: &CellValue, dialect: &dyn SyncSqlDialect) -> String {
+    let column = dialect.quote_identifier(column);
     if value.is_null() {
         format!("{column} IS NULL")
     } else {
@@ -339,6 +472,32 @@ fn extract_key_values_from_row(
 /// - DROP COLUMN 默认不选中
 /// - 列类型修改默认不选中（可能导致数据丢失）
 pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str) -> SyncPlan {
+    build_schema_sync_plan_with_dialect(result, "", None, target_db_type, &RawSyncSqlDialect)
+}
+
+pub fn build_schema_sync_plan_with_plugin(
+    result: &SchemaCompareResult,
+    target_database: &str,
+    target_schema: Option<&str>,
+    plugin: &dyn DatabasePlugin,
+) -> SyncPlan {
+    let target_db_type = format!("{:?}", plugin.name()).to_lowercase();
+    build_schema_sync_plan_with_dialect(
+        result,
+        target_database,
+        target_schema,
+        &target_db_type,
+        &PluginSyncSqlDialect(plugin),
+    )
+}
+
+fn build_schema_sync_plan_with_dialect(
+    result: &SchemaCompareResult,
+    target_database: &str,
+    target_schema: Option<&str>,
+    target_db_type: &str,
+    dialect: &dyn SyncSqlDialect,
+) -> SyncPlan {
     let mut statements = Vec::new();
     let plan_id = uuid::Uuid::new_v4().to_string();
 
@@ -347,9 +506,10 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
             DiffStatus::Added => {
                 if let Some(source_table) = &table_diff.source {
                     let stmt_id = uuid::Uuid::new_v4().to_string();
+                    let design = table_schema_to_design(target_database, source_table);
                     statements.push(SyncStatement {
                         id: stmt_id,
-                        sql: generate_create_table_sql(source_table),
+                        sql: dialect.build_create_table_sql(&design),
                         kind: SyncStatementKind::CreateTable,
                         object_name: Some(table_diff.name.clone()),
                         row_key: None,
@@ -363,9 +523,13 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
             DiffStatus::Removed => {
                 // 删除表 - P0 安全保护：默认不选中
                 let stmt_id = uuid::Uuid::new_v4().to_string();
+                let mut sql = dialect.drop_table(target_database, target_schema, &table_diff.name);
+                if !sql.trim_end().ends_with(';') {
+                    sql.push(';');
+                }
                 statements.push(SyncStatement {
                     id: stmt_id,
-                    sql: format!("DROP TABLE IF EXISTS {};", table_diff.name),
+                    sql,
                     kind: SyncStatementKind::DropTable,
                     object_name: Some(table_diff.name.clone()),
                     row_key: None,
@@ -379,16 +543,22 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
                 // 修改表
                 for col_diff in &table_diff.column_diffs {
                     let stmt_id = uuid::Uuid::new_v4().to_string();
+                    let table_ref = dialect.format_table_reference(
+                        target_database,
+                        target_schema,
+                        &table_diff.name,
+                    );
 
                     match col_diff.status {
                         DiffStatus::Added => {
                             if let Some(src) = &col_diff.source {
-                                let nullable = if src.nullable { "NULL" } else { "NOT NULL" };
+                                let column = column_schema_to_definition(src);
                                 statements.push(SyncStatement {
                                     id: stmt_id,
                                     sql: format!(
-                                        "ALTER TABLE {} ADD COLUMN {} {} {};",
-                                        table_diff.name, src.name, src.data_type, nullable
+                                        "ALTER TABLE {} ADD COLUMN {};",
+                                        table_ref,
+                                        dialect.build_column_def(&column)
                                     ),
                                     kind: SyncStatementKind::AlterTable,
                                     object_name: Some(table_diff.name.clone()),
@@ -406,7 +576,8 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
                                 id: stmt_id,
                                 sql: format!(
                                     "ALTER TABLE {} DROP COLUMN {};",
-                                    table_diff.name, col_diff.name
+                                    table_ref,
+                                    dialect.quote_identifier(&col_diff.name)
                                 ),
                                 kind: SyncStatementKind::AlterTable,
                                 object_name: Some(table_diff.name.clone()),
@@ -420,17 +591,20 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
                         DiffStatus::Modified => {
                             // 修改列 - P0 安全保护：默认不选中（可能导致数据丢失）
                             if let Some(src) = &col_diff.source {
-                                let nullable = if src.nullable { "NULL" } else { "NOT NULL" };
                                 let sql =
                                     if target_db_type == "mysql" || target_db_type == "mariadb" {
+                                        let column = column_schema_to_definition(src);
                                         format!(
-                                            "ALTER TABLE {} MODIFY COLUMN {} {} {};",
-                                            table_diff.name, src.name, src.data_type, nullable
+                                            "ALTER TABLE {} MODIFY COLUMN {};",
+                                            table_ref,
+                                            dialect.build_column_def(&column)
                                         )
                                     } else {
                                         format!(
                                             "ALTER TABLE {} ALTER COLUMN {} TYPE {};",
-                                            table_diff.name, src.name, src.data_type
+                                            table_ref,
+                                            dialect.quote_identifier(&src.name),
+                                            src.data_type
                                         )
                                     };
 
@@ -459,9 +633,14 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
                     match idx_diff.status {
                         DiffStatus::Added => {
                             if let Some(index) = &idx_diff.source {
+                                let table_ref = dialect.format_table_reference(
+                                    target_database,
+                                    target_schema,
+                                    &table_diff.name,
+                                );
                                 statements.push(SyncStatement {
                                     id: stmt_id,
-                                    sql: generate_create_index_sql(&table_diff.name, index),
+                                    sql: generate_create_index_sql(&table_ref, index, dialect),
                                     kind: SyncStatementKind::CreateIndex,
                                     object_name: Some(idx_diff.name.clone()),
                                     row_key: None,
@@ -475,7 +654,10 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
                         DiffStatus::Removed => {
                             statements.push(SyncStatement {
                                 id: stmt_id,
-                                sql: format!("DROP INDEX IF EXISTS {};", idx_diff.name),
+                                sql: format!(
+                                    "DROP INDEX IF EXISTS {};",
+                                    dialect.quote_identifier(&idx_diff.name)
+                                ),
                                 kind: SyncStatementKind::DropIndex,
                                 object_name: Some(idx_diff.name.clone()),
                                 row_key: None,
@@ -487,9 +669,14 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
                         }
                         DiffStatus::Modified => {
                             if let Some(index) = &idx_diff.source {
+                                let table_ref = dialect.format_table_reference(
+                                    target_database,
+                                    target_schema,
+                                    &table_diff.name,
+                                );
                                 statements.push(SyncStatement {
                                     id: stmt_id,
-                                    sql: generate_create_index_sql(&table_diff.name, index),
+                                    sql: generate_create_index_sql(&table_ref, index, dialect),
                                     kind: SyncStatementKind::CreateIndex,
                                     object_name: Some(idx_diff.name.clone()),
                                     row_key: None,
@@ -530,6 +717,39 @@ pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str
         warnings: vec![],
         sql_text,
     }
+}
+
+fn table_schema_to_design(database: &str, table: &TableSchema) -> TableDesign {
+    let mut design = TableDesign::new(database, table.name.clone());
+    design.columns = table
+        .columns
+        .iter()
+        .map(column_schema_to_definition)
+        .collect();
+    design.indexes = table
+        .indexes
+        .iter()
+        .map(|index| {
+            IndexDefinition::new(index.name.clone())
+                .columns(index.columns.clone())
+                .unique(index.unique)
+        })
+        .collect();
+    design.options.comment = table.comment.clone().unwrap_or_default();
+    design
+}
+
+fn column_schema_to_definition(column: &ColumnSchema) -> ColumnDefinition {
+    let mut definition = ColumnDefinition::new(column.name.clone())
+        .data_type(column.data_type.clone())
+        .nullable(column.nullable);
+    if let Some(default_value) = &column.default_value {
+        definition = definition.default_value(default_value.clone());
+    }
+    if let Some(comment) = &column.comment {
+        definition = definition.comment(comment.clone());
+    }
+    definition
 }
 
 #[cfg(test)]
@@ -611,8 +831,9 @@ mod tests {
     fn test_generate_insert_sql() {
         let row = create_row(&[("id", json!(1)), ("name", json!("Alice"))]);
         let columns = vec!["id".to_string(), "name".to_string()];
+        let dialect = RawSyncSqlDialect;
 
-        let sql = generate_insert_sql("users", &row, &columns);
+        let sql = generate_insert_sql("users", &row, &columns, &dialect);
 
         assert!(sql.contains("INSERT INTO users"));
         assert!(sql.contains("id, name"));
@@ -626,8 +847,9 @@ mod tests {
         key_values.insert("id".to_string(), json!(1));
         let mut changes = HashMap::new();
         changes.insert("name".to_string(), (json!("Alicia"), json!("Alice")));
+        let dialect = RawSyncSqlDialect;
 
-        let sql = generate_update_sql("users", &source_values, &key_values, &changes);
+        let sql = generate_update_sql("users", &source_values, &key_values, &changes, &dialect);
 
         assert!(sql.contains("UPDATE users"));
         assert!(sql.contains("SET"));
@@ -639,8 +861,9 @@ mod tests {
     fn test_generate_delete_sql() {
         let mut key_values = HashMap::new();
         key_values.insert("id".to_string(), json!(1));
+        let dialect = RawSyncSqlDialect;
 
-        let sql = generate_delete_sql("users", &key_values);
+        let sql = generate_delete_sql("users", &key_values, &dialect);
 
         assert!(sql.contains("DELETE FROM users"));
         assert!(sql.contains("WHERE id = 1"));
@@ -814,12 +1037,50 @@ mod tests {
         let mut key_values = HashMap::new();
         key_values.insert("tenant_id".to_string(), CellValue::Null);
         key_values.insert("id".to_string(), json!(1));
+        let dialect = RawSyncSqlDialect;
 
-        let sql = generate_delete_sql("users", &key_values);
+        let sql = generate_delete_sql("users", &key_values, &dialect);
 
         assert!(sql.contains("id = 1"));
         assert!(sql.contains("tenant_id IS NULL"));
         assert!(!sql.contains("tenant_id = NULL"));
+    }
+
+    #[test]
+    fn test_data_sync_plan_with_plugin_quotes_keyword_identifiers() {
+        let result = DataCompareResult {
+            source_table: "select".to_string(),
+            target_table: "select".to_string(),
+            key_columns: vec!["from".to_string()],
+            columns: vec!["from".to_string(), "order".to_string()],
+            added: vec![create_row(&[("from", json!(1)), ("order", json!("new"))])],
+            removed: vec![],
+            modified: vec![super::super::DataCompareModifiedRow {
+                key_values: {
+                    let mut values = HashMap::new();
+                    values.insert("from".to_string(), json!(2));
+                    values
+                },
+                source_values: create_row(&[("from", json!(2)), ("order", json!("updated"))]),
+                target_values: create_row(&[("from", json!(2)), ("order", json!("old"))]),
+                changes: {
+                    let mut changes = HashMap::new();
+                    changes.insert("order".to_string(), (json!("updated"), json!("old")));
+                    changes
+                },
+            }],
+            source_truncated: false,
+            target_truncated: false,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_data_sync_plan_with_plugin(&result, "app", None, &plugin);
+
+        assert!(plan.sql_text.contains("INSERT INTO `app`.`select`"));
+        assert!(plan.sql_text.contains("(`from`, `order`)"));
+        assert!(plan.sql_text.contains("UPDATE `app`.`select`"));
+        assert!(plan.sql_text.contains("`order` = 'updated'"));
+        assert!(plan.sql_text.contains("WHERE `from` = 2"));
     }
 
     #[test]

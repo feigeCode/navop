@@ -109,6 +109,25 @@ pub fn generate_data_sync_plan(result: &DataCompareResult) -> SyncPlan {
     build_data_sync_plan(result)
 }
 
+pub fn generate_data_sync_plan_for_target(
+    result: &DataCompareResult,
+    db_state: &GlobalDbState,
+    target_connection_id: &str,
+    target_database: &str,
+    target_schema: Option<&str>,
+) -> anyhow::Result<SyncPlan> {
+    let config = db_state
+        .get_config(target_connection_id)
+        .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", target_connection_id))?;
+    let plugin = db_state.get_plugin(&config.database_type)?;
+    Ok(db::compare::build_data_sync_plan_with_plugin(
+        result,
+        target_database,
+        target_schema,
+        plugin.as_ref(),
+    ))
+}
+
 /// 执行结构比较任务（简化版本）
 pub async fn execute_schema_compare(
     params: SchemaCompareParams,
@@ -145,6 +164,25 @@ pub async fn execute_schema_compare(
 /// 生成结构同步计划
 pub fn generate_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str) -> SyncPlan {
     build_schema_sync_plan(result, target_db_type)
+}
+
+pub fn generate_schema_sync_plan_for_target(
+    result: &SchemaCompareResult,
+    db_state: &GlobalDbState,
+    target_connection_id: &str,
+    target_database: &str,
+    target_schema: Option<&str>,
+) -> anyhow::Result<SyncPlan> {
+    let config = db_state
+        .get_config(target_connection_id)
+        .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", target_connection_id))?;
+    let plugin = db_state.get_plugin(&config.database_type)?;
+    Ok(db::compare::build_schema_sync_plan_with_plugin(
+        result,
+        target_database,
+        target_schema,
+        plugin.as_ref(),
+    ))
 }
 
 #[derive(Debug, Clone, Copy)]
