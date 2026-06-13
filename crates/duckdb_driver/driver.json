@@ -1,0 +1,155 @@
+{
+  "id": "duckdb",
+  "name": "DuckDB",
+  "description": "DuckDB embedded analytical database IPC driver",
+  "version": "1.0.0",
+  "license": "MIT",
+  "repository": "https://github.com/duckdb/duckdb",
+  "homepage": "https://duckdb.org",
+  "authors": ["DuckDB Labs <info@duckdb.org>"],
+  "dependencies": {
+    "onetcli-sdk": "^1.0.0"
+  },
+  "entry": {
+    "command": "./duckdb_driver",
+    "args": [],
+    "working_dir": null
+  },
+  "transport": {
+    "name": "duckdb-driver.sock",
+    "connect_timeout_ms": 5000
+  },
+  "methods": [
+    "$/ping",
+    "shutdown",
+    "conn/test",
+    "conn/open",
+    "conn/close",
+    "conn/ping",
+    "conn/use",
+    "query/start",
+    "cursor/fetch",
+    "cursor/close",
+    "cursor/cancel",
+    "exec/run",
+    "exec/batch",
+    "tx/begin",
+    "tx/commit",
+    "tx/rollback",
+    "data/export",
+    "data/import_begin",
+    "data/import_chunk",
+    "data/import_commit",
+    "data/import_abort",
+    "stream/read",
+    "stream/close",
+    "schema/databases",
+    "schema/schemas",
+    "schema/objects",
+    "schema/columns",
+    "schema/views",
+    "schema/indexes",
+    "schema/checks",
+    "ddl/build_create_table",
+    "ddl/build_alter_table",
+    "ddl/build_drop"
+  ],
+  "dialect": {
+    "identifier_quote": "\""
+  },
+  "capabilities": {
+    "supports_schema": true,
+    "uses_schema_as_database": false,
+    "supports_sequences": false,
+    "supports_functions": false,
+    "supports_procedures": false,
+    "supports_triggers": false,
+    "supports_table_engine": false,
+    "supports_table_charset": false,
+    "supports_table_collation": false,
+    "supports_auto_increment": false,
+    "supports_tablespace": false,
+    "supports_unsigned": false,
+    "supports_enum_values": false,
+    "show_charset_in_column_detail": false,
+    "show_collation_in_column_detail": false,
+    "table_engines": []
+  },
+  "ui": {
+    "icon": "DuckDB",
+    "locales_dir": "locales",
+    "default_port": null,
+    "form": {
+      "schema_version": 1,
+      "forms": [
+        {
+          "kind": "Connection",
+          "title_i18n_key": "database.duckdb.connection.title",
+          "submit_i18n_key": "common.connect",
+          "tabs": [
+            {
+              "id": "general",
+              "label_i18n_key": "database.connection.tab.general",
+              "fields": [
+                {
+                  "id": "name",
+                  "label_i18n_key": "database.connection.field.name",
+                  "field_type": "Text",
+                  "required": true,
+                  "default_value": null,
+                  "placeholder_i18n_key": "database.connection.field.name.placeholder",
+                  "help_i18n_key": null,
+                  "options": [],
+                  "options_source": null,
+                  "visible_when": [],
+                  "default_when": [],
+                  "disabled_when_editing": false,
+                  "rows": null,
+                  "min": null,
+                  "max": null
+                },
+                {
+                  "id": "host",
+                  "label_i18n_key": "database.duckdb.field.database_path",
+                  "field_type": "FilePath",
+                  "required": true,
+                  "default_value": null,
+                  "placeholder_i18n_key": "database.duckdb.field.database_path.placeholder",
+                  "help_i18n_key": "database.duckdb.field.database_path.help",
+                  "options": [],
+                  "options_source": null,
+                  "visible_when": [],
+                  "default_when": [],
+                  "disabled_when_editing": false,
+                  "rows": null,
+                  "min": null,
+                  "max": null
+                },
+                {
+                  "id": "database",
+                  "label_i18n_key": "database.connection.field.database",
+                  "field_type": "Text",
+                  "required": false,
+                  "default_value": "main",
+                  "placeholder_i18n_key": null,
+                  "help_i18n_key": "database.duckdb.field.database.help",
+                  "options": [],
+                  "options_source": null,
+                  "visible_when": [],
+                  "default_when": [],
+                  "disabled_when_editing": false,
+                  "rows": null,
+                  "min": null,
+                  "max": null
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "actions": {
+        "actions": []
+      }
+    }
+  }
+}

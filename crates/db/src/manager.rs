@@ -2,6 +2,7 @@ use crate::cache::CacheContext;
 use crate::cache_manager::GlobalNodeCache;
 use crate::clickhouse::ClickHousePlugin;
 use crate::connection::{DbConnection, DbError, StreamingProgress};
+use crate::connection_config_resolver::ConnectionConfigResolver;
 use crate::duckdb::DuckDbPlugin;
 use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportResult,
@@ -15,13 +16,14 @@ use crate::plugin_manifest::DatabaseCapabilities;
 use crate::postgresql::PostgresPlugin;
 use crate::sqlite::SqlitePlugin;
 use crate::{
-    DbNode, DbNodeType, ExecOptions, SqlErrorInfo, SqlResult, SqlSource, TableSaveResponse,
+    DbNode, DbNodeType, ExecOptions, SqlErrorInfo, SqlResult, SqlSource, TableDesign,
+    TableSaveResponse,
 };
 use dashmap::DashMap;
 use gpui::{AppContext, AsyncApp, Global};
 use one_core::connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier};
 use one_core::gpui_tokio::Tokio;
-use one_core::storage::{DatabaseType, DbConnectionConfig};
+use one_core::storage::{ConnectionRepository, DatabaseType, DbConnectionConfig};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -291,6 +293,8 @@ impl ConnectionSession {
 pub struct ConnectionManager {
     /// config_id -> list of sessions for that config
     sessions: Arc<RwLock<HashMap<String, Vec<ConnectionSession>>>>,
+    /// Converts stored connection configs into runtime configs before opening sessions.
+    config_resolver: ConnectionConfigResolver,
     /// Connection idle timeout (default: 5 minutes)
     idle_timeout: Duration,
     /// Maximum connection lifetime (default: 30 minutes)
@@ -301,17 +305,33 @@ pub struct ConnectionManager {
 
 impl ConnectionManager {
     pub fn new() -> Self {
-        Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-            idle_timeout: Duration::from_secs(300), // 5 minutes
-            max_lifetime: Duration::from_secs(1800), // 30 minutes
-            session_counter: Arc::new(tokio::sync::Mutex::new(0)),
-        }
+        Self::with_config_resolver(ConnectionConfigResolver::default())
+    }
+
+    pub fn with_config_resolver(config_resolver: ConnectionConfigResolver) -> Self {
+        Self::with_config_and_resolver(
+            Duration::from_secs(300),
+            Duration::from_secs(1800),
+            config_resolver,
+        )
     }
 
     pub fn with_config(idle_timeout: Duration, max_lifetime: Duration) -> Self {
+        Self::with_config_and_resolver(
+            idle_timeout,
+            max_lifetime,
+            ConnectionConfigResolver::default(),
+        )
+    }
+
+    fn with_config_and_resolver(
+        idle_timeout: Duration,
+        max_lifetime: Duration,
+        config_resolver: ConnectionConfigResolver,
+    ) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            config_resolver,
             idle_timeout,
             max_lifetime,
             session_counter: Arc::new(tokio::sync::Mutex::new(0)),
@@ -332,6 +352,7 @@ impl ConnectionManager {
         db_manager: &DbManager,
     ) -> Result<String, DbError> {
         let session_started = Instant::now();
+        let config = self.config_resolver.resolve(config)?;
         let config_id = config.id.clone();
         let database_type = config.database_type;
         let database = config.database.clone();
@@ -714,6 +735,7 @@ impl Clone for ConnectionManager {
     fn clone(&self) -> Self {
         Self {
             sessions: Arc::clone(&self.sessions),
+            config_resolver: self.config_resolver.clone(),
             idle_timeout: self.idle_timeout,
             max_lifetime: self.max_lifetime,
             session_counter: Arc::clone(&self.session_counter),
@@ -739,47 +761,31 @@ pub struct SessionInfo {
     pub lifetime: Duration,
 }
 
-/// Connection pool compatibility layer
-#[derive(Clone)]
-pub struct ConnectionPool {
-    db_manager: DbManager,
-}
-
-impl ConnectionPool {
-    pub fn new(db_manager: DbManager) -> Self {
-        Self { db_manager }
-    }
-
-    pub async fn get_connection(
-        &self,
-        config: DbConnectionConfig,
-        _db_manager: &DbManager,
-    ) -> anyhow::Result<Arc<RwLock<Box<dyn DbConnection + Send + Sync>>>> {
-        let plugin = self.db_manager.get_plugin(&config.database_type)?;
-        let connection = plugin.create_connection(config).await?;
-        Ok(Arc::new(RwLock::new(connection)))
-    }
-}
-
 /// Global database state - stores DbManager and ConnectionManager
 #[derive(Clone)]
 pub struct GlobalDbState {
     pub db_manager: DbManager,
     pub connection_manager: ConnectionManager,
-    pub connection_pool: ConnectionPool,
     /// connection_id -> config mapping
     connections: Arc<DashMap<String, DbConnectionConfig>>,
 }
 
 impl GlobalDbState {
     pub fn new() -> Self {
-        let manager = ConnectionManager::new();
+        Self::with_config_resolver(ConnectionConfigResolver::default())
+    }
+
+    pub fn with_connection_repository(connection_repo: Option<Arc<ConnectionRepository>>) -> Self {
+        Self::with_config_resolver(ConnectionConfigResolver::new(connection_repo))
+    }
+
+    fn with_config_resolver(config_resolver: ConnectionConfigResolver) -> Self {
+        let manager = ConnectionManager::with_config_resolver(config_resolver);
         let db_manager = DbManager::new();
 
         Self {
             db_manager: db_manager.clone(),
             connection_manager: manager,
-            connection_pool: ConnectionPool::new(db_manager),
             connections: Arc::new(DashMap::new()),
         }
     }
@@ -1040,6 +1046,78 @@ impl GlobalDbState {
     ) -> anyhow::Result<Vec<SqlResult>> {
         self.execute_with_session_internal(cx, config, script, opts, None)
             .await
+    }
+
+    /// Build table-designer DDL SQL on an async path.
+    ///
+    /// This keeps synchronous preview builders local, while allowing external IPC
+    /// drivers to provide dialect-specific DDL through `ddl/build_*` without
+    /// blocking the UI thread.
+    pub async fn build_table_design_sql(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        database: String,
+        schema: Option<String>,
+        original: Option<TableDesign>,
+        design: TableDesign,
+        column_renames: Vec<(String, String)>,
+    ) -> anyhow::Result<String> {
+        let mut config = self
+            .get_config(&connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database);
+        }
+
+        let clone_self = self.clone();
+        Tokio::spawn_result(cx, async move {
+            let plugin = clone_self.get_plugin(&config.database_type)?;
+            let session_id = clone_self
+                .connection_manager
+                .create_session(config, &clone_self.db_manager)
+                .await?;
+
+            let result = async {
+                let mut guard = clone_self
+                    .connection_manager
+                    .get_session_connection(&session_id)
+                    .await?;
+                let conn = guard
+                    .connection()
+                    .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+
+                if let Some(schema) = &schema {
+                    conn.switch_schema(schema)
+                        .await
+                        .map_err(|error| anyhow::anyhow!("Failed to switch schema: {}", error))?;
+                }
+
+                match original.as_ref() {
+                    Some(original) => {
+                        plugin
+                            .build_alter_table_sql_with_renames_async(
+                                conn,
+                                original,
+                                &design,
+                                &column_renames,
+                            )
+                            .await
+                    }
+                    None => plugin.build_create_table_sql_async(conn, &design).await,
+                }
+            }
+            .await;
+
+            let close_result = clone_self
+                .connection_manager
+                .close_session(&session_id)
+                .await;
+            close_result?;
+            result
+        })
+        .await
     }
 
     async fn execute_with_session_internal(
@@ -2682,6 +2760,26 @@ mod tests {
 
         assert!(acquired.is_none());
         assert!(remaining.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_session_resolves_ssh_reference_before_opening_connection() {
+        let manager = ConnectionManager::new();
+        let mut config = test_config("conn-with-ssh-ref");
+        config
+            .extra_params
+            .insert("ssh_connection_id".to_string(), "42".to_string());
+
+        let error = manager
+            .create_session(config, &DbManager::new())
+            .await
+            .expect_err("missing repository should fail during config resolution");
+
+        assert!(
+            error
+                .to_string()
+                .contains("ConnectionRepository is unavailable")
+        );
     }
 
     #[tokio::test]

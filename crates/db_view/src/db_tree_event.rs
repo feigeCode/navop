@@ -3709,7 +3709,7 @@ impl DatabaseEventHandler {
         let title = DataCompareWindow::popup_title_for(&node);
         let compare_view = DataCompareWindow::new(node, window, cx);
         open_popup_window(
-            PopupWindowOptions::new(title).size(900.0, 650.0),
+            PopupWindowOptions::new(title).size(1100.0, 780.0),
             move |_window, _cx| compare_view.clone(),
             cx,
         );
@@ -3722,7 +3722,7 @@ impl DatabaseEventHandler {
         let title = SchemaCompareWindow::popup_title_for(&node);
         let compare_view = SchemaCompareWindow::new(node, window, cx);
         open_popup_window(
-            PopupWindowOptions::new(title).size(900.0, 650.0),
+            PopupWindowOptions::new(title).size(1100.0, 780.0),
             move |_window, _cx| compare_view.clone(),
             cx,
         );

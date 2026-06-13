@@ -6,8 +6,7 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let socket_name = std::env::var("ONETCLI_IPC_SOCKET")
-        .or_else(|_| std::env::var("ONETCLI_DUCKDB_DRIVER_SOCKET"))
+    let socket_name = std::env::var("ONETCLI_EXT_SOCKET")
         .ok()
         .or_else(|| std::env::args().nth(1))
         .unwrap_or_else(|| "onetcli-duckdb-driver.sock".to_string());

@@ -4,6 +4,8 @@ use gpui_component::{Icon, IconName, Sizable};
 use one_core::storage::DatabaseType;
 use rust_i18n::t;
 
+const BUILTIN_EXTERNAL_DRIVER_IDS: &[&str] = &["duckdb"];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum NewConnectionCategory {
     All,
@@ -66,16 +68,7 @@ impl NewConnectionKind {
                 .copied()
                 .map(Self::Database),
         );
-        items.extend(
-            IpcDriverRegistry::load_default()
-                .drivers()
-                .iter()
-                .map(|driver| Self::ExternalDatabase {
-                    driver_id: driver.id.clone(),
-                    name: driver.name.clone(),
-                    description: driver.description.clone(),
-                }),
-        );
+        items.extend(external_database_kinds(&IpcDriverRegistry::load_default()));
         items
     }
 
@@ -123,6 +116,68 @@ impl NewConnectionKind {
             Self::Serial => IconName::SerialPort.color().with_size(px(40.0)),
             Self::Database(db_type) => db_type.as_icon().with_size(px(40.0)),
             Self::ExternalDatabase { .. } => IconName::Database.color().with_size(px(40.0)),
+        }
+    }
+}
+
+fn external_database_kinds(registry: &IpcDriverRegistry) -> Vec<NewConnectionKind> {
+    registry
+        .drivers()
+        .iter()
+        .filter(|driver| !is_builtin_external_driver(&driver.id))
+        .map(|driver| NewConnectionKind::ExternalDatabase {
+            driver_id: driver.id.clone(),
+            name: driver.name.clone(),
+            description: driver.description.clone(),
+        })
+        .collect()
+}
+
+fn is_builtin_external_driver(driver_id: &str) -> bool {
+    BUILTIN_EXTERNAL_DRIVER_IDS.contains(&driver_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use db::ipc::{IpcDriverEntry, IpcDriverManifest, IpcDriverRegistry, IpcDriverTransport};
+    use std::path::PathBuf;
+
+    #[test]
+    fn external_database_kinds_skip_builtin_duckdb_driver() {
+        let registry = IpcDriverRegistry::from_drivers(vec![
+            manifest("duckdb", "DuckDB"),
+            manifest("custom", "Custom"),
+        ]);
+
+        let ids: Vec<String> = external_database_kinds(&registry)
+            .into_iter()
+            .filter_map(|kind| match kind {
+                NewConnectionKind::ExternalDatabase { driver_id, .. } => Some(driver_id),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(ids, vec!["custom"]);
+    }
+
+    fn manifest(id: &str, name: &str) -> IpcDriverManifest {
+        IpcDriverManifest {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: String::new(),
+            version: String::new(),
+            entry: IpcDriverEntry {
+                command: "./driver".to_string(),
+                args: Vec::new(),
+                working_dir: None,
+            },
+            transport: IpcDriverTransport::local_socket(format!("{id}.sock")),
+            dialect: Default::default(),
+            capabilities: None,
+            methods: Vec::new(),
+            ui: Default::default(),
+            manifest_dir: PathBuf::from("."),
         }
     }
 }

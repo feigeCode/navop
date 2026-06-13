@@ -974,7 +974,7 @@ impl Terminal {
         let rows = config.pty_config.height as usize;
 
         let (term, event_proxy, _colors) = Self::create_term(cols, rows, event_tx.clone());
-        let (disconnect_tx, disconnect_rx) = tokio::sync::oneshot::channel::<()>();
+        let (disconnect_tx, disconnect_rx) = oneshot::channel::<()>();
         let connection_generation = 1;
 
         Self::spawn_disconnect_handler(disconnect_rx, connection_generation, cx);

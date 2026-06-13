@@ -27,6 +27,20 @@ use std::collections::HashMap;
 use std::io;
 use tracing::log::error;
 
+pub mod core;
+pub mod import_export_ops;
+pub mod metadata;
+pub mod sql_builder;
+pub mod table_data;
+pub mod tree;
+
+pub use core::DatabasePluginCore;
+pub use import_export_ops::DatabaseImportExportOps;
+pub use metadata::DatabaseMetadataOps;
+pub use sql_builder::DatabaseSqlBuilder;
+pub use table_data::DatabaseTableDataOps;
+pub use tree::DatabaseTreeOps;
+
 /// Standard SQL functions common to most databases
 pub const STANDARD_SQL_FUNCTIONS: &[(&str, &str)] = &[
     // String functions
@@ -133,6 +147,13 @@ pub trait DatabasePlugin: Send + Sync {
         &self,
         config: DbConnectionConfig,
     ) -> Result<Box<dyn DbConnection + Send + Sync>, DbError>;
+
+    async fn test_connection(&self, config: DbConnectionConfig) -> Result<(), DbError> {
+        let mut connection = self.create_connection(config).await?;
+        let ping_result = connection.ping().await;
+        let _ = connection.disconnect().await;
+        ping_result
+    }
 
     // === Database/Schema Level Operations ===
     async fn list_databases(&self, connection: &dyn DbConnection) -> Result<Vec<String>>;
@@ -2272,6 +2293,19 @@ pub trait DatabasePlugin: Send + Sync {
     /// Build CREATE TABLE SQL from TableDesign
     fn build_create_table_sql(&self, design: &TableDesign) -> String;
 
+    /// Build CREATE TABLE SQL through an async-capable path.
+    ///
+    /// The default implementation deliberately calls the synchronous local builder.
+    /// External IPC plugins can override this to ask the driver for dialect-specific
+    /// SQL without forcing synchronous UI preview code to block on IPC.
+    async fn build_create_table_sql_async(
+        &self,
+        _connection: &dyn DbConnection,
+        design: &TableDesign,
+    ) -> Result<String> {
+        Ok(self.build_create_table_sql(design))
+    }
+
     /// Build ALTER TABLE SQL from original and new TableDesign
     /// Returns a series of ALTER TABLE statements for the differences
     fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> String;
@@ -2312,6 +2346,21 @@ pub trait DatabasePlugin: Send + Sync {
             })
             .collect();
         merge_alter_sql(base_sql, rename_statements)
+    }
+
+    /// Async-capable ALTER TABLE builder.
+    ///
+    /// Use this in execution paths that already run off the UI thread. Synchronous
+    /// preview paths should keep using [`DatabasePlugin::build_alter_table_sql_with_renames`]
+    /// so methods that do not require a connection never block on IPC.
+    async fn build_alter_table_sql_with_renames_async(
+        &self,
+        _connection: &dyn DbConnection,
+        original: &TableDesign,
+        new: &TableDesign,
+        column_renames: &[(String, String)],
+    ) -> Result<String> {
+        Ok(self.build_alter_table_sql_with_renames(original, new, column_renames))
     }
 
     /// Check if a column definition has changed
@@ -2801,6 +2850,28 @@ mod tests {
         assert!(capabilities.supports_procedures);
     }
 
+    #[test]
+    fn mysql_plugin_exposes_split_plugin_traits() {
+        let plugin = MySqlPlugin::new();
+        let core: &dyn DatabasePluginCore = &plugin;
+        let metadata: &dyn DatabaseMetadataOps = &plugin;
+        let sql_builder: &dyn DatabaseSqlBuilder = &plugin;
+        let table_data: &dyn DatabaseTableDataOps = &plugin;
+        let import_export: &dyn DatabaseImportExportOps = &plugin;
+
+        assert_eq!(DatabaseType::MySQL, core.name());
+        assert_eq!("`users`", core.quote_identifier("users"));
+        assert!(core.capabilities().supports_functions);
+
+        let _ = metadata;
+        let _ = table_data;
+        let _ = import_export;
+        assert_eq!(
+            " LIMIT 10 OFFSET 20",
+            sql_builder.format_pagination(10, 20, "")
+        );
+    }
+
     // ==================== is_query_stmt tests (AST-based) ====================
 
     #[test]
@@ -2900,7 +2971,7 @@ mod tests {
  ------------------------------------------------------------------------
 "#;
 
-        assert!(plugin.split_sql_statements(sql).is_empty());
+        assert!(DatabasePlugin::split_sql_statements(&plugin, sql).is_empty());
     }
 
     // ==================== classify_stmt tests (AST-based) ====================

@@ -15,7 +15,7 @@ use crate::import_export::{
 pub struct CsvFormatHandler;
 
 impl CsvFormatHandler {
-    fn parse_csv_data_with_config(
+    pub(crate) fn parse_csv_data_with_config(
         data: &str,
         delimiter: char,
         qualifier: Option<char>,

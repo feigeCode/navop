@@ -2,6 +2,7 @@ use crate::DatabasePlugin;
 use crate::executor::{ExecOptions, SqlResult, SqlSource};
 use async_trait::async_trait;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
+use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
 
@@ -174,6 +175,12 @@ pub trait DbConnection: Sync + Send {
         options: ExecOptions,
     ) -> Result<Vec<SqlResult>, DbError>;
     async fn query(&self, query: &str) -> Result<SqlResult, DbError>;
+
+    async fn driver_request_value(&self, _method: &str, _params: Value) -> Result<Value, DbError> {
+        Err(DbError::NotSupported(
+            "driver request is not supported by this connection".to_string(),
+        ))
+    }
 
     async fn ping(&self) -> Result<(), DbError> {
         match self.query("SELECT 1").await? {

@@ -876,6 +876,81 @@ impl TableDesigner {
         });
     }
 
+    fn build_and_maybe_execute(
+        &mut self,
+        design: TableDesign,
+        column_renames: Vec<(String, String)>,
+        success_behavior: ExecuteSuccessBehavior,
+        cx: &mut Context<Self>,
+    ) {
+        let global_state = cx.global::<GlobalDbState>().clone();
+        let connection_id = self.config.connection_id.clone();
+        let database_name = self.config.database_name.clone();
+        let schema_name = self.config.schema_name.clone();
+        let original = self.original_design.clone();
+        let is_new_table = original.is_none();
+        let table_name = design.table_name.clone();
+
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let sql_result = global_state
+                .build_table_design_sql(
+                    cx,
+                    connection_id.clone(),
+                    database_name.clone(),
+                    schema_name.clone(),
+                    original,
+                    design,
+                    column_renames,
+                )
+                .await;
+
+            let _ = cx.update(|cx: &mut App| {
+                let Some(window_id) = cx.active_window() else {
+                    return;
+                };
+                let _ = cx.update_window(window_id, |_, window, cx| {
+                    let _ = this.update(cx, |designer, cx| match sql_result {
+                        Ok(sql) if !Self::sql_has_changes(&sql) => match &success_behavior {
+                            ExecuteSuccessBehavior::StayOpen { .. } => {
+                                window.push_notification(t!("Table.no_changes").to_string(), cx);
+                            }
+                            ExecuteSuccessBehavior::CloseTab {
+                                tab_container,
+                                tab_id,
+                                ..
+                            } => {
+                                tab_container.update(cx, |container: &mut TabContainer, cx| {
+                                    container.force_close_tab_by_id(tab_id, cx);
+                                });
+                            }
+                        },
+                        Ok(sql) => {
+                            let request = TableDesignerExecutionRequest {
+                                connection_id,
+                                database_name,
+                                schema_name,
+                                sql,
+                                table_name,
+                                is_new_table,
+                                success_behavior,
+                            };
+                            designer.maybe_confirm_and_execute(request, window, cx);
+                        }
+                        Err(error) => {
+                            let msg = if is_new_table {
+                                t!("Table.create_failed").to_string()
+                            } else {
+                                t!("Table.modify_failed").to_string()
+                            };
+                            window.push_notification(format!("{}: {}", msg, error), cx);
+                        }
+                    });
+                });
+            });
+        })
+        .detach();
+    }
+
     pub fn has_unsaved_changes(&self, cx: &App) -> bool {
         let sql = self.sql_preview_input.read(cx).text().to_string();
         Self::sql_has_changes(&sql)
@@ -903,30 +978,12 @@ impl TableDesigner {
         }
 
         let column_renames = self.collect_column_renames(cx);
-        let sql = self.build_diff_preview_sql(&design, &column_renames, cx);
-
-        if !Self::sql_has_changes(&sql) {
-            tab_container.update(cx, |container: &mut TabContainer, cx| {
-                container.force_close_tab_by_id(&tab_id, cx);
-            });
-            return;
-        }
-
-        let request = TableDesignerExecutionRequest {
-            connection_id: self.config.connection_id.clone(),
-            database_name: self.config.database_name.clone(),
-            schema_name: self.config.schema_name.clone(),
-            sql,
-            table_name: design.table_name.clone(),
-            is_new_table: self.original_design.is_none(),
-            success_behavior: ExecuteSuccessBehavior::CloseTab {
-                tab_container,
-                tab_id,
-                emitted_tab_id: self.config.tab_id.clone(),
-            },
+        let success_behavior = ExecuteSuccessBehavior::CloseTab {
+            tab_container,
+            tab_id,
+            emitted_tab_id: self.config.tab_id.clone(),
         };
-
-        self.maybe_confirm_and_execute(request, window, cx);
+        self.build_and_maybe_execute(design, column_renames, success_behavior, cx);
     }
 
     pub fn load_table_structure(&mut self, reason: &'static str, cx: &mut Context<Self>) {
@@ -1059,26 +1116,10 @@ impl TableDesigner {
         }
 
         let column_renames = self.collect_column_renames(cx);
-        let sql = self.build_diff_preview_sql(&design, &column_renames, cx);
-
-        if !Self::sql_has_changes(&sql) {
-            window.push_notification(t!("Table.no_changes").to_string(), cx);
-            return;
-        }
-
-        let request = TableDesignerExecutionRequest {
-            connection_id: self.config.connection_id.clone(),
-            database_name: self.config.database_name.clone(),
-            schema_name: self.config.schema_name.clone(),
-            sql,
-            table_name: design.table_name.clone(),
-            is_new_table: self.original_design.is_none(),
-            success_behavior: ExecuteSuccessBehavior::StayOpen {
-                tab_id: self.config.tab_id.clone(),
-            },
+        let success_behavior = ExecuteSuccessBehavior::StayOpen {
+            tab_id: self.config.tab_id.clone(),
         };
-
-        self.maybe_confirm_and_execute(request, window, cx);
+        self.build_and_maybe_execute(design, column_renames, success_behavior, cx);
     }
 
     fn render_toolbar(&self, cx: &Context<Self>) -> AnyElement {

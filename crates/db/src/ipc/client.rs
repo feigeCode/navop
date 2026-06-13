@@ -1,540 +1,411 @@
+//! v2 wire 客户端——把 `extension-host` 的 JSON-RPC 2.0 primitives 包装成
+//! 业务层易用的「请求/响应」接口。
+//!
+//! 核心职责:
+//!
+//! - **进程管理**:spawn / kill_on_drop / socket 握手都委托给
+//!   `extension_host::process`,本地只剩组合调用。
+//! - **生命周期 init 化**:连上之后必须先 `init` 才能调业务方法,本 client 自动
+//!   做握手,并把 capability 集合保留在 [`ExtensionSession`] 中供上层查询。
+//!
+//! 取消、超时、并发路由这些复杂部分全部下沉到 `extension-host::JsonRpcClient`;
+//! 本层只需把 `HostError` 转成业务侧的 [`DbError`]。
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
 use crate::connection::DbError;
 use crate::ipc::registry::IpcDriverManifest;
-use interprocess::local_socket::{
-    GenericNamespaced,
-    tokio::{Stream as LocalSocketStream, prelude::*},
-};
-use ipc::{
-    IpcErrorCode, IpcRequest, IpcResponse,
-    framing::{recv_msg_async, send_msg_async},
-};
+use extension_host::client::{JsonRpcClient as HostClient, JsonRpcClientHandle, RequestOptions};
+use extension_host::error::HostError;
+use extension_host::negotiation::{ExtensionSession, NegotiationConfig, negotiate, shutdown};
+use extension_host::process::{ProcessHandle, SpawnConfig, SpawnTransport, default_socket_name};
+use extension_host::transport::FramedTransport;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::process::Stdio;
-use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader, ReadHalf, WriteHalf, split};
-use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, oneshot};
-use tokio::task::JoinHandle;
-use tokio::time::{Instant, sleep, timeout};
 use tracing::warn;
 
+/// 单次请求默认超时(毫秒)。
 const REQUEST_TIMEOUT_MS: u64 = 30_000;
 
-/// 通过该环境变量把 client 生成的动态 socket 名透传给 driver 子进程。
-///
-/// driver 启动时优先读这个变量来决定 listen 名,从而支持「同 driver 多实例」
-/// 场景:每个 ExternalDbConnection 都拿到独立的 socket,互不冲突。
-pub const SOCKET_ENV_VAR: &str = "ONETCLI_IPC_SOCKET";
+/// shutdown 优雅时长(毫秒)。
+const SHUTDOWN_GRACE_MS: u32 = 5_000;
 
-/// 客户端「写半 / 路由表 / 关闭标记」共享状态。
+/// 与一个扩展子进程通讯的 v2 wire 客户端。
 ///
-/// - `writer`: tokio::sync::Mutex 串行化「写一帧」操作。
-/// - `pending`: std::sync::Mutex 持锁时间极短(insert/remove HashMap),且允许在
-///   Drop 中同步 lock,这是 cancel-safety 的关键。
-/// - `next_id`: AtomicU64,无锁分配 request id。
-/// - `closed`: AtomicBool,reader task 退出后置位,后续 caller 立即失败。
-struct ClientShared {
-    writer: Mutex<WriteHalf<LocalSocketStream>>,
-    pending: StdMutex<HashMap<u64, oneshot::Sender<IpcResponse>>>,
-    next_id: AtomicU64,
-    closed: AtomicBool,
+/// 内部组合:
+/// - [`HostClient`](extension_host::JsonRpcClient):reader task 持有者,Drop 时 abort
+/// - [`JsonRpcClientHandle`][]:轻量请求句柄(可 clone)
+/// - [`ProcessHandle`][]:子进程持有者,kill_on_drop=true
+/// - [`ExtensionSession`][]:init 握手后协商出的 capability 集合
+///
+/// 用法:
+/// ```ignore
+/// let client = JsonRpcClient::start(&driver).await?;
+/// let result: serde_json::Value = client.request("conn/open", params).await?;
+/// // ...
+/// client.shutdown().await;
+/// ```
+pub struct JsonRpcClient {
+    handle: JsonRpcClientHandle,
+    session: ExtensionSession,
+    // 用 std Mutex<Option<...>> 而不是 tokio Mutex,是因为 shutdown 时希望同步 take,
+    // 之后再 await 各自的关闭流程(reader task / process kill)。
+    inner: StdMutex<Option<ClientInner>>,
+    // 写一次性 flag:reader 退出后,主动询问 is_closed 通过此提示——也可直接用
+    // handle.is_closed(),保留为日后扩展(例如观测)
+    driver_id: String,
 }
 
-/// JSON-RPC over IPC client。
-///
-/// 单 stream 多 caller 并发:writer mutex 串行化写,reader task 把响应按
-/// `request_id` 路由到对应 caller 的 oneshot。caller drop / timeout / 写失败
-/// 均不会泄漏 pending 表条目(由 PendingGuard 的 RAII Drop 保证)。
-pub struct JsonRpcClient {
-    shared: Arc<ClientShared>,
-    reader_task: JoinHandle<()>,
-    /// 子进程 owner;包在 std Mutex 里以让 `JsonRpcClient: Sync`。
-    /// `kill_on_drop=true` 保证 child 被 drop 时进程被 OS 回收。
-    child: StdMutex<Option<Child>>,
+struct ClientInner {
+    owner: HostClient,
+    process: ProcessHandle,
 }
 
 impl JsonRpcClient {
+    /// 根据 driver manifest spawn 子进程、握手、返回可用客户端。
+    ///
+    /// 步骤:
+    /// 1. spawn 子进程(用 `extension_host::process::spawn`)。
+    /// 2. 把握得到的 stream split 成 reader/writer → 喂给 [`FramedTransport`]。
+    /// 3. `JsonRpcClient::start` 启 reader task,得到 handle。
+    /// 4. `negotiate` 做 init 握手,得到 ExtensionSession。
     pub async fn start(driver: &IpcDriverManifest) -> Result<Self, DbError> {
-        // command 为空 → 测试 / 预 listen 模式:server 已绑定 transport.name,直接连。
-        // 否则 → 生产模式:每实例生成独立 socket 名,通过 env var 透传给 driver。
-        let socket_name = if driver.entry.command.trim().is_empty() {
-            driver.transport.name.clone()
-        } else {
-            make_socket_name(driver)
-        };
+        if driver.entry.command.trim().is_empty() {
+            return Err(DbError::connection(format!(
+                "external driver '{}' has empty command",
+                driver.id
+            )));
+        }
 
-        let mut child = if driver.entry.command.trim().is_empty() {
-            None
-        } else {
-            Some(spawn_driver_process(driver, &socket_name).await?)
-        };
+        let spawn_config = build_spawn_config(driver);
+        let mut process = extension_host::process::spawn(spawn_config)
+            .await
+            .map_err(host_error_to_db_error)?;
 
-        let stream =
-            match connect_local_socket(&socket_name, driver.transport.connect_timeout_ms()).await {
-                Ok(stream) => stream,
-                Err(error) => {
-                    shutdown_child(&mut child).await;
-                    return Err(error);
-                }
-            };
+        let stream = process.take_stream().ok_or_else(|| {
+            DbError::connection(format!(
+                "external driver '{}' did not return a connected stream",
+                driver.id
+            ))
+        })?;
 
-        let (read_half, write_half) = split(stream);
+        let (reader, writer) = tokio::io::split(stream);
+        let transport = FramedTransport::new(reader, writer);
+        let owner = HostClient::start(transport);
+        let handle = owner.handle();
 
-        let shared = Arc::new(ClientShared {
-            writer: Mutex::new(write_half),
-            pending: StdMutex::new(HashMap::new()),
-            next_id: AtomicU64::new(1),
-            closed: AtomicBool::new(false),
-        });
-
-        let reader_shared = Arc::clone(&shared);
-        let reader_task = tokio::spawn(async move {
-            reader_loop(read_half, reader_shared).await;
-        });
+        // init 握手
+        let negotiation = build_negotiation(driver);
+        let session = negotiate(&handle, negotiation)
+            .await
+            .map_err(host_error_to_db_error)?;
 
         Ok(Self {
-            shared,
-            reader_task,
-            child: StdMutex::new(child),
+            handle,
+            session,
+            inner: StdMutex::new(Some(ClientInner { owner, process })),
+            driver_id: driver.id.clone(),
         })
     }
 
+    /// 调用 wire 方法并把 result 反序列化为 `T`。
     pub async fn request<T>(&self, method: &str, params: Value) -> Result<T, DbError>
     where
         T: DeserializeOwned,
     {
-        let value = self.request_value(method, params).await?;
-        serde_json::from_value(value)
+        let raw = self.request_value(method, params).await?;
+        serde_json::from_value::<T>(raw)
             .map_err(|error| DbError::query_with_source("invalid external driver response", error))
     }
 
+    /// 调用 wire 方法,返回 raw `serde_json::Value`(协议层场景用)。
     pub async fn request_value(&self, method: &str, params: Value) -> Result<Value, DbError> {
-        if self.shared.closed.load(Ordering::Acquire) {
-            return Err(DbError::connection("driver disconnected"));
-        }
-
-        let id = self.shared.next_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-
-        // 注册 pending,double-check closed 防止 reader 已 drain。
-        {
-            let mut pending = self.shared.pending.lock().expect("pending mutex poisoned");
-            if self.shared.closed.load(Ordering::Acquire) {
-                return Err(DbError::connection("driver disconnected"));
-            }
-            pending.insert(id, tx);
-        }
-
-        // RAII guard:future cancel / timeout / 写失败时从 pending 拿掉 sender,避免泄漏。
-        let mut guard = PendingGuard {
-            shared: Arc::clone(&self.shared),
-            id,
-            armed: true,
-        };
-
-        // 写一帧;writer mutex 仅在写期间持锁,写完立刻释放允许下个 caller 写。
-        let request = IpcRequest::new(id, method, params);
-        let send_result = {
-            let mut writer = self.shared.writer.lock().await;
-            send_msg_async(&mut *writer, &request).await
-        };
-        if let Err(error) = send_result {
-            return Err(DbError::query_with_source(
-                "failed to write IPC request",
-                error,
-            ));
-            // guard.drop → remove pending entry
-        }
-
-        // 等回复。
-        match timeout(Duration::from_millis(REQUEST_TIMEOUT_MS), rx).await {
-            Ok(Ok(response)) => {
-                guard.armed = false; // reader 已 take 走 sender,不需再清理
-                validate_response(response, id)
-            }
-            Ok(Err(_)) => {
-                guard.armed = false; // reader 关闭已 drain pending
-                Err(DbError::connection("driver disconnected"))
-            }
-            Err(_) => {
-                // timeout:guard.drop 清理 sender,reader 后到的 response 静默丢弃
-                Err(DbError::query("timed out waiting for IPC response"))
-            }
-        }
+        let options =
+            RequestOptions::default().with_timeout(Duration::from_millis(REQUEST_TIMEOUT_MS));
+        self.handle
+            .call_raw(method, params, options)
+            .await
+            .map_err(host_error_to_db_error)
     }
 
-    /// 显式关闭:abort reader,kill + wait child。
-    /// 通常在 ExternalDbConnection::disconnect 末尾调用,确保子进程退出后才返回。
+    /// 当前协商出的 capability 集合(`init` 之后冻结)。
+    pub fn session(&self) -> &ExtensionSession {
+        &self.session
+    }
+
+    /// driver 是否支持某项 capability。
+    pub fn supports(&self, capability: &str) -> bool {
+        self.session.has_feature(capability)
+    }
+
+    /// 是否已关闭(reader task 退出 / 用户调 `shutdown`)。
+    pub fn is_closed(&self) -> bool {
+        self.handle.is_closed()
+    }
+
+    /// 优雅关闭:先发 `shutdown` RPC 给扩展,再 abort reader,最后 kill child。
     pub async fn shutdown(&self) {
-        close_and_drain(&self.shared);
-        self.reader_task.abort();
-        let mut taken = {
-            let mut guard = self.child.lock().expect("child mutex poisoned");
+        // 1. 让扩展尝试 graceful shutdown(grace 时间内自行清理)。
+        if let Err(error) = shutdown(&self.handle, SHUTDOWN_GRACE_MS).await {
+            // 协议 shutdown 失败不致命(可能是子进程已经异常退出),warning 即可。
+            warn!(
+                driver = %self.driver_id,
+                error = %error,
+                "graceful shutdown failed; proceeding to abort reader and kill child"
+            );
+        }
+
+        // 2. 取出 owner 与 process,owner.shutdown 内部 await reader task 退出,
+        //    process 在 Drop 时 kill_on_drop。
+        let inner = {
+            let mut guard = self.inner.lock().expect("inner mutex poisoned");
             guard.take()
         };
-        shutdown_child(&mut taken).await;
-    }
-
-    /// reader task 是否已经退出(stream EOF / error / abort)。
-    ///
-    /// 一旦置位,所有后续 `request` 调用都会立即得到 disconnected 错误。
-    /// ExternalDbConnection 用这个信号触发 client eviction(P0-4)。
-    pub fn is_closed(&self) -> bool {
-        self.shared.closed.load(Ordering::Acquire)
+        if let Some(ClientInner { owner, process }) = inner {
+            owner.shutdown().await;
+            drop(process);
+        }
     }
 }
 
 impl Drop for JsonRpcClient {
     fn drop(&mut self) {
-        // 兜底:abort reader task,child 由 kill_on_drop=true 自动回收。
-        // 不在 Drop 里 await,避免阻塞 runtime。
-        self.reader_task.abort();
+        // 兜底:确保 handle 标记关闭(让 in-flight caller 收 Closed),
+        // owner 在 inner Drop 时也会 abort reader task,process 在 Drop 时 kill。
+        self.handle.close();
     }
 }
 
-/// RAII 保护 pending 表条目的 cancel-safety。
-///
-/// 当 caller 的 future 被 cancel / timeout / 写失败时,Drop 自动移除 pending sender,
-/// 避免内存泄漏与 reader 找不到对应 caller 时的隐性丢弃。
-struct PendingGuard {
-    shared: Arc<ClientShared>,
-    id: u64,
-    armed: bool,
+/// 把 driver manifest 翻译成 `SpawnConfig`。
+fn build_spawn_config(driver: &IpcDriverManifest) -> SpawnConfig {
+    let program = PathBuf::from(&driver.entry.command);
+    let cwd = command_working_dir(driver);
+    let socket_name = default_socket_name();
+
+    let mut config = SpawnConfig::new(program)
+        .with_args(driver.entry.args.clone())
+        .with_cwd(cwd)
+        .with_transport(SpawnTransport::LocalSocket { name: socket_name });
+    config = config.with_ready_timeout(Duration::from_millis(
+        driver.transport.connect_timeout_ms().max(1_000),
+    ));
+    config
 }
 
-impl Drop for PendingGuard {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        if let Ok(mut pending) = self.shared.pending.lock() {
-            pending.remove(&self.id);
-        }
-    }
-}
-
-fn close_and_drain(shared: &ClientShared) {
-    shared.closed.store(true, Ordering::Release);
-    if let Ok(mut pending) = shared.pending.lock() {
-        pending.clear();
-        // oneshot::Sender 被 drop → caller 的 rx 收 RecvError → 报 disconnected
-    }
-}
-
-async fn reader_loop(mut reader: ReadHalf<LocalSocketStream>, shared: Arc<ClientShared>) {
-    /// 无论 reader_loop 怎么退出(EOF / Err / task abort),都标记 closed + drain
-    /// pending,把所有 caller 唤醒为 disconnected。
-    struct CloseGuard {
-        shared: Arc<ClientShared>,
-    }
-    impl Drop for CloseGuard {
-        fn drop(&mut self) {
-            close_and_drain(&self.shared);
-        }
-    }
-    let _guard = CloseGuard {
-        shared: Arc::clone(&shared),
-    };
-
-    while let Ok(response) = recv_msg_async::<_, IpcResponse>(&mut reader).await {
-        let sender = match shared.pending.lock() {
-            Ok(mut pending) => pending.remove(&response.request_id),
-            Err(_) => break, // pending mutex poisoned — 走 CloseGuard 兜底
-        };
-        if let Some(sender) = sender {
-            // caller 已超时 / cancel drop 了 rx 时 send 失败 — 静默忽略
-            let _ = sender.send(response);
-        }
-        // 找不到 sender:caller 已 timeout / cancel,response 静默丢弃
-    }
-}
-
-fn validate_response(response: IpcResponse, expected_id: u64) -> Result<Value, DbError> {
-    let version = response.protocol_version;
-    if !ipc::IPC_VERSION.is_compatible_with(version) {
-        return Err(DbError::connection(format!(
-            "IPC protocol version mismatch: local {:?}, remote {:?}",
-            ipc::IPC_VERSION,
-            version
-        )));
-    }
-    if response.request_id != expected_id {
-        return Err(DbError::query(format!(
-            "IPC response id mismatch: expected {}, got {}",
-            expected_id, response.request_id
-        )));
-    }
-    if let Some(error) = response.error {
-        if error.code == IpcErrorCode::UnsupportedMethod {
-            return Err(DbError::NotSupported(error.message));
-        }
-        return Err(DbError::query(format!(
-            "external driver error {:?}: {}",
-            error.code, error.message
-        )));
-    }
-    response
-        .result
-        .ok_or_else(|| DbError::query("IPC response missing result"))
-}
-
-async fn shutdown_child(child: &mut Option<Child>) {
-    if let Some(child) = child.as_mut() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
-}
-
-/// 为 driver 生成本次启动的最终 socket 名。
-///
-/// 使用短前缀避免 macOS `sockaddr_un.sun_path` 容量限制。
-fn make_socket_name(driver: &IpcDriverManifest) -> String {
-    format!(
-        "onetcli-{}-{}.sock",
-        driver.id,
-        uuid::Uuid::new_v4().simple()
-    )
-}
-
-/// 构造 driver 启动 Command,设置 `ONETCLI_IPC_SOCKET` env var 把动态 socket
-/// 名透传给子进程。抽出独立函数便于在 Drop / multi-instance 测试中验证 env。
-fn build_driver_command(driver: &IpcDriverManifest, socket_name: &str) -> Command {
-    let mut command = Command::new(&driver.entry.command);
-    command
-        .args(&driver.entry.args)
-        .env(SOCKET_ENV_VAR, socket_name)
-        .current_dir(driver.command_working_dir())
-        // 关键:确保 client 异常 drop 时子进程被回收,不变孤儿。
-        // 详见 P0-3 改造 — 仅 `Child::kill().await` 不足以应对 panic / runtime abort 场景。
-        .kill_on_drop(true)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    command
-}
-
-async fn spawn_driver_process(
-    driver: &IpcDriverManifest,
-    socket_name: &str,
-) -> Result<Child, DbError> {
-    let mut command = build_driver_command(driver, socket_name);
-    let mut child = command.spawn().map_err(|error| {
-        DbError::connection_with_source(
-            format!("failed to start external driver '{}'", driver.id),
-            error,
-        )
-    })?;
-
-    if let Some(stderr) = child.stderr.take() {
-        spawn_stderr_logger(driver.id.clone(), stderr);
-    }
-
-    Ok(child)
-}
-
-async fn connect_local_socket(name: &str, timeout_ms: u64) -> Result<LocalSocketStream, DbError> {
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    let name = name
-        .to_ns_name::<GenericNamespaced>()
-        .map_err(|error| DbError::connection_with_source("invalid local socket name", error))?;
-
-    loop {
-        match timeout(
-            Duration::from_millis(200),
-            LocalSocketStream::connect(name.clone()),
-        )
-        .await
-        {
-            Ok(Ok(stream)) => return Ok(stream),
-            Ok(Err(error)) if Instant::now() < deadline => {
-                sleep(Duration::from_millis(50)).await;
-                let _ = error;
+/// 解析 driver 的 working_dir;空 / 不存在则用 manifest 目录。
+fn command_working_dir(driver: &IpcDriverManifest) -> PathBuf {
+    match driver.entry.working_dir.as_deref() {
+        Some(wd) if !wd.is_empty() => {
+            let candidate = Path::new(wd);
+            if candidate.is_absolute() {
+                candidate.to_path_buf()
+            } else {
+                driver.manifest_dir.join(candidate)
             }
-            Ok(Err(error)) => {
-                return Err(DbError::connection_with_source(
-                    "failed to connect local socket",
-                    error,
-                ));
-            }
-            Err(error) if Instant::now() < deadline => {
-                sleep(Duration::from_millis(50)).await;
-                let _ = error;
-            }
-            Err(error) => {
-                return Err(DbError::connection_with_source(
-                    "timed out connecting local socket",
-                    error,
-                ));
+        }
+        _ => {
+            if driver.manifest_dir.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                driver.manifest_dir.clone()
             }
         }
     }
 }
 
-fn spawn_stderr_logger(driver_id: String, stderr: tokio::process::ChildStderr) {
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            warn!(driver = %driver_id, "external driver stderr: {}", line);
+/// 构造 init 握手参数。
+fn build_negotiation(driver: &IpcDriverManifest) -> NegotiationConfig {
+    let host_version = env!("CARGO_PKG_VERSION").to_string();
+    let instance_id = uuid::Uuid::new_v4().to_string();
+    let config = NegotiationConfig::new(host_version, instance_id)
+        .offer_api("database", "1.0")
+        // 宿主默认接受丰富错误,但不强制要求;driver 若没声明就只会给文本 message。
+        .with_handshake_timeout(Duration::from_millis(
+            driver.transport.connect_timeout_ms().max(5_000),
+        ));
+    // 暂不 require_capability;由 plugin 层在调用具体方法时 fallback。
+    config
+}
+
+/// 把 [`HostError`] 翻译成 [`DbError`],尽量保留 protocol error 的语义。
+pub(crate) fn host_error_to_db_error(error: HostError) -> DbError {
+    match error {
+        HostError::Io(io) => DbError::connection_with_source("external driver io error", io),
+        HostError::Serde(serde) => {
+            DbError::query_with_source("invalid external driver json", serde)
         }
-    });
+        HostError::Protocol(pe) => {
+            use extension_protocol::error::error_codes;
+            let message = pe.message.clone();
+            if pe.code == error_codes::METHOD_NOT_FOUND {
+                DbError::NotSupported(message)
+            } else if pe.is_connection_error() {
+                DbError::connection(format!("external driver error: {message}"))
+            } else if pe.is_sql_error() {
+                DbError::query(format!("external driver sql error: {message}"))
+            } else {
+                DbError::query(format!(
+                    "external driver error (code {}): {message}",
+                    pe.code
+                ))
+            }
+        }
+        HostError::Timeout { method, timeout_ms } => DbError::query(format!(
+            "external driver request `{method}` timed out after {timeout_ms}ms"
+        )),
+        HostError::Cancelled { method } => {
+            DbError::query(format!("external driver request `{method}` was cancelled"))
+        }
+        HostError::Closed | HostError::NotInitialized => DbError::NotConnected,
+        HostError::ProcessExited(reason) => {
+            DbError::connection(format!("external driver process exited: {reason}"))
+        }
+        HostError::Config(reason) => {
+            DbError::connection(format!("external driver spawn config invalid: {reason}"))
+        }
+        HostError::ProcessNotReady {
+            deadline_ms,
+            stderr_tail,
+        } => {
+            let mut message =
+                format!("external driver did not become ready within {deadline_ms}ms");
+            if let Some(stderr_tail) = stderr_tail.filter(|tail| !tail.trim().is_empty()) {
+                message.push_str("\nrecent stderr:\n");
+                message.push_str(&stderr_tail);
+            }
+            DbError::connection(message)
+        }
+        HostError::Incompatible(reason) => {
+            DbError::connection(format!("external driver compatibility error: {reason}"))
+        }
+        HostError::NotImplemented(msg) => DbError::NotSupported(msg),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ipc::{IpcErrorCode, ProtocolVersion};
+    use crate::ipc::registry::{IpcDriverEntry, IpcDriverTransport};
+    use extension_protocol::error::{ProtocolError, error_codes};
 
-    #[test]
-    fn accepts_matching_response() {
-        let response = IpcResponse::result(7, Value::String("ok".into()));
-        assert!(validate_response(response, 7).is_ok());
-    }
-
-    #[test]
-    fn rejects_mismatched_response_id() {
-        let response = IpcResponse::result(8, Value::String("ok".into()));
-        assert!(validate_response(response, 7).is_err());
-    }
-
-    #[test]
-    fn rejects_incompatible_protocol_version() {
-        let response = IpcResponse {
-            protocol_version: ProtocolVersion::new(99, 0),
-            request_id: 7,
-            result: Some(Value::String("ok".into())),
-            error: None,
-        };
-        assert!(validate_response(response, 7).is_err());
-    }
-
-    #[test]
-    fn propagates_ipc_error() {
-        let response = IpcResponse::error(7, IpcErrorCode::Internal, "boom");
-        let result = validate_response(response, 7);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("boom"));
-    }
-
-    #[test]
-    fn maps_unsupported_method_to_not_supported() {
-        let response = IpcResponse::error(7, IpcErrorCode::UnsupportedMethod, "missing");
-        let result = validate_response(response, 7);
-        assert!(matches!(result, Err(DbError::NotSupported(message)) if message == "missing"));
-    }
-
-    #[test]
-    fn make_socket_name_generates_distinct_names_with_manifest_prefix() {
-        let driver = make_test_manifest("driver.sock");
-        let first = make_socket_name(&driver);
-        let second = make_socket_name(&driver);
-
-        assert_ne!(first, second);
-        assert!(first.starts_with("onetcli-socket-test-"));
-        assert!(second.starts_with("onetcli-socket-test-"));
-        assert!(first.ends_with(".sock"));
-        assert!(second.ends_with(".sock"));
-    }
-
-    fn make_test_manifest(socket_name: &str) -> IpcDriverManifest {
+    fn dummy_manifest(command: &str, working_dir: Option<&str>) -> IpcDriverManifest {
         IpcDriverManifest {
-            id: "socket-test".into(),
-            name: "Socket Test".into(),
-            description: String::new(),
-            version: String::new(),
-            entry: crate::ipc::registry::IpcDriverEntry {
-                command: "sleep".into(),
-                args: vec!["30".into()],
-                working_dir: None,
-            },
-            transport: crate::ipc::registry::IpcDriverTransport::local_socket(socket_name),
-            dialect: Default::default(),
-            capabilities: None,
-            ui: Default::default(),
-            manifest_dir: std::path::PathBuf::from("/tmp"),
-        }
-    }
-}
-
-#[cfg(all(test, unix))]
-mod lifecycle_tests {
-    use super::*;
-    use crate::ipc::registry::{IpcDriverEntry, IpcDriverManifest, IpcDriverTransport};
-    use std::path::PathBuf;
-    use std::time::Duration;
-
-    /// 构造一个跑 `sleep 30` 的 manifest,作为「永远不会主动退出」的 driver 占位。
-    fn make_sleep_manifest() -> IpcDriverManifest {
-        IpcDriverManifest {
-            id: "lifecycle-test".into(),
-            name: "Lifecycle Test".into(),
+            id: "dummy".into(),
+            name: "Dummy".into(),
             description: String::new(),
             version: String::new(),
             entry: IpcDriverEntry {
-                command: "sleep".into(),
-                args: vec!["30".into()],
-                working_dir: None,
+                command: command.into(),
+                args: Vec::new(),
+                working_dir: working_dir.map(str::to_string),
             },
-            transport: IpcDriverTransport::local_socket("onetcli-lifecycle-test.sock"),
+            transport: IpcDriverTransport::local_socket("dummy.sock"),
             dialect: Default::default(),
-            capabilities: None,
+            capabilities: Default::default(),
+            methods: Vec::new(),
             ui: Default::default(),
-            manifest_dir: PathBuf::from("/tmp"),
+            manifest_dir: PathBuf::from("/tmp/onetcli-test"),
         }
     }
 
-    /// 通过 `kill -0 <pid>` 检测 unix 进程是否仍存活。
-    fn process_alive(pid: u32) -> bool {
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+    #[test]
+    fn spawn_config_uses_manifest_dir_as_cwd() {
+        let manifest = dummy_manifest("/usr/bin/true", None);
+        let cfg = build_spawn_config(&manifest);
+        assert!(cfg.env.is_empty());
+        assert_eq!(cfg.cwd.as_deref(), Some(Path::new("/tmp/onetcli-test")));
     }
 
-    /// 兜底回收:测试失败时也不要把 sleep 进程留给 CI。
-    fn force_kill(pid: u32) {
-        let _ = std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .status();
+    #[test]
+    fn working_dir_falls_back_to_manifest_dir() {
+        let manifest = dummy_manifest("/usr/bin/true", None);
+        let wd = command_working_dir(&manifest);
+        assert_eq!(wd, PathBuf::from("/tmp/onetcli-test"));
+    }
+
+    #[test]
+    fn working_dir_resolves_relative_against_manifest_dir() {
+        let manifest = dummy_manifest("/usr/bin/true", Some("bin"));
+        let wd = command_working_dir(&manifest);
+        assert_eq!(wd, PathBuf::from("/tmp/onetcli-test/bin"));
+    }
+
+    #[test]
+    fn working_dir_uses_absolute_path_as_is() {
+        let manifest = dummy_manifest("/usr/bin/true", Some("/opt/driver"));
+        let wd = command_working_dir(&manifest);
+        assert_eq!(wd, PathBuf::from("/opt/driver"));
+    }
+
+    #[test]
+    fn method_not_found_maps_to_not_supported() {
+        let err = host_error_to_db_error(HostError::Protocol(Box::new(ProtocolError::new(
+            error_codes::METHOD_NOT_FOUND,
+            "missing",
+        ))));
+        assert!(matches!(err, DbError::NotSupported(message) if message == "missing"));
+    }
+
+    #[test]
+    fn closed_maps_to_not_connected() {
+        let err = host_error_to_db_error(HostError::Closed);
+        assert!(matches!(err, DbError::NotConnected));
+    }
+
+    #[test]
+    fn timeout_maps_to_query_error() {
+        let err = host_error_to_db_error(HostError::Timeout {
+            method: "query/start".into(),
+            timeout_ms: 1_000,
+        });
+        match err {
+            DbError::Query { message, .. } => {
+                assert!(message.contains("query/start"));
+                assert!(message.contains("1000"));
+            }
+            other => panic!("expected Query, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn process_not_ready_maps_stderr_tail_to_connection_error() {
+        let err = host_error_to_db_error(HostError::ProcessNotReady {
+            deadline_ms: 500,
+            stderr_tail: Some("driver boot failed".into()),
+        });
+
+        match err {
+            DbError::Connection { message, .. } => {
+                assert!(message.contains("500"));
+                assert!(message.contains("driver boot failed"));
+            }
+            other => panic!("expected Connection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sql_error_maps_to_query_error() {
+        let pe = ProtocolError::new(error_codes::SQL_SYNTAX_ERROR, "bad sql");
+        let err = host_error_to_db_error(HostError::Protocol(Box::new(pe)));
+        match err {
+            DbError::Query { message, .. } => assert!(message.contains("bad sql")),
+            other => panic!("expected Query, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn connection_refused_maps_to_connection_error() {
+        let pe = ProtocolError::new(error_codes::IO_CONNECTION_REFUSED, "refused");
+        let err = host_error_to_db_error(HostError::Protocol(Box::new(pe)));
+        assert!(matches!(err, DbError::Connection { .. }));
     }
 
     #[tokio::test]
-    async fn spawn_driver_process_kills_child_when_handle_drops() {
-        let manifest = make_sleep_manifest();
-        let socket_name = manifest.transport.name.clone();
-        let child = spawn_driver_process(&manifest, &socket_name)
-            .await
-            .expect("spawn driver child process");
-        let pid = child.id().expect("child pid should be available");
-
-        assert!(
-            process_alive(pid),
-            "child should be alive immediately after spawn"
-        );
-
-        drop(child);
-
-        // 给 OS 至多 2 秒时间发送信号并清理 zombie。
-        let mut reaped = false;
-        for _ in 0..20 {
-            if !process_alive(pid) {
-                reaped = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-
-        if !reaped {
-            force_kill(pid);
-        }
-        assert!(
-            reaped,
-            "child pid={pid} should be killed within 2s after Child handle drops"
-        );
+    async fn start_rejects_empty_command() {
+        let manifest = dummy_manifest("", None);
+        let result = JsonRpcClient::start(&manifest).await;
+        assert!(matches!(result, Err(DbError::Connection { .. })));
     }
 }

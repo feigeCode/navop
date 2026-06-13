@@ -79,9 +79,7 @@ fn build_database_form(
         let ssh_connections = home
             .connections
             .iter()
-            .filter(|connection| {
-                connection.connection_type == ConnectionType::SshSftp
-            })
+            .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
             .cloned()
             .collect();
         home.editing_connection_id = None;

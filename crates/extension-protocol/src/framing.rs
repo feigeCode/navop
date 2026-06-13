@@ -1,7 +1,8 @@
-/// 长度前缀 JSON 消息帧协议。
-///
-/// 每条消息 = 4 字节 LE 长度前缀 + JSON 序列化的消息体。
-/// 最大消息大小为 16 MiB。
+//! 当前扩展协议使用的长度前缀 JSON 消息帧。
+//!
+//! 每条消息 = 4 字节 LE 长度前缀 + JSON 序列化的消息体。
+//! 最大消息大小为 16 MiB。
+
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::io::{self, Read, Write};
@@ -39,8 +40,6 @@ pub async fn recv_msg_async<R: AsyncReadExt + Unpin, T: DeserializeOwned>(
     let buf = read_framed_async(&mut reader).await?;
     serde_json::from_slice(&buf).map_err(io::Error::other)
 }
-
-// ── 内部实现 ──
 
 fn write_framed(writer: &mut impl Write, bytes: &[u8], len: u32) -> io::Result<()> {
     if len > MAX_MSG_SIZE {

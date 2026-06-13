@@ -137,7 +137,7 @@ jobs:
           ONETCLI_WECHAT_QR_URL: ${{ secrets.ONETCLI_WECHAT_QR_URL }}
           ONETCLI_ALIPAY_QR_URL: ${{ secrets.ONETCLI_ALIPAY_QR_URL }}
           ONETCLI_PAYPAL_QR_URL: ${{ secrets.ONETCLI_PAYPAL_QR_URL }}
-        run: cargo build --release -p main --target ${{ matrix.target }}
+        run: cargo build --release -p main -p duckdb_driver --target ${{ matrix.target }}
 
 
       - name: Clean build artifacts (macOS)
@@ -166,6 +166,7 @@ jobs:
           mkdir -p package/usr/share/icons/hicolor/256x256/apps
           mkdir -p package/usr/share/icons/hicolor/512x515/apps
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} package/usr/bin/
+          bash script/package-ipc-drivers.sh ${{ matrix.target }} package/usr/share/onetcli/ipc-drivers
           cp resources/linux/onetcli.desktop package/usr/share/applications/
           cp resources/linux/onetcli-128.png package/usr/share/icons/hicolor/128x128/apps/onetcli.png
           cp resources/linux/onetcli-256.png package/usr/share/icons/hicolor/256x256/apps/onetcli.png
@@ -176,7 +177,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.binary }}" -DestinationPath "${{ matrix.archive }}"
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "package/${{ matrix.binary }}"
+          bash script/package-ipc-drivers.sh "${{ matrix.target }}" "package/ipc-drivers"
+          Compress-Archive -Path "package/*" -DestinationPath "${{ matrix.archive }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -1,0 +1,21 @@
+[package]
+name = "extension-driver"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+extension-protocol = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "rt", "sync", "macros"] }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

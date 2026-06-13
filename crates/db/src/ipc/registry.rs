@@ -1,8 +1,13 @@
 use crate::connection::DbError;
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
-use one_core::storage::get_config_dir;
+use extension_protocol::method;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use tracing::warn;
+
+mod discovery;
+mod entry;
 
 pub const EXTERNAL_DRIVER_ID_PARAM: &str = "external_driver_id";
 const DRIVER_MANIFEST_FILE: &str = "driver.json";
@@ -21,6 +26,8 @@ pub struct IpcDriverManifest {
     pub dialect: IpcDriverDialect,
     #[serde(default)]
     pub capabilities: Option<DatabaseCapabilities>,
+    #[serde(default)]
+    pub methods: Vec<String>,
     #[serde(default)]
     pub ui: IpcDriverUi,
     #[serde(skip)]
@@ -140,8 +147,20 @@ impl IpcDriverManifest {
                 self.id
             )));
         }
+        for method_name in &self.methods {
+            if !is_allowed_manifest_method(method_name) {
+                return Err(DbError::connection(format!(
+                    "external driver '{}' declares unknown IPC method '{}'",
+                    self.id, method_name
+                )));
+            }
+        }
         Ok(())
     }
+}
+
+fn is_allowed_manifest_method(method_name: &str) -> bool {
+    method::is_allowed_declaration(method_name)
 }
 
 #[derive(Clone, Debug)]
@@ -151,8 +170,37 @@ pub struct IpcDriverRegistry {
 
 impl IpcDriverRegistry {
     pub fn load_default() -> Self {
-        let dir = default_driver_dir();
-        Self::load_from_dir(&dir).unwrap_or_else(|_| Self::empty())
+        Self::load_from_dirs(&discovery::default_driver_dirs()).unwrap_or_else(|_| Self::empty())
+    }
+
+    pub fn from_drivers(mut drivers: Vec<IpcDriverManifest>) -> Self {
+        sort_drivers(&mut drivers);
+        Self { drivers }
+    }
+
+    pub fn load_from_dirs(dirs: &[PathBuf]) -> Result<Self, DbError> {
+        let mut drivers = Vec::new();
+        let mut seen = HashSet::new();
+        for dir in dirs {
+            let registry = match Self::load_from_dir(dir) {
+                Ok(registry) => registry,
+                Err(error) => {
+                    warn!(
+                        path = %dir.display(),
+                        error = %error,
+                        "skipping external driver directory"
+                    );
+                    continue;
+                }
+            };
+            for driver in registry.drivers {
+                if seen.insert(driver.id.clone()) {
+                    drivers.push(driver);
+                }
+            }
+        }
+        sort_drivers(&mut drivers);
+        Ok(Self { drivers })
     }
 
     pub fn load_from_dir(dir: &Path) -> Result<Self, DbError> {
@@ -161,6 +209,12 @@ impl IpcDriverRegistry {
         }
 
         let mut drivers = Vec::new();
+        if dir.join(DRIVER_MANIFEST_FILE).is_file() {
+            if let Ok(driver) = load_manifest(dir) {
+                drivers.push(driver);
+            }
+        }
+
         for entry in std::fs::read_dir(dir).map_err(read_dir_error)? {
             let entry = entry.map_err(read_dir_error)?;
             if entry.file_type().map_err(read_dir_error)?.is_dir() {
@@ -169,7 +223,7 @@ impl IpcDriverRegistry {
                 }
             }
         }
-        drivers.sort_by(|left, right| left.name.cmp(&right.name));
+        sort_drivers(&mut drivers);
         Ok(Self { drivers })
     }
 
@@ -192,9 +246,11 @@ impl IpcDriverRegistry {
 }
 
 pub fn default_driver_dir() -> PathBuf {
-    get_config_dir()
-        .map(|dir| dir.join("ipc-drivers"))
-        .unwrap_or_else(|_| PathBuf::from("ipc-drivers"))
+    discovery::default_user_driver_dir()
+}
+
+pub fn default_driver_dirs() -> Vec<PathBuf> {
+    discovery::default_driver_dirs()
 }
 
 fn load_manifest(driver_dir: &Path) -> Result<IpcDriverManifest, DbError> {
@@ -206,6 +262,7 @@ fn load_manifest(driver_dir: &Path) -> Result<IpcDriverManifest, DbError> {
         .map_err(|error| DbError::connection_with_source("invalid driver manifest", error))?;
     manifest.manifest_dir = driver_dir.to_path_buf();
     manifest.validate()?;
+    entry::resolve_entry_command(&mut manifest);
     Ok(manifest)
 }
 
@@ -213,90 +270,9 @@ fn read_dir_error(error: std::io::Error) -> DbError {
     DbError::connection_with_source("failed to scan external driver directory", error)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn parses_local_socket_transport() {
-        let manifest: IpcDriverManifest = serde_json::from_str(
-            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"}}"#,
-        )
-        .unwrap();
-
-        assert_eq!(manifest.transport.name, "demo.sock");
-    }
-
-    #[test]
-    fn rejects_missing_transport() {
-        let result = serde_json::from_str::<IpcDriverManifest>(
-            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"}}"#,
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn rejects_local_socket_transport_without_name() {
-        let mut manifest: IpcDriverManifest = serde_json::from_str(
-            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":""}}"#,
-        )
-        .unwrap();
-        manifest.manifest_dir = PathBuf::from(".");
-
-        assert!(manifest.validate().is_err());
-    }
-
-    #[test]
-    fn scans_driver_manifests() {
-        let temp = tempfile::tempdir().unwrap();
-        let driver_dir = temp.path().join("demo");
-        fs::create_dir(&driver_dir).unwrap();
-        fs::write(
-            driver_dir.join(DRIVER_MANIFEST_FILE),
-            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"}}"#,
-        )
-        .unwrap();
-
-        let registry = IpcDriverRegistry::load_from_dir(temp.path()).unwrap();
-        assert_eq!(registry.drivers().len(), 1);
-        assert_eq!(registry.find("demo").unwrap().name, "Demo");
-    }
-
-    #[test]
-    fn parses_top_level_capabilities() {
-        let manifest: IpcDriverManifest = serde_json::from_str(
-            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"dialect":{"supports_schema":false},"capabilities":{"supports_schema":true,"supports_functions":true}}"#,
-        )
-        .unwrap();
-
-        let capabilities = manifest.effective_capabilities();
-        assert!(capabilities.supports_schema);
-        assert!(capabilities.supports_functions);
-    }
-
-    #[test]
-    fn falls_back_to_legacy_dialect_capabilities() {
-        let manifest: IpcDriverManifest = serde_json::from_str(
-            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"dialect":{"supports_schema":true,"supports_sequences":true}}"#,
-        )
-        .unwrap();
-
-        let capabilities = manifest.effective_capabilities();
-        assert!(capabilities.supports_schema);
-        assert!(capabilities.supports_sequences);
-        assert!(capabilities.supports_functions);
-        assert!(capabilities.supports_procedures);
-    }
-
-    #[test]
-    fn falls_back_to_legacy_ui_form_capabilities() {
-        let manifest: IpcDriverManifest = serde_json::from_str(
-            r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"ui":{"form":{"schema_version":1,"capabilities":{"supports_triggers":true},"forms":[],"actions":{"actions":[]}}}}"#,
-        )
-        .unwrap();
-
-        assert!(manifest.effective_capabilities().supports_triggers);
-    }
+fn sort_drivers(drivers: &mut [IpcDriverManifest]) {
+    drivers.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
 }
+
+#[cfg(test)]
+mod tests;

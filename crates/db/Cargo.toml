@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
@@ -37,7 +38,8 @@ moka.workspace = true
 smol.workspace = true
 regex.workspace = true
 thiserror.workspace = true
-ipc.workspace = true
+extension-host.workspace = true
+extension-protocol.workspace = true
 rust-i18n.workspace = true
 [dev-dependencies]
 proptest = { workspace = true }

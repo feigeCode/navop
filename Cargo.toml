@@ -17,7 +17,9 @@ members = [
     "examples/focus_trap",
     "crates/db",
     "crates/db_view",
-    "crates/ipc",
+    "crates/extension-protocol",
+    "crates/extension-host",
+    "crates/extension-driver",
     "crates/duckdb_driver",
     "crates/er_flow",
     "crates/terminal",
@@ -85,6 +87,9 @@ mongodb_view = {path = "crates/mongodb_view"}
 remote_file_editor = { path = "crates/remote_file_editor" }
 er_flow = { path = "crates/er_flow" }
 ipc = { path = "crates/ipc" }
+extension-protocol = { path = "crates/extension-protocol" }
+extension-host = { path = "crates/extension-host" }
+extension-driver = { path = "crates/extension-driver" }
 
 
 json5 = "1.3.0"
@@ -120,7 +125,7 @@ rust_xlsxwriter = "0.94.0"
 dashmap = "5.5.3"
 moka = { version = "0.12", features = ["sync"] }
 thiserror="2.0.14"
-llm-connector = { version = "1.1.14", features = ["streaming"] }
+llm-connector = { version = "1.4.0", features = ["streaming"] }
 redis_client = { package = "redis", version = "0.27", features = ["tokio-comp", "cluster-async", "connection-manager"] }
 
 # SSH and SFTP

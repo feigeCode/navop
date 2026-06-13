@@ -120,11 +120,7 @@ pub fn graph_from_diagram_with_options(
         let source = output_ports[&relationship.from_entity];
         let target = input_ports[&relationship.to_entity];
 
-        graph
-            .create_edge()
-            .source(source)
-            .target(target)
-            .build();
+        graph.create_edge().source(source).target(target).build();
     }
 
     Ok(graph)
