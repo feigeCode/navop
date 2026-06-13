@@ -144,6 +144,7 @@ fn build_auth(config: &DbConnectionConfig) -> Result<SshAuth, DbError> {
 
     match auth_type.as_str() {
         "agent" => Ok(SshAuth::Agent),
+        "auto_publickey" | "auto_public_key" => Ok(SshAuth::AutoPublicKey),
         "private_key" => {
             let key_path = required_param(config, SSH_PRIVATE_KEY_PATH)?;
             let passphrase = config
@@ -195,6 +196,18 @@ mod tests {
         let auth = build_auth(&config).expect("agent auth type should parse successfully");
 
         assert!(matches!(auth, SshAuth::Agent));
+    }
+
+    #[test]
+    fn build_auth_supports_auto_publickey_type() {
+        let mut extra_params = HashMap::new();
+        extra_params.insert(SSH_AUTH_TYPE.to_string(), "auto_publickey".to_string());
+        let config = build_config(extra_params);
+
+        let auth =
+            build_auth(&config).expect("auto public key auth type should parse successfully");
+
+        assert!(matches!(auth, SshAuth::AutoPublicKey));
     }
 
     #[test]
