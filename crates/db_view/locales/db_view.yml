@@ -263,6 +263,14 @@ ConnectionForm:
     en: Enable SSH Tunnel
     zh-CN: 启用 SSH 隧道
     zh-HK: 啟用 SSH 通道
+  ssh_connection_id:
+    en: Reuse SSH Connection
+    zh-CN: 引用 SSH 连接
+    zh-HK: 引用 SSH 連線
+  ssh_connection_manual:
+    en: Manual SSH Settings
+    zh-CN: 手动填写 SSH
+    zh-HK: 手動填寫 SSH
   ssh_host:
     en: SSH Host
     zh-CN: SSH 主机
