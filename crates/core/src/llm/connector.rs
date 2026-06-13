@@ -1,10 +1,12 @@
 use std::pin::Pin;
+use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
-use llm_connector::LlmClient;
+use llm_connector::builder::LlmClientBuilder;
 use llm_connector::types::{ChatRequest, Message, Role, StreamingResponse};
+use llm_connector::{GenericProvider, HttpClient, LlmClient, OpenAIProtocol};
 
 use super::types::{ProviderConfig, ProviderType};
 
@@ -20,6 +22,7 @@ const VOLCENGINE_BASE_URL: &str = "https://ark.cn-beijing.volces.com/api/v3";
 const MOONSHOT_BASE_URL: &str = "https://api.moonshot.cn/v1";
 const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 const GOOGLE_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
+const LLM_CLIENT_TIMEOUT_SECS: u64 = 120;
 
 pub use llm_connector::types::{
     ChatRequest as LlmChatRequest, Message as LlmMessage, Role as LlmRole,
@@ -41,104 +44,14 @@ pub struct LlmConnector {
 
 impl LlmConnector {
     pub fn from_config(config: &ProviderConfig) -> Result<Self> {
-        let client = match config.provider_type {
-            ProviderType::OpenAI => {
-                let api_key = config
-                    .api_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("API key required for OpenAI"))?;
-                LlmClient::openai(api_key, provider_base_url(config, OPENAI_BASE_URL))?
-            }
-            ProviderType::Anthropic => {
-                let api_key = config
-                    .api_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("API key required for Anthropic"))?;
-                LlmClient::anthropic(api_key, provider_base_url(config, ANTHROPIC_BASE_URL))?
-            }
-            ProviderType::Aliyun => {
-                let api_key = config
-                    .api_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("API key required for Aliyun"))?;
-                if aliyun_prefers_compatible_mode(config) {
-                    let base_url = aliyun_base_url(config);
-                    LlmClient::openai_compatible(api_key, base_url, &config.name)?
-                } else if let Some(base_url) = &config.api_base {
-                    LlmClient::aliyun_private(api_key, base_url)?
-                } else {
-                    LlmClient::aliyun(api_key, ALIYUN_BASE_URL)?
-                }
-            }
-            ProviderType::Zhipu => {
-                let api_key = config
-                    .api_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("API key required for Zhipu"))?;
-                LlmClient::zhipu(api_key, provider_base_url(config, ZHIPU_BASE_URL))?
-            }
-            ProviderType::Ollama => LlmClient::ollama(provider_base_url(config, OLLAMA_BASE_URL))?,
-            ProviderType::Volcengine => {
-                let api_key = config
-                    .api_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("API key required for Volcengine"))?;
-                LlmClient::volcengine(api_key, provider_base_url(config, VOLCENGINE_BASE_URL))?
-            }
-            ProviderType::Moonshot => {
-                let api_key = config
-                    .api_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("API key required for Moonshot"))?;
-                LlmClient::moonshot(api_key, provider_base_url(config, MOONSHOT_BASE_URL))?
-            }
-            ProviderType::DeepSeek => {
-                let api_key = config
-                    .api_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("API key required for DeepSeek"))?;
-                LlmClient::deepseek(api_key, provider_base_url(config, DEEPSEEK_BASE_URL))?
-            }
-            ProviderType::Google => {
-                let api_key = config
-                    .api_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("API key required for Google"))?;
-                LlmClient::google(api_key, provider_base_url(config, GOOGLE_BASE_URL))?
-            }
-            ProviderType::AzureOpenAI => {
-                let api_key = config
-                    .api_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("API key required for Azure OpenAI"))?;
-                let base_url = config
-                    .api_base
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Base URL required for Azure OpenAI"))?;
-                let api_version = config
-                    .api_version
-                    .as_deref()
-                    .unwrap_or("2024-02-15-preview");
-                LlmClient::azure_openai(api_key, base_url, api_version)?
-            }
-            ProviderType::OpenAICompatible => {
-                let api_key = config
-                    .api_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("API key required for OpenAI Compatible"))?;
-                let base_url = config
-                    .api_base
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Base URL required for OpenAI Compatible"))?;
-                LlmClient::openai_compatible(api_key, base_url, &config.name)?
-            }
-            ProviderType::OnetCli => {
-                // OnetCli 使用专门的 OnetCliLLMProvider，不通过 LlmConnector 创建
-                anyhow::bail!(
-                    "OnetCli provider should be created via ProviderManager, not LlmConnector"
-                )
-            }
-        };
+        Self::from_config_with_proxy(config, None)
+    }
+
+    pub fn from_config_with_proxy(
+        config: &ProviderConfig,
+        proxy_url: Option<&str>,
+    ) -> Result<Self> {
+        let client = client_from_config(config, proxy_url)?;
 
         Ok(Self {
             client,
@@ -163,6 +76,152 @@ impl LlmConnector {
 
         request
     }
+}
+
+fn client_from_config(config: &ProviderConfig, proxy_url: Option<&str>) -> Result<LlmClient> {
+    match config.provider_type {
+        ProviderType::OpenAI => build_client(
+            LlmClient::builder().openai(required_api_key(config, "OpenAI")?),
+            provider_base_url(config, OPENAI_BASE_URL),
+            proxy_url,
+        ),
+        ProviderType::Anthropic => build_client(
+            LlmClient::builder().anthropic(required_api_key(config, "Anthropic")?),
+            provider_base_url(config, ANTHROPIC_BASE_URL),
+            proxy_url,
+        ),
+        ProviderType::Aliyun => aliyun_client(config, proxy_url),
+        ProviderType::Zhipu => build_client(
+            LlmClient::builder().zhipu(required_api_key(config, "Zhipu")?),
+            provider_base_url(config, ZHIPU_BASE_URL),
+            proxy_url,
+        ),
+        ProviderType::Ollama => build_client(
+            LlmClient::builder().ollama(),
+            provider_base_url(config, OLLAMA_BASE_URL),
+            proxy_url,
+        ),
+        ProviderType::Volcengine => build_client(
+            LlmClient::builder().volcengine(required_api_key(config, "Volcengine")?),
+            provider_base_url(config, VOLCENGINE_BASE_URL),
+            proxy_url,
+        ),
+        ProviderType::Moonshot => build_client(
+            LlmClient::builder().moonshot(required_api_key(config, "Moonshot")?),
+            provider_base_url(config, MOONSHOT_BASE_URL),
+            proxy_url,
+        ),
+        ProviderType::DeepSeek => build_client(
+            LlmClient::builder().deepseek(required_api_key(config, "DeepSeek")?),
+            provider_base_url(config, DEEPSEEK_BASE_URL),
+            proxy_url,
+        ),
+        ProviderType::Google => build_client(
+            LlmClient::builder().google(required_api_key(config, "Google")?),
+            provider_base_url(config, GOOGLE_BASE_URL),
+            proxy_url,
+        ),
+        ProviderType::AzureOpenAI => azure_openai_client(config, proxy_url),
+        ProviderType::OpenAICompatible => openai_compatible_client(
+            required_api_key(config, "OpenAI Compatible")?,
+            required_base_url(config, "OpenAI Compatible")?,
+            &config.name,
+            proxy_url,
+        ),
+        ProviderType::OnetCli => {
+            anyhow::bail!(
+                "OnetCli provider should be created via ProviderManager, not LlmConnector"
+            )
+        }
+    }
+}
+
+fn build_client(
+    mut builder: LlmClientBuilder,
+    base_url: &str,
+    proxy_url: Option<&str>,
+) -> Result<LlmClient> {
+    builder = builder.base_url(base_url).timeout(LLM_CLIENT_TIMEOUT_SECS);
+    if let Some(proxy_url) = proxy_url {
+        builder = builder.proxy(proxy_url);
+    }
+    Ok(builder.build()?)
+}
+
+fn aliyun_client(config: &ProviderConfig, proxy_url: Option<&str>) -> Result<LlmClient> {
+    let api_key = required_api_key(config, "Aliyun")?;
+    if aliyun_prefers_compatible_mode(config) {
+        openai_compatible_client(api_key, aliyun_base_url(config), &config.name, proxy_url)
+    } else {
+        build_client(
+            LlmClient::builder().aliyun(api_key),
+            provider_base_url(config, ALIYUN_BASE_URL),
+            proxy_url,
+        )
+    }
+}
+
+fn openai_compatible_client(
+    api_key: &str,
+    base_url: &str,
+    service_name: &str,
+    proxy_url: Option<&str>,
+) -> Result<LlmClient> {
+    if let Some(proxy_url) = proxy_url {
+        let provider = llm_connector::providers::openai_compatible_with_config(
+            api_key,
+            base_url,
+            service_name,
+            Some(LLM_CLIENT_TIMEOUT_SECS),
+            Some(proxy_url),
+        )?;
+        return Ok(LlmClient::from_provider(Arc::new(provider)));
+    }
+
+    build_client(
+        LlmClient::builder().openai_compatible(api_key, service_name),
+        base_url,
+        None,
+    )
+}
+
+fn azure_openai_client(config: &ProviderConfig, proxy_url: Option<&str>) -> Result<LlmClient> {
+    let api_key = required_api_key(config, "Azure OpenAI")?;
+    let endpoint = required_base_url(config, "Azure OpenAI")?;
+    let api_version = config
+        .api_version
+        .as_deref()
+        .unwrap_or("2024-02-15-preview");
+
+    if let Some(proxy_url) = proxy_url {
+        let protocol = OpenAIProtocol::with_service(api_key, "azure-openai");
+        let client =
+            HttpClient::with_config(endpoint, Some(LLM_CLIENT_TIMEOUT_SECS), Some(proxy_url))?
+                .with_header("api-key".to_string(), api_key.to_string())
+                .with_header("api-version".to_string(), api_version.to_string());
+        let provider = GenericProvider::new(protocol, client);
+        return Ok(LlmClient::from_provider(Arc::new(provider)));
+    }
+
+    build_client(
+        LlmClient::builder().azure_openai(api_key, endpoint, api_version),
+        endpoint,
+        None,
+    )
+}
+
+fn required_api_key<'a>(config: &'a ProviderConfig, provider_name: &str) -> Result<&'a str> {
+    config
+        .api_key
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("API key required for {provider_name}"))
+}
+
+fn required_base_url<'a>(config: &'a ProviderConfig, provider_name: &str) -> Result<&'a str> {
+    config
+        .api_base
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("Base URL required for {provider_name}"))
 }
 
 fn provider_base_url<'a>(config: &'a ProviderConfig, default_base_url: &'static str) -> &'a str {
@@ -288,5 +347,79 @@ mod tests {
         };
 
         assert!(!aliyun_prefers_compatible_mode(&config));
+    }
+
+    fn assert_invalid_proxy_error(result: Result<LlmConnector>) {
+        let error = match result {
+            Ok(_) => panic!("无效代理地址应阻止 LLM client 构建"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("Invalid proxy URL"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn connector_proxy_rejects_invalid_proxy_for_openai_builder_path() {
+        let config = ProviderConfig {
+            provider_type: ProviderType::OpenAI,
+            api_key: Some("sk-test".to_string()),
+            model: "gpt-4o-mini".to_string(),
+            ..Default::default()
+        };
+
+        assert_invalid_proxy_error(LlmConnector::from_config_with_proxy(
+            &config,
+            Some("http://"),
+        ));
+    }
+
+    #[test]
+    fn connector_proxy_rejects_invalid_proxy_for_openai_compatible_path() {
+        let config = ProviderConfig {
+            provider_type: ProviderType::OpenAICompatible,
+            name: "custom".to_string(),
+            api_key: Some("sk-test".to_string()),
+            api_base: Some("https://llm.example.com/v1".to_string()),
+            model: "custom-model".to_string(),
+            ..Default::default()
+        };
+
+        assert_invalid_proxy_error(LlmConnector::from_config_with_proxy(
+            &config,
+            Some("http://"),
+        ));
+    }
+
+    #[test]
+    fn connector_proxy_rejects_invalid_proxy_for_azure_openai_path() {
+        let config = ProviderConfig {
+            provider_type: ProviderType::AzureOpenAI,
+            api_key: Some("sk-test".to_string()),
+            api_base: Some("https://example.openai.azure.com".to_string()),
+            api_version: Some("2024-02-15-preview".to_string()),
+            model: "gpt-4o-mini".to_string(),
+            ..Default::default()
+        };
+
+        assert_invalid_proxy_error(LlmConnector::from_config_with_proxy(
+            &config,
+            Some("http://"),
+        ));
+    }
+
+    #[test]
+    fn connector_proxy_rejects_invalid_proxy_for_ollama_builder_path() {
+        let config = ProviderConfig {
+            provider_type: ProviderType::Ollama,
+            model: "llama3.2".to_string(),
+            ..Default::default()
+        };
+
+        assert_invalid_proxy_error(LlmConnector::from_config_with_proxy(
+            &config,
+            Some("http://"),
+        ));
     }
 }

@@ -16,10 +16,7 @@ use gpui_component::{
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::manager::GlobalProviderState;
-use one_core::llm::{
-    LlmConnector, LlmProvider,
-    types::{ProviderConfig, ProviderType},
-};
+use one_core::llm::types::{ProviderConfig, ProviderType};
 use rust_i18n::t;
 
 const CUSTOM_MODEL_ID: &str = "__custom__";
@@ -473,21 +470,15 @@ impl ProviderForm {
             updated_at: now,
         };
 
-        let is_onet_cli = provider_type.is_builtin();
         let global_provider_state = cx.global::<GlobalProviderState>().clone();
 
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let result = Tokio::spawn(cx, async move {
-                if is_onet_cli {
-                    let provider = global_provider_state
-                        .manager()
-                        .get_provider(&config)
-                        .await?;
-                    provider.models().await
-                } else {
-                    let connector = LlmConnector::from_config(&config)?;
-                    connector.models().await
-                }
+                let provider = global_provider_state
+                    .manager()
+                    .get_provider(&config)
+                    .await?;
+                provider.models().await
             })
             .await;
 
