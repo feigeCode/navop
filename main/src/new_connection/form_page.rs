@@ -76,6 +76,14 @@ fn build_database_form(
         let editing_connection = home
             .editing_connection_id
             .and_then(|id| home.connections.iter().find(|c| c.id == Some(id)).cloned());
+        let ssh_connections = home
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.connection_type == ConnectionType::SshSftp
+            })
+            .cloned()
+            .collect();
         home.editing_connection_id = None;
         Some(ConnectionFormWindowConfig {
             db_type,
@@ -83,6 +91,7 @@ fn build_database_form(
             editing_connection,
             workspaces: home.workspaces.clone(),
             teams: get_cached_team_options(cx),
+            ssh_connections,
         })
     }) else {
         return NewConnectionFormResult::Blocked;
