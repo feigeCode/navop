@@ -15,6 +15,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{
     action_id, keystroke_matches_shortcuts, rebind_keybindings, shortcuts_for,
 };
+use one_core::settings::AppSettings;
 use std::borrow::Cow;
 use std::cell::{Cell as StdCell, RefCell};
 use std::collections::HashMap;
@@ -32,7 +33,7 @@ use crate::cd_completion::{
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
 use crate::settings::{
-    GlobalTerminalSettings, TerminalHighlightRule, TerminalSettings, TerminalSettingsEvent,
+    GlobalTerminalLocalSettings, TerminalHighlightRule, TerminalSettings, TerminalSettingsEvent,
     current_settings, update_settings,
 };
 use crate::sidebar::{SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
@@ -413,6 +414,7 @@ enum ResizingPanel {
 }
 
 pub fn init(cx: &mut App) {
+    crate::settings::init_settings(cx);
     cx.bind_keys(init_keybindings(cx));
 }
 
@@ -1005,7 +1007,7 @@ impl TerminalView {
         subscriptions.push(blink_subscription);
         subscriptions.push(focus_subscription);
         subscriptions.push(blur_subscription);
-        if let Some(global_settings) = cx.try_global::<GlobalTerminalSettings>().cloned() {
+        if let Some(global_settings) = cx.try_global::<GlobalTerminalLocalSettings>().cloned() {
             let settings_subscription = cx.subscribe_in(
                 &global_settings.0,
                 window,
@@ -1013,6 +1015,8 @@ impl TerminalView {
             );
             subscriptions.push(settings_subscription);
         }
+        subscriptions
+            .push(cx.observe_global_in::<AppSettings>(window, Self::handle_app_settings_changed));
 
         let scrollbar_metrics = Rc::new(RefCell::new(TerminalScrollbarMetrics::default()));
         let scrollbar_handle = TerminalScrollbarHandle::new(
@@ -1087,6 +1091,11 @@ impl TerminalView {
                 self.apply_settings_snapshot(current, window, cx);
             }
         }
+    }
+
+    fn handle_app_settings_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let settings = current_settings(cx);
+        self.apply_settings_snapshot(&settings, window, cx);
     }
 
     /// 处理侧边栏事件

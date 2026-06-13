@@ -1,9 +1,11 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use db_view::{DbViewSettings, LargeTextEditorOpenMode};
-use gpui::http_client::{AsyncBody, Method, Request, Url};
+use crate::app_init::is_valid_system_hotkey;
+use crate::auth::get_auth_service;
+use crate::license::{get_license_service, offline_license_public_key};
+use crate::settings::llm_providers_view::LlmProvidersView;
+use crate::update;
+use gpui::http_client::{AsyncBody, Method, Request};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -25,515 +27,84 @@ use gpui_component::{
     switch::Switch,
     v_flex,
 };
-use one_core::cloud_sync::GlobalCloudUser;
-use one_core::cloud_sync::UserInfo;
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::action_id;
 use one_core::llm::manager::GlobalProviderState;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
-use one_core::storage::manager::get_config_dir;
+pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
+pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-space";
+
+pub use one_core::settings::{
+    AppSettings, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings,
+    LargeTextCellEditorOpenMode, ProxyType,
+};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
 use reqwest_client::ReqwestClient;
 use rust_i18n::t;
-use serde::{Deserialize, Serialize};
-use terminal_view::TerminalSettings;
-use tracing::{error, info};
-
-use crate::app_init::is_valid_system_hotkey;
-use crate::auth::get_auth_service;
-use crate::license::{get_license_service, offline_license_public_key};
-use crate::settings::llm_providers_view::LlmProvidersView;
-use crate::update;
-
-// ============================================================================
-// 全局用户状态
-// ============================================================================
-
-/// 全局当前用户状态
-///
-/// 用于在设置面板中显示用户信息和执行登出操作。
-#[derive(Clone, Default)]
-pub struct GlobalCurrentUser {
-    user: Arc<RwLock<Option<UserInfo>>>,
-}
-
-impl gpui::Global for GlobalCurrentUser {}
-
-impl GlobalCurrentUser {
-    /// 获取当前用户
-    pub fn get_user(cx: &App) -> Option<UserInfo> {
-        if let Some(state) = cx.try_global::<GlobalCurrentUser>() {
-            state.user.read().ok().and_then(|u| u.clone())
-        } else {
-            None
-        }
-    }
-
-    /// 设置当前用户
-    pub fn set_user(user: Option<UserInfo>, cx: &mut App) {
-        if !cx.has_global::<GlobalCurrentUser>() {
-            cx.set_global(GlobalCurrentUser::default());
-        }
-        if let Some(state) = cx.try_global::<GlobalCurrentUser>() {
-            if let Ok(mut guard) = state.user.write() {
-                *guard = user.clone();
-            }
-        }
-        GlobalCloudUser::set_user(user, cx);
-    }
-}
-
-// ============================================================================
-// 数据库配置
-// ============================================================================
-
-/// 数据库打开方式
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum DatabaseOpenMode {
-    /// 单库模式：每个数据库单独打开一个标签页
-    #[default]
-    Single,
-    /// 工作区模式：按工作区分组打开，同一工作区的数据库在同一标签页
-    Workspace,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LargeTextCellEditorOpenMode {
-    #[default]
-    SidebarPreview,
-    Dialog,
-}
-
-impl LargeTextCellEditorOpenMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            LargeTextCellEditorOpenMode::SidebarPreview => "sidebar_preview",
-            LargeTextCellEditorOpenMode::Dialog => "dialog",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "dialog" => LargeTextCellEditorOpenMode::Dialog,
-            _ => LargeTextCellEditorOpenMode::SidebarPreview,
-        }
-    }
-}
-
-impl From<LargeTextCellEditorOpenMode> for LargeTextEditorOpenMode {
-    fn from(value: LargeTextCellEditorOpenMode) -> Self {
-        match value {
-            LargeTextCellEditorOpenMode::SidebarPreview => LargeTextEditorOpenMode::SidebarPreview,
-            LargeTextCellEditorOpenMode::Dialog => LargeTextEditorOpenMode::Dialog,
-        }
-    }
-}
-
-impl DatabaseOpenMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            DatabaseOpenMode::Single => "single",
-            DatabaseOpenMode::Workspace => "workspace",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "workspace" => DatabaseOpenMode::Workspace,
-            _ => DatabaseOpenMode::Single,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProxyType {
-    Http,
-    Https,
-    #[default]
-    Socks5,
-}
-
-impl ProxyType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ProxyType::Http => "http",
-            ProxyType::Https => "https",
-            ProxyType::Socks5 => "socks5",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GlobalProxySettings {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub proxy_type: ProxyType,
-    #[serde(default)]
-    pub host: String,
-    #[serde(default = "default_proxy_port")]
-    pub port: u16,
-    #[serde(default)]
-    pub username: String,
-    #[serde(default)]
-    pub password: String,
-}
-
-fn default_proxy_port() -> u16 {
-    1080
-}
-
-impl Default for GlobalProxySettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            proxy_type: ProxyType::default(),
-            host: String::new(),
-            port: default_proxy_port(),
-            username: String::new(),
-            password: String::new(),
-        }
-    }
-}
-
-impl GlobalProxySettings {
-    pub fn validate(&self) -> Result<(), String> {
-        if !self.enabled {
-            return Ok(());
-        }
-
-        if self.host.trim().is_empty() {
-            return Err("代理主机不能为空".to_string());
-        }
-
-        if self.port == 0 {
-            return Err("代理端口不能为空".to_string());
-        }
-
-        if self.username.trim().is_empty() && !self.password.is_empty() {
-            return Err("填写代理密码时必须同时填写用户名".to_string());
-        }
-
-        Ok(())
-    }
-
-    pub fn to_proxy_url(&self) -> Result<Option<Url>, String> {
-        if !self.enabled {
-            return Ok(None);
-        }
-
-        self.validate()?;
-
-        let base = format!(
-            "{}://{}:{}",
-            self.proxy_type.as_str(),
-            self.host.trim(),
-            self.port
-        );
-        let mut url = Url::parse(&base).map_err(|err| format!("代理地址格式不正确: {}", err))?;
-
-        if !self.username.trim().is_empty() {
-            url.set_username(self.username.trim())
-                .map_err(|_| "代理用户名格式不正确".to_string())?;
-        }
-
-        if !self.password.is_empty() {
-            url.set_password(Some(&self.password))
-                .map_err(|_| "代理密码格式不正确".to_string())?;
-        }
-
-        Ok(Some(url))
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppSettings {
-    #[serde(default)]
-    pub locale: String,
-    #[serde(default)]
-    pub theme_mode: String,
-    #[serde(default)]
-    pub auto_switch_theme: bool,
-    #[serde(default = "default_font_family")]
-    pub font_family: String,
-    #[serde(default = "default_font_size")]
-    pub font_size: f64,
-    #[serde(default = "default_terminal_font_size")]
-    pub terminal_font_size: f64,
-    #[serde(default = "default_true")]
-    pub terminal_auto_copy: bool,
-    #[serde(default = "default_true")]
-    pub terminal_enable_autocomplete: bool,
-    #[serde(default = "default_true")]
-    pub terminal_middle_click_paste: bool,
-    #[serde(default)]
-    pub terminal_sync_path_with_terminal: bool,
-    #[serde(default = "default_terminal_theme")]
-    pub terminal_theme: String,
-    #[serde(default)]
-    pub terminal_cursor_blink: bool,
-    #[serde(default = "default_true")]
-    pub terminal_confirm_multiline_paste: bool,
-    #[serde(default = "default_true")]
-    pub terminal_confirm_high_risk_command: bool,
-    #[serde(default)]
-    pub log_file_path: String,
-    #[serde(default = "default_true")]
-    pub auto_update: bool,
-    #[serde(default)]
-    pub global_proxy: GlobalProxySettings,
-    #[serde(default)]
-    pub database_open_mode: DatabaseOpenMode,
-    #[serde(default)]
-    pub large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode,
-    /// 是否启用SQL查询的自动保存功能
-    #[serde(default = "default_true")]
-    pub enable_sql_auto_save: bool,
-    /// SQL查询自动保存的间隔（秒），默认5秒
-    #[serde(default = "default_auto_save_interval")]
-    pub sql_auto_save_interval: f64,
-    #[serde(default = "default_system_hotkey_macos")]
-    pub system_hotkey_macos: String,
-    #[serde(default = "default_system_hotkey_other")]
-    pub system_hotkey_other: String,
-    /// 表格行高（像素），默认44
-    #[serde(default = "default_table_row_height")]
-    pub table_row_height: u32,
-    #[serde(default)]
-    pub custom_keybindings: HashMap<String, Vec<String>>,
-}
-
-pub(crate) const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
-pub(crate) const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-space";
-
-fn default_font_family() -> String {
-    "Arial".to_string()
-}
-
-fn default_font_size() -> f64 {
-    14.0
-}
-
-fn default_terminal_font_size() -> f64 {
-    15.0
-}
-
-fn default_terminal_theme() -> String {
-    "ocean".to_string()
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_auto_save_interval() -> f64 {
-    5.0
-}
-
-fn default_system_hotkey_macos() -> String {
-    DEFAULT_SYSTEM_HOTKEY_MACOS.to_string()
-}
-
-fn default_system_hotkey_other() -> String {
-    DEFAULT_SYSTEM_HOTKEY_OTHER.to_string()
-}
-
-fn default_table_row_height() -> u32 {
-    44
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            locale: "zh-CN".to_string(),
-            theme_mode: "light".to_string(),
-            auto_switch_theme: false,
-            font_family: default_font_family(),
-            font_size: default_font_size(),
-            terminal_font_size: default_terminal_font_size(),
-            terminal_auto_copy: default_true(),
-            terminal_enable_autocomplete: default_true(),
-            terminal_middle_click_paste: default_true(),
-            terminal_sync_path_with_terminal: false,
-            terminal_theme: default_terminal_theme(),
-            terminal_cursor_blink: false,
-            terminal_confirm_multiline_paste: default_true(),
-            terminal_confirm_high_risk_command: default_true(),
-            log_file_path: String::new(),
-            auto_update: true,
-            global_proxy: GlobalProxySettings::default(),
-            database_open_mode: DatabaseOpenMode::default(),
-            large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
-            enable_sql_auto_save: true,
-            sql_auto_save_interval: default_auto_save_interval(),
-            system_hotkey_macos: default_system_hotkey_macos(),
-            system_hotkey_other: default_system_hotkey_other(),
-            table_row_height: default_table_row_height(),
-            custom_keybindings: HashMap::new(),
-        }
-    }
-}
-
-impl gpui::Global for AppSettings {}
-
-impl AppSettings {
-    pub fn global(cx: &App) -> &AppSettings {
-        cx.global::<AppSettings>()
-    }
-
-    pub fn global_mut(cx: &mut App) -> &mut AppSettings {
-        cx.global_mut::<AppSettings>()
-    }
-
-    pub(crate) fn current_system_hotkey(&self) -> &str {
-        #[cfg(target_os = "macos")]
-        {
-            &self.system_hotkey_macos
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            &self.system_hotkey_other
-        }
-    }
-
-    fn config_path() -> Option<PathBuf> {
-        get_config_dir().ok().map(|dir| dir.join("settings.json"))
-    }
-
-    pub fn load() -> Self {
-        let Some(path) = Self::config_path() else {
-            return Self::default();
-        };
-
-        if !path.exists() {
-            return Self::default();
-        }
-
-        match std::fs::read_to_string(&path) {
-            Ok(content) => match serde_json::from_str(&content) {
-                Ok(settings) => {
-                    info!("Settings loaded from {:?}", path);
-                    settings
-                }
-                Err(e) => {
-                    error!("Failed to parse settings: {}", e);
-                    Self::default()
-                }
-            },
-            Err(e) => {
-                error!("Failed to read settings file: {}", e);
-                Self::default()
-            }
-        }
-    }
-
-    pub fn save(&self) {
-        let Some(path) = Self::config_path() else {
-            error!("Could not determine config path");
-            return;
-        };
-
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                error!("Failed to create config directory: {}", e);
-                return;
-            }
-        }
-
-        match serde_json::to_string_pretty(self) {
-            Ok(content) => {
-                if let Err(e) = std::fs::write(&path, content) {
-                    error!("Failed to write settings file: {}", e);
-                } else {
-                    info!("Settings saved to {:?}", path);
-                }
-            }
-            Err(e) => {
-                error!("Failed to serialize settings: {}", e);
-            }
-        }
-    }
-
-    pub fn apply(&self, cx: &mut App) {
-        gpui_component::set_locale(&self.locale);
-
-        let mode = if self.theme_mode == "dark" {
-            ThemeMode::Dark
-        } else {
-            ThemeMode::Light
-        };
-        Theme::global_mut(cx).mode = mode;
-        Theme::change(mode, None, cx);
-
-        // 同步自动保存配置
-        self.sync_auto_save_config(cx);
-        db_view::init_db_view_settings(
-            cx,
-            DbViewSettings {
-                large_text_editor_open_mode: self.large_text_cell_editor_open_mode.into(),
-            },
-        );
-        one_ui::init_table_display_settings(
-            cx,
-            one_ui::TableDisplaySettings::new(self.table_row_height),
-        );
-        one_core::keybindings::set_overrides(self.custom_keybindings.clone(), cx);
-    }
-
-    /// 同步自动保存配置到全局状态
-    pub fn sync_auto_save_config(&self, cx: &mut App) {
-        Self::update_auto_save_config(self.enable_sql_auto_save, self.sql_auto_save_interval, cx);
-    }
-
-    /// 更新自动保存配置（静态方法，避免借用冲突）
-    pub fn update_auto_save_config(enabled: bool, interval_seconds: f64, cx: &mut App) {
-        if let Some(config) = cx.try_global::<AutoSaveConfig>() {
-            config.set_enabled(enabled);
-            config.set_interval_seconds(interval_seconds);
-        }
-    }
-}
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 pub fn init_settings(cx: &mut App) {
     let settings = AppSettings::load();
-    terminal_view::init_settings(cx, Some(legacy_terminal_settings(&settings)));
     // 初始化自动保存配置全局状态
     cx.set_global(AutoSaveConfig::new(
         settings.enable_sql_auto_save,
         settings.sql_auto_save_interval,
     ));
     settings.apply(cx);
+    init_tracing(&settings);
+    let http_client = build_app_http_client(&settings.global_proxy).expect("HTTP 客户端初始化失败");
+    cx.set_http_client(http_client);
     cx.set_global(settings);
 }
 
-fn legacy_terminal_settings(settings: &AppSettings) -> TerminalSettings {
-    TerminalSettings {
-        font_size: settings.terminal_font_size as f32,
-        auto_copy: settings.terminal_auto_copy,
-        enable_autocomplete: settings.terminal_enable_autocomplete,
-        middle_click_paste: settings.terminal_middle_click_paste,
-        sync_path_with_terminal: settings.terminal_sync_path_with_terminal,
-        theme: settings.terminal_theme.clone(),
-        cursor_blink: settings.terminal_cursor_blink,
-        confirm_multiline_paste: settings.terminal_confirm_multiline_paste,
-        confirm_high_risk_command: settings.terminal_confirm_high_risk_command,
-        vim_scroll_to_arrow_keys: true,
-        builtin_highlights_initialized: false,
-        custom_highlights: Vec::new(),
+fn init_tracing(settings: &AppSettings) {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    match crate::onetcli_app::configured_log_file_path(&settings.log_file_path) {
+        Ok(log_file_path) => match crate::onetcli_app::log_file_appender(&log_file_path) {
+            Ok(file_appender) => {
+                let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+                Box::leak(Box::new(guard));
+                tracing_subscriber::registry()
+                    .with(tracing_subscriber::fmt::layer())
+                    .with(tracing_subscriber::fmt::layer().with_writer(non_blocking))
+                    .with(env_filter)
+                    .init();
+            }
+            Err(err) => {
+                tracing_subscriber::registry()
+                    .with(tracing_subscriber::fmt::layer())
+                    .with(env_filter)
+                    .init();
+                tracing::error!(path = %log_file_path.display(), error = %err, "日志文件初始化失败");
+            }
+        },
+        Err(err) => {
+            tracing_subscriber::registry()
+                .with(tracing_subscriber::fmt::layer())
+                .with(env_filter)
+                .init();
+            tracing::error!(error = %err, "默认日志目录初始化失败");
+        }
     }
 }
 
 pub(crate) fn build_app_http_client(
     proxy: &GlobalProxySettings,
 ) -> Result<Arc<ReqwestClient>, String> {
-    let proxy_url = proxy.to_proxy_url()?;
-    ReqwestClient::proxy_and_user_agent(proxy_url, "one-hub")
-        .map(Arc::new)
-        .map_err(|err| format!("HTTP 客户端初始化失败: {}", err))
+    if proxy.enabled {
+        let proxy_url = proxy.to_proxy_url()?;
+        ReqwestClient::proxy_and_user_agent(proxy_url, "onetcli")
+            .map(Arc::new)
+            .map_err(|err| format!("HTTP 客户端初始化失败: {}", err))
+    } else {
+        ReqwestClient::user_agent("onetcli")
+            .map(Arc::new)
+            .map_err(|err| format!("HTTP 客户端初始化失败: {}", err))
+    }
 }
 
 pub struct SettingsPanel {
@@ -585,10 +156,11 @@ impl SettingsPanel {
                                         SharedString::from(AppSettings::global(cx).locale.clone())
                                     },
                                     |val: SharedString, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.locale = val.to_string();
-                                        gpui_component::set_locale(&settings.locale);
-                                        settings.save();
+                                        let locale = val.to_string();
+                                        gpui_component::set_locale(&locale);
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.locale = locale;
+                                        });
                                     },
                                 )
                                 .default_value(SharedString::from(default_settings.locale)),
@@ -613,13 +185,14 @@ impl SettingsPanel {
                                         Theme::global_mut(cx).mode = mode;
                                         Theme::change(mode, None, cx);
 
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.theme_mode = if val {
+                                        let theme_mode = if val {
                                             "dark".to_string()
                                         } else {
                                             "light".to_string()
                                         };
-                                        settings.save();
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.theme_mode = theme_mode;
+                                        });
                                     },
                                 )
                                 .default_value(false),
@@ -632,9 +205,9 @@ impl SettingsPanel {
                                 SettingField::checkbox(
                                     |cx: &App| AppSettings::global(cx).auto_switch_theme,
                                     |val: bool, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.auto_switch_theme = val;
-                                        settings.save();
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.auto_switch_theme = val;
+                                        });
                                     },
                                 )
                                 .default_value(default_settings.auto_switch_theme),
@@ -662,9 +235,9 @@ impl SettingsPanel {
                                         )
                                     },
                                     |val: SharedString, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.font_family = val.to_string();
-                                        settings.save();
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.font_family = val.to_string();
+                                        });
                                     },
                                 )
                                 .default_value(SharedString::from(default_settings.font_family)),
@@ -682,9 +255,9 @@ impl SettingsPanel {
                                     },
                                     |cx: &App| AppSettings::global(cx).font_size,
                                     |val: f64, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.font_size = val;
-                                        settings.save();
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.font_size = val;
+                                        });
                                     },
                                 )
                                 .default_value(default_settings.font_size),
@@ -714,10 +287,10 @@ impl SettingsPanel {
                                         )
                                     },
                                     |val: SharedString, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.database_open_mode =
-                                            DatabaseOpenMode::from_str(&val);
-                                        settings.save();
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.database_open_mode =
+                                                DatabaseOpenMode::from_str(&val);
+                                        });
                                     },
                                 )
                                 .default_value(SharedString::from(
@@ -756,10 +329,9 @@ impl SettingsPanel {
                                     |val: SharedString, cx: &mut App| {
                                         let mode =
                                             LargeTextCellEditorOpenMode::from_str(val.as_ref());
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.large_text_cell_editor_open_mode = mode;
-                                        settings.save();
-                                        db_view::set_large_text_editor_open_mode(mode.into(), cx);
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.large_text_cell_editor_open_mode = mode;
+                                        });
                                     },
                                 )
                                 .default_value(SharedString::from(
@@ -777,12 +349,14 @@ impl SettingsPanel {
                                 SettingField::switch(
                                     |cx: &App| AppSettings::global(cx).enable_sql_auto_save,
                                     |val: bool, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.enable_sql_auto_save = val;
-                                        settings.save();
+                                        let interval =
+                                            AppSettings::global(cx).sql_auto_save_interval;
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.enable_sql_auto_save = val;
+                                        });
                                         AppSettings::update_auto_save_config(
                                             val,
-                                            cx.global::<AppSettings>().sql_auto_save_interval,
+                                            interval,
                                             cx,
                                         );
                                     },
@@ -802,11 +376,12 @@ impl SettingsPanel {
                                     },
                                     |cx: &App| AppSettings::global(cx).sql_auto_save_interval,
                                     |val: f64, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.sql_auto_save_interval = val;
-                                        settings.save();
+                                        let enabled = AppSettings::global(cx).enable_sql_auto_save;
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.sql_auto_save_interval = val;
+                                        });
                                         AppSettings::update_auto_save_config(
-                                            cx.global::<AppSettings>().enable_sql_auto_save,
+                                            enabled,
                                             val,
                                             cx,
                                         );
@@ -828,10 +403,9 @@ impl SettingsPanel {
                                     |cx: &App| AppSettings::global(cx).table_row_height as f64,
                                     |val: f64, cx: &mut App| {
                                         let height = val as u32;
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.table_row_height = height;
-                                        settings.save();
-                                        one_ui::set_table_row_height(height, cx);
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.table_row_height = height;
+                                        });
                                     },
                                 )
                                 .default_value(default_settings.table_row_height as f64),
@@ -852,9 +426,10 @@ impl SettingsPanel {
                                         )
                                     },
                                     |val: SharedString, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.log_file_path = val.trim().to_string();
-                                        settings.save();
+                                        let log_file_path = val.trim().to_string();
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.log_file_path = log_file_path;
+                                        });
                                     },
                                 )
                                 .default_value(SharedString::from("")),
@@ -869,9 +444,9 @@ impl SettingsPanel {
                                 SettingField::switch(
                                     |cx: &App| AppSettings::global(cx).auto_update,
                                     |val: bool, cx: &mut App| {
-                                        let settings = AppSettings::global_mut(cx);
-                                        settings.auto_update = val;
-                                        settings.save();
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.auto_update = val;
+                                        });
                                     },
                                 )
                                 .default_value(default_settings.auto_update),
@@ -1245,14 +820,7 @@ impl GlobalProxySettingsView {
             }
         };
 
-        let proxy_settings_for_apply = proxy_settings.clone();
-        let new_client_for_apply = new_client.clone();
-        cx.defer(move |cx| {
-            let settings = AppSettings::global_mut(cx);
-            settings.global_proxy = proxy_settings_for_apply;
-            settings.save();
-            apply_global_http_client(new_client_for_apply, cx);
-        });
+        apply_global_proxy_settings(proxy_settings, new_client, cx);
 
         window.push_notification(t!("Settings.General.Proxy.save_success").to_string(), cx);
         window.remove_window();
@@ -1422,13 +990,31 @@ fn show_global_proxy_settings_window(cx: &mut App) {
     );
 }
 
-fn apply_global_http_client(http_client: Arc<ReqwestClient>, cx: &mut App) {
+fn apply_global_proxy_settings(
+    proxy_settings: GlobalProxySettings,
+    http_client: Arc<ReqwestClient>,
+    cx: &mut App,
+) {
+    AppSettings::update_and_save(cx, |settings| {
+        settings.global_proxy = proxy_settings.clone();
+    });
+    apply_global_http_client(&proxy_settings, http_client, cx);
+}
+
+fn apply_global_http_client(
+    proxy_settings: &GlobalProxySettings,
+    http_client: Arc<ReqwestClient>,
+    cx: &mut App,
+) {
     let auth_service = get_auth_service(cx);
     let http_for_auth: Arc<dyn gpui::http_client::HttpClient> = http_client.clone();
     auth_service.replace_http_client(http_for_auth);
 
     if let Some(provider_state) = cx.try_global::<GlobalProviderState>() {
         provider_state.set_cloud_client(auth_service.cloud_client());
+        if let Err(err) = provider_state.set_proxy_settings(proxy_settings) {
+            tracing::error!(error = %err, "LLM 代理设置同步失败");
+        }
         provider_state.manager().clear_cache();
     }
 
@@ -2025,40 +1611,32 @@ fn render_shortcut_values(key_specs: &[String], cx: &App) -> gpui::AnyElement {
 }
 
 fn set_current_system_hotkey(spec: String, cx: &mut App) {
-    let settings = AppSettings::global_mut(cx);
-    #[cfg(target_os = "macos")]
-    {
-        settings.system_hotkey_macos = spec;
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        settings.system_hotkey_other = spec;
-    }
-    settings.save();
+    AppSettings::update_and_save(cx, |settings| {
+        #[cfg(target_os = "macos")]
+        {
+            settings.system_hotkey_macos = spec;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            settings.system_hotkey_other = spec;
+        }
+    });
     crate::app_init::refresh_system_hotkey(cx);
 }
 
 fn set_custom_keybinding(action_id: &str, spec: String, cx: &mut App) {
-    let overrides = {
-        let settings = AppSettings::global_mut(cx);
+    AppSettings::update_and_save(cx, |settings| {
         settings
             .custom_keybindings
             .insert(action_id.to_string(), vec![spec]);
-        settings.save();
-        settings.custom_keybindings.clone()
-    };
-    one_core::keybindings::set_overrides(overrides, cx);
+    });
     crate::onetcli_app::refresh_keybindings(cx);
 }
 
 fn reset_custom_keybinding(action_id: &str, cx: &mut App) {
-    let overrides = {
-        let settings = AppSettings::global_mut(cx);
+    AppSettings::update_and_save(cx, |settings| {
         settings.custom_keybindings.remove(action_id);
-        settings.save();
-        settings.custom_keybindings.clone()
-    };
-    one_core::keybindings::set_overrides(overrides, cx);
+    });
     crate::onetcli_app::refresh_keybindings(cx);
 }
 
@@ -2327,7 +1905,9 @@ fn render_shortcuts_section(
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, GlobalProxySettings, ProxyType};
+    use gpui::http_client::HttpClient;
+
+    use super::{AppSettings, GlobalProxySettings, ProxyType, build_app_http_client};
 
     #[test]
     fn global_proxy_settings_build_proxy_url_without_auth() {
@@ -2390,6 +1970,39 @@ mod tests {
     }
 
     #[test]
+    fn build_app_http_client_uses_no_app_proxy_when_proxy_disabled() {
+        let settings = GlobalProxySettings {
+            enabled: false,
+            host: "127.0.0.1".to_string(),
+            port: 7890,
+            ..GlobalProxySettings::default()
+        };
+
+        let client = build_app_http_client(&settings).expect("禁用代理时 HTTP client 应创建成功");
+
+        assert_eq!(client.proxy(), None);
+    }
+
+    #[test]
+    fn build_app_http_client_uses_current_app_proxy_when_proxy_enabled() {
+        let settings = GlobalProxySettings {
+            enabled: true,
+            proxy_type: ProxyType::Http,
+            host: "127.0.0.1".to_string(),
+            port: 7891,
+            ..GlobalProxySettings::default()
+        };
+        let expected = settings
+            .to_proxy_url()
+            .expect("代理 URL 应构建成功")
+            .expect("启用代理应返回 URL");
+
+        let client = build_app_http_client(&settings).expect("启用代理时 HTTP client 应创建成功");
+
+        assert_eq!(client.proxy(), Some(&expected));
+    }
+
+    #[test]
     fn global_proxy_settings_validate_required_fields() {
         let settings = GlobalProxySettings {
             enabled: true,
@@ -2403,20 +2016,6 @@ mod tests {
         let err = settings.validate().expect_err("缺少主机和端口时应校验失败");
 
         assert!(err.contains("主机"));
-    }
-
-    #[test]
-    fn legacy_terminal_settings_maps_terminal_fields() {
-        let settings = AppSettings::default();
-        let legacy = super::legacy_terminal_settings(&settings);
-
-        assert_eq!(legacy.font_size, settings.terminal_font_size as f32);
-        assert_eq!(legacy.auto_copy, settings.terminal_auto_copy);
-        assert_eq!(
-            legacy.enable_autocomplete,
-            settings.terminal_enable_autocomplete
-        );
-        assert_eq!(legacy.theme, settings.terminal_theme);
     }
 }
 

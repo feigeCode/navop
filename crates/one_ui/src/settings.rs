@@ -1,4 +1,5 @@
-use gpui::{App, Global, Pixels, px};
+use gpui::{App, Pixels, px};
+use one_core::settings::AppSettings;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableDisplaySettings {
@@ -25,19 +26,17 @@ impl Default for TableDisplaySettings {
     }
 }
 
-impl Global for TableDisplaySettings {}
-
 pub fn init_table_display_settings(cx: &mut App, settings: TableDisplaySettings) {
-    if cx.has_global::<TableDisplaySettings>() {
-        *cx.global_mut::<TableDisplaySettings>() = settings;
-    } else {
-        cx.set_global(settings);
-    }
+    AppSettings::update(cx, |app_settings| {
+        app_settings.table_row_height = settings.row_height;
+    });
 }
 
 pub fn set_table_row_height(height: u32, cx: &mut App) {
     let settings = TableDisplaySettings::new(height);
-    init_table_display_settings(cx, settings);
+    AppSettings::update_and_save(cx, |app_settings| {
+        app_settings.table_row_height = settings.row_height;
+    });
 }
 
 pub fn table_row_height(cx: &App) -> Pixels {
@@ -45,8 +44,8 @@ pub fn table_row_height(cx: &App) -> Pixels {
 }
 
 pub fn table_row_height_or(cx: &App, fallback: Pixels) -> Pixels {
-    cx.try_global::<TableDisplaySettings>()
-        .map(|settings| px(settings.row_height as f32))
+    cx.try_global::<AppSettings>()
+        .map(|settings| px(clamp_row_height(settings.table_row_height) as f32))
         .unwrap_or(fallback)
 }
 

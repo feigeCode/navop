@@ -15,7 +15,6 @@ use rust_xlsxwriter::Workbook;
 use tracing::{error, log::trace};
 
 use crate::import_export::table_export_view::DataExportView;
-use crate::settings::{LargeTextEditorOpenMode, current_settings as current_db_view_settings};
 use crate::sql_editor::SqlEditor;
 use crate::table_data::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
 use crate::table_data::filter_editor::{FilterEditorEvent, TableFilterEditor, TableSchema};
@@ -33,6 +32,7 @@ use one_core::storage::DatabaseType;
 use one_core::tab_container::TabContainer;
 use one_ui::edit_table::ColumnSort;
 use std::path::PathBuf;
+use one_core::settings::{AppSettings, LargeTextCellEditorOpenMode};
 
 actions!(
     data_grid,
@@ -113,10 +113,10 @@ pub enum LargeTextEditorRoute {
     Dialog,
 }
 
-fn resolve_large_text_editor_route(mode: LargeTextEditorOpenMode) -> LargeTextEditorRoute {
+fn resolve_large_text_editor_route(mode: LargeTextCellEditorOpenMode) -> LargeTextEditorRoute {
     match mode {
-        LargeTextEditorOpenMode::SidebarPreview => LargeTextEditorRoute::PagePreview,
-        LargeTextEditorOpenMode::Dialog => LargeTextEditorRoute::Dialog,
+        LargeTextCellEditorOpenMode::SidebarPreview => LargeTextEditorRoute::PagePreview,
+        LargeTextCellEditorOpenMode::Dialog => LargeTextEditorRoute::Dialog,
     }
 }
 
@@ -141,7 +141,7 @@ pub struct DataGridConfig {
     /// 数据库连接ID
     pub connection_id: String,
     /// 数据库类型
-    pub database_type: one_core::storage::DatabaseType,
+    pub database_type: DatabaseType,
     /// 是否允许编辑
     pub editable: bool,
     /// 是否显示工具栏
@@ -161,7 +161,7 @@ impl DataGridConfig {
         database_name: impl Into<String>,
         table_name: impl Into<String>,
         connection_id: impl Into<String>,
-        database_type: one_core::storage::DatabaseType,
+        database_type: DatabaseType,
     ) -> Self {
         Self {
             database_name: database_name.into(),
@@ -568,7 +568,7 @@ impl DataGrid {
 
             match (result, columns_info) {
                 (Err(err), _) => {
-                    tracing::error!("load_data_with_clauses failed: {}", err);
+                    error!("load_data_with_clauses failed: {}", err);
                     cx.update(|cx| {
                         table_data_info.update(cx, |info, cx| {
                             info.error_message =
@@ -695,9 +695,8 @@ impl DataGrid {
     }
 
     pub fn open_large_text_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
-        match resolve_large_text_editor_route(
-            current_db_view_settings(cx).large_text_editor_open_mode,
-        ) {
+        let settings = cx.global::<AppSettings>();
+        match resolve_large_text_editor_route(settings.large_text_cell_editor_open_mode) {
             LargeTextEditorRoute::PagePreview => {
                 cx.emit(DataGridEvent::ToggleLargeTextEditorRequested);
             }
@@ -1713,7 +1712,7 @@ impl DataGrid {
     }
 
     pub fn save_changes(&self, window: &mut Window, cx: &mut App) {
-        self.handle_save_changes(&gpui::ClickEvent::default(), window, cx);
+        self.handle_save_changes(&ClickEvent::default(), window, cx);
     }
 
     pub fn save_and_close(
@@ -2244,8 +2243,8 @@ impl DataGrid {
         let editable = self.config.editable;
         let loading = self.table.read(cx).delegate().is_loading();
         let data_grid = cx.entity().clone();
-        let large_text_button_selected = current_db_view_settings(cx).large_text_editor_open_mode
-            == LargeTextEditorOpenMode::SidebarPreview
+        let settings = cx.global::<AppSettings>();
+        let large_text_button_selected = settings.large_text_cell_editor_open_mode == LargeTextCellEditorOpenMode::SidebarPreview
             && self.is_large_text_editor_sidebar_open;
 
         h_flex()
@@ -2686,7 +2685,6 @@ mod tests {
         ExportFormat, LargeTextEditorRoute, TableMetadata, build_header_order_by_clause,
         build_large_text_editor_title, collect_delete_row_indices, resolve_large_text_editor_route,
     };
-    use crate::settings::LargeTextEditorOpenMode;
     use db::DbManager;
     use gpui::SharedString;
     use one_core::storage::DatabaseType;
@@ -2694,6 +2692,7 @@ mod tests {
     use rust_i18n::t;
     use std::io::{Cursor, Read};
     use zip::ZipArchive;
+    use one_core::settings::LargeTextCellEditorOpenMode;
 
     fn sample_export_input() -> (Vec<Vec<Option<String>>>, Vec<SharedString>, TableMetadata) {
         let rows = vec![vec![
@@ -2790,14 +2789,14 @@ mod tests {
 
     #[test]
     fn resolve_large_text_editor_route_uses_page_preview_for_sidebar_mode() {
-        let route = resolve_large_text_editor_route(LargeTextEditorOpenMode::SidebarPreview);
+        let route = resolve_large_text_editor_route(LargeTextCellEditorOpenMode::SidebarPreview);
 
         assert_eq!(route, LargeTextEditorRoute::PagePreview);
     }
 
     #[test]
     fn resolve_large_text_editor_route_uses_dialog_for_dialog_mode() {
-        let route = resolve_large_text_editor_route(LargeTextEditorOpenMode::Dialog);
+        let route = resolve_large_text_editor_route(LargeTextCellEditorOpenMode::Dialog);
 
         assert_eq!(route, LargeTextEditorRoute::Dialog);
     }

@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::{Action, App, KeyBinding, Keystroke, NoAction};
 
+use crate::settings::AppSettings;
+
 pub type KeyBindingOverrides = HashMap<String, Vec<String>>;
 
 pub mod action_id {
@@ -40,21 +42,10 @@ pub mod action_id {
     pub const TABLE_CANCEL: &str = "table.cancel";
 }
 
-#[derive(Clone, Default)]
-pub struct GlobalKeyBindingOverrides {
-    overrides: KeyBindingOverrides,
-}
-
-impl gpui::Global for GlobalKeyBindingOverrides {}
-
-pub fn set_overrides(overrides: KeyBindingOverrides, cx: &mut App) {
-    cx.set_global(GlobalKeyBindingOverrides { overrides });
-}
-
 pub fn shortcuts_for(cx: &App, action_id: &str, defaults: &[&str]) -> Vec<String> {
     let overrides = cx
-        .try_global::<GlobalKeyBindingOverrides>()
-        .map(|global| &global.overrides);
+        .try_global::<AppSettings>()
+        .map(|settings| &settings.custom_keybindings);
     match overrides {
         Some(overrides) => resolve_shortcuts(overrides, action_id, defaults),
         None => defaults

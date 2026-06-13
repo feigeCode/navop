@@ -18,6 +18,7 @@ pub mod popup_window;
 pub mod storage;
 pub mod tab_container;
 // pub mod tab_persistence;
+pub mod settings;
 pub mod themes;
 pub mod utils;
 

@@ -1,0 +1,480 @@
+use crate::cloud_sync::{GlobalCloudUser, UserInfo};
+use crate::storage::get_config_dir;
+use crate::utils::auto_save_config::AutoSaveConfig;
+use gpui::http_client::Url;
+use gpui::{App, Global};
+use gpui_component::{Theme, ThemeMode};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+use tracing::{error, info};
+
+// ============================================================================
+// 全局用户状态
+// ============================================================================
+
+/// 全局当前用户状态
+///
+/// 用于在设置面板中显示用户信息和执行登出操作。
+#[derive(Clone, Default)]
+pub struct GlobalCurrentUser {
+    user: Arc<RwLock<Option<UserInfo>>>,
+}
+
+impl Global for GlobalCurrentUser {}
+
+impl GlobalCurrentUser {
+    /// 获取当前用户
+    pub fn get_user(cx: &App) -> Option<UserInfo> {
+        if let Some(state) = cx.try_global::<GlobalCurrentUser>() {
+            state.user.read().ok().and_then(|u| u.clone())
+        } else {
+            None
+        }
+    }
+
+    /// 设置当前用户
+    pub fn set_user(user: Option<UserInfo>, cx: &mut App) {
+        if !cx.has_global::<GlobalCurrentUser>() {
+            cx.set_global(GlobalCurrentUser::default());
+        }
+        if let Some(state) = cx.try_global::<GlobalCurrentUser>() {
+            if let Ok(mut guard) = state.user.write() {
+                *guard = user.clone();
+            }
+        }
+        GlobalCloudUser::set_user(user, cx);
+    }
+}
+
+// ============================================================================
+// 数据库配置
+// ============================================================================
+
+/// 数据库打开方式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum DatabaseOpenMode {
+    /// 单库模式：每个数据库单独打开一个标签页
+    #[default]
+    Single,
+    /// 工作区模式：按工作区分组打开，同一工作区的数据库在同一标签页
+    Workspace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LargeTextCellEditorOpenMode {
+    #[default]
+    SidebarPreview,
+    Dialog,
+}
+
+impl LargeTextCellEditorOpenMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LargeTextCellEditorOpenMode::SidebarPreview => "sidebar_preview",
+            LargeTextCellEditorOpenMode::Dialog => "dialog",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "dialog" => LargeTextCellEditorOpenMode::Dialog,
+            _ => LargeTextCellEditorOpenMode::SidebarPreview,
+        }
+    }
+}
+
+impl DatabaseOpenMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DatabaseOpenMode::Single => "single",
+            DatabaseOpenMode::Workspace => "workspace",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "workspace" => DatabaseOpenMode::Workspace,
+            _ => DatabaseOpenMode::Single,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyType {
+    Http,
+    Https,
+    #[default]
+    Socks5,
+}
+
+impl ProxyType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProxyType::Http => "http",
+            ProxyType::Https => "https",
+            ProxyType::Socks5 => "socks5",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GlobalProxySettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub proxy_type: ProxyType,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default = "default_proxy_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+}
+
+fn default_proxy_port() -> u16 {
+    1080
+}
+
+impl Default for GlobalProxySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            proxy_type: ProxyType::default(),
+            host: String::new(),
+            port: default_proxy_port(),
+            username: String::new(),
+            password: String::new(),
+        }
+    }
+}
+
+impl GlobalProxySettings {
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        if self.host.trim().is_empty() {
+            return Err("代理主机不能为空".to_string());
+        }
+
+        if self.port == 0 {
+            return Err("代理端口不能为空".to_string());
+        }
+
+        if self.username.trim().is_empty() && !self.password.is_empty() {
+            return Err("填写代理密码时必须同时填写用户名".to_string());
+        }
+
+        Ok(())
+    }
+
+    pub fn to_proxy_url(&self) -> Result<Option<Url>, String> {
+        if !self.enabled {
+            return Ok(None);
+        }
+
+        self.validate()?;
+
+        let base = format!(
+            "{}://{}:{}",
+            self.proxy_type.as_str(),
+            self.host.trim(),
+            self.port
+        );
+        let mut url = Url::parse(&base).map_err(|err| format!("代理地址格式不正确: {}", err))?;
+
+        if !self.username.trim().is_empty() {
+            url.set_username(self.username.trim())
+                .map_err(|_| "代理用户名格式不正确".to_string())?;
+        }
+
+        if !self.password.is_empty() {
+            url.set_password(Some(&self.password))
+                .map_err(|_| "代理密码格式不正确".to_string())?;
+        }
+
+        Ok(Some(url))
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSettings {
+    #[serde(default)]
+    pub locale: String,
+    #[serde(default)]
+    pub theme_mode: String,
+    #[serde(default)]
+    pub auto_switch_theme: bool,
+    #[serde(default = "default_font_family")]
+    pub font_family: String,
+    #[serde(default = "default_font_size")]
+    pub font_size: f64,
+    #[serde(default = "default_terminal_font_size")]
+    pub terminal_font_size: f64,
+    #[serde(default = "default_true")]
+    pub terminal_auto_copy: bool,
+    #[serde(default = "default_true")]
+    pub terminal_enable_autocomplete: bool,
+    #[serde(default = "default_true")]
+    pub terminal_middle_click_paste: bool,
+    #[serde(default)]
+    pub terminal_sync_path_with_terminal: bool,
+    #[serde(default = "default_terminal_theme")]
+    pub terminal_theme: String,
+    #[serde(default)]
+    pub terminal_cursor_blink: bool,
+    #[serde(default = "default_true")]
+    pub terminal_confirm_multiline_paste: bool,
+    #[serde(default = "default_true")]
+    pub terminal_confirm_high_risk_command: bool,
+    #[serde(default)]
+    pub log_file_path: String,
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
+    #[serde(default)]
+    pub global_proxy: GlobalProxySettings,
+    #[serde(default)]
+    pub database_open_mode: DatabaseOpenMode,
+    #[serde(default)]
+    pub large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode,
+    /// 是否启用SQL查询的自动保存功能
+    #[serde(default = "default_true")]
+    pub enable_sql_auto_save: bool,
+    /// SQL查询自动保存的间隔（秒），默认5秒
+    #[serde(default = "default_auto_save_interval")]
+    pub sql_auto_save_interval: f64,
+    #[serde(default = "default_system_hotkey_macos")]
+    pub system_hotkey_macos: String,
+    #[serde(default = "default_system_hotkey_other")]
+    pub system_hotkey_other: String,
+    /// 表格行高（像素），默认44
+    #[serde(default = "default_table_row_height")]
+    pub table_row_height: u32,
+    #[serde(default)]
+    pub custom_keybindings: HashMap<String, Vec<String>>,
+}
+
+pub(crate) const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
+pub(crate) const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-space";
+
+fn default_font_family() -> String {
+    "Arial".to_string()
+}
+
+fn default_font_size() -> f64 {
+    14.0
+}
+
+fn default_terminal_font_size() -> f64 {
+    15.0
+}
+
+fn default_terminal_theme() -> String {
+    "ocean".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_auto_save_interval() -> f64 {
+    5.0
+}
+
+fn default_system_hotkey_macos() -> String {
+    DEFAULT_SYSTEM_HOTKEY_MACOS.to_string()
+}
+
+fn default_system_hotkey_other() -> String {
+    DEFAULT_SYSTEM_HOTKEY_OTHER.to_string()
+}
+
+fn default_table_row_height() -> u32 {
+    44
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            locale: "zh-CN".to_string(),
+            theme_mode: "light".to_string(),
+            auto_switch_theme: false,
+            font_family: default_font_family(),
+            font_size: default_font_size(),
+            terminal_font_size: default_terminal_font_size(),
+            terminal_auto_copy: default_true(),
+            terminal_enable_autocomplete: default_true(),
+            terminal_middle_click_paste: default_true(),
+            terminal_sync_path_with_terminal: false,
+            terminal_theme: default_terminal_theme(),
+            terminal_cursor_blink: false,
+            terminal_confirm_multiline_paste: default_true(),
+            terminal_confirm_high_risk_command: default_true(),
+            log_file_path: String::new(),
+            auto_update: true,
+            global_proxy: GlobalProxySettings::default(),
+            database_open_mode: DatabaseOpenMode::default(),
+            large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
+            enable_sql_auto_save: true,
+            sql_auto_save_interval: default_auto_save_interval(),
+            system_hotkey_macos: default_system_hotkey_macos(),
+            system_hotkey_other: default_system_hotkey_other(),
+            table_row_height: default_table_row_height(),
+            custom_keybindings: HashMap::new(),
+        }
+    }
+}
+
+impl Global for AppSettings {}
+
+impl AppSettings {
+    pub fn current(cx: &App) -> Self {
+        cx.try_global::<AppSettings>().cloned().unwrap_or_default()
+    }
+
+    pub fn global(cx: &App) -> &AppSettings {
+        cx.global::<AppSettings>()
+    }
+
+    pub fn global_mut(cx: &mut App) -> &mut AppSettings {
+        cx.global_mut::<AppSettings>()
+    }
+
+    pub fn update(cx: &mut App, update: impl FnOnce(&mut AppSettings)) {
+        let mut settings = Self::current(cx);
+        update(&mut settings);
+        cx.set_global(settings);
+    }
+
+    pub fn update_and_save(cx: &mut App, update: impl FnOnce(&mut AppSettings)) {
+        let mut settings = Self::current(cx);
+        update(&mut settings);
+        settings.save();
+        cx.set_global(settings);
+    }
+
+    pub fn current_system_hotkey(&self) -> &str {
+        #[cfg(target_os = "macos")]
+        {
+            &self.system_hotkey_macos
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            &self.system_hotkey_other
+        }
+    }
+
+    fn config_path() -> Option<PathBuf> {
+        get_config_dir().ok().map(|dir| dir.join("settings.json"))
+    }
+
+    pub fn load() -> Self {
+        let Some(path) = Self::config_path() else {
+            return Self::default();
+        };
+
+        if !path.exists() {
+            return Self::default();
+        }
+
+        match std::fs::read_to_string(&path) {
+            Ok(content) => match serde_json::from_str(&content) {
+                Ok(settings) => {
+                    info!("Settings loaded from {:?}", path);
+                    settings
+                }
+                Err(e) => {
+                    error!("Failed to parse settings: {}", e);
+                    Self::default()
+                }
+            },
+            Err(e) => {
+                error!("Failed to read settings file: {}", e);
+                Self::default()
+            }
+        }
+    }
+
+    pub fn save(&self) {
+        let Some(path) = Self::config_path() else {
+            error!("Could not determine config path");
+            return;
+        };
+
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                error!("Failed to create config directory: {}", e);
+                return;
+            }
+        }
+
+        match serde_json::to_string_pretty(self) {
+            Ok(content) => {
+                if let Err(e) = std::fs::write(&path, content) {
+                    error!("Failed to write settings file: {}", e);
+                } else {
+                    info!("Settings saved to {:?}", path);
+                }
+            }
+            Err(e) => {
+                error!("Failed to serialize settings: {}", e);
+            }
+        }
+    }
+
+    pub fn apply(&self, cx: &mut App) {
+        gpui_component::set_locale(&self.locale);
+
+        let mode = if self.theme_mode == "dark" {
+            ThemeMode::Dark
+        } else {
+            ThemeMode::Light
+        };
+        Theme::global_mut(cx).mode = mode;
+        Theme::change(mode, None, cx);
+
+        // 同步自动保存配置
+        self.sync_auto_save_config(cx);
+    }
+
+    /// 同步自动保存配置到全局状态
+    pub fn sync_auto_save_config(&self, cx: &mut App) {
+        Self::update_auto_save_config(self.enable_sql_auto_save, self.sql_auto_save_interval, cx);
+    }
+
+    /// 更新自动保存配置（静态方法，避免借用冲突）
+    pub fn update_auto_save_config(enabled: bool, interval_seconds: f64, cx: &mut App) {
+        if let Some(config) = cx.try_global::<AutoSaveConfig>() {
+            config.set_enabled(enabled);
+            config.set_interval_seconds(interval_seconds);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LargeTextCellEditorOpenMode;
+
+    #[test]
+    fn large_text_editor_open_mode_defaults_to_sidebar_preview() {
+        assert_eq!(
+            LargeTextCellEditorOpenMode::from_str("unknown"),
+            LargeTextCellEditorOpenMode::SidebarPreview
+        );
+    }
+
+    #[test]
+    fn large_text_editor_open_mode_parses_dialog() {
+        assert_eq!(
+            LargeTextCellEditorOpenMode::from_str("dialog"),
+            LargeTextCellEditorOpenMode::Dialog
+        );
+    }
+}

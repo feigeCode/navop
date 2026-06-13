@@ -21,6 +21,5 @@ pub use settings::{
 };
 
 pub fn init(cx: &mut App) {
-    init_table_display_settings(cx, TableDisplaySettings::default());
     edit_table::init(cx);
 }

@@ -16,7 +16,6 @@ mod update;
 mod user_avatar;
 
 use crate::onetcli_app::OnetCliApp;
-use db::GlobalDbState;
 use gpui::*;
 
 use gpui_component::Root;
@@ -33,13 +32,6 @@ fn main() {
 
     app.run(move |cx| {
         onetcli_app::init(cx);
-
-        setting_tab::init_settings(cx);
-        let db_state = GlobalDbState::new();
-        db_state.start_cleanup_task(cx);
-        cx.set_global(db_state);
-
-        db_view::init_ask_ai_notifier(cx);
 
         let mut window_size = size(px(1600.0), px(1200.0));
         if let Some(display) = cx.primary_display() {
