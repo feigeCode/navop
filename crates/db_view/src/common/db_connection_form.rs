@@ -19,7 +19,7 @@ use gpui_component::{
     popover::Popover,
     radio::Radio,
     scroll::ScrollableElement,
-    select::{Select, SelectEvent, SelectItem, SelectState},
+    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     tab::{Tab, TabBar},
     v_flex,
 };
@@ -27,8 +27,8 @@ use one_core::cloud_sync::{GlobalCloudUser, TeamOption};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
-    ConnectionRepository, DatabaseType, DbConnectionConfig, GlobalStorageState, StoredConnection,
-    Workspace, get_config_dir,
+    ConnectionRepository, ConnectionType, DatabaseType, DbConnectionConfig, GlobalStorageState,
+    StoredConnection, Workspace, get_config_dir,
 };
 use rust_i18n::t;
 use tracing::info;
@@ -121,6 +121,45 @@ impl TeamSelectItem {
 
 impl SelectItem for TeamSelectItem {
     type Value = Option<String>;
+
+    fn title(&self) -> SharedString {
+        self.name.clone().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+}
+
+/// SSH connection select item for tunnel reuse.
+#[derive(Clone, Debug)]
+pub struct SshConnectionSelectItem {
+    pub id: Option<i64>,
+    pub name: String,
+}
+
+impl SshConnectionSelectItem {
+    pub fn none() -> Self {
+        Self {
+            id: None,
+            name: t!("ConnectionForm.ssh_connection_manual").to_string(),
+        }
+    }
+
+    pub fn from_connection(connection: &StoredConnection) -> Self {
+        let id = connection.id;
+        let host = connection.to_ssh_params().ok().map(|params| params.host);
+        let name = match host.as_deref().filter(|host| !host.trim().is_empty()) {
+            Some(host) => format!("{} ({})", connection.name, host),
+            None => connection.name.clone(),
+        };
+
+        Self { id, name }
+    }
+}
+
+impl SelectItem for SshConnectionSelectItem {
+    type Value = Option<i64>;
 
     fn title(&self) -> SharedString {
         self.name.clone().into()
@@ -247,6 +286,12 @@ impl DbFormConfig {
                 ("false".to_string(), t!("Common.no").to_string()),
                 ("true".to_string(), t!("Common.yes").to_string()),
             ]),
+            FormField::new(
+                "ssh_connection_id",
+                t!("ConnectionForm.ssh_connection_id"),
+                FormFieldType::Text,
+            )
+            .optional(),
             FormField::new(
                 "ssh_host",
                 t!("ConnectionForm.ssh_host"),
@@ -1050,6 +1095,8 @@ pub struct DbConnectionForm {
     test_result: Entity<Option<Result<bool, String>>>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
+    ssh_connection_select: Entity<SelectState<SearchableVec<SshConnectionSelectItem>>>,
+    ssh_connections: Vec<StoredConnection>,
     pending_file_path: Entity<Option<String>>,
     editing_connection: Option<StoredConnection>,
     /// Whether cloud sync is enabled.
@@ -1165,6 +1212,33 @@ impl DbConnectionForm {
         let team_select =
             cx.new(|cx| SelectState::new(team_items, Some(Default::default()), window, cx));
 
+        let ssh_connection_items = SearchableVec::new(vec![SshConnectionSelectItem::none()]);
+        let ssh_connection_select = cx.new(|cx| {
+            SelectState::new(ssh_connection_items, Some(Default::default()), window, cx)
+                .searchable(true)
+        });
+        cx.subscribe_in(
+            &ssh_connection_select,
+            window,
+            move |form,
+                  select,
+                  event: &SelectEvent<SearchableVec<SshConnectionSelectItem>>,
+                  window,
+                  cx| {
+                if matches!(event, SelectEvent::Confirm(_)) {
+                    let value = select
+                        .read(cx)
+                        .selected_value()
+                        .cloned()
+                        .flatten()
+                        .map(|id| id.to_string())
+                        .unwrap_or_default();
+                    form.set_field_value("ssh_connection_id", &value, window, cx);
+                }
+            },
+        )
+        .detach();
+
         let pending_file_path = cx.new(|_| None);
 
         // Enable cloud sync by default.
@@ -1184,6 +1258,8 @@ impl DbConnectionForm {
             test_result,
             workspace_select,
             team_select,
+            ssh_connection_select,
+            ssh_connections: Vec::new(),
             pending_file_path,
             editing_connection: None,
             sync_enabled,
@@ -1295,6 +1371,29 @@ impl DbConnectionForm {
         cx.notify();
     }
 
+    pub fn set_ssh_connections(
+        &mut self,
+        connections: Vec<StoredConnection>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ssh_connections = connections
+            .into_iter()
+            .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
+            .collect();
+        let mut items = vec![SshConnectionSelectItem::none()];
+        items.extend(
+            self.ssh_connections
+                .iter()
+                .map(SshConnectionSelectItem::from_connection),
+        );
+
+        self.ssh_connection_select.update(cx, |select, cx| {
+            select.set_items(SearchableVec::new(items), window, cx);
+        });
+        cx.notify();
+    }
+
     pub fn load_connection(
         &mut self,
         connection: &StoredConnection,
@@ -1353,6 +1452,13 @@ impl DbConnectionForm {
                 select.set_selected_value(&None, window, cx);
             });
         }
+
+        let selected_ssh_id = self
+            .get_field_value("ssh_connection_id", cx)
+            .and_then(|value| value.parse::<i64>().ok());
+        self.ssh_connection_select.update(cx, |select, cx| {
+            select.set_selected_value(&selected_ssh_id, window, cx);
+        });
     }
 
     fn set_field_value(
@@ -1448,6 +1554,36 @@ impl DbConnectionForm {
         }
     }
 
+    fn resolve_referenced_ssh_connection(&self, cx: &App) -> Option<&StoredConnection> {
+        let selected_id = self
+            .ssh_connection_select
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .flatten()
+            .or_else(|| {
+                self.get_field_value("ssh_connection_id", cx)
+                    .and_then(|value| value.parse::<i64>().ok())
+            })?;
+
+        self.ssh_connections
+            .iter()
+            .find(|connection| connection.id == Some(selected_id))
+    }
+
+    fn build_connection_with_referenced_ssh(&self, cx: &App) -> Result<DbConnectionConfig, String> {
+        let mut connection = self.build_connection(cx);
+
+        if let Some(ssh_connection) = self.resolve_referenced_ssh_connection(cx) {
+            connection.extra_params.insert(
+                "ssh_connection_id".to_string(),
+                ssh_connection.id.unwrap().to_string(),
+            );
+        }
+
+        Ok(connection)
+    }
+
     fn validate(&self, cx: &App) -> Result<(), String> {
         for tab_group in &self.config.tab_groups {
             for field in &tab_group.fields {
@@ -1473,6 +1609,9 @@ impl DbConnectionForm {
         let auth_type = self
             .get_field_value("ssh_auth_type", cx)
             .unwrap_or_else(|| "password".to_string());
+        if self.resolve_referenced_ssh_connection(cx).is_some() {
+            return Ok(());
+        }
         let missing_field = missing_ssh_tunnel_required_field(
             enabled,
             &self.get_field_value("ssh_host", cx).unwrap_or_default(),
@@ -1552,7 +1691,27 @@ impl DbConnectionForm {
             return;
         }
 
-        let connection = self.build_connection(cx);
+        let connection = match self.build_connection_with_referenced_ssh(cx) {
+            Ok(mut connection) => {
+                if let Some(ssh_connection) = self.resolve_referenced_ssh_connection(cx) {
+                    if let Err(error) = connection.apply_referenced_ssh_tunnel(ssh_connection) {
+                        self.test_result.update(cx, |result, cx| {
+                            *result = Some(Err(error.to_string()));
+                            cx.notify();
+                        });
+                        return;
+                    }
+                }
+                connection
+            }
+            Err(error) => {
+                self.test_result.update(cx, |result, cx| {
+                    *result = Some(Err(error));
+                    cx.notify();
+                });
+                return;
+            }
+        };
         let db_type = *self.current_db_type.read(cx);
 
         self.is_testing.update(cx, |testing, cx| {
@@ -1570,45 +1729,24 @@ impl DbConnectionForm {
             let test_result = Tokio::spawn_result(cx, async move {
                 let test_started = Instant::now();
                 let db_plugin = manager.get_plugin(&db_type)?;
-                let connect_started = Instant::now();
-                let conn = match db_plugin.create_connection(connection).await {
-                    Ok(conn) => conn,
+                match db_plugin.test_connection(connection).await {
+                    Ok(()) => {
+                        info!(
+                            "[DB][Timing] test_connection total db_type={:?} elapsed={}ms",
+                            db_type,
+                            test_started.elapsed().as_millis()
+                        );
+                    }
                     Err(error) => {
                         info!(
-                            "[DB][Timing] test_connection failed stage=create_connection db_type={:?} elapsed={}ms error={}",
+                            "[DB][Timing] test_connection failed db_type={:?} elapsed={}ms error={}",
                             db_type,
                             test_started.elapsed().as_millis(),
                             error
                         );
                         return Err(Error::new(error));
                     }
-                };
-                info!(
-                    "[DB][Timing] test_connection create_connection db_type={:?} elapsed={}ms",
-                    db_type,
-                    connect_started.elapsed().as_millis()
-                );
-
-                let ping_started = Instant::now();
-                if let Err(error) = conn.ping().await {
-                    info!(
-                        "[DB][Timing] test_connection failed stage=ping db_type={:?} elapsed={}ms error={}",
-                        db_type,
-                        test_started.elapsed().as_millis(),
-                        error
-                    );
-                    return Err(Error::new(error));
                 }
-                info!(
-                    "[DB][Timing] test_connection ping db_type={:?} elapsed={}ms",
-                    db_type,
-                    ping_started.elapsed().as_millis()
-                );
-                info!(
-                    "[DB][Timing] test_connection total db_type={:?} elapsed={}ms",
-                    db_type,
-                    test_started.elapsed().as_millis()
-                );
                 Ok::<bool, Error>(true)
             })
             .await;
@@ -1638,7 +1776,7 @@ impl DbConnectionForm {
     pub fn build_stored_connection(&self, cx: &App) -> Result<(StoredConnection, bool), String> {
         self.validate(cx)?;
 
-        let connection = self.build_connection(cx);
+        let connection = self.build_connection_with_referenced_ssh(cx)?;
         let remark = self.get_field_value("remark", cx);
         let is_update = self.editing_connection.is_some();
         let sync_enabled = *self.sync_enabled.read(cx);
@@ -2241,6 +2379,13 @@ impl DbConnectionForm {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let ssh_enabled = self.field_bool_value("ssh_tunnel_enabled", cx);
+        let selected_ssh_connection_id = self
+            .ssh_connection_select
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .flatten();
+        let using_ssh_reference = selected_ssh_connection_id.is_some();
         let ssh_auth_type = self
             .get_field_value("ssh_auth_type", cx)
             .unwrap_or_else(|| "password".to_string());
@@ -2271,10 +2416,24 @@ impl DbConnectionForm {
                     ),
             )
             .when(ssh_enabled, |form| {
-                form.child(self.render_field_by_name("ssh_host"))
-                    .child(self.render_field_by_name("ssh_port"))
-                    .child(self.render_field_by_name("ssh_username"))
-                    .child(
+                form.child(
+                    field()
+                        .label(t!("ConnectionForm.ssh_connection_id").to_string())
+                        .items_center()
+                        .label_justify_end()
+                        .child(
+                            Select::new(&self.ssh_connection_select)
+                                .placeholder(t!("ConnectionForm.ssh_connection_manual"))
+                                .w_full(),
+                        ),
+                )
+                .when(!using_ssh_reference, |form| {
+                    form.child(self.render_field_by_name("ssh_host"))
+                        .child(self.render_field_by_name("ssh_port"))
+                        .child(self.render_field_by_name("ssh_username"))
+                })
+                .when(!using_ssh_reference, |form| {
+                    form.child(
                         field()
                             .label(self.field_label("ssh_auth_type"))
                             .items_center()
@@ -2336,8 +2495,9 @@ impl DbConnectionForm {
                         form.child(self.render_field_by_name("ssh_private_key_path"))
                             .child(self.render_field_by_name("ssh_private_key_passphrase"))
                     })
-                    .child(self.render_field_by_name("ssh_target_host"))
-                    .child(self.render_field_by_name("ssh_target_port"))
+                })
+                .child(self.render_field_by_name("ssh_target_host"))
+                .child(self.render_field_by_name("ssh_target_port"))
             })
             .into_any_element()
     }
@@ -2464,6 +2624,7 @@ impl Render for DbConnectionForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use one_core::storage::{SshAuthMethod, SshParams};
 
     fn field_names(tab_group: &TabGroup) -> Vec<&str> {
         tab_group
@@ -2471,6 +2632,40 @@ mod tests {
             .iter()
             .map(|field| field.name.as_str())
             .collect()
+    }
+
+    fn stored_ssh_connection(id: i64, name: &str, host: &str) -> StoredConnection {
+        let mut connection = StoredConnection::new_ssh(
+            name.to_string(),
+            SshParams {
+                host: host.to_string(),
+                port: 22,
+                username: "root".to_string(),
+                auth_method: SshAuthMethod::Agent,
+                connect_timeout: None,
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                jump_server: None,
+                proxy: None,
+            },
+            None,
+        );
+        connection.id = Some(id);
+        connection
+    }
+
+    #[test]
+    fn ssh_connection_select_item_label_shows_name_and_host_not_id() {
+        let connection = stored_ssh_connection(42, "Prod SSH", "10.0.0.5");
+        let item = SshConnectionSelectItem::from_connection(&connection);
+
+        assert_eq!("Prod SSH (10.0.0.5)", item.title().as_ref());
+        assert_eq!(&Some(42), item.value());
+        assert!(item.matches("10.0.0.5"));
+        assert!(!item.matches("42"));
     }
 
     #[test]
@@ -2529,6 +2724,7 @@ mod tests {
             field_names(ssh_tab),
             vec![
                 "ssh_tunnel_enabled",
+                "ssh_connection_id",
                 "ssh_host",
                 "ssh_port",
                 "ssh_username",

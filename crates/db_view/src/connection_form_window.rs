@@ -28,6 +28,7 @@ pub struct ConnectionFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
     pub workspaces: Vec<Workspace>,
     pub teams: Vec<TeamOption>,
+    pub ssh_connections: Vec<StoredConnection>,
 }
 
 /// 连接表单窗口
@@ -77,6 +78,7 @@ impl ConnectionFormWindow {
         form.update(cx, |f, cx| {
             f.set_workspaces(config.workspaces.clone(), window, cx);
             f.set_teams(config.teams.clone(), window, cx);
+            f.set_ssh_connections(config.ssh_connections.clone(), window, cx);
         });
 
         if let Some(ref conn) = config.editing_connection {

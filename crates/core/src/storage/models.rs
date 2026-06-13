@@ -509,6 +509,65 @@ impl DbConnectionConfig {
             || self.sid != other.sid
             || self.extra_params != other.extra_params
     }
+
+    pub fn apply_referenced_ssh_tunnel(
+        &mut self,
+        ssh_connection: &StoredConnection,
+    ) -> Result<(), serde_json::Error> {
+        let Some(ssh_connection_id) = self.extra_params.get("ssh_connection_id") else {
+            return Ok(());
+        };
+        if ssh_connection.id.map(|id| id.to_string()).as_ref() != Some(ssh_connection_id) {
+            return Ok(());
+        }
+        if ssh_connection.connection_type != ConnectionType::SshSftp {
+            return Ok(());
+        }
+
+        let ssh_params = ssh_connection.to_ssh_params()?;
+        self.extra_params
+            .insert("ssh_host".to_string(), ssh_params.host);
+        self.extra_params
+            .insert("ssh_port".to_string(), ssh_params.port.to_string());
+        self.extra_params
+            .insert("ssh_username".to_string(), ssh_params.username);
+        if let Some(timeout) = ssh_params.connect_timeout {
+            self.extra_params
+                .insert("ssh_timeout".to_string(), timeout.to_string());
+        }
+
+        match ssh_params.auth_method {
+            SshAuthMethod::Password { password } => {
+                self.extra_params
+                    .insert("ssh_auth_type".to_string(), "password".to_string());
+                self.extra_params
+                    .insert("ssh_password".to_string(), password);
+            }
+            SshAuthMethod::PrivateKey {
+                key_path,
+                passphrase,
+            } => {
+                self.extra_params
+                    .insert("ssh_auth_type".to_string(), "private_key".to_string());
+                self.extra_params
+                    .insert("ssh_private_key_path".to_string(), key_path);
+                if let Some(passphrase) = passphrase {
+                    self.extra_params
+                        .insert("ssh_private_key_passphrase".to_string(), passphrase);
+                }
+            }
+            SshAuthMethod::Agent => {
+                self.extra_params
+                    .insert("ssh_auth_type".to_string(), "agent".to_string());
+            }
+            SshAuthMethod::AutoPublicKey => {
+                self.extra_params
+                    .insert("ssh_auth_type".to_string(), "auto_publickey".to_string());
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Workspace for organizing connections
@@ -843,6 +902,125 @@ impl StoredConnection {
         let mut cloned = self.clone();
         cloned.params = cloned.decrypt_params();
         cloned
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn ssh_connection_with_id(id: i64, auth_method: SshAuthMethod) -> StoredConnection {
+        let mut connection = StoredConnection::new_ssh(
+            "prod-bastion".to_string(),
+            SshParams {
+                host: "bastion.example.com".to_string(),
+                port: 2222,
+                username: "deploy".to_string(),
+                auth_method,
+                connect_timeout: Some(15),
+                keepalive_interval: Some(30),
+                keepalive_max: Some(3),
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                jump_server: None,
+                proxy: None,
+            },
+            Some(7),
+        );
+        connection.id = Some(id);
+        connection
+    }
+
+    fn database_config_with_ssh_ref(ssh_connection_id: i64) -> DbConnectionConfig {
+        let mut extra_params = HashMap::new();
+        extra_params.insert("ssh_tunnel_enabled".to_string(), "true".to_string());
+        extra_params.insert(
+            "ssh_connection_id".to_string(),
+            ssh_connection_id.to_string(),
+        );
+
+        DbConnectionConfig {
+            id: "db-1".to_string(),
+            database_type: DatabaseType::MySQL,
+            name: "prod mysql".to_string(),
+            host: "mysql.internal".to_string(),
+            port: 3306,
+            username: "root".to_string(),
+            password: "secret".to_string(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: Some(7),
+            extra_params,
+        }
+    }
+
+    #[test]
+    fn db_connection_can_apply_referenced_password_ssh_connection() {
+        let ssh = ssh_connection_with_id(
+            42,
+            SshAuthMethod::Password {
+                password: "ssh-secret".to_string(),
+            },
+        );
+        let mut db = database_config_with_ssh_ref(42);
+
+        db.apply_referenced_ssh_tunnel(&ssh)
+            .expect("referenced ssh connection should be applied");
+
+        assert_eq!(
+            Some(&"bastion.example.com".to_string()),
+            db.extra_params.get("ssh_host")
+        );
+        assert_eq!(Some(&"2222".to_string()), db.extra_params.get("ssh_port"));
+        assert_eq!(
+            Some(&"deploy".to_string()),
+            db.extra_params.get("ssh_username")
+        );
+        assert_eq!(
+            Some(&"password".to_string()),
+            db.extra_params.get("ssh_auth_type")
+        );
+        assert_eq!(
+            Some(&"ssh-secret".to_string()),
+            db.extra_params.get("ssh_password")
+        );
+        assert_eq!(Some(&"15".to_string()), db.extra_params.get("ssh_timeout"));
+    }
+
+    #[test]
+    fn stored_db_connection_keeps_only_ssh_reference_before_runtime_resolution() {
+        let db = database_config_with_ssh_ref(42);
+        let stored = StoredConnection::from_db_connection(db);
+
+        let parsed = stored
+            .to_db_connection()
+            .expect("stored db connection should parse");
+
+        assert_eq!(
+            Some(&"42".to_string()),
+            parsed.extra_params.get("ssh_connection_id")
+        );
+        assert_eq!(None, parsed.extra_params.get("ssh_password"));
+        assert_eq!(None, parsed.extra_params.get("ssh_host"));
+    }
+
+    #[test]
+    fn db_connection_applies_referenced_auto_publickey_ssh_connection() {
+        let ssh = ssh_connection_with_id(42, SshAuthMethod::AutoPublicKey);
+        let mut db = database_config_with_ssh_ref(42);
+
+        db.apply_referenced_ssh_tunnel(&ssh)
+            .expect("auto public key ssh connection should be reusable by db tunnel");
+
+        assert_eq!(
+            Some(&"auto_publickey".to_string()),
+            db.extra_params.get("ssh_auth_type")
+        );
+        assert_eq!(None, db.extra_params.get("ssh_password"));
+        assert_eq!(None, db.extra_params.get("ssh_private_key_path"));
     }
 }
 
