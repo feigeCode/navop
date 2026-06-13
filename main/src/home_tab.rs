@@ -1370,6 +1370,14 @@ impl HomePage {
         let editing_conn = self
             .editing_connection_id
             .and_then(|id| self.connections.iter().find(|c| c.id == Some(id)).cloned());
+        let ssh_connections = self
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.connection_type == ConnectionType::SshSftp
+            })
+            .cloned()
+            .collect();
 
         let config = ConnectionFormWindowConfig {
             db_type,
@@ -1377,6 +1385,7 @@ impl HomePage {
             editing_connection: editing_conn,
             workspaces: self.workspaces.clone(),
             teams: get_cached_team_options(cx),
+            ssh_connections,
         };
 
         self.editing_connection_id = None;
