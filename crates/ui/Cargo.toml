@@ -18,7 +18,9 @@ doctest = false
 decimal = ["dep:rust_decimal"]
 inspector = ["gpui-macros/inspector", "gpui/inspector"]
 
-# All languages for syntax highlighting in Markdown and CodeEditor.
+# DEPRECATED: 将 30+ 语言静态链接进二进制的旧方案。新代码请使用 wasm 扩展
+# 机制(详见 `crates/ui/src/highlighter/extension.rs` 与 main 启动加载逻辑)。
+# 仅 `crates/story` 仍启用该 feature 用于组件演示。
 tree-sitter-languages = [
     "dep:tree-sitter-css",
     "dep:tree-sitter-diff",
@@ -73,6 +75,7 @@ itertools = "0.13.0"
 once_cell = "1.19.0"
 paste = "1"
 regex = "1"
+sha2 = { workspace = true }
 unicode-segmentation = "1.12.0"
 uuid = "1.10"
 
@@ -93,7 +96,7 @@ chrono = "0.4.38"
 # Code Editor
 aho-corasick = "1.1.3"
 lsp-types.workspace = true
-tree-sitter = "0.25.4"
+tree-sitter = { version = "0.25.4", features = ["wasm"] }
 tree-sitter-bash = { version = "0.23.3"}
 tree-sitter-c = { version = "0.24.1", optional = true }
 tree-sitter-c-sharp = { version = "0.23.1", optional = true }
@@ -133,6 +136,7 @@ core-text = "=21.0.0"
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 indoc = "2"
+tempfile = "3"
 
 [lints]
 workspace = true

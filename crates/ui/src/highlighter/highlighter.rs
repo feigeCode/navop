@@ -1,4 +1,4 @@
-use crate::highlighter::{HighlightTheme, LanguageRegistry};
+use crate::highlighter::{HighlightTheme, LanguageKind, LanguageRegistry, wasm_store};
 
 use anyhow::{Context, Result, anyhow};
 use gpui::{HighlightStyle, SharedString};
@@ -224,6 +224,7 @@ impl SyntaxHighlighter {
         };
 
         let mut parser = Parser::new();
+        configure_parser_for_language(&mut parser, &config)?;
         parser
             .set_language(&config.language)
             .context("parse set_language")?;
@@ -521,6 +522,9 @@ impl SyntaxHighlighter {
             };
 
             let mut parser = Parser::new();
+            if configure_parser_for_language(&mut parser, &config).is_err() {
+                continue;
+            }
             if parser.set_language(&config.language).is_err() {
                 continue;
             }
@@ -860,6 +864,23 @@ fn collect_query_nodes_inner<'a>(
     }
 
     out.push(node);
+}
+
+/// 当语言是 wasm 加载时,为 parser 配置一个独立的 `WasmStore`。
+fn configure_parser_for_language(
+    parser: &mut Parser,
+    config: &crate::highlighter::LanguageConfig,
+) -> Result<()> {
+    if let LanguageKind::Wasm { wasm_bytes } = &config.kind {
+        let mut store = wasm_store::new_parser_store().context("create parser wasm store")?;
+        store
+            .load_language(&config.name, wasm_bytes)
+            .map_err(|e| anyhow!("load wasm language {} into parser store: {e}", &config.name))?;
+        parser
+            .set_wasm_store(store)
+            .map_err(|e| anyhow!("attach wasm store to parser: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Merge other style (Other on top)

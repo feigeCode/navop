@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     ActiveTheme, DEFAULT_THEME_COLORS, ThemeMode,
-    highlighter::{Language, languages},
+    highlighter::{Language, languages, wasm_store},
 };
 
 pub(super) const HIGHLIGHT_NAMES: [&str; 40] = [
@@ -60,11 +60,31 @@ pub(super) const HIGHLIGHT_NAMES: [&str; 40] = [
 pub struct LanguageConfig {
     pub name: SharedString,
     pub language: tree_sitter::Language,
+    pub kind: LanguageKind,
     pub injection_languages: Vec<SharedString>,
     pub highlights: SharedString,
     pub injections: SharedString,
     pub locals: SharedString,
 }
+
+/// 区分语言是静态链接的 native parser 还是通过 wasm 扩展加载的。
+#[derive(Debug, Clone)]
+pub enum LanguageKind {
+    Native,
+    Wasm { wasm_bytes: Arc<[u8]> },
+}
+
+impl PartialEq for LanguageKind {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Native, Self::Native) => true,
+            (Self::Wasm { wasm_bytes: a }, Self::Wasm { wasm_bytes: b }) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for LanguageKind {}
 
 impl LanguageConfig {
     pub fn new(
@@ -78,6 +98,28 @@ impl LanguageConfig {
         Self {
             name: name.into(),
             language,
+            kind: LanguageKind::Native,
+            injection_languages,
+            highlights: SharedString::from(highlights.to_string()),
+            injections: SharedString::from(injections.to_string()),
+            locals: SharedString::from(locals.to_string()),
+        }
+    }
+
+    /// 使用 wasm parser 构造 `LanguageConfig`。
+    pub fn new_wasm(
+        name: impl Into<SharedString>,
+        language: tree_sitter::Language,
+        wasm_bytes: Arc<[u8]>,
+        injection_languages: Vec<SharedString>,
+        highlights: &str,
+        injections: &str,
+        locals: &str,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            language,
+            kind: LanguageKind::Wasm { wasm_bytes },
             injection_languages,
             highlights: SharedString::from(highlights.to_string()),
             injections: SharedString::from(injections.to_string()),
@@ -466,15 +508,20 @@ pub struct LanguageRegistry {
 }
 
 impl LanguageRegistry {
-    /// Returns the singleton instance of the `LanguageRegistry` with default languages and themes.
-    pub fn singleton() -> &'static LazyLock<LanguageRegistry> {
-        static INSTANCE: LazyLock<LanguageRegistry> = LazyLock::new(|| LanguageRegistry {
+    fn with_default_languages() -> Self {
+        Self {
             languages: Mutex::new(
                 languages::Language::all()
                     .map(|language| (language.name().into(), language.config()))
                     .collect(),
             ),
-        });
+        }
+    }
+
+    /// Returns the singleton instance of the `LanguageRegistry` with default languages and themes.
+    pub fn singleton() -> &'static LazyLock<LanguageRegistry> {
+        static INSTANCE: LazyLock<LanguageRegistry> =
+            LazyLock::new(LanguageRegistry::with_default_languages);
         &INSTANCE
     }
 
@@ -484,6 +531,37 @@ impl LanguageRegistry {
             .lock()
             .unwrap()
             .insert(lang.to_string().into(), config.clone());
+    }
+
+    /// 注册一个通过 wasm 加载的语言扩展。
+    pub fn register_wasm(
+        &self,
+        name: &str,
+        wasm_bytes: impl Into<Arc<[u8]>>,
+        injection_languages: Vec<SharedString>,
+        highlights: &str,
+        injections: &str,
+        locals: &str,
+    ) -> anyhow::Result<()> {
+        let bytes: Arc<[u8]> = wasm_bytes.into();
+        let language = wasm_store::with_registry_store(|store| store.load_language(name, &bytes))
+            .map_err(|e| anyhow::anyhow!("load wasm language {name}: {e}"))?;
+
+        let config = LanguageConfig::new_wasm(
+            name.to_string(),
+            language,
+            bytes,
+            injection_languages,
+            highlights,
+            injections,
+            locals,
+        );
+
+        self.languages
+            .lock()
+            .unwrap()
+            .insert(name.to_string().into(), config);
+        Ok(())
     }
 
     /// Returns a list of all registered language names.
@@ -501,16 +579,46 @@ impl LanguageRegistry {
             .or_else(|| languages.get(Language::from_str(name).name()))
             .cloned()
     }
+
+    /// 移除一个已注册的语言。返回是否真的有条目被删除。
+    pub fn unregister(&self, name: &str) -> bool {
+        let builtin = builtin_language_config(name);
+        let key = SharedString::from(name.to_string());
+        let mut languages = self.languages.lock().unwrap();
+
+        match languages.get(&key) {
+            Some(current) if builtin.as_ref().is_some_and(|config| current == config) => false,
+            Some(_) => {
+                languages.remove(&key);
+                if let Some(config) = builtin {
+                    languages.insert(key, config);
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 查询指定语言是否是通过 wasm 扩展加载的。
+    pub fn is_wasm(&self, name: &str) -> Option<bool> {
+        self.language(name)
+            .map(|config| matches!(config.kind, LanguageKind::Wasm { .. }))
+    }
+}
+
+fn builtin_language_config(name: &str) -> Option<LanguageConfig> {
+    languages::Language::all()
+        .find(|language| language.name() == name)
+        .map(|language| language.config())
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::highlighter::LanguageConfig;
+    use crate::highlighter::{LanguageConfig, LanguageRegistry};
 
     #[test]
     fn test_registry() {
-        use super::LanguageRegistry;
-        let registry = LanguageRegistry::singleton();
+        let registry = LanguageRegistry::with_default_languages();
 
         registry.register(
             "foo",
@@ -522,5 +630,62 @@ mod tests {
         assert!(registry.language("rs").is_some());
         assert!(registry.language("javascript").is_some());
         assert!(registry.language("js").is_some());
+    }
+
+    #[test]
+    fn register_wasm_rejects_invalid_bytes() {
+        let registry = LanguageRegistry::with_default_languages();
+        let invalid = vec![0u8, 1, 2, 3, 4];
+        let result = registry.register_wasm("__test_invalid_wasm__", invalid, vec![], "", "", "");
+
+        assert!(result.is_err(), "expected error for non-wasm bytes");
+        assert!(
+            !registry
+                .languages()
+                .iter()
+                .any(|name| name.as_ref() == "__test_invalid_wasm__")
+        );
+    }
+
+    #[test]
+    fn unregister_removes_existing_entry() {
+        let registry = LanguageRegistry::with_default_languages();
+        registry.register(
+            "__test_unregister__",
+            &LanguageConfig::new(
+                "__test_unregister__",
+                tree_sitter_json::LANGUAGE.into(),
+                vec![],
+                "",
+                "",
+                "",
+            ),
+        );
+
+        assert!(registry.unregister("__test_unregister__"));
+        assert!(!registry.unregister("__test_unregister__"));
+    }
+
+    #[test]
+    fn unregister_restores_builtin_language_after_override() {
+        let registry = LanguageRegistry::with_default_languages();
+        let builtin = registry.language("json").unwrap();
+        registry.register(
+            "json",
+            &LanguageConfig::new(
+                "json",
+                tree_sitter_bash::LANGUAGE.into(),
+                vec![],
+                "override",
+                "",
+                "",
+            ),
+        );
+        assert_ne!(builtin, registry.language("json").unwrap());
+
+        assert!(registry.unregister("json"));
+        assert_eq!(builtin, registry.language("json").unwrap());
+        assert!(!registry.unregister("json"));
+        assert_eq!(builtin, registry.language("json").unwrap());
     }
 }
