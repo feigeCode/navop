@@ -26,6 +26,8 @@ dirs = {workspace = true}
 futures = { workspace = true }
 smol = { workspace = true }
 db_view = { workspace = true }
+extension-runtime = { workspace = true }
+extension_view = { workspace = true }
 terminal = { workspace = true }
 terminal_view = { workspace = true }
 sftp_view = { workspace = true }
@@ -46,6 +48,10 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winresource = "0.1"
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3"
 
 [lints]
 workspace = true

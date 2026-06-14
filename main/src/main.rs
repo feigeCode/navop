@@ -32,6 +32,7 @@ fn main() {
 
     app.run(move |cx| {
         onetcli_app::init(cx);
+        extension_runtime::init(cx);
 
         let mut window_size = size(px(1600.0), px(1200.0));
         if let Some(display) = cx.primary_display() {

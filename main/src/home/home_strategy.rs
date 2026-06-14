@@ -50,7 +50,21 @@ impl ConnectionOpenStrategy for DatabaseOpenStrategy {
             connection,
             workspace,
         } = *self;
-        home.add_item_to_tab(&connection, workspace, window, cx);
+        extension_runtime::database_driver_install::open_database_connection_with_driver_guard(
+            home, connection, workspace, window, cx,
+        );
+    }
+}
+
+impl extension_runtime::database_driver_install::DatabaseDriverConnectionOpener for HomePage {
+    fn open_database_connection(
+        &mut self,
+        connection: &StoredConnection,
+        workspace: Option<Workspace>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.add_item_to_tab(connection, workspace, window, cx);
     }
 }
 

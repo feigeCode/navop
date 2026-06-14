@@ -1,0 +1,236 @@
+use std::path::PathBuf;
+
+use crate::{
+    ExtensionRuntimeCatalog,
+    extension::manifest::{
+        ApiVersions, CommandContrib, CommandHandlerContrib, ContributesManifest, Engines, Manifest,
+        MenuCommandRef, MenuContrib, RuntimeSection, WasmRuntime, WasmRuntimeKind,
+    },
+};
+
+#[test]
+fn runtime_catalog_registers_wasm_command_and_db_tree_menu() {
+    let mut manifest = base_manifest();
+    manifest.runtime.wasm.push(wasm_runtime("main"));
+    manifest
+        .contributes
+        .commands
+        .push(command("main", "example.sync_table"));
+    manifest.contributes.menus.insert(
+        "db.tree.table".to_string(),
+        vec![MenuContrib {
+            command: MenuCommandRef {
+                id: "example.sync_table".to_string(),
+            },
+            label: Some("同步表".to_string()),
+            group: Some("extension@10".to_string()),
+            when: Some("node.type == 'table'".to_string()),
+            requires_active: true,
+        }],
+    );
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let menu_registry = catalog.db_tree_menu_registry();
+    let table_items = menu_registry.items_for_node(db::DbNodeType::Table);
+
+    assert!(
+        catalog
+            .component_permissions_for_command("example.sync_table")
+            .is_ok()
+    );
+    assert_eq!(1, table_items.len());
+    assert_eq!("com.example.tools", table_items[0].extension_id);
+    assert_eq!("example.sync_table", table_items[0].command_id);
+    assert_eq!("同步表", table_items[0].label);
+}
+
+#[test]
+fn runtime_catalog_rejects_wasm_command_with_missing_runtime() {
+    let mut manifest = base_manifest();
+    manifest
+        .contributes
+        .commands
+        .push(command("missing", "example.missing"));
+
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+    assert!(error.to_string().contains("unknown runtime_id"));
+}
+
+#[test]
+fn runtime_catalog_exposes_component_permissions_for_command() {
+    let mut manifest = base_manifest();
+    manifest.runtime.wasm.push(wasm_runtime("main"));
+    manifest
+        .contributes
+        .commands
+        .push(command("main", "example.search"));
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let permissions = catalog
+        .component_permissions_for_command("example.search")
+        .unwrap();
+
+    assert_eq!(vec!["db:schema:*", "ui:dialog"], permissions);
+}
+
+#[test]
+fn runtime_catalog_loads_compatible_extensions_from_composite_root() {
+    let root = tempfile::TempDir::new().unwrap();
+    write_composite_manifest(
+        root.path(),
+        "com.example.echo",
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.echo",
+            "name": "Echo",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.1.0" },
+            "runtime": {
+                "wasm": [{
+                    "id": "main",
+                    "module": "./wasm/plugin.wasm",
+                    "kind": "component"
+                }]
+            },
+            "contributes": {
+                "commands": [{
+                    "id": "example.echo",
+                    "title": "Echo",
+                    "handler": {
+                        "kind": "wasm",
+                        "runtime_id": "main"
+                    }
+                }]
+            }
+        }"#,
+    );
+    std::fs::create_dir_all(root.path().join("_staging")).unwrap();
+    std::fs::create_dir_all(root.path().join("noise")).unwrap();
+
+    let catalog = ExtensionRuntimeCatalog::from_installed_composite_root(root.path()).unwrap();
+
+    assert!(
+        catalog
+            .component_permissions_for_command("example.echo")
+            .is_ok()
+    );
+}
+
+#[test]
+fn runtime_catalog_rebuild_after_uninstall_drops_db_tree_menu() {
+    let root = tempfile::TempDir::new().unwrap();
+    write_composite_manifest(
+        root.path(),
+        "com.example.cleanup",
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.cleanup",
+            "name": "Cleanup",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.1.0" },
+            "runtime": {
+                "wasm": [{
+                    "id": "main",
+                    "module": "./wasm/plugin.wasm",
+                    "kind": "component"
+                }]
+            },
+            "contributes": {
+                "commands": [{
+                    "id": "cleanup.run",
+                    "title": "Cleanup",
+                    "handler": {
+                        "kind": "wasm",
+                        "runtime_id": "main"
+                    }
+                }],
+                "menus": {
+                    "db.tree.table": [{
+                        "command": "cleanup.run",
+                        "label": "Cleanup",
+                        "group": "extension@10"
+                    }]
+                }
+            }
+        }"#,
+    );
+
+    let before = ExtensionRuntimeCatalog::from_installed_composite_root(root.path()).unwrap();
+    assert_eq!(
+        1,
+        before
+            .db_tree_menu_registry()
+            .items_for_node(db::DbNodeType::Table)
+            .len()
+    );
+
+    std::fs::remove_dir_all(root.path().join("com.example.cleanup")).unwrap();
+    let after = ExtensionRuntimeCatalog::from_installed_composite_root(root.path()).unwrap();
+
+    assert!(
+        after
+            .db_tree_menu_registry()
+            .items_for_node(db::DbNodeType::Table)
+            .is_empty()
+    );
+}
+
+fn wasm_runtime(id: &str) -> WasmRuntime {
+    WasmRuntime {
+        id: id.to_string(),
+        module: "./wasm/plugin.wasm".to_string(),
+        kind: WasmRuntimeKind::Component,
+        timeout_ms: 5_000,
+        max_memory_mb: 64,
+        fuel_per_call: 100_000_000,
+    }
+}
+
+fn command(runtime_id: &str, command_id: &str) -> CommandContrib {
+    CommandContrib {
+        id: command_id.to_string(),
+        title: "Sync Table".to_string(),
+        category: String::new(),
+        icon: None,
+        enablement_when: Some("node.type == 'table'".to_string()),
+        handler: CommandHandlerContrib {
+            kind: "wasm".to_string(),
+            runtime_id: runtime_id.to_string(),
+            function: Some("run".to_string()),
+        },
+    }
+}
+
+fn base_manifest() -> Manifest {
+    Manifest {
+        schema_version: 1,
+        id: "com.example.tools".to_string(),
+        name: "Example Tools".to_string(),
+        version: "0.1.0".to_string(),
+        publisher: String::new(),
+        license: String::new(),
+        homepage: String::new(),
+        repository: String::new(),
+        icon: String::new(),
+        description_i18n: String::new(),
+        description: String::new(),
+        categories: vec![],
+        keywords: vec![],
+        engines: Engines {
+            onetcli: ">=0.1.0".to_string(),
+        },
+        api: ApiVersions::default(),
+        activation: vec![],
+        permissions: vec!["db:schema:*".to_string(), "ui:dialog".to_string()],
+        runtime: RuntimeSection::default(),
+        contributes: ContributesManifest::default(),
+        manifest_dir: PathBuf::from("/tmp/com.example.tools"),
+    }
+}
+
+fn write_composite_manifest(root: &std::path::Path, id: &str, content: &str) {
+    let dir = root.join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("extension.json"), content).unwrap();
+}

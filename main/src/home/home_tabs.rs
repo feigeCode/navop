@@ -436,6 +436,25 @@ impl HomePage {
         });
     }
 
+    pub(crate) fn add_extensions_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_container = self.tab_container.clone();
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tc, cx| {
+                tc.activate_or_add_tab_lazy(
+                    "extensions",
+                    |win, cx| {
+                        let host = std::sync::Arc::new(extension_runtime::MainExtensionViewHost);
+                        let extensions =
+                            cx.new(|cx| extension_view::ExtensionManagerView::new(host, win, cx));
+                        TabItem::new("extensions", "home", extensions)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
     pub(crate) fn add_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // 使用时间戳生成唯一 tab_id，支持打开多个本地终端
         let timestamp = std::time::SystemTime::now()

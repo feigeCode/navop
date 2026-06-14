@@ -1,0 +1,33 @@
+[package]
+name = "extension-runtime"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+db = { workspace = true }
+db_view = { workspace = true }
+extension-component = { workspace = true }
+extension-wasm = { workspace = true }
+extension_view = { workspace = true }
+flate2 = "1"
+futures = { workspace = true }
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+one-core = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tar = "0.4"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+smol = { workspace = true }
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -17,9 +17,14 @@ members = [
     "examples/focus_trap",
     "crates/db",
     "crates/db_view",
+    "crates/extension-runtime",
+    "crates/extension_view",
     "crates/extension-protocol",
     "crates/extension-host",
     "crates/extension-driver",
+    "crates/extension-api",
+    "crates/extension-component",
+    "crates/extension-wasm",
     "crates/duckdb_driver",
     "crates/er_flow",
     "crates/terminal",
@@ -90,6 +95,11 @@ ipc = { path = "crates/ipc" }
 extension-protocol = { path = "crates/extension-protocol" }
 extension-host = { path = "crates/extension-host" }
 extension-driver = { path = "crates/extension-driver" }
+extension-runtime = { path = "crates/extension-runtime" }
+extension_view = { path = "crates/extension_view" }
+extension-api = { path = "crates/extension-api" }
+extension-component = { path = "crates/extension-component" }
+extension-wasm = { path = "crates/extension-wasm" }
 
 
 json5 = "1.3.0"

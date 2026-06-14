@@ -1373,9 +1373,7 @@ impl HomePage {
         let ssh_connections = self
             .connections
             .iter()
-            .filter(|connection| {
-                connection.connection_type == ConnectionType::SshSftp
-            })
+            .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
             .cloned()
             .collect();
 
@@ -2130,6 +2128,16 @@ impl HomePage {
                     .gap_3()
                     .border_t_1()
                     .border_color(cx.theme().border)
+                    .child(
+                        Button::new("open_extensions")
+                            .icon(IconName::GalleryVerticalEnd)
+                            .label("扩展")
+                            .w_full()
+                            .justify_start()
+                            .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
+                                this.add_extensions_tab(window, cx);
+                            })),
+                    )
                     .child(
                         Button::new("open_settings")
                             .icon(IconName::Settings)
