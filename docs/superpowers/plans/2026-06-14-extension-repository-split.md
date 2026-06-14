@@ -574,7 +574,7 @@ ARTIFACT_DIR=artifacts \
 EXTENSION_VERSION=1.0.0 \
 EXTENSION_ID=duckdb \
 RELEASE_TAG=duckdb-v1.0.0 \
-ONETCLI_PUBLIC_BASE_URL=https://onetcli.pdyyds.cn \
+ONETCLI_PUBLIC_BASE_URL=https://onetcli.test.cn \
 GITHUB_REPOSITORY=feigeCode/onetcli-extensions \
 node scripts/generate-marketplace-manifest.mjs
 node -e 'const fs = require("fs"); const m = JSON.parse(fs.readFileSync("artifacts/extension-manifest.json", "utf8")); if (m.extensions[0].id !== "duckdb") process.exit(1);'
@@ -1087,7 +1087,7 @@ Expected: `upload-r2 yaml ok`.
 Set repository variable in `feigeCode/onetcli-extensions`:
 
 ```text
-ONETCLI_PUBLIC_BASE_URL=https://onetcli.pdyyds.cn
+ONETCLI_PUBLIC_BASE_URL=https://onetcli.test.cn
 ```
 
 Set repository secrets:
@@ -1115,7 +1115,7 @@ Expected: GitHub Actions runs `Release`, then `Upload R2`.
 Run:
 
 ```bash
-curl -fsSL https://onetcli.pdyyds.cn/extensions/manifest.json -o /tmp/onetcli-extension-manifest.json
+curl -fsSL https://onetcli.test.cn/extensions/manifest.json -o /tmp/onetcli-extension-manifest.json
 node -e 'const fs = require("fs"); const m = JSON.parse(fs.readFileSync("/tmp/onetcli-extension-manifest.json", "utf8")); if (m.extensions[0].id !== "duckdb") process.exit(1); console.log("manifest ok");'
 ```
 
@@ -1266,10 +1266,10 @@ Expected: `onetcli` still builds the host app and extension consumption path wit
 Run the main app with:
 
 ```bash
-ONETCLI_PUBLIC_BASE_URL=https://onetcli.pdyyds.cn cargo run -p main
+ONETCLI_PUBLIC_BASE_URL=https://onetcli.test.cn cargo run -p main
 ```
 
-Open the extension marketplace. Expected: DuckDB appears from `https://onetcli.pdyyds.cn/extensions/manifest.json`.
+Open the extension marketplace. Expected: DuckDB appears from `https://onetcli.test.cn/extensions/manifest.json`.
 
 - [ ] **Step 2: Verify GitHub fallback manifest**
 

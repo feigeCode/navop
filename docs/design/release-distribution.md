@@ -134,7 +134,7 @@ metadata before installation.
 Repository variables:
 
 - `ONETCLI_PUBLIC_BASE_URL`: public Cloudflare/R2 base URL, for example
-  `https://onetcli.test.cn`
+  `https://onetcli.pdyyds.cn`
 
 Repository secrets for R2 upload:
 
