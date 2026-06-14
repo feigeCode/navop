@@ -13,6 +13,7 @@ rusqlite.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+thiserror.workspace = true
 dirs.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true

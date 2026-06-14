@@ -1,6 +1,6 @@
 use gpui::{
-    AnyView, App, AppContext, Bounds, SharedString, Size, Window, WindowBounds, WindowKind,
-    WindowOptions, px, size,
+    AnyView, App, AppContext, Bounds, Context, IntoElement, ParentElement, Render, SharedString,
+    Size, Styled, Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
 };
 use gpui_component::{Root, TitleBar};
 
@@ -112,7 +112,8 @@ where
 
         let window = cx.open_window(window_opts, |window, cx| {
             let view = create_view_fn(window, cx);
-            cx.new(|cx| Root::new(view, window, cx))
+            let content = cx.new(|_| PopupWindowContent { view: view.into() });
+            cx.new(|cx| Root::new(content, window, cx))
         })?;
 
         window.update(cx, |_, window, _| {
@@ -123,4 +124,24 @@ where
         Ok::<_, anyhow::Error>(())
     })
     .detach();
+}
+
+struct PopupWindowContent {
+    view: AnyView,
+}
+
+impl Render for PopupWindowContent {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let sheet_layer = Root::render_sheet_layer(window, cx);
+        let dialog_layer = Root::render_dialog_layer(window, cx);
+        let notification_layer = Root::render_notification_layer(window, cx);
+
+        div()
+            .relative()
+            .size_full()
+            .child(self.view.clone())
+            .children(sheet_layer)
+            .children(dialog_layer)
+            .children(notification_layer)
+    }
 }
