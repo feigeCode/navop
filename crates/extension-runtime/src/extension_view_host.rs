@@ -7,6 +7,7 @@ use crate::{
     extension as host_extension,
     extension::manifest::{build_permission_review, load_from_dir},
     extension_downloader as host_downloader,
+    extension_package_layout::package_root,
 };
 
 #[derive(Clone, Default)]
@@ -146,7 +147,8 @@ fn permission_review_for_staging(
     kind: host_extension::ExtensionKind,
 ) -> anyhow::Result<extension_view::PermissionReviewModel> {
     let review = if kind == host_extension::ExtensionKind::Composite {
-        let manifest = load_from_dir(staging)?;
+        let root = package_root(staging)?;
+        let manifest = load_from_dir(&root)?;
         build_permission_review(&manifest.permissions)?
     } else {
         build_permission_review(&[])?

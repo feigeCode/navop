@@ -1,7 +1,9 @@
 use std::{fs, sync::Arc};
 
 use crate::extension::{DatabaseDriverExtensionProvider, ExtensionKind, ExtensionRegistry};
-use crate::extension_downloader::{install_from_staging_generic, stage_local_tarball};
+use crate::extension_downloader::{
+    detect_package_kind, install_from_staging_generic, stage_local_tarball,
+};
 
 #[test]
 fn stage_local_tarball_then_install_staging_installs_database_driver() {
@@ -22,6 +24,31 @@ fn stage_local_tarball_then_install_staging_installs_database_driver() {
     assert_eq!("fake_pg", summary.name);
     assert!(summary.path.join("driver.json").exists());
     assert!(summary.path.join("driver-bin").exists());
+}
+
+#[test]
+fn stage_local_tarball_supports_single_top_level_driver_directory() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tarball = tmp.path().join("duckdb-driver.tar.gz");
+    fs::write(&tarball, wrapped_database_driver_tarball_bytes()).unwrap();
+
+    let mut registry = ExtensionRegistry::new(tmp.path().join("extensions"));
+    registry.register_provider(Arc::new(DatabaseDriverExtensionProvider));
+
+    let staging = stage_local_tarball(&tarball).unwrap();
+    assert_eq!(
+        ExtensionKind::DatabaseDriver,
+        detect_package_kind(&staging).unwrap()
+    );
+
+    let summary = install_from_staging_generic(&staging, &registry, None).unwrap();
+    let _ = fs::remove_dir_all(staging);
+
+    assert_eq!(ExtensionKind::DatabaseDriver, summary.kind);
+    assert_eq!("duckdb", summary.name);
+    assert!(summary.path.join("driver.json").exists());
+    assert!(summary.path.join("duckdb_driver").exists());
+    assert!(!summary.path.join("duckdb").exists());
 }
 
 #[cfg(unix)]
@@ -84,6 +111,32 @@ fn database_driver_tarball_bytes() -> Vec<u8> {
             "version": "1.2.3",
             "entry": { "command": "./driver-bin" },
             "transport": { "name": "fake_pg.sock" }
+        }"#,
+    );
+    let encoder = archive.into_inner().unwrap();
+    encoder.finish().unwrap()
+}
+
+fn wrapped_database_driver_tarball_bytes() -> Vec<u8> {
+    let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    append_bytes(&mut archive, "._duckdb", b"appledouble metadata");
+    append_bytes(&mut archive, "duckdb/duckdb_driver", b"driver");
+    append_bytes(
+        &mut archive,
+        "duckdb/._driver.json",
+        b"appledouble metadata",
+    );
+    append_bytes(
+        &mut archive,
+        "duckdb/driver.json",
+        br#"{
+            "id": "duckdb",
+            "name": "DuckDB",
+            "description": "DuckDB IPC driver",
+            "version": "1.0.0",
+            "entry": { "command": "./duckdb_driver" },
+            "transport": { "name": "duckdb.sock" }
         }"#,
     );
     let encoder = archive.into_inner().unwrap();

@@ -7,6 +7,7 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::extension::manifest::{build_permission_review, load_from_dir};
 use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
+use crate::extension_package_layout::{detect_kind_in_package, direct_package_kind, package_root};
 
 mod marketplace;
 mod transfer;
@@ -25,19 +26,7 @@ pub use transfer::{
 };
 
 pub fn detect_package_kind(staging_dir: &Path) -> Result<ExtensionKind> {
-    if staging_dir.join("extension.json").exists() {
-        return Ok(ExtensionKind::Composite);
-    }
-    if staging_dir.join("driver.json").exists() {
-        return Ok(ExtensionKind::DatabaseDriver);
-    }
-    if staging_dir.join("manifest.json").exists() && staging_dir.join("parser.wasm").exists() {
-        return Ok(ExtensionKind::Language);
-    }
-    anyhow::bail!(
-        "无法识别扩展包类型,缺少 extension.json / driver.json / manifest.json+parser.wasm: {}",
-        staging_dir.display()
-    );
+    detect_kind_in_package(staging_dir)
 }
 
 pub fn install_from_staging_generic(
@@ -62,10 +51,13 @@ fn install_from_staging_with_policy(
     requested_kind: Option<ExtensionKind>,
     allow_high_risk_permissions: bool,
 ) -> Result<ExtensionSummary> {
-    let kind = requested_kind.unwrap_or(detect_package_kind(staging_dir)?);
-    enforce_install_security_policy(staging_dir, kind, allow_high_risk_permissions)?;
+    let package_root = package_root(staging_dir)?;
+    let kind = requested_kind
+        .or_else(|| direct_package_kind(&package_root))
+        .ok_or_else(|| anyhow!("无法识别扩展包类型: {}", staging_dir.display()))?;
+    enforce_install_security_policy(&package_root, kind, allow_high_risk_permissions)?;
 
-    let install_name = package_install_name(staging_dir, kind)?;
+    let install_name = package_install_name(&package_root, kind)?;
     let provider = registry
         .provider(kind)
         .ok_or_else(|| anyhow!("no provider for {:?}", kind))?;
@@ -74,7 +66,7 @@ fn install_from_staging_with_policy(
 
     let target_dir = root.join(&install_name);
     let backup_dir = backup_existing_target(&root, &install_name, &target_dir)?;
-    if let Err(err) = copy_dir_recursive(staging_dir, &target_dir) {
+    if let Err(err) = copy_dir_recursive(&package_root, &target_dir) {
         if let Err(restore_err) = restore_failed_install(&target_dir, backup_dir.as_deref()) {
             return Err(err).context(format!("restore previous extension failed: {restore_err}"));
         }

@@ -5,6 +5,7 @@ pub mod extension;
 mod extension_action_handler;
 pub mod extension_db_gateway;
 pub mod extension_downloader;
+mod extension_package_layout;
 mod extension_view_host;
 mod global;
 mod registration;
