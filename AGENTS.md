@@ -193,6 +193,10 @@
 
 - 环境初始化优先遵循仓库文档与项目级 AGENTS。
 - 若无明确要求，则按当前任务所需执行最小准备，不做额外环境工程。
+- macOS 上 `reqwest` 默认系统代理探测可能在测试进程里触发
+  `system-configuration` 的 NULL object panic；应用内需要“无应用代理”的
+  HTTP client 时，优先使用 `ReqwestClient::user_agent("onetcli")` 这类显式
+  direct client 构造路径，并用相关 `setting_tab`/CLI 测试验证。
 
 ### Command Verification Rules
 
@@ -324,6 +328,15 @@
   - **正确做法**：以后应优先怎么处理
   - **验证方式**：如何确认这次处理是对的
   - **适用范围**：影响哪些模块、页面、链路或命令
+
+#### 已沉淀经验
+
+- **标题**：GPUI UI 测试不要直接依赖真实 Tokio worker 的完成时序
+- **触发信号**：`#[gpui::test]` 覆盖 UI 加载时，代码路径内部调用 `one_core::gpui_tokio::Tokio::spawn`，测试出现非确定性 background thread / scheduler 活动，或需要等待真实多线程 Tokio worker 才能断言 UI 状态。
+- **根因 / 约束**：`Tokio::spawn` 使用全局 Tokio runtime，再通过 GPUI `background_spawn` 回到测试调度器；这会让本应确定性的 UI 测试混入真实多线程调度。
+- **正确做法**：优先把异步任务完成后的 UI 状态变更提取为纯状态 contract，并用普通单元测试覆盖成功、失败、防重复加载、手动刷新等行为；网络解析和下载使用 fake HTTP client 覆盖。对纯 HTTP/IO 的 UI 加载，不要在 GPUI view 层额外包一层 `Tokio::spawn`，优先使用 `cx.background_spawn`，这样 `gpui` 的 `test-support` 能用 `TestAppContext`/`condition` 稳定驱动真实 view 测试。
+- **验证方式**：运行对应状态 contract 测试、fake HTTP 网络测试、真实 GPUI view 测试，以及相关 crate 的 `cargo check` / `cargo clippy -D warnings` / `cargo test`。
+- **适用范围**：`main/src/settings/*`、扩展市场加载、更新检查、数据库驱动安装等 GPUI UI 层异步加载路径。
 
 ### 执行原则
 
