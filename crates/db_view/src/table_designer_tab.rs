@@ -30,8 +30,10 @@ use crate::database_view_plugin::{
     get_table_designer_capabilities_for,
 };
 use db::GlobalDbState;
-#[cfg(test)]
+#[cfg(all(test, feature = "builtin-duckdb"))]
 use db::duckdb::DuckDbPlugin;
+#[cfg(all(test, not(feature = "builtin-duckdb")))]
+use db::ipc::ExternalDatabasePlugin;
 use db::plugin::DatabasePlugin;
 use db::types::{
     CharsetInfo, CollationInfo, ColumnDefinition, ColumnInfo, IndexDefinition, IndexInfo,
@@ -3317,7 +3319,10 @@ mod tests {
             DatabaseType::MySQL => Box::new(MySqlPlugin::new()),
             DatabaseType::PostgreSQL => Box::new(PostgresPlugin::new()),
             DatabaseType::SQLite => Box::new(SqlitePlugin::new()),
+            #[cfg(feature = "builtin-duckdb")]
             DatabaseType::DuckDB => Box::new(DuckDbPlugin::new()),
+            #[cfg(not(feature = "builtin-duckdb"))]
+            DatabaseType::DuckDB => Box::new(ExternalDatabasePlugin::new()),
             DatabaseType::MSSQL => Box::new(MsSqlPlugin::new()),
             DatabaseType::Oracle => Box::new(OraclePlugin::new()),
             DatabaseType::ClickHouse => Box::new(ClickHousePlugin::new()),

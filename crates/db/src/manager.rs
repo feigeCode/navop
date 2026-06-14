@@ -3,6 +3,7 @@ use crate::cache_manager::GlobalNodeCache;
 use crate::clickhouse::ClickHousePlugin;
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::connection_config_resolver::ConnectionConfigResolver;
+#[cfg(feature = "builtin-duckdb")]
 use crate::duckdb::DuckDbPlugin;
 use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportResult,
@@ -167,7 +168,7 @@ impl DbManager {
             mysql: Arc::new(MySqlPlugin::new()),
             postgresql: Arc::new(PostgresPlugin::new()),
             sqlite: Arc::new(SqlitePlugin::new()),
-            duckdb: Arc::new(DuckDbPlugin::new()),
+            duckdb: default_duckdb_plugin(),
             clickhouse: Arc::new(ClickHousePlugin::new()),
             mssql: Arc::new(MsSqlPlugin::new()),
             oracle: Arc::new(OraclePlugin::new()),
@@ -187,6 +188,16 @@ impl DbManager {
             DatabaseType::External => Ok(Arc::clone(&self.external)),
         }
     }
+}
+
+#[cfg(feature = "builtin-duckdb")]
+fn default_duckdb_plugin() -> Arc<dyn DatabasePlugin> {
+    Arc::new(DuckDbPlugin::new())
+}
+
+#[cfg(not(feature = "builtin-duckdb"))]
+fn default_duckdb_plugin() -> Arc<dyn DatabasePlugin> {
+    Arc::new(ExternalDatabasePlugin::new())
 }
 
 impl Default for DbManager {
@@ -2849,6 +2860,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "builtin-duckdb")]
     #[test]
     fn test_db_manager_registers_duckdb_plugin() {
         let plugin = DbManager::default()
@@ -2856,6 +2868,39 @@ mod tests {
             .expect("DuckDB plugin should be registered");
 
         assert_eq!(plugin.name(), DatabaseType::DuckDB);
+    }
+
+    #[cfg(not(feature = "builtin-duckdb"))]
+    #[test]
+    fn default_db_manager_uses_external_plugin_for_duckdb() {
+        let plugin = DbManager::default()
+            .get_plugin(&DatabaseType::DuckDB)
+            .expect("DuckDB plugin should be available through external IPC");
+
+        assert_eq!(plugin.name(), DatabaseType::External);
+    }
+
+    #[cfg(not(feature = "builtin-duckdb"))]
+    #[tokio::test]
+    async fn external_duckdb_plugin_uses_ipc_driver_id_without_external_param() {
+        let mut config = test_config("duckdb-ipc");
+        config.database_type = DatabaseType::DuckDB;
+        config.host = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("duckdb-ipc.duckdb")
+            .to_string_lossy()
+            .to_string();
+        config.database = Some("main".to_string());
+
+        let plugin = ExternalDatabasePlugin::with_registry(crate::ipc::IpcDriverRegistry::empty());
+
+        let error = plugin.test_connection(config).await.unwrap_err();
+
+        assert!(
+            format!("{error}").contains("external driver 'duckdb' not found"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

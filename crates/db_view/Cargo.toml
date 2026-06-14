@@ -3,6 +3,10 @@ name = "db_view"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+builtin-duckdb = ["db/builtin-duckdb"]
+
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true

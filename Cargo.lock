@@ -2804,7 +2804,6 @@ dependencies = [
  "gpui",
  "gpui-component",
  "hex",
- "interprocess",
  "moka",
  "mysql_async",
  "one-core",

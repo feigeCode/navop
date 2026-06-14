@@ -12,7 +12,6 @@ use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportProgressSender,
     ImportResult,
 };
-use crate::ipc::{ExternalDbConnection, IpcDriverRegistry};
 use crate::manifest_helpers::{DatabaseActionDescriptorExt, action, action_with_scope, field, tab};
 use crate::plugin::{DatabaseOperationRequest, DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
@@ -50,7 +49,6 @@ pub const DUCKDB_DATA_TYPES: &[(&str, &str)] = &[
 
 pub struct DuckDbPlugin {
     sqlite: SqlitePlugin,
-    registry: IpcDriverRegistry,
 }
 
 static DUCKDB_UI_MANIFEST: LazyLock<DatabaseUiManifest> = LazyLock::new(build_duckdb_ui_manifest);
@@ -59,7 +57,6 @@ impl DuckDbPlugin {
     pub fn new() -> Self {
         Self {
             sqlite: SqlitePlugin::new(),
-            registry: IpcDriverRegistry::load_default(),
         }
     }
 
@@ -781,11 +778,6 @@ impl DatabasePlugin for DuckDbPlugin {
         &self,
         config: DbConnectionConfig,
     ) -> Result<Box<dyn DbConnection + Send + Sync>, DbError> {
-        if let Some(driver) = self.registry.find("duckdb") {
-            let mut conn = ExternalDbConnection::new(config, driver);
-            conn.connect().await?;
-            return Ok(Box::new(conn));
-        }
         let mut conn = DuckDbConnection::new(config);
         conn.connect().await?;
         Ok(Box::new(conn))
@@ -1461,6 +1453,11 @@ mod tests {
 
     fn create_plugin() -> DuckDbPlugin {
         DuckDbPlugin::new()
+    }
+
+    #[test]
+    fn duckdb_plugin_keeps_only_builtin_plugin_state() {
+        let DuckDbPlugin { sqlite: _ } = create_plugin();
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub mod types;
 
 // Database implementations
 pub mod clickhouse;
+#[cfg(feature = "builtin-duckdb")]
 pub mod duckdb;
 pub mod mssql;
 pub mod mysql;

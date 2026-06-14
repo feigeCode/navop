@@ -36,9 +36,7 @@ impl ExternalDatabasePlugin {
     }
 
     fn driver_for_config(&self, config: &DbConnectionConfig) -> Result<IpcDriverManifest, DbError> {
-        let driver_id = config
-            .get_param(EXTERNAL_DRIVER_ID_PARAM)
-            .ok_or_else(|| DbError::connection("external driver id is required"))?;
+        let driver_id = driver_id_for_config(config)?;
         self.registry.find(driver_id).ok_or_else(|| {
             DbError::connection(format!("external driver '{}' not found", driver_id))
         })
@@ -135,6 +133,20 @@ impl ExternalDatabasePlugin {
             Err(error) if is_not_supported(&error) => Ok(None),
             Err(error) => Err(error),
         }
+    }
+}
+
+fn driver_id_for_config(config: &DbConnectionConfig) -> Result<&str, DbError> {
+    if let Some(driver_id) = config.get_param(EXTERNAL_DRIVER_ID_PARAM) {
+        return Ok(driver_id);
+    }
+    match config.database_type {
+        DatabaseType::DuckDB => Ok("duckdb"),
+        DatabaseType::External => Err(DbError::connection("external driver id is required")),
+        _ => Err(DbError::connection(format!(
+            "external driver id is required for {:?}",
+            config.database_type
+        ))),
     }
 }
 

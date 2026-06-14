@@ -86,6 +86,33 @@ fn scans_single_driver_directory() {
 }
 
 #[test]
+fn scans_driver_manifest_with_ui_form_without_capabilities() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::write(
+        temp.path().join(DRIVER_MANIFEST_FILE),
+        r#"{
+            "id": "duckdb",
+            "name": "DuckDB",
+            "entry": { "command": "./duckdb_driver" },
+            "transport": { "name": "duckdb.sock" },
+            "ui": {
+                "form": {
+                    "schema_version": 1,
+                    "forms": [],
+                    "actions": { "actions": [] }
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let registry = IpcDriverRegistry::load_from_dir(temp.path()).unwrap();
+
+    assert_eq!(1, registry.drivers().len());
+    assert!(registry.find("duckdb").is_some());
+}
+
+#[test]
 fn load_from_dirs_prioritizes_earlier_driver_ids() {
     let user = tempfile::tempdir().unwrap();
     let bundled = tempfile::tempdir().unwrap();
@@ -117,6 +144,15 @@ fn load_from_dirs_skips_unscannable_roots() {
 }
 
 #[test]
+fn default_driver_dirs_only_use_extension_database_drivers_dir() {
+    let config_dir = one_core::storage::get_config_dir().unwrap();
+    let expected = config_dir.join("extensions").join("database_drivers");
+
+    assert_eq!(vec![expected.clone()], default_driver_dirs());
+    assert_eq!(expected, default_driver_dir());
+}
+
+#[test]
 fn relative_entry_command_prefers_manifest_dir_binary() {
     let manifest_dir = tempfile::tempdir().unwrap();
     let exe_dir = tempfile::tempdir().unwrap();
@@ -142,31 +178,6 @@ fn relative_entry_command_falls_back_to_exe_sibling() {
     super::entry::resolve_relative_entry_command(&mut driver, exe_dir.path());
 
     assert_eq!(driver.entry.command, exe_driver.to_string_lossy());
-}
-
-#[test]
-fn bundled_driver_dirs_include_macos_resources() {
-    let exe = PathBuf::from("/Applications/OnetCli.app/Contents/MacOS/onetcli");
-
-    let dirs = super::discovery::bundled_driver_dirs_from_exe(&exe);
-
-    assert_eq!(
-        dirs[0],
-        PathBuf::from("/Applications/OnetCli.app/Contents/Resources/ipc-drivers")
-    );
-    assert!(dirs.contains(&PathBuf::from(
-        "/Applications/OnetCli.app/Contents/MacOS/ipc-drivers"
-    )));
-}
-
-#[test]
-fn bundled_driver_dirs_include_unix_prefix_share() {
-    let exe = PathBuf::from("/usr/bin/onetcli");
-
-    let dirs = super::discovery::bundled_driver_dirs_from_exe(&exe);
-
-    assert_eq!(dirs[0], PathBuf::from("/usr/share/onetcli/ipc-drivers"));
-    assert!(dirs.contains(&PathBuf::from("/usr/bin/ipc-drivers")));
 }
 
 #[test]
