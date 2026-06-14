@@ -1,0 +1,56 @@
+package onet:extension;
+
+interface db {
+    record connection-info {
+        id: string,
+        name: string,
+        driver: string,
+        database: option<string>,
+    }
+
+    record exec-options {
+        max-rows: option<u32>,
+        timeout-ms: option<u64>,
+        streaming: bool,
+    }
+
+    record column {
+        name: string,
+        type-name: string,
+        nullable: bool,
+    }
+
+    variant db-value {
+        null,
+        boolean(bool),
+        integer(s64),
+        float(f64),
+        text(string),
+        bytes(list<u8>),
+    }
+
+    record row-batch {
+        columns: list<column>,
+        rows: list<list<db-value>>,
+        next-cursor: option<string>,
+    }
+
+    record db-error {
+        code: string,
+        message: string,
+    }
+
+    resource session {
+        execute: func(sql: string, options: exec-options) -> result<row-batch, db-error>;
+        list-databases: func() -> result<list<string>, db-error>;
+        list-schemas: func(database: string) -> result<list<string>, db-error>;
+        close: func() -> result<_, db-error>;
+    }
+
+    resource cursor {
+        close: func() -> result<_, db-error>;
+    }
+
+    list-connections: func() -> result<list<connection-info>, db-error>;
+    open-session: func(connection-id: string, database: option<string>) -> result<session, db-error>;
+}

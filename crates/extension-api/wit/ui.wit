@@ -1,0 +1,129 @@
+package onet:extension;
+
+interface ui {
+    record action-context {
+        extension-id: string,
+        command-id: string,
+        node-id: string,
+        node-name: string,
+        node-type: string,
+        database-type: string,
+        connection-id: string,
+    }
+
+    enum view-mode {
+        dialog,
+        window,
+    }
+
+    enum field-kind {
+        text,
+        text-area,
+        password,
+        checkbox,
+        select,
+    }
+
+    enum db-selector-kind {
+        connection,
+        database,
+        schema,
+        table,
+        column,
+    }
+
+    record db-selector-query {
+        connection-id: option<string>,
+        database: option<string>,
+        schema: option<string>,
+        table: option<string>,
+    }
+
+    record db-selector-source {
+        kind: db-selector-kind,
+        query: db-selector-query,
+    }
+
+    record select-option {
+        value: string,
+        label: string,
+    }
+
+    variant field-source {
+        static-options(list<select-option>),
+        db-selector(db-selector-source),
+    }
+
+    record ui-field {
+        id: string,
+        label: string,
+        kind: field-kind,
+        required: bool,
+        value: option<string>,
+        source: option<field-source>,
+    }
+
+    variant ui-node {
+        text(string),
+        form(list<ui-field>),
+    }
+
+    enum action-style {
+        primary,
+        secondary,
+        danger,
+    }
+
+    record ui-action {
+        id: string,
+        label: string,
+        style: action-style,
+    }
+
+    record view-window-options {
+        width: option<f32>,
+        height: option<f32>,
+        min-width: option<f32>,
+        min-height: option<f32>,
+    }
+
+    record view-spec {
+        id: string,
+        title: string,
+        mode: view-mode,
+        nodes: list<ui-node>,
+        actions: list<ui-action>,
+        window: option<view-window-options>,
+    }
+
+    record field-value {
+        id: string,
+        value: string,
+    }
+
+    record view-action-event {
+        view-id: string,
+        action-id: string,
+        fields: list<field-value>,
+    }
+
+    enum notification-level {
+        info,
+        success,
+        warning,
+        error,
+    }
+
+    resource progress {
+        set-message: func(message: string);
+        set-fraction: func(fraction: f32);
+        close: func();
+    }
+
+    notify: func(level: notification-level, title: string, message: string);
+    current-action-context: func() -> option<action-context>;
+    open-view: func(view: view-spec);
+    open-result-view: func(title: string, payload: string);
+    refresh-tree: func(connection-id: string);
+    start-progress: func(title: string) -> progress;
+}

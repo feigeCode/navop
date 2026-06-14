@@ -1,0 +1,20 @@
+package onet:extension;
+
+interface task {
+    enum task-state {
+        running,
+        completed,
+        failed,
+        cancelled,
+    }
+
+    record task-status {
+        id: string,
+        title: string,
+        state: task-state,
+        message: option<string>,
+    }
+
+    report-status: func(status: task-status);
+    is-cancelled: func(task-id: string) -> bool;
+}

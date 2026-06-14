@@ -1,0 +1,11 @@
+[package]
+name = "extension-api"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+wit-parser = "0.244.0"

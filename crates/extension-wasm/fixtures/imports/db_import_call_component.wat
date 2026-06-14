@@ -1,0 +1,84 @@
+(component
+    (type $ui-instance
+        (instance
+            (type (;0;) (record (field "id" string) (field "value" string)))
+            (export (;1;) "field-value" (type (eq 0)))
+            (type (;2;) (list 1))
+            (type (;3;) (record (field "view-id" string) (field "action-id" string) (field "fields" 2)))
+            (export (;4;) "view-action-event" (type (eq 3)))
+        )
+    )
+    (import "onet:extension/ui" (instance $ui (type $ui-instance)))
+    (alias export $ui "view-action-event" (type $view-action-event))
+    (type $handle-view-action-ty (func (param "event" $view-action-event)))
+    (type $db-instance
+        (instance
+            (type (;0;) (option string))
+            (type (;1;) (record (field "id" string) (field "name" string) (field "driver" string) (field "database" 0)))
+            (export (;2;) "connection-info" (type (eq 1)))
+            (type (;3;) (list 2))
+            (type (;4;) (record (field "code" string) (field "message" string)))
+            (export (;5;) "db-error" (type (eq 4)))
+            (type (;6;) (result 3 (error 5)))
+            (type (;7;) (func (result 6)))
+            (export (;0;) "list-connections" (func (type 7)))
+        )
+    )
+    (import "onet:extension/db" (instance $db (type $db-instance)))
+    (core module $memory
+        (memory (export "memory") 1)
+        (global $heap (mut i32) (i32.const 1024))
+        (func (export "cabi_realloc") (param i32 i32 i32 i32) (result i32)
+            global.get $heap
+            global.get $heap
+            local.get 3
+            i32.add
+            global.set $heap
+        )
+    )
+    (core instance $mem (instantiate $memory))
+    (alias core export $mem "memory" (core memory $memory))
+    (alias core export $mem "cabi_realloc" (core func $realloc))
+    (alias export $db "list-connections" (func $list-connections))
+    (core func $list-connections-core
+        (canon lower
+            (func $list-connections)
+            (memory $memory)
+            (realloc $realloc)
+            string-encoding=utf8
+        )
+    )
+    (core instance $db-core
+        (export "list-connections" (func $list-connections-core))
+    )
+    (core module $m
+        (type (;0;) (func (param i32)))
+        (import "onet:extension/db" "list-connections" (func $list-connections (type 0)))
+        (func (export "activate")
+            i32.const 0
+            call $list-connections
+        )
+        (func (export "run-action"))
+        (func (export "handle-view-action") (param i32 i32 i32 i32 i32 i32))
+        (func (export "deactivate"))
+    )
+    (core instance $i
+        (instantiate $m
+            (with "onet:extension/db" (instance $db-core))
+        )
+    )
+    (func $activate (canon lift (core func $i "activate")))
+    (func $run-action (canon lift (core func $i "run-action")))
+    (func $handle-view-action (type $handle-view-action-ty)
+        (canon lift
+            (core func $i "handle-view-action")
+            (memory $memory)
+            (realloc $realloc)
+            string-encoding=utf8
+        ))
+    (func $deactivate (canon lift (core func $i "deactivate")))
+    (export "activate" (func $activate))
+    (export "run-action" (func $run-action))
+    (export "handle-view-action" (func $handle-view-action) (func (type $handle-view-action-ty)))
+    (export "deactivate" (func $deactivate))
+)

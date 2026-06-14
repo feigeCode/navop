@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "com.onetcli.coverage-wasm",
+  "name": "WASM Coverage Smoke",
+  "version": "0.1.0",
+  "description": "Smoke extension that exercises the current WIT component surface.",
+  "engines": {
+    "onetcli": ">=0.1.0"
+  },
+  "permissions": [
+    "db:connections:list",
+    "db:schema:*",
+    "ui:dialog",
+    "ui:notify",
+    "ui:progress"
+  ],
+  "runtime": {
+    "wasm": [
+      {
+        "id": "main",
+        "module": "./wasm/coverage_component.wat",
+        "kind": "component"
+      }
+    ]
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "coverage.run",
+        "title": "Run WASM Coverage Smoke",
+        "category": "Database",
+        "handler": {
+          "kind": "wasm",
+          "runtime_id": "main"
+        }
+      }
+    ],
+    "menus": {
+      "db.tree.table": [
+        {
+          "command": "coverage.run",
+          "label": "Run WASM Coverage Smoke",
+          "group": "extension@99",
+          "when": "node.type == 'table'",
+          "requires_active": true
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,14 @@
+package onet:extension;
+
+world extension {
+    use ui.{view-action-event};
+
+    import db;
+    import ui;
+    import task;
+
+    export activate: func();
+    export run-action: func();
+    export handle-view-action: func(event: view-action-event);
+    export deactivate: func();
+}
