@@ -111,6 +111,7 @@ CI and Release selection rules:
 - Release tags are extension-scoped, for example `duckdb-v1.0.0` or `sql-formatter-v0.3.0`, so a DuckDB release never builds unrelated extensions.
 - R2 upload uploads only the current extension's package files plus a regenerated global `extensions/manifest.json`.
 - `extension-manifest.json` is always generated as a full manifest, but it is built by merging `manifest/entries/*.json`; unchanged extensions reuse their existing entry files and do not rebuild.
+- Manifest `asset_url`, `asset_urls`, `fallback_asset_url`, and `fallback_asset_urls` values may be relative paths. When a value does not start with `http://` or `https://`, the `onetcli` client resolves it against the directory containing the manifest URL. Because the R2 manifest is published at `/extensions/manifest.json`, primary R2 package paths should look like `duckdb/1.0.0/duckdb-driver-x86_64-unknown-linux-gnu.tar.gz`, not a hard-coded public domain.
 
 Submodules are optional later. If official extensions move to separate
 repositories, `onetcli-extensions` can become a registry repository whose
@@ -473,7 +474,6 @@ const artifactDir = process.env.ARTIFACT_DIR || "artifacts";
 const version = requiredEnv("EXTENSION_VERSION");
 const releaseTag = requiredEnv("RELEASE_TAG");
 const extensionId = requiredEnv("EXTENSION_ID");
-const publicBaseUrl = requiredEnv("ONETCLI_PUBLIC_BASE_URL").replace(/\/+$/, "");
 const repository = requiredEnv("GITHUB_REPOSITORY");
 
 const targets = [
@@ -490,7 +490,7 @@ const sha256s = {};
 
 for (const target of targets) {
   const fileName = `duckdb-driver-${target}.tar.gz`;
-  assetUrls[target] = `${publicBaseUrl}/extensions/duckdb/${version}/${fileName}`;
+  assetUrls[target] = `${extensionId}/${version}/${fileName}`;
   fallbackAssetUrls[target] = `https://github.com/${repository}/releases/download/${releaseTag}/${fileName}`;
   sha256s[target] = checksumFor(checksums, fileName);
 }
@@ -574,13 +574,12 @@ ARTIFACT_DIR=artifacts \
 EXTENSION_VERSION=1.0.0 \
 EXTENSION_ID=duckdb \
 RELEASE_TAG=duckdb-v1.0.0 \
-ONETCLI_PUBLIC_BASE_URL=https://onetcli.test.cn \
 GITHUB_REPOSITORY=feigeCode/onetcli-extensions \
 node scripts/generate-marketplace-manifest.mjs
-node -e 'const fs = require("fs"); const m = JSON.parse(fs.readFileSync("artifacts/extension-manifest.json", "utf8")); if (m.extensions[0].id !== "duckdb") process.exit(1);'
+node -e 'const fs = require("fs"); const m = JSON.parse(fs.readFileSync("artifacts/extension-manifest.json", "utf8")); const e = m.extensions[0]; if (e.id !== "duckdb" || !e.asset_urls["x86_64-unknown-linux-gnu"].startsWith("duckdb/1.0.0/")) process.exit(1);'
 ```
 
-Expected: local package verifies and `artifacts/extension-manifest.json` contains a DuckDB database driver entry.
+Expected: local package verifies and `artifacts/extension-manifest.json` contains a DuckDB database driver entry whose primary asset URLs are relative to the manifest directory.
 
 ---
 
@@ -836,7 +835,6 @@ jobs:
           EXTENSION_ID: ${{ needs.prepare.outputs.extension_id }}
           EXTENSION_VERSION: ${{ needs.prepare.outputs.version }}
           RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
-          ONETCLI_PUBLIC_BASE_URL: ${{ vars.ONETCLI_PUBLIC_BASE_URL }}
         run: node scripts/generate-marketplace-manifest.mjs
       - name: Write release metadata
         run: |
@@ -916,18 +914,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Resolve public base URL
-        id: r2_config
-        env:
-          ONETCLI_PUBLIC_BASE_URL: ${{ vars.ONETCLI_PUBLIC_BASE_URL }}
-        run: |
-          base_url="${ONETCLI_PUBLIC_BASE_URL%/}"
-          if [ -z "$base_url" ]; then
-            echo "::error::ONETCLI_PUBLIC_BASE_URL repo variable is not set"
-            exit 1
-          fi
-          echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
 
       - name: Resolve release tag
         id: release
@@ -1084,12 +1070,6 @@ Expected: `upload-r2 yaml ok`.
 
 - [ ] **Step 1: Configure repository variables and secrets**
 
-Set repository variable in `feigeCode/onetcli-extensions`:
-
-```text
-ONETCLI_PUBLIC_BASE_URL=https://onetcli.test.cn
-```
-
 Set repository secrets:
 
 ```text
@@ -1126,7 +1106,7 @@ Expected: `manifest ok`.
 Run:
 
 ```bash
-asset_url="$(node -e 'const fs = require("fs"); const m = JSON.parse(fs.readFileSync("/tmp/onetcli-extension-manifest.json", "utf8")); process.stdout.write(m.extensions[0].asset_urls["x86_64-unknown-linux-gnu"]);')"
+asset_url="$(node -e 'const fs = require("fs"); const m = JSON.parse(fs.readFileSync("/tmp/onetcli-extension-manifest.json", "utf8")); const asset = m.extensions[0].asset_urls["x86_64-unknown-linux-gnu"]; const manifest = "https://onetcli.test.cn/extensions/manifest.json"; const prefix = manifest.slice(0, manifest.lastIndexOf("/") + 1); process.stdout.write(/^https?:\/\//.test(asset) ? asset : prefix + asset.replace(/^\/+/, ""));')"
 curl -fsSL "$asset_url" -o /tmp/duckdb-driver-x86_64-unknown-linux-gnu.tar.gz
 tar tzf /tmp/duckdb-driver-x86_64-unknown-linux-gnu.tar.gz | sort
 ```
@@ -1146,34 +1126,79 @@ duckdb/locales/zh-HK.yml
 ## Task 7: Point `onetcli` GitHub Marketplace Fallback To The Extension Repository
 
 **Files:**
+- Modify in `onetcli`: `.github/workflows/release.yml`
 - Modify in `onetcli`: `crates/extension-runtime/src/extension_downloader/transfer.rs`
 - Test in `onetcli`: `crates/extension-runtime/src/extension_downloader_network_tests.rs`
 
-- [ ] **Step 1: Update fallback manifest URL**
+- [ ] **Step 1: Add injectable GitHub fallback manifest URL**
 
-In `crates/extension-runtime/src/extension_downloader/transfer.rs`, change:
-
-```rust
-pub const GITHUB_EXTENSION_MANIFEST_URL: &str =
-    "https://github.com/feigeCode/onetcli/releases/latest/download/extension-manifest.json";
-```
-
-to:
+In `crates/extension-runtime/build.rs`, pass through both extension manifest environment variables:
 
 ```rust
-pub const GITHUB_EXTENSION_MANIFEST_URL: &str =
-    "https://github.com/feigeCode/onetcli-extensions/releases/latest/download/extension-manifest.json";
+fn main() {
+    for key in [
+        "ONETCLI_EXTENSION_MANIFEST_URL",
+        "ONETCLI_EXTENSION_GITHUB_MANIFEST_URL",
+    ] {
+        println!("cargo:rerun-if-env-changed={key}");
+        if let Ok(value) = std::env::var(key)
+            && !value.is_empty()
+        {
+            println!("cargo:rustc-env={key}={value}");
+        }
+    }
+}
 ```
 
-- [ ] **Step 2: Update tests that assert the fallback URL**
+In `crates/extension-runtime/src/extension_downloader/transfer.rs`, keep the built-in GitHub fallback as the last resort and resolve the effective fallback in this order:
 
-In `crates/extension-runtime/src/extension_downloader_network_tests.rs`, replace expected fallback strings with:
+```rust
+pub fn github_extension_manifest_url_from_parts(
+    runtime: Option<&str>,
+    build_time: Option<&str>,
+) -> String {
+    runtime
+        .and_then(non_empty_trimmed)
+        .or_else(|| build_time.and_then(non_empty_trimmed))
+        .unwrap_or_else(|| GITHUB_EXTENSION_MANIFEST_URL.to_string())
+}
+```
+
+- [ ] **Step 2: Inject the extension repository fallback in the main app release build**
+
+Set this repository variable in `feigeCode/onetcli`:
 
 ```text
-https://github.com/feigeCode/onetcli-extensions/releases/latest/download/extension-manifest.json
+ONETCLI_EXTENSION_GITHUB_MANIFEST_URL=https://github.com/feigeCode/onetcli-extensions/releases/latest/download/extension-manifest.json
 ```
 
-- [ ] **Step 3: Run extension marketplace tests**
+In `onetcli/.github/workflows/release.yml`, pass the repository variable through to app bundle builds:
+
+```yaml
+ONETCLI_EXTENSION_GITHUB_MANIFEST_URL: ${{ vars.ONETCLI_EXTENSION_GITHUB_MANIFEST_URL }}
+```
+
+Do not hard-code this URL in source. Do not require this variable for local developer builds. If it is absent, the client keeps using the built-in GitHub fallback URL.
+
+- [ ] **Step 3: Add relative asset URL coverage**
+
+In `crates/extension-runtime/src/extension_downloader_network_tests.rs`, add a test that fetches manifest URL `https://onetcli.test.cn/extensions/manifest.json` with relative primary and fallback asset URLs:
+
+```json
+{
+  "asset_url": "packages/missing.tar.gz",
+  "fallback_asset_url": "packages/fake_pg.tar.gz"
+}
+```
+
+Expected download requests:
+
+```text
+https://onetcli.test.cn/extensions/packages/missing.tar.gz
+https://onetcli.test.cn/extensions/packages/fake_pg.tar.gz
+```
+
+- [ ] **Step 4: Run extension marketplace tests**
 
 Run:
 
@@ -1182,7 +1207,7 @@ cargo test -p extension-runtime extension_downloader_network_tests -- --nocaptur
 cargo test -p extension-runtime --features github-marketplace extension_downloader_network_tests -- --nocapture
 ```
 
-Expected: default build tries configured/R2 manifest then GitHub fallback; `github-marketplace` feature uses GitHub-only manifest from `onetcli-extensions`.
+Expected: default build tries configured/R2 manifest then GitHub fallback; injected `ONETCLI_EXTENSION_GITHUB_MANIFEST_URL` can redirect GitHub fallback to `onetcli-extensions`; relative asset URLs resolve against the manifest URL prefix; `github-marketplace` feature uses a GitHub-only manifest.
 
 ---
 
