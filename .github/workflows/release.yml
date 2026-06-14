@@ -132,12 +132,11 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          ONETCLI_UPDATE_URL: ${{ secrets.ONETCLI_UPDATE_URL }}
-          ONETCLI_UPDATE_DOWNLOAD_URL: ${{ secrets.ONETCLI_UPDATE_DOWNLOAD_URL }}
+          ONETCLI_PUBLIC_BASE_URL: ${{ vars.ONETCLI_PUBLIC_BASE_URL || vars.ONETCLI_R2_PUBLIC_BASE_URL }}
           ONETCLI_WECHAT_QR_URL: ${{ secrets.ONETCLI_WECHAT_QR_URL }}
           ONETCLI_ALIPAY_QR_URL: ${{ secrets.ONETCLI_ALIPAY_QR_URL }}
           ONETCLI_PAYPAL_QR_URL: ${{ secrets.ONETCLI_PAYPAL_QR_URL }}
-        run: cargo build --release -p main -p duckdb_driver --target ${{ matrix.target }}
+        run: cargo build --release -p main --target ${{ matrix.target }}
 
 
       - name: Clean build artifacts (macOS)
@@ -153,7 +152,7 @@ jobs:
         run: |
           chmod +x script/bundle-macos.sh
           chmod +x script/bundle-macos-dmg.sh
-          script/bundle-macos.sh ${{ matrix.target }}
+          ONETCLI_BUNDLE_IPC_DRIVERS=0 script/bundle-macos.sh ${{ matrix.target }}
           script/bundle-macos-dmg.sh ${{ matrix.target }}
           tar czf ${{ matrix.archive }} -C target OnetCli.app
 
@@ -166,7 +165,6 @@ jobs:
           mkdir -p package/usr/share/icons/hicolor/256x256/apps
           mkdir -p package/usr/share/icons/hicolor/512x515/apps
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} package/usr/bin/
-          bash script/package-ipc-drivers.sh ${{ matrix.target }} package/usr/share/onetcli/ipc-drivers
           cp resources/linux/onetcli.desktop package/usr/share/applications/
           cp resources/linux/onetcli-128.png package/usr/share/icons/hicolor/128x128/apps/onetcli.png
           cp resources/linux/onetcli-256.png package/usr/share/icons/hicolor/256x256/apps/onetcli.png
@@ -179,7 +177,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "package/${{ matrix.binary }}"
-          bash script/package-ipc-drivers.sh "${{ matrix.target }}" "package/ipc-drivers"
           Compress-Archive -Path "package/*" -DestinationPath "${{ matrix.archive }}"
 
       - name: Upload artifact
@@ -218,6 +215,24 @@ jobs:
           cd artifacts
           sha256sum onetcli-* > sha256sums.txt
           cat sha256sums.txt
+
+      - name: Write release metadata
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const releaseTag = process.env.GITHUB_REF_NAME;
+          const version = releaseTag.replace(/^v/, "");
+          fs.writeFileSync(
+            "artifacts/release-metadata.json",
+            `${JSON.stringify({ release_tag: releaseTag, version }, null, 2)}\n`,
+          );
+          NODE
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata
+          path: artifacts/release-metadata.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

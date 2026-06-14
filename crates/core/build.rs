@@ -4,6 +4,7 @@ fn main() {
     for key in [
         "SUPABASE_URL",
         "SUPABASE_ANON_KEY",
+        "ONETCLI_PUBLIC_BASE_URL",
         "ONETCLI_UPDATE_URL",
         "ONETCLI_UPDATE_DOWNLOAD_URL",
     ] {

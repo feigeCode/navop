@@ -107,8 +107,10 @@ bash script/package-ipc-drivers.sh x86_64-pc-windows-msvc \
   package/ipc-drivers
 ```
 
-The release workflow builds both `main` and `duckdb_driver`, then packages the
-driver manifest, binary, and locales into the platform discovery path.
+The main application release workflow builds only `main`. IPC driver binaries
+and marketplace manifests are published by extension-specific release pipelines.
+Use the helper above from those pipelines, or for local manual packaging, when a
+driver package still needs the bundled-driver directory layout.
 
 ## UI Behavior
 

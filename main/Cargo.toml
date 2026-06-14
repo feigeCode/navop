@@ -53,5 +53,11 @@ winresource = "0.1"
 gpui = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 
+[features]
+default = []
+github-distribution = ["github-updates", "github-marketplace"]
+github-marketplace = ["extension-runtime/github-marketplace"]
+github-updates = []
+
 [lints]
 workspace = true

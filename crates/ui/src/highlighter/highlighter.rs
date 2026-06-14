@@ -200,16 +200,13 @@ impl<'a> sum_tree::Dimension<'a, HighlightSummary> for Range<usize> {
 impl SyntaxHighlighter {
     /// Create a new SyntaxHighlighter for HTML.
     pub fn new(lang: &str) -> Self {
-        match Self::build_combined_injections_query(&lang) {
-            Ok(result) => result,
-            Err(err) => {
-                tracing::warn!(
+        Self::build_combined_injections_query(&lang).unwrap_or_else(|err| {
+            tracing::warn!(
                     "SyntaxHighlighter init failed, fallback to use `text`, {}",
                     err
                 );
-                Self::build_combined_injections_query("text").unwrap()
-            }
-        }
+            Self::build_combined_injections_query("text").unwrap()
+        })
     }
 
     /// Build the combined injections query for the given language.

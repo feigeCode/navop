@@ -135,6 +135,10 @@ fn entry(id: &str, kind: ExtensionKind) -> MarketplaceEntry {
         file_extensions: Vec::new(),
         asset_url: format!("https://example.test/{id}.tar.gz"),
         sha256: Some("hash".to_string()),
+        asset_urls: HashMap::new(),
+        sha256s: HashMap::new(),
+        fallback_asset_url: None,
+        fallback_asset_urls: HashMap::new(),
     }
 }
 

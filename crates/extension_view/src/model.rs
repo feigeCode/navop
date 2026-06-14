@@ -78,6 +78,7 @@ pub struct MarketplaceEntry {
     pub file_extensions: Vec<String>,
     pub asset_url: String,
     pub sha256: Option<String>,
+    pub fallback_asset_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

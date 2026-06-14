@@ -1,0 +1,277 @@
+name: Upload R2
+
+on:
+  workflow_run:
+    workflows:
+      - Release
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: GitHub Release tag to upload to R2, for example v0.4.8
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    name: Upload release assets to R2
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve R2 public base URL
+        id: r2_config
+        env:
+          ONETCLI_PUBLIC_BASE_URL: ${{ vars.ONETCLI_PUBLIC_BASE_URL || vars.ONETCLI_R2_PUBLIC_BASE_URL }}
+        run: |
+          base_url="${ONETCLI_PUBLIC_BASE_URL%/}"
+          if [ -z "$base_url" ]; then
+            echo "::warning::ONETCLI_PUBLIC_BASE_URL repo variable is not set; skipping R2 upload. GitHub Release remains the fallback source."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release tag
+        id: release
+        if: ${{ steps.r2_config.outputs.skip != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
+          WORKFLOW_RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$INPUT_TAG" ]; then
+            release_tag="$INPUT_TAG"
+          else
+            mkdir -p run-metadata
+            if ! gh run download "$WORKFLOW_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name release-metadata \
+              --dir run-metadata; then
+              echo "::warning::Release workflow metadata was not found; skipping R2 upload."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            release_tag="$(
+              node -e 'const fs = require("fs"); const data = JSON.parse(fs.readFileSync("run-metadata/release-metadata.json", "utf8")); process.stdout.write(data.release_tag || "");'
+            )"
+          fi
+
+          if [ -z "$release_tag" ]; then
+            echo "::warning::Release tag is empty; skipping R2 upload."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "version=${release_tag#v}" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Show R2 upload target
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        run: |
+          echo "Release tag: ${{ steps.release.outputs.tag }}"
+          echo "R2 public base URL: ${{ steps.r2_config.outputs.base_url }}"
+
+      - name: Verify R2 secrets are set
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+        run: |
+          for name in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_R2_ACCESS_KEY_ID CLOUDFLARE_R2_SECRET_ACCESS_KEY CLOUDFLARE_R2_BUCKET; do
+            if [ -z "${!name}" ]; then
+              echo "::error::${name} secret is empty or not set"
+              exit 1
+            fi
+          done
+
+      - name: Download GitHub Release assets
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          mkdir -p artifacts
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "onetcli-aarch64-apple-darwin.tar.gz" \
+            --pattern "onetcli-x86_64-apple-darwin.tar.gz" \
+            --pattern "onetcli-x86_64-unknown-linux-gnu.tar.gz" \
+            --pattern "onetcli-x86_64-pc-windows-msvc.zip" \
+            --pattern "onetcli-aarch64-apple-darwin.dmg" \
+            --pattern "onetcli-x86_64-apple-darwin.dmg" \
+            --pattern "sha256sums.txt" \
+            --dir artifacts
+          ls -la artifacts
+
+      - name: Verify downloaded release assets
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        run: |
+          set -euo pipefail
+          for file in \
+            onetcli-aarch64-apple-darwin.tar.gz \
+            onetcli-x86_64-apple-darwin.tar.gz \
+            onetcli-x86_64-unknown-linux-gnu.tar.gz \
+            onetcli-x86_64-pc-windows-msvc.zip \
+            onetcli-aarch64-apple-darwin.dmg \
+            onetcli-x86_64-apple-darwin.dmg \
+            sha256sums.txt; do
+            if [ ! -s "artifacts/${file}" ]; then
+              echo "::error::Missing or empty GitHub Release asset: ${file}"
+              exit 1
+            fi
+          done
+
+          for file in \
+            onetcli-aarch64-apple-darwin.tar.gz \
+            onetcli-x86_64-apple-darwin.tar.gz \
+            onetcli-x86_64-unknown-linux-gnu.tar.gz \
+            onetcli-x86_64-pc-windows-msvc.zip \
+            onetcli-aarch64-apple-darwin.dmg \
+            onetcli-x86_64-apple-darwin.dmg; do
+            if ! awk -v file="$file" '$2 == file && $1 ~ /^[0-9a-f]{64}$/ { found = 1 } END { exit found ? 0 : 1 }' artifacts/sha256sums.txt; then
+              echo "::error::sha256sums.txt is missing checksum for ${file}"
+              exit 1
+            fi
+          done
+
+      - name: Generate R2 update manifest
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        env:
+          ONETCLI_PUBLIC_BASE_URL: ${{ steps.r2_config.outputs.base_url }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+
+          const baseUrl = process.env.ONETCLI_PUBLIC_BASE_URL.replace(/\/+$/, "");
+          const releaseTag = process.env.RELEASE_TAG;
+          const version = process.env.RELEASE_VERSION;
+          const checksums = new Map(
+            fs
+              .readFileSync("artifacts/sha256sums.txt", "utf8")
+              .trim()
+              .split(/\n/)
+              .filter(Boolean)
+              .map((line) => {
+                const [sha256, fileName] = line.trim().split(/\s+/, 2);
+                return [fileName, sha256];
+              }),
+          );
+
+          const appAssets = {
+            "aarch64-apple-darwin": "onetcli-aarch64-apple-darwin.tar.gz",
+            "x86_64-apple-darwin": "onetcli-x86_64-apple-darwin.tar.gz",
+            "x86_64-unknown-linux-gnu": "onetcli-x86_64-unknown-linux-gnu.tar.gz",
+            "x86_64-pc-windows-msvc": "onetcli-x86_64-pc-windows-msvc.zip",
+          };
+
+          function checksumFor(fileName) {
+            const sha256 = checksums.get(fileName);
+            if (!sha256) throw new Error(`missing checksum for ${fileName}`);
+            return sha256;
+          }
+
+          function objectUrls(prefix, assets) {
+            return Object.fromEntries(
+              Object.entries(assets).map(([target, fileName]) => [
+                target,
+                `${baseUrl}/${prefix}/${releaseTag}/${fileName}`,
+              ]),
+            );
+          }
+
+          function objectChecksums(assets) {
+            return Object.fromEntries(
+              Object.entries(assets).map(([target, fileName]) => [
+                target,
+                checksumFor(fileName),
+              ]),
+            );
+          }
+
+          fs.mkdirSync("artifacts/updates", { recursive: true });
+          fs.writeFileSync(
+            "artifacts/updates/latest.json",
+            `${JSON.stringify(
+              {
+                schema_version: 1,
+                version,
+                release_page_url: `${baseUrl}/releases/${releaseTag}/`,
+                downloads: objectUrls("releases", appAssets),
+                sha256s: objectChecksums(appAssets),
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          NODE
+
+      - name: Configure Cloudflare R2 credentials
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          aws-region: auto
+
+      - name: Upload release assets and update manifest to R2
+        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          R2_ENDPOINT="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          upload_object() {
+            local source="$1"
+            local key="$2"
+            local content_type="$3"
+            local cache_control="$4"
+            aws s3 cp "$source" "s3://${CLOUDFLARE_R2_BUCKET}/${key}" \
+              --endpoint-url "$R2_ENDPOINT" \
+              --content-type "$content_type" \
+              --cache-control "$cache_control"
+          }
+
+          for file in \
+            onetcli-aarch64-apple-darwin.tar.gz \
+            onetcli-x86_64-apple-darwin.tar.gz \
+            onetcli-x86_64-unknown-linux-gnu.tar.gz \
+            onetcli-x86_64-pc-windows-msvc.zip \
+            onetcli-aarch64-apple-darwin.dmg \
+            onetcli-x86_64-apple-darwin.dmg \
+            sha256sums.txt; do
+            if [[ "$file" == *.zip ]]; then
+              content_type="application/zip"
+            elif [[ "$file" == *.dmg ]]; then
+              content_type="application/x-apple-diskimage"
+            elif [[ "$file" == *.txt ]]; then
+              content_type="text/plain; charset=utf-8"
+            else
+              content_type="application/gzip"
+            fi
+            upload_object "artifacts/${file}" "releases/${RELEASE_TAG}/${file}" "$content_type" "public, max-age=31536000, immutable"
+            upload_object "artifacts/${file}" "releases/latest/${file}" "$content_type" "public, max-age=300"
+          done
+
+          upload_object "artifacts/updates/latest.json" "updates/latest.json" "application/json; charset=utf-8" "no-cache"

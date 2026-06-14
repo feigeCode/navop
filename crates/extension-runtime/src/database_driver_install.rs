@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::extension::ExtensionKind;
 use crate::extension::{ExtensionRegistry, ExtensionSummary};
 use crate::extension_downloader::{
-    DEFAULT_EXTENSION_MANIFEST_URL, MarketplaceEntry, download_marketplace_entry_to_staging,
+    MarketplaceEntry, download_marketplace_entry_to_staging, fetch_default_manifest_url,
     fetch_manifest_url, install_from_staging_generic, install_marketplace_entry_generic,
 };
 const DUCKDB_DRIVER_ID: &str = "duckdb";
@@ -156,7 +156,7 @@ async fn install_database_driver_from_marketplace(
     http_client: Arc<dyn gpui::http_client::HttpClient>,
     driver_id: &str,
 ) -> anyhow::Result<ExtensionSummary> {
-    let manifest = fetch_manifest_url(http_client.clone(), DEFAULT_EXTENSION_MANIFEST_URL).await?;
+    let manifest = fetch_default_manifest_url(http_client.clone()).await?;
     let entries = manifest.into_entries();
     let entry = find_database_driver_entry(&entries, driver_id)
         .cloned()

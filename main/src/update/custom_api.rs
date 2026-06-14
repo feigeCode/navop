@@ -1,21 +1,8 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use futures::AsyncReadExt;
 use gpui::http_client::{AsyncBody, HttpClient, Method, Request};
 use serde::Deserialize;
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct UpdateDownloads {
-    #[serde(default)]
-    #[allow(dead_code)]
-    windows: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    macos: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    linux: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct UpdateResponse {
@@ -23,9 +10,13 @@ pub(crate) struct UpdateResponse {
     #[serde(default)]
     download_url: Option<String>,
     #[serde(default)]
-    downloads: Option<UpdateDownloads>,
+    downloads: Option<HashMap<String, String>>,
     #[serde(default)]
     pub(crate) sha256: Option<String>,
+    #[serde(default)]
+    sha256s: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub(crate) release_page_url: Option<String>,
 }
 
 pub(crate) async fn fetch_update_info(
@@ -63,24 +54,93 @@ pub(crate) fn select_download_url(
     response: &UpdateResponse,
     default_download_url: Option<String>,
 ) -> Option<String> {
-    let platform_url = response.downloads.as_ref().and_then(|downloads| {
-        #[cfg(target_os = "windows")]
-        {
-            return downloads.windows.clone();
-        }
-        #[cfg(target_os = "macos")]
-        {
-            return downloads.macos.clone();
-        }
-        #[cfg(target_os = "linux")]
-        {
-            return downloads.linux.clone();
-        }
-        #[allow(unreachable_code)]
-        None
-    });
+    select_download_url_for_keys(response, default_download_url, platform_download_keys())
+}
 
-    platform_url
+pub(crate) fn select_sha256(response: &UpdateResponse) -> Option<String> {
+    select_sha256_for_keys(response, platform_download_keys())
+}
+
+fn select_download_url_for_keys(
+    response: &UpdateResponse,
+    default_download_url: Option<String>,
+    keys: &[&str],
+) -> Option<String> {
+    select_keyed_value(&response.downloads, keys)
         .or_else(|| response.download_url.clone())
         .or(default_download_url)
+}
+
+fn select_sha256_for_keys(response: &UpdateResponse, keys: &[&str]) -> Option<String> {
+    select_keyed_value(&response.sha256s, keys).or_else(|| response.sha256.clone())
+}
+
+fn select_keyed_value(values: &Option<HashMap<String, String>>, keys: &[&str]) -> Option<String> {
+    values
+        .as_ref()
+        .and_then(|values| keys.iter().find_map(|key| values.get(*key).cloned()))
+}
+
+fn platform_download_keys() -> &'static [&'static str] {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        return &["aarch64-apple-darwin", "macos"];
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        return &["x86_64-apple-darwin", "macos"];
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        return &["x86_64-unknown-linux-gnu", "linux"];
+    }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        return &["x86_64-pc-windows-msvc", "windows"];
+    }
+    #[allow(unreachable_code)]
+    &[]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn select_download_url_prefers_target_triple_before_os_fallback() {
+        let response = serde_json::from_str::<UpdateResponse>(
+            r#"{
+                "version": "1.2.3",
+                "downloads": {
+                    "aarch64-apple-darwin": "https://example.test/arm64.tar.gz",
+                    "macos": "https://example.test/macos.tar.gz"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            Some("https://example.test/arm64.tar.gz".to_string()),
+            select_download_url_for_keys(&response, None, &["aarch64-apple-darwin", "macos"])
+        );
+    }
+
+    #[test]
+    fn select_sha256_prefers_target_triple_before_global_fallback() {
+        let response = serde_json::from_str::<UpdateResponse>(
+            r#"{
+                "version": "1.2.3",
+                "sha256": "global",
+                "sha256s": {
+                    "x86_64-unknown-linux-gnu": "linux-sha"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            Some("linux-sha".to_string()),
+            select_sha256_for_keys(&response, &["x86_64-unknown-linux-gnu", "linux"])
+        );
+    }
 }

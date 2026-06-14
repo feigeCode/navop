@@ -7,8 +7,12 @@ use gpui::http_client::{AsyncBody, HttpClient, Method, Request};
 use super::marketplace::{MarketplaceEntry, MarketplaceManifest};
 use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
 
-pub const DEFAULT_EXTENSION_MANIFEST_URL: &str =
-    "https://raw.githubusercontent.com/feigeCode/onetcli-language-extensions/main/manifest.json";
+pub const GITHUB_EXTENSION_MANIFEST_URL: &str =
+    "https://github.com/feigeCode/onetcli/releases/latest/download/extension-manifest.json";
+pub const DEFAULT_EXTENSION_MANIFEST_URL: &str = GITHUB_EXTENSION_MANIFEST_URL;
+
+#[cfg(not(feature = "github-marketplace"))]
+const EXTENSION_MANIFEST_PATH: &str = "extensions/manifest.json";
 
 pub async fn fetch_manifest_url(
     http_client: Arc<dyn HttpClient>,
@@ -20,21 +24,137 @@ pub async fn fetch_manifest_url(
     serde_json::from_slice(&bytes).context("parse release manifest")
 }
 
+pub async fn fetch_default_manifest_url(
+    http_client: Arc<dyn HttpClient>,
+) -> Result<MarketplaceManifest> {
+    fetch_manifest_url_with_fallback(http_client, configured_extension_manifest_url()).await
+}
+
+pub async fn fetch_manifest_url_with_fallback(
+    http_client: Arc<dyn HttpClient>,
+    configured_url: Option<String>,
+) -> Result<MarketplaceManifest> {
+    let urls = manifest_urls_for_configured_url(configured_url);
+    let mut last_error = None;
+
+    for url in urls {
+        match fetch_manifest_url(http_client.clone(), &url).await {
+            Ok(manifest) => return Ok(manifest),
+            Err(err) => {
+                tracing::warn!("扩展市场 manifest 加载失败，尝试下一个源: {err:#}");
+                last_error = Some(err);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| anyhow!("没有可用的扩展市场 manifest 源")))
+}
+
+pub fn manifest_urls_for_configured_url(configured_url: Option<String>) -> Vec<String> {
+    #[cfg(feature = "github-marketplace")]
+    {
+        let _ = configured_url;
+        return vec![GITHUB_EXTENSION_MANIFEST_URL.to_string()];
+    }
+
+    #[cfg(not(feature = "github-marketplace"))]
+    {
+        let mut urls = Vec::new();
+        if let Some(url) = configured_url.and_then(|url| non_empty_trimmed(&url)) {
+            push_unique_url(&mut urls, url);
+        }
+        push_unique_url(&mut urls, GITHUB_EXTENSION_MANIFEST_URL.to_string());
+        urls
+    }
+}
+
+fn configured_extension_manifest_url() -> Option<String> {
+    #[cfg(feature = "github-marketplace")]
+    {
+        return None;
+    }
+
+    #[cfg(not(feature = "github-marketplace"))]
+    {
+        runtime_env("ONETCLI_EXTENSION_MANIFEST_URL")
+            .or_else(|| {
+                non_empty_trimmed(option_env!("ONETCLI_EXTENSION_MANIFEST_URL").unwrap_or_default())
+            })
+            .or_else(extension_manifest_url_from_public_base)
+    }
+}
+
+#[cfg(not(feature = "github-marketplace"))]
+fn extension_manifest_url_from_public_base() -> Option<String> {
+    one_core::config::public_base_url().map(|base_url| {
+        format!(
+            "{}/{}",
+            base_url.trim_end_matches('/'),
+            EXTENSION_MANIFEST_PATH
+        )
+    })
+}
+
+#[cfg(not(feature = "github-marketplace"))]
+fn runtime_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| non_empty_trimmed(&value))
+}
+
+#[cfg(not(feature = "github-marketplace"))]
+fn non_empty_trimmed(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+#[cfg(not(feature = "github-marketplace"))]
+fn push_unique_url(urls: &mut Vec<String>, url: String) {
+    if !urls.contains(&url) {
+        urls.push(url);
+    }
+}
+
 pub async fn download_marketplace_entry_to_staging(
     http_client: Arc<dyn HttpClient>,
     entry: &MarketplaceEntry,
 ) -> Result<PathBuf> {
-    if entry.sha256.is_none() && entry.kind != ExtensionKind::Language {
+    let asset_urls = entry.download_urls();
+    if asset_urls.is_empty() {
+        anyhow::bail!("marketplace entry {} 缺少 asset_url", entry.id);
+    }
+    let expected_sha256 = entry.sha256();
+    if expected_sha256.is_none() && entry.kind != ExtensionKind::Language {
         anyhow::bail!("marketplace entry {} 缺少 sha256", entry.id);
     }
-    let tarball = fetch_bytes(&http_client, &entry.asset_url)
-        .await
-        .with_context(|| format!("download asset {}", entry.asset_url))?;
-    if let Some(expected) = &entry.sha256 {
-        gpui_component::highlighter::verify_sha256(&tarball, expected)
-            .with_context(|| format!("verify sha256 for {}", entry.asset_url))?;
+
+    let mut last_error = None;
+    for asset_url in asset_urls {
+        match download_asset_to_staging(&http_client, &asset_url, expected_sha256.as_deref()).await
+        {
+            Ok(staging) => return Ok(staging),
+            Err(err) => {
+                tracing::warn!("扩展资产下载失败，尝试下一个源: {err:#}");
+                last_error = Some(err);
+            }
+        }
     }
 
+    Err(last_error.unwrap_or_else(|| anyhow!("marketplace entry {} 没有可用下载源", entry.id)))
+}
+
+async fn download_asset_to_staging(
+    http_client: &Arc<dyn HttpClient>,
+    asset_url: &str,
+    expected_sha256: Option<&str>,
+) -> Result<PathBuf> {
+    let tarball = fetch_bytes(http_client, asset_url)
+        .await
+        .with_context(|| format!("download asset {asset_url}"))?;
+    if let Some(expected) = expected_sha256 {
+        gpui_component::highlighter::verify_sha256(&tarball, expected)
+            .with_context(|| format!("verify sha256 for {asset_url}"))?;
+    }
     let staging = super::make_staging_dir()?;
     let result = super::extract_tarball_to(&tarball, &staging).map(|_| staging.clone());
     if result.is_err() {

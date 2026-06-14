@@ -32,6 +32,27 @@ pub struct UpdateConfig {
     pub download_url: Option<String>,
 }
 
+pub fn public_base_url_from_parts(
+    runtime: Option<&str>,
+    build_time: Option<&str>,
+) -> Option<String> {
+    trimmed_value(runtime)
+        .or_else(|| trimmed_value(build_time))
+        .map(|value| value.trim_end_matches('/').to_string())
+}
+
+pub fn public_base_url() -> Option<String> {
+    let runtime = std::env::var("ONETCLI_PUBLIC_BASE_URL").ok();
+    public_base_url_from_parts(runtime.as_deref(), option_env!("ONETCLI_PUBLIC_BASE_URL"))
+}
+
+pub fn update_url_from_public_base(base_url: &str) -> String {
+    format!(
+        "{}/updates/latest.json",
+        base_url.trim().trim_end_matches('/')
+    )
+}
+
 impl UpdateConfig {
     /// 获取更新配置
     ///
@@ -45,38 +66,43 @@ impl UpdateConfig {
 
     /// 获取更新接口地址
     fn get_update_url() -> String {
-        if let Ok(url) = std::env::var("ONETCLI_UPDATE_URL") {
-            if !url.trim().is_empty() {
-                return url;
-            }
+        if let Some(url) = runtime_env("ONETCLI_UPDATE_URL") {
+            return url;
         }
 
-        option_env!("ONETCLI_UPDATE_URL")
+        if let Some(url) = trimmed_value(option_env!("ONETCLI_UPDATE_URL")) {
+            return url;
+        }
+
+        public_base_url()
+            .map(|base_url| update_url_from_public_base(&base_url))
             .unwrap_or_default()
-            .to_string()
     }
 
     /// 获取下载页地址
     fn get_download_url() -> Option<String> {
-        if let Ok(url) = std::env::var("ONETCLI_UPDATE_DOWNLOAD_URL") {
-            if !url.trim().is_empty() {
-                return Some(url);
-            }
+        if let Some(url) = runtime_env("ONETCLI_UPDATE_DOWNLOAD_URL") {
+            return Some(url);
         }
 
-        option_env!("ONETCLI_UPDATE_DOWNLOAD_URL").and_then(|value| {
-            if value.trim().is_empty() {
-                None
-            } else {
-                Some(value.to_string())
-            }
-        })
+        trimmed_value(option_env!("ONETCLI_UPDATE_DOWNLOAD_URL"))
     }
 
     /// 检查配置是否有效
     pub fn is_valid(&self) -> bool {
         !self.update_url.trim().is_empty()
     }
+}
+
+fn runtime_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| trimmed_value(Some(&value)))
+}
+
+fn trimmed_value(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 impl Default for UpdateConfig {
@@ -151,5 +177,30 @@ mod tests {
     fn test_update_config_get() {
         let config = UpdateConfig::get();
         let _ = config.is_valid();
+    }
+
+    #[test]
+    fn update_url_from_public_base_points_to_r2_manifest() {
+        assert_eq!(
+            "https://onetcli.test.cn/updates/latest.json",
+            update_url_from_public_base("https://onetcli.test.cn")
+        );
+    }
+
+    #[test]
+    fn update_url_from_public_base_trims_trailing_slash() {
+        assert_eq!(
+            "https://onetcli.test.cn/updates/latest.json",
+            update_url_from_public_base("https://onetcli.test.cn/")
+        );
+    }
+
+    #[test]
+    fn public_base_url_from_parts_has_no_built_in_default() {
+        assert_eq!(None, public_base_url_from_parts(None, None));
+        assert_eq!(
+            Some("https://onetcli.test.cn".to_string()),
+            public_base_url_from_parts(None, Some("https://onetcli.test.cn"))
+        );
     }
 }

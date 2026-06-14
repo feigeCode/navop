@@ -30,11 +30,7 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
         http_client: Arc<dyn HttpClient>,
     ) -> BoxFuture<'static, anyhow::Result<Vec<extension_view::MarketplaceEntry>>> {
         async move {
-            let manifest = host_downloader::fetch_manifest_url(
-                http_client,
-                host_downloader::DEFAULT_EXTENSION_MANIFEST_URL,
-            )
-            .await?;
+            let manifest = host_downloader::fetch_default_manifest_url(http_client).await?;
             Ok(manifest
                 .into_entries()
                 .into_iter()
@@ -79,6 +75,7 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
             file_extensions: Vec::new(),
             asset_url: path.display().to_string(),
             sha256: None,
+            fallback_asset_url: None,
         };
         review_downloaded_extension(staging, kind, entry)
     }
@@ -202,6 +199,9 @@ fn to_view_summary(summary: host_extension::ExtensionSummary) -> extension_view:
 }
 
 fn to_view_entry(entry: host_downloader::MarketplaceEntry) -> extension_view::MarketplaceEntry {
+    let asset_url = entry.asset_url().unwrap_or_default();
+    let fallback_asset_url = entry.fallback_asset_url();
+    let sha256 = entry.sha256();
     extension_view::MarketplaceEntry {
         id: entry.id,
         kind: to_view_kind(entry.kind),
@@ -209,8 +209,9 @@ fn to_view_entry(entry: host_downloader::MarketplaceEntry) -> extension_view::Ma
         version: entry.version,
         description: entry.description,
         file_extensions: entry.file_extensions,
-        asset_url: entry.asset_url,
-        sha256: entry.sha256,
+        asset_url,
+        sha256,
+        fallback_asset_url,
     }
 }
 
@@ -224,6 +225,10 @@ fn to_host_entry(entry: extension_view::MarketplaceEntry) -> host_downloader::Ma
         file_extensions: entry.file_extensions,
         asset_url: entry.asset_url,
         sha256: entry.sha256,
+        asset_urls: std::collections::HashMap::new(),
+        sha256s: std::collections::HashMap::new(),
+        fallback_asset_url: entry.fallback_asset_url,
+        fallback_asset_urls: std::collections::HashMap::new(),
     }
 }
 

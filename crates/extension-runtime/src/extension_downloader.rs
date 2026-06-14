@@ -17,8 +17,10 @@ pub use marketplace::MarketplaceEntry;
 #[cfg(test)]
 pub use marketplace::MarketplaceManifest;
 pub use transfer::{
-    DEFAULT_EXTENSION_MANIFEST_URL, download_marketplace_entry_to_staging, fetch_manifest_url,
-    install_marketplace_entry_generic,
+    DEFAULT_EXTENSION_MANIFEST_URL, GITHUB_EXTENSION_MANIFEST_URL,
+    download_marketplace_entry_to_staging, fetch_default_manifest_url, fetch_manifest_url,
+    fetch_manifest_url_with_fallback, install_marketplace_entry_generic,
+    manifest_urls_for_configured_url,
 };
 
 pub fn detect_package_kind(staging_dir: &Path) -> Result<ExtensionKind> {

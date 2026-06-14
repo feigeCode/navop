@@ -29,5 +29,9 @@ tracing = { workspace = true }
 smol = { workspace = true }
 tempfile = "3"
 
+[features]
+default = []
+github-marketplace = []
+
 [lints]
 workspace = true

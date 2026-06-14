@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fs,
     sync::{Arc, Mutex},
 };
@@ -9,6 +9,13 @@ use gpui::http_client::{self, AsyncBody, HttpClient, Url, http};
 
 use crate::extension::{
     DatabaseDriverExtensionProvider, ExtensionKind, ExtensionRegistry, ExtensionSummary,
+};
+#[cfg(feature = "github-marketplace")]
+use crate::extension_downloader::DEFAULT_EXTENSION_MANIFEST_URL;
+#[cfg(not(feature = "github-marketplace"))]
+use crate::extension_downloader::{
+    GITHUB_EXTENSION_MANIFEST_URL, fetch_manifest_url_with_fallback,
+    manifest_urls_for_configured_url,
 };
 use crate::extension_downloader::{
     MarketplaceEntry, download_marketplace_entry_to_staging, fetch_manifest_url,
@@ -48,6 +55,87 @@ fn fetch_manifest_url_parses_marketplace_manifest() {
     );
 }
 
+#[cfg(not(feature = "github-marketplace"))]
+#[test]
+fn missing_extension_manifest_env_uses_github_only() {
+    assert_eq!(
+        vec![GITHUB_EXTENSION_MANIFEST_URL.to_string()],
+        manifest_urls_for_configured_url(None)
+    );
+}
+
+#[cfg(feature = "github-marketplace")]
+#[test]
+fn github_marketplace_feature_points_to_github_manifest() {
+    assert_eq!(
+        "https://github.com/feigeCode/onetcli/releases/latest/download/extension-manifest.json",
+        DEFAULT_EXTENSION_MANIFEST_URL
+    );
+}
+
+#[test]
+fn marketplace_entry_prefers_target_asset_and_sha256() {
+    let mut entry = marketplace_database_driver_entry(Some("fallback-sha".to_string()));
+    entry.asset_urls = HashMap::from([
+        (
+            "aarch64-apple-darwin".to_string(),
+            "https://example.test/duckdb-macos-arm64.tar.gz".to_string(),
+        ),
+        (
+            "macos".to_string(),
+            "https://example.test/duckdb-macos.tar.gz".to_string(),
+        ),
+    ]);
+    entry.sha256s = HashMap::from([("aarch64-apple-darwin".to_string(), "target-sha".to_string())]);
+
+    assert_eq!(
+        Some("https://example.test/duckdb-macos-arm64.tar.gz".to_string()),
+        entry.asset_url_for_keys(&["aarch64-apple-darwin", "macos"])
+    );
+    assert_eq!(
+        Some("target-sha".to_string()),
+        entry.sha256_for_keys(&["aarch64-apple-darwin", "macos"])
+    );
+}
+
+#[cfg(not(feature = "github-marketplace"))]
+#[test]
+fn fetch_default_manifest_url_falls_back_to_github_when_r2_fails() {
+    let r2_manifest_url = "https://onetcli.test.cn/extensions/manifest.json".to_string();
+    let client = Arc::new(FakeHttpClient::new(vec![
+        Err(anyhow::anyhow!("r2 unavailable")),
+        FakeHttpClient::response(
+            200,
+            r#"{
+                "release_version": "github-fallback",
+                "extensions": [{
+                    "id": "rust",
+                    "kind": "language",
+                    "name": "Rust",
+                    "asset_url": "https://github.example.test/rust.tar.gz"
+                }]
+            }"#,
+        ),
+    ]));
+
+    let manifest = smol::block_on(fetch_manifest_url_with_fallback(
+        client.clone(),
+        Some(r2_manifest_url),
+    ))
+    .unwrap();
+
+    assert_eq!("github-fallback", manifest.release_version);
+    let requests = client.take_requests();
+    assert_eq!(
+        "https://onetcli.test.cn/extensions/manifest.json",
+        requests[0].uri
+    );
+    assert_eq!(
+        "https://github.com/feigeCode/onetcli/releases/latest/download/extension-manifest.json",
+        requests[1].uri
+    );
+}
+
 #[test]
 fn download_marketplace_entry_to_staging_verifies_sha256_and_extracts_tarball() {
     let tarball = database_driver_tarball_bytes();
@@ -66,6 +154,37 @@ fn download_marketplace_entry_to_staging_verifies_sha256_and_extracts_tarball() 
     assert_eq!(
         "https://example.test/fake_pg.tar.gz",
         client.take_requests()[0].uri
+    );
+    fs::remove_dir_all(staging).unwrap();
+}
+
+#[test]
+fn download_marketplace_entry_to_staging_falls_back_to_github_asset() {
+    let tarball = database_driver_tarball_bytes();
+    let sha256 = sha256_hex(&tarball);
+    let client = Arc::new(FakeHttpClient::new(vec![
+        Err(anyhow::anyhow!("r2 unavailable")),
+        binary_response(200, tarball),
+    ]));
+    let mut entry = marketplace_database_driver_entry(Some(sha256));
+    entry.asset_url = "https://onetcli.test.cn/extensions/fake_pg.tar.gz".to_string();
+    entry.fallback_asset_url = Some("https://github.example.test/fake_pg.tar.gz".to_string());
+
+    let staging = smol::block_on(download_marketplace_entry_to_staging(
+        client.clone(),
+        &entry,
+    ))
+    .unwrap();
+
+    assert!(staging.join("driver.json").exists());
+    let requests = client.take_requests();
+    assert_eq!(
+        "https://onetcli.test.cn/extensions/fake_pg.tar.gz",
+        requests[0].uri
+    );
+    assert_eq!(
+        "https://github.example.test/fake_pg.tar.gz",
+        requests[1].uri
     );
     fs::remove_dir_all(staging).unwrap();
 }
@@ -130,6 +249,10 @@ fn marketplace_database_driver_entry(sha256: Option<String>) -> MarketplaceEntry
         file_extensions: Vec::new(),
         asset_url: "https://example.test/fake_pg.tar.gz".to_string(),
         sha256,
+        asset_urls: HashMap::new(),
+        sha256s: HashMap::new(),
+        fallback_asset_url: None,
+        fallback_asset_urls: HashMap::new(),
     }
 }
 
