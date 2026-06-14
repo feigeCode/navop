@@ -11,6 +11,10 @@ pub(crate) struct UpdateResponse {
     download_url: Option<String>,
     #[serde(default)]
     downloads: Option<HashMap<String, String>>,
+    #[serde(default, alias = "github_download_url")]
+    fallback_download_url: Option<String>,
+    #[serde(default, alias = "github_downloads")]
+    fallback_downloads: Option<HashMap<String, String>>,
     #[serde(default)]
     pub(crate) sha256: Option<String>,
     #[serde(default)]
@@ -61,6 +65,10 @@ pub(crate) fn select_sha256(response: &UpdateResponse) -> Option<String> {
     select_sha256_for_keys(response, platform_download_keys())
 }
 
+pub(crate) fn select_fallback_download_url(response: &UpdateResponse) -> Option<String> {
+    select_fallback_download_url_for_keys(response, platform_download_keys())
+}
+
 fn select_download_url_for_keys(
     response: &UpdateResponse,
     default_download_url: Option<String>,
@@ -73,6 +81,14 @@ fn select_download_url_for_keys(
 
 fn select_sha256_for_keys(response: &UpdateResponse, keys: &[&str]) -> Option<String> {
     select_keyed_value(&response.sha256s, keys).or_else(|| response.sha256.clone())
+}
+
+fn select_fallback_download_url_for_keys(
+    response: &UpdateResponse,
+    keys: &[&str],
+) -> Option<String> {
+    select_keyed_value(&response.fallback_downloads, keys)
+        .or_else(|| response.fallback_download_url.clone())
 }
 
 fn select_keyed_value(values: &Option<HashMap<String, String>>, keys: &[&str]) -> Option<String> {
@@ -141,6 +157,28 @@ mod tests {
         assert_eq!(
             Some("linux-sha".to_string()),
             select_sha256_for_keys(&response, &["x86_64-unknown-linux-gnu", "linux"])
+        );
+    }
+
+    #[test]
+    fn select_fallback_download_url_prefers_target_triple_before_global_fallback() {
+        let response = serde_json::from_str::<UpdateResponse>(
+            r#"{
+                "version": "1.2.3",
+                "fallback_download_url": "https://github.example.test/global.tar.gz",
+                "fallback_downloads": {
+                    "x86_64-unknown-linux-gnu": "https://github.example.test/linux.tar.gz"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            Some("https://github.example.test/linux.tar.gz".to_string()),
+            select_fallback_download_url_for_keys(
+                &response,
+                &["x86_64-unknown-linux-gnu", "linux"]
+            )
         );
     }
 }

@@ -15,7 +15,8 @@ use crate::extension_downloader::DEFAULT_EXTENSION_MANIFEST_URL;
 #[cfg(not(feature = "github-marketplace"))]
 use crate::extension_downloader::{
     GITHUB_EXTENSION_MANIFEST_URL, fetch_manifest_url_with_fallback,
-    manifest_urls_for_configured_url,
+    github_extension_manifest_url_from_parts, manifest_urls_for_configured_url,
+    manifest_urls_for_configured_url_with_github_fallback,
 };
 use crate::extension_downloader::{
     MarketplaceEntry, download_marketplace_entry_to_staging, fetch_manifest_url,
@@ -61,6 +62,44 @@ fn missing_extension_manifest_env_uses_github_only() {
     assert_eq!(
         vec![GITHUB_EXTENSION_MANIFEST_URL.to_string()],
         manifest_urls_for_configured_url(None)
+    );
+}
+
+#[cfg(not(feature = "github-marketplace"))]
+#[test]
+fn github_extension_manifest_url_prefers_runtime_then_build_time() {
+    assert_eq!(
+        "https://github.example.test/runtime/extension-manifest.json",
+        github_extension_manifest_url_from_parts(
+            Some(" https://github.example.test/runtime/extension-manifest.json "),
+            Some("https://github.example.test/build/extension-manifest.json")
+        )
+    );
+    assert_eq!(
+        "https://github.example.test/build/extension-manifest.json",
+        github_extension_manifest_url_from_parts(
+            Some(" "),
+            Some(" https://github.example.test/build/extension-manifest.json ")
+        )
+    );
+    assert_eq!(
+        GITHUB_EXTENSION_MANIFEST_URL,
+        github_extension_manifest_url_from_parts(None, None)
+    );
+}
+
+#[cfg(not(feature = "github-marketplace"))]
+#[test]
+fn configured_manifest_urls_use_injected_github_fallback() {
+    assert_eq!(
+        vec![
+            "https://onetcli.test.cn/extensions/manifest.json".to_string(),
+            "https://github.example.test/onetcli-extensions/releases/latest/download/extension-manifest.json".to_string(),
+        ],
+        manifest_urls_for_configured_url_with_github_fallback(
+            Some("https://onetcli.test.cn/extensions/manifest.json".to_string()),
+            "https://github.example.test/onetcli-extensions/releases/latest/download/extension-manifest.json".to_string(),
+        )
     );
 }
 
@@ -185,6 +224,60 @@ fn download_marketplace_entry_to_staging_falls_back_to_github_asset() {
     assert_eq!(
         "https://github.example.test/fake_pg.tar.gz",
         requests[1].uri
+    );
+    fs::remove_dir_all(staging).unwrap();
+}
+
+#[test]
+fn download_marketplace_entry_to_staging_resolves_relative_asset_urls_from_manifest_prefix() {
+    let tarball = database_driver_tarball_bytes();
+    let sha256 = sha256_hex(&tarball);
+    let manifest = format!(
+        r#"{{
+            "release_version": "relative-assets",
+            "extensions": [{{
+                "id": "fake_pg",
+                "kind": "database_driver",
+                "name": "Fake PostgreSQL",
+                "version": "1.2.3",
+                "asset_url": "packages/missing.tar.gz",
+                "fallback_asset_url": "packages/fake_pg.tar.gz",
+                "sha256": "{sha256}"
+            }}]
+        }}"#,
+    );
+    let client = Arc::new(FakeHttpClient::new(vec![
+        FakeHttpClient::response(200, &manifest),
+        Err(anyhow::anyhow!("primary unavailable")),
+        binary_response(200, tarball),
+    ]));
+
+    let manifest = smol::block_on(fetch_manifest_url(
+        client.clone(),
+        "https://onetcli.test.cn/extensions/manifest.json",
+    ))
+    .unwrap();
+    let entries = manifest.into_entries();
+
+    let staging = smol::block_on(download_marketplace_entry_to_staging(
+        client.clone(),
+        &entries[0],
+    ))
+    .unwrap();
+
+    assert!(staging.join("driver.json").exists());
+    let requests = client.take_requests();
+    assert_eq!(
+        "https://onetcli.test.cn/extensions/manifest.json",
+        requests[0].uri
+    );
+    assert_eq!(
+        "https://onetcli.test.cn/extensions/packages/missing.tar.gz",
+        requests[1].uri
+    );
+    assert_eq!(
+        "https://onetcli.test.cn/extensions/packages/fake_pg.tar.gz",
+        requests[2].uri
     );
     fs::remove_dir_all(staging).unwrap();
 }

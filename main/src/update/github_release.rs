@@ -100,6 +100,7 @@ pub(crate) fn github_release_to_dialog_info(
         current_version: current_version.to_string(),
         latest_version: release.tag_name.clone(),
         download_url: Some(asset.browser_download_url.clone()),
+        fallback_download_url: None,
         expected_sha256: None,
         release_page_url: Some(release_page_url),
     })

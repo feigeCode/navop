@@ -10,6 +10,7 @@ use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
 pub const GITHUB_EXTENSION_MANIFEST_URL: &str =
     "https://github.com/feigeCode/onetcli/releases/latest/download/extension-manifest.json";
 pub const DEFAULT_EXTENSION_MANIFEST_URL: &str = GITHUB_EXTENSION_MANIFEST_URL;
+const EXTENSION_GITHUB_MANIFEST_URL_ENV: &str = "ONETCLI_EXTENSION_GITHUB_MANIFEST_URL";
 
 #[cfg(not(feature = "github-marketplace"))]
 const EXTENSION_MANIFEST_PATH: &str = "extensions/manifest.json";
@@ -21,7 +22,10 @@ pub async fn fetch_manifest_url(
     let bytes = fetch_bytes(&http_client, url)
         .await
         .with_context(|| format!("fetch release manifest from {url}"))?;
-    serde_json::from_slice(&bytes).context("parse release manifest")
+    let mut manifest: MarketplaceManifest =
+        serde_json::from_slice(&bytes).context("parse release manifest")?;
+    manifest.resolve_asset_urls(url);
+    Ok(manifest)
 }
 
 pub async fn fetch_default_manifest_url(
@@ -51,10 +55,20 @@ pub async fn fetch_manifest_url_with_fallback(
 }
 
 pub fn manifest_urls_for_configured_url(configured_url: Option<String>) -> Vec<String> {
+    manifest_urls_for_configured_url_with_github_fallback(
+        configured_url,
+        configured_github_extension_manifest_url(),
+    )
+}
+
+pub fn manifest_urls_for_configured_url_with_github_fallback(
+    configured_url: Option<String>,
+    github_fallback_url: String,
+) -> Vec<String> {
     #[cfg(feature = "github-marketplace")]
     {
         let _ = configured_url;
-        return vec![GITHUB_EXTENSION_MANIFEST_URL.to_string()];
+        return vec![github_fallback_url];
     }
 
     #[cfg(not(feature = "github-marketplace"))]
@@ -63,9 +77,27 @@ pub fn manifest_urls_for_configured_url(configured_url: Option<String>) -> Vec<S
         if let Some(url) = configured_url.and_then(|url| non_empty_trimmed(&url)) {
             push_unique_url(&mut urls, url);
         }
-        push_unique_url(&mut urls, GITHUB_EXTENSION_MANIFEST_URL.to_string());
+        push_unique_url(&mut urls, github_fallback_url);
         urls
     }
+}
+
+pub fn github_extension_manifest_url_from_parts(
+    runtime: Option<&str>,
+    build_time: Option<&str>,
+) -> String {
+    runtime
+        .and_then(non_empty_trimmed)
+        .or_else(|| build_time.and_then(non_empty_trimmed))
+        .unwrap_or_else(|| GITHUB_EXTENSION_MANIFEST_URL.to_string())
+}
+
+fn configured_github_extension_manifest_url() -> String {
+    let runtime = std::env::var(EXTENSION_GITHUB_MANIFEST_URL_ENV).ok();
+    github_extension_manifest_url_from_parts(
+        runtime.as_deref(),
+        option_env!("ONETCLI_EXTENSION_GITHUB_MANIFEST_URL"),
+    )
 }
 
 fn configured_extension_manifest_url() -> Option<String> {
@@ -102,7 +134,6 @@ fn runtime_env(key: &str) -> Option<String> {
         .and_then(|value| non_empty_trimmed(&value))
 }
 
-#[cfg(not(feature = "github-marketplace"))]
 fn non_empty_trimmed(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())

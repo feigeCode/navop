@@ -17,7 +17,9 @@ mod install;
 mod network;
 mod util;
 
-use custom_api::{fetch_update_info, select_download_url, select_sha256};
+use custom_api::{
+    fetch_update_info, select_download_url, select_fallback_download_url, select_sha256,
+};
 use dialog::show_update_dialog;
 use github_release::{fetch_github_release, github_release_to_dialog_info};
 use install::{apply_update_helper, cleanup_stale_update_backups};
@@ -70,9 +72,28 @@ pub(crate) struct UpdateDialogInfo {
     current_version: String,
     latest_version: String,
     download_url: Option<String>,
+    fallback_download_url: Option<String>,
     expected_sha256: Option<String>,
     /// 发布页面 URL，方便用户手动下载
     release_page_url: Option<String>,
+}
+
+impl UpdateDialogInfo {
+    fn download_urls(&self) -> Vec<String> {
+        let mut urls = Vec::new();
+        push_unique_url(&mut urls, self.download_url.clone());
+        push_unique_url(&mut urls, self.fallback_download_url.clone());
+        urls
+    }
+}
+
+fn push_unique_url(urls: &mut Vec<String>, url: Option<String>) {
+    let Some(url) = url.filter(|url| !url.trim().is_empty()) else {
+        return;
+    };
+    if !urls.contains(&url) {
+        urls.push(url);
+    }
 }
 
 pub fn handle_update_command() -> bool {
@@ -296,6 +317,7 @@ async fn fetch_custom_dialog_info(
         current_version: current_version.to_string(),
         latest_version: response.version.clone(),
         download_url: select_download_url(&response, config.download_url.clone()),
+        fallback_download_url: select_fallback_download_url(&response),
         expected_sha256: select_sha256(&response),
         release_page_url: response.release_page_url.clone(),
     }))
@@ -412,7 +434,10 @@ mod tests {
     #[cfg(not(feature = "github-updates"))]
     use one_core::config::update_url_from_public_base;
 
-    use super::{ACTIVE_UPDATE_SOURCE, UpdateCheckTrigger, UpdateSource, should_run_update_check};
+    use super::{
+        ACTIVE_UPDATE_SOURCE, UpdateCheckTrigger, UpdateDialogInfo, UpdateSource,
+        should_run_update_check,
+    };
     #[cfg(not(feature = "github-updates"))]
     use super::{UpdateCheckOutcome, perform_update_check};
     #[cfg(not(feature = "github-updates"))]
@@ -444,10 +469,47 @@ mod tests {
         assert_eq!(UpdateSource::GitHub, ACTIVE_UPDATE_SOURCE);
     }
 
+    #[test]
+    fn update_dialog_info_download_urls_keep_primary_then_fallback() {
+        let info = UpdateDialogInfo {
+            current_version: "0.1.0".to_string(),
+            latest_version: "9.9.9".to_string(),
+            download_url: Some("https://onetcli.pdyyds.cn/update.tar.gz".to_string()),
+            fallback_download_url: Some("https://github.example.test/update.tar.gz".to_string()),
+            expected_sha256: None,
+            release_page_url: None,
+        };
+
+        assert_eq!(
+            vec![
+                "https://onetcli.pdyyds.cn/update.tar.gz".to_string(),
+                "https://github.example.test/update.tar.gz".to_string(),
+            ],
+            info.download_urls()
+        );
+    }
+
+    #[test]
+    fn update_dialog_info_download_urls_deduplicate_repeated_fallback() {
+        let info = UpdateDialogInfo {
+            current_version: "0.1.0".to_string(),
+            latest_version: "9.9.9".to_string(),
+            download_url: Some("https://github.example.test/update.tar.gz".to_string()),
+            fallback_download_url: Some("https://github.example.test/update.tar.gz".to_string()),
+            expected_sha256: None,
+            release_page_url: None,
+        };
+
+        assert_eq!(
+            vec!["https://github.example.test/update.tar.gz".to_string()],
+            info.download_urls()
+        );
+    }
+
     #[cfg(not(feature = "github-updates"))]
     #[tokio::test]
     async fn cloudflare_connectivity_failure_falls_back_to_github_release() {
-        let update_url = update_url_from_public_base("https://onetcli.test.cn");
+        let update_url = update_url_from_public_base("https://onetcli.pdyyds.cn");
         let client = Arc::new(FakeHttpClient::new(vec![
             Err(anyhow!("r2 unavailable")),
             FakeHttpClient::response(200, ""),
@@ -519,7 +581,7 @@ mod tests {
     #[cfg(not(feature = "github-updates"))]
     #[tokio::test]
     async fn stale_cloudflare_manifest_falls_back_to_github_release() {
-        let update_url = update_url_from_public_base("https://onetcli.test.cn");
+        let update_url = update_url_from_public_base("https://onetcli.pdyyds.cn");
         let client = Arc::new(FakeHttpClient::new(vec![
             FakeHttpClient::response(200, ""),
             FakeHttpClient::response(200, r#"{"version":"0.1.0"}"#),
@@ -556,6 +618,53 @@ mod tests {
     }
 
     #[cfg(not(feature = "github-updates"))]
+    #[tokio::test]
+    async fn cloudflare_manifest_can_provide_github_download_fallback() {
+        let update_url = update_url_from_public_base("https://onetcli.pdyyds.cn");
+        let client = Arc::new(FakeHttpClient::new(vec![
+            FakeHttpClient::response(200, ""),
+            FakeHttpClient::response(200, &custom_update_body_with_fallback("9.9.9")),
+        ]));
+        let http_client: Arc<dyn HttpClient> = client.clone();
+        let config = one_core::config::UpdateConfig {
+            update_url,
+            download_url: None,
+        };
+
+        let outcome = perform_update_check(
+            config,
+            http_client,
+            "0.1.0".to_string(),
+            UpdateCheckTrigger::Manual,
+        )
+        .await;
+
+        let UpdateCheckOutcome::ShowDialog(info) = outcome else {
+            panic!("R2 manifest 有新版本时应展示更新对话框");
+        };
+        assert_eq!(
+            info.download_url.as_deref(),
+            Some(
+                format!(
+                    "https://onetcli.pdyyds.cn/releases/v9.9.9/{}",
+                    expected_archive_name()
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(
+            info.fallback_download_url.as_deref(),
+            Some(
+                format!(
+                    "https://github.com/feigeCode/onetcli/releases/download/v9.9.9/{}",
+                    expected_archive_name()
+                )
+                .as_str()
+            )
+        );
+    }
+
+    #[cfg(not(feature = "github-updates"))]
     fn github_release_body(version: &str) -> String {
         format!(
             r#"{{
@@ -567,6 +676,47 @@ mod tests {
             }}"#,
             expected_archive_name()
         )
+    }
+
+    #[cfg(not(feature = "github-updates"))]
+    fn custom_update_body_with_fallback(version: &str) -> String {
+        format!(
+            r#"{{
+                "version": "{version}",
+                "downloads": {{
+                    "{}": "https://onetcli.pdyyds.cn/releases/v{version}/{}"
+                }},
+                "fallback_downloads": {{
+                    "{}": "https://github.com/feigeCode/onetcli/releases/download/v{version}/{}"
+                }}
+            }}"#,
+            current_target_key(),
+            expected_archive_name(),
+            current_target_key(),
+            expected_archive_name()
+        )
+    }
+
+    #[cfg(not(feature = "github-updates"))]
+    fn current_target_key() -> &'static str {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            return "aarch64-apple-darwin";
+        }
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        {
+            return "x86_64-apple-darwin";
+        }
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        {
+            return "x86_64-unknown-linux-gnu";
+        }
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        {
+            return "x86_64-pc-windows-msvc";
+        }
+        #[allow(unreachable_code)]
+        "unsupported-target"
     }
 
     #[cfg(not(feature = "github-updates"))]

@@ -91,6 +91,38 @@ where
     Ok(())
 }
 
+pub(crate) async fn download_update_file_from_sources<F>(
+    http_client: Arc<dyn HttpClient>,
+    download_urls: &[String],
+    download_path: &Path,
+    mut on_progress: F,
+) -> Result<(), String>
+where
+    F: FnMut(u64, Option<u64>),
+{
+    let mut last_error = None;
+    for download_url in download_urls {
+        match download_update_file(
+            http_client.clone(),
+            download_url,
+            download_path,
+            |done, total| {
+                on_progress(done, total);
+            },
+        )
+        .await
+        {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                let _ = std::fs::remove_file(download_path);
+                last_error = Some(err);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| "缺少可用的更新下载源".to_string()))
+}
+
 pub(crate) fn build_download_path(version: &str, download_url: &str) -> Result<PathBuf, String> {
     let file_name = download_file_name(version, download_url);
     let dir = std::env::temp_dir().join("onetcli-update");
@@ -173,7 +205,12 @@ async fn cleanup_old_downloads(dir: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::download_file_name;
+    use std::sync::Arc;
+
+    use gpui::http_client::{AsyncBody, HttpClient, http};
+
+    use super::{download_file_name, download_update_file_from_sources};
+    use crate::update::test_support::FakeHttpClient;
 
     #[test]
     fn download_file_name_preserves_tar_gz_suffix() {
@@ -193,5 +230,35 @@ mod tests {
         );
 
         assert_eq!(file_name, "onetcli-update-0.3.2.zip");
+    }
+
+    #[tokio::test]
+    async fn download_update_file_from_sources_falls_back_to_second_url() {
+        let temp_dir = tempfile::TempDir::new().expect("创建临时目录失败");
+        let download_path = temp_dir.path().join("onetcli.tar.gz");
+        let client = Arc::new(FakeHttpClient::new(vec![
+            http::Response::builder()
+                .status(503)
+                .body(AsyncBody::from(Vec::new()))
+                .map_err(|err| anyhow::anyhow!("构建响应失败: {}", err)),
+            FakeHttpClient::response(200, "github-package"),
+        ]));
+        let http_client: Arc<dyn HttpClient> = client.clone();
+        let urls = vec![
+            "https://onetcli.pdyyds.cn/releases/v9.9.9/onetcli-x86_64-unknown-linux-gnu.tar.gz"
+                .to_string(),
+            "https://github.com/feigeCode/onetcli/releases/download/v9.9.9/onetcli-x86_64-unknown-linux-gnu.tar.gz"
+                .to_string(),
+        ];
+
+        download_update_file_from_sources(http_client, &urls, &download_path, |_, _| {})
+            .await
+            .expect("应从第二个下载源成功下载");
+
+        assert_eq!(std::fs::read(&download_path).unwrap(), b"github-package");
+        let requests = client.take_requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].uri, urls[0]);
+        assert_eq!(requests[1].uri, urls[1]);
     }
 }

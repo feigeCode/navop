@@ -30,6 +30,15 @@ impl MarketplaceManifest {
             .map(MarketplaceEntry::from)
             .collect()
     }
+
+    pub(crate) fn resolve_asset_urls(&mut self, manifest_url: &str) {
+        for entry in &mut self.extensions {
+            entry.resolve_asset_urls(manifest_url);
+        }
+        for entry in &mut self.languages {
+            entry.resolve_asset_urls(manifest_url);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +107,15 @@ impl MarketplaceEntry {
     pub(crate) fn fallback_asset_url(&self) -> Option<String> {
         self.fallback_asset_url_for_keys(marketplace_target_keys())
     }
+
+    fn resolve_asset_urls(&mut self, manifest_url: &str) {
+        self.asset_url = resolve_asset_url(manifest_url, &self.asset_url);
+        resolve_asset_url_map(manifest_url, &mut self.asset_urls);
+        if let Some(asset_url) = &mut self.fallback_asset_url {
+            *asset_url = resolve_asset_url(manifest_url, asset_url);
+        }
+        resolve_asset_url_map(manifest_url, &mut self.fallback_asset_urls);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +157,12 @@ impl From<LegacyLanguageEntry> for MarketplaceEntry {
     }
 }
 
+impl LegacyLanguageEntry {
+    fn resolve_asset_urls(&mut self, manifest_url: &str) {
+        self.asset_url = resolve_asset_url(manifest_url, &self.asset_url);
+    }
+}
+
 fn default_marketplace_kind() -> ExtensionKind {
     ExtensionKind::Language
 }
@@ -162,6 +186,35 @@ fn push_unique(urls: &mut Vec<String>, url: Option<String>) {
     if !urls.iter().any(|existing| existing == &url) {
         urls.push(url);
     }
+}
+
+fn resolve_asset_url(manifest_url: &str, asset_url: &str) -> String {
+    let asset_url = asset_url.trim();
+    if asset_url.is_empty() || has_http_url_scheme(asset_url) {
+        return asset_url.to_string();
+    }
+    manifest_url_prefix(manifest_url)
+        .map(|prefix| format!("{prefix}{}", asset_url.trim_start_matches('/')))
+        .unwrap_or_else(|| asset_url.to_string())
+}
+
+fn resolve_asset_url_map(manifest_url: &str, asset_urls: &mut HashMap<String, String>) {
+    for asset_url in asset_urls.values_mut() {
+        *asset_url = resolve_asset_url(manifest_url, asset_url);
+    }
+}
+
+fn has_http_url_scheme(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
+fn manifest_url_prefix(manifest_url: &str) -> Option<&str> {
+    let manifest_url = manifest_url.trim();
+    let scheme_end = manifest_url.find("://").map(|index| index + 3)?;
+    let path_end = manifest_url.find(['?', '#']).unwrap_or(manifest_url.len());
+    let without_query = &manifest_url[..path_end];
+    let path_slash = without_query[scheme_end..].rfind('/')? + scheme_end;
+    Some(&without_query[..=path_slash])
 }
 
 fn marketplace_target_keys() -> &'static [&'static str] {
