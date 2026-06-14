@@ -25,27 +25,27 @@ pub struct TableDataTabContent {
     _data_grid_sub: Option<Subscription>,
 }
 
+pub struct TableDataTabParams {
+    pub database_name: String,
+    pub schema_name: Option<String>,
+    pub table_name: String,
+    pub connection_id: String,
+    pub database_type: one_core::storage::DatabaseType,
+    pub editable: bool,
+}
+
 impl TableDataTabContent {
-    pub fn new(
-        database_name: String,
-        schema_name: Option<String>,
-        table_name: String,
-        connection_id: impl Into<String>,
-        database_type: one_core::storage::DatabaseType,
-        editable: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(params: TableDataTabParams, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut config = DataGridConfig::new(
-            database_name.clone(),
-            table_name.clone(),
-            connection_id,
-            database_type,
+            params.database_name.clone(),
+            params.table_name.clone(),
+            params.connection_id,
+            params.database_type,
         )
-        .editable(editable)
+        .editable(params.editable)
         .show_toolbar(true);
 
-        if let Some(schema) = schema_name {
+        if let Some(schema) = params.schema_name {
             config = config.with_schema(schema);
         }
 
@@ -66,8 +66,8 @@ impl TableDataTabContent {
         Self {
             data_grid,
             content,
-            database_name,
-            table_name,
+            database_name: params.database_name,
+            table_name: params.table_name,
             focus_handle,
             _data_grid_sub: Some(data_grid_sub),
         }

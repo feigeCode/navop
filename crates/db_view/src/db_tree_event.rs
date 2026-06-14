@@ -667,12 +667,14 @@ impl DatabaseEventHandler {
                 move |window, cx| {
                     let sql_editor = cx.new(|cx| {
                         SqlEditorTab::new_with_config(
-                            title.clone(),
-                            connection_id.clone(),
-                            database_type,
-                            None,
-                            database.clone(),
-                            schema.clone(),
+                            crate::sql_editor_view::SqlEditorTabConfig {
+                                title: title.clone().into(),
+                                connection_id: connection_id.clone(),
+                                database_type,
+                                file_path: None,
+                                initial_database: database.clone(),
+                                initial_schema: schema.clone(),
+                            },
                             window,
                             cx,
                         )
@@ -757,12 +759,14 @@ impl DatabaseEventHandler {
                 move |window, cx| {
                     let table_data = cx.new(|cx| {
                         TableDataTabContent::new(
-                            database_clone.clone(),
-                            schema_clone.clone(),
-                            table_clone.clone(),
-                            config_id_clone.clone(),
-                            database_type,
-                            true,
+                            crate::table_data_tab::TableDataTabParams {
+                                database_name: database_clone.clone(),
+                                schema_name: schema_clone.clone(),
+                                table_name: table_clone.clone(),
+                                connection_id: config_id_clone.clone(),
+                                database_type,
+                                editable: true,
+                            },
                             window,
                             cx,
                         )
@@ -831,12 +835,14 @@ impl DatabaseEventHandler {
                 move |window, cx| {
                     let view_data = cx.new(|cx| {
                         TableDataTabContent::new(
-                            database_clone.clone(),
-                            schema_clone.clone(),
-                            view_clone.clone(),
-                            config_id_clone.clone(),
-                            database_type,
-                            false,
+                            crate::table_data_tab::TableDataTabParams {
+                                database_name: database_clone.clone(),
+                                schema_name: schema_clone.clone(),
+                                table_name: view_clone.clone(),
+                                connection_id: config_id_clone.clone(),
+                                database_type,
+                                editable: false,
+                            },
                             window,
                             cx,
                         )
@@ -1029,7 +1035,7 @@ impl DatabaseEventHandler {
                     cx,
                     clone_connection_id,
                     clone_database,
-                    schema.into(),
+                    schema,
                     clone_table_name,
                 )
                 .await;
@@ -1551,9 +1557,9 @@ impl DatabaseEventHandler {
                         .gap_2()
                         .child(format!(
                             "{} \"{}\" {}?",
-                            t!("Common.confirm").to_string(),
+                            t!("Common.confirm"),
                             db_name,
-                            t!("Database.close_database").to_string()
+                            t!("Database.close_database")
                         ))
                         .child(t!("Database.close_hint").to_string()),
                 )
@@ -2707,7 +2713,7 @@ impl DatabaseEventHandler {
             let tbl_name = table_name.clone();
             let tbl_node_id = table_node_id.clone();
             let state = global_state.clone();
-            let tbl_name_display = table_name.as_ref().map(|s| s.as_str()).unwrap_or("");
+            let tbl_name_display = table_name.as_deref().unwrap_or("");
             let tree = tree_view.clone();
             let panel = objects_panel.clone();
             let db_name = database_name.clone();
@@ -3327,13 +3333,15 @@ impl DatabaseEventHandler {
                     tab_id.clone(),
                     move |window, cx| {
                         let sql_editor = cx.new(|cx| {
-                            SqlEditorTab::new_with_file_path(
-                                path.clone(),
-                                query_name.clone(),
-                                connection_id.clone(),
-                                database_type,
-                                database.clone(),
-                                schema.clone(),
+                            SqlEditorTab::new_with_config(
+                                crate::sql_editor_view::SqlEditorTabConfig {
+                                    title: query_name.clone().into(),
+                                    connection_id: connection_id.clone(),
+                                    database_type,
+                                    file_path: Some(path.clone()),
+                                    initial_database: database.clone(),
+                                    initial_schema: schema.clone(),
+                                },
                                 window,
                                 cx,
                             )
@@ -3651,13 +3659,15 @@ impl DatabaseEventHandler {
                                 .size(800.0, 510.0),
                             move |window, cx| {
                                 SqlDumpView::new(
-                                    config_id,
-                                    server_info,
-                                    database,
-                                    schema,
-                                    table,
-                                    output_path,
-                                    mode,
+                                    crate::import_export::sql_dump_view::SqlDumpViewParams {
+                                        connection_id: config_id,
+                                        server_info,
+                                        database,
+                                        schema,
+                                        table,
+                                        output_path,
+                                        mode,
+                                    },
                                     window,
                                     cx,
                                 )

@@ -578,7 +578,7 @@ impl Render for SqlRunView {
                                 let short_file_len = entry
                                     .file
                                     .split('/')
-                                    .last()
+                                    .next_back()
                                     .map(|s| s.len())
                                     .unwrap_or(entry.file.len());
                                 short_file_len + entry.message.len() + 8
@@ -617,7 +617,7 @@ impl Render for SqlRunView {
                                                 let short_file = entry
                                                     .file
                                                     .split('/')
-                                                    .last()
+                                                    .next_back()
                                                     .unwrap_or(&entry.file);
                                                 format!("[RUN] {}> {}", short_file, entry.message)
                                             };

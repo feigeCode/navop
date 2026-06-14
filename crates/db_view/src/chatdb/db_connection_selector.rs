@@ -677,24 +677,15 @@ impl DbConnectionSelector {
             })
     }
 
-    fn render_column(
-        column_id: &str,
-        title: String,
-        search_input: Entity<InputState>,
-        items: Vec<AnyColumnItem>,
-        is_loading: bool,
-        show_right_border: bool,
-        width: f32,
-        colors: SelectorColors,
-    ) -> impl IntoElement {
+    fn render_column(args: ColumnRenderArgs) -> impl IntoElement {
         v_flex()
-            .w(px(width))
-            .min_w(px(width))
+            .w(px(args.width))
+            .min_w(px(args.width))
             .h(px(260.0))
             .min_h_0()
             .overflow_hidden()
-            .when(show_right_border, |this| {
-                this.border_r_1().border_color(colors.border)
+            .when(args.show_right_border, |this| {
+                this.border_r_1().border_color(args.colors.border)
             })
             .child(
                 div()
@@ -702,13 +693,15 @@ impl DbConnectionSelector {
                     .px_3()
                     .py_2()
                     .text_sm()
-                    .text_color(colors.muted_foreground)
-                    .child(title),
+                    .text_color(args.colors.muted_foreground)
+                    .child(args.title),
             )
             .child(
                 div().flex_shrink_0().px_2().pb_2().child(
-                    Input::new(&search_input)
-                        .prefix(Icon::new(IconName::Search).text_color(colors.muted_foreground))
+                    Input::new(&args.search_input)
+                        .prefix(
+                            Icon::new(IconName::Search).text_color(args.colors.muted_foreground),
+                        )
                         .cleanable(true)
                         .small()
                         .w_full(),
@@ -716,12 +709,15 @@ impl DbConnectionSelector {
             )
             .child(
                 div()
-                    .id(SharedString::from(format!("db-selector-{}", column_id)))
+                    .id(SharedString::from(format!(
+                        "db-selector-{}",
+                        args.column_id
+                    )))
                     .flex_1()
                     .min_h_0()
                     .overflow_x_hidden()
                     .overflow_y_scroll()
-                    .when(is_loading, |this| {
+                    .when(args.is_loading, |this| {
                         this.child(
                             div()
                                 .w_full()
@@ -731,28 +727,24 @@ impl DbConnectionSelector {
                                 .child(Spinner::new().with_size(Size::Small)),
                         )
                     })
-                    .when(!is_loading && items.is_empty(), |this| {
+                    .when(!args.is_loading && args.items.is_empty(), |this| {
                         this.child(
                             div()
                                 .w_full()
                                 .py_4()
                                 .text_sm()
-                                .text_color(colors.muted_foreground)
+                                .text_color(args.colors.muted_foreground)
                                 .child(t!("ChatDbSelector.no_data")),
                         )
                     })
-                    .children(items.into_iter().map(|item| item.element)),
+                    .children(args.items.into_iter().map(|item| item.element)),
             )
     }
 
     fn render_popover_content(
         snapshot: DbConnectionSelectorSnapshot,
-        connection_search_input: Entity<InputState>,
-        database_search_input: Entity<InputState>,
-        schema_search_input: Entity<InputState>,
-        connection_query: String,
-        database_query: String,
-        schema_query: String,
+        search_inputs: SelectorSearchInputs,
+        queries: SelectorQueries,
         view: Entity<Self>,
         colors: SelectorColors,
     ) -> impl IntoElement {
@@ -774,9 +766,9 @@ impl DbConnectionSelector {
         let connection_items = connections
             .into_iter()
             .filter(|conn| {
-                connection_query.is_empty()
-                    || conn.name.to_lowercase().contains(&connection_query)
-                    || conn.id.to_lowercase().contains(&connection_query)
+                queries.connection.is_empty()
+                    || conn.name.to_lowercase().contains(&queries.connection)
+                    || conn.id.to_lowercase().contains(&queries.connection)
             })
             .map(|conn| {
                 let selected = selected_connection
@@ -802,7 +794,9 @@ impl DbConnectionSelector {
 
         let database_items = databases
             .into_iter()
-            .filter(|db| database_query.is_empty() || db.to_lowercase().contains(&database_query))
+            .filter(|db| {
+                queries.database.is_empty() || db.to_lowercase().contains(&queries.database)
+            })
             .map(|db| {
                 let selected = if uses_schema_as_database {
                     selected_schema.as_ref().map(|s| s == &db).unwrap_or(false)
@@ -834,7 +828,7 @@ impl DbConnectionSelector {
         let schema_items = schemas
             .into_iter()
             .filter(|schema| {
-                schema_query.is_empty() || schema.to_lowercase().contains(&schema_query)
+                queries.schema.is_empty() || schema.to_lowercase().contains(&queries.schema)
             })
             .map(|schema| {
                 let selected = selected_schema
@@ -900,38 +894,35 @@ impl DbConnectionSelector {
                     .border_color(colors.border)
                     .rounded(px(8.0))
                     .when(show_connection_column, |this| {
-                        this.child(Self::render_column(
+                        this.child(Self::render_column(ColumnRenderArgs::new(
                             "connections",
                             t!("ChatDbSelector.connection_title").to_string(),
-                            connection_search_input,
+                            search_inputs.connection,
                             connection_items,
                             loading_connections,
                             true,
-                            200.0,
                             colors,
-                        ))
+                        )))
                     })
-                    .child(Self::render_column(
+                    .child(Self::render_column(ColumnRenderArgs::new(
                         "databases",
                         database_title,
-                        database_search_input,
+                        search_inputs.database,
                         database_items,
                         loading_databases,
                         show_schema_column,
-                        200.0,
                         colors,
-                    ))
+                    )))
                     .when(show_schema_column, |this| {
-                        this.child(Self::render_column(
+                        this.child(Self::render_column(ColumnRenderArgs::new(
                             "schemas",
                             t!("ChatDbSelector.schema_title").to_string(),
-                            schema_search_input,
+                            search_inputs.schema,
                             schema_items,
                             loading_schemas,
                             false,
-                            200.0,
                             colors,
-                        ))
+                        )))
                     }),
             )
     }
@@ -1021,12 +1012,16 @@ impl DbConnectionSelector {
                     };
                     Self::render_popover_content(
                         snapshot,
-                        connection_search_input,
-                        database_search_input,
-                        schema_search_input,
-                        connection_query,
-                        database_query,
-                        schema_query,
+                        SelectorSearchInputs {
+                            connection: connection_search_input,
+                            database: database_search_input,
+                            schema: schema_search_input,
+                        },
+                        SelectorQueries {
+                            connection: connection_query,
+                            database: database_query,
+                            schema: schema_query,
+                        },
                         view_for_content.clone(),
                         colors,
                     )
@@ -1050,6 +1045,52 @@ impl Render for DbConnectionSelector {
         let view = cx.entity().clone();
         self.render_trigger(view, cx)
     }
+}
+
+struct ColumnRenderArgs {
+    column_id: &'static str,
+    title: String,
+    search_input: Entity<InputState>,
+    items: Vec<AnyColumnItem>,
+    is_loading: bool,
+    show_right_border: bool,
+    width: f32,
+    colors: SelectorColors,
+}
+
+impl ColumnRenderArgs {
+    fn new(
+        column_id: &'static str,
+        title: String,
+        search_input: Entity<InputState>,
+        items: Vec<AnyColumnItem>,
+        is_loading: bool,
+        show_right_border: bool,
+        colors: SelectorColors,
+    ) -> Self {
+        Self {
+            column_id,
+            title,
+            search_input,
+            items,
+            is_loading,
+            show_right_border,
+            width: 200.0,
+            colors,
+        }
+    }
+}
+
+struct SelectorSearchInputs {
+    connection: Entity<InputState>,
+    database: Entity<InputState>,
+    schema: Entity<InputState>,
+}
+
+struct SelectorQueries {
+    connection: String,
+    database: String,
+    schema: String,
 }
 
 struct AnyColumnItem {

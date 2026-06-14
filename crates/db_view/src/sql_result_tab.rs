@@ -70,6 +70,15 @@ pub struct StatementListData {
     cached_filtered_items: Vec<StatementListItem>,
 }
 
+struct ResultsBatchUpdate {
+    results: Vec<SqlResult>,
+    current: usize,
+    total: usize,
+    connection_id: String,
+    database: Option<String>,
+    database_type: one_core::storage::DatabaseType,
+}
+
 impl StatementListData {
     pub fn new() -> Self {
         Self {
@@ -365,12 +374,14 @@ impl SqlResultTabContainer {
                 if should_update_list && !pending_results.is_empty() {
                     let results_to_send = std::mem::take(&mut pending_results);
                     clone_self.update_results_batch(
-                        results_to_send,
-                        current,
-                        total,
-                        connection_id_clone.clone(),
-                        database_clone.clone(),
-                        database_type,
+                        ResultsBatchUpdate {
+                            results: results_to_send,
+                            current,
+                            total,
+                            connection_id: connection_id_clone.clone(),
+                            database: database_clone.clone(),
+                            database_type,
+                        },
                         cx,
                     );
                     last_ui_update = Instant::now();
@@ -458,29 +469,23 @@ impl SqlResultTabContainer {
         });
     }
 
-    fn update_results_batch(
-        &self,
-        results: Vec<SqlResult>,
-        current: usize,
-        total: usize,
-        connection_id: String,
-        database: Option<String>,
-        database_type: one_core::storage::DatabaseType,
-        cx: &mut AsyncApp,
-    ) {
+    fn update_results_batch(&self, update: ResultsBatchUpdate, cx: &mut AsyncApp) {
         cx.update(|cx| {
             if let Some(window_id) = cx.active_window() {
                 if let Err(err) = cx.update_window(window_id, |_entity, window, cx| {
                     self.execution_state.update(cx, |state, cx| {
-                        *state = ExecutionState::Executing { current, total };
+                        *state = ExecutionState::Executing {
+                            current: update.current,
+                            total: update.total,
+                        };
                         cx.notify();
                     });
 
                     self.add_streaming_results_batch(
-                        results,
-                        connection_id,
-                        database,
-                        database_type,
+                        update.results,
+                        update.connection_id,
+                        update.database,
+                        update.database_type,
                         window,
                         cx,
                     );
@@ -568,7 +573,7 @@ impl SqlResultTabContainer {
                             .await;
                         let table_name = table_name
                             .split('.')
-                            .last()
+                            .next_back()
                             .unwrap_or(&table_name)
                             .to_string();
                         let is_view = result
@@ -1031,8 +1036,10 @@ impl SqlResultTabContainer {
         idx: usize,
         _cx: &Context<Self>,
     ) -> impl IntoElement {
-        if item.is_error && item.full_error_message.is_some() {
-            let error_msg = item.full_error_message.as_ref().unwrap().clone();
+        if item.is_error
+            && let Some(error_msg) = item.full_error_message.as_ref()
+        {
+            let error_msg = error_msg.clone();
             let sql = item.sql.clone();
 
             Popover::new(("error-popover", idx))

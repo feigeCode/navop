@@ -78,6 +78,15 @@ pub enum SqlEditorEvent {
     },
 }
 
+pub struct SqlEditorTabConfig {
+    pub title: SharedString,
+    pub connection_id: String,
+    pub database_type: DatabaseType,
+    pub file_path: Option<PathBuf>,
+    pub initial_database: Option<String>,
+    pub initial_schema: Option<String>,
+}
+
 pub struct SqlEditorTab {
     title: SharedString,
     editor: Entity<SqlEditor>,
@@ -102,12 +111,7 @@ pub struct SqlEditorTab {
 
 impl SqlEditorTab {
     pub fn new_with_config(
-        title: impl Into<SharedString>,
-        connection_id: impl Into<String>,
-        database_type: DatabaseType,
-        file_path: Option<PathBuf>,
-        initial_database: Option<String>,
-        initial_schema: Option<String>,
+        config: SqlEditorTabConfig,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -119,17 +123,17 @@ impl SqlEditorTab {
             cx.new(|cx| SelectState::new(SearchableVec::new(vec![]), None, window, cx));
 
         let global_state = cx.global::<GlobalDbState>().clone();
-        let capabilities = global_state.capabilities(&database_type);
+        let capabilities = global_state.capabilities(&config.database_type);
         let supports_schema = capabilities.supports_schema;
         let uses_schema_as_database = capabilities.uses_schema_as_database;
-        let connection_id_str = connection_id.into();
+        let connection_id = config.connection_id;
 
-        let should_load_file = file_path.is_some();
-        let resolved_file_path = file_path.unwrap_or_else(|| {
+        let should_load_file = config.file_path.is_some();
+        let resolved_file_path = config.file_path.unwrap_or_else(|| {
             Self::generate_new_file_path(
-                &database_type,
-                &connection_id_str,
-                initial_database.as_deref().unwrap_or("default"),
+                &config.database_type,
+                &connection_id,
+                config.initial_database.as_deref().unwrap_or("default"),
             )
         });
 
@@ -137,10 +141,10 @@ impl SqlEditorTab {
         let is_dirty = Arc::new(AtomicBool::new(false));
 
         let instance = Self {
-            title: title.into(),
+            title: config.title,
             editor: editor.clone(),
-            connection_id: connection_id_str,
-            database_type,
+            connection_id,
+            database_type: config.database_type,
             sql_result_tab_container: cx.new(|cx| SqlResultTabContainer::new(window, cx)),
             database_select: database_select.clone(),
             schema_select: schema_select.clone(),
@@ -160,8 +164,8 @@ impl SqlEditorTab {
         instance.bind_select_event(cx);
         instance.bind_auto_save(auto_save_seq, is_dirty, window, cx);
         instance.load_databases_async(
-            initial_database,
-            initial_schema,
+            config.initial_database,
+            config.initial_schema,
             resolved_file_path,
             should_load_file,
             cx,
@@ -189,28 +193,6 @@ impl SqlEditorTab {
                 cx,
             );
         });
-    }
-
-    pub fn new_with_file_path(
-        file_path: PathBuf,
-        title: impl Into<SharedString>,
-        connection_id: impl Into<String>,
-        database_type: DatabaseType,
-        initial_database: Option<String>,
-        initial_schema: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        Self::new_with_config(
-            title,
-            connection_id,
-            database_type,
-            Some(file_path),
-            initial_database,
-            initial_schema,
-            window,
-            cx,
-        )
     }
 
     fn generate_new_file_path(
@@ -362,7 +344,6 @@ impl SqlEditorTab {
                                             path = format!("{:?}", parent),
                                             error = e
                                         )
-                                        .to_string()
                                     );
                                     return;
                                 }
@@ -377,7 +358,6 @@ impl SqlEditorTab {
                                         path = format!("{:?}", file_path_clone),
                                         error = e
                                     )
-                                    .to_string()
                                 );
                             } else {
                                 // 保存成功，清除脏标记
@@ -749,7 +729,7 @@ impl SqlEditorTab {
             window.push_notification(t!("Query.no_sql_to_format").to_string(), cx);
             return;
         }
-        let window_option = cx.active_window().clone();
+        let window_option = cx.active_window();
         cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
             entity
                 .update(cx, |this, cx| {

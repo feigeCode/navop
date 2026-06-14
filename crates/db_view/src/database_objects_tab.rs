@@ -182,7 +182,7 @@ impl DatabaseObjects {
             if let Some(view) = result {
                 let columns = view.columns.clone();
                 let rows = view.rows.clone();
-                let db_node_type = view.db_node_type.clone();
+                let db_node_type = view.db_node_type;
                 entity
                     .update(cx, move |this, cx| {
                         this.loaded_data.update(cx, |data, _cx| {
@@ -291,7 +291,7 @@ impl DatabaseObjects {
             if let Some(view) = result {
                 let columns = view.columns.clone();
                 let rows = view.rows.clone();
-                let db_node_type = view.db_node_type.clone();
+                let db_node_type = view.db_node_type;
                 entity
                     .update(cx, move |this, cx| {
                         let search_query = this.search_query.clone();
@@ -471,7 +471,7 @@ impl DatabaseObjects {
     }
 
     fn build_node_for_row(&self, row_ix: usize) -> Option<DbNode> {
-        let db_node_type = self.db_node_type.clone();
+        let db_node_type = self.db_node_type;
         let original_row = self.filtered_rows.get(row_ix).copied()?;
         let row_data = self.rows.get(original_row)?;
 
@@ -725,44 +725,34 @@ impl DatabaseObjects {
         header
     }
 
-    fn render_row(
-        &self,
-        row_ix: usize,
-        row_values: &[String],
-        columns: &[Column],
-        show_row_number: bool,
-        is_selected: bool,
-        search_query: &str,
-        db_node_type: DbNodeType,
-        cx: &App,
-    ) -> impl IntoElement {
+    fn render_row(&self, args: ObjectRowRenderArgs<'_>, cx: &App) -> impl IntoElement {
         let mut row = h_flex()
             .h(one_ui::table_row_height(cx))
             .px_2()
             .items_center()
-            .when(is_selected, |el| el.bg(cx.theme().selection));
+            .when(args.is_selected, |el| el.bg(cx.theme().selection));
 
-        if show_row_number {
+        if args.show_row_number {
             row = row.child(
                 div()
                     .w(px(48.))
                     .px_2()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child((row_ix + 1).to_string()),
+                    .child((args.row_ix + 1).to_string()),
             );
         }
 
-        let is_last_column = columns.len();
-        for (col_ix, column) in columns.iter().enumerate() {
-            let cell_value = row_values.get(col_ix).cloned().unwrap_or_default();
+        let is_last_column = args.columns.len();
+        for (col_ix, column) in args.columns.iter().enumerate() {
+            let cell_value = args.row_values.get(col_ix).cloned().unwrap_or_default();
             let tooltip_text = cell_value.clone();
             let cell = if col_ix == 0 {
-                let icon = get_icon_for_node_type(&db_node_type, cx.theme()).color();
-                let label = if search_query.is_empty() {
+                let icon = get_icon_for_node_type(&args.db_node_type, cx.theme()).color();
+                let label = if args.search_query.is_empty() {
                     Label::new(cell_value)
                 } else {
-                    Label::new(cell_value).highlights(search_query.to_string())
+                    Label::new(cell_value).highlights(args.search_query.to_string())
                 };
                 h_flex()
                     .gap_2()
@@ -776,7 +766,7 @@ impl DatabaseObjects {
 
             // 最后一列使用 flex_1 自动填充剩余空间，其他列使用固定宽度
             let is_last = col_ix == is_last_column - 1;
-            let cell_id = SharedString::from(format!("cell-{}-{}", row_ix, col_ix));
+            let cell_id = SharedString::from(format!("cell-{}-{}", args.row_ix, col_ix));
             row = row.child(
                 div()
                     .id(cell_id)
@@ -808,7 +798,7 @@ impl DatabaseObjects {
         let data_db_node_type = self.db_node_type;
         let node_type = current_node
             .as_ref()
-            .map(|n| n.node_type.clone())
+            .map(|n| n.node_type)
             .unwrap_or(DbNodeType::Connection);
         let database_type = current_node
             .as_ref()
@@ -903,6 +893,16 @@ impl DatabaseObjects {
     }
 }
 
+struct ObjectRowRenderArgs<'a> {
+    row_ix: usize,
+    row_values: &'a [String],
+    columns: &'a [Column],
+    show_row_number: bool,
+    is_selected: bool,
+    search_query: &'a str,
+    db_node_type: DbNodeType,
+}
+
 impl Render for DatabaseObjects {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let loaded_data = self.loaded_data.read(cx);
@@ -949,7 +949,7 @@ impl Render for DatabaseObjects {
                         uniform_list("database-objects-list", row_count, {
                             cx.processor(
                                 move |state: &mut Self, range: Range<usize>, _window, cx| {
-                                    let db_node_type = state.db_node_type.clone();
+                                    let db_node_type = state.db_node_type;
                                     let show_row_number = true;
                                     range
                                         .map(|list_ix| {
@@ -994,13 +994,15 @@ impl Render for DatabaseObjects {
                                                         },
                                                     ))
                                                     .child(state.render_row(
-                                                        row_ix,
-                                                        row_values,
-                                                        &list_columns,
-                                                        show_row_number,
-                                                        is_selected,
-                                                        &list_search_query,
-                                                        db_node_type.clone(),
+                                                        ObjectRowRenderArgs {
+                                                            row_ix,
+                                                            row_values,
+                                                            columns: &list_columns,
+                                                            show_row_number,
+                                                            is_selected,
+                                                            search_query: &list_search_query,
+                                                            db_node_type,
+                                                        },
                                                         cx,
                                                     ))
                                                     .into_any_element()
@@ -1026,7 +1028,7 @@ impl Clone for DatabaseObjects {
             columns: self.columns.clone(),
             rows: self.rows.clone(),
             filtered_rows: self.filtered_rows.clone(),
-            db_node_type: self.db_node_type.clone(),
+            db_node_type: self.db_node_type,
             focus_handle: self.focus_handle.clone(),
             workspace: self.workspace.clone(),
             search_input: self.search_input.clone(),

@@ -761,6 +761,15 @@ pub struct SessionInfo {
     pub lifetime: Duration,
 }
 
+/// Safe connection metadata for extension and UI callers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbConnectionSummary {
+    pub id: String,
+    pub name: String,
+    pub database_type: DatabaseType,
+    pub database: Option<String>,
+}
+
 /// Global database state - stores DbManager and ConnectionManager
 #[derive(Clone)]
 pub struct GlobalDbState {
@@ -812,6 +821,24 @@ impl GlobalDbState {
             return Some(config.value().clone());
         }
         None
+    }
+
+    pub fn list_connection_summaries(&self) -> Vec<DbConnectionSummary> {
+        let mut summaries = self
+            .connections
+            .iter()
+            .map(|entry| {
+                let config = entry.value();
+                DbConnectionSummary {
+                    id: config.id.clone(),
+                    name: config.name.clone(),
+                    database_type: config.database_type,
+                    database: config.database.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+        summaries.sort_by(|left, right| left.id.cmp(&right.id));
+        summaries
     }
 
     pub fn get_plugin(
@@ -992,6 +1019,23 @@ impl GlobalDbState {
         .await
     }
 
+    pub async fn create_session_direct(
+        &self,
+        connection_id: String,
+        database: Option<String>,
+    ) -> anyhow::Result<String> {
+        let mut config = self
+            .get_config(&connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+        if let Some(database) = database {
+            config.database = Some(database);
+        }
+        self.connection_manager
+            .create_session(config, &self.db_manager)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
     /// Execute SQL  (simplified - creates session per execution)
     pub async fn execute_single(
         &self,
@@ -1046,6 +1090,94 @@ impl GlobalDbState {
     ) -> anyhow::Result<Vec<SqlResult>> {
         self.execute_with_session_internal(cx, config, script, opts, None)
             .await
+    }
+
+    pub async fn execute_session(
+        &self,
+        session_id: String,
+        script: String,
+        opts: Option<ExecOptions>,
+    ) -> anyhow::Result<Vec<SqlResult>> {
+        let config = self
+            .connection_manager
+            .get_session_config(&session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
+        let plugin = self.get_plugin(&config.database_type)?;
+        let mut guard = self
+            .connection_manager
+            .get_session_connection(&session_id)
+            .await?;
+        let conn = guard
+            .connection()
+            .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+        conn.execute(plugin.as_ref(), &script, opts.unwrap_or_default())
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    pub async fn list_databases_direct(
+        &self,
+        connection_id: String,
+    ) -> anyhow::Result<Vec<String>> {
+        let config = self
+            .get_config(&connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+        let plugin = self.get_plugin(&config.database_type)?;
+        let session_id = self
+            .connection_manager
+            .create_session(config, &self.db_manager)
+            .await?;
+        let result = async {
+            let mut guard = self
+                .connection_manager
+                .get_session_connection(&session_id)
+                .await?;
+            let conn = guard
+                .connection()
+                .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+            plugin
+                .list_databases(&*conn)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+        }
+        .await;
+        self.connection_manager.close_session(&session_id).await?;
+        result
+    }
+
+    pub async fn list_schemas_direct(
+        &self,
+        connection_id: String,
+        database: String,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut config = self
+            .get_config(&connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database.clone());
+        }
+        let plugin = self.get_plugin(&config.database_type)?;
+        let session_id = self
+            .connection_manager
+            .create_session(config, &self.db_manager)
+            .await?;
+        let result = async {
+            let mut guard = self
+                .connection_manager
+                .get_session_connection(&session_id)
+                .await?;
+            let conn = guard
+                .connection()
+                .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+            plugin
+                .list_schemas(&*conn, &database)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))
+        }
+        .await;
+        self.connection_manager.close_session(&session_id).await?;
+        result
     }
 
     /// Build table-designer DDL SQL on an async path.
@@ -2581,7 +2713,7 @@ mod tests {
     use async_trait::async_trait;
     use one_core::storage::DatabaseType;
     use std::sync::{
-        Arc,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering},
     };
     use tokio::sync::mpsc;
@@ -2590,6 +2722,7 @@ mod tests {
         config: DbConnectionConfig,
         healthy: bool,
         disconnect_count: Arc<AtomicUsize>,
+        executed_sql: Option<Arc<StdMutex<Vec<String>>>>,
     }
 
     impl MockConnection {
@@ -2598,6 +2731,7 @@ mod tests {
                 config,
                 healthy,
                 disconnect_count: Arc::new(AtomicUsize::new(0)),
+                executed_sql: None,
             }
         }
 
@@ -2610,6 +2744,19 @@ mod tests {
                 config,
                 healthy,
                 disconnect_count,
+                executed_sql: None,
+            }
+        }
+
+        fn with_executed_sql(
+            config: DbConnectionConfig,
+            executed_sql: Arc<StdMutex<Vec<String>>>,
+        ) -> Self {
+            Self {
+                config,
+                healthy: true,
+                disconnect_count: Arc::new(AtomicUsize::new(0)),
+                executed_sql: Some(executed_sql),
             }
         }
     }
@@ -2636,10 +2783,18 @@ mod tests {
         async fn execute(
             &self,
             _plugin: &dyn DatabasePlugin,
-            _script: &str,
+            script: &str,
             _options: ExecOptions,
         ) -> Result<Vec<SqlResult>, DbError> {
-            Ok(Vec::new())
+            if let Some(executed_sql) = &self.executed_sql {
+                executed_sql.lock().unwrap().push(script.to_string());
+            }
+            Ok(vec![SqlResult::Exec(ExecResult {
+                sql: script.to_string(),
+                rows_affected: 0,
+                elapsed_ms: 0,
+                message: None,
+            })])
         }
 
         async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
@@ -2715,6 +2870,59 @@ mod tests {
         .with_children_loaded(true);
 
         assert!(GlobalDbState::cached_children_ready(&node));
+    }
+
+    #[test]
+    fn list_connection_summaries_exposes_safe_metadata() {
+        let mut state = GlobalDbState::new();
+        state.register_connection(test_config("conn1"));
+
+        let summaries = state.list_connection_summaries();
+
+        assert_eq!(1, summaries.len());
+        assert_eq!("conn1", summaries[0].id);
+        assert_eq!("test", summaries[0].name);
+        assert_eq!(DatabaseType::PostgreSQL, summaries[0].database_type);
+        assert_eq!(Some("postgres".to_string()), summaries[0].database);
+    }
+
+    #[tokio::test]
+    async fn execute_session_uses_existing_connection_session() {
+        let state = GlobalDbState::new();
+        let config = test_config("conn1");
+        let session_id = "conn1:session:test".to_string();
+        let executed_sql = Arc::new(StdMutex::new(Vec::new()));
+        let mut session = ConnectionSession::new(
+            Box::new(MockConnection::with_executed_sql(
+                config.clone(),
+                executed_sql.clone(),
+            )),
+            session_id.clone(),
+        );
+        session.mark_in_use();
+        state
+            .connection_manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(session);
+
+        let result = state
+            .execute_session(session_id.clone(), "select 1".to_string(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(1, result.len());
+        assert_eq!(vec!["select 1".to_string()], *executed_sql.lock().unwrap());
+        assert!(
+            state
+                .connection_manager
+                .get_session_config(&session_id)
+                .await
+                .is_some()
+        );
     }
 
     #[test]

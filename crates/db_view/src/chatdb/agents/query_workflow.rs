@@ -80,7 +80,7 @@ impl QueryContext {
 
         // 警告信息
         if let Some(warning) = &self.warning {
-            summary.push_str(&t!("QueryWorkflow.warning_block", warning = warning).to_string());
+            summary.push_str(t!("QueryWorkflow.warning_block", warning = warning).as_ref());
         }
 
         // 选择的表
@@ -92,8 +92,7 @@ impl QueryContext {
                     t!("QueryWorkflow.source_history").to_string()
                 }
             };
-            summary
-                .push_str(&t!("QueryWorkflow.related_tables_header", source = source).to_string());
+            summary.push_str(t!("QueryWorkflow.related_tables_header", source = source).as_ref());
             summary.push_str("```json\n");
             let json_array = serde_json::to_string(&self.selected_table_names)
                 .unwrap_or_else(|_| format!("{:?}", self.selected_table_names));
@@ -177,9 +176,8 @@ impl QueryContext {
         prompt.push_str(t!("QueryWorkflow.sql_prompt_tables_header").as_ref());
 
         for table in &self.tables {
-            prompt.push_str(
-                &t!("QueryWorkflow.sql_prompt_table_header", table = table.name).to_string(),
-            );
+            prompt
+                .push_str(t!("QueryWorkflow.sql_prompt_table_header", table = table.name).as_ref());
             if let Some(comment) = &table.comment {
                 if !comment.is_empty() {
                     prompt.push_str(&format!(" - {}", comment));

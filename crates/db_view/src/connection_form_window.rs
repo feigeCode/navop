@@ -96,14 +96,14 @@ impl ConnectionFormWindow {
                     if is_edit {
                         emit_connection_event(
                             ConnectionDataEvent::ConnectionUpdated {
-                                connection: conn.clone(),
+                                connection: conn.as_ref().clone(),
                             },
                             cx,
                         );
                     } else {
                         emit_connection_event(
                             ConnectionDataEvent::ConnectionCreated {
-                                connection: conn.clone(),
+                                connection: conn.as_ref().clone(),
                             },
                             cx,
                         );

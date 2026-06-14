@@ -28,11 +28,11 @@ use gpui_component::button::ButtonVariants;
 use gpui_component::dialog::DialogButtonProps;
 use gpui_component::menu::{DropdownMenu, PopupMenuItem};
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use one_core::settings::{AppSettings, LargeTextCellEditorOpenMode};
 use one_core::storage::DatabaseType;
 use one_core::tab_container::TabContainer;
 use one_ui::edit_table::ColumnSort;
 use std::path::PathBuf;
-use one_core::settings::{AppSettings, LargeTextCellEditorOpenMode};
 
 actions!(
     data_grid,
@@ -98,6 +98,14 @@ pub struct LargeTextCellTarget {
     pub column_name: String,
     pub value: String,
     pub editable: bool,
+}
+
+struct TextEditorDialogRequest {
+    initial_text: String,
+    title: String,
+    row_ix: usize,
+    col_ix: usize,
+    editable: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1272,11 +1280,13 @@ impl DataGrid {
         };
 
         self.show_text_editor_dialog(
-            target.value,
-            &build_large_text_editor_title(&target.column_name, target.display_row_ix),
-            target.display_row_ix,
-            target.col_ix + 1,
-            target.editable,
+            TextEditorDialogRequest {
+                initial_text: target.value,
+                title: build_large_text_editor_title(&target.column_name, target.display_row_ix),
+                row_ix: target.display_row_ix,
+                col_ix: target.col_ix + 1,
+                editable: target.editable,
+            },
             window,
             cx,
         );
@@ -1333,26 +1343,21 @@ impl DataGrid {
 
     fn show_text_editor_dialog(
         &self,
-        initial_text: String,
-        title: &str,
-        row_ix: usize,
-        col_ix: usize,
-        editable: bool,
+        request: TextEditorDialogRequest,
         window: &mut Window,
         cx: &mut App,
     ) {
         let dialog_text_editor =
-            create_large_text_editor_with_content(Some(initial_text.clone()), window, cx);
+            create_large_text_editor_with_content(Some(request.initial_text.clone()), window, cx);
         let data_grid = self.clone();
-        let title = title.to_string();
 
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let editor = dialog_text_editor.clone();
             let data_grid = data_grid.clone();
-            let original_text = initial_text.clone();
+            let original_text = request.initial_text.clone();
 
             let mut d = dialog
-                .title(SharedString::from(title.clone()))
+                .title(SharedString::from(request.title.clone()))
                 .w(px(800.0))
                 .h(px(600.0))
                 .child(v_flex().w_full().h_full().child(editor.clone()))
@@ -1360,7 +1365,7 @@ impl DataGrid {
                 .overlay(false)
                 .content_center();
 
-            if editable {
+            if request.editable {
                 d = d
                     .footer(|ok, cancel, window, cx| vec![ok(window, cx), cancel(window, cx)])
                     .on_ok(move |_, window, cx| {
@@ -1381,12 +1386,13 @@ impl DataGrid {
                                 });
                                 data_grid.table.update(cx, |state, cx| {
                                     let delegate = state.delegate_mut();
-                                    let Some(actual_row_ix) = delegate.resolve_display_row(row_ix)
+                                    let Some(actual_row_ix) =
+                                        delegate.resolve_display_row(request.row_ix)
                                     else {
                                         return false;
                                     };
 
-                                    let col_index = col_ix.saturating_sub(1);
+                                    let col_index = request.col_ix.saturating_sub(1);
                                     let changed =
                                         delegate.record_cell_change(actual_row_ix, col_index, val);
 
@@ -2244,7 +2250,8 @@ impl DataGrid {
         let loading = self.table.read(cx).delegate().is_loading();
         let data_grid = cx.entity().clone();
         let settings = cx.global::<AppSettings>();
-        let large_text_button_selected = settings.large_text_cell_editor_open_mode == LargeTextCellEditorOpenMode::SidebarPreview
+        let large_text_button_selected = settings.large_text_cell_editor_open_mode
+            == LargeTextCellEditorOpenMode::SidebarPreview
             && self.is_large_text_editor_sidebar_open;
 
         h_flex()
@@ -2571,7 +2578,7 @@ impl DataGrid {
     fn render_simple_status_bar(&self, cx: &App) -> AnyElement {
         let row_count = self.config.rows_count;
         // 将SQL中的换行符替换为空格，保持单行显示
-        let sql = self.config.sql.replace('\n', " ").replace('\r', " ");
+        let sql = self.config.sql.replace(['\n', '\r'], " ");
         let execution_time = self.config.execution_time;
 
         h_flex()
@@ -2687,12 +2694,12 @@ mod tests {
     };
     use db::DbManager;
     use gpui::SharedString;
+    use one_core::settings::LargeTextCellEditorOpenMode;
     use one_core::storage::DatabaseType;
     use one_ui::edit_table::ColumnSort;
     use rust_i18n::t;
     use std::io::{Cursor, Read};
     use zip::ZipArchive;
-    use one_core::settings::LargeTextCellEditorOpenMode;
 
     fn sample_export_input() -> (Vec<Vec<Option<String>>>, Vec<SharedString>, TableMetadata) {
         let rows = vec![vec![

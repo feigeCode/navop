@@ -350,7 +350,7 @@ impl DataExportView {
             .unwrap_or_default();
 
         Self {
-            connection_id: connection_id.into(),
+            connection_id,
             server_info: if let Some(c) = config {
                 c.server_info()
             } else {

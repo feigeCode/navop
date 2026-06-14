@@ -140,7 +140,7 @@ impl ContextMenuItem {
 }
 
 /// 表设计器 UI 配置能力
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct TableDesignerCapabilities {
     /// 是否支持存储引擎选择（MySQL: InnoDB/MyISAM）
     pub supports_engine: bool,
@@ -154,20 +154,8 @@ pub struct TableDesignerCapabilities {
     pub supports_tablespace: bool,
 }
 
-impl Default for TableDesignerCapabilities {
-    fn default() -> Self {
-        Self {
-            supports_engine: false,
-            supports_charset: false,
-            supports_collation: false,
-            supports_auto_increment: false,
-            supports_tablespace: false,
-        }
-    }
-}
-
 /// 列编辑器 UI 配置能力
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ColumnEditorCapabilities {
     /// 是否支持 unsigned（MySQL 特有）
     pub supports_unsigned: bool,
@@ -177,17 +165,6 @@ pub struct ColumnEditorCapabilities {
     pub show_charset_in_detail: bool,
     /// 是否在详情面板显示排序规则
     pub show_collation_in_detail: bool,
-}
-
-impl Default for ColumnEditorCapabilities {
-    fn default() -> Self {
-        Self {
-            supports_unsigned: false,
-            supports_enum_values: false,
-            show_charset_in_detail: false,
-            show_collation_in_detail: false,
-        }
-    }
 }
 
 struct ManifestDatabaseViewPlugin {

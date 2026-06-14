@@ -235,12 +235,14 @@ impl DatabaseTabView {
                         move |window, cx| {
                             let sql_editor = cx.new(|cx| {
                                 let editor = SqlEditorTab::new_with_config(
-                                    "AI Query",
-                                    connection_id.clone(),
-                                    database_type,
-                                    None,
-                                    None,
-                                    None,
+                                    crate::sql_editor_view::SqlEditorTabConfig {
+                                        title: "AI Query".into(),
+                                        connection_id: connection_id.clone(),
+                                        database_type,
+                                        file_path: None,
+                                        initial_database: None,
+                                        initial_schema: None,
+                                    },
                                     window,
                                     cx,
                                 );

@@ -49,26 +49,26 @@ pub struct SqlDumpView {
     focus_handle: FocusHandle,
 }
 
+pub struct SqlDumpViewParams {
+    pub connection_id: String,
+    pub server_info: String,
+    pub database: String,
+    pub schema: Option<String>,
+    pub table: Option<String>,
+    pub output_path: PathBuf,
+    pub mode: SqlDumpMode,
+}
+
 impl SqlDumpView {
-    pub fn new(
-        connection_id: impl Into<String>,
-        server_info: impl Into<String>,
-        database: impl Into<String>,
-        schema: Option<String>,
-        table: Option<String>,
-        output_path: PathBuf,
-        mode: SqlDumpMode,
-        _window: &mut Window,
-        cx: &mut App,
-    ) -> Entity<Self> {
+    pub fn new(params: SqlDumpViewParams, _window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self {
-            connection_id: connection_id.into(),
-            server_info: server_info.into(),
-            database: database.into(),
-            schema,
-            table,
-            output_path,
-            mode,
+            connection_id: params.connection_id,
+            server_info: params.server_info,
+            database: params.database,
+            schema: params.schema,
+            table: params.table,
+            output_path: params.output_path,
+            mode: params.mode,
 
             logs: cx.new(|_| Vec::new()),
             scroll_handle: VirtualListScrollHandle::new(),
@@ -148,7 +148,7 @@ impl SqlDumpView {
         let schema = self.schema.clone();
         let single_table = self.table.clone();
         let output_path = self.output_path.clone();
-        let mode = self.mode.clone();
+        let mode = self.mode;
 
         let logs = self.logs.clone();
         let scroll_handle = self.scroll_handle.clone();
@@ -498,7 +498,7 @@ impl Clone for SqlDumpView {
             schema: self.schema.clone(),
             table: self.table.clone(),
             output_path: self.output_path.clone(),
-            mode: self.mode.clone(),
+            mode: self.mode,
             logs: self.logs.clone(),
             scroll_handle: self.scroll_handle.clone(),
             processed_records: self.processed_records.clone(),

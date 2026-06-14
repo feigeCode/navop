@@ -326,7 +326,7 @@ impl EditorTableDelegate {
         self.column_meta
             .get(col_ix)
             .map(|m| {
-                let field_type = FieldType::from_db_type(&*m.data_type);
+                let field_type = FieldType::from_db_type(&m.data_type);
                 // Oracle DATE contains both date and time
                 if field_type == FieldType::Date && self.database_type == DatabaseType::Oracle {
                     FieldType::DateTime
@@ -842,7 +842,7 @@ impl EditTableDelegate for EditorTableDelegate {
                 if let Some(comment) = &meta.comment {
                     if !comment.is_empty() {
                         text.push('\n');
-                        text.push_str(&*comment);
+                        text.push_str(comment);
                     }
                 }
                 text

@@ -31,6 +31,10 @@ use tracing::log::{error, info, trace, warn};
 
 // 3. 当前 crate 导入（按模块分组）
 use crate::database_view_plugin::build_context_menu_for;
+use crate::extension_menu::{
+    DbTreeExtensionActionContext, DbTreeExtensionMenuContext, DbTreeExtensionMenuItem,
+    DbTreeExtensionMenuRegistry, GlobalDbTreeExtensionActionHandler,
+};
 use db::{DbNode, DbNodeType, GlobalDbState};
 use gpui_component::label::Label;
 use gpui_component::menu::PopupMenu;
@@ -109,6 +113,33 @@ fn apply_db_context_menu_target(
     *context_menu_node_id = Some(node_id.to_string());
 }
 
+fn extension_menu_items_for_node(
+    node: &DbNode,
+    registry: &DbTreeExtensionMenuRegistry,
+) -> Vec<DbTreeExtensionMenuItem> {
+    registry.items_for_context(&DbTreeExtensionMenuContext {
+        node_type: node.node_type,
+        node_name: node.name.clone(),
+        connection_id: node.connection_id.clone(),
+        database_type: node.database_type,
+    })
+}
+
+fn extension_action_context_for_item(
+    node: &DbNode,
+    item: &DbTreeExtensionMenuItem,
+) -> DbTreeExtensionActionContext {
+    DbTreeExtensionActionContext {
+        extension_id: item.extension_id.clone(),
+        command_id: item.command_id.clone(),
+        node_id: node.id.clone(),
+        node_name: node.name.clone(),
+        node_type: node.node_type,
+        database_type: node.database_type,
+        connection_id: node.connection_id.clone(),
+    }
+}
+
 // ============================================================================
 // FlatDbEntry - 扁平化的树条目（用于 uniform_list 渲染）
 // ============================================================================
@@ -127,7 +158,7 @@ struct FlatDbEntry {
 pub struct DatabaseListItem {
     db_id: String,
     db_name: String,
-    is_selected: bool,
+    db_selected: bool,
     selected: bool,
     view: Entity<DbTreeView>,
     connection_id: String,
@@ -145,7 +176,7 @@ impl DatabaseListItem {
         Self {
             db_id,
             db_name,
-            is_selected,
+            db_selected: is_selected,
             selected,
             view,
             connection_id,
@@ -170,7 +201,7 @@ impl RenderOnce for DatabaseListItem {
         let conn_item = self.connection_id.clone();
         let db_name_item = self.db_name.clone();
         let db_name_display = self.db_name.clone();
-        let is_selected = self.is_selected;
+        let is_selected = self.db_selected;
 
         h_flex()
             .id(SharedString::from(format!("db-item-{}", self.db_id)))
@@ -495,6 +526,35 @@ impl DbTreeView {
             }
         }
 
+        result_menu
+    }
+
+    fn render_extension_menu_items(
+        menu: PopupMenu,
+        items: Vec<DbTreeExtensionMenuItem>,
+        is_active: bool,
+        node: &DbNode,
+    ) -> PopupMenu {
+        let mut result_menu = menu;
+        for item in items {
+            let disabled = item.requires_active && !is_active;
+            let context = extension_action_context_for_item(node, &item);
+            let label = item.label.clone();
+            result_menu = result_menu.item(PopupMenuItem::new(label).disabled(disabled).on_click(
+                move |_, window, cx| {
+                    match cx
+                        .try_global::<GlobalDbTreeExtensionActionHandler>()
+                        .cloned()
+                    {
+                        Some(handler) => handler.run(context.clone(), window, cx),
+                        None => warn!(
+                            "db tree extension action handler is not registered for {}",
+                            context.command_id
+                        ),
+                    }
+                },
+            ));
+        }
         result_menu
     }
 
@@ -1418,7 +1478,7 @@ impl DbTreeView {
         let global_state = global_state.clone();
         let clone_node_id = node_id.clone();
         let connection_id = node.connection_id.clone();
-        let node_type = node.node_type.clone();
+        let node_type = node.node_type;
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             // 使用 DatabasePlugin 的方法加载子节点，添加超时机制
@@ -1854,8 +1914,7 @@ impl DbTreeView {
                 .with_size(ComponentSize::Size(px(20.))),
             Some(DbNodeType::Column) => {
                 let is_primary_key = node
-                    .map(|n| n.metadata.get("is_primary_key"))
-                    .flatten()
+                    .and_then(|n| n.metadata.get("is_primary_key"))
                     .map(|v| v == "true")
                     .unwrap_or(false);
                 if is_primary_key {
@@ -2445,8 +2504,8 @@ impl DbTreeView {
         };
 
         // 获取节点类型相关信息
-        let node_type = node.as_ref().map(|n| n.node_type.clone());
-        let database_type = node.as_ref().map(|n| n.database_type.clone());
+        let node_type = node.as_ref().map(|n| n.node_type);
+        let database_type = node.as_ref().map(|n| n.database_type);
         // 判断是否是分组类型（Folder 类型）
         let is_folder_type = matches!(
             node_type,
@@ -2793,6 +2852,15 @@ impl DbTreeView {
             menu = Self::render_context_menu_items(menu, menu_items, is_active, view, window, cx);
         }
 
+        let extension_items = cx
+            .try_global::<DbTreeExtensionMenuRegistry>()
+            .map(|registry| extension_menu_items_for_node(node, registry))
+            .unwrap_or_default();
+        if !extension_items.is_empty() {
+            menu = menu.separator();
+            menu = Self::render_extension_menu_items(menu, extension_items, is_active, node);
+        }
+
         // 添加通用的刷新菜单项
         let view_ref = view.clone();
         let node_id_for_refresh = node_id.to_string();
@@ -2966,5 +3034,51 @@ mod tests {
         assert_eq!(selected_node_id.as_deref(), Some("node-2"));
         assert_eq!(selected_ix, Some(4));
         assert_eq!(context_menu_node_id, None);
+    }
+
+    #[test]
+    fn extension_menu_items_for_node_filters_and_builds_action_context() {
+        let node = build_node(
+            DbNodeType::Table,
+            "users",
+            &[("database", "analytics"), ("schema", "public")],
+        );
+        let mut registry = crate::extension_menu::DbTreeExtensionMenuRegistry::default();
+        registry.add(
+            "db.tree.table",
+            crate::extension_menu::DbTreeExtensionMenuItem {
+                extension_id: "com.example.tools".to_string(),
+                command_id: "example.sync_table".to_string(),
+                label: "同步表".to_string(),
+                group: Some("extension@10".to_string()),
+                when_clause: Some("node.type == 'table' && connection.kind == 'mysql'".to_string()),
+                requires_active: true,
+            },
+        );
+        registry.add(
+            "db.tree.table",
+            crate::extension_menu::DbTreeExtensionMenuItem {
+                extension_id: "com.example.tools".to_string(),
+                command_id: "example.hidden".to_string(),
+                label: "Hidden".to_string(),
+                group: Some("extension@20".to_string()),
+                when_clause: Some("connection.kind == 'duckdb'".to_string()),
+                requires_active: true,
+            },
+        );
+
+        let items = extension_menu_items_for_node(&node, &registry);
+
+        assert_eq!(1, items.len());
+        assert_eq!("example.sync_table", items[0].command_id);
+
+        let context = extension_action_context_for_item(&node, &items[0]);
+        assert_eq!("com.example.tools", context.extension_id);
+        assert_eq!("example.sync_table", context.command_id);
+        assert_eq!("node-users", context.node_id);
+        assert_eq!("users", context.node_name);
+        assert_eq!(DbNodeType::Table, context.node_type);
+        assert_eq!(DatabaseType::MySQL, context.database_type);
+        assert_eq!("conn-1", context.connection_id);
     }
 }

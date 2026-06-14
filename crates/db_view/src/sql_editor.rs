@@ -199,7 +199,7 @@ pub mod completion_priority {
     /// Format: "{score:05}_{label}" for stable sorting.
     pub fn score_to_sort_text(score: i32, label: &str) -> String {
         // Lower score = higher priority, so use score directly
-        format!("{:05}_{}", score.max(0).min(99999), label)
+        format!("{:05}_{}", score.clamp(0, 99999), label)
     }
 }
 

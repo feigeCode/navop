@@ -1035,10 +1035,10 @@ fn is_custom_ssl_enabled(
     match db_type {
         DatabaseType::MySQL => require_ssl,
         DatabaseType::PostgreSQL => ssl_mode
-            .map(|value| value.trim().to_ascii_lowercase() != "disable")
+            .map(|value| !value.trim().eq_ignore_ascii_case("disable"))
             .unwrap_or(false),
         DatabaseType::MSSQL => encrypt
-            .map(|value| value.trim().to_ascii_lowercase() != "off")
+            .map(|value| !value.trim().eq_ignore_ascii_case("off"))
             .unwrap_or(false),
         _ => false,
     }
@@ -1078,7 +1078,7 @@ fn missing_ssh_tunnel_required_field(
 /// Event emitted when a connection is saved successfully
 #[derive(Clone, Debug)]
 pub enum DbConnectionFormEvent {
-    Saved(StoredConnection),
+    Saved(Box<StoredConnection>),
     SaveError(String),
 }
 
@@ -1875,7 +1875,7 @@ impl DbConnectionForm {
                         Ok(..) => {
                             let _ = this.update(cx, |form, cx| {
                                 form.editing_connection = None;
-                                cx.emit(DbConnectionFormEvent::Saved(stored));
+                                cx.emit(DbConnectionFormEvent::Saved(Box::new(stored)));
                             });
                         }
                         Err(e) => {
@@ -1893,7 +1893,7 @@ impl DbConnectionForm {
                             let _ = this.update(cx, |form, cx| {
                                 form.editing_connection = None;
                                 stored.id = Some(id);
-                                cx.emit(DbConnectionFormEvent::Saved(stored));
+                                cx.emit(DbConnectionFormEvent::Saved(Box::new(stored)));
                             });
                         }
                         Err(e) => {
@@ -2205,7 +2205,6 @@ impl DbConnectionForm {
                 .when(db_type == DatabaseType::Oracle, |form| {
                     let has_error = matches!(&oracle_client_status, Some(Err(_)));
                     let oracle_client_guide = oracle_client_guide.clone();
-                    let oracle_client_download_url = oracle_client_download_url;
 
                     form.child(
                         field()
