@@ -788,10 +788,9 @@ impl GlobalProxySettingsView {
                 test_proxy_connectivity(http_client).await
             });
 
-            let result = match test_task.await {
-                Ok(result) => result,
-                Err(err) => Err(format!("代理测试任务执行失败: {}", err)),
-            };
+            let result = test_task
+                .await
+                .unwrap_or_else(|err| Err(format!("代理测试任务执行失败: {}", err)));
 
             let _ = this.update(cx, |view, cx| {
                 view.testing = false;
@@ -1981,6 +1980,10 @@ mod tests {
         let client = build_app_http_client(&settings).expect("禁用代理时 HTTP client 应创建成功");
 
         assert_eq!(client.proxy(), None);
+        assert_eq!(
+            client.user_agent().and_then(|value| value.to_str().ok()),
+            Some("onetcli")
+        );
     }
 
     #[test]

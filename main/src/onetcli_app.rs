@@ -157,8 +157,8 @@ pub(crate) fn log_file_appender(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 pub fn init(cx: &mut App) {
-    setting_tab::init_settings(cx);
     gpui_component::init(cx);
+    setting_tab::init_settings(cx);
     one_core::init(cx);
     one_ui::init(cx);
     db_view::sql_editor_view::init(cx);
