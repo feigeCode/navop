@@ -202,9 +202,9 @@ impl SyntaxHighlighter {
     pub fn new(lang: &str) -> Self {
         Self::build_combined_injections_query(&lang).unwrap_or_else(|err| {
             tracing::warn!(
-                    "SyntaxHighlighter init failed, fallback to use `text`, {}",
-                    err
-                );
+                "SyntaxHighlighter init failed, fallback to use `text`, {}",
+                err
+            );
             Self::build_combined_injections_query("text").unwrap()
         })
     }
