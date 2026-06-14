@@ -8,7 +8,7 @@ use crate::duckdb::DuckDbPlugin;
 use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportResult,
 };
-use crate::ipc::ExternalDatabasePlugin;
+use crate::ipc::{ExternalDatabasePlugin, IpcDriverRegistry};
 use crate::mssql::MsSqlPlugin;
 use crate::mysql::MySqlPlugin;
 use crate::oracle::OraclePlugin;
@@ -159,20 +159,36 @@ pub struct DbManager {
     clickhouse: Arc<dyn DatabasePlugin>,
     mssql: Arc<dyn DatabasePlugin>,
     oracle: Arc<dyn DatabasePlugin>,
-    external: Arc<dyn DatabasePlugin>,
+    external_drivers: HashMap<String, Arc<dyn DatabasePlugin>>,
 }
 
 impl DbManager {
     pub fn new() -> Self {
+        Self::with_external_registry(IpcDriverRegistry::load_default())
+    }
+
+    fn with_external_registry(registry: IpcDriverRegistry) -> Self {
+        let external_drivers = registry
+            .drivers()
+            .iter()
+            .map(|driver| {
+                (
+                    driver.id.clone(),
+                    Arc::new(ExternalDatabasePlugin::for_driver(driver.clone()))
+                        as Arc<dyn DatabasePlugin>,
+                )
+            })
+            .collect();
+
         Self {
             mysql: Arc::new(MySqlPlugin::new()),
             postgresql: Arc::new(PostgresPlugin::new()),
             sqlite: Arc::new(SqlitePlugin::new()),
-            duckdb: default_duckdb_plugin(),
+            duckdb: default_duckdb_plugin(&registry),
             clickhouse: Arc::new(ClickHousePlugin::new()),
             mssql: Arc::new(MsSqlPlugin::new()),
             oracle: Arc::new(OraclePlugin::new()),
-            external: Arc::new(ExternalDatabasePlugin::new()),
+            external_drivers,
         }
     }
 
@@ -185,19 +201,25 @@ impl DbManager {
             DatabaseType::ClickHouse => Ok(Arc::clone(&self.clickhouse)),
             DatabaseType::MSSQL => Ok(Arc::clone(&self.mssql)),
             DatabaseType::Oracle => Ok(Arc::clone(&self.oracle)),
-            DatabaseType::External => Ok(Arc::clone(&self.external)),
+            DatabaseType::External { driver_id } => self
+                .external_drivers
+                .get(driver_id)
+                .cloned()
+                .ok_or_else(|| {
+                    DbError::connection(format!("external driver '{}' not found", driver_id))
+                }),
         }
     }
 }
 
 #[cfg(feature = "builtin-duckdb")]
-fn default_duckdb_plugin() -> Arc<dyn DatabasePlugin> {
+fn default_duckdb_plugin(_registry: &IpcDriverRegistry) -> Arc<dyn DatabasePlugin> {
     Arc::new(DuckDbPlugin::new())
 }
 
 #[cfg(not(feature = "builtin-duckdb"))]
-fn default_duckdb_plugin() -> Arc<dyn DatabasePlugin> {
-    Arc::new(ExternalDatabasePlugin::new())
+fn default_duckdb_plugin(registry: &IpcDriverRegistry) -> Arc<dyn DatabasePlugin> {
+    Arc::new(ExternalDatabasePlugin::with_registry(registry.clone()))
 }
 
 impl Default for DbManager {
@@ -216,7 +238,7 @@ impl Clone for DbManager {
             clickhouse: Arc::clone(&self.clickhouse),
             mssql: Arc::clone(&self.mssql),
             oracle: Arc::clone(&self.oracle),
-            external: Arc::clone(&self.external),
+            external_drivers: self.external_drivers.clone(),
         }
     }
 }
@@ -365,7 +387,7 @@ impl ConnectionManager {
         let session_started = Instant::now();
         let config = self.config_resolver.resolve(config)?;
         let config_id = config.id.clone();
-        let database_type = config.database_type;
+        let database_type = config.database_type.clone();
         let database = config.database.clone();
 
         // Try to acquire an existing session and switch database if needed
@@ -843,7 +865,7 @@ impl GlobalDbState {
                 DbConnectionSummary {
                     id: config.id.clone(),
                     name: config.name.clone(),
-                    database_type: config.database_type,
+                    database_type: config.database_type.clone(),
                     database: config.database.clone(),
                 }
             })
@@ -2721,8 +2743,10 @@ mod tests {
     use super::*;
     use crate::connection::DbConnection;
     use crate::executor::{ExecOptions, ExecResult, SqlErrorInfo, SqlSource};
+    use crate::ipc::{IpcDriverManifest, IpcDriverRegistry};
     use async_trait::async_trait;
     use one_core::storage::DatabaseType;
+    use std::path::PathBuf;
     use std::sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering},
@@ -2860,6 +2884,22 @@ mod tests {
         }
     }
 
+    fn external_driver_manifest(id: &str, quote: &str, supports_schema: bool) -> IpcDriverManifest {
+        let mut driver: IpcDriverManifest = serde_json::from_str(&format!(
+            r#"{{
+                "id":"{id}",
+                "name":"{id}",
+                "entry":{{"command":"driver"}},
+                "transport":{{"name":"{id}.sock"}},
+                "capabilities":{{"supports_schema":{supports_schema}}}
+            }}"#
+        ))
+        .unwrap();
+        driver.dialect.identifier_quote = quote.to_string();
+        driver.manifest_dir = PathBuf::from(format!("/drivers/{id}"));
+        driver
+    }
+
     #[cfg(feature = "builtin-duckdb")]
     #[test]
     fn test_db_manager_registers_duckdb_plugin() {
@@ -2877,7 +2917,7 @@ mod tests {
             .get_plugin(&DatabaseType::DuckDB)
             .expect("DuckDB plugin should be available through external IPC");
 
-        assert_eq!(plugin.name(), DatabaseType::External);
+        assert_eq!(plugin.name(), DatabaseType::external("duckdb"));
     }
 
     #[cfg(not(feature = "builtin-duckdb"))]
@@ -2901,6 +2941,24 @@ mod tests {
             format!("{error}").contains("external driver 'duckdb' not found"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn db_manager_resolves_external_plugin_by_connection_driver_id() {
+        let manager = DbManager::with_external_registry(IpcDriverRegistry::from_drivers(vec![
+            external_driver_manifest("alpha", "`", true),
+            external_driver_manifest("beta", "\"", false),
+        ]));
+
+        let alpha = manager
+            .get_plugin(&DatabaseType::external("alpha"))
+            .unwrap();
+        let beta = manager.get_plugin(&DatabaseType::external("beta")).unwrap();
+
+        assert_eq!("`a``b`", alpha.quote_identifier("a`b"));
+        assert!(alpha.capabilities().supports_schema);
+        assert_eq!("\"a\"\"b\"", beta.quote_identifier("a\"b"));
+        assert!(!beta.capabilities().supports_schema);
     }
 
     #[test]

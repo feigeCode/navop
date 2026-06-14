@@ -202,7 +202,7 @@ impl SqlEditorTab {
     ) -> PathBuf {
         let queries_dir = get_queries_dir().unwrap_or_else(|_| PathBuf::from("."));
         let dir_path = queries_dir
-            .join(database_type.as_str())
+            .join(database_type.path_key())
             .join(connection_id)
             .join(database);
 
@@ -1087,7 +1087,7 @@ impl Clone for SqlEditorTab {
             title: self.title.clone(),
             editor: self.editor.clone(),
             connection_id: self.connection_id.clone(),
-            database_type: self.database_type,
+            database_type: self.database_type.clone(),
             sql_result_tab_container: self.sql_result_tab_container.clone(),
             database_select: self.database_select.clone(),
             schema_select: self.schema_select.clone(),

@@ -32,7 +32,7 @@ impl CacheContext {
     /// 从连接配置创建缓存上下文
     pub fn from_config(config: &DbConnectionConfig) -> Self {
         Self {
-            database_type: config.database_type,
+            database_type: config.database_type.clone(),
             host: config.host.clone(),
             port: config.port,
         }
@@ -43,6 +43,14 @@ impl CacheContext {
         let mut hasher = DefaultHasher::new();
         s.hash(&mut hasher);
         format!("{:08x}", hasher.finish() as u32)
+    }
+
+    fn safe_component(s: &str) -> String {
+        s.replace([':', '/', '\\', '<', '>', '|', '?', '*', '.'], "_")
+    }
+
+    fn database_type_key(&self) -> String {
+        self.database_type.path_key()
     }
 
     /// 生成缓存目录名
@@ -59,19 +67,12 @@ impl CacheContext {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown");
-            let safe_name = db_name.replace([':', '/', '\\', '<', '>', '|', '?', '*', '.'], "_");
+            let safe_name = Self::safe_component(db_name);
             let hash = Self::short_hash(&self.host);
-            format!("{}/{}_{}", self.database_type.as_str(), safe_name, hash)
+            format!("{}/{}_{}", self.database_type_key(), safe_name, hash)
         } else {
-            let safe_host = self
-                .host
-                .replace([':', '/', '\\', '<', '>', '|', '?', '*', '.'], "_");
-            format!(
-                "{}/{}_{}",
-                self.database_type.as_str(),
-                safe_host,
-                self.port
-            )
+            let safe_host = Self::safe_component(&self.host);
+            format!("{}/{}_{}", self.database_type_key(), safe_host, self.port)
         }
     }
 
@@ -87,21 +88,19 @@ impl CacheContext {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown");
-            let safe_name = db_name.replace([':', '/', '\\', '<', '>', '|', '?', '*', '.'], "_");
+            let safe_name = Self::safe_component(db_name);
             let hash = Self::short_hash(&self.host);
             format!(
                 "{}_{}_{}",
-                self.database_type.as_str().to_ascii_lowercase(),
+                self.database_type_key().to_ascii_lowercase(),
                 safe_name,
                 hash
             )
         } else {
-            let safe_host = self
-                .host
-                .replace([':', '/', '\\', '<', '>', '|', '?', '*', '.'], "_");
+            let safe_host = Self::safe_component(&self.host);
             format!(
                 "{}_{}_{}",
-                self.database_type.as_str().to_lowercase(),
+                self.database_type_key().to_ascii_lowercase(),
                 safe_host,
                 self.port
             )

@@ -380,7 +380,7 @@ impl SqlResultTabContainer {
                             total,
                             connection_id: connection_id_clone.clone(),
                             database: database_clone.clone(),
-                            database_type,
+                            database_type: database_type.clone(),
                         },
                         cx,
                     );
@@ -530,7 +530,7 @@ impl SqlResultTabContainer {
                     db_name.clone(),
                     table_name.clone(),
                     &connection_id,
-                    database_type,
+                    database_type.clone(),
                 )
                 .editable(editable)
                 .show_toolbar(true)

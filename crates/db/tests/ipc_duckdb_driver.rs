@@ -78,7 +78,7 @@ fn make_config(id: &str, db_path: &std::path::Path) -> DbConnectionConfig {
     DbConnectionConfig {
         id: id.into(),
         name: "DuckDB Test".into(),
-        database_type: DatabaseType::External,
+        database_type: DatabaseType::external("duckdb"),
         host: db_path.to_string_lossy().into_owned(),
         port: 0,
         username: String::new(),

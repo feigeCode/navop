@@ -166,7 +166,7 @@ impl ChatSqlResultView {
             self.database.clone().unwrap_or_default(),
             "",
             &self.connection_id,
-            self.db_type,
+            self.db_type.clone(),
         )
         .editable(false)
         .show_toolbar(false)

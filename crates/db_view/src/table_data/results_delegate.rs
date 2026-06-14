@@ -196,7 +196,7 @@ impl Clone for EditorTableDelegate {
             column_filters: self.column_filters.clone(),
             editable: self.editable,
             loading: self.loading,
-            database_type: self.database_type,
+            database_type: self.database_type.clone(),
             table_name: self.table_name.clone(),
             primary_key_indices: self.primary_key_indices.clone(),
             data_grid: self.data_grid.clone(),
@@ -2249,7 +2249,7 @@ impl EditorTableDelegate {
 
     /// 获取数据库类型
     pub fn database_type(&self) -> DatabaseType {
-        self.database_type
+        self.database_type.clone()
     }
 }
 

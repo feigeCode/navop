@@ -8,7 +8,7 @@ use crate::ipc::connection::ExternalDbConnection;
 use crate::ipc::protocol::driver_config_value;
 use crate::ipc::registry::{EXTERNAL_DRIVER_ID_PARAM, IpcDriverManifest, IpcDriverRegistry};
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
-use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiCapabilities, DatabaseUiManifest};
+use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use crate::types::*;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -21,25 +21,46 @@ use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct ExternalDatabasePlugin {
-    registry: IpcDriverRegistry,
+    driver: IpcDriverManifest,
+    registry: Option<IpcDriverRegistry>,
 }
 
 impl ExternalDatabasePlugin {
     pub fn new() -> Self {
-        Self {
-            registry: IpcDriverRegistry::load_default(),
-        }
+        Self::with_registry(IpcDriverRegistry::load_default())
     }
 
     pub fn with_registry(registry: IpcDriverRegistry) -> Self {
-        Self { registry }
+        let driver = registry
+            .find("duckdb")
+            .unwrap_or_else(|| placeholder_driver_manifest("duckdb"));
+        Self {
+            driver,
+            registry: Some(registry),
+        }
+    }
+
+    pub fn for_driver(driver: IpcDriverManifest) -> Self {
+        Self {
+            driver,
+            registry: None,
+        }
     }
 
     fn driver_for_config(&self, config: &DbConnectionConfig) -> Result<IpcDriverManifest, DbError> {
         let driver_id = driver_id_for_config(config)?;
-        self.registry.find(driver_id).ok_or_else(|| {
-            DbError::connection(format!("external driver '{}' not found", driver_id))
-        })
+        if let Some(registry) = &self.registry {
+            return registry.find(driver_id).ok_or_else(|| {
+                DbError::connection(format!("external driver '{}' not found", driver_id))
+            });
+        }
+        if driver_id != self.driver.id {
+            return Err(DbError::connection(format!(
+                "external driver '{}' does not match plugin driver '{}'",
+                driver_id, self.driver.id
+            )));
+        }
+        Ok(self.driver.clone())
     }
 
     async fn test_connection_via_open(&self, config: DbConnectionConfig) -> Result<(), DbError> {
@@ -137,16 +158,40 @@ impl ExternalDatabasePlugin {
 }
 
 fn driver_id_for_config(config: &DbConnectionConfig) -> Result<&str, DbError> {
+    if let Some(driver_id) = config.database_type.external_driver_id() {
+        return Ok(driver_id);
+    }
     if let Some(driver_id) = config.get_param(EXTERNAL_DRIVER_ID_PARAM) {
         return Ok(driver_id);
     }
     match config.database_type {
         DatabaseType::DuckDB => Ok("duckdb"),
-        DatabaseType::External => Err(DbError::connection("external driver id is required")),
         _ => Err(DbError::connection(format!(
             "external driver id is required for {:?}",
             config.database_type
         ))),
+    }
+}
+
+fn placeholder_driver_manifest(driver_id: &str) -> IpcDriverManifest {
+    IpcDriverManifest {
+        id: driver_id.to_string(),
+        name: driver_id.to_string(),
+        description: String::new(),
+        version: String::new(),
+        entry: crate::ipc::registry::IpcDriverEntry {
+            command: String::new(),
+            args: Vec::new(),
+            working_dir: None,
+        },
+        transport: crate::ipc::registry::IpcDriverTransport::local_socket(format!(
+            "{driver_id}.sock"
+        )),
+        dialect: Default::default(),
+        capabilities: None,
+        methods: Vec::new(),
+        ui: Default::default(),
+        manifest_dir: Default::default(),
     }
 }
 
@@ -175,11 +220,11 @@ impl Default for ExternalDatabasePlugin {
 #[async_trait]
 impl DatabasePlugin for ExternalDatabasePlugin {
     fn name(&self) -> DatabaseType {
-        DatabaseType::External
+        DatabaseType::external(self.driver.id.clone())
     }
 
     fn quote_identifier(&self, identifier: &str) -> String {
-        format!("\"{}\"", identifier.replace('"', "\"\""))
+        quote_identifier_with(&self.driver.dialect.identifier_quote, identifier)
     }
 
     fn get_completion_info(&self) -> SqlCompletionInfo {
@@ -260,12 +305,7 @@ impl DatabasePlugin for ExternalDatabasePlugin {
     }
 
     fn capabilities(&self) -> DatabaseCapabilities {
-        merge_capabilities(
-            self.registry
-                .drivers()
-                .iter()
-                .map(IpcDriverManifest::effective_capabilities),
-        )
+        self.driver.effective_capabilities()
     }
 
     fn sql_dialect(&self) -> Box<dyn Dialect> {
@@ -556,11 +596,7 @@ impl DatabasePlugin for ExternalDatabasePlugin {
     }
 
     fn ui_manifest(&self) -> DatabaseUiManifest {
-        self.registry
-            .drivers()
-            .first()
-            .and_then(|driver| driver.ui.form.clone())
-            .unwrap_or_default()
+        self.driver.ui.form.clone().unwrap_or_default()
     }
 
     async fn list_procedures(
@@ -1171,34 +1207,15 @@ fn is_not_supported(error: &anyhow::Error) -> bool {
         .is_some_and(|error| matches!(error, DbError::NotSupported(_)))
 }
 
-fn merge_capabilities(
-    capabilities: impl IntoIterator<Item = DatabaseCapabilities>,
-) -> DatabaseCapabilities {
-    capabilities
-        .into_iter()
-        .fold(DatabaseUiCapabilities::default(), |mut merged, current| {
-            merged.supports_schema |= current.supports_schema;
-            merged.uses_schema_as_database |= current.uses_schema_as_database;
-            merged.supports_sequences |= current.supports_sequences;
-            merged.supports_functions |= current.supports_functions;
-            merged.supports_procedures |= current.supports_procedures;
-            merged.supports_triggers |= current.supports_triggers;
-            merged.supports_table_engine |= current.supports_table_engine;
-            merged.supports_table_charset |= current.supports_table_charset;
-            merged.supports_table_collation |= current.supports_table_collation;
-            merged.supports_auto_increment |= current.supports_auto_increment;
-            merged.supports_tablespace |= current.supports_tablespace;
-            merged.supports_unsigned |= current.supports_unsigned;
-            merged.supports_enum_values |= current.supports_enum_values;
-            merged.show_charset_in_column_detail |= current.show_charset_in_column_detail;
-            merged.show_collation_in_column_detail |= current.show_collation_in_column_detail;
-            for engine in current.table_engines {
-                if !merged.table_engines.contains(&engine) {
-                    merged.table_engines.push(engine);
-                }
-            }
-            merged
-        })
+fn quote_identifier_with(quote: &str, identifier: &str) -> String {
+    match quote {
+        "" => identifier.to_string(),
+        "[" => format!("[{}]", identifier.replace(']', "]]")),
+        quote => format!(
+            "{quote}{}{quote}",
+            identifier.replace(quote, &format!("{quote}{quote}"))
+        ),
+    }
 }
 
 fn object_view(
@@ -1223,6 +1240,7 @@ mod tests {
     use super::*;
     use crate::connection::StreamingProgress;
     use crate::executor::{ExecOptions, SqlResult, SqlSource};
+    use std::path::PathBuf;
     use tokio::sync::mpsc;
 
     struct DriverRequestOnlyConnection {
@@ -1235,7 +1253,7 @@ mod tests {
                 config: DbConnectionConfig {
                     id: "driver-request-only".into(),
                     name: "Driver Request Only".into(),
-                    database_type: DatabaseType::External,
+                    database_type: DatabaseType::external("driver-request-only"),
                     host: String::new(),
                     port: 0,
                     username: String::new(),
@@ -1333,6 +1351,58 @@ mod tests {
         ) -> Result<(), DbError> {
             Ok(())
         }
+    }
+
+    fn driver_manifest(
+        id: &str,
+        quote: &str,
+        supports_schema: bool,
+        form_title: &str,
+    ) -> IpcDriverManifest {
+        let mut driver: IpcDriverManifest = serde_json::from_str(&format!(
+            r#"{{
+                "id":"{id}",
+                "name":"{id}",
+                "entry":{{"command":"driver"}},
+                "transport":{{"name":"{id}.sock"}},
+                "capabilities":{{"supports_schema":{supports_schema}}},
+                "ui":{{
+                    "form":{{
+                        "schema_version":1,
+                        "forms":[{{
+                            "kind":"Connection",
+                            "title_i18n_key":"{form_title}",
+                            "submit_i18n_key":"submit",
+                            "tabs":[]
+                        }}],
+                        "actions":{{"actions":[]}}
+                    }}
+                }}
+            }}"#
+        ))
+        .unwrap();
+        driver.dialect.identifier_quote = quote.to_string();
+        driver.manifest_dir = PathBuf::from(format!("/drivers/{id}"));
+        driver
+    }
+
+    #[test]
+    fn fixed_driver_plugin_uses_that_driver_capabilities_ui_and_quote() {
+        let alpha = driver_manifest("alpha", "`", true, "alpha.connection");
+        let beta = driver_manifest("beta", "\"", false, "beta.connection");
+
+        let plugin = ExternalDatabasePlugin::for_driver(beta.clone());
+
+        assert_eq!("\"has\"\"quote\"", plugin.quote_identifier("has\"quote"));
+        assert!(!plugin.capabilities().supports_schema);
+        assert_eq!(
+            "beta.connection",
+            plugin.ui_manifest().forms[0].title_i18n_key
+        );
+        assert_ne!(
+            alpha.ui.form.unwrap().forms[0].title_i18n_key,
+            plugin.ui_manifest().forms[0].title_i18n_key
+        );
     }
 
     #[tokio::test]

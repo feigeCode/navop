@@ -1109,7 +1109,7 @@ pub struct DbConnectionForm {
 impl DbConnectionForm {
     pub fn new(config: DbFormConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        let current_db_type = cx.new(|_| config.db_type);
+        let current_db_type = cx.new(|_| config.db_type.clone());
 
         // Initialize field values, inputs, and selects
         let mut field_values = Vec::new();
@@ -1529,7 +1529,7 @@ impl DbConnectionForm {
             }
         }
 
-        let db_type = *self.current_db_type.read(cx);
+        let db_type = self.current_db_type.read(cx).clone();
 
         let port_str = self.get_field_value("port", cx);
 
@@ -1712,7 +1712,7 @@ impl DbConnectionForm {
                 return;
             }
         };
-        let db_type = *self.current_db_type.read(cx);
+        let db_type = self.current_db_type.read(cx).clone();
 
         self.is_testing.update(cx, |testing, cx| {
             *testing = true;
@@ -1981,14 +1981,14 @@ impl DbConnectionForm {
 
     fn should_use_custom_ssl_tab(&self) -> bool {
         matches!(
-            self.config.db_type,
+            self.config.db_type.clone(),
             DatabaseType::MySQL | DatabaseType::PostgreSQL | DatabaseType::MSSQL
         )
     }
 
     fn is_ssl_enabled(&self, cx: &App) -> bool {
         is_custom_ssl_enabled(
-            self.config.db_type,
+            self.config.db_type.clone(),
             self.field_bool_value("require_ssl", cx),
             self.get_field_value("ssl_mode", cx).as_deref(),
             self.get_field_value("encrypt", cx).as_deref(),
@@ -2095,7 +2095,7 @@ impl DbConnectionForm {
         }
 
         let is_general_tab = self.active_tab == 0;
-        let db_type = self.config.db_type;
+        let db_type = self.config.db_type.clone();
 
         v_form()
             .layout(Axis::Horizontal)

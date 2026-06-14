@@ -31,11 +31,11 @@ pub trait DatabaseDriverConnectionOpener: Sized + 'static {
 }
 
 pub fn required_driver_for_config(config: &DbConnectionConfig) -> DriverRequirement {
-    match config.database_type {
+    match &config.database_type {
         DatabaseType::DuckDB => DriverRequirement::Required {
             driver_id: DUCKDB_DRIVER_ID.to_string(),
         },
-        DatabaseType::External => required_external_driver(config),
+        DatabaseType::External { .. } => required_external_driver(config),
         _ => DriverRequirement::NotRequired,
     }
 }
@@ -217,8 +217,14 @@ fn notify_success<T>(window: &mut Window, cx: &mut Context<T>, message: impl Int
 
 fn required_external_driver(config: &DbConnectionConfig) -> DriverRequirement {
     let driver_id = config
-        .get_param(EXTERNAL_DRIVER_ID_PARAM)
-        .map(|id| id.trim())
+        .database_type
+        .external_driver_id()
+        .or_else(|| {
+            config
+                .get_param(EXTERNAL_DRIVER_ID_PARAM)
+                .map(String::as_str)
+        })
+        .map(str::trim)
         .unwrap_or_default();
     if driver_id.is_empty() {
         return DriverRequirement::InvalidConfig {

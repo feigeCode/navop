@@ -118,7 +118,7 @@ fn config(database_type: DatabaseType) -> DbConnectionConfig {
 }
 
 fn external_config(driver_id: &str) -> DbConnectionConfig {
-    let mut config = config(DatabaseType::External);
+    let mut config = config(DatabaseType::external(driver_id));
     config
         .extra_params
         .insert(EXTERNAL_DRIVER_ID_PARAM.to_string(), driver_id.to_string());

@@ -49,14 +49,14 @@ impl SchemaEditorView {
         let focus_handle = cx.focus_handle();
         let error_message = cx.new(|_| None);
 
-        let db_type = database_type;
+        let db_type = database_type.clone();
 
         let form_subscription = cx.subscribe_in(
             &form,
             window,
             move |this, _form, event, window, cx| match event {
                 SchemaFormEvent::FormChanged(request) => {
-                    this.update_sql_preview(request, db_type, window, cx);
+                    this.update_sql_preview(request, db_type.clone(), window, cx);
                 }
             },
         );
@@ -116,7 +116,7 @@ impl SchemaEditorView {
     }
 
     pub fn database_type(&self) -> DatabaseType {
-        self.database_type
+        self.database_type.clone()
     }
 }
 

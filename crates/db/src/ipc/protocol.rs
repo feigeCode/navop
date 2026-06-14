@@ -22,8 +22,15 @@ pub fn driver_config_value(config: &DbConnectionConfig) -> Value {
     json!({
         "id": config.id,
         "database_type": config.database_type.as_str(),
-        "database_type_key": config.database_type.as_str(),
-        "driver_id": config.get_param(crate::ipc::registry::EXTERNAL_DRIVER_ID_PARAM),
+        "database_type_key": config.database_type.storage_key(),
+        "driver_id": config
+            .database_type
+            .external_driver_id()
+            .or_else(|| {
+                config
+                    .get_param(crate::ipc::registry::EXTERNAL_DRIVER_ID_PARAM)
+                    .map(String::as_str)
+            }),
         "name": config.name,
         "host": config.host,
         "port": config.port,

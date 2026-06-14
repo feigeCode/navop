@@ -117,7 +117,7 @@ impl ConnectionType {
 }
 
 /// Database type enumeration
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DatabaseType {
     MySQL,
     PostgreSQL,
@@ -126,7 +126,7 @@ pub enum DatabaseType {
     MSSQL,
     Oracle,
     ClickHouse,
-    External,
+    External { driver_id: String },
 }
 
 impl DatabaseType {
@@ -146,6 +146,23 @@ impl DatabaseType {
         ]
     }
 
+    pub fn external(driver_id: impl Into<String>) -> Self {
+        Self::External {
+            driver_id: driver_id.into(),
+        }
+    }
+
+    pub fn is_external(&self) -> bool {
+        matches!(self, Self::External { .. })
+    }
+
+    pub fn external_driver_id(&self) -> Option<&str> {
+        match self {
+            Self::External { driver_id } => Some(driver_id),
+            _ => None,
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         match self {
             DatabaseType::MySQL => "MySQL",
@@ -155,8 +172,30 @@ impl DatabaseType {
             DatabaseType::MSSQL => "MSSQL",
             DatabaseType::Oracle => "Oracle",
             DatabaseType::ClickHouse => "ClickHouse",
-            DatabaseType::External => "External",
+            DatabaseType::External { .. } => "External",
         }
+    }
+
+    pub fn storage_key(&self) -> String {
+        match self {
+            DatabaseType::External { driver_id } => format!("External:{driver_id}"),
+            _ => self.as_str().to_string(),
+        }
+    }
+
+    pub fn path_key(&self) -> String {
+        self.storage_key()
+            .replace([':', '/', '\\', '<', '>', '|', '?', '*', '.'], "_")
+    }
+
+    pub fn from_storage_key(s: &str) -> Option<Self> {
+        if let Some(driver_id) = s.strip_prefix("External:") {
+            if driver_id.is_empty() {
+                return None;
+            }
+            return Some(DatabaseType::external(driver_id));
+        }
+        Self::from_str(s)
     }
 
     pub fn from_str(s: &str) -> Option<Self> {
@@ -168,7 +207,6 @@ impl DatabaseType {
             "MSSQL" => Some(DatabaseType::MSSQL),
             "Oracle" => Some(DatabaseType::Oracle),
             "ClickHouse" => Some(DatabaseType::ClickHouse),
-            "External" => Some(DatabaseType::External),
             _ => None,
         }
     }
@@ -182,7 +220,7 @@ impl DatabaseType {
             DatabaseType::MSSQL => IconName::MSSQLColor.color().with_size(Large),
             DatabaseType::Oracle => IconName::OracleColor.color().with_size(Large),
             DatabaseType::ClickHouse => IconName::ClickHouseColor.color().with_size(Large),
-            DatabaseType::External => IconName::Database.color().with_size(Large),
+            DatabaseType::External { .. } => IconName::Database.color().with_size(Large),
         }
     }
     pub fn as_node_icon(&self) -> Icon {
@@ -194,7 +232,7 @@ impl DatabaseType {
             DatabaseType::MSSQL => IconName::MSSQLLineColor.color().with_size(Large),
             DatabaseType::Oracle => IconName::OracleLineColor.color().with_size(Large),
             DatabaseType::ClickHouse => IconName::ClickHouseLineColor.color().with_size(Large),
-            DatabaseType::External => IconName::Database.color().with_size(Large),
+            DatabaseType::External { .. } => IconName::Database.color().with_size(Large),
         }
     }
 }
@@ -1021,6 +1059,22 @@ mod tests {
         );
         assert_eq!(None, db.extra_params.get("ssh_password"));
         assert_eq!(None, db.extra_params.get("ssh_private_key_path"));
+    }
+
+    #[test]
+    fn external_database_type_carries_driver_identity() {
+        let database_type = DatabaseType::external("iotdb");
+
+        assert_eq!("External", database_type.as_str());
+        assert_eq!("iotdb", database_type.external_driver_id().unwrap());
+        assert_eq!("External:iotdb", database_type.storage_key());
+        assert_eq!("External_iotdb", database_type.path_key());
+        assert_eq!(
+            Some(DatabaseType::external("iotdb")),
+            DatabaseType::from_storage_key("External:iotdb")
+        );
+        assert_eq!(None, DatabaseType::from_str("External"));
+        assert!(database_type.is_external());
     }
 }
 

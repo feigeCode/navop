@@ -358,7 +358,7 @@ impl DataGrid {
     pub fn new(config: DataGridConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let editable = config.editable;
         let is_table_data = config.usage == DataGridUsage::TableData;
-        let database_type = config.database_type;
+        let database_type = config.database_type.clone();
         let table_name = config.table_name.clone();
         let data_grid_handle = cx.entity().downgrade();
         let table = cx.new(|cx| {
@@ -511,7 +511,7 @@ impl DataGrid {
         let global_state = cx.global::<GlobalDbState>().clone();
         let order_by_clause = match build_header_order_by_clause(
             &global_state.db_manager,
-            self.config.database_type,
+            self.config.database_type.clone(),
             column_name,
             sort,
         ) {
@@ -1745,7 +1745,7 @@ impl DataGrid {
         let database_name = self.config.database_name.clone();
         let schema_name = self.config.schema_name.clone();
         let table_name = self.config.table_name.clone();
-        let database_type = self.config.database_type;
+        let database_type = self.config.database_type.clone();
         let this = self.clone();
         let delegate = self.table.read(cx).delegate();
         let columns = delegate.column_meta.clone();
@@ -1880,7 +1880,7 @@ impl DataGrid {
         let database_name = self.config.database_name.clone();
         let schema_name = self.config.schema_name.clone();
         let table_name = self.config.table_name.clone();
-        let database_type = self.config.database_type;
+        let database_type = self.config.database_type.clone();
         let this = self.clone();
         let delegate = self.table.read(cx).delegate();
         let columns = delegate.column_meta.clone();

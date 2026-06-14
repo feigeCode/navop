@@ -121,7 +121,7 @@ fn extension_menu_items_for_node(
         node_type: node.node_type,
         node_name: node.name.clone(),
         connection_id: node.connection_id.clone(),
-        database_type: node.database_type,
+        database_type: node.database_type.clone(),
     })
 }
 
@@ -135,7 +135,7 @@ fn extension_action_context_for_item(
         node_id: node.id.clone(),
         node_name: node.name.clone(),
         node_type: node.node_type,
-        database_type: node.database_type,
+        database_type: node.database_type.clone(),
         connection_id: node.connection_id.clone(),
     }
 }
@@ -872,7 +872,7 @@ impl DbTreeView {
                 config.name.to_string(),
                 DbNodeType::Connection,
                 id.clone(),
-                config.database_type,
+                config.database_type.clone(),
             );
             let global_db_state = cx.global_mut::<GlobalDbState>();
             global_db_state.register_connection(config);
@@ -2144,7 +2144,10 @@ impl DbTreeView {
 
         // 获取连接节点信息
         let (database_type, connection_id_str) = match self.db_nodes.get(connection_id) {
-            Some(conn_node) => (conn_node.database_type, conn_node.connection_id.clone()),
+            Some(conn_node) => (
+                conn_node.database_type.clone(),
+                conn_node.connection_id.clone(),
+            ),
             None => {
                 error!("Connection node not found: {}", connection_id);
                 return;
@@ -2217,7 +2220,7 @@ impl DbTreeView {
 
         // 获取数据库节点信息
         let database_type = match self.db_nodes.get(&db_node_id) {
-            Some(db_node) => db_node.database_type,
+            Some(db_node) => db_node.database_type.clone(),
             None => {
                 error!("Database node not found: {}", db_node_id);
                 return;
@@ -2505,7 +2508,7 @@ impl DbTreeView {
 
         // 获取节点类型相关信息
         let node_type = node.as_ref().map(|n| n.node_type);
-        let database_type = node.as_ref().map(|n| n.database_type);
+        let database_type = node.as_ref().map(|n| n.database_type.clone());
         // 判断是否是分组类型（Folder 类型）
         let is_folder_type = matches!(
             node_type,
@@ -2846,7 +2849,8 @@ impl DbTreeView {
         let is_active =
             conn_active && (node.node_type != DbNodeType::Database || node.children_loaded);
 
-        let menu_items = build_context_menu_for(node.database_type, node_id, node.node_type, cx);
+        let menu_items =
+            build_context_menu_for(node.database_type.clone(), node_id, node.node_type, cx);
         if !menu_items.is_empty() {
             // 渲染 plugin 提供的菜单，传入连接激活状态
             menu = Self::render_context_menu_items(menu, menu_items, is_active, view, window, cx);

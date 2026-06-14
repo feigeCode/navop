@@ -55,6 +55,7 @@ impl DatabaseEditorView {
         let is_edit = is_edit_mode;
 
         let database_name_clone = database_name.clone();
+        let preview_database_type = database_type.clone();
         let form_subscription = cx.subscribe_in(
             &form,
             window,
@@ -63,7 +64,13 @@ impl DatabaseEditorView {
                     database_name_clone.update(cx, |name, _| {
                         *name = request.database_name.clone();
                     });
-                    this.update_sql_preview(request, database_type, is_edit, window, cx);
+                    this.update_sql_preview(
+                        request,
+                        preview_database_type.clone(),
+                        is_edit,
+                        window,
+                        cx,
+                    );
                 }
             },
         );

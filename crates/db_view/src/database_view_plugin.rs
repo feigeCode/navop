@@ -224,7 +224,7 @@ impl ManifestDatabaseViewPlugin {
             .expect("database plugin should exist");
         let form = find_form(&self.manifest, DatabaseFormKind::Connection)
             .expect("connection form manifest should exist");
-        let config = to_connection_form_config(self.database_type, &form, plugin.as_ref());
+        let config = to_connection_form_config(self.database_type.clone(), &form, plugin.as_ref());
         cx.new(|cx| DbConnectionForm::new(config, window, cx))
     }
 
@@ -236,9 +236,10 @@ impl ManifestDatabaseViewPlugin {
     ) -> Entity<DatabaseEditorView> {
         let manifest = find_form(&self.manifest, DatabaseFormKind::CreateDatabase)
             .expect("create database form manifest should exist");
-        let database_type = self.database_type;
+        let database_type = self.database_type.clone();
         cx.new(|cx| {
-            let form = cx.new(|cx| GenericDatabaseForm::new(database_type, manifest, window, cx));
+            let form =
+                cx.new(|cx| GenericDatabaseForm::new(database_type.clone(), manifest, window, cx));
             DatabaseEditorView::new(form, database_type, false, window, cx)
         })
     }
@@ -252,9 +253,10 @@ impl ManifestDatabaseViewPlugin {
     ) -> Entity<DatabaseEditorView> {
         let manifest = find_form(&self.manifest, DatabaseFormKind::EditDatabase)
             .expect("edit database form manifest should exist");
-        let database_type = self.database_type;
+        let database_type = self.database_type.clone();
         cx.new(|cx| {
-            let form = cx.new(|cx| GenericDatabaseForm::new(database_type, manifest, window, cx));
+            let form =
+                cx.new(|cx| GenericDatabaseForm::new(database_type.clone(), manifest, window, cx));
             DatabaseEditorView::new(form, database_type, true, window, cx)
         })
     }
@@ -267,7 +269,7 @@ impl ManifestDatabaseViewPlugin {
         cx: &mut App,
     ) -> Option<Entity<SchemaEditorView>> {
         let manifest = find_form(&self.manifest, DatabaseFormKind::CreateSchema)?;
-        let database_type = self.database_type;
+        let database_type = self.database_type.clone();
         Some(cx.new(|cx| {
             let form = cx.new(|cx| GenericSchemaForm::new(manifest, window, cx));
             SchemaEditorView::new(form, database_type, window, cx)
@@ -560,13 +562,14 @@ pub fn create_external_connection_form_for(
 }
 
 fn external_form_config(driver: &IpcDriverManifest, cx: &mut App) -> Option<DbFormConfig> {
+    let database_type = DatabaseType::external(driver.id.clone());
     let plugin = cx
         .global::<db::GlobalDbState>()
-        .get_plugin(&DatabaseType::External)
+        .get_plugin(&database_type)
         .ok()?;
     let mut config = if let Some(manifest) = driver.ui.form.clone() {
         let form = find_form(&manifest, DatabaseFormKind::Connection)?;
-        to_connection_form_config(DatabaseType::External, &form, plugin.as_ref())
+        to_connection_form_config(database_type.clone(), &form, plugin.as_ref())
     } else {
         default_external_form_config(driver)
     };
@@ -578,7 +581,7 @@ fn external_form_config(driver: &IpcDriverManifest, cx: &mut App) -> Option<DbFo
 
 fn default_external_form_config(driver: &IpcDriverManifest) -> DbFormConfig {
     DbFormConfig {
-        db_type: DatabaseType::External,
+        db_type: DatabaseType::external(driver.id.clone()),
         title: format!("{} ({})", translate("Common.new"), driver.name),
         hidden_params: HashMap::new(),
         tab_groups: vec![

@@ -373,7 +373,7 @@ impl DatabaseObjects {
                 vec![
                     stored_conn.name.clone(),
                     connection_id,
-                    db_type.as_str().into(),
+                    db_type.storage_key(),
                     created,
                     updated,
                     remark,
@@ -400,7 +400,7 @@ impl DatabaseObjects {
         use std::time::UNIX_EPOCH;
 
         let database_name = node.get_database_name().unwrap_or_default();
-        let database_type = node.database_type.as_str();
+        let database_type = node.database_type.path_key();
         let connection_id = node.connection_id.clone();
 
         let queries_dir = get_queries_dir().ok()?;
@@ -489,7 +489,8 @@ impl DatabaseObjects {
         if current_node.is_none() && db_node_type == DbNodeType::Connection {
             let connection_id = row_data.get(1).cloned().unwrap_or_default();
             let db_type_str = row_data.get(2).cloned().unwrap_or_default();
-            let database_type = DatabaseType::from_str(&db_type_str).unwrap_or(DatabaseType::MySQL);
+            let database_type =
+                DatabaseType::from_storage_key(&db_type_str).unwrap_or(DatabaseType::MySQL);
 
             return Some(DbNode::new(
                 connection_id.clone(),
@@ -502,7 +503,7 @@ impl DatabaseObjects {
 
         let current_node = current_node?;
         let connection_id = current_node.connection_id.clone();
-        let database_type = current_node.database_type;
+        let database_type = current_node.database_type.clone();
 
         let mut metadata: HashMap<String, String> = current_node.metadata.clone();
         let database = metadata.get("database").cloned().unwrap_or_default();
@@ -517,7 +518,7 @@ impl DatabaseObjects {
                     let row_connection_id = row_data.get(1).cloned().unwrap_or_default();
                     let db_type_str = row_data.get(2).cloned().unwrap_or_default();
                     let row_database_type =
-                        DatabaseType::from_str(&db_type_str).unwrap_or(DatabaseType::MySQL);
+                        DatabaseType::from_storage_key(&db_type_str).unwrap_or(DatabaseType::MySQL);
                     return Some(DbNode::new(
                         row_connection_id.clone(),
                         name,
@@ -802,7 +803,7 @@ impl DatabaseObjects {
             .unwrap_or(DbNodeType::Connection);
         let database_type = current_node
             .as_ref()
-            .map(|n| n.database_type)
+            .map(|n| n.database_type.clone())
             .unwrap_or(DatabaseType::MySQL);
 
         buttons.push({

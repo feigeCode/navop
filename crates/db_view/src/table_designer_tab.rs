@@ -121,7 +121,7 @@ pub(crate) fn build_table_design_from_metadata(
             let parsed = plugin
                 .map(|plugin| plugin.parse_column_type(&col.data_type))
                 .unwrap_or_else(|| fallback_parse_column_type(&col.data_type));
-            column_info_to_definition(database_type, col, parsed)
+            column_info_to_definition(database_type.clone(), col, parsed)
         })
         .collect();
 
@@ -321,11 +321,11 @@ impl TableDesigner {
             Vec<EngineSelectItem>,
             ColumnEditorCapabilities,
         ) = {
-            let engines = get_engines_for(config.database_type, cx)
+            let engines = get_engines_for(config.database_type.clone(), cx)
                 .into_iter()
                 .map(|name| EngineSelectItem { name })
                 .collect();
-            let capabilities = get_column_editor_capabilities_for(config.database_type, cx);
+            let capabilities = get_column_editor_capabilities_for(config.database_type.clone(), cx);
             (engines, capabilities)
         };
 
@@ -371,7 +371,7 @@ impl TableDesigner {
 
         let columns_editor = cx.new(|cx| {
             ColumnsEditor::new(
-                config.database_type,
+                config.database_type.clone(),
                 charsets.clone(),
                 column_editor_capabilities,
                 window,
@@ -1092,7 +1092,7 @@ impl TableDesigner {
             .get_plugin(&self.config.database_type)
             .ok();
         build_table_design_from_metadata(
-            self.config.database_type,
+            self.config.database_type.clone(),
             self.config.database_name.clone(),
             self.config.table_name.clone().unwrap_or_default(),
             &columns,
@@ -1218,7 +1218,8 @@ impl TableDesigner {
     }
 
     fn render_options(&self, cx: &Context<Self>) -> AnyElement {
-        let capabilities = get_table_designer_capabilities_for(self.config.database_type, cx);
+        let capabilities =
+            get_table_designer_capabilities_for(self.config.database_type.clone(), cx);
 
         v_flex()
             .size_full()
@@ -1751,7 +1752,7 @@ impl ColumnsEditor {
             window,
             move |this, _, _event: &SelectEvent<Vec<CharsetSelectItem>>, window, cx| {
                 Self::update_collation_for_charset(
-                    this.database_type,
+                    this.database_type.clone(),
                     &charset_select_clone,
                     &collation_select_clone,
                     window,
@@ -2197,7 +2198,7 @@ impl ColumnsEditor {
                 window,
                 move |this, _, _event: &SelectEvent<Vec<CharsetSelectItem>>, window, cx| {
                     Self::update_collation_for_charset(
-                        this.database_type,
+                        this.database_type.clone(),
                         &charset_select_clone,
                         &collation_select_clone,
                         window,
@@ -3326,7 +3327,7 @@ mod tests {
             DatabaseType::MSSQL => Box::new(MsSqlPlugin::new()),
             DatabaseType::Oracle => Box::new(OraclePlugin::new()),
             DatabaseType::ClickHouse => Box::new(ClickHousePlugin::new()),
-            DatabaseType::External => Box::new(MySqlPlugin::new()),
+            DatabaseType::External { .. } => Box::new(MySqlPlugin::new()),
         }
     }
 
