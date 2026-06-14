@@ -17,8 +17,8 @@ use gpui_component::{
 
 use crate::{
     extension_widget::{
-        ExtensionWidgetModel, build_extension_widget_model,
-        build_extension_widget_model_with_options, default_form_values,
+        ExtensionWidgetModel, ExtensionWidgetSelectorPolicies, build_extension_widget_model,
+        build_extension_widget_model_with_selector_data, default_form_values,
         form_values_to_action_event,
     },
     extension_widget_view_controls::{
@@ -61,7 +61,29 @@ impl ExtensionWidgetView {
         selector_options: BTreeMap<String, Vec<SelectOption>>,
         action_handler: Option<ExtensionWidgetActionHandler>,
     ) -> anyhow::Result<Self> {
-        let model = build_extension_widget_model_with_options(&spec, selector_options)?;
+        Self::new_with_selector_data_and_handler(
+            window,
+            cx,
+            spec,
+            selector_options,
+            BTreeMap::new(),
+            action_handler,
+        )
+    }
+
+    pub fn new_with_selector_data_and_handler(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        spec: ViewSpec,
+        selector_options: BTreeMap<String, Vec<SelectOption>>,
+        selector_policies: ExtensionWidgetSelectorPolicies,
+        action_handler: Option<ExtensionWidgetActionHandler>,
+    ) -> anyhow::Result<Self> {
+        let model = build_extension_widget_model_with_selector_data(
+            &spec,
+            selector_options,
+            selector_policies,
+        )?;
         let values = default_form_values(&model);
         let (input_states, mut subscriptions) = build_input_states(&model, window, cx);
         let (select_states, select_subscriptions) = build_select_states(&model, window, cx);

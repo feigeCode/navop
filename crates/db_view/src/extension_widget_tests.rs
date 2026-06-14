@@ -5,9 +5,21 @@ use extension_component::ui_protocol::{
 };
 
 use crate::extension_widget::{
-    build_extension_widget_model, build_extension_widget_model_with_options, default_form_values,
-    form_values_to_action_event,
+    ExtensionWidgetSelectorPolicy, build_extension_widget_model,
+    build_extension_widget_model_with_options, build_extension_widget_model_with_selector_data,
+    default_form_values, form_values_to_action_event,
 };
+
+#[test]
+fn db_object_selector_parts_expand_column_depth() {
+    let parts = crate::db_object_selector::selector_parts(&DbSelectorKind::Column);
+    let suffixes = parts.iter().map(|part| part.suffix).collect::<Vec<_>>();
+
+    assert_eq!(
+        vec!["connection_id", "database", "schema", "table", "column"],
+        suffixes
+    );
+}
 
 #[test]
 fn render_model_extracts_dialog_form_fields_and_actions() {
@@ -180,6 +192,101 @@ fn db_column_selector_expands_to_full_composite_controls() {
         ],
         field_ids
     );
+}
+
+#[test]
+fn db_table_selector_hides_schema_when_policy_disables_schema() {
+    let spec = ViewSpec::dialog(
+        "table-picker",
+        "选择表",
+        vec![UiNode::form(vec![UiField::db_select(
+            "target",
+            "目标",
+            DbSelectorKind::Table,
+        )])],
+        vec![],
+    );
+    let mut policies = BTreeMap::new();
+    policies.insert(
+        "target".to_string(),
+        ExtensionWidgetSelectorPolicy {
+            show_schema: false,
+            schema_as_database: false,
+        },
+    );
+
+    let model =
+        build_extension_widget_model_with_selector_data(&spec, BTreeMap::new(), policies).unwrap();
+    let field_ids = model
+        .fields
+        .iter()
+        .map(|field| field.id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        vec!["target.connection_id", "target.database", "target.table"],
+        field_ids
+    );
+}
+
+#[test]
+fn db_table_selector_maps_oracle_schema_to_database_part() {
+    let spec = ViewSpec::dialog(
+        "table-picker",
+        "选择表",
+        vec![UiNode::form(vec![UiField::db_select(
+            "target",
+            "目标",
+            DbSelectorKind::Table,
+        )])],
+        vec![],
+    );
+    let mut policies = BTreeMap::new();
+    policies.insert(
+        "target".to_string(),
+        ExtensionWidgetSelectorPolicy {
+            show_schema: false,
+            schema_as_database: true,
+        },
+    );
+
+    let model =
+        build_extension_widget_model_with_selector_data(&spec, BTreeMap::new(), policies).unwrap();
+    let database = model
+        .fields
+        .iter()
+        .find(|field| field.id == "target.database")
+        .unwrap();
+
+    assert_eq!("Schema", database.label);
+    assert!(model.fields.iter().all(|field| field.id != "target.schema"));
+}
+
+#[test]
+fn db_table_selector_shows_schema_when_policy_supports_schema() {
+    let spec = ViewSpec::dialog(
+        "table-picker",
+        "选择表",
+        vec![UiNode::form(vec![UiField::db_select(
+            "target",
+            "目标",
+            DbSelectorKind::Table,
+        )])],
+        vec![],
+    );
+    let mut policies = BTreeMap::new();
+    policies.insert(
+        "target".to_string(),
+        ExtensionWidgetSelectorPolicy {
+            show_schema: true,
+            schema_as_database: false,
+        },
+    );
+
+    let model =
+        build_extension_widget_model_with_selector_data(&spec, BTreeMap::new(), policies).unwrap();
+
+    assert!(model.fields.iter().any(|field| field.id == "target.schema"));
 }
 
 #[test]

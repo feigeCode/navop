@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use db::{DbNode, GlobalDbState};
+use extension_component::DbSelectorKind;
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
     Render, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
@@ -14,6 +15,7 @@ use gpui_component::{
     select::{SearchableVec, SelectEvent, SelectState},
     v_flex,
 };
+use rust_i18n::t;
 use tokio::sync::mpsc;
 
 use crate::compare::sync_statement_picker::{
@@ -21,18 +23,20 @@ use crate::compare::sync_statement_picker::{
     selected_sync_sql_text_for_ids, sync_statement_list_state,
 };
 use crate::compare::target_picker::{
-    StringSelect, selected_string, set_connection_select, set_string_select, string_select_row,
-    string_select_state,
+    StringSelect, selected_string, set_connection_select, set_string_select, string_select_state,
 };
 use crate::compare::window_params::{SchemaCompareSelection, schema_compare_params};
 use crate::compare::window_ui::{
-    ConnectionSelectItem, close_button, connection_select_row, connection_select_state,
-    register_connection_for_compare, section_title, selected_connection_id, sql_editor_panel,
-    start_sync_sql_execution, sync_sql_editor_state,
+    ConnectionSelectItem, close_button, connection_select_state, register_connection_for_compare,
+    selected_connection_id, sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
 };
 use crate::compare::{
     CompareProgress, CompareTargetScope, SchemaCompareParams, execute_schema_compare,
     generate_schema_sync_plan_for_target,
+};
+use crate::db_object_selector::{
+    DbObjectSelectorPolicy, db_object_selector_panel, effective_database_schema,
+    policy_for_connection,
 };
 use db::compare::{SchemaCompareResult, SyncPlan};
 
@@ -69,6 +73,17 @@ impl SchemaCompareWindow {
     pub fn new(source_node: DbNode, window: &mut Window, cx: &mut App) -> Entity<Self> {
         let default_database = source_node.get_database_name().unwrap_or_default();
         let default_schema = source_node.get_schema_name().unwrap_or_default();
+        let default_policy = db_object_policy_for_source(&source_node, cx);
+        let default_database = if default_policy.schema_as_database {
+            default_schema.clone()
+        } else {
+            default_database
+        };
+        let default_schema = if default_policy.show_schema {
+            default_schema
+        } else {
+            String::new()
+        };
 
         let source_connection_id = cx
             .new(|cx| InputState::new(window, cx).default_value(source_node.connection_id.clone()));
@@ -333,7 +348,7 @@ impl SchemaCompareWindow {
             *slot = None;
             cx.notify();
         });
-        self.set_status("已交换源和目标", cx);
+        self.set_status(t!("Compare.swapped_source_target").to_string(), cx);
     }
 
     fn cancel_compare(&mut self, cx: &mut Context<Self>) {
@@ -405,44 +420,61 @@ impl SchemaCompareWindow {
     }
 
     fn render_source(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .gap_2()
-            .p_3()
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded_md()
-            .child(section_title("源"))
-            .child(connection_select_row(
-                "连接",
-                &self.source_connection_select,
-            ))
-            .child(string_select_row("数据库", &self.source_database_select))
-            .child(string_select_row("Schema", &self.source_schema_select))
+        db_object_selector_panel(
+            t!("Compare.source").to_string(),
+            DbSelectorKind::Schema,
+            self.source_controls(cx),
+            cx,
+        )
     }
 
     fn source_selection(&self, cx: &Context<Self>) -> SchemaCompareSelection {
+        let database = selected_string(&self.source_database_select, &self.source_database, cx);
+        let schema = selected_string(&self.source_schema_select, &self.source_schema, cx);
+        let (database, schema) = effective_database_schema(
+            database,
+            schema,
+            policy_for_connection(&self.source_connection_controls(), cx),
+        );
         SchemaCompareSelection {
             connection_id: selected_connection_id(
                 &self.source_connection_select,
                 &self.source_connection_id,
                 cx,
             ),
-            database: selected_string(&self.source_database_select, &self.source_database, cx),
-            schema: selected_string(&self.source_schema_select, &self.source_schema, cx),
+            database,
+            schema,
         }
     }
 
     fn target_selection(&self, cx: &Context<Self>) -> SchemaCompareSelection {
+        let database = selected_string(&self.target_database_select, &self.target_database, cx);
+        let schema = selected_string(&self.target_schema_select, &self.target_schema, cx);
+        let (database, schema) = effective_database_schema(
+            database,
+            schema,
+            policy_for_connection(&self.connection_controls(), cx),
+        );
         SchemaCompareSelection {
             connection_id: selected_connection_id(
                 &self.target_connection_select,
                 &self.target_connection_id,
                 cx,
             ),
-            database: selected_string(&self.target_database_select, &self.target_database, cx),
-            schema: selected_string(&self.target_schema_select, &self.target_schema, cx),
+            database,
+            schema,
         }
     }
+}
+
+fn db_object_policy_for_source(source_node: &DbNode, cx: &mut App) -> DbObjectSelectorPolicy {
+    cx.try_global::<GlobalDbState>()
+        .map(|db_state| {
+            DbObjectSelectorPolicy::from_capabilities(
+                &db_state.capabilities(&source_node.database_type),
+            )
+        })
+        .unwrap_or_default()
 }
 
 impl Focusable for SchemaCompareWindow {
@@ -463,7 +495,11 @@ impl Render for SchemaCompareWindow {
             .size_full()
             .p_4()
             .gap_3()
-            .child(div().font_semibold().child("结构比较"))
+            .child(
+                div()
+                    .font_semibold()
+                    .child(t!("Compare.schema_compare").to_string()),
+            )
             .child(
                 v_flex()
                     .flex_1()
@@ -478,7 +514,7 @@ impl Render for SchemaCompareWindow {
                                 div().pt_10().child(
                                     Button::new("swap-schema-compare-source-target")
                                         .icon(IconName::Replace)
-                                        .tooltip("交换源和目标")
+                                        .tooltip(t!("Compare.swap_source_target").to_string())
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.swap_source_target(window, cx);
                                         })),
@@ -527,7 +563,7 @@ impl Render for SchemaCompareWindow {
                                 this.child(
                                     Button::new("cancel-compare")
                                         .danger()
-                                        .child("取消")
+                                        .child(t!("Common.cancel").to_string())
                                         .on_click(cx.listener(move |view, _, _, cx| {
                                             view.cancel_compare(cx);
                                         })),
@@ -535,7 +571,7 @@ impl Render for SchemaCompareWindow {
                             })
                             .child(
                                 Button::new("execute-sync-sql")
-                                    .child("执行 SQL")
+                                    .child(t!("Compare.execute_sql").to_string())
                                     .loading(is_executing)
                                     .disabled(is_running || is_executing || !has_sync_sql)
                                     .on_click(cx.listener(move |view, _, _, cx| {
@@ -547,7 +583,7 @@ impl Render for SchemaCompareWindow {
                                     .primary()
                                     .loading(is_running)
                                     .disabled(is_running || is_executing)
-                                    .child("开始比较")
+                                    .child(t!("Compare.start_compare").to_string())
                                     .on_click(cx.listener(move |view, _, _, cx| {
                                         view.start_compare(cx);
                                     })),

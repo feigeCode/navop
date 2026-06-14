@@ -14,6 +14,7 @@ use gpui_component::{
     select::{SearchableVec, SelectEvent, SelectState},
     v_flex,
 };
+use rust_i18n::t;
 use tokio::sync::mpsc;
 
 use crate::compare::sync_statement_picker::{
@@ -31,6 +32,9 @@ use crate::compare::window_ui::{
 use crate::compare::{
     CompareProgress, CompareTargetScope, DataCompareParams, execute_data_compare,
     generate_data_sync_plan_for_target,
+};
+use crate::db_object_selector::{
+    DbObjectSelectorPolicy, effective_database_schema, policy_for_connection,
 };
 use db::compare::{DataCompareResult, SyncPlan};
 
@@ -71,6 +75,17 @@ impl DataCompareWindow {
     pub fn new(source_node: DbNode, window: &mut Window, cx: &mut App) -> Entity<Self> {
         let default_database = source_node.get_database_name().unwrap_or_default();
         let default_schema = source_node.get_schema_name().unwrap_or_default();
+        let default_policy = db_object_policy_for_source(&source_node, cx);
+        let default_database = if default_policy.schema_as_database {
+            default_schema.clone()
+        } else {
+            default_database
+        };
+        let default_schema = if default_policy.show_schema {
+            default_schema
+        } else {
+            String::new()
+        };
         let default_table = source_node
             .get_table_name()
             .unwrap_or_else(|| source_node.name.clone());
@@ -378,7 +393,7 @@ impl DataCompareWindow {
             *slot = None;
             cx.notify();
         });
-        self.set_status("已交换源和目标", cx);
+        self.set_status(t!("Compare.swapped_source_target").to_string(), cx);
     }
 
     fn cancel_compare(&mut self, cx: &mut Context<Self>) {
@@ -454,30 +469,54 @@ impl DataCompareWindow {
     }
 
     fn source_selection(&self, cx: &Context<Self>) -> DataCompareSelection {
+        let database = selected_string(&self.source_database_select, &self.source_database, cx);
+        let schema = selected_string(&self.source_schema_select, &self.source_schema, cx);
+        let (database, schema) = effective_database_schema(
+            database,
+            schema,
+            policy_for_connection(&self.source_connection_controls(), cx),
+        );
         DataCompareSelection {
             connection_id: selected_connection_id(
                 &self.source_connection_select,
                 &self.source_connection_id,
                 cx,
             ),
-            database: selected_string(&self.source_database_select, &self.source_database, cx),
-            schema: selected_string(&self.source_schema_select, &self.source_schema, cx),
+            database,
+            schema,
             table: selected_string(&self.source_table_select, &self.source_table, cx),
         }
     }
 
     fn target_selection(&self, cx: &Context<Self>) -> DataCompareSelection {
+        let database = selected_string(&self.target_database_select, &self.target_database, cx);
+        let schema = selected_string(&self.target_schema_select, &self.target_schema, cx);
+        let (database, schema) = effective_database_schema(
+            database,
+            schema,
+            policy_for_connection(&self.connection_controls(), cx),
+        );
         DataCompareSelection {
             connection_id: selected_connection_id(
                 &self.target_connection_select,
                 &self.target_connection_id,
                 cx,
             ),
-            database: selected_string(&self.target_database_select, &self.target_database, cx),
-            schema: selected_string(&self.target_schema_select, &self.target_schema, cx),
+            database,
+            schema,
             table: selected_string(&self.target_table_select, &self.target_table, cx),
         }
     }
+}
+
+fn db_object_policy_for_source(source_node: &DbNode, cx: &mut App) -> DbObjectSelectorPolicy {
+    cx.try_global::<GlobalDbState>()
+        .map(|db_state| {
+            DbObjectSelectorPolicy::from_capabilities(
+                &db_state.capabilities(&source_node.database_type),
+            )
+        })
+        .unwrap_or_default()
 }
 
 impl Focusable for DataCompareWindow {
@@ -498,7 +537,11 @@ impl Render for DataCompareWindow {
             .size_full()
             .p_4()
             .gap_3()
-            .child(div().font_semibold().child("数据比较"))
+            .child(
+                div()
+                    .font_semibold()
+                    .child(t!("Compare.data_compare").to_string()),
+            )
             .child(
                 v_flex()
                     .flex_1()
@@ -513,7 +556,7 @@ impl Render for DataCompareWindow {
                                 div().pt_10().child(
                                     Button::new("swap-data-compare-source-target")
                                         .icon(IconName::Replace)
-                                        .tooltip("交换源和目标")
+                                        .tooltip(t!("Compare.swap_source_target").to_string())
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.swap_source_target(window, cx);
                                         })),
@@ -562,7 +605,7 @@ impl Render for DataCompareWindow {
                                 this.child(
                                     Button::new("cancel-compare")
                                         .danger()
-                                        .child("取消")
+                                        .child(t!("Common.cancel").to_string())
                                         .on_click(cx.listener(move |view, _, _, cx| {
                                             view.cancel_compare(cx);
                                         })),
@@ -570,7 +613,7 @@ impl Render for DataCompareWindow {
                             })
                             .child(
                                 Button::new("execute-sync-sql")
-                                    .child("执行 SQL")
+                                    .child(t!("Compare.execute_sql").to_string())
                                     .loading(is_executing)
                                     .disabled(is_running || is_executing || !has_sync_sql)
                                     .on_click(cx.listener(move |view, _, _, cx| {
@@ -582,7 +625,7 @@ impl Render for DataCompareWindow {
                                     .primary()
                                     .loading(is_running)
                                     .disabled(is_running || is_executing)
-                                    .child("开始比较")
+                                    .child(t!("Compare.start_compare").to_string())
                                     .on_click(cx.listener(move |view, _, _, cx| {
                                         view.start_compare(cx);
                                     })),

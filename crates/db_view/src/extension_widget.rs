@@ -5,8 +5,12 @@ use extension_component::{
     DbSelectorKind, DbSelectorSource, FieldSource, FieldValue, SelectOption, UiAction, UiField,
     UiFieldKind, UiNode, ViewActionEvent, ViewMode, ViewSpec,
 };
+use rust_i18n::t;
 
-use crate::extension_selector_parts::{selector_parts, selector_suffix};
+use crate::db_object_selector::{
+    DbObjectSelectorPolicy, selector_parts_for_source_with_policy, selector_source_part,
+    selector_suffix,
+};
 
 pub use crate::extension_widget_view::{ExtensionWidgetActionHandler, ExtensionWidgetView};
 
@@ -31,6 +35,9 @@ pub struct ExtensionWidgetField {
     pub options: Vec<SelectOption>,
 }
 
+pub type ExtensionWidgetSelectorPolicy = DbObjectSelectorPolicy;
+pub type ExtensionWidgetSelectorPolicies = BTreeMap<String, ExtensionWidgetSelectorPolicy>;
+
 pub fn build_extension_widget_model(spec: &ViewSpec) -> Result<ExtensionWidgetModel> {
     build_extension_widget_model_with_options(spec, BTreeMap::new())
 }
@@ -38,6 +45,14 @@ pub fn build_extension_widget_model(spec: &ViewSpec) -> Result<ExtensionWidgetMo
 pub fn build_extension_widget_model_with_options(
     spec: &ViewSpec,
     selector_options: BTreeMap<String, Vec<SelectOption>>,
+) -> Result<ExtensionWidgetModel> {
+    build_extension_widget_model_with_selector_data(spec, selector_options, BTreeMap::new())
+}
+
+pub fn build_extension_widget_model_with_selector_data(
+    spec: &ViewSpec,
+    selector_options: BTreeMap<String, Vec<SelectOption>>,
+    selector_policies: ExtensionWidgetSelectorPolicies,
 ) -> Result<ExtensionWidgetModel> {
     validate_view_spec(spec)?;
     let mut text_blocks = Vec::new();
@@ -50,7 +65,7 @@ pub fn build_extension_widget_model_with_options(
             } => fields.extend(
                 form_fields
                     .iter()
-                    .flat_map(|field| widget_fields(field, &selector_options)),
+                    .flat_map(|field| widget_fields(field, &selector_options, &selector_policies)),
             ),
         }
     }
@@ -100,26 +115,33 @@ pub fn form_values_to_action_event(
 
 pub(crate) fn field_source_label(field: &ExtensionWidgetField) -> String {
     if !field.options.is_empty() {
-        return format!(
-            "{} / {} 个选项",
-            field.options[0].label,
-            field.options.len()
-        );
+        return t!(
+            "ExtensionWidget.selected_options_count",
+            selected = field.options[0].label.clone(),
+            count = field.options.len()
+        )
+        .to_string();
     }
     match &field.source {
-        Some(FieldSource::StaticOptions(options)) => format!("{} 个选项", options.len()),
+        Some(FieldSource::StaticOptions(options)) => {
+            t!("ExtensionWidget.options_count", count = options.len()).to_string()
+        }
         Some(FieldSource::DbSelector(source)) => db_selector_label(&source.kind).to_string(),
-        None => format!("输入 {}", field.id),
+        None => t!(
+            "ExtensionWidget.input_placeholder",
+            field = field.id.clone()
+        )
+        .to_string(),
     }
 }
 
-pub(crate) fn db_selector_label(kind: &DbSelectorKind) -> &'static str {
+pub(crate) fn db_selector_label(kind: &DbSelectorKind) -> String {
     match kind {
-        DbSelectorKind::Connection => "选择数据库连接",
-        DbSelectorKind::Database => "选择数据库",
-        DbSelectorKind::Schema => "选择 Schema",
-        DbSelectorKind::Table => "选择表",
-        DbSelectorKind::Column => "选择字段",
+        DbSelectorKind::Connection => t!("DbObjectSelector.select_connection").to_string(),
+        DbSelectorKind::Database => t!("DbObjectSelector.select_database").to_string(),
+        DbSelectorKind::Schema => t!("DbObjectSelector.select_schema").to_string(),
+        DbSelectorKind::Table => t!("DbObjectSelector.select_table").to_string(),
+        DbSelectorKind::Column => t!("DbObjectSelector.select_column").to_string(),
     }
 }
 
@@ -158,6 +180,7 @@ fn validate_fields(fields: &[UiField]) -> Result<()> {
 fn widget_fields(
     field: &UiField,
     selector_options: &BTreeMap<String, Vec<SelectOption>>,
+    selector_policies: &ExtensionWidgetSelectorPolicies,
 ) -> Vec<ExtensionWidgetField> {
     let Some(FieldSource::DbSelector(source)) = &field.source else {
         return vec![widget_field(
@@ -169,10 +192,15 @@ fn widget_fields(
             selector_options.get(&field.id).cloned(),
         )];
     };
-    selector_parts(source)
+    let policy = selector_policies
+        .get(&field.id)
+        .copied()
+        .unwrap_or_else(DbObjectSelectorPolicy::generic);
+    selector_parts_for_source_with_policy(source, policy)
         .into_iter()
         .map(|part| {
             let id = format!("{}.{}", field.id, part.suffix);
+            let source_part = selector_source_part(source, &part);
             let options = selector_options.get(&id).cloned().or_else(|| {
                 deepest_part(source, part.suffix)
                     .then(|| selector_options.get(&field.id).cloned())
@@ -186,8 +214,8 @@ fn widget_fields(
             widget_field(
                 field,
                 id.clone(),
-                part.label.to_string(),
-                Some(FieldSource::DbSelector(part.source)),
+                part.label,
+                Some(FieldSource::DbSelector(source_part)),
                 value,
                 options,
             )

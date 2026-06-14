@@ -7,6 +7,7 @@ pub mod connection_form_window;
 pub mod database_objects_tab;
 pub mod database_tab;
 pub mod database_view_plugin;
+pub mod db_object_selector;
 mod db_tree_event;
 pub mod db_tree_view;
 pub mod er_diagram;
@@ -14,7 +15,6 @@ pub mod extension_menu;
 #[cfg(test)]
 mod extension_menu_contract_tests;
 pub mod extension_selector;
-mod extension_selector_parts;
 pub mod extension_widget;
 #[cfg(test)]
 mod extension_widget_tests;

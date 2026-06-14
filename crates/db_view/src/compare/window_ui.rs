@@ -20,11 +20,12 @@ use gpui_component::{
 use one_core::storage::{
     ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection, traits::Repository,
 };
+use rust_i18n::t;
 
 use crate::compare::{CompareProgress, CompareTargetScope, execute_sync_sql};
 
 #[derive(Clone, Debug)]
-pub(super) struct ConnectionSelectItem {
+pub(crate) struct ConnectionSelectItem {
     pub id: String,
     pub label: String,
 }
@@ -101,7 +102,7 @@ pub(super) fn selected_connection_id(
         .unwrap_or_default()
 }
 
-pub(super) fn register_connection_for_compare<T>(connection_id: &str, cx: &mut Context<T>) {
+pub(crate) fn register_connection_for_compare<T>(connection_id: &str, cx: &mut Context<T>) {
     let Some(storage_state) = cx.try_global::<GlobalStorageState>() else {
         return;
     };
@@ -237,7 +238,7 @@ fn set_status_app(status: &Entity<String>, message: impl Into<String>, cx: &mut 
     });
 }
 
-pub(super) fn section_title(title: &'static str) -> impl IntoElement {
+pub(crate) fn section_title(title: impl IntoElement) -> impl IntoElement {
     div().font_semibold().child(title)
 }
 
@@ -249,7 +250,8 @@ pub(super) fn close_button() -> impl IntoElement {
         })
 }
 
-pub(super) fn input_row(label: &'static str, input: &Entity<InputState>) -> impl IntoElement {
+pub(super) fn input_row(label: impl Into<String>, input: &Entity<InputState>) -> impl IntoElement {
+    let label = label.into();
     div()
         .flex()
         .items_center()
@@ -258,19 +260,20 @@ pub(super) fn input_row(label: &'static str, input: &Entity<InputState>) -> impl
         .child(Input::new(input).small().w_full())
 }
 
-pub(super) fn connection_select_row(
-    label: &'static str,
+pub(crate) fn connection_select_row(
+    label: impl Into<String>,
     select: &Entity<SelectState<SearchableVec<ConnectionSelectItem>>>,
 ) -> impl IntoElement {
+    let label = label.into();
     div()
         .flex()
         .items_center()
         .gap_2()
-        .child(div().w(px(120.0)).text_sm().child(label))
+        .child(div().w(px(120.0)).text_sm().child(label.clone()))
         .child(
             Select::new(select)
                 .small()
-                .search_placeholder("搜索连接")
+                .search_placeholder(t!("DbObjectSelector.search", item = label).to_string())
                 .w_full(),
         )
 }

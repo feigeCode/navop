@@ -2879,6 +2879,140 @@ ErDiagram:
     zh-CN: 正在加载 ER 图...
     zh-HK: 正在載入 ER 圖...
 
+DbObjectSelector:
+  connection:
+    en: Connection
+    zh-CN: 连接
+    zh-HK: 連線
+  database:
+    en: Database
+    zh-CN: 数据库
+    zh-HK: 資料庫
+  schema:
+    en: Schema
+    zh-CN: Schema
+    zh-HK: Schema
+  table:
+    en: Table
+    zh-CN: 表
+    zh-HK: 表
+  column:
+    en: Column
+    zh-CN: 字段
+    zh-HK: 欄位
+  search:
+    en: "Search %{item}"
+    zh-CN: "搜索%{item}"
+    zh-HK: "搜尋%{item}"
+  select_connection:
+    en: Select a connection first
+    zh-CN: 请先选择连接
+    zh-HK: 請先選擇連線
+  select_database:
+    en: Select database
+    zh-CN: 选择数据库
+    zh-HK: 選擇資料庫
+  select_schema:
+    en: Select schema
+    zh-CN: 选择 Schema
+    zh-HK: 選擇 Schema
+  select_table:
+    en: Select table
+    zh-CN: 选择表
+    zh-HK: 選擇表
+  select_column:
+    en: Select column
+    zh-CN: 选择字段
+    zh-HK: 選擇欄位
+  select_connection_database:
+    en: Select a connection and database first
+    zh-CN: 请先选择连接和数据库
+    zh-HK: 請先選擇連線和資料庫
+  select_connection_database_table:
+    en: Select a connection, database, and table first
+    zh-CN: 请先选择连接、数据库和表
+    zh-HK: 請先選擇連線、資料庫和表
+  loading_databases:
+    en: Loading databases...
+    zh-CN: 正在加载数据库...
+    zh-HK: 正在載入資料庫...
+  loading_schemas:
+    en: Loading schemas...
+    zh-CN: 正在加载 Schema...
+    zh-HK: 正在載入 Schema...
+  loading_tables:
+    en: Loading tables...
+    zh-CN: 正在加载表...
+    zh-HK: 正在載入表...
+  loading_columns:
+    en: Loading columns...
+    zh-CN: 正在加载字段...
+    zh-HK: 正在載入欄位...
+  load_failed:
+    en: "Failed to load: %{error}"
+    zh-CN: "加载失败：%{error}"
+    zh-HK: "載入失敗：%{error}"
+  loaded_count:
+    en: "Loaded %{count} items"
+    zh-CN: "已加载 %{count} 项"
+    zh-HK: "已載入 %{count} 項"
+
+ExtensionWidget:
+  selected_options_count:
+    en: "%{selected} / %{count} options"
+    zh-CN: "%{selected} / %{count} 个选项"
+    zh-HK: "%{selected} / %{count} 個選項"
+  options_count:
+    en: "%{count} options"
+    zh-CN: "%{count} 个选项"
+    zh-HK: "%{count} 個選項"
+  input_placeholder:
+    en: "Input %{field}"
+    zh-CN: "输入 %{field}"
+    zh-HK: "輸入 %{field}"
+
+Compare:
+  source:
+    en: Source
+    zh-CN: 源
+    zh-HK: 來源
+  target:
+    en: Target
+    zh-CN: 目标
+    zh-HK: 目標
+  result:
+    en: Result
+    zh-CN: 结果
+    zh-HK: 結果
+  data_compare:
+    en: Data Compare
+    zh-CN: 数据比较
+    zh-HK: 資料比較
+  schema_compare:
+    en: Schema Compare
+    zh-CN: 结构比较
+    zh-HK: 結構比較
+  key_columns:
+    en: Key Columns
+    zh-CN: 主键列
+    zh-HK: 主鍵欄位
+  swap_source_target:
+    en: Swap source and target
+    zh-CN: 交换源和目标
+    zh-HK: 交換來源和目標
+  swapped_source_target:
+    en: Source and target swapped
+    zh-CN: 已交换源和目标
+    zh-HK: 已交換來源和目標
+  execute_sql:
+    en: Execute SQL
+    zh-CN: 执行 SQL
+    zh-HK: 執行 SQL
+  start_compare:
+    en: Start Compare
+    zh-CN: 开始比较
+    zh-HK: 開始比較
+
 # 团队同步
 TeamSync:
   personal:

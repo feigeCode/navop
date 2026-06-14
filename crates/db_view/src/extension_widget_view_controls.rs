@@ -13,6 +13,7 @@ use gpui_component::{
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     v_flex,
 };
+use rust_i18n::t;
 
 use crate::{
     extension_widget::{ExtensionWidgetField, ExtensionWidgetModel, field_source_label},
@@ -182,7 +183,7 @@ fn select_row_control(
 ) -> impl IntoElement {
     Select::new(state)
         .placeholder(field_source_label(field))
-        .search_placeholder(format!("搜索{}", field.label))
+        .search_placeholder(t!("DbObjectSelector.search", item = field.label.clone()).to_string())
         .w_full()
         .small()
 }

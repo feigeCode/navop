@@ -13,7 +13,7 @@ mod target_picker;
 mod window_params;
 #[cfg(test)]
 mod window_tests;
-mod window_ui;
+pub(crate) mod window_ui;
 
 pub use data_compare_dialog::*;
 pub use data_compare_window::*;

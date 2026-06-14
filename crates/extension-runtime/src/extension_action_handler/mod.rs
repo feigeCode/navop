@@ -7,10 +7,10 @@ use db_view::{
         DbTreeExtensionActionContext, DbTreeExtensionActionHandler,
         GlobalDbTreeExtensionActionHandler,
     },
-    extension_selector::{ExtensionSelectorOptions, load_extension_selector_options},
+    extension_selector::{ExtensionSelectorData, load_extension_selector_data},
     extension_widget::{
         ExtensionWidgetActionHandler, ExtensionWidgetView,
-        build_extension_widget_model_with_options,
+        build_extension_widget_model_with_selector_data,
     },
 };
 use extension_component::{PermissionSet, ViewActionEvent, ViewSpec};
@@ -121,11 +121,11 @@ async fn prepare_views(
 ) -> Result<Vec<PreparedExtensionView>> {
     let mut prepared = Vec::new();
     for spec in views {
-        let selector_options =
-            load_extension_selector_options(&spec, &db_state, &permissions, &context).await;
+        let selector_data =
+            load_extension_selector_data(&spec, &db_state, &permissions, &context).await;
         prepared.push(PreparedExtensionView {
             spec,
-            selector_options,
+            selector_data,
             composite_root: composite_root.clone(),
             catalog: Some(catalog.clone()),
             context: context.clone(),
@@ -137,7 +137,7 @@ async fn prepare_views(
 
 struct PreparedExtensionView {
     spec: ViewSpec,
-    selector_options: ExtensionSelectorOptions,
+    selector_data: ExtensionSelectorData,
     composite_root: PathBuf,
     catalog: Option<Arc<ExtensionRuntimeCatalog>>,
     context: DbTreeExtensionActionContext,
@@ -168,7 +168,11 @@ fn open_views(views: Vec<PreparedExtensionView>, window: &mut Window, cx: &mut A
 
 fn open_view(view: PreparedExtensionView, cx: &mut App) -> Result<()> {
     let title = view.spec.title.clone();
-    build_extension_widget_model_with_options(&view.spec, view.selector_options.clone())?;
+    build_extension_widget_model_with_selector_data(
+        &view.spec,
+        view.selector_data.options.clone(),
+        view.selector_data.policies.clone(),
+    )?;
     let popup_options = popup::popup_options_for_view(title, view.spec.window.as_ref());
     let action_handler = view_action_handler(
         view.composite_root,
@@ -180,11 +184,12 @@ fn open_view(view: PreparedExtensionView, cx: &mut App) -> Result<()> {
         popup_options,
         move |window, cx| {
             cx.new(|cx| {
-                ExtensionWidgetView::new_with_options_and_handler(
+                ExtensionWidgetView::new_with_selector_data_and_handler(
                     window,
                     cx,
                     view.spec,
-                    view.selector_options,
+                    view.selector_data.options,
+                    view.selector_data.policies,
                     Some(action_handler),
                 )
                 .expect("validated extension view spec")

@@ -1,5 +1,7 @@
+use extension_component::DbSelectorKind;
 use gpui::{Context, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder};
-use gpui_component::{ActiveTheme, v_flex};
+use gpui_component::v_flex;
+use rust_i18n::t;
 
 use crate::compare::schema_compare_window::SchemaCompareWindow;
 use crate::compare::sync_statement_picker::{
@@ -7,19 +9,19 @@ use crate::compare::sync_statement_picker::{
 };
 use crate::compare::target_picker::{
     TargetConnectionControls, TargetStringControls, clear_string_select, load_databases,
-    load_schemas, string_select_row,
+    load_schemas,
 };
-use crate::compare::window_ui::{
-    compare_progress_view, connection_select_row, section_title, stat_cards_row,
+use crate::compare::window_ui::{compare_progress_view, section_title, stat_cards_row};
+use crate::db_object_selector::{
+    DbObjectSelectorControls, db_object_selector_panel, policy_for_connection,
 };
 
 impl SchemaCompareWindow {
     pub(super) fn load_source_databases(&mut self, cx: &mut Context<Self>) {
         clear_string_select(&self.source_schema_select, cx);
         load_databases(
-            self.source_connection_select.clone(),
-            self.source_database_select.clone(),
-            self.source_database.clone(),
+            self.source_connection_controls(),
+            self.source_database_controls(),
             self.status.clone(),
             cx,
         );
@@ -38,9 +40,8 @@ impl SchemaCompareWindow {
     pub(super) fn load_target_databases(&mut self, cx: &mut Context<Self>) {
         clear_string_select(&self.target_schema_select, cx);
         load_databases(
-            self.target_connection_select.clone(),
-            self.target_database_select.clone(),
-            self.target_database.clone(),
+            self.connection_controls(),
+            self.database_controls(),
             self.status.clone(),
             cx,
         );
@@ -57,19 +58,12 @@ impl SchemaCompareWindow {
     }
 
     pub(super) fn render_target(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .gap_2()
-            .p_3()
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded_md()
-            .child(section_title("目标"))
-            .child(connection_select_row(
-                "连接",
-                &self.target_connection_select,
-            ))
-            .child(string_select_row("数据库", &self.target_database_select))
-            .child(string_select_row("Schema", &self.target_schema_select))
+        db_object_selector_panel(
+            t!("Compare.target").to_string(),
+            DbSelectorKind::Schema,
+            self.target_controls(cx),
+            cx,
+        )
     }
 
     pub(super) fn render_result_meta(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -89,7 +83,7 @@ impl SchemaCompareWindow {
             .size_full()
             .min_h_0()
             .gap_2()
-            .child(section_title("结果"))
+            .child(section_title(t!("Compare.result").to_string()))
             .when_some(progress, |this, progress| {
                 this.child(compare_progress_view(&progress, cx))
             })
@@ -109,7 +103,7 @@ impl SchemaCompareWindow {
             })
     }
 
-    fn source_connection_controls(&self) -> TargetConnectionControls {
+    pub(super) fn source_connection_controls(&self) -> TargetConnectionControls {
         TargetConnectionControls {
             select: self.source_connection_select.clone(),
         }
@@ -129,7 +123,20 @@ impl SchemaCompareWindow {
         }
     }
 
-    fn connection_controls(&self) -> TargetConnectionControls {
+    pub(super) fn source_controls(&self, cx: &Context<Self>) -> DbObjectSelectorControls {
+        let connection = self.source_connection_controls();
+        let policy = policy_for_connection(&connection, cx);
+        DbObjectSelectorControls {
+            connection,
+            database: Some(self.source_database_controls()),
+            schema: Some(self.source_schema_controls()),
+            table: None,
+            column: None,
+            policy,
+        }
+    }
+
+    pub(super) fn connection_controls(&self) -> TargetConnectionControls {
         TargetConnectionControls {
             select: self.target_connection_select.clone(),
         }
@@ -146,6 +153,19 @@ impl SchemaCompareWindow {
         TargetStringControls {
             select: self.target_schema_select.clone(),
             fallback: self.target_schema.clone(),
+        }
+    }
+
+    fn target_controls(&self, cx: &Context<Self>) -> DbObjectSelectorControls {
+        let connection = self.connection_controls();
+        let policy = policy_for_connection(&connection, cx);
+        DbObjectSelectorControls {
+            connection,
+            database: Some(self.database_controls()),
+            schema: Some(self.schema_controls()),
+            table: None,
+            column: None,
+            policy,
         }
     }
 }
