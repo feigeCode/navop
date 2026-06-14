@@ -1,5 +1,6 @@
 use gpui::SharedString;
 
+use crate::status_message::format_status_error;
 use crate::{ExtensionManagerMode, MarketplaceEntry};
 
 pub(crate) fn should_auto_load_marketplace(
@@ -26,7 +27,7 @@ pub(crate) fn apply_marketplace_load_result(
             *marketplace_entries = entries;
             *status = format!("已加载 {} 个市场扩展", marketplace_entries.len()).into();
         }
-        Err(err) => *status = format!("加载扩展市场失败: {err:?}").into(),
+        Err(err) => *status = format_status_error("加载扩展市场失败", &err).into(),
     }
 }
 

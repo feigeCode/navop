@@ -4,6 +4,7 @@ mod model;
 mod permissions;
 mod render;
 mod state;
+mod status_message;
 mod view;
 
 pub use host::ExtensionViewHost;

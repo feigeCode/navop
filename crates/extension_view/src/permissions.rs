@@ -7,7 +7,7 @@ use gpui_component::{
 
 use crate::{
     DownloadedMarketplaceExtension, ExtensionManagerView, MarketplaceInstallOutcome,
-    PermissionReviewModel,
+    PermissionReviewModel, status_message::format_status_error,
 };
 
 impl ExtensionManagerView {
@@ -83,7 +83,7 @@ impl ExtensionManagerView {
             }
             Err(err) => {
                 self.busy = None;
-                self.status = format!("安装失败: {err:?}").into();
+                self.status = format_status_error("安装失败", &err).into();
                 window.push_notification(Notification::error("扩展安装失败"), cx);
             }
         }

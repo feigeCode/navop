@@ -4,6 +4,7 @@ use gpui::{App, AppContext, AsyncApp, Context, PathPromptOptions, WeakEntity, Wi
 use gpui_component::{WindowExt, notification::Notification};
 
 use crate::state::{apply_marketplace_load_result, should_auto_load_marketplace};
+use crate::status_message::format_status_error;
 use crate::{ExtensionManagerView, ExtensionSummary, MarketplaceEntry, MarketplaceInstallOutcome};
 
 impl ExtensionManagerView {
@@ -97,7 +98,7 @@ impl ExtensionManagerView {
                 window.push_notification(Notification::success(format!("已卸载 {name}")), cx);
             }
             Err(err) => {
-                self.status = format!("卸载失败: {err:?}").into();
+                self.status = format_status_error("卸载失败", &err).into();
                 window.push_notification(Notification::error("扩展卸载失败"), cx);
             }
         }
@@ -173,7 +174,7 @@ fn finish_extension_action(
                 }
                 Err(err) => {
                     view.busy = None;
-                    view.status = format!("安装失败: {err:?}").into();
+                    view.status = format_status_error("安装失败", &err).into();
                     window.push_notification(Notification::error("扩展安装失败"), cx);
                 }
             });
@@ -194,7 +195,7 @@ impl ExtensionManagerView {
                 self.finish_marketplace_outcome(outcome, entity, window, cx);
             }
             Err(err) => {
-                self.status = format!("安装失败: {err:?}").into();
+                self.status = format_status_error("安装失败", &err).into();
                 window.push_notification(Notification::error("扩展安装失败"), cx);
             }
         }
