@@ -131,7 +131,8 @@ fn when_context_for_menu(
     one_core::when_clause::WhenContext::from_json(serde_json::json!({
         "connection": {
             "id": context.connection_id.as_str(),
-            "kind": database_type_when_value(&context.database_type)
+            "kind": database_type_when_value(&context.database_type),
+            "driver_id": context.database_type.external_driver_id()
         },
         "node": {
             "type": db_node_type_when_value(context.node_type),
@@ -276,5 +277,25 @@ mod tests {
         };
 
         assert!(registry.items_for_context(&context).is_empty());
+    }
+
+    #[test]
+    fn external_menu_when_clause_can_match_driver_id() {
+        let mut registry = DbTreeExtensionMenuRegistry::default();
+        let mut visible = item("iotdb.export", "IoTDB 导出", "extension@10");
+        visible.when_clause = Some("connection.driver_id == 'iotdb'".to_string());
+        registry.add("db.tree.table", visible);
+
+        let context = DbTreeExtensionMenuContext {
+            node_type: DbNodeType::Table,
+            node_name: "metrics".to_string(),
+            connection_id: "conn-1".to_string(),
+            database_type: DatabaseType::external("iotdb"),
+        };
+
+        let items = registry.items_for_context(&context);
+
+        assert_eq!(1, items.len());
+        assert_eq!("iotdb.export", items[0].command_id);
     }
 }

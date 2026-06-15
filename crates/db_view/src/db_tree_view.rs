@@ -38,7 +38,7 @@ use crate::extension_menu::{
 use db::{DbNode, DbNodeType, GlobalDbState};
 use gpui_component::label::Label;
 use gpui_component::menu::PopupMenu;
-use one_core::storage::DatabaseType;
+use one_core::storage::{DatabaseType, DbConnectionConfig};
 use one_core::utils::debouncer::Debouncer;
 use one_core::{
     connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier, get_notifier},
@@ -87,6 +87,58 @@ fn sync_selected_databases_for_connection(
         .get_selected_databases()
         .map(|selected_dbs| selected_dbs.into_iter().collect());
     selected_databases.insert(connection_id, selected);
+}
+
+const EXTERNAL_DRIVER_ICON_METADATA: &str = "external_driver_icon";
+const EXTERNAL_DRIVER_ID_METADATA: &str = "external_driver_id";
+const EXTERNAL_DRIVER_NAME_METADATA: &str = "external_driver_name";
+
+fn connection_node(id: String, name: String, config: &DbConnectionConfig) -> DbNode {
+    let node = DbNode::new(
+        id.clone(),
+        name,
+        DbNodeType::Connection,
+        id,
+        config.database_type.clone(),
+    );
+    let metadata = external_driver_metadata(config);
+    if metadata.is_empty() {
+        node
+    } else {
+        node.with_metadata(metadata)
+    }
+}
+
+fn external_driver_metadata(config: &DbConnectionConfig) -> HashMap<String, String> {
+    let registry = db::ipc::IpcDriverRegistry::load_default();
+    external_driver_metadata_from_registry(config, &registry)
+}
+
+fn external_driver_metadata_from_registry(
+    config: &DbConnectionConfig,
+    registry: &db::ipc::IpcDriverRegistry,
+) -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+    if let Some(display) = registry.display_for_config(config) {
+        metadata.insert(EXTERNAL_DRIVER_ID_METADATA.to_string(), display.driver_id);
+        metadata.insert(EXTERNAL_DRIVER_NAME_METADATA.to_string(), display.name);
+        if let Some(icon_asset_path) = display.icon_asset_path {
+            metadata.insert(EXTERNAL_DRIVER_ICON_METADATA.to_string(), icon_asset_path);
+        }
+    }
+    metadata
+}
+
+fn connection_node_icon(node: &DbNode) -> Icon {
+    node.metadata
+        .get(EXTERNAL_DRIVER_ICON_METADATA)
+        .map(|path| {
+            Icon::default()
+                .path(path.clone())
+                .color()
+                .with_size(ComponentSize::Large)
+        })
+        .unwrap_or_else(|| node.database_type.as_node_icon())
 }
 
 fn apply_db_selection_state(
@@ -605,13 +657,7 @@ impl DbTreeView {
 
                 sync_selected_databases_for_connection(&mut unselected_databases_map, conn);
 
-                let node = DbNode::new(
-                    id.clone(),
-                    conn_config.name.to_string(),
-                    DbNodeType::Connection,
-                    id.clone(),
-                    conn_config.database_type,
-                );
+                let node = connection_node(id.clone(), conn_config.name.to_string(), &conn_config);
                 db_nodes.insert(id, node.clone());
             }
         }
@@ -867,13 +913,7 @@ impl DbTreeView {
 
             sync_selected_databases_for_connection(&mut self.selected_databases, connection);
 
-            let node = DbNode::new(
-                id.clone(),
-                config.name.to_string(),
-                DbNodeType::Connection,
-                id.clone(),
-                config.database_type.clone(),
-            );
+            let node = connection_node(id.clone(), config.name.to_string(), &config);
             let global_db_state = cx.global_mut::<GlobalDbState>();
             global_db_state.register_connection(config);
             self.db_nodes.insert(id, node);
@@ -1854,7 +1894,7 @@ impl DbTreeView {
         match node.map(|n| &n.node_type) {
             Some(DbNodeType::Connection) => {
                 if let Some(n) = node {
-                    n.database_type.as_node_icon()
+                    connection_node_icon(n)
                 } else {
                     IconName::Database.color().with_size(ComponentSize::Large)
                 }
@@ -2890,7 +2930,8 @@ impl Focusable for DbTreeView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use one_core::storage::ConnectionType;
+    use db::ipc::{IpcDriverManifest, IpcDriverRegistry};
+    use one_core::storage::{ConnectionType, DbConnectionConfig};
 
     fn build_node(node_type: DbNodeType, name: &str, metadata: &[(&str, &str)]) -> DbNode {
         let metadata = metadata
@@ -2932,6 +2973,57 @@ mod tests {
             team_id: None,
             owner_id: None,
         }
+    }
+
+    fn external_config(driver_id: &str) -> DbConnectionConfig {
+        DbConnectionConfig {
+            id: "1".to_string(),
+            database_type: DatabaseType::external(driver_id),
+            name: "saved".to_string(),
+            host: "localhost".to_string(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params: HashMap::new(),
+        }
+    }
+
+    fn driver_manifest() -> IpcDriverManifest {
+        let mut manifest: IpcDriverManifest = serde_json::from_str(
+            r#"{
+                "id": "demo",
+                "name": "DemoDB",
+                "entry": { "command": "driver" },
+                "transport": { "name": "demo.sock" },
+                "ui": { "icon": "DuckDB" }
+            }"#,
+        )
+        .unwrap();
+        manifest.manifest_dir = std::path::PathBuf::from("/drivers/demo");
+        manifest
+    }
+
+    #[test]
+    fn external_connection_metadata_uses_driver_display() {
+        let registry = IpcDriverRegistry::from_drivers(vec![driver_manifest()]);
+        let metadata = external_driver_metadata_from_registry(&external_config("demo"), &registry);
+
+        assert_eq!(
+            Some(&"demo".to_string()),
+            metadata.get(EXTERNAL_DRIVER_ID_METADATA)
+        );
+        assert_eq!(
+            Some(&"DemoDB".to_string()),
+            metadata.get(EXTERNAL_DRIVER_NAME_METADATA)
+        );
+        assert_eq!(
+            Some(&"icons/duckdb.svg".to_string()),
+            metadata.get(EXTERNAL_DRIVER_ICON_METADATA)
+        );
     }
 
     #[test]
