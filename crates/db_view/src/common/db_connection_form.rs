@@ -2,6 +2,7 @@ use anyhow::Error;
 use std::collections::HashMap;
 use std::time::Instant;
 
+use db::plugin_manifest::FormVisibilityRule;
 use db::{GlobalDbState, oracle};
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -209,6 +210,7 @@ pub struct FormField {
     pub required: bool,
     pub default_value: String,
     pub options: Vec<(String, String)>,
+    pub visible_when: Vec<FormVisibilityRule>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -218,6 +220,8 @@ pub enum FormFieldType {
     Password,
     TextArea,
     Select,
+    Checkbox,
+    FilePath,
 }
 
 impl FormField {
@@ -236,6 +240,7 @@ impl FormField {
             required: true,
             default_value: String::new(),
             options: Vec::new(),
+            visible_when: Vec::new(),
         }
     }
 
@@ -1026,6 +1031,10 @@ fn ssh_auth_requires_private_key(auth_type: &str) -> bool {
     normalized_ssh_auth_type(auth_type) == "private_key"
 }
 
+fn should_use_custom_ssh_tab(db_type: &DatabaseType) -> bool {
+    !db_type.is_external()
+}
+
 fn is_custom_ssl_enabled(
     db_type: DatabaseType,
     require_ssl: bool,
@@ -1042,6 +1051,16 @@ fn is_custom_ssl_enabled(
             .unwrap_or(false),
         _ => false,
     }
+}
+
+fn field_visible_from_values(
+    field: &FormField,
+    mut value_for: impl FnMut(&str) -> Option<String>,
+) -> bool {
+    field.visible_when.iter().all(|rule| {
+        let value = value_for(&rule.when_field);
+        rule.condition.matches(value.as_deref())
+    })
 }
 
 fn missing_ssh_tunnel_required_field(
@@ -1097,7 +1116,7 @@ pub struct DbConnectionForm {
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
     ssh_connection_select: Entity<SelectState<SearchableVec<SshConnectionSelectItem>>>,
     ssh_connections: Vec<StoredConnection>,
-    pending_file_path: Entity<Option<String>>,
+    pending_file_path: Entity<Option<(String, String)>>,
     editing_connection: Option<StoredConnection>,
     /// Whether cloud sync is enabled.
     sync_enabled: Entity<bool>,
@@ -1159,6 +1178,8 @@ impl DbConnectionForm {
                     )
                     .detach();
                     field_selects.insert(field_name, select);
+                    field_inputs.push(None);
+                } else if field.field_type == FormFieldType::Checkbox {
                     field_inputs.push(None);
                 } else {
                     // Create InputState for other field types
@@ -1521,6 +1542,11 @@ impl DbConnectionForm {
         let mut extra_params = self.config.hidden_params.clone();
 
         for (field_name, value_entity) in &self.field_values {
+            if let Some(field) = self.find_field(field_name) {
+                if !self.is_field_visible(field, cx) {
+                    continue;
+                }
+            }
             if !basic_fields.contains(&field_name.as_str()) {
                 let value = value_entity.read(cx).clone();
                 if !value.is_empty() {
@@ -1587,6 +1613,9 @@ impl DbConnectionForm {
     fn validate(&self, cx: &App) -> Result<(), String> {
         for tab_group in &self.config.tab_groups {
             for field in &tab_group.fields {
+                if !self.is_field_visible(field, cx) {
+                    continue;
+                }
                 if field.required {
                     let value = self.get_field_value(&field.name, cx);
                     if value.is_none() {
@@ -1910,8 +1939,9 @@ impl DbConnectionForm {
         .detach();
     }
 
-    fn browse_file_path(&mut self, _window: &mut Window, cx: &mut App) {
+    fn browse_file_path_for_field(&mut self, field_name: impl Into<String>, cx: &mut App) {
         let pending = self.pending_file_path.clone();
+        let field_name = field_name.into();
 
         let future = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -1926,7 +1956,7 @@ impl DbConnectionForm {
                     let path_str = path.to_string_lossy().to_string();
                     let _ = cx.update(|cx| {
                         pending.update(cx, |p, cx| {
-                            *p = Some(path_str);
+                            *p = Some((field_name, path_str));
                             cx.notify();
                         });
                     });
@@ -1955,6 +1985,10 @@ impl DbConnectionForm {
             .iter()
             .flat_map(|group| group.fields.iter())
             .find(|field| field.name == field_name)
+    }
+
+    fn is_field_visible(&self, field: &FormField, cx: &App) -> bool {
+        field_visible_from_values(field, |name| self.get_field_value(name, cx))
     }
 
     fn field_label(&self, field_name: &str) -> String {
@@ -2035,12 +2069,21 @@ impl DbConnectionForm {
         }
     }
 
-    fn render_field_by_name(&self, field_name: &str) -> gpui_component::form::Field {
+    fn render_field_by_name(
+        &self,
+        field_name: &str,
+        cx: &mut Context<Self>,
+    ) -> gpui_component::form::Field {
         let Some(field_info) = self.find_field(field_name) else {
             return field();
         };
+        if !self.is_field_visible(field_info, cx) {
+            return field();
+        }
 
         let is_select = field_info.field_type == FormFieldType::Select;
+        let is_checkbox = field_info.field_type == FormFieldType::Checkbox;
+        let is_file_path = field_info.field_type == FormFieldType::FilePath;
         let is_password = field_info.field_type == FormFieldType::Password;
         let field_name = field_info.name.clone();
 
@@ -2060,7 +2103,18 @@ impl DbConnectionForm {
                             el
                         }
                     })
-                    .when(!is_select, |el| {
+                    .when(is_checkbox, |el| {
+                        let checkbox_field = field_name.clone();
+                        el.child(
+                            Checkbox::new(format!("{checkbox_field}-checkbox"))
+                                .checked(self.field_bool_value(&field_name, cx))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    let next = !this.field_bool_value(&checkbox_field, cx);
+                                    this.set_bool_field_value(&checkbox_field, next, window, cx);
+                                })),
+                        )
+                    })
+                    .when(!is_select && !is_checkbox, |el| {
                         if let Some(input_state) = self.get_input_by_name(&field_name) {
                             let input = Input::new(&input_state).w_full();
                             let input = if is_password {
@@ -2072,6 +2126,17 @@ impl DbConnectionForm {
                         } else {
                             el
                         }
+                        .when(is_file_path, |el| {
+                            let file_field = field_name.clone();
+                            el.child(
+                                Button::new(format!("{file_field}-browse-file"))
+                                    .icon(IconName::FolderOpen)
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _window, cx| {
+                                        this.browse_file_path_for_field(file_field.clone(), cx);
+                                    })),
+                            )
+                        })
                     }),
             )
     }
@@ -2083,7 +2148,13 @@ impl DbConnectionForm {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        if current_tab_fields.is_empty() {
+        let visible_fields = current_tab_fields
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| self.is_field_visible(field, cx))
+            .collect::<Vec<_>>();
+
+        if visible_fields.is_empty() {
             return div()
                 .flex()
                 .items_center()
@@ -2102,12 +2173,14 @@ impl DbConnectionForm {
             .with_size(Size::Medium)
             .columns(1)
             .label_width(px(100.))
-            .children(current_tab_fields.iter().enumerate().map(|(i, field_info)| {
+            .children(visible_fields.into_iter().map(|(i, field_info)| {
                 let input_idx = field_input_offset + i;
                 let is_sqlite_path = matches!(db_type, DatabaseType::SQLite | DatabaseType::DuckDB)
                     && field_info.name == "host";
                 let is_textarea = field_info.field_type == FormFieldType::TextArea;
                 let is_select = field_info.field_type == FormFieldType::Select;
+                let is_checkbox = field_info.field_type == FormFieldType::Checkbox;
+                let is_file_path = field_info.field_type == FormFieldType::FilePath;
                 let is_password = field_info.field_type == FormFieldType::Password;
                 let field_name = field_info.name.clone();
 
@@ -2129,7 +2202,24 @@ impl DbConnectionForm {
                                     el
                                 }
                             })
-                            .when(!is_select, |el| {
+                            .when(is_checkbox, |el| {
+                                let checkbox_field = field_name.clone();
+                                el.child(
+                                    Checkbox::new(format!("{checkbox_field}-checkbox"))
+                                        .checked(self.field_bool_value(&field_name, cx))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            let next =
+                                                !this.field_bool_value(&checkbox_field, cx);
+                                            this.set_bool_field_value(
+                                                &checkbox_field,
+                                                next,
+                                                window,
+                                                cx,
+                                            );
+                                        })),
+                                )
+                            })
+                            .when(!is_select && !is_checkbox, |el| {
                                 if let Some(Some(input_state)) = self.field_inputs.get(input_idx) {
                                     let input = Input::new(input_state).w_full();
                                     let input = if is_password {
@@ -2142,13 +2232,21 @@ impl DbConnectionForm {
                                     el
                                 }
                             })
-                            .when(is_sqlite_path, |el| {
+                            .when(is_sqlite_path || is_file_path, |el| {
+                                let file_field = if is_file_path {
+                                    field_name.clone()
+                                } else {
+                                    "host".to_string()
+                                };
                                 el.child(
-                                    Button::new("browse-file")
+                                    Button::new(format!("{file_field}-browse-file"))
                                         .icon(IconName::FolderOpen)
                                         .ghost()
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.browse_file_path(window, cx);
+                                        .on_click(cx.listener(move |this, _, _window, cx| {
+                                            this.browse_file_path_for_field(
+                                                file_field.clone(),
+                                                cx,
+                                            );
                                         })),
                                 )
                             }),
@@ -2427,9 +2525,9 @@ impl DbConnectionForm {
                         ),
                 )
                 .when(!using_ssh_reference, |form| {
-                    form.child(self.render_field_by_name("ssh_host"))
-                        .child(self.render_field_by_name("ssh_port"))
-                        .child(self.render_field_by_name("ssh_username"))
+                    form.child(self.render_field_by_name("ssh_host", cx))
+                        .child(self.render_field_by_name("ssh_port", cx))
+                        .child(self.render_field_by_name("ssh_username", cx))
                 })
                 .when(!using_ssh_reference, |form| {
                     form.child(
@@ -2488,15 +2586,15 @@ impl DbConnectionForm {
                             ),
                     )
                     .when(ssh_auth_type == "password", |form| {
-                        form.child(self.render_field_by_name("ssh_password"))
+                        form.child(self.render_field_by_name("ssh_password", cx))
                     })
                     .when(ssh_auth_type == "private_key", |form| {
-                        form.child(self.render_field_by_name("ssh_private_key_path"))
-                            .child(self.render_field_by_name("ssh_private_key_passphrase"))
+                        form.child(self.render_field_by_name("ssh_private_key_path", cx))
+                            .child(self.render_field_by_name("ssh_private_key_passphrase", cx))
                     })
                 })
-                .child(self.render_field_by_name("ssh_target_host"))
-                .child(self.render_field_by_name("ssh_target_port"))
+                .child(self.render_field_by_name("ssh_target_host", cx))
+                .child(self.render_field_by_name("ssh_target_port", cx))
             })
             .into_any_element()
     }
@@ -2528,18 +2626,18 @@ impl DbConnectionForm {
             )
             .when(ssl_enabled, |form| match self.config.db_type {
                 DatabaseType::MySQL => form
-                    .child(self.render_field_by_name("verify_ca"))
-                    .child(self.render_field_by_name("verify_identity"))
-                    .child(self.render_field_by_name("ssl_root_cert_path"))
-                    .child(self.render_field_by_name("tls_hostname_override")),
+                    .child(self.render_field_by_name("verify_ca", cx))
+                    .child(self.render_field_by_name("verify_identity", cx))
+                    .child(self.render_field_by_name("ssl_root_cert_path", cx))
+                    .child(self.render_field_by_name("tls_hostname_override", cx)),
                 DatabaseType::PostgreSQL => form
-                    .child(self.render_field_by_name("ssl_mode"))
-                    .child(self.render_field_by_name("ssl_root_cert_path"))
-                    .child(self.render_field_by_name("ssl_accept_invalid_certs"))
-                    .child(self.render_field_by_name("ssl_accept_invalid_hostnames")),
+                    .child(self.render_field_by_name("ssl_mode", cx))
+                    .child(self.render_field_by_name("ssl_root_cert_path", cx))
+                    .child(self.render_field_by_name("ssl_accept_invalid_certs", cx))
+                    .child(self.render_field_by_name("ssl_accept_invalid_hostnames", cx)),
                 DatabaseType::MSSQL => form
-                    .child(self.render_field_by_name("encrypt"))
-                    .child(self.render_field_by_name("trust_cert")),
+                    .child(self.render_field_by_name("encrypt", cx))
+                    .child(self.render_field_by_name("trust_cert", cx)),
                 _ => form,
             })
             .into_any_element()
@@ -2557,12 +2655,8 @@ impl Focusable for DbConnectionForm {
 impl Render for DbConnectionForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Check if there's a pending file path to apply
-        if let Some(path) = self.pending_file_path.read(cx).clone() {
-            if let Some(host_input) = self.get_input_by_name("host") {
-                host_input.update(cx, |state, cx| {
-                    state.set_value(path, window, cx);
-                });
-            }
+        if let Some((field_name, path)) = self.pending_file_path.read(cx).clone() {
+            self.set_field_value(&field_name, &path, window, cx);
             self.pending_file_path.update(cx, |p, _| *p = None);
         }
 
@@ -2604,7 +2698,9 @@ impl Render for DbConnectionForm {
                 // Form fields for active tab
                 div().flex_1().min_h(px(250.)).overflow_y_scrollbar().child(
                     match current_tab_name {
-                        "ssh" => self.render_ssh_tab_content(window, cx),
+                        "ssh" if should_use_custom_ssh_tab(&self.config.db_type) => {
+                            self.render_ssh_tab_content(window, cx)
+                        }
                         "ssl" if self.should_use_custom_ssl_tab() => {
                             self.render_ssl_tab_content(window, cx)
                         }
@@ -2623,6 +2719,7 @@ impl Render for DbConnectionForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use db::plugin_manifest::FormValueCondition;
     use one_core::storage::{SshAuthMethod, SshParams};
 
     fn field_names(tab_group: &TabGroup) -> Vec<&str> {
@@ -2708,6 +2805,27 @@ mod tests {
         let config = DbFormConfig::oracle();
 
         assert!(config.tab_groups.iter().all(|group| group.name != "ssl"));
+    }
+
+    #[test]
+    fn external_driver_ssh_tab_uses_manifest_fields() {
+        assert!(!should_use_custom_ssh_tab(&DatabaseType::external("iotdb")));
+    }
+
+    #[test]
+    fn field_visibility_rules_follow_current_values() {
+        let mut field = FormField::new("ssl_ca_file", "CA", FormFieldType::FilePath);
+        field.visible_when = vec![FormVisibilityRule {
+            when_field: "ssl_enabled".to_string(),
+            condition: FormValueCondition::Equals("true".to_string()),
+        }];
+
+        assert!(!field_visible_from_values(&field, |_| Some(
+            "false".to_string()
+        )));
+        assert!(field_visible_from_values(&field, |_| Some(
+            "true".to_string()
+        )));
     }
 
     #[test]

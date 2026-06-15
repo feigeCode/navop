@@ -14,7 +14,7 @@ use crate::common::db_connection_form::{
 };
 use crate::common::manifest_bridge::{
     find_form, matches_node_type, to_column_editor_capabilities, to_connection_form_config,
-    to_table_designer_capabilities, translate,
+    to_connection_form_config_with_text_resolver, to_table_designer_capabilities, translate,
 };
 use crate::common::{DatabaseEditorView, GenericDatabaseForm, GenericSchemaForm, SchemaEditorView};
 use crate::database_objects_tab::DatabaseObjectsEvent;
@@ -569,59 +569,125 @@ fn external_form_config(driver: &IpcDriverManifest, cx: &mut App) -> Option<DbFo
         .ok()?;
     let mut config = if let Some(manifest) = driver.ui.form.clone() {
         let form = find_form(&manifest, DatabaseFormKind::Connection)?;
-        to_connection_form_config(database_type.clone(), &form, plugin.as_ref())
+        to_connection_form_config_with_text_resolver(
+            database_type.clone(),
+            &form,
+            plugin.as_ref(),
+            |key| translate_external_driver_text(driver, key),
+        )
     } else {
         default_external_form_config(driver)
     };
-    config.title = format!("{} ({})", translate("Common.new"), driver.name);
-    config.hidden_params =
-        HashMap::from([(EXTERNAL_DRIVER_ID_PARAM.to_string(), driver.id.clone())]);
+    apply_external_driver_defaults(&mut config, driver);
     Some(config)
 }
 
+fn apply_external_driver_defaults(config: &mut DbFormConfig, driver: &IpcDriverManifest) {
+    if config.title.trim().is_empty() {
+        config.title = format!("{} ({})", translate("Common.new"), driver.name);
+    }
+    config
+        .hidden_params
+        .insert(EXTERNAL_DRIVER_ID_PARAM.to_string(), driver.id.clone());
+    apply_external_driver_name_defaults(config, driver);
+}
+
+fn apply_external_driver_name_defaults(config: &mut DbFormConfig, driver: &IpcDriverManifest) {
+    for group in &mut config.tab_groups {
+        for field in &mut group.fields {
+            if field.name != "name" {
+                continue;
+            }
+            if field.default_value.trim().is_empty() {
+                field.default_value = driver.name.clone();
+            }
+            if field.placeholder.trim().is_empty() {
+                field.placeholder = driver.name.clone();
+            }
+            return;
+        }
+    }
+}
+
+fn translate_external_driver_text(driver: &IpcDriverManifest, key_or_text: &str) -> String {
+    if driver.locales_dir().is_some() {
+        let translated = crate::t_driver(driver, key_or_text);
+        if translated != key_or_text {
+            return translated;
+        }
+    }
+
+    db::translate_or_raw_for_locale(rust_i18n::locale().as_ref(), key_or_text)
+}
+
 fn default_external_form_config(driver: &IpcDriverManifest) -> DbFormConfig {
+    let t = |driver_key: &str, fallback_key: &str| -> String {
+        let text = translate_external_driver_text(driver, driver_key);
+        if text != driver_key {
+            text
+        } else {
+            translate(fallback_key)
+        }
+    };
+    let placeholder = |driver_key: &str, default: &str| -> String {
+        let text = translate_external_driver_text(driver, driver_key);
+        if text != driver_key {
+            text
+        } else {
+            default.to_string()
+        }
+    };
+    let title = {
+        let text = translate_external_driver_text(driver, "connection.title");
+        if text != "connection.title" {
+            text
+        } else {
+            format!("{} ({})", translate("Common.new"), driver.name)
+        }
+    };
+
     DbFormConfig {
         db_type: DatabaseType::external(driver.id.clone()),
-        title: format!("{} ({})", translate("Common.new"), driver.name),
+        title,
         hidden_params: HashMap::new(),
         tab_groups: vec![
-            TabGroup::new("general", translate("ConnectionForm.general")).fields(vec![
+            TabGroup::new("general", t("tabs.general", "ConnectionForm.general")).fields(vec![
                 FormField::new(
                     "name",
-                    translate("ConnectionForm.connection_name"),
+                    t("fields.name.label", "ConnectionForm.connection_name"),
                     FormFieldType::Text,
                 )
                 .placeholder(driver.name.clone())
                 .default(driver.name.clone()),
                 FormField::new(
                     "host",
-                    translate("ConnectionForm.host"),
+                    t("fields.host.label", "ConnectionForm.host"),
                     FormFieldType::Text,
                 )
-                .placeholder("localhost")
+                .placeholder(placeholder("fields.host.placeholder", "localhost"))
                 .default("localhost"),
                 FormField::new(
                     "port",
-                    translate("ConnectionForm.port"),
+                    t("fields.port.label", "ConnectionForm.port"),
                     FormFieldType::Number,
                 )
                 .placeholder("0")
                 .default(driver.ui.default_port.unwrap_or_default().to_string()),
                 FormField::new(
                     "username",
-                    translate("ConnectionForm.username"),
+                    t("fields.username.label", "ConnectionForm.username"),
                     FormFieldType::Text,
                 )
                 .optional(),
                 FormField::new(
                     "password",
-                    translate("ConnectionForm.password"),
+                    t("fields.password.label", "ConnectionForm.password"),
                     FormFieldType::Password,
                 )
                 .optional(),
                 FormField::new(
                     "database",
-                    translate("ConnectionForm.database"),
+                    t("fields.database.label", "ConnectionForm.database"),
                     FormFieldType::Text,
                 )
                 .optional(),
@@ -906,7 +972,11 @@ fn action_id(action: &DatabaseActionDescriptor) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use db::ipc::{
+        EXTERNAL_DRIVER_ID_PARAM, IpcDriverEntry, IpcDriverManifest, IpcDriverTransport,
+    };
     use db::mysql::MySqlPlugin;
+    use std::path::PathBuf;
 
     fn mysql_manifest_plugin() -> ManifestDatabaseViewPlugin {
         let plugin = MySqlPlugin::new();
@@ -921,6 +991,113 @@ mod tests {
                 label == expected || has_label(items, expected)
             }
         })
+    }
+
+    fn demo_driver() -> IpcDriverManifest {
+        IpcDriverManifest {
+            id: "demo".into(),
+            name: "DemoDB".into(),
+            description: String::new(),
+            version: String::new(),
+            entry: IpcDriverEntry {
+                command: "driver".into(),
+                args: Vec::new(),
+                working_dir: None,
+            },
+            transport: IpcDriverTransport::local_socket("demo.sock"),
+            dialect: Default::default(),
+            capabilities: None,
+            methods: Vec::new(),
+            ui: Default::default(),
+            manifest_dir: PathBuf::from("."),
+        }
+    }
+
+    fn demo_driver_with_locales(root: &std::path::Path) -> IpcDriverManifest {
+        let locales_dir = root.join("locales");
+        std::fs::create_dir_all(&locales_dir).unwrap();
+        let locale = rust_i18n::locale().to_string();
+        let content = r#"
+connection:
+  title: "Driver Connection"
+database:
+  connection:
+    field:
+      host: "Driver Host"
+"#;
+        std::fs::write(locales_dir.join(format!("{locale}.yml")), content).unwrap();
+        std::fs::write(locales_dir.join("en.yml"), content).unwrap();
+        let mut driver = demo_driver();
+        driver.ui.locales_dir = Some("locales".to_string());
+        driver.manifest_dir = root.to_path_buf();
+        driver
+    }
+
+    fn temp_test_dir(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("onetcli-{name}-{}-{nanos}", std::process::id()))
+    }
+
+    #[test]
+    fn external_driver_text_uses_driver_locale_then_app_locale() {
+        let temp = temp_test_dir("driver-i18n");
+        let driver = demo_driver_with_locales(&temp);
+
+        assert_eq!(
+            "Driver Connection",
+            translate_external_driver_text(&driver, "connection.title")
+        );
+        assert_eq!(
+            "Driver Host",
+            translate_external_driver_text(&driver, "database.connection.field.host")
+        );
+        assert_eq!(
+            translate("ConnectionForm.general"),
+            translate_external_driver_text(&driver, "ConnectionForm.general")
+        );
+        assert_eq!(
+            "literal text",
+            translate_external_driver_text(&driver, "literal text")
+        );
+    }
+
+    #[test]
+    fn default_external_form_config_uses_driver_title_locale() {
+        let temp = temp_test_dir("driver-title-i18n");
+        let driver = demo_driver_with_locales(&temp);
+
+        let config = default_external_form_config(&driver);
+
+        assert_eq!("Driver Connection", config.title);
+    }
+
+    #[test]
+    fn external_driver_form_defaults_preserve_manifest_title() {
+        let mut config = DbFormConfig {
+            db_type: DatabaseType::external("demo"),
+            title: "Driver Connection".into(),
+            hidden_params: HashMap::new(),
+            tab_groups: vec![
+                TabGroup::new("general", "General").field(
+                    FormField::new("name", "Name", FormFieldType::Text)
+                        .placeholder("")
+                        .default(""),
+                ),
+            ],
+        };
+
+        apply_external_driver_defaults(&mut config, &demo_driver());
+
+        assert_eq!("Driver Connection", config.title);
+        assert_eq!(
+            Some(&"demo".to_string()),
+            config.hidden_params.get(EXTERNAL_DRIVER_ID_PARAM)
+        );
+        assert_eq!("DemoDB", config.tab_groups[0].fields[0].default_value);
+        assert_eq!("DemoDB", config.tab_groups[0].fields[0].placeholder);
     }
 
     #[test]

@@ -44,10 +44,21 @@ fn external_driver_id_from_connection(conn: Option<&StoredConnection>) -> Option
     conn.and_then(|conn| conn.to_db_connection().ok())
         .and_then(|config| {
             config
-                .extra_params
-                .get(db::ipc::EXTERNAL_DRIVER_ID_PARAM)
-                .cloned()
+                .database_type
+                .external_driver_id()
+                .map(str::to_string)
         })
+}
+
+fn external_driver_id_for_form(
+    db_type: &DatabaseType,
+    explicit_driver_id: Option<&str>,
+    conn: Option<&StoredConnection>,
+) -> Option<String> {
+    explicit_driver_id
+        .map(str::to_string)
+        .or_else(|| db_type.external_driver_id().map(str::to_string))
+        .or_else(|| external_driver_id_from_connection(conn))
 }
 
 impl ConnectionFormWindow {
@@ -59,10 +70,11 @@ impl ConnectionFormWindow {
         let is_editing = config.editing_connection.is_some();
         let db_type = config.db_type;
 
-        let external_driver_id = config
-            .external_driver_id
-            .clone()
-            .or_else(|| external_driver_id_from_connection(config.editing_connection.as_ref()));
+        let external_driver_id = external_driver_id_for_form(
+            &db_type,
+            config.external_driver_id.as_deref(),
+            config.editing_connection.as_ref(),
+        );
         let title: SharedString = db::translate_connection_title_for_locale(
             locale().as_ref(),
             is_editing,
@@ -236,5 +248,82 @@ impl Render for ConnectionFormWindow {
                             })),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use one_core::storage::{DbConnectionConfig, StoredConnection};
+    use std::collections::HashMap;
+
+    fn stored_external_connection(driver_id: &str) -> StoredConnection {
+        StoredConnection::new_database(
+            "demo".to_string(),
+            DbConnectionConfig {
+                id: String::new(),
+                database_type: DatabaseType::external(driver_id),
+                name: "demo".to_string(),
+                host: "localhost".to_string(),
+                port: 0,
+                username: String::new(),
+                password: String::new(),
+                database: None,
+                service_name: None,
+                sid: None,
+                workspace_id: None,
+                extra_params: HashMap::new(),
+            },
+            None,
+        )
+    }
+
+    fn stored_connection_with_extra_driver_param() -> StoredConnection {
+        let mut extra_params = HashMap::new();
+        extra_params.insert("external_driver_id".to_string(), "iotdb".to_string());
+
+        StoredConnection::new_database(
+            "demo".to_string(),
+            DbConnectionConfig {
+                id: String::new(),
+                database_type: DatabaseType::MySQL,
+                name: "demo".to_string(),
+                host: "localhost".to_string(),
+                port: 0,
+                username: String::new(),
+                password: String::new(),
+                database: None,
+                service_name: None,
+                sid: None,
+                workspace_id: None,
+                extra_params,
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn external_driver_id_from_connection_uses_database_type_identity() {
+        let connection = stored_external_connection("iotdb");
+
+        assert_eq!(
+            Some("iotdb".to_string()),
+            external_driver_id_from_connection(Some(&connection))
+        );
+    }
+
+    #[test]
+    fn external_driver_id_for_form_uses_database_type_without_explicit_config() {
+        assert_eq!(
+            Some("iotdb".to_string()),
+            external_driver_id_for_form(&DatabaseType::external("iotdb"), None, None)
+        );
+    }
+
+    #[test]
+    fn external_driver_id_from_connection_ignores_extra_params_driver_id() {
+        let connection = stored_connection_with_extra_driver_param();
+
+        assert_eq!(None, external_driver_id_from_connection(Some(&connection)));
     }
 }

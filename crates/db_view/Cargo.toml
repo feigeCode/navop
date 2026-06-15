@@ -12,6 +12,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 chrono.workspace = true
@@ -33,6 +34,8 @@ rust_xlsxwriter.workspace = true
 rust-i18n.workspace = true
 json5.workspace = true
 regex.workspace = true
+parking_lot.workspace = true
+once_cell.workspace = true
 [dev-dependencies]
 proptest = { workspace = true }
 zip = "6.0.0"

@@ -10,6 +10,7 @@ pub mod database_view_plugin;
 pub mod db_object_selector;
 mod db_tree_event;
 pub mod db_tree_view;
+mod driver_i18n;
 pub mod er_diagram;
 pub mod extension_menu;
 #[cfg(test)]
@@ -34,4 +35,5 @@ pub mod table_data_tab;
 pub mod table_designer_tab;
 
 pub use common::DatabaseFormEvent;
+pub(crate) use driver_i18n::t_driver;
 pub use one_core::ai_chat::ask_ai::{AskAiButton, emit_ask_ai_event, init_ask_ai_notifier};

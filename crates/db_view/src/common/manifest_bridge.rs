@@ -36,6 +36,23 @@ pub(crate) fn to_connection_form_config(
     form: &DatabaseFormManifest,
     plugin: &dyn DatabasePlugin,
 ) -> DbFormConfig {
+    to_connection_form_config_with_text_resolver(
+        db_type,
+        form,
+        plugin,
+        translate_connection_form_text,
+    )
+}
+
+pub(crate) fn to_connection_form_config_with_text_resolver<F>(
+    db_type: DatabaseType,
+    form: &DatabaseFormManifest,
+    plugin: &dyn DatabasePlugin,
+    translate_text: F,
+) -> DbFormConfig
+where
+    F: Fn(&str) -> String,
+{
     let mut default_state = HashMap::new();
     for tab in &form.tabs {
         for field in &tab.fields {
@@ -46,18 +63,20 @@ pub(crate) fn to_connection_form_config(
 
     DbFormConfig {
         db_type,
-        title: translate_connection_form_text(&form.title_i18n_key),
+        title: translate_text(&form.title_i18n_key),
         hidden_params: HashMap::new(),
         tab_groups: form
             .tabs
             .iter()
             .map(|tab| TabGroup {
                 name: tab.id.clone(),
-                label: translate_connection_form_text(&tab.label_i18n_key),
+                label: translate_text(&tab.label_i18n_key),
                 fields: tab
                     .fields
                     .iter()
-                    .map(|field| to_connection_field(field, plugin, &default_state))
+                    .map(|field| {
+                        to_connection_field(field, plugin, &default_state, &translate_text)
+                    })
                     .collect(),
             })
             .collect(),
@@ -68,30 +87,27 @@ fn to_connection_field(
     field: &DatabaseFormField,
     plugin: &dyn DatabasePlugin,
     context: &HashMap<String, String>,
+    translate_text: &impl Fn(&str) -> String,
 ) -> FormField {
     let options = resolve_field_options(plugin, field, context)
         .into_iter()
-        .map(|option| {
-            (
-                option.value,
-                translate_connection_form_text(&option.label_i18n_key),
-            )
-        })
+        .map(|option| (option.value, translate_text(&option.label_i18n_key)))
         .collect();
 
     FormField {
         name: field.id.clone(),
-        label: translate_connection_form_text(&field.label_i18n_key),
+        label: translate_text(&field.label_i18n_key),
         placeholder: field
             .placeholder_i18n_key
             .as_deref()
-            .map(translate_connection_form_text)
+            .map(translate_text)
             .unwrap_or_default(),
         field_type: to_connection_field_type(field.field_type),
         rows: field.rows.unwrap_or(5) as usize,
         required: field.required,
         default_value: field.default_value.clone().unwrap_or_default(),
         options,
+        visible_when: field.visible_when.clone(),
     }
 }
 
@@ -101,9 +117,9 @@ fn to_connection_field_type(field_type: DatabaseFormFieldType) -> FormFieldType 
         DatabaseFormFieldType::Password => FormFieldType::Password,
         DatabaseFormFieldType::TextArea => FormFieldType::TextArea,
         DatabaseFormFieldType::Select => FormFieldType::Select,
-        DatabaseFormFieldType::Text
-        | DatabaseFormFieldType::Checkbox
-        | DatabaseFormFieldType::FilePath => FormFieldType::Text,
+        DatabaseFormFieldType::Checkbox => FormFieldType::Checkbox,
+        DatabaseFormFieldType::FilePath => FormFieldType::FilePath,
+        DatabaseFormFieldType::Text => FormFieldType::Text,
     }
 }
 
@@ -182,10 +198,227 @@ pub(crate) fn matches_node_type(
 
 #[cfg(test)]
 mod tests {
-    use super::translate_connection_form_text;
+    use super::*;
+    use db::ipc::{ExternalDatabasePlugin, IpcDriverEntry, IpcDriverManifest, IpcDriverTransport};
+    use db::plugin_manifest::{DatabaseFormTab, FormValueCondition, FormVisibilityRule};
+    use serde_json::json;
+    use std::path::PathBuf;
 
     #[test]
     fn connection_form_translation_keeps_literal_placeholder() {
         assert_eq!(translate_connection_form_text("28800"), "28800");
+    }
+
+    #[test]
+    fn connection_form_config_uses_custom_text_resolver() {
+        let form = DatabaseFormManifest {
+            kind: DatabaseFormKind::Connection,
+            title_i18n_key: "driver.connection.title".into(),
+            submit_i18n_key: "submit".into(),
+            tabs: vec![DatabaseFormTab {
+                id: "general".into(),
+                label_i18n_key: "driver.connection.tab.general".into(),
+                fields: vec![
+                    serde_json::from_value(json!({
+                        "id": "mode",
+                        "label_i18n_key": "driver.connection.field.mode",
+                        "field_type": "Select",
+                        "required": false,
+                        "default_value": "local",
+                        "placeholder_i18n_key": "driver.connection.field.mode.placeholder",
+                        "help_i18n_key": null,
+                        "options": [
+                            {
+                                "value": "local",
+                                "label_i18n_key": "driver.connection.mode.local"
+                            }
+                        ],
+                        "options_source": null,
+                        "visible_when": [],
+                        "default_when": [],
+                        "disabled_when_editing": false,
+                        "rows": null,
+                        "min": null,
+                        "max": null
+                    }))
+                    .unwrap(),
+                ],
+            }],
+        };
+        let plugin = ExternalDatabasePlugin::for_driver(demo_driver());
+
+        let config = to_connection_form_config_with_text_resolver(
+            DatabaseType::external("demo"),
+            &form,
+            &plugin,
+            |key| format!("translated:{key}"),
+        );
+
+        assert_eq!("translated:driver.connection.title", config.title);
+        assert_eq!(
+            "translated:driver.connection.tab.general",
+            config.tab_groups[0].label
+        );
+        let field = &config.tab_groups[0].fields[0];
+        assert_eq!(FormFieldType::Select, field.field_type);
+        assert_eq!("translated:driver.connection.field.mode", field.label);
+        assert_eq!(
+            "translated:driver.connection.field.mode.placeholder",
+            field.placeholder
+        );
+        assert_eq!(
+            vec![(
+                "local".to_string(),
+                "translated:driver.connection.mode.local".to_string()
+            )],
+            field.options
+        );
+    }
+
+    #[test]
+    fn manifest_bridge_preserves_checkbox_and_file_path_fields() {
+        let form = DatabaseFormManifest {
+            kind: DatabaseFormKind::Connection,
+            title_i18n_key: "driver.connection.title".into(),
+            submit_i18n_key: "submit".into(),
+            tabs: vec![DatabaseFormTab {
+                id: "ssh".into(),
+                label_i18n_key: "driver.connection.tab.ssh".into(),
+                fields: vec![
+                    serde_json::from_value(json!({
+                        "id": "ssh_tunnel_enabled",
+                        "label_i18n_key": "driver.connection.field.ssh_enabled",
+                        "field_type": "Checkbox",
+                        "required": false,
+                        "default_value": "false",
+                        "placeholder_i18n_key": null,
+                        "help_i18n_key": null,
+                        "options": [],
+                        "options_source": null,
+                        "visible_when": [],
+                        "default_when": [],
+                        "disabled_when_editing": false,
+                        "rows": null,
+                        "min": null,
+                        "max": null
+                    }))
+                    .unwrap(),
+                    serde_json::from_value(json!({
+                        "id": "ssl_ca_file",
+                        "label_i18n_key": "driver.connection.field.ssl_ca_file",
+                        "field_type": "FilePath",
+                        "required": false,
+                        "default_value": "",
+                        "placeholder_i18n_key": null,
+                        "help_i18n_key": null,
+                        "options": [],
+                        "options_source": null,
+                        "visible_when": [],
+                        "default_when": [],
+                        "disabled_when_editing": false,
+                        "rows": null,
+                        "min": null,
+                        "max": null
+                    }))
+                    .unwrap(),
+                ],
+            }],
+        };
+        let plugin = ExternalDatabasePlugin::for_driver(demo_driver());
+
+        let config = to_connection_form_config(DatabaseType::external("demo"), &form, &plugin);
+
+        assert_eq!(
+            FormFieldType::Checkbox,
+            config.tab_groups[0].fields[0].field_type
+        );
+        assert_eq!(
+            FormFieldType::FilePath,
+            config.tab_groups[0].fields[1].field_type
+        );
+    }
+
+    #[test]
+    fn connection_form_config_preserves_field_visibility_rules() {
+        let mut form = DatabaseFormManifest {
+            kind: DatabaseFormKind::Connection,
+            title_i18n_key: "driver.connection.title".into(),
+            submit_i18n_key: "submit".into(),
+            tabs: vec![DatabaseFormTab {
+                id: "ssl".into(),
+                label_i18n_key: "driver.connection.tab.ssl".into(),
+                fields: vec![
+                    serde_json::from_value(json!({
+                        "id": "ssl_enabled",
+                        "label_i18n_key": "driver.connection.field.ssl_enabled",
+                        "field_type": "Checkbox",
+                        "required": false,
+                        "default_value": "false",
+                        "placeholder_i18n_key": null,
+                        "help_i18n_key": null,
+                        "options": [],
+                        "options_source": null,
+                        "visible_when": [],
+                        "default_when": [],
+                        "disabled_when_editing": false,
+                        "rows": null,
+                        "min": null,
+                        "max": null
+                    }))
+                    .unwrap(),
+                    serde_json::from_value(json!({
+                        "id": "ssl_ca_file",
+                        "label_i18n_key": "driver.connection.field.ssl_ca_file",
+                        "field_type": "FilePath",
+                        "required": true,
+                        "default_value": "",
+                        "placeholder_i18n_key": null,
+                        "help_i18n_key": null,
+                        "options": [],
+                        "options_source": null,
+                        "visible_when": [],
+                        "default_when": [],
+                        "disabled_when_editing": false,
+                        "rows": null,
+                        "min": null,
+                        "max": null
+                    }))
+                    .unwrap(),
+                ],
+            }],
+        };
+        form.tabs[0].fields[1].visible_when = vec![FormVisibilityRule {
+            when_field: "ssl_enabled".into(),
+            condition: FormValueCondition::Equals("true".into()),
+        }];
+        let plugin = ExternalDatabasePlugin::for_driver(demo_driver());
+
+        let config = to_connection_form_config(DatabaseType::external("demo"), &form, &plugin);
+
+        assert_eq!(1, config.tab_groups[0].fields[1].visible_when.len());
+        assert_eq!(
+            "ssl_enabled",
+            config.tab_groups[0].fields[1].visible_when[0].when_field
+        );
+    }
+
+    fn demo_driver() -> IpcDriverManifest {
+        IpcDriverManifest {
+            id: "demo".into(),
+            name: "Demo".into(),
+            description: String::new(),
+            version: String::new(),
+            entry: IpcDriverEntry {
+                command: "driver".into(),
+                args: Vec::new(),
+                working_dir: None,
+            },
+            transport: IpcDriverTransport::local_socket("demo.sock"),
+            dialect: Default::default(),
+            capabilities: None,
+            methods: Vec::new(),
+            ui: Default::default(),
+            manifest_dir: PathBuf::from("."),
+        }
     }
 }
