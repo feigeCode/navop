@@ -1,5 +1,5 @@
 use db::DbNodeType;
-use db::ipc::{EXTERNAL_DRIVER_ID_PARAM, IpcDriverManifest, IpcDriverRegistry};
+use db::ipc::{IpcDriverManifest, IpcDriverRegistry};
 use db::plugin::DatabasePlugin;
 use db::plugin_manifest::{
     DatabaseActionDescriptor, DatabaseActionId, DatabaseActionPlacement,
@@ -586,9 +586,6 @@ fn apply_external_driver_defaults(config: &mut DbFormConfig, driver: &IpcDriverM
     if config.title.trim().is_empty() {
         config.title = format!("{} ({})", translate("Common.new"), driver.name);
     }
-    config
-        .hidden_params
-        .insert(EXTERNAL_DRIVER_ID_PARAM.to_string(), driver.id.clone());
     apply_external_driver_name_defaults(config, driver);
 }
 
@@ -972,9 +969,7 @@ fn action_id(action: &DatabaseActionDescriptor) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use db::ipc::{
-        EXTERNAL_DRIVER_ID_PARAM, IpcDriverEntry, IpcDriverManifest, IpcDriverTransport,
-    };
+    use db::ipc::{IpcDriverEntry, IpcDriverManifest, IpcDriverTransport};
     use db::mysql::MySqlPlugin;
     use std::path::PathBuf;
 
@@ -1093,8 +1088,9 @@ database:
 
         assert_eq!("Driver Connection", config.title);
         assert_eq!(
-            Some(&"demo".to_string()),
-            config.hidden_params.get(EXTERNAL_DRIVER_ID_PARAM)
+            None,
+            config.hidden_params.get("external_driver_id"),
+            "external driver identity must be stored in DatabaseType, not hidden params"
         );
         assert_eq!("DemoDB", config.tab_groups[0].fields[0].default_value);
         assert_eq!("DemoDB", config.tab_groups[0].fields[0].placeholder);

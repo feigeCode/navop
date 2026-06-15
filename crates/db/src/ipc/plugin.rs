@@ -7,9 +7,7 @@ use crate::import_export::{
 use crate::ipc::client::JsonRpcClient;
 use crate::ipc::connection::{ExternalDbConnection, WIRE_PREFIX};
 use crate::ipc::protocol::driver_config_value;
-use crate::ipc::registry::{
-    EXTERNAL_DRIVER_ID_PARAM, IpcDriverManifest, IpcDriverRegistry, LimitStyle,
-};
+use crate::ipc::registry::{IpcDriverManifest, IpcDriverRegistry, LimitStyle};
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use crate::streaming_parser::StreamingSqlParser;
@@ -251,9 +249,6 @@ impl ExternalDatabasePlugin {
 
 fn driver_id_for_config(config: &DbConnectionConfig) -> Result<&str, DbError> {
     if let Some(driver_id) = config.database_type.external_driver_id() {
-        return Ok(driver_id);
-    }
-    if let Some(driver_id) = config.get_param(EXTERNAL_DRIVER_ID_PARAM) {
         return Ok(driver_id);
     }
     match config.database_type {
@@ -1602,6 +1597,34 @@ mod tests {
     }
 
     #[test]
+    fn driver_id_for_config_ignores_extra_params_driver_id() {
+        let mut config = DbConnectionConfig {
+            id: "conn-1".into(),
+            name: "demo".into(),
+            database_type: DatabaseType::MySQL,
+            host: String::new(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params: Default::default(),
+        };
+        config
+            .extra_params
+            .insert("external_driver_id".to_string(), "iotdb".to_string());
+
+        let error = driver_id_for_config(&config).unwrap_err();
+
+        assert!(
+            error.to_string().contains("external driver id is required"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn dialect_contract_drives_host_sql_fragments() {
         let mut driver = driver_manifest("mssql-ish", "\"", false, "mssql.connection");
         driver.dialect.identifier_quote_left = Some("[".to_string());
@@ -1668,6 +1691,16 @@ mod tests {
             statements
                 .iter()
                 .all(|statement| statement.starts_with(WIRE_PREFIX))
+        );
+    }
+
+    #[test]
+    fn external_splitter_keeps_original_sql_when_parser_errors() {
+        let sql = "SELECT * FROM";
+
+        assert_eq!(
+            vec![sql.to_string()],
+            split_sql_with_parser(sql, DatabaseType::external("demo"))
         );
     }
 

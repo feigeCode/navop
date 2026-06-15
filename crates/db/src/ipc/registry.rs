@@ -9,7 +9,6 @@ use tracing::warn;
 mod discovery;
 mod entry;
 
-pub const EXTERNAL_DRIVER_ID_PARAM: &str = "external_driver_id";
 const DRIVER_MANIFEST_FILE: &str = "driver.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

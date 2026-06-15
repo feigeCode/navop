@@ -1,4 +1,3 @@
-use db::ipc::EXTERNAL_DRIVER_ID_PARAM;
 use gpui::{AppContext, AsyncApp, Context, PromptLevel, WeakEntity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::gpui_tokio::Tokio;
@@ -219,11 +218,6 @@ fn required_external_driver(config: &DbConnectionConfig) -> DriverRequirement {
     let driver_id = config
         .database_type
         .external_driver_id()
-        .or_else(|| {
-            config
-                .get_param(EXTERNAL_DRIVER_ID_PARAM)
-                .map(String::as_str)
-        })
         .map(str::trim)
         .unwrap_or_default();
     if driver_id.is_empty() {

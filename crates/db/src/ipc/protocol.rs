@@ -23,14 +23,7 @@ pub fn driver_config_value(config: &DbConnectionConfig) -> Value {
         "id": config.id,
         "database_type": config.database_type.as_str(),
         "database_type_key": config.database_type.storage_key(),
-        "driver_id": config
-            .database_type
-            .external_driver_id()
-            .or_else(|| {
-                config
-                    .get_param(crate::ipc::registry::EXTERNAL_DRIVER_ID_PARAM)
-                    .map(String::as_str)
-            }),
+        "driver_id": config.database_type.external_driver_id(),
         "name": config.name,
         "host": config.host,
         "port": config.port,
@@ -222,6 +215,38 @@ pub fn schema_triggers_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use one_core::storage::DatabaseType;
+    use std::collections::HashMap;
+
+    fn config_with_extra_driver_param() -> DbConnectionConfig {
+        let mut extra_params = HashMap::new();
+        extra_params.insert("external_driver_id".to_string(), "iotdb".to_string());
+        DbConnectionConfig {
+            id: "conn-1".into(),
+            database_type: DatabaseType::MySQL,
+            name: "demo".into(),
+            host: "localhost".into(),
+            port: 3306,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params,
+        }
+    }
+
+    #[test]
+    fn driver_config_value_does_not_infer_driver_id_from_extra_params() {
+        let value = driver_config_value(&config_with_extra_driver_param());
+
+        assert_eq!(json!("MySQL"), value["database_type_key"]);
+        assert!(
+            value["driver_id"].is_null(),
+            "driver id must come from DatabaseType::External"
+        );
+    }
 
     #[test]
     fn schema_databases_only_carries_conn_id() {

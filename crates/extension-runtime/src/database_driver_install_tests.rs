@@ -3,7 +3,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use db::ipc::EXTERNAL_DRIVER_ID_PARAM;
 use futures::FutureExt;
 use gpui::http_client::{self, AsyncBody, HttpClient, Url, http};
 use one_core::storage::{DatabaseType, DbConnectionConfig};
@@ -47,6 +46,19 @@ fn external_database_requires_its_driver_id() {
 fn external_database_without_driver_id_is_invalid() {
     assert!(matches!(
         required_driver_for_config(&external_config("")),
+        DriverRequirement::InvalidConfig { .. }
+    ));
+}
+
+#[test]
+fn external_database_does_not_fallback_to_extra_params_driver_id() {
+    let mut config = external_config("");
+    config
+        .extra_params
+        .insert("external_driver_id".to_string(), "custom".to_string());
+
+    assert!(matches!(
+        required_driver_for_config(&config),
         DriverRequirement::InvalidConfig { .. }
     ));
 }
@@ -118,11 +130,7 @@ fn config(database_type: DatabaseType) -> DbConnectionConfig {
 }
 
 fn external_config(driver_id: &str) -> DbConnectionConfig {
-    let mut config = config(DatabaseType::external(driver_id));
-    config
-        .extra_params
-        .insert(EXTERNAL_DRIVER_ID_PARAM.to_string(), driver_id.to_string());
-    config
+    config(DatabaseType::external(driver_id))
 }
 
 fn entry(id: &str, kind: ExtensionKind) -> MarketplaceEntry {

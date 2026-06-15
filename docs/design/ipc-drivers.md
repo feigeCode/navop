@@ -120,9 +120,8 @@ The new-connection UI filters that driver out of the generic external driver
 list to avoid showing duplicate DuckDB entries.
 
 Third-party drivers are shown as `ExternalDatabase` entries and persist the
-selected driver id in `DatabaseType::External { driver_id }`. The host must not
-use `extra_params[external_driver_id]` as a compatibility path before this
-contract ships; the database type is the source of truth.
+selected driver id in `DatabaseType::External { driver_id }`. The database type
+is the source of truth for external driver identity.
 
 When the connection form edits an existing external connection, it resolves the
 driver id from `DatabaseType::External { driver_id }` and asks
@@ -138,9 +137,6 @@ Driver connection forms are manifest-driven:
 - `visible_when` rules are preserved by the manifest bridge and enforced during
   rendering, validation, and `extra_params` construction. Invisible fields are
   not validated or saved.
-- `hidden_params` always includes the selected `external_driver_id` for the
-  wire config sent to the driver, but persisted identity remains
-  `DatabaseType::External { driver_id }`.
 - Driver-localized labels are resolved from `ui.locales_dir` first, then the app
   locale/raw fallback.
 

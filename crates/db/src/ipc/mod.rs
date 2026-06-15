@@ -15,7 +15,6 @@ pub use display::IpcDriverDisplay;
 pub use method_support::{MethodSet, MethodSupport};
 pub use plugin::ExternalDatabasePlugin;
 pub use registry::{
-    EXTERNAL_DRIVER_ID_PARAM, IpcDriverEntry, IpcDriverManifest, IpcDriverRegistry,
-    IpcDriverTransport, LimitStyle,
+    IpcDriverEntry, IpcDriverManifest, IpcDriverRegistry, IpcDriverTransport, LimitStyle,
 };
 pub use resources::{DriverAssetSource, DriverResourceLoader};

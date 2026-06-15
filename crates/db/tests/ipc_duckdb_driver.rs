@@ -5,8 +5,8 @@ use db::{
     ColumnDefinition, DatabasePlugin, DbConnection, ExecOptions, ExportConfig, ImportConfig,
     IndexDefinition, SqlResult, TableDesign,
     ipc::{
-        EXTERNAL_DRIVER_ID_PARAM, ExternalDatabasePlugin, ExternalDbConnection, IpcDriverEntry,
-        IpcDriverManifest, IpcDriverRegistry, IpcDriverTransport,
+        ExternalDatabasePlugin, ExternalDbConnection, IpcDriverEntry, IpcDriverManifest,
+        IpcDriverRegistry, IpcDriverTransport,
     },
 };
 use extension_protocol::method as wire_method;
@@ -92,11 +92,7 @@ fn make_config(id: &str, db_path: &std::path::Path) -> DbConnectionConfig {
 }
 
 fn make_external_config(id: &str, db_path: &std::path::Path) -> DbConnectionConfig {
-    let mut config = make_config(id, db_path);
-    config
-        .extra_params
-        .insert(EXTERNAL_DRIVER_ID_PARAM.into(), "duckdb".into());
-    config
+    make_config(id, db_path)
 }
 
 fn skip_if_missing_binary(binary: &std::path::Path) -> bool {
