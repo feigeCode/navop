@@ -3315,7 +3315,7 @@ mod tests {
         }
     }
 
-    fn build_plugin(database_type: DatabaseType) -> Box<dyn DatabasePlugin> {
+    fn build_plugin(database_type: &DatabaseType) -> Box<dyn DatabasePlugin> {
         match database_type {
             DatabaseType::MySQL => Box::new(MySqlPlugin::new()),
             DatabaseType::PostgreSQL => Box::new(PostgresPlugin::new()),
@@ -3574,8 +3574,8 @@ mod tests {
     fn test_build_alter_table_sql_with_renames_contains_rename_for_all_databases() {
         let (original, current, renames) = build_delete_and_rename_conflict_case();
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             assert_contains_rename_sql(&sql, database_type);
         }
@@ -3585,8 +3585,8 @@ mod tests {
     fn test_build_alter_table_sql_with_renames_not_drop_source_for_all_databases() {
         let (original, current, renames) = build_delete_and_rename_conflict_case();
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             assert_not_drop_source_column(&sql, plugin.as_ref());
         }
@@ -3615,8 +3615,8 @@ mod tests {
         );
         let renames = vec![("b".to_string(), "b2".to_string())];
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 不应包含 DROP COLUMN
             let drop_b = format!("DROP COLUMN {}", plugin.quote_identifier("b"));
@@ -3720,8 +3720,8 @@ mod tests {
     fn test_no_changes_returns_no_changes_for_all_databases() {
         let design = build_design(vec![build_col("a"), build_col("b")], vec![]);
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&design, &design);
             assert_eq!(
                 sql, "-- No changes detected",
@@ -3737,8 +3737,8 @@ mod tests {
         let original = build_design(vec![build_col("a")], vec![]);
         let current = build_design(vec![build_col("a"), build_col("b")], vec![]);
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             let quoted_b = plugin.quote_identifier("b");
             assert!(
@@ -3760,8 +3760,8 @@ mod tests {
         let original = build_design(vec![build_col("a"), build_col("b")], vec![]);
         let current = build_design(vec![build_col("a")], vec![]);
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             // SQLite 使用 table recreation 方式，不包含 DROP COLUMN 关键词
             if !matches!(database_type, DatabaseType::SQLite | DatabaseType::DuckDB) {
@@ -3787,8 +3787,8 @@ mod tests {
         modified_col.data_type = "BIGINT".to_string();
         let current = build_design(vec![modified_col], vec![]);
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             assert!(
                 sql.contains("BIGINT"),
@@ -3811,8 +3811,8 @@ mod tests {
         nullable_col.is_nullable = true;
         let current = build_design(vec![nullable_col], vec![]);
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             assert!(
                 !sql.starts_with("-- No changes"),
@@ -3832,8 +3832,8 @@ mod tests {
         );
         let renames = vec![("a".to_string(), "a_new".to_string())];
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 应包含重命名
             let has_rename = sql.contains("RENAME COLUMN")
@@ -3865,8 +3865,8 @@ mod tests {
         let current = build_design(vec![build_col("a2"), build_col("b")], vec![]);
         let renames = vec![("a".to_string(), "a2".to_string())];
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 应包含重命名
             let has_rename = sql.contains("RENAME COLUMN")
@@ -3902,8 +3902,8 @@ mod tests {
         let current = build_design(vec![build_col("a_new"), modified_b], vec![]);
         let renames = vec![("a".to_string(), "a_new".to_string())];
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 应包含重命名
             let has_rename = sql.contains("RENAME COLUMN")
@@ -3929,8 +3929,8 @@ mod tests {
             ("b".to_string(), "y".to_string()),
         ];
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 不应 DROP 源列
             let drop_a = format!("DROP COLUMN {}", plugin.quote_identifier("a"));
@@ -3978,8 +3978,8 @@ mod tests {
         current.indexes[0].name = "idx_test".to_string();
         let renames = vec![("b".to_string(), "b2".to_string())];
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 应包含重命名语句
             let has_rename = sql.contains("RENAME COLUMN")
@@ -4001,8 +4001,8 @@ mod tests {
         let original = build_design(vec![build_col("a"), build_col("b")], vec![]);
         let current = build_design(vec![build_col("a"), build_col("b")], vec!["a"]);
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             // 应包含 INDEX 相关关键字
             assert!(
@@ -4019,8 +4019,8 @@ mod tests {
         let original = build_design(vec![build_col("a"), build_col("b")], vec!["a"]);
         let current = build_design(vec![build_col("a"), build_col("b")], vec![]);
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             assert!(
                 sql.to_uppercase().contains("DROP") && sql.to_uppercase().contains("INDEX"),
@@ -4245,8 +4245,8 @@ mod tests {
         let current = build_design(vec![renamed_and_modified, build_col("b")], vec![]);
         let renames = vec![("a".to_string(), "a_new".to_string())];
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql_with_renames(&original, &current, &renames);
             // 应包含重命名
             let has_rename = sql.contains("RENAME COLUMN")
@@ -4278,8 +4278,8 @@ mod tests {
         let original = build_design(vec![build_col("a"), build_col("b")], vec![]);
         let current = build_design(vec![], vec![]);
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             // 应生成非空 SQL（而非 no changes）
             assert!(
@@ -4296,8 +4296,8 @@ mod tests {
         let original = build_design(vec![], vec![]);
         let current = build_design(vec![build_col("a"), build_col("b"), build_col("c")], vec![]);
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             let quoted_a = plugin.quote_identifier("a");
             let quoted_b = plugin.quote_identifier("b");
@@ -4325,8 +4325,8 @@ mod tests {
         );
         current.indexes[0].name = "idx_new".to_string();
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             let upper = sql.to_uppercase();
             assert!(
@@ -4378,8 +4378,8 @@ mod tests {
         col_new.default_value = Some("1".to_string());
         let current = build_design(vec![col_new], vec![]);
 
-        for database_type in DatabaseType::all().iter().copied() {
-            let plugin = build_plugin(database_type);
+        for database_type in DatabaseType::all().iter().cloned() {
+            let plugin = build_plugin(&database_type);
             let sql = plugin.build_alter_table_sql(&original, &current);
             assert!(
                 !sql.starts_with("-- No changes"),

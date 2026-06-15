@@ -1378,7 +1378,7 @@ impl HomePage {
             .collect();
 
         let config = ConnectionFormWindowConfig {
-            db_type,
+            db_type: db_type.clone(),
             external_driver_id: None,
             editing_connection: editing_conn,
             workspaces: self.workspaces.clone(),

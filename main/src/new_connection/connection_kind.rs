@@ -65,7 +65,7 @@ impl NewConnectionKind {
         items.extend(
             DatabaseType::builtin_all()
                 .iter()
-                .copied()
+                .cloned()
                 .map(Self::Database),
         );
         items.extend(external_database_kinds(&IpcDriverRegistry::load_default()));

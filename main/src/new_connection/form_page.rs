@@ -42,7 +42,8 @@ impl NewConnectionFormPage for NewConnectionKind {
             Self::Serial => build_serial_form(parent, window, cx),
             Self::Database(db_type) => build_database_form(parent, db_type, None, window, cx),
             Self::ExternalDatabase { driver_id, .. } => {
-                build_database_form(parent, DatabaseType::External, Some(driver_id), window, cx)
+                let db_type = DatabaseType::external(driver_id.clone());
+                build_database_form(parent, db_type, Some(driver_id), window, cx)
             }
         }
     }
