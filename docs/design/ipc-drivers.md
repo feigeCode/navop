@@ -119,8 +119,85 @@ When the `duckdb` IPC driver is available, `DuckDbPlugin` uses it internally.
 The new-connection UI filters that driver out of the generic external driver
 list to avoid showing duplicate DuckDB entries.
 
-Third-party drivers are shown as `ExternalDatabase` entries and must persist the
-selected driver id in `extra_params[external_driver_id]`.
+Third-party drivers are shown as `ExternalDatabase` entries and persist the
+selected driver id in `DatabaseType::External { driver_id }`. The host must not
+use `extra_params[external_driver_id]` as a compatibility path before this
+contract ships; the database type is the source of truth.
+
+When the connection form edits an existing external connection, it resolves the
+driver id from `DatabaseType::External { driver_id }` and asks
+`create_external_connection_form_for(driver_id, ...)` for that driver's manifest
+form. This prevents existing external connections from falling back to a generic
+external form.
+
+Driver connection forms are manifest-driven:
+
+- `ui.form.tabs` maps directly to connection form tabs, so drivers can expose
+  SSH, SSL, advanced, or database-specific groups without host UI changes.
+- `Checkbox` and `FilePath` are supported connection field types.
+- `visible_when` rules are preserved by the manifest bridge and enforced during
+  rendering, validation, and `extra_params` construction. Invisible fields are
+  not validated or saved.
+- `hidden_params` always includes the selected `external_driver_id` for the
+  wire config sent to the driver, but persisted identity remains
+  `DatabaseType::External { driver_id }`.
+- Driver-localized labels are resolved from `ui.locales_dir` first, then the app
+  locale/raw fallback.
+
+## Host Integration Contract
+
+`DbManager` registers one `ExternalDatabasePlugin` per manifest driver id. Each
+plugin instance owns its concrete `IpcDriverManifest` and serves only that
+driver. `DatabaseType::External { driver_id }` is routed to the matching plugin.
+
+`DatabaseType::DuckDB` remains a built-in-facing type for users, but the manager
+may back it with the `duckdb` IPC driver when the manifest is available. This is
+a compatibility bridge for DuckDB only; future third-party databases should use
+`DatabaseType::External { driver_id }`.
+
+The connection config sent over IPC includes both:
+
+- `database_type_key`: the storage key such as `DuckDB` or `External:iotdb`.
+- `driver_id`: the concrete external driver id.
+
+## Manifest SQL And Dialect Contract
+
+The manifest dialect is the host SQL-generation contract for external drivers.
+It currently includes:
+
+- `identifier_quote_left` and `identifier_quote_right`, with right-quote
+  escaping. This supports asymmetric quoting such as `[name]`.
+- `limit_style`: `limit_offset` or `offset_fetch`.
+- `bool_true` and `bool_false` literals.
+- `explain_template`, used as the fallback SQL carried with `sql/explain`.
+
+Host-side SQL builders must use the driver dialect uniformly. The external
+plugin's local fallback covers column changes and index changes, including
+`DROP INDEX IF EXISTS ...` and `CREATE [UNIQUE] INDEX ...`. When a driver
+declares DDL methods such as `ddl/build_create_table` or
+`ddl/build_alter_table`, async table designer paths ask the driver first and
+fall back to local SQL only when the method is not supported.
+
+`sql/explain` is connection-bound. The host builds a wire pseudo-SQL request
+containing the original SQL plus dialect fallback SQL so the driver can either
+execute native explain behavior or use the fallback template.
+
+## Display And Resources
+
+Driver display metadata resolves from the manifest:
+
+- driver id
+- driver name
+- icon asset path
+
+Built-in icon names map to app assets. Relative custom driver icons become
+`driver://{driver_id}/icon` or `driver://{driver_id}/icon_color`. The main app
+asset source tries `DriverAssetSource` first and falls back to bundled GPUI
+assets.
+
+Connection tree nodes store external driver metadata for display. Extension menu
+`when` contexts keep `connection.kind == "external"` for broad compatibility and
+add `connection.driver_id` for driver-specific menu filtering.
 
 ## Extensibility Rules
 
@@ -145,8 +222,17 @@ Useful targeted checks:
 cargo test -p extension-driver -- --nocapture
 cargo test -p duckdb_driver -- --nocapture
 cargo test -p db ipc:: -- --nocapture
+cargo test -p db manager::tests -- --nocapture
+cargo test -p db_view common:: -- --nocapture
+cargo test -p db_view database_view_plugin::tests -- --nocapture
+cargo test -p db_view db_tree_view::tests -- --nocapture
+cargo test -p db_view connection_form_window::tests -- --nocapture
+cargo test -p db_view extension_menu -- --nocapture
+cargo test -p db_view table_designer_tab::tests -- --nocapture
+cargo test -p extension-runtime database_driver_install -- --nocapture
 cargo test -p db --test ipc_duckdb_driver -- --nocapture
 cargo test -p main new_connection::connection_kind::tests::external_database_kinds_skip_builtin_duckdb_driver -- --nocapture
-cargo check -p main -p db_view
+cargo check -p one-core -p db -p db_view -p extension-runtime -p main
+cargo fmt --check
 git diff --check
 ```

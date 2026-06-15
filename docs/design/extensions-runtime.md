@@ -215,9 +215,14 @@ DB UI
   -> concrete driver connection worker
 ```
 
-`DbManager` registers `ExternalDatabasePlugin` for `DatabaseType::External`.
-`ExternalDatabasePlugin` reads `extra_params[external_driver_id]`, resolves the
-matching driver manifest, and creates `ExternalDbConnection`.
+`DbManager` registers one `ExternalDatabasePlugin` per external driver id from
+`IpcDriverRegistry`. `DatabaseType::External { driver_id }` resolves directly to
+that plugin. Each plugin owns its concrete `IpcDriverManifest` and creates
+`ExternalDbConnection` for that driver only.
+
+`DatabaseType::DuckDB` remains user-facing as a built-in database type, but the
+manager can route it to the `duckdb` IPC driver when that manifest is available.
+This DuckDB bridge is not the generic external-driver identity contract.
 
 `db::ipc::JsonRpcClient::start` then:
 
