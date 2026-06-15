@@ -406,7 +406,7 @@ fn method_requires_auto_conn_id(method_name: &str) -> bool {
         "schema" | "query" | "cursor" | "exec" | "tx" | "data" | "stream"
     ) || matches!(
         method_name,
-        method::CONN_PING | method::CONN_USE | method::CONN_CLOSE
+        method::CONN_PING | method::CONN_USE | method::CONN_CLOSE | method::SQL_EXPLAIN
     )
 }
 
@@ -960,6 +960,7 @@ mod tests {
         assert!(method_requires_auto_conn_id(method::CURSOR_FETCH));
         assert!(method_requires_auto_conn_id(method::EXEC_RUN));
         assert!(method_requires_auto_conn_id(method::EXEC_BATCH));
+        assert!(method_requires_auto_conn_id(method::SQL_EXPLAIN));
         assert!(method_requires_auto_conn_id(method::TX_BEGIN));
         assert!(method_requires_auto_conn_id(method::TX_COMMIT));
         assert!(method_requires_auto_conn_id(method::TX_ROLLBACK));

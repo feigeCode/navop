@@ -1,14 +1,18 @@
 use crate::connection::{DbConnection, DbError};
+use crate::executor::SqlSource;
 use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportProgressSender,
     ImportResult,
 };
 use crate::ipc::client::JsonRpcClient;
-use crate::ipc::connection::ExternalDbConnection;
+use crate::ipc::connection::{ExternalDbConnection, WIRE_PREFIX};
 use crate::ipc::protocol::driver_config_value;
-use crate::ipc::registry::{EXTERNAL_DRIVER_ID_PARAM, IpcDriverManifest, IpcDriverRegistry};
+use crate::ipc::registry::{
+    EXTERNAL_DRIVER_ID_PARAM, IpcDriverManifest, IpcDriverRegistry, LimitStyle,
+};
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
+use crate::streaming_parser::StreamingSqlParser;
 use crate::types::*;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -127,6 +131,94 @@ impl ExternalDatabasePlugin {
         statements
     }
 
+    fn index_changed(original: &IndexDefinition, new: &IndexDefinition) -> bool {
+        original.columns != new.columns
+            || original.is_unique != new.is_unique
+            || original.index_type != new.index_type
+    }
+
+    fn build_index_sql(&self, table: &str, index: &IndexDefinition) -> Option<String> {
+        if index.is_primary || index.columns.is_empty() {
+            return None;
+        }
+
+        let columns = index
+            .columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let unique = if index.is_unique { "UNIQUE " } else { "" };
+
+        Some(format!(
+            "CREATE {unique}INDEX {} ON {table} ({columns});",
+            self.quote_identifier(&index.name)
+        ))
+    }
+
+    fn build_index_change_sql(
+        &self,
+        table: &str,
+        original: &TableDesign,
+        new: &TableDesign,
+    ) -> (Vec<String>, Vec<String>) {
+        let original_indexes: HashMap<&str, &IndexDefinition> = original
+            .indexes
+            .iter()
+            .map(|index| (index.name.as_str(), index))
+            .collect();
+        let new_indexes: HashMap<&str, &IndexDefinition> = new
+            .indexes
+            .iter()
+            .map(|index| (index.name.as_str(), index))
+            .collect();
+
+        let mut drops = Vec::new();
+        let mut creates = Vec::new();
+
+        for index in original.indexes.iter().filter(|index| !index.is_primary) {
+            let should_drop = new_indexes
+                .get(index.name.as_str())
+                .is_none_or(|new_index| Self::index_changed(index, new_index));
+            if should_drop {
+                drops.push(format!(
+                    "DROP INDEX IF EXISTS {};",
+                    self.quote_identifier(&index.name)
+                ));
+            }
+        }
+
+        for index in new.indexes.iter().filter(|index| !index.is_primary) {
+            let should_create = original_indexes
+                .get(index.name.as_str())
+                .is_none_or(|original_index| Self::index_changed(original_index, index));
+            if should_create {
+                if let Some(sql) = self.build_index_sql(table, index) {
+                    creates.push(sql);
+                }
+            }
+        }
+
+        (drops, creates)
+    }
+
+    fn build_external_explain_statement(&self, statement: &str) -> Option<String> {
+        let statement = statement.trim();
+        if statement.is_empty() {
+            return None;
+        }
+        if statement.starts_with(WIRE_PREFIX) || self.is_explain_statement(statement) {
+            return Some(statement.to_string());
+        }
+        if !self.is_query_statement(statement) {
+            return None;
+        }
+        Some(wire_explain_sql(
+            statement,
+            self.driver.dialect.format_explain_sql(statement),
+        ))
+    }
+
     async fn metadata<T>(
         &self,
         connection: &dyn DbConnection,
@@ -224,7 +316,8 @@ impl DatabasePlugin for ExternalDatabasePlugin {
     }
 
     fn quote_identifier(&self, identifier: &str) -> String {
-        quote_identifier_with(&self.driver.dialect.identifier_quote, identifier)
+        let (left, right) = self.driver.dialect.identifier_quote_pair();
+        quote_identifier_with(left, right, identifier)
     }
 
     fn get_completion_info(&self) -> SqlCompletionInfo {
@@ -756,7 +849,66 @@ impl DatabasePlugin for ExternalDatabasePlugin {
     }
 
     fn build_limit_clause(&self) -> String {
-        "LIMIT".to_string()
+        match self.driver.dialect.limit_style {
+            LimitStyle::LimitOffset => "LIMIT".to_string(),
+            LimitStyle::OffsetFetch => String::new(),
+        }
+    }
+
+    fn format_pagination(&self, limit: usize, offset: usize, order_clause: &str) -> String {
+        match self.driver.dialect.limit_style {
+            LimitStyle::LimitOffset => format!(" LIMIT {limit} OFFSET {offset}"),
+            LimitStyle::OffsetFetch => {
+                if order_clause.is_empty() {
+                    format!(
+                        " ORDER BY (SELECT NULL) OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY"
+                    )
+                } else {
+                    format!(" OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY")
+                }
+            }
+        }
+    }
+
+    fn format_boolean_value(&self, v: &str) -> String {
+        if v == "1" || v.eq_ignore_ascii_case("true") {
+            self.driver.dialect.bool_true.clone()
+        } else {
+            self.driver.dialect.bool_false.clone()
+        }
+    }
+
+    fn build_explain_statement(&self, sql: &str) -> String {
+        self.driver
+            .dialect
+            .format_explain_sql(sql)
+            .unwrap_or_default()
+    }
+
+    fn build_explain_sql(&self, sql: &str) -> Option<String> {
+        let trimmed = sql.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let statements = self
+            .split_sql_statements(trimmed)
+            .into_iter()
+            .filter_map(|statement| self.build_external_explain_statement(&statement))
+            .collect::<Vec<_>>();
+        if statements.is_empty() {
+            None
+        } else {
+            Some(statements.join("\n"))
+        }
+    }
+
+    fn split_sql_statements(&self, sql: &str) -> Vec<String> {
+        let trimmed = sql.trim();
+        if trimmed.starts_with(WIRE_PREFIX) {
+            return split_wire_script(trimmed);
+        }
+        split_sql_with_parser(trimmed, self.name())
     }
 
     fn build_where_and_limit_clause(
@@ -819,7 +971,9 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             .map(|column| (column.name.as_str(), column))
             .collect();
         let mut statements = Vec::new();
+        let (index_drops, index_creates) = self.build_index_change_sql(&table, original, new);
 
+        statements.extend(index_drops);
         for column in &new.columns {
             if !original_cols.contains_key(column.name.as_str()) {
                 statements.push(format!(
@@ -841,6 +995,7 @@ impl DatabasePlugin for ExternalDatabasePlugin {
                 statements.extend(self.build_column_change_sql(&table, original_col, column));
             }
         }
+        statements.extend(index_creates);
 
         if statements.is_empty() {
             "-- No changes detected".to_string()
@@ -1207,15 +1362,55 @@ fn is_not_supported(error: &anyhow::Error) -> bool {
         .is_some_and(|error| matches!(error, DbError::NotSupported(_)))
 }
 
-fn quote_identifier_with(quote: &str, identifier: &str) -> String {
-    match quote {
-        "" => identifier.to_string(),
-        "[" => format!("[{}]", identifier.replace(']', "]]")),
-        quote => format!(
-            "{quote}{}{quote}",
-            identifier.replace(quote, &format!("{quote}{quote}"))
-        ),
+fn quote_identifier_with(left: &str, right: &str, identifier: &str) -> String {
+    if left.is_empty() && right.is_empty() {
+        return identifier.to_string();
     }
+    let escaped = if right.is_empty() {
+        identifier.to_string()
+    } else {
+        identifier.replace(right, &format!("{right}{right}"))
+    };
+    format!("{left}{escaped}{right}")
+}
+
+fn wire_explain_sql(sql: &str, fallback_sql: Option<String>) -> String {
+    let mut params = serde_json::json!({ "sql": sql });
+    if let Some(fallback_sql) = fallback_sql {
+        params["fallback_sql"] = serde_json::json!(fallback_sql);
+    }
+    wire_request_sql(wire_method::SQL_EXPLAIN, params)
+}
+
+fn wire_request_sql(method: &str, params: serde_json::Value) -> String {
+    format!(
+        "{WIRE_PREFIX}{}",
+        serde_json::json!({ "method": method, "params": params })
+    )
+}
+
+fn split_wire_script(sql: &str) -> Vec<String> {
+    sql.lines()
+        .map(str::trim)
+        .filter(|statement| !statement.is_empty())
+        .map(|statement| statement.trim_end_matches(';').trim().to_string())
+        .collect()
+}
+
+fn split_sql_with_parser(sql: &str, database_type: DatabaseType) -> Vec<String> {
+    if sql.is_empty() {
+        return Vec::new();
+    }
+    let Ok(parser) =
+        StreamingSqlParser::from_source(SqlSource::Script(sql.to_string()), database_type)
+    else {
+        return vec![sql.to_string()];
+    };
+    parser
+        .filter_map(Result::ok)
+        .map(|sql| sql.trim().to_string())
+        .filter(|sql| !sql.is_empty())
+        .collect()
 }
 
 fn object_view(
@@ -1240,6 +1435,7 @@ mod tests {
     use super::*;
     use crate::connection::StreamingProgress;
     use crate::executor::{ExecOptions, SqlResult, SqlSource};
+    use crate::ipc::connection::WIRE_PREFIX;
     use std::path::PathBuf;
     use tokio::sync::mpsc;
 
@@ -1405,6 +1601,76 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dialect_contract_drives_host_sql_fragments() {
+        let mut driver = driver_manifest("mssql-ish", "\"", false, "mssql.connection");
+        driver.dialect.identifier_quote_left = Some("[".to_string());
+        driver.dialect.identifier_quote_right = Some("]".to_string());
+        driver.dialect.limit_style = LimitStyle::OffsetFetch;
+        driver.dialect.bool_true = "1".to_string();
+        driver.dialect.bool_false = "0".to_string();
+
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        assert_eq!("[has]]quote]", plugin.quote_identifier("has]quote"));
+        assert_eq!(
+            " OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY",
+            plugin.format_pagination(10, 20, " ORDER BY id")
+        );
+        assert_eq!(
+            " ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 500 ROWS ONLY",
+            plugin.format_pagination(500, 0, "")
+        );
+        assert_eq!("", plugin.build_limit_clause());
+        assert_eq!("1", plugin.format_boolean_value("true"));
+        assert_eq!("1", plugin.format_boolean_value("1"));
+        assert_eq!("0", plugin.format_boolean_value("false"));
+        assert_eq!("0", plugin.format_boolean_value("0"));
+    }
+
+    #[test]
+    fn external_explain_sql_uses_wire_method_with_dialect_fallback() {
+        let mut driver = driver_manifest("explainable", "\"", false, "explain.connection");
+        driver.methods = vec![wire_method::SQL_EXPLAIN.to_string()];
+        driver.dialect.explain_template = Some("EXPLAIN QUERY PLAN {sql}".to_string());
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        let sql = plugin
+            .build_explain_sql("select * from metrics")
+            .expect("query should produce explain SQL");
+        let envelope: serde_json::Value =
+            serde_json::from_str(sql.strip_prefix(WIRE_PREFIX).unwrap()).unwrap();
+
+        assert_eq!(Some(wire_method::SQL_EXPLAIN), envelope["method"].as_str());
+        assert_eq!(
+            Some("select * from metrics"),
+            envelope["params"]["sql"].as_str()
+        );
+        assert_eq!(
+            Some("EXPLAIN QUERY PLAN select * from metrics"),
+            envelope["params"]["fallback_sql"].as_str()
+        );
+    }
+
+    #[test]
+    fn external_splitter_preserves_wire_explain_requests() {
+        let mut driver = driver_manifest("explainable", "\"", false, "explain.connection");
+        driver.methods = vec![wire_method::SQL_EXPLAIN.to_string()];
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+        let sql = plugin
+            .build_explain_sql("select 1; select 2;")
+            .expect("queries should produce explain SQL");
+
+        let statements = plugin.split_sql_statements(&sql);
+
+        assert_eq!(2, statements.len());
+        assert!(
+            statements
+                .iter()
+                .all(|statement| statement.starts_with(WIRE_PREFIX))
+        );
+    }
+
     #[tokio::test]
     async fn metadata_uses_driver_request_instead_of_query_tunnel() {
         let plugin = ExternalDatabasePlugin::new();
@@ -1516,5 +1782,28 @@ mod tests {
         let sql = plugin.build_alter_table_sql(&original, &current);
 
         assert!(sql.contains("ALTER TABLE \"events\" ADD COLUMN \"payload\" VARCHAR"));
+    }
+
+    #[test]
+    fn sync_alter_table_builder_includes_index_changes() {
+        let plugin = ExternalDatabasePlugin::new();
+        let mut original = TableDesign::new("main", "events");
+        original.add_column(ColumnDefinition::new("id").data_type("INTEGER"));
+        original.add_column(ColumnDefinition::new("payload").data_type("VARCHAR"));
+        original.add_index(IndexDefinition::new("idx_payload").columns(vec!["payload".into()]));
+
+        let mut current = TableDesign::new("main", "events");
+        current.add_column(ColumnDefinition::new("id").data_type("INTEGER"));
+        current.add_column(ColumnDefinition::new("payload").data_type("VARCHAR"));
+        current.add_index(
+            IndexDefinition::new("idx_id")
+                .columns(vec!["id".into()])
+                .unique(true),
+        );
+
+        let sql = plugin.build_alter_table_sql(&original, &current);
+
+        assert!(sql.contains("DROP INDEX IF EXISTS \"idx_payload\";"));
+        assert!(sql.contains("CREATE UNIQUE INDEX \"idx_id\" ON \"events\" (\"id\");"));
     }
 }

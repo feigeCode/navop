@@ -71,6 +71,18 @@ pub struct IpcDriverDialect {
     #[serde(default = "default_identifier_quote")]
     pub identifier_quote: String,
     #[serde(default)]
+    pub identifier_quote_left: Option<String>,
+    #[serde(default)]
+    pub identifier_quote_right: Option<String>,
+    #[serde(default)]
+    pub limit_style: LimitStyle,
+    #[serde(default = "default_bool_true")]
+    pub bool_true: String,
+    #[serde(default = "default_bool_false")]
+    pub bool_false: String,
+    #[serde(default)]
+    pub explain_template: Option<String>,
+    #[serde(default)]
     pub supports_schema: bool,
     #[serde(default)]
     pub supports_sequences: bool,
@@ -83,6 +95,10 @@ pub struct IpcDriverUi {
     #[serde(default)]
     pub icon: String,
     #[serde(default)]
+    pub icon_color: Option<String>,
+    #[serde(default)]
+    pub locales_dir: Option<String>,
+    #[serde(default)]
     pub default_port: Option<u16>,
     #[serde(default)]
     pub form: Option<DatabaseUiManifest>,
@@ -92,6 +108,12 @@ impl Default for IpcDriverDialect {
     fn default() -> Self {
         Self {
             identifier_quote: default_identifier_quote(),
+            identifier_quote_left: None,
+            identifier_quote_right: None,
+            limit_style: LimitStyle::default(),
+            bool_true: default_bool_true(),
+            bool_false: default_bool_false(),
+            explain_template: None,
             supports_schema: false,
             supports_sequences: false,
             uses_schema_as_database: false,
@@ -99,8 +121,52 @@ impl Default for IpcDriverDialect {
     }
 }
 
+impl IpcDriverDialect {
+    pub fn identifier_quote_pair(&self) -> (&str, &str) {
+        let left = self
+            .identifier_quote_left
+            .as_deref()
+            .unwrap_or(&self.identifier_quote);
+        let right = match self.identifier_quote_right.as_deref() {
+            Some(right) => right,
+            None if left == "[" => "]",
+            None => left,
+        };
+        (left, right)
+    }
+
+    pub fn format_explain_sql(&self, sql: &str) -> Option<String> {
+        let template = self.explain_template.as_deref().unwrap_or("EXPLAIN {sql}");
+        let template = template.trim();
+        if template.is_empty() {
+            return None;
+        }
+        if template.contains("{sql}") {
+            Some(template.replace("{sql}", sql))
+        } else {
+            Some(format!("{template} {sql}"))
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitStyle {
+    #[default]
+    LimitOffset,
+    OffsetFetch,
+}
+
 fn default_identifier_quote() -> String {
     "\"".to_string()
+}
+
+fn default_bool_true() -> String {
+    "TRUE".to_string()
+}
+
+fn default_bool_false() -> String {
+    "FALSE".to_string()
 }
 
 impl IpcDriverManifest {
@@ -127,6 +193,50 @@ impl IpcDriverManifest {
         capabilities.supports_sequences |= self.dialect.supports_sequences;
         capabilities.uses_schema_as_database |= self.dialect.uses_schema_as_database;
         self.capabilities.clone().unwrap_or(capabilities)
+    }
+
+    pub fn icon_path(&self) -> Option<PathBuf> {
+        if self.ui.icon.trim().is_empty() {
+            return None;
+        }
+        Some(self.manifest_dir.join(&self.ui.icon))
+    }
+
+    pub fn icon_color_path(&self) -> Option<PathBuf> {
+        self.ui
+            .icon_color
+            .as_ref()
+            .filter(|path| !path.trim().is_empty())
+            .map(|path| self.manifest_dir.join(path))
+    }
+
+    pub fn locales_dir(&self) -> Option<PathBuf> {
+        self.ui
+            .locales_dir
+            .as_ref()
+            .filter(|path| !path.trim().is_empty())
+            .map(|path| self.manifest_dir.join(path))
+    }
+
+    pub fn load_locale(&self, locale: &str) -> Result<serde_yaml::Value, DbError> {
+        let locales_dir = self.locales_dir().ok_or_else(|| {
+            DbError::connection(format!("driver '{}' has no locales directory", self.id))
+        })?;
+
+        let locale_file = locales_dir.join(format!("{locale}.yml"));
+        if locale_file.exists() {
+            return load_yaml_file(&locale_file);
+        }
+
+        let en_file = locales_dir.join("en.yml");
+        if en_file.exists() {
+            return load_yaml_file(&en_file);
+        }
+
+        Err(DbError::connection(format!(
+            "driver '{}' has no locale file for '{}'",
+            self.id, locale
+        )))
     }
 
     fn validate(&self) -> Result<(), DbError> {
@@ -157,6 +267,14 @@ impl IpcDriverManifest {
         }
         Ok(())
     }
+}
+
+fn load_yaml_file(path: &Path) -> Result<serde_yaml::Value, DbError> {
+    let content = std::fs::read_to_string(path).map_err(|error| {
+        DbError::connection_with_source("failed to read driver locale file", error)
+    })?;
+    serde_yaml::from_str(&content)
+        .map_err(|error| DbError::connection_with_source("invalid driver locale file", error))
 }
 
 fn is_allowed_manifest_method(method_name: &str) -> bool {
