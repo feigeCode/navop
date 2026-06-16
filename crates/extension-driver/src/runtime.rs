@@ -60,6 +60,7 @@ type Inflight = Arc<StdMutex<HashMap<RequestId, ConnId>>>;
 type CursorRoutes = Arc<StdMutex<HashMap<String, ConnId>>>;
 type StreamRoutes = Arc<StdMutex<HashMap<String, ConnId>>>;
 type ImportRoutes = Arc<StdMutex<HashMap<String, ConnId>>>;
+type TxRoutes = Arc<StdMutex<HashMap<String, ConnId>>>;
 
 /// reader 外后台执行的请求(`conn/open` / connless)状态。
 #[derive(Clone)]
@@ -123,6 +124,7 @@ where
     let cursor_routes: CursorRoutes = Arc::new(StdMutex::new(HashMap::new()));
     let stream_routes: StreamRoutes = Arc::new(StdMutex::new(HashMap::new()));
     let import_routes: ImportRoutes = Arc::new(StdMutex::new(HashMap::new()));
+    let tx_routes: TxRoutes = Arc::new(StdMutex::new(HashMap::new()));
     let background = BackgroundRequests::new();
     let (out_tx, out_rx) = mpsc::unbounded_channel::<Outcome>();
     let (open_tx, open_rx) = mpsc::unbounded_channel::<OpenOutcome>();
@@ -133,6 +135,7 @@ where
         cursor_routes.clone(),
         stream_routes.clone(),
         import_routes.clone(),
+        tx_routes.clone(),
         writer.clone(),
     ));
 
@@ -147,6 +150,7 @@ where
         cursor_routes,
         stream_routes,
         import_routes,
+        tx_routes,
         background,
     )
     .await;
@@ -169,6 +173,7 @@ async fn reader_loop<D, R, W>(
     cursor_routes: CursorRoutes,
     stream_routes: StreamRoutes,
     import_routes: ImportRoutes,
+    tx_routes: TxRoutes,
     background: BackgroundRequests,
 ) -> anyhow::Result<()>
 where
@@ -199,6 +204,7 @@ where
                             &cursor_routes,
                             &stream_routes,
                             &import_routes,
+                            &tx_routes,
                             &background,
                             &mut workers,
                             &mut initialized,
@@ -239,6 +245,7 @@ async fn handle_request<D, W>(
     cursor_routes: &CursorRoutes,
     stream_routes: &StreamRoutes,
     import_routes: &ImportRoutes,
+    tx_routes: &TxRoutes,
     background: &BackgroundRequests,
     workers: &mut HashMap<ConnId, Worker>,
     initialized: &mut bool,
@@ -297,7 +304,13 @@ where
         method::CONN_CLOSE => {
             match conn_id_of(&req.params).and_then(|cid| workers.remove(&cid).map(|w| (cid, w))) {
                 Some((cid, worker)) => {
-                    remove_routes_for_conn(cursor_routes, stream_routes, import_routes, cid);
+                    remove_routes_for_conn(
+                        cursor_routes,
+                        stream_routes,
+                        import_routes,
+                        tx_routes,
+                        cid,
+                    );
                     // 走 worker 让 conn.close() 在拥有连接的线程上执行;响应由 pump 回写。
                     inflight
                         .lock()
@@ -353,6 +366,15 @@ where
                             .lock()
                             .expect("import routes poisoned")
                             .get(import_id)
+                            .copied()
+                    })
+                })
+                .or_else(|| {
+                    tx_id_of(&req.params).and_then(|tx_id| {
+                        tx_routes
+                            .lock()
+                            .expect("tx routes poisoned")
+                            .get(tx_id)
                             .copied()
                     })
                 })
@@ -420,6 +442,16 @@ where
                     Err(ProtocolError::new(
                         error_codes::UNKNOWN_IMPORT_ID,
                         "unknown import_id",
+                    )),
+                )
+                .await;
+            } else if is_tx_routed_method(&method_name) {
+                write_result(
+                    writer,
+                    id,
+                    Err(ProtocolError::new(
+                        error_codes::UNKNOWN_TX_ID,
+                        "unknown tx_id",
                     )),
                 )
                 .await;
@@ -667,6 +699,7 @@ async fn pump_loop<W>(
     cursor_routes: CursorRoutes,
     stream_routes: StreamRoutes,
     import_routes: ImportRoutes,
+    tx_routes: TxRoutes,
     writer: Arc<Mutex<W>>,
 ) where
     W: AsyncWriteExt + Unpin + Send,
@@ -679,6 +712,7 @@ async fn pump_loop<W>(
         update_cursor_routes(&cursor_routes, conn_id, &outcome);
         update_stream_routes(&stream_routes, conn_id, &outcome);
         update_import_routes(&import_routes, conn_id, &outcome);
+        update_tx_routes(&tx_routes, conn_id, &outcome);
         let resp = match outcome.result {
             Ok(value) => Response::ok(outcome.id, value),
             Err(error) => Response::err(outcome.id, error),
@@ -723,6 +757,10 @@ fn import_id_of(params: &Value) -> Option<&str> {
     params.get("import_id").and_then(Value::as_str)
 }
 
+fn tx_id_of(params: &Value) -> Option<&str> {
+    params.get("tx_id").and_then(Value::as_str)
+}
+
 fn is_cursor_method(method_name: &str) -> bool {
     matches!(
         method_name,
@@ -741,10 +779,18 @@ fn is_import_method(method_name: &str) -> bool {
     )
 }
 
+fn is_tx_routed_method(method_name: &str) -> bool {
+    matches!(
+        method_name,
+        method::TX_COMMIT | method::TX_ROLLBACK | method::TX_SAVEPOINT | method::TX_RELEASE
+    )
+}
+
 fn remove_routes_for_conn(
     cursor_routes: &CursorRoutes,
     stream_routes: &StreamRoutes,
     import_routes: &ImportRoutes,
+    tx_routes: &TxRoutes,
     conn_id: ConnId,
 ) {
     cursor_routes
@@ -758,6 +804,10 @@ fn remove_routes_for_conn(
     import_routes
         .lock()
         .expect("import routes poisoned")
+        .retain(|_, route_conn_id| *route_conn_id != conn_id);
+    tx_routes
+        .lock()
+        .expect("tx routes poisoned")
         .retain(|_, route_conn_id| *route_conn_id != conn_id);
 }
 
@@ -858,6 +908,49 @@ fn update_import_routes(import_routes: &ImportRoutes, conn_id: Option<ConnId>, o
             }
         }
         _ => {}
+    }
+}
+
+fn update_tx_routes(tx_routes: &TxRoutes, conn_id: Option<ConnId>, outcome: &Outcome) {
+    let Some(method_name) = outcome.method.as_deref() else {
+        return;
+    };
+    match method_name {
+        method::TX_BEGIN => {
+            if let (Some(conn_id), Ok(value)) = (conn_id, &outcome.result)
+                && let Some(tx_id) = value.get("tx_id").and_then(Value::as_str)
+            {
+                tx_routes
+                    .lock()
+                    .expect("tx routes poisoned")
+                    .insert(tx_id.to_string(), conn_id);
+            }
+        }
+        method::TX_COMMIT | method::TX_ROLLBACK if tx_is_closed_by_outcome(outcome) => {
+            remove_tx_route(tx_routes, outcome);
+        }
+        _ => {}
+    }
+}
+
+fn tx_is_closed_by_outcome(outcome: &Outcome) -> bool {
+    match &outcome.result {
+        Ok(_) => true,
+        Err(error) => matches!(
+            error.code,
+            error_codes::UNKNOWN_TX_ID | error_codes::RESOURCE_CLOSED
+        ),
+    }
+}
+
+fn remove_tx_route(tx_routes: &TxRoutes, outcome: &Outcome) {
+    if let Some(tx_id) = outcome
+        .params
+        .as_ref()
+        .and_then(|params| params.get("tx_id"))
+        .and_then(Value::as_str)
+    {
+        tx_routes.lock().expect("tx routes poisoned").remove(tx_id);
     }
 }
 
@@ -967,6 +1060,12 @@ mod tests {
                     error_codes::RESOURCE_CLOSED,
                     "import already closed",
                 )),
+                method::TX_BEGIN => Ok(serde_json::json!({ "tx_id": "tx-1" })),
+                method::TX_COMMIT if params["fail"].as_bool().unwrap_or(false) => Err(
+                    ProtocolError::new(error_codes::TX_ROLLBACK_REQUIRED, "commit failed"),
+                ),
+                method::TX_COMMIT => Ok(serde_json::json!({ "committed": params["tx_id"] })),
+                method::TX_ROLLBACK => Ok(serde_json::json!({ "rolled_back": params["tx_id"] })),
                 // 可中断的"慢"调用:循环检查 cancel flag(模拟 DuckDB interrupt)。
                 "slow" => {
                     for _ in 0..200 {
@@ -1233,6 +1332,95 @@ mod tests {
         let chunked = resp_of(recv(&mut r).await);
 
         assert_eq!(chunked.result().unwrap()["inserted"], 1);
+    }
+
+    #[tokio::test]
+    async fn tx_commit_routes_by_tx_id_without_conn_id() {
+        let (mut w, mut r) = start();
+        init_and_open(&mut w, &mut r).await;
+        send(
+            &mut w,
+            req(3, method::TX_BEGIN, serde_json::json!({ "conn_id": 1 })),
+        )
+        .await;
+        let begun = resp_of(recv(&mut r).await);
+        assert_eq!(begun.result().unwrap()["tx_id"], "tx-1");
+
+        send(
+            &mut w,
+            req(4, method::TX_COMMIT, serde_json::json!({ "tx_id": "tx-1" })),
+        )
+        .await;
+        let committed = resp_of(recv(&mut r).await);
+
+        assert_eq!(committed.result().unwrap()["committed"], "tx-1");
+    }
+
+    #[tokio::test]
+    async fn tx_rollback_routes_by_tx_id_without_conn_id() {
+        let (mut w, mut r) = start();
+        init_and_open(&mut w, &mut r).await;
+        send(
+            &mut w,
+            req(3, method::TX_BEGIN, serde_json::json!({ "conn_id": 1 })),
+        )
+        .await;
+        let begun = resp_of(recv(&mut r).await);
+        assert_eq!(begun.result().unwrap()["tx_id"], "tx-1");
+
+        send(
+            &mut w,
+            req(
+                4,
+                method::TX_ROLLBACK,
+                serde_json::json!({ "tx_id": "tx-1" }),
+            ),
+        )
+        .await;
+        let rolled_back = resp_of(recv(&mut r).await);
+
+        assert_eq!(rolled_back.result().unwrap()["rolled_back"], "tx-1");
+    }
+
+    #[tokio::test]
+    async fn failed_tx_commit_keeps_tx_route_for_rollback() {
+        let (mut w, mut r) = start();
+        init_and_open(&mut w, &mut r).await;
+        send(
+            &mut w,
+            req(3, method::TX_BEGIN, serde_json::json!({ "conn_id": 1 })),
+        )
+        .await;
+        let begun = resp_of(recv(&mut r).await);
+        assert_eq!(begun.result().unwrap()["tx_id"], "tx-1");
+
+        send(
+            &mut w,
+            req(
+                4,
+                method::TX_COMMIT,
+                serde_json::json!({ "tx_id": "tx-1", "fail": true }),
+            ),
+        )
+        .await;
+        let failed_commit = resp_of(recv(&mut r).await);
+        assert_eq!(
+            failed_commit.error().unwrap().code,
+            error_codes::TX_ROLLBACK_REQUIRED
+        );
+
+        send(
+            &mut w,
+            req(
+                5,
+                method::TX_ROLLBACK,
+                serde_json::json!({ "tx_id": "tx-1" }),
+            ),
+        )
+        .await;
+        let rolled_back = resp_of(recv(&mut r).await);
+
+        assert_eq!(rolled_back.result().unwrap()["rolled_back"], "tx-1");
     }
 
     #[tokio::test]
