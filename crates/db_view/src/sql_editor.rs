@@ -25,8 +25,9 @@ use sum_tree::Bias;
 /// Simple schema hints to improve autocomplete suggestions.
 #[derive(Clone, Default)]
 pub struct SqlSchema {
-    pub tables: Vec<(String, String)>,  // (name, doc)
-    pub columns: Vec<(String, String)>, // global (name, doc)
+    pub tables: Vec<(String, String)>,    // (name, doc)
+    pub columns: Vec<(String, String)>,   // global (name, doc)
+    pub functions: Vec<(String, String)>, // (signature, doc)
     /// 表→列映射，每列包含 (name, data_type, doc)
     pub columns_by_table: std::collections::HashMap<String, Vec<(String, String, String)>>,
 }
@@ -47,6 +48,16 @@ impl SqlSchema {
         columns: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     ) -> Self {
         self.columns = columns
+            .into_iter()
+            .map(|(n, d)| (n.into(), d.into()))
+            .collect();
+        self
+    }
+    pub fn with_functions(
+        mut self,
+        functions: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.functions = functions
             .into_iter()
             .map(|(n, d)| (n.into(), d.into()))
             .collect();
@@ -882,6 +893,34 @@ impl CompletionProvider for DefaultSqlCompletionProvider {
 
             // Functions - priority based on context (Requirement 5.3)
             if show_functions {
+                for (func, doc) in &schema.functions {
+                    let func_name = func.split('(').next().unwrap_or("");
+                    if matches_filter(func_name) {
+                        let matches_prefix = !current_word.is_empty()
+                            && func_name.to_uppercase().starts_with(&current_word);
+                        let score = completion_priority::calculate_score(
+                            &context,
+                            Some(CompletionItemKind::FUNCTION),
+                            matches_prefix,
+                        );
+                        items.push(CompletionItem {
+                            label: func.to_string(),
+                            kind: Some(CompletionItemKind::FUNCTION),
+                            text_edit: Some(CompletionTextEdit::InsertAndReplace(
+                                InsertReplaceEdit {
+                                    new_text: func.to_string(),
+                                    insert: replace_range,
+                                    replace: replace_range,
+                                },
+                            )),
+                            filter_text: Some(matched_prefix(func_name)),
+                            documentation: Some(lsp_types::Documentation::String(doc.to_string())),
+                            sort_text: Some(completion_priority::score_to_sort_text(score, func)),
+                            ..Default::default()
+                        });
+                    }
+                }
+
                 // Standard SQL functions
                 for (func, doc) in SQL_FUNCTIONS {
                     let func_name = func.split('(').next().unwrap_or("");

@@ -2224,6 +2224,18 @@ impl GlobalDbState {
         })
     }
 
+    /// List functions
+    pub async fn list_functions(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        database: String,
+    ) -> anyhow::Result<Vec<crate::types::FunctionInfo>> {
+        with_plugin_session_db!(self, cx, connection_id, database.clone(), |plugin, conn| {
+            plugin.list_functions(&*conn, &database).await
+        })
+    }
+
     /// List procedures view
     pub async fn list_procedures_view(
         &self,

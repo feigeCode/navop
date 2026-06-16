@@ -67,7 +67,7 @@ mod tests {
         "[a-z][a-z0-9]{0,2}".prop_filter("not a keyword", |s| {
             !matches!(
                 s.to_uppercase().as_str(),
-                "AS" | "ON" | "OR" | "BY" | "IN" | "IS"
+                "AND" | "AS" | "ON" | "OR" | "BY" | "IN" | "IS"
             )
         })
     }
@@ -172,6 +172,7 @@ mod tests {
             let schema = SqlSchema {
                 tables: vec![(table1.clone(), "".to_string()), (table2.clone(), "".to_string())],
                 columns: vec![],
+                functions: vec![],
                 columns_by_table,
             };
 
@@ -235,6 +236,7 @@ mod tests {
             let schema = SqlSchema {
                 tables: vec![(table.clone(), "".to_string())],
                 columns: vec![],
+                functions: vec![],
                 columns_by_table,
             };
 
@@ -284,6 +286,7 @@ mod tests {
             let schema = SqlSchema {
                 tables: vec![(table1.clone(), "".to_string()), (table2.clone(), "".to_string())],
                 columns: vec![],
+                functions: vec![],
                 columns_by_table,
             };
 
@@ -338,6 +341,7 @@ mod tests {
             let schema = SqlSchema {
                 tables: vec![(table.clone(), "".to_string())],
                 columns: vec![],
+                functions: vec![],
                 columns_by_table,
             };
 
@@ -381,6 +385,7 @@ mod tests {
             let schema = SqlSchema {
                 tables: vec![(table.clone(), "".to_string())],
                 columns: vec![],
+                functions: vec![],
                 columns_by_table,
             };
 
@@ -421,6 +426,7 @@ mod tests {
             let schema = SqlSchema {
                 tables: vec![(table.clone(), "".to_string())],
                 columns: vec![],
+                functions: vec![],
                 columns_by_table,
             };
 
@@ -882,6 +888,21 @@ mod tests {
 
         // Verify: with_db_completion_info accepts SqlCompletionInfo
         let _provider_with_info = provider.with_db_completion_info(info);
+    }
+
+    #[test]
+    fn test_api_sql_schema_with_dynamic_functions() {
+        let schema = SqlSchema::default().with_functions([
+            ("lower(value)", "Converts a string to lower case"),
+            (
+                "regexp_matches(string, pattern)",
+                "Returns whether a regex matches",
+            ),
+        ]);
+
+        assert_eq!(schema.functions.len(), 2);
+        assert_eq!(schema.functions[0].0, "lower(value)");
+        assert_eq!(schema.functions[1].1, "Returns whether a regex matches");
     }
 
     /// Test: CompletionProvider trait implementation
@@ -1397,6 +1418,7 @@ mod tests {
                 ("orders".to_string(), "订单表".to_string()),
             ],
             columns: vec![],
+            functions: vec![],
             columns_by_table,
         };
 
@@ -1541,6 +1563,7 @@ mod tests {
         let schema = SqlSchema {
             tables: vec![("Users".to_string(), "".to_string())],
             columns: vec![],
+            functions: vec![],
             columns_by_table,
         };
 

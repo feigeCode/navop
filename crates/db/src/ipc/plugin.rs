@@ -1348,6 +1348,8 @@ fn function_info_from_wire(function: wire_schema::FunctionInfo) -> FunctionInfo 
                 let type_str = arg.type_str;
                 if name.is_empty() {
                     type_str
+                } else if type_str.is_empty() {
+                    name
                 } else {
                     format!("{name} {type_str}")
                 }

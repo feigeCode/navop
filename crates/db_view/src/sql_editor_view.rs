@@ -633,6 +633,25 @@ impl SqlEditorTab {
             }
         }
 
+        if let Ok(functions) = global_state
+            .list_functions(cx, connection_id.clone(), db.clone())
+            .await
+        {
+            let function_items = functions.into_iter().map(|function| {
+                let signature = if function.parameters.is_empty() {
+                    format!("{}()", function.name)
+                } else {
+                    format!("{}({})", function.name, function.parameters.join(", "))
+                };
+                let description = function
+                    .comment
+                    .or(function.definition)
+                    .unwrap_or_else(|| "Function".to_string());
+                (signature, description)
+            });
+            schema = schema.with_functions(function_items);
+        }
+
         // Update editor with schema and database-specific completion info
         _ = editor.update(cx, |e, cx| {
             e.set_db_completion_info(db_completion_info, schema, cx);
