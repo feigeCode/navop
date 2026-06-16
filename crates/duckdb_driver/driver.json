@@ -55,7 +55,8 @@
     "ddl/build_drop"
   ],
   "dialect": {
-    "identifier_quote": "\""
+    "identifier_quote_left": "\"",
+    "identifier_quote_right": "\""
   },
   "capabilities": {
     "supports_schema": true,

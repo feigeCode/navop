@@ -1586,12 +1586,7 @@ mod tests {
         }
     }
 
-    fn driver_manifest(
-        id: &str,
-        quote: &str,
-        supports_schema: bool,
-        form_title: &str,
-    ) -> IpcDriverManifest {
+    fn driver_manifest(id: &str, supports_schema: bool, form_title: &str) -> IpcDriverManifest {
         let mut driver: IpcDriverManifest = serde_json::from_str(&format!(
             r#"{{
                 "id":"{id}",
@@ -1614,15 +1609,14 @@ mod tests {
             }}"#
         ))
         .unwrap();
-        driver.dialect.identifier_quote = quote.to_string();
         driver.manifest_dir = PathBuf::from(format!("/drivers/{id}"));
         driver
     }
 
     #[test]
     fn fixed_driver_plugin_uses_that_driver_capabilities_ui_and_quote() {
-        let alpha = driver_manifest("alpha", "`", true, "alpha.connection");
-        let beta = driver_manifest("beta", "\"", false, "beta.connection");
+        let alpha = driver_manifest("alpha", true, "alpha.connection");
+        let beta = driver_manifest("beta", false, "beta.connection");
 
         let plugin = ExternalDatabasePlugin::for_driver(beta.clone());
 
@@ -1668,8 +1662,8 @@ mod tests {
 
     #[test]
     fn dialect_contract_drives_host_sql_fragments() {
-        let mut driver = driver_manifest("mssql-ish", "\"", false, "mssql.connection");
-        driver.dialect.identifier_quote_left = Some("[".to_string());
+        let mut driver = driver_manifest("mssql-ish", false, "mssql.connection");
+        driver.dialect.identifier_quote_left = "[".to_string();
         driver.dialect.identifier_quote_right = Some("]".to_string());
         driver.dialect.limit_style = LimitStyle::OffsetFetch;
         driver.dialect.bool_true = "1".to_string();
@@ -1695,7 +1689,7 @@ mod tests {
 
     #[test]
     fn external_explain_sql_uses_wire_method_with_dialect_fallback() {
-        let mut driver = driver_manifest("explainable", "\"", false, "explain.connection");
+        let mut driver = driver_manifest("explainable", false, "explain.connection");
         driver.methods = vec![wire_method::SQL_EXPLAIN.to_string()];
         driver.dialect.explain_template = Some("EXPLAIN QUERY PLAN {sql}".to_string());
         let plugin = ExternalDatabasePlugin::for_driver(driver);
@@ -1719,7 +1713,7 @@ mod tests {
 
     #[test]
     fn external_splitter_preserves_wire_explain_requests() {
-        let mut driver = driver_manifest("explainable", "\"", false, "explain.connection");
+        let mut driver = driver_manifest("explainable", false, "explain.connection");
         driver.methods = vec![wire_method::SQL_EXPLAIN.to_string()];
         let plugin = ExternalDatabasePlugin::for_driver(driver);
         let sql = plugin
@@ -1844,7 +1838,7 @@ mod tests {
 
     #[tokio::test]
     async fn async_create_table_uses_compatible_database_fallback() {
-        let mut driver = driver_manifest("postgres-compatible", "\"", false, "postgres.connection");
+        let mut driver = driver_manifest("postgres-compatible", false, "postgres.connection");
         driver.dialect.compatible_database_type = Some(DatabaseType::PostgreSQL);
         let plugin = ExternalDatabasePlugin::for_driver(driver);
         let mut connection = DriverRequestOnlyConnection::new();
@@ -1869,7 +1863,7 @@ mod tests {
 
     #[tokio::test]
     async fn async_alter_table_uses_compatible_database_fallback() {
-        let mut driver = driver_manifest("postgres-compatible", "\"", false, "postgres.connection");
+        let mut driver = driver_manifest("postgres-compatible", false, "postgres.connection");
         driver.dialect.compatible_database_type = Some(DatabaseType::PostgreSQL);
         let plugin = ExternalDatabasePlugin::for_driver(driver);
         let mut connection = DriverRequestOnlyConnection::without_alter_table_builder();

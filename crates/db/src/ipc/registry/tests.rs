@@ -252,6 +252,22 @@ fn parses_dialect_sql_generation_contract() {
 }
 
 #[test]
+fn parses_left_identifier_quote_with_bracket_default_right_quote() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{
+            "id":"demo",
+            "name":"Demo",
+            "entry":{"command":"python3"},
+            "transport":{"name":"demo.sock"},
+            "dialect":{"identifier_quote_left":"["}
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(("[", "]"), manifest.dialect.identifier_quote_pair());
+}
+
+#[test]
 fn parses_compatible_database_type() {
     let manifest: IpcDriverManifest = serde_json::from_str(
         r#"{

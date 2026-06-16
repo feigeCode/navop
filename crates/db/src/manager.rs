@@ -2895,7 +2895,7 @@ mod tests {
             }}"#
         ))
         .unwrap();
-        driver.dialect.identifier_quote = quote.to_string();
+        driver.dialect.identifier_quote_left = quote.to_string();
         driver.manifest_dir = PathBuf::from(format!("/drivers/{id}"));
         driver
     }

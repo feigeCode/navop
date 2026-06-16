@@ -68,10 +68,8 @@ impl IpcDriverTransport {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IpcDriverDialect {
-    #[serde(default = "default_identifier_quote")]
-    pub identifier_quote: String,
-    #[serde(default)]
-    pub identifier_quote_left: Option<String>,
+    #[serde(default = "default_identifier_quote_left")]
+    pub identifier_quote_left: String,
     #[serde(default)]
     pub identifier_quote_right: Option<String>,
     #[serde(default)]
@@ -109,8 +107,7 @@ pub struct IpcDriverUi {
 impl Default for IpcDriverDialect {
     fn default() -> Self {
         Self {
-            identifier_quote: default_identifier_quote(),
-            identifier_quote_left: None,
+            identifier_quote_left: default_identifier_quote_left(),
             identifier_quote_right: None,
             limit_style: LimitStyle::default(),
             bool_true: default_bool_true(),
@@ -126,10 +123,7 @@ impl Default for IpcDriverDialect {
 
 impl IpcDriverDialect {
     pub fn identifier_quote_pair(&self) -> (&str, &str) {
-        let left = self
-            .identifier_quote_left
-            .as_deref()
-            .unwrap_or(&self.identifier_quote);
+        let left = self.identifier_quote_left.as_str();
         let right = match self.identifier_quote_right.as_deref() {
             Some(right) => right,
             None if left == "[" => "]",
@@ -160,7 +154,7 @@ pub enum LimitStyle {
     OffsetFetch,
 }
 
-fn default_identifier_quote() -> String {
+fn default_identifier_quote_left() -> String {
     "\"".to_string()
 }
 
