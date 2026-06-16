@@ -1,6 +1,7 @@
 use crate::connection::DbError;
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use extension_protocol::method;
+use one_core::storage::DatabaseType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -82,6 +83,8 @@ pub struct IpcDriverDialect {
     #[serde(default)]
     pub explain_template: Option<String>,
     #[serde(default)]
+    pub compatible_database_type: Option<DatabaseType>,
+    #[serde(default)]
     pub supports_schema: bool,
     #[serde(default)]
     pub supports_sequences: bool,
@@ -113,6 +116,7 @@ impl Default for IpcDriverDialect {
             bool_true: default_bool_true(),
             bool_false: default_bool_false(),
             explain_template: None,
+            compatible_database_type: None,
             supports_schema: false,
             supports_sequences: false,
             uses_schema_as_database: false,

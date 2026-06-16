@@ -1,3 +1,4 @@
+use crate::clickhouse::ClickHousePlugin;
 use crate::connection::{DbConnection, DbError};
 use crate::executor::SqlSource;
 use crate::import_export::{
@@ -8,8 +9,13 @@ use crate::ipc::client::JsonRpcClient;
 use crate::ipc::connection::{ExternalDbConnection, WIRE_PREFIX};
 use crate::ipc::protocol::driver_config_value;
 use crate::ipc::registry::{IpcDriverManifest, IpcDriverRegistry, LimitStyle};
+use crate::mssql::MsSqlPlugin;
+use crate::mysql::MySqlPlugin;
+use crate::oracle::OraclePlugin;
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
+use crate::postgresql::PostgresPlugin;
+use crate::sqlite::SqlitePlugin;
 use crate::streaming_parser::StreamingSqlParser;
 use crate::types::*;
 use anyhow::Result;
@@ -245,6 +251,10 @@ impl ExternalDatabasePlugin {
             Err(error) => Err(error),
         }
     }
+
+    fn compatible_plugin(&self) -> Option<Box<dyn DatabasePlugin>> {
+        compatible_plugin_for(self.driver.dialect.compatible_database_type.clone()?)
+    }
 }
 
 fn driver_id_for_config(config: &DbConnectionConfig) -> Result<&str, DbError> {
@@ -279,6 +289,19 @@ fn placeholder_driver_manifest(driver_id: &str) -> IpcDriverManifest {
         methods: Vec::new(),
         ui: Default::default(),
         manifest_dir: Default::default(),
+    }
+}
+
+fn compatible_plugin_for(database_type: DatabaseType) -> Option<Box<dyn DatabasePlugin>> {
+    match database_type {
+        DatabaseType::MySQL => Some(Box::new(MySqlPlugin::new())),
+        DatabaseType::PostgreSQL => Some(Box::new(PostgresPlugin::new())),
+        DatabaseType::SQLite => Some(Box::new(SqlitePlugin::new())),
+        DatabaseType::DuckDB => None,
+        DatabaseType::MSSQL => Some(Box::new(MsSqlPlugin::new())),
+        DatabaseType::Oracle => Some(Box::new(OraclePlugin::new())),
+        DatabaseType::ClickHouse => Some(Box::new(ClickHousePlugin::new())),
+        DatabaseType::External { .. } => None,
     }
 }
 
@@ -1019,7 +1042,10 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             .await
         {
             Ok(result) => Ok(join_ddl_statements(result.statements, Some(result.sql))),
-            Err(error) if is_not_supported(&error) => Ok(self.build_create_table_sql(design)),
+            Err(error) if is_not_supported(&error) => Ok(self
+                .compatible_plugin()
+                .map(|plugin| plugin.build_create_table_sql(design))
+                .unwrap_or_else(|| self.build_create_table_sql(design))),
             Err(error) => Err(error),
         }
     }
@@ -1057,9 +1083,14 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             .await
         {
             Ok(result) => Ok(join_ddl_statements(result.statements, None)),
-            Err(error) if is_not_supported(&error) => {
-                Ok(self.build_alter_table_sql_with_renames(original, new, column_renames))
-            }
+            Err(error) if is_not_supported(&error) => Ok(self
+                .compatible_plugin()
+                .map(|plugin| {
+                    plugin.build_alter_table_sql_with_renames(original, new, column_renames)
+                })
+                .unwrap_or_else(|| {
+                    self.build_alter_table_sql_with_renames(original, new, column_renames)
+                })),
             Err(error) => Err(error),
         }
     }
@@ -1436,6 +1467,7 @@ mod tests {
 
     struct DriverRequestOnlyConnection {
         config: DbConnectionConfig,
+        supports_alter_table_builder: bool,
     }
 
     impl DriverRequestOnlyConnection {
@@ -1455,6 +1487,14 @@ mod tests {
                     workspace_id: None,
                     extra_params: Default::default(),
                 },
+                supports_alter_table_builder: true,
+            }
+        }
+
+        fn without_alter_table_builder() -> Self {
+            Self {
+                supports_alter_table_builder: false,
+                ..Self::new()
             }
         }
     }
@@ -1516,11 +1556,13 @@ mod tests {
                     "comment": "",
                     "extra": null
                 }])),
-                wire_method::DDL_BUILD_ALTER_TABLE => Ok(serde_json::json!({
-                    "statements": ["DRIVER RENAME SQL"],
-                    "rollback_statements": [],
-                    "warnings": []
-                })),
+                wire_method::DDL_BUILD_ALTER_TABLE if self.supports_alter_table_builder => {
+                    Ok(serde_json::json!({
+                        "statements": ["DRIVER RENAME SQL"],
+                        "rollback_statements": [],
+                        "warnings": []
+                    }))
+                }
                 other => Err(DbError::NotSupported(other.to_string())),
             }
         }
@@ -1798,6 +1840,52 @@ mod tests {
             .unwrap();
 
         assert_eq!("DRIVER RENAME SQL;", sql);
+    }
+
+    #[tokio::test]
+    async fn async_create_table_uses_compatible_database_fallback() {
+        let mut driver = driver_manifest("postgres-compatible", "\"", false, "postgres.connection");
+        driver.dialect.compatible_database_type = Some(DatabaseType::PostgreSQL);
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+        let mut connection = DriverRequestOnlyConnection::new();
+        connection.config.database_type = DatabaseType::external("postgres-compatible");
+        let mut design = TableDesign::new("main", "events");
+        design.add_column(
+            ColumnDefinition::new("id")
+                .data_type("INTEGER")
+                .nullable(false),
+        );
+
+        let sql = plugin
+            .build_create_table_sql_async(&connection, &design)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            "CREATE TABLE \"events\" (\n  \"id\" INTEGER NOT NULL\n);",
+            sql
+        );
+    }
+
+    #[tokio::test]
+    async fn async_alter_table_uses_compatible_database_fallback() {
+        let mut driver = driver_manifest("postgres-compatible", "\"", false, "postgres.connection");
+        driver.dialect.compatible_database_type = Some(DatabaseType::PostgreSQL);
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+        let mut connection = DriverRequestOnlyConnection::without_alter_table_builder();
+        connection.config.database_type = DatabaseType::external("postgres-compatible");
+        let mut original = TableDesign::new("main", "events");
+        original.add_column(ColumnDefinition::new("id").data_type("INTEGER"));
+        let mut current = TableDesign::new("main", "events");
+        current.add_column(ColumnDefinition::new("id").data_type("INTEGER"));
+        current.add_column(ColumnDefinition::new("payload").data_type("TEXT"));
+
+        let sql = plugin
+            .build_alter_table_sql_with_renames_async(&connection, &original, &current, &[])
+            .await
+            .unwrap();
+
+        assert_eq!("ALTER TABLE \"events\" ADD COLUMN \"payload\" TEXT;", sql);
     }
 
     #[test]

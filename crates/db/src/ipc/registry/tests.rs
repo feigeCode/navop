@@ -252,6 +252,25 @@ fn parses_dialect_sql_generation_contract() {
 }
 
 #[test]
+fn parses_compatible_database_type() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{
+            "id":"postgres-compatible",
+            "name":"Postgres Compatible",
+            "entry":{"command":"./driver"},
+            "transport":{"name":"postgres-compatible.sock"},
+            "dialect":{"compatible_database_type":"PostgreSQL"}
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        Some(DatabaseType::PostgreSQL),
+        manifest.dialect.compatible_database_type
+    );
+}
+
+#[test]
 fn registry_resolves_external_driver_display_metadata() {
     let mut manifest: IpcDriverManifest = serde_json::from_str(
         r#"{
