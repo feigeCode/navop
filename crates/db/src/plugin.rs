@@ -27,20 +27,6 @@ use std::collections::HashMap;
 use std::io;
 use tracing::log::error;
 
-pub mod core;
-pub mod import_export_ops;
-pub mod metadata;
-pub mod sql_builder;
-pub mod table_data;
-pub mod tree;
-
-pub use core::DatabasePluginCore;
-pub use import_export_ops::DatabaseImportExportOps;
-pub use metadata::DatabaseMetadataOps;
-pub use sql_builder::DatabaseSqlBuilder;
-pub use table_data::DatabaseTableDataOps;
-pub use tree::DatabaseTreeOps;
-
 /// Standard SQL functions common to most databases
 pub const STANDARD_SQL_FUNCTIONS: &[(&str, &str)] = &[
     // String functions
@@ -2910,22 +2896,13 @@ mod tests {
     #[test]
     fn mysql_plugin_exposes_split_plugin_traits() {
         let plugin = MySqlPlugin::new();
-        let core: &dyn DatabasePluginCore = &plugin;
-        let metadata: &dyn DatabaseMetadataOps = &plugin;
-        let sql_builder: &dyn DatabaseSqlBuilder = &plugin;
-        let table_data: &dyn DatabaseTableDataOps = &plugin;
-        let import_export: &dyn DatabaseImportExportOps = &plugin;
+        assert_eq!(DatabaseType::MySQL, plugin.name());
+        assert_eq!("`users`", plugin.quote_identifier("users"));
+        assert!(plugin.capabilities().supports_functions);
 
-        assert_eq!(DatabaseType::MySQL, core.name());
-        assert_eq!("`users`", core.quote_identifier("users"));
-        assert!(core.capabilities().supports_functions);
-
-        let _ = metadata;
-        let _ = table_data;
-        let _ = import_export;
         assert_eq!(
             " LIMIT 10 OFFSET 20",
-            sql_builder.format_pagination(10, 20, "")
+            plugin.format_pagination(10, 20, "")
         );
     }
 

@@ -1004,28 +1004,6 @@ impl DatabasePlugin for MySqlPlugin {
         }.with_standard_sql()
     }
 
-    fn capabilities(&self) -> DatabaseCapabilities {
-        DatabaseUiCapabilities {
-            supports_functions: true,
-            supports_procedures: true,
-            supports_triggers: true,
-            supports_table_engine: true,
-            supports_table_charset: true,
-            supports_table_collation: true,
-            supports_auto_increment: true,
-            supports_unsigned: true,
-            supports_enum_values: true,
-            show_charset_in_column_detail: true,
-            show_collation_in_column_detail: true,
-            table_engines: self.engines(),
-            ..DatabaseUiCapabilities::default()
-        }
-    }
-
-    fn ui_manifest(&self) -> DatabaseUiManifest {
-        MYSQL_UI_MANIFEST.clone()
-    }
-
     async fn create_connection(
         &self,
         config: DbConnectionConfig,
@@ -1051,8 +1029,6 @@ impl DatabasePlugin for MySqlPlugin {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
     }
-
-    // === Database/Schema Level Operations ===
 
     async fn list_databases_view(&self, connection: &dyn DbConnection) -> Result<ObjectView> {
         use gpui::px;
@@ -1098,13 +1074,13 @@ impl DatabasePlugin for MySqlPlugin {
     ) -> Result<Vec<DatabaseInfo>> {
         let result = connection
             .query(
-                "SELECT 
+                "SELECT
                 s.SCHEMA_NAME as name,
                 s.DEFAULT_CHARACTER_SET_NAME as charset,
                 s.DEFAULT_COLLATION_NAME as collation,
                 COUNT(t.TABLE_NAME) as table_count
             FROM INFORMATION_SCHEMA.SCHEMATA s
-            LEFT JOIN INFORMATION_SCHEMA.TABLES t 
+            LEFT JOIN INFORMATION_SCHEMA.TABLES t
                 ON s.SCHEMA_NAME = t.TABLE_SCHEMA AND t.TABLE_TYPE = 'BASE TABLE'
             GROUP BY s.SCHEMA_NAME, s.DEFAULT_CHARACTER_SET_NAME, s.DEFAULT_COLLATION_NAME
             ORDER BY s.SCHEMA_NAME",
@@ -1141,11 +1117,11 @@ impl DatabasePlugin for MySqlPlugin {
         }
     }
 
+    // === Database/Schema Level Operations ===
+
     fn sql_dialect(&self) -> Box<dyn sqlparser::dialect::Dialect> {
         Box::new(sqlparser::dialect::MySqlDialect {})
     }
-
-    // === Table Operations ===
 
     async fn list_tables(
         &self,
@@ -1250,6 +1226,8 @@ impl DatabasePlugin for MySqlPlugin {
             rows,
         })
     }
+
+    // === Table Operations ===
 
     async fn list_columns(
         &self,
@@ -1455,7 +1433,25 @@ impl DatabasePlugin for MySqlPlugin {
         }
     }
 
-    // === View Operations ===
+    async fn list_table_triggers(
+        &self,
+        connection: &dyn DbConnection,
+        database: &str,
+        _schema: Option<String>,
+        table: &str,
+    ) -> Result<Vec<TriggerInfo>> {
+        let sql = mysql_table_triggers_sql(database, table);
+        let result = connection
+            .query(&sql)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list table triggers: {}", e))?;
+
+        if let SqlResult::Query(query_result) = result {
+            Ok(parse_mysql_triggers(query_result.rows))
+        } else {
+            Err(anyhow::anyhow!("Unexpected result type"))
+        }
+    }
 
     async fn list_table_checks(
         &self,
@@ -1496,6 +1492,8 @@ impl DatabasePlugin for MySqlPlugin {
         }
     }
 
+    // === View Operations ===
+
     async fn list_views(
         &self,
         connection: &dyn DbConnection,
@@ -1531,8 +1529,6 @@ impl DatabasePlugin for MySqlPlugin {
         }
     }
 
-    // === Function Operations ===
-
     async fn list_views_view(
         &self,
         connection: &dyn DbConnection,
@@ -1564,6 +1560,8 @@ impl DatabasePlugin for MySqlPlugin {
             rows,
         })
     }
+
+    // === Function Operations ===
 
     async fn list_functions(
         &self,
@@ -1600,8 +1598,6 @@ impl DatabasePlugin for MySqlPlugin {
         }
     }
 
-    // === Procedure Operations ===
-
     async fn list_functions_view(
         &self,
         connection: &dyn DbConnection,
@@ -1632,6 +1628,75 @@ impl DatabasePlugin for MySqlPlugin {
             columns,
             rows,
         })
+    }
+
+    // === Procedure Operations ===
+
+    fn capabilities(&self) -> DatabaseCapabilities {
+        DatabaseUiCapabilities {
+            supports_functions: true,
+            supports_procedures: true,
+            supports_triggers: true,
+            supports_table_engine: true,
+            supports_table_charset: true,
+            supports_table_collation: true,
+            supports_auto_increment: true,
+            supports_unsigned: true,
+            supports_enum_values: true,
+            show_charset_in_column_detail: true,
+            show_collation_in_column_detail: true,
+            table_engines: self.engines(),
+            ..DatabaseUiCapabilities::default()
+        }
+    }
+
+    fn ui_manifest(&self) -> DatabaseUiManifest {
+        MYSQL_UI_MANIFEST.clone()
+    }
+
+    // === Trigger Operations ===
+
+    fn resolve_reference_data(
+        &self,
+        kind: ReferenceDataKind,
+        context: &HashMap<String, String>,
+    ) -> Vec<FormSelectOption> {
+        match kind {
+            ReferenceDataKind::MySqlCharsets => self
+                .get_charsets()
+                .into_iter()
+                .map(|charset| FormSelectOption {
+                    value: charset.name.clone(),
+                    label_i18n_key: format!("{} - {}", charset.name, charset.description),
+                })
+                .collect(),
+            ReferenceDataKind::MySqlCollations => {
+                let charset = context
+                    .get("charset")
+                    .map(String::as_str)
+                    .unwrap_or("utf8mb4");
+                self.get_collations(charset)
+                    .into_iter()
+                    .map(|collation| FormSelectOption {
+                        value: collation.name.clone(),
+                        label_i18n_key: if collation.is_default {
+                            format!("{} (default)", collation.name)
+                        } else {
+                            collation.name
+                        },
+                    })
+                    .collect()
+            }
+            ReferenceDataKind::TableEngines => self
+                .engines()
+                .into_iter()
+                .map(|engine| FormSelectOption {
+                    value: engine.clone(),
+                    label_i18n_key: engine,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     async fn list_procedures(
@@ -1668,8 +1733,6 @@ impl DatabasePlugin for MySqlPlugin {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
     }
-
-    // === Trigger Operations ===
 
     async fn list_procedures_view(
         &self,
@@ -1730,25 +1793,9 @@ impl DatabasePlugin for MySqlPlugin {
         }
     }
 
-    async fn list_table_triggers(
-        &self,
-        connection: &dyn DbConnection,
-        database: &str,
-        _schema: Option<String>,
-        table: &str,
-    ) -> Result<Vec<TriggerInfo>> {
-        let sql = mysql_table_triggers_sql(database, table);
-        let result = connection
-            .query(&sql)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to list table triggers: {}", e))?;
-
-        if let SqlResult::Query(query_result) = result {
-            Ok(parse_mysql_triggers(query_result.rows))
-        } else {
-            Err(anyhow::anyhow!("Unexpected result type"))
-        }
-    }
+    // === Sequence Operations ===
+    // MySQL doesn't support sequences natively (until MySQL 8.0 which has AUTO_INCREMENT only)
+    // Return empty results
 
     async fn list_triggers_view(
         &self,
@@ -1785,10 +1832,6 @@ impl DatabasePlugin for MySqlPlugin {
             rows,
         })
     }
-
-    // === Sequence Operations ===
-    // MySQL doesn't support sequences natively (until MySQL 8.0 which has AUTO_INCREMENT only)
-    // Return empty results
 
     async fn list_sequences(
         &self,
@@ -2284,49 +2327,6 @@ impl DatabasePlugin for MySqlPlugin {
         }
     }
 
-    fn resolve_reference_data(
-        &self,
-        kind: ReferenceDataKind,
-        context: &HashMap<String, String>,
-    ) -> Vec<FormSelectOption> {
-        match kind {
-            ReferenceDataKind::MySqlCharsets => self
-                .get_charsets()
-                .into_iter()
-                .map(|charset| FormSelectOption {
-                    value: charset.name.clone(),
-                    label_i18n_key: format!("{} - {}", charset.name, charset.description),
-                })
-                .collect(),
-            ReferenceDataKind::MySqlCollations => {
-                let charset = context
-                    .get("charset")
-                    .map(String::as_str)
-                    .unwrap_or("utf8mb4");
-                self.get_collations(charset)
-                    .into_iter()
-                    .map(|collation| FormSelectOption {
-                        value: collation.name.clone(),
-                        label_i18n_key: if collation.is_default {
-                            format!("{} (default)", collation.name)
-                        } else {
-                            collation.name
-                        },
-                    })
-                    .collect()
-            }
-            ReferenceDataKind::TableEngines => self
-                .engines()
-                .into_iter()
-                .map(|engine| FormSelectOption {
-                    value: engine.clone(),
-                    label_i18n_key: engine,
-                })
-                .collect(),
-            _ => Vec::new(),
-        }
-    }
-
     fn engines(&self) -> Vec<String> {
         mysql_engine_names()
     }
@@ -2540,31 +2540,6 @@ impl DatabasePlugin for MySqlPlugin {
 
         sql.push(';');
         sql
-    }
-
-    /// MySQL 使用 CHANGE COLUMN 语法进行列重命名，需要完整列定义。
-    fn build_column_rename_sql(
-        &self,
-        table_name: &str,
-        old_name: &str,
-        new_name: &str,
-        new_column: Option<&ColumnDefinition>,
-    ) -> String {
-        let quoted_table = self.quote_identifier(table_name);
-        let quoted_old = self.quote_identifier(old_name);
-        if let Some(col) = new_column {
-            let col_def = self.build_column_def(col);
-            format!(
-                "ALTER TABLE {} CHANGE COLUMN {} {};",
-                quoted_table, quoted_old, col_def
-            )
-        } else {
-            let quoted_new = self.quote_identifier(new_name);
-            format!(
-                "ALTER TABLE {} RENAME COLUMN {} TO {};",
-                quoted_table, quoted_old, quoted_new
-            )
-        }
     }
 
     fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> String {
@@ -2807,6 +2782,31 @@ impl DatabasePlugin for MySqlPlugin {
             "-- No changes detected".to_string()
         } else {
             statements.join("\n")
+        }
+    }
+
+    /// MySQL 使用 CHANGE COLUMN 语法进行列重命名，需要完整列定义。
+    fn build_column_rename_sql(
+        &self,
+        table_name: &str,
+        old_name: &str,
+        new_name: &str,
+        new_column: Option<&ColumnDefinition>,
+    ) -> String {
+        let quoted_table = self.quote_identifier(table_name);
+        let quoted_old = self.quote_identifier(old_name);
+        if let Some(col) = new_column {
+            let col_def = self.build_column_def(col);
+            format!(
+                "ALTER TABLE {} CHANGE COLUMN {} {};",
+                quoted_table, quoted_old, col_def
+            )
+        } else {
+            let quoted_new = self.quote_identifier(new_name);
+            format!(
+                "ALTER TABLE {} RENAME COLUMN {} TO {};",
+                quoted_table, quoted_old, quoted_new
+            )
         }
     }
 
