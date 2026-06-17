@@ -1076,6 +1076,32 @@ mod tests {
         assert_eq!(None, DatabaseType::from_str("External"));
         assert!(database_type.is_external());
     }
+
+    #[test]
+    fn duckdb_database_type_stays_compatible_with_historical_storage() {
+        let json = r#"{
+            "database_type": "DuckDB",
+            "host": "/tmp/history.duckdb",
+            "port": 0,
+            "username": "",
+            "password": "",
+            "database": null,
+            "service_name": null,
+            "sid": null,
+            "extra_params": {}
+        }"#;
+
+        let config: DbConnectionConfig =
+            serde_json::from_str(json).expect("historical DuckDB config should deserialize");
+
+        assert_eq!(DatabaseType::DuckDB, config.database_type);
+        assert_eq!(Some(DatabaseType::DuckDB), DatabaseType::from_str("DuckDB"));
+        assert_eq!(
+            Some(DatabaseType::DuckDB),
+            DatabaseType::from_storage_key("DuckDB")
+        );
+        assert_eq!("/tmp/history.duckdb", config.server_info());
+    }
 }
 
 /// 递归加密 JSON 中所有名为 password 或 passphrase 的字符串字段
