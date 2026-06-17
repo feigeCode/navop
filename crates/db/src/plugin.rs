@@ -113,6 +113,59 @@ pub struct DatabaseOperationRequest {
     pub field_values: HashMap<String, String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConnectionLifecycle {
+    pub close_on_release: bool,
+    pub physical_open_lock_key: Option<String>,
+}
+
+impl ConnectionLifecycle {
+    pub fn single_file(
+        driver_id: &str,
+        config: &DbConnectionConfig,
+        path_fields: &[String],
+    ) -> Self {
+        let path = first_config_value(config, path_fields)
+            .or_else(|| first_config_value(config, &default_file_path_fields()))
+            .unwrap_or(config.id.as_str());
+
+        Self {
+            close_on_release: true,
+            physical_open_lock_key: Some(format!("{driver_id}:{}", normalize_file_lock_path(path))),
+        }
+    }
+}
+
+fn default_file_path_fields() -> Vec<String> {
+    vec![
+        "host".to_string(),
+        "database".to_string(),
+        "extra_params.path".to_string(),
+    ]
+}
+
+fn first_config_value<'a>(config: &'a DbConnectionConfig, fields: &[String]) -> Option<&'a str> {
+    fields
+        .iter()
+        .filter_map(|field| config_value_for_field(config, field))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+}
+
+fn config_value_for_field<'a>(config: &'a DbConnectionConfig, field: &str) -> Option<&'a str> {
+    match field {
+        "host" => Some(config.host.as_str()),
+        "database" => config.database.as_deref(),
+        other => other
+            .strip_prefix("extra_params.")
+            .and_then(|key| config.extra_params.get(key).map(String::as_str)),
+    }
+}
+
+fn normalize_file_lock_path(path: &str) -> &str {
+    path.strip_prefix("file:").unwrap_or(path)
+}
+
 impl SqlCompletionInfo {
     /// Create completion info with standard SQL functions and keywords included
     pub fn with_standard_sql(mut self) -> Self {
@@ -147,6 +200,10 @@ pub trait DatabasePlugin: Send + Sync {
         &self,
         config: DbConnectionConfig,
     ) -> Result<Box<dyn DbConnection + Send + Sync>, DbError>;
+
+    fn connection_lifecycle(&self, _config: &DbConnectionConfig) -> ConnectionLifecycle {
+        ConnectionLifecycle::default()
+    }
 
     async fn test_connection(&self, config: DbConnectionConfig) -> Result<(), DbError> {
         let mut connection = self.create_connection(config).await?;

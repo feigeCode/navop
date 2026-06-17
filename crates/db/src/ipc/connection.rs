@@ -922,7 +922,6 @@ fn is_method_not_found(error: &DbError) -> bool {
 mod tests {
     use super::*;
     use extension_protocol::row::ColumnTypeKind;
-
     #[test]
     fn is_query_sql_handles_common_prefixes() {
         assert!(is_query_sql("SELECT 1"));

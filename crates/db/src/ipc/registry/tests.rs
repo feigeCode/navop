@@ -17,6 +17,33 @@ fn parses_local_socket_transport() {
 }
 
 #[test]
+fn parses_connection_lifecycle_policy() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{
+            "id":"singlefile",
+            "name":"SingleFile",
+            "entry":{"command":"driver"},
+            "transport":{"name":"singlefile.sock"},
+            "connection":{
+                "single_file":true,
+                "single_connection":true,
+                "close_on_release":true,
+                "path_fields":["host","extra_params.path"]
+            }
+        }"#,
+    )
+    .unwrap();
+
+    assert!(manifest.connection.single_file);
+    assert!(manifest.connection.single_connection);
+    assert!(manifest.connection.close_on_release);
+    assert_eq!(
+        vec!["host".to_string(), "extra_params.path".to_string()],
+        manifest.connection.path_fields
+    );
+}
+
+#[test]
 fn rejects_missing_transport() {
     let result = serde_json::from_str::<IpcDriverManifest>(
         r#"{"id":"demo","name":"Demo","entry":{"command":"python3"}}"#,
@@ -436,6 +463,7 @@ fn manifest(id: &str, name: &str) -> IpcDriverManifest {
         transport: IpcDriverTransport::local_socket(format!("{id}.sock")),
         dialect: Default::default(),
         capabilities: None,
+        connection: Default::default(),
         methods: Vec::new(),
         ui: Default::default(),
         manifest_dir: PathBuf::from("."),

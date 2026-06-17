@@ -44,6 +44,7 @@ fn make_driver(binary: &std::path::Path, manifest_dir: &std::path::Path) -> IpcD
         },
         dialect: Default::default(),
         capabilities: None,
+        connection: Default::default(),
         methods: vec![
             wire_method::CONN_TEST.into(),
             wire_method::SCHEMA_DATABASES.into(),

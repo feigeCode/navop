@@ -13,7 +13,9 @@ use crate::import_export::{
     ImportResult,
 };
 use crate::manifest_helpers::{DatabaseActionDescriptorExt, action, action_with_scope, field, tab};
-use crate::plugin::{DatabaseOperationRequest, DatabasePlugin, SqlCompletionInfo};
+use crate::plugin::{
+    ConnectionLifecycle, DatabaseOperationRequest, DatabasePlugin, SqlCompletionInfo,
+};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
     DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
@@ -761,6 +763,10 @@ impl DatabasePlugin for DuckDbPlugin {
 
     fn quote_identifier(&self, identifier: &str) -> String {
         format!("\"{}\"", identifier.replace('"', "\"\""))
+    }
+
+    fn connection_lifecycle(&self, config: &DbConnectionConfig) -> ConnectionLifecycle {
+        ConnectionLifecycle::single_file("duckdb", config, &[])
     }
 
     fn get_completion_info(&self) -> SqlCompletionInfo {

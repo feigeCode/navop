@@ -1,7 +1,7 @@
 use crate::DatabasePlugin;
 use crate::executor::{ExecOptions, SqlResult, SqlSource};
 use async_trait::async_trait;
-use one_core::storage::{DatabaseType, DbConnectionConfig};
+use one_core::storage::DbConnectionConfig;
 use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -163,7 +163,7 @@ pub trait DbConnection: Sync + Send {
     /// File-backed engines such as DuckDB hold exclusive file handles, so keeping
     /// them idle in the shared session pool can block a later open of the file.
     fn close_on_release(&self) -> bool {
-        self.config().database_type == DatabaseType::DuckDB
+        false
     }
 
     async fn connect(&mut self) -> Result<(), DbError>;

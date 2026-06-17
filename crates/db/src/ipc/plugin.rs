@@ -12,7 +12,7 @@ use crate::ipc::registry::{IpcDriverManifest, IpcDriverRegistry, LimitStyle};
 use crate::mssql::MsSqlPlugin;
 use crate::mysql::MySqlPlugin;
 use crate::oracle::OraclePlugin;
-use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
+use crate::plugin::{ConnectionLifecycle, DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use crate::postgresql::PostgresPlugin;
 use crate::sqlite::SqlitePlugin;
@@ -286,6 +286,7 @@ fn placeholder_driver_manifest(driver_id: &str) -> IpcDriverManifest {
         )),
         dialect: Default::default(),
         capabilities: None,
+        connection: Default::default(),
         methods: Vec::new(),
         ui: Default::default(),
         manifest_dir: Default::default(),
@@ -350,6 +351,26 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         let mut conn = ExternalDbConnection::new(config, driver);
         conn.connect().await?;
         Ok(Box::new(conn))
+    }
+
+    fn connection_lifecycle(&self, config: &DbConnectionConfig) -> ConnectionLifecycle {
+        let Ok(driver) = self.driver_for_config(config) else {
+            return ConnectionLifecycle::default();
+        };
+
+        let close_on_release = driver.connection.close_on_release;
+        let physical_open_lock_key =
+            if driver.connection.single_file && driver.connection.single_connection {
+                ConnectionLifecycle::single_file(&driver.id, config, &driver.connection.path_fields)
+                    .physical_open_lock_key
+            } else {
+                None
+            };
+
+        ConnectionLifecycle {
+            close_on_release,
+            physical_open_lock_key,
+        }
     }
 
     async fn test_connection(&self, config: DbConnectionConfig) -> Result<(), DbError> {
@@ -1631,6 +1652,47 @@ mod tests {
         assert_ne!(
             alpha.ui.form.unwrap().forms[0].title_i18n_key,
             plugin.ui_manifest().forms[0].title_i18n_key
+        );
+    }
+
+    #[test]
+    fn fixed_driver_plugin_uses_manifest_connection_lifecycle() {
+        let mut driver = driver_manifest("singlefile", false, "singlefile.connection");
+        driver.connection.single_file = true;
+        driver.connection.single_connection = true;
+        driver.connection.close_on_release = true;
+        driver.connection.path_fields = vec!["host".to_string(), "extra_params.path".to_string()];
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+        let mut config = DbConnectionConfig {
+            id: "singlefile-conn".into(),
+            name: "SingleFile".into(),
+            database_type: DatabaseType::external("singlefile"),
+            host: "file:/tmp/singlefile.db".into(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params: Default::default(),
+        };
+
+        let lifecycle = plugin.connection_lifecycle(&config);
+        assert!(lifecycle.close_on_release);
+        assert_eq!(
+            Some("singlefile:/tmp/singlefile.db".to_string()),
+            lifecycle.physical_open_lock_key
+        );
+
+        config.host.clear();
+        config
+            .extra_params
+            .insert("path".to_string(), "/tmp/from-extra.db".to_string());
+        let lifecycle = plugin.connection_lifecycle(&config);
+        assert_eq!(
+            Some("singlefile:/tmp/from-extra.db".to_string()),
+            lifecycle.physical_open_lock_key
         );
     }
 

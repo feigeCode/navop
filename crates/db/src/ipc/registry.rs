@@ -27,11 +27,22 @@ pub struct IpcDriverManifest {
     #[serde(default)]
     pub capabilities: Option<DatabaseCapabilities>,
     #[serde(default)]
+    pub connection: IpcDriverConnection,
+    #[serde(default)]
     pub methods: Vec<String>,
     #[serde(default)]
     pub ui: IpcDriverUi,
     #[serde(skip)]
     pub manifest_dir: PathBuf,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IpcDriverConnection {
+    pub single_file: bool,
+    pub single_connection: bool,
+    pub close_on_release: bool,
+    pub path_fields: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

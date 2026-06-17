@@ -304,6 +304,7 @@ mod tests {
             transport: IpcDriverTransport::local_socket("dummy.sock"),
             dialect: Default::default(),
             capabilities: Default::default(),
+            connection: Default::default(),
             methods: Vec::new(),
             ui: Default::default(),
             manifest_dir: PathBuf::from("/tmp/onetcli-test"),
