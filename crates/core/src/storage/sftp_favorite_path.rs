@@ -296,6 +296,7 @@ mod tests {
             sync_enabled: true,
             cloud_id: None,
             last_synced_at: None,
+            last_used_at: None,
             created_at: None,
             updated_at: None,
             team_id: None,

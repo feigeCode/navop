@@ -96,6 +96,15 @@ pub enum TerminalConnectionKind {
     Serial,
 }
 
+const SSH_CLEAR_SCREEN_REDRAW_BYTES: &[u8] = b"\x0c";
+
+fn clear_screen_remote_redraw_bytes(kind: TerminalConnectionKind) -> Option<&'static [u8]> {
+    match kind {
+        TerminalConnectionKind::Ssh => Some(SSH_CLEAR_SCREEN_REDRAW_BYTES),
+        TerminalConnectionKind::Local | TerminalConnectionKind::Serial => None,
+    }
+}
+
 /// SSH 终端配置
 #[derive(Clone)]
 pub struct SshTerminalConfig {
@@ -864,6 +873,9 @@ impl Terminal {
         term.grid_mut().reset::<Color>();
         term.selection = None;
         drop(term);
+        if let Some(bytes) = clear_screen_remote_redraw_bytes(self.connection_kind) {
+            self.write(bytes);
+        }
         cx.emit(TerminalModelEvent::Wakeup);
     }
 
@@ -1863,9 +1875,9 @@ mod tests {
     use super::{
         ConnectionState, Terminal, TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest,
         TerminalMfaResponder, build_cd_command, build_ssh_base_init_commands,
-        build_ssh_init_commands, compose_ssh_init_commands, format_connection_error,
-        keyboard_interactive_answers_for_terminal, resolve_default_windows_shell_from_env,
-        resolve_local_working_dir, shell_escape_arg,
+        build_ssh_init_commands, clear_screen_remote_redraw_bytes, compose_ssh_init_commands,
+        format_connection_error, keyboard_interactive_answers_for_terminal,
+        resolve_default_windows_shell_from_env, resolve_local_working_dir, shell_escape_arg,
     };
     use crate::TerminalEvent;
     use crate::history::{
@@ -1897,6 +1909,22 @@ mod tests {
     fn build_cd_command_escapes_newline() {
         let cmd = build_cd_command("a\nb");
         assert_eq!(cmd, "cd -- 'a\nb'");
+    }
+
+    #[test]
+    fn clear_screen_requests_remote_prompt_redraw_for_ssh_only() {
+        assert_eq!(
+            Some(b"\x0c".as_slice()),
+            clear_screen_remote_redraw_bytes(TerminalConnectionKind::Ssh)
+        );
+        assert_eq!(
+            None,
+            clear_screen_remote_redraw_bytes(TerminalConnectionKind::Local)
+        );
+        assert_eq!(
+            None,
+            clear_screen_remote_redraw_bytes(TerminalConnectionKind::Serial)
+        );
     }
 
     #[test]

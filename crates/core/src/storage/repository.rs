@@ -22,6 +22,7 @@ struct ConnectionRow {
     sync_enabled: bool,
     cloud_id: Option<String>,
     last_synced_at: Option<i64>,
+    last_used_at: Option<i64>,
     created_at: i64,
     updated_at: i64,
     team_id: Option<String>,
@@ -44,6 +45,7 @@ impl FromSqliteRow for ConnectionRow {
                 .unwrap_or(true),
             cloud_id: row.get("cloud_id")?,
             last_synced_at: row.get("last_synced_at")?,
+            last_used_at: row.get("last_used_at")?,
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
             team_id: row.get("team_id").unwrap_or(None),
@@ -65,6 +67,7 @@ impl From<ConnectionRow> for StoredConnection {
             sync_enabled: row.sync_enabled,
             cloud_id: row.cloud_id,
             last_synced_at: row.last_synced_at,
+            last_used_at: row.last_used_at,
             created_at: Some(row.created_at),
             updated_at: Some(row.updated_at),
             team_id: row.team_id,
@@ -198,7 +201,7 @@ impl Repository for ConnectionRepository {
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, created_at, updated_at, team_id, owner_id FROM connections WHERE id = ?1",
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, created_at, updated_at, team_id, owner_id FROM connections WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -212,7 +215,7 @@ impl Repository for ConnectionRepository {
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, created_at, updated_at, team_id, owner_id FROM connections ORDER BY updated_at DESC",
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, created_at, updated_at, team_id, owner_id FROM connections ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map([], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -247,9 +250,9 @@ impl ConnectionRepository {
     pub fn list_by_workspace(&self, workspace_id: Option<i64>) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let sql = if workspace_id.is_some() {
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id = ?1 ORDER BY updated_at DESC"
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
             } else {
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id IS NULL ORDER BY updated_at DESC"
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
             };
             let mut stmt = conn.prepare(sql)?;
 
@@ -287,11 +290,23 @@ impl ConnectionRepository {
         })
     }
 
+    /// 记录连接最近一次被打开的时间，不影响内容更新时间和云同步判断。
+    pub fn touch_last_used(&self, id: i64) -> Result<()> {
+        let ts = now();
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections SET last_used_at = ?1 WHERE id = ?2",
+                params![ts, id],
+            )?;
+            Ok(())
+        })
+    }
+
     /// 查询需要同步的连接（sync_enabled=true 且 cloud_id 为空或 updated_at > last_synced_at）
     pub fn list_pending_sync(&self) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, created_at, updated_at, team_id, owner_id
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, created_at, updated_at, team_id, owner_id
                  FROM connections
                  WHERE sync_enabled = 1 AND (cloud_id IS NULL OR updated_at > COALESCE(last_synced_at, 0))
                  ORDER BY updated_at DESC",
@@ -309,7 +324,7 @@ impl ConnectionRepository {
     pub fn get_by_cloud_id(&self, cloud_id: &str) -> Result<Option<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, created_at, updated_at, team_id, owner_id
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, created_at, updated_at, team_id, owner_id
                  FROM connections WHERE cloud_id = ?1",
             )?;
             let mut rows = stmt.query(params![cloud_id])?;
@@ -351,7 +366,7 @@ impl ConnectionRepository {
     pub fn list_by_team(&self, team_id: &str) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id = ?1 ORDER BY updated_at DESC",
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map(params![team_id], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -366,7 +381,7 @@ impl ConnectionRepository {
     pub fn list_personal(&self) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id IS NULL ORDER BY updated_at DESC",
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map([], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -724,6 +739,102 @@ impl TeamKeyCacheRepository {
             )?;
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConnectionRepository;
+    use crate::storage::StoredConnection;
+    use crate::storage::connection::SqliteConnection;
+    use crate::storage::migration::run_migrations;
+    use crate::storage::models::{SshAuthMethod, SshParams};
+    use crate::storage::traits::Repository;
+    use rusqlite::params;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn test_repository() -> (SqliteConnection, ConnectionRepository) {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let db_path = std::env::temp_dir().join(format!(
+            "onetcli-connection-repository-{}-{unique}-{counter}.db",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_file(&db_path);
+        let conn = SqliteConnection::open_with_pool_size(&db_path, 1).expect("open sqlite");
+        conn.with_connection(|conn| run_migrations(conn))
+            .expect("run migrations");
+        let repo = ConnectionRepository::new(conn.clone());
+        (conn, repo)
+    }
+
+    fn ssh_connection(name: &str) -> StoredConnection {
+        StoredConnection::new_ssh(
+            name.to_string(),
+            SshParams {
+                host: format!("{name}.example.com"),
+                port: 22,
+                username: "deploy".to_string(),
+                auth_method: SshAuthMethod::Agent,
+                connect_timeout: None,
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                jump_server: None,
+                proxy: None,
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn list_orders_by_recent_use_without_touching_updated_at() {
+        let (conn, repo) = test_repository();
+        let mut old_connection = ssh_connection("old");
+        let old_id = repo.insert(&mut old_connection).unwrap();
+        let mut new_connection = ssh_connection("new");
+        let new_id = repo.insert(&mut new_connection).unwrap();
+
+        conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections SET created_at = ?1, updated_at = ?1 WHERE id = ?2",
+                params![1000i64, old_id],
+            )?;
+            conn.execute(
+                "UPDATE connections SET created_at = ?1, updated_at = ?1 WHERE id = ?2",
+                params![2000i64, new_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            Some(new_id),
+            repo.list().unwrap().first().and_then(|c| c.id)
+        );
+
+        repo.touch_last_used(old_id).unwrap();
+        let listed = repo.list().unwrap();
+
+        assert_eq!(Some(old_id), listed.first().and_then(|c| c.id));
+        let (updated_at, last_used_at): (i64, Option<i64>) = conn
+            .with_connection(|conn| {
+                Ok(conn.query_row(
+                    "SELECT updated_at, last_used_at FROM connections WHERE id = ?1",
+                    params![old_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(1000, updated_at);
+        assert!(last_used_at.is_some());
     }
 }
 

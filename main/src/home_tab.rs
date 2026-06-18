@@ -1158,12 +1158,31 @@ impl HomePage {
             return;
         }
 
+        let connection = connection.clone();
+        self.touch_connection_last_used(connection.id, cx);
         let workspace = connection
             .workspace_id
             .and_then(|id| self.workspaces.iter().find(|w| w.id == Some(id)).cloned());
-        let strategy = build_connection_open_strategy(connection.clone(), workspace);
+        let strategy = build_connection_open_strategy(connection, workspace);
         strategy.open(self, window, cx);
         cx.notify();
+    }
+
+    fn touch_connection_last_used(&mut self, connection_id: Option<i64>, cx: &mut Context<Self>) {
+        let Some(connection_id) = connection_id else {
+            return;
+        };
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let result = storage
+            .get::<ConnectionRepository>()
+            .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))
+            .and_then(|repo| repo.touch_last_used(connection_id));
+
+        if let Err(err) = result {
+            tracing::warn!("更新连接最近使用时间失败: {err}");
+            return;
+        }
+        self.load_connections(cx);
     }
 
     pub(crate) fn handle_save_workspace(

@@ -18,6 +18,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260610000001",
         include_str!("../../migrations/20260610000001_sftp_favorite_paths.sql"),
     ),
+    (
+        "20260618000001",
+        include_str!("../../migrations/20260618000001_connection_last_used.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

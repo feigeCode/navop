@@ -707,6 +707,9 @@ pub struct StoredConnection {
     /// 最后同步时间戳
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_synced_at: Option<i64>,
+    /// 最近使用时间戳，仅用于本地列表排序，不参与云同步。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -798,6 +801,7 @@ impl StoredConnection {
             sync_enabled: true,
             cloud_id: None,
             last_synced_at: None,
+            last_used_at: None,
             created_at: None,
             updated_at: None,
             team_id: None,
@@ -817,6 +821,7 @@ impl StoredConnection {
             sync_enabled: true,
             cloud_id: None,
             last_synced_at: None,
+            last_used_at: None,
             created_at: None,
             updated_at: None,
             team_id: None,
@@ -836,6 +841,7 @@ impl StoredConnection {
             sync_enabled: true,
             cloud_id: None,
             last_synced_at: None,
+            last_used_at: None,
             created_at: None,
             updated_at: None,
             team_id: None,
@@ -855,6 +861,7 @@ impl StoredConnection {
             sync_enabled: true,
             cloud_id: None,
             last_synced_at: None,
+            last_used_at: None,
             created_at: None,
             updated_at: None,
             team_id: None,
@@ -886,6 +893,7 @@ impl StoredConnection {
             sync_enabled: true,
             cloud_id: None,
             last_synced_at: None,
+            last_used_at: None,
             created_at: None,
             updated_at: None,
             team_id: None,
