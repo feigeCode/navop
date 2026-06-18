@@ -4,6 +4,7 @@ use extension_protocol::method;
 use one_core::storage::DatabaseType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
@@ -335,17 +336,23 @@ impl IpcDriverRegistry {
         }
 
         let mut drivers = Vec::new();
-        if dir.join(DRIVER_MANIFEST_FILE).is_file() {
-            if let Ok(driver) = load_manifest(dir) {
+        let mut root_is_wrapped_driver = false;
+        if let Some(driver_dir) = driver_manifest_dir_for(dir)? {
+            root_is_wrapped_driver = driver_dir != dir;
+            if let Ok(driver) = load_manifest(&driver_dir) {
                 drivers.push(driver);
             }
         }
 
-        for entry in std::fs::read_dir(dir).map_err(read_dir_error)? {
-            let entry = entry.map_err(read_dir_error)?;
-            if entry.file_type().map_err(read_dir_error)?.is_dir() {
-                if let Ok(driver) = load_manifest(&entry.path()) {
-                    drivers.push(driver);
+        if !root_is_wrapped_driver {
+            for entry in std::fs::read_dir(dir).map_err(read_dir_error)? {
+                let entry = entry.map_err(read_dir_error)?;
+                if entry.file_type().map_err(read_dir_error)?.is_dir() {
+                    if let Some(driver_dir) = driver_manifest_dir_for(&entry.path())? {
+                        if let Ok(driver) = load_manifest(&driver_dir) {
+                            drivers.push(driver);
+                        }
+                    }
                 }
             }
         }
@@ -390,6 +397,44 @@ fn load_manifest(driver_dir: &Path) -> Result<IpcDriverManifest, DbError> {
     manifest.validate()?;
     entry::resolve_entry_command(&mut manifest);
     Ok(manifest)
+}
+
+fn driver_manifest_dir_for(dir: &Path) -> Result<Option<PathBuf>, DbError> {
+    if dir.join(DRIVER_MANIFEST_FILE).is_file() {
+        return Ok(Some(dir.to_path_buf()));
+    }
+    single_wrapped_driver_dir(dir)
+}
+
+fn single_wrapped_driver_dir(dir: &Path) -> Result<Option<PathBuf>, DbError> {
+    let mut found_dir = None;
+    for entry in std::fs::read_dir(dir).map_err(read_dir_error)? {
+        let entry = entry.map_err(read_dir_error)?;
+        if ignored_archive_metadata(&entry.file_name()) {
+            continue;
+        }
+        if !entry.file_type().map_err(read_dir_error)?.is_dir() {
+            return Ok(None);
+        }
+        if found_dir.replace(entry.path()).is_some() {
+            return Ok(None);
+        }
+    }
+    let Some(driver_dir) = found_dir else {
+        return Ok(None);
+    };
+    if driver_dir.join(DRIVER_MANIFEST_FILE).is_file() {
+        Ok(Some(driver_dir))
+    } else {
+        Ok(None)
+    }
+}
+
+fn ignored_archive_metadata(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    name == ".DS_Store" || name == "__MACOSX" || name.starts_with("._")
 }
 
 fn read_dir_error(error: std::io::Error) -> DbError {

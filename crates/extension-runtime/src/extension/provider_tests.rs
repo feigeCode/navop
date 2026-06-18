@@ -102,6 +102,34 @@ fn database_driver_provider_install_from_dir_requires_driver_manifest() {
 }
 
 #[test]
+fn database_driver_provider_install_from_dir_accepts_single_wrapped_driver_directory() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("database_drivers");
+    let outer_dir = root.join("gbase8s");
+    let driver_dir = outer_dir.join("gbase8s");
+    fs::create_dir_all(&driver_dir).unwrap();
+    fs::write(
+        driver_dir.join("driver.json"),
+        r#"{
+            "id": "gbase8s",
+            "name": "GBase 8s",
+            "description": "GBase 8s IPC driver",
+            "version": "0.1.0",
+            "entry": { "command": "./gbase8s-ipc-driver" },
+            "transport": { "name": "gbase8s.sock" }
+        }"#,
+    )
+    .unwrap();
+
+    let provider = DatabaseDriverExtensionProvider;
+    let summary = provider.install_from_dir(&outer_dir).unwrap();
+
+    assert_eq!("gbase8s", summary.name);
+    assert_eq!("0.1.0", summary.version);
+    assert_eq!(driver_dir, summary.path);
+}
+
+#[test]
 fn builtin_registry_registers_all_extension_providers() {
     let tmp = tempfile::TempDir::new().unwrap();
     let registry = builtin_registry(tmp.path().join("extensions"));

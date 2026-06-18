@@ -103,6 +103,24 @@ fn scans_driver_manifests() {
 }
 
 #[test]
+fn scans_single_wrapped_driver_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let outer_dir = temp.path().join("gbase8s");
+    let driver_dir = outer_dir.join("gbase8s");
+    fs::create_dir_all(&driver_dir).unwrap();
+    fs::write(
+        driver_dir.join(DRIVER_MANIFEST_FILE),
+        r#"{"id":"gbase8s","name":"GBase 8s","entry":{"command":"./gbase8s-ipc-driver"},"transport":{"name":"gbase8s.sock"}}"#,
+    )
+    .unwrap();
+
+    let registry = IpcDriverRegistry::load_from_dir(temp.path()).unwrap();
+
+    assert_eq!(registry.drivers().len(), 1);
+    assert_eq!(registry.find("gbase8s").unwrap().manifest_dir, driver_dir);
+}
+
+#[test]
 fn scans_single_driver_directory() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(
