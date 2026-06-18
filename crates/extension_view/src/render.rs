@@ -1,5 +1,6 @@
 use gpui::{
     Context, FontWeight, IntoElement, ParentElement, Styled, Window, div, prelude::FluentBuilder,
+    px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable,
@@ -16,6 +17,8 @@ use crate::{
     marketplace_install_state,
     state::{install_progress_value, marketplace_filter_query},
 };
+
+const INSTALL_PROGRESS_WIDTH: f32 = 144.0;
 
 impl ExtensionManagerView {
     pub(crate) fn render_toolbar(
@@ -94,9 +97,11 @@ impl ExtensionManagerView {
                 install_progress_value(self.busy.is_some()),
                 |this, value| {
                     this.child(
-                        Progress::new("extension-install-progress")
-                            .xsmall()
-                            .value(value),
+                        div().w(px(INSTALL_PROGRESS_WIDTH)).child(
+                            Progress::new("extension-install-progress")
+                                .xsmall()
+                                .value(value),
+                        ),
                     )
                 },
             )

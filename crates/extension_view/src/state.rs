@@ -4,7 +4,7 @@ use crate::status_message::format_notification_error;
 use crate::{ExtensionManagerMode, MarketplaceEntry};
 
 const MANIFEST_JSON_SUFFIX: &str = ".json";
-const INSTALL_PROGRESS_VALUE: f32 = 65.0;
+const INSTALL_PROGRESS_VALUE: f32 = 28.0;
 
 pub(crate) fn should_auto_load_marketplace(
     mode: ExtensionManagerMode,
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn install_progress_value_only_shows_while_installing() {
-        assert_eq!(Some(65.0), install_progress_value(true));
+        assert_eq!(Some(28.0), install_progress_value(true));
         assert_eq!(None, install_progress_value(false));
     }
 
