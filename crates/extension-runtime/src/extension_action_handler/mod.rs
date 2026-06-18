@@ -2,18 +2,22 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use db::GlobalDbState;
+#[cfg(feature = "wasm-components")]
+use db_view::extension_selector::load_extension_selector_data;
 use db_view::{
     extension_menu::{
         DbTreeExtensionActionContext, DbTreeExtensionActionHandler,
         GlobalDbTreeExtensionActionHandler,
     },
-    extension_selector::{ExtensionSelectorData, load_extension_selector_data},
+    extension_selector::ExtensionSelectorData,
     extension_widget::{
         ExtensionWidgetActionHandler, ExtensionWidgetView,
         build_extension_widget_model_with_selector_data,
     },
 };
-use extension_component::{PermissionSet, ViewActionEvent, ViewSpec};
+#[cfg(feature = "wasm-components")]
+use extension_component::PermissionSet;
+use extension_component::{ViewActionEvent, ViewSpec};
 use gpui::{App, AppContext, AsyncApp, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::{gpui_tokio::Tokio, popup_window::open_popup_window};
@@ -91,26 +95,36 @@ async fn run_action(
     context: DbTreeExtensionActionContext,
     db_state: GlobalDbState,
 ) -> Result<Vec<PreparedExtensionView>> {
-    let catalog = catalog_for_action(catalog, &composite_root)?;
-    let permissions = PermissionSet::new(
-        catalog
-            .component_permissions_for_command(&context.command_id)?
-            .iter(),
-    );
-    let views = catalog
-        .run_db_tree_component_action(context.clone(), db_state.clone())
-        .await?;
-    prepare_views(
-        views,
-        composite_root,
-        catalog,
-        context,
-        db_state,
-        permissions,
-    )
-    .await
+    #[cfg(not(feature = "wasm-components"))]
+    {
+        let _ = (composite_root, catalog, context, db_state);
+        return Err(anyhow::anyhow!("wasm component runtime is disabled"));
+    }
+
+    #[cfg(feature = "wasm-components")]
+    {
+        let catalog = catalog_for_action(catalog, &composite_root)?;
+        let permissions = PermissionSet::new(
+            catalog
+                .component_permissions_for_command(&context.command_id)?
+                .iter(),
+        );
+        let views = catalog
+            .run_db_tree_component_action(context.clone(), db_state.clone())
+            .await?;
+        prepare_views(
+            views,
+            composite_root,
+            catalog,
+            context,
+            db_state,
+            permissions,
+        )
+        .await
+    }
 }
 
+#[cfg(feature = "wasm-components")]
 async fn prepare_views(
     views: Vec<ViewSpec>,
     composite_root: PathBuf,
@@ -241,13 +255,30 @@ struct SubmitInput {
 }
 
 async fn submit_view_action(input: SubmitInput) -> Result<()> {
-    let catalog = catalog_for_action(input.catalog, &input.composite_root)?;
-    catalog
-        .handle_db_tree_component_view_action(input.context, input.db_state, input.event)
-        .await?;
-    Ok(())
+    #[cfg(not(feature = "wasm-components"))]
+    {
+        let SubmitInput {
+            composite_root,
+            catalog,
+            context,
+            db_state,
+            event,
+        } = input;
+        let _ = (composite_root, catalog, context, db_state, event);
+        return Err(anyhow::anyhow!("wasm component runtime is disabled"));
+    }
+
+    #[cfg(feature = "wasm-components")]
+    {
+        let catalog = catalog_for_action(input.catalog, &input.composite_root)?;
+        catalog
+            .handle_db_tree_component_view_action(input.context, input.db_state, input.event)
+            .await?;
+        Ok(())
+    }
 }
 
+#[cfg(feature = "wasm-components")]
 fn catalog_for_action(
     catalog: Option<Arc<ExtensionRuntimeCatalog>>,
     composite_root: &PathBuf,

@@ -27,6 +27,8 @@ use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ConnectionRepository, DatabaseType, DbConnectionConfig};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+type ExternalRegistryReloader = dyn Fn() -> IpcDriverRegistry + Send + Sync;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, RwLock, mpsc};
 use tokio::time::sleep;
@@ -162,6 +164,7 @@ pub struct DbManager {
     mssql: Arc<dyn DatabasePlugin>,
     oracle: Arc<dyn DatabasePlugin>,
     external_drivers: HashMap<String, Arc<dyn DatabasePlugin>>,
+    external_registry_reloader: Arc<ExternalRegistryReloader>,
 }
 
 impl DbManager {
@@ -170,6 +173,13 @@ impl DbManager {
     }
 
     fn with_external_registry(registry: IpcDriverRegistry) -> Self {
+        Self::with_external_registry_reloader(registry, Arc::new(IpcDriverRegistry::load_default))
+    }
+
+    fn with_external_registry_reloader(
+        registry: IpcDriverRegistry,
+        external_registry_reloader: Arc<ExternalRegistryReloader>,
+    ) -> Self {
         let external_drivers = registry
             .drivers()
             .iter()
@@ -191,6 +201,7 @@ impl DbManager {
             mssql: Arc::new(MsSqlPlugin::new()),
             oracle: Arc::new(OraclePlugin::new()),
             external_drivers,
+            external_registry_reloader,
         }
     }
 
@@ -203,13 +214,20 @@ impl DbManager {
             DatabaseType::ClickHouse => Ok(Arc::clone(&self.clickhouse)),
             DatabaseType::MSSQL => Ok(Arc::clone(&self.mssql)),
             DatabaseType::Oracle => Ok(Arc::clone(&self.oracle)),
-            DatabaseType::External { driver_id } => self
-                .external_drivers
-                .get(driver_id)
-                .cloned()
-                .ok_or_else(|| {
-                    DbError::connection(format!("external driver '{}' not found", driver_id))
-                }),
+            DatabaseType::External { driver_id } => {
+                if let Some(plugin) = self.external_drivers.get(driver_id).cloned() {
+                    return Ok(plugin);
+                }
+                (self.external_registry_reloader)()
+                    .find(driver_id)
+                    .map(|driver| {
+                        Arc::new(ExternalDatabasePlugin::for_driver(driver))
+                            as Arc<dyn DatabasePlugin>
+                    })
+                    .ok_or_else(|| {
+                        DbError::connection(format!("external driver '{}' not found", driver_id))
+                    })
+            }
         }
     }
 }
@@ -244,6 +262,7 @@ impl Clone for DbManager {
             mssql: Arc::clone(&self.mssql),
             oracle: Arc::clone(&self.oracle),
             external_drivers: self.external_drivers.clone(),
+            external_registry_reloader: Arc::clone(&self.external_registry_reloader),
         }
     }
 }
@@ -3350,6 +3369,21 @@ mod tests {
         assert!(alpha.capabilities().supports_schema);
         assert_eq!("\"a\"\"b\"", beta.quote_identifier("a\"b"));
         assert!(!beta.capabilities().supports_schema);
+    }
+
+    #[test]
+    fn db_manager_reloads_external_driver_added_after_manager_creation() {
+        let manager = DbManager::with_external_registry_reloader(
+            IpcDriverRegistry::empty(),
+            Arc::new(|| {
+                IpcDriverRegistry::from_drivers(vec![external_driver_manifest("dm", "\"", true)])
+            }),
+        );
+
+        let plugin = manager.get_plugin(&DatabaseType::external("dm")).unwrap();
+
+        assert_eq!(DatabaseType::external("dm"), plugin.name());
+        assert!(plugin.capabilities().supports_schema);
     }
 
     #[test]

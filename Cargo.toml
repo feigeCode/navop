@@ -95,7 +95,7 @@ ipc = { path = "crates/ipc" }
 extension-protocol = { path = "crates/extension-protocol" }
 extension-host = { path = "crates/extension-host" }
 extension-driver = { path = "crates/extension-driver" }
-extension-runtime = { path = "crates/extension-runtime" }
+extension-runtime = { path = "crates/extension-runtime", default-features = false }
 extension_view = { path = "crates/extension_view" }
 extension-api = { path = "crates/extension-api" }
 extension-component = { path = "crates/extension-component" }

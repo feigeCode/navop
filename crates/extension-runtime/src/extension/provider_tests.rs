@@ -102,6 +102,31 @@ fn database_driver_provider_install_from_dir_requires_driver_manifest() {
 }
 
 #[test]
+fn database_driver_provider_install_from_dir_reports_invalid_driver_manifest() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("database_drivers");
+    let driver_dir = root.join("broken");
+    fs::create_dir_all(&driver_dir).unwrap();
+    fs::write(
+        driver_dir.join("driver.json"),
+        r#"{
+            "id": "broken",
+            "name": "Broken Driver"
+        }"#,
+    )
+    .unwrap();
+
+    let provider = DatabaseDriverExtensionProvider;
+    let err = provider.install_from_dir(&driver_dir).unwrap_err();
+    let message = err.to_string();
+
+    assert!(message.contains("解析 driver manifest 失败"));
+    assert!(
+        message.contains("invalid driver manifest") || message.contains("missing field `entry`")
+    );
+}
+
+#[test]
 fn database_driver_provider_install_from_dir_accepts_single_wrapped_driver_directory() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("database_drivers");

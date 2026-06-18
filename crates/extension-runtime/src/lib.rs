@@ -1,3 +1,4 @@
+#[cfg(feature = "wasm-components")]
 mod action;
 mod catalog;
 pub mod database_driver_install;
@@ -29,5 +30,5 @@ mod extension_downloader_policy_tests;
 mod extension_downloader_tests;
 #[cfg(test)]
 mod extension_runtime_contract_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "wasm-components"))]
 mod extension_runtime_wasm_contract_tests;

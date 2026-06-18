@@ -61,7 +61,7 @@ impl ExtensionRuntimeCatalog {
     pub fn component_permissions_for_command(
         &self,
         command_id: &str,
-    ) -> extension_wasm::WasmResult<Vec<String>> {
+    ) -> Result<Vec<String>, ExtensionRuntimeError> {
         Ok(self
             .component_binding_for_command(command_id)?
             .permissions
@@ -71,26 +71,27 @@ impl ExtensionRuntimeCatalog {
     pub(super) fn component_binding_for_command(
         &self,
         command_id: &str,
-    ) -> extension_wasm::WasmResult<&WasmRuntimeBinding> {
+    ) -> Result<&WasmRuntimeBinding, ExtensionRuntimeError> {
         let Some(command) = self.commands.get(command_id) else {
-            return Err(extension_wasm::WasmError::FunctionNotFound(
-                command_id.to_string(),
-            ));
+            return Err(ExtensionRuntimeError::CommandNotFound {
+                command_id: command_id.to_string(),
+            });
         };
         let CommandHandler::Wasm { runtime_id, .. } = &command.handler else {
-            return Err(extension_wasm::WasmError::FunctionNotFound(
-                command_id.to_string(),
-            ));
+            return Err(ExtensionRuntimeError::UnsupportedCommand {
+                command_id: command_id.to_string(),
+            });
         };
         let Some(binding) = self.wasm_runtimes.get(runtime_id) else {
-            return Err(extension_wasm::WasmError::ModuleNotFound(
-                runtime_id.clone(),
-            ));
+            return Err(ExtensionRuntimeError::RuntimeBindingNotFound {
+                command_id: command_id.to_string(),
+                runtime_id: runtime_id.clone(),
+            });
         };
         if binding.kind != WasmRuntimeKind::Component {
-            return Err(extension_wasm::WasmError::FunctionNotFound(
-                command_id.to_string(),
-            ));
+            return Err(ExtensionRuntimeError::UnsupportedCommand {
+                command_id: command_id.to_string(),
+            });
         }
         Ok(binding)
     }

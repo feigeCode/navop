@@ -25,16 +25,11 @@ impl ExtensionProvider for DatabaseDriverExtensionProvider {
     }
 
     fn install_from_dir(&self, dir: &Path) -> Result<ExtensionSummary> {
-        let parent = dir
-            .parent()
-            .ok_or_else(|| anyhow!("driver 目录无父目录: {}", dir.display()))?;
-        let registry = IpcDriverRegistry::load_from_dir(parent)
+        let manifest = IpcDriverRegistry::load_driver_from_dir(dir)
             .map_err(|error| anyhow!("解析 driver manifest 失败: {error}"))?;
-        let manifest = registry
-            .drivers()
-            .iter()
-            .find(|manifest| manifest_belongs_to_install_dir(manifest, dir))
-            .ok_or_else(|| anyhow!("未在 {} 找到合法的 driver.json", dir.display()))?;
+        let manifest = manifest
+            .as_ref()
+            .ok_or_else(|| anyhow!("未在 {} 找到 driver.json", dir.display()))?;
         Ok(to_summary(manifest))
     }
 
@@ -47,10 +42,6 @@ impl ExtensionProvider for DatabaseDriverExtensionProvider {
         std::fs::remove_dir_all(dir).with_context(|| format!("删除驱动目录 {}", dir.display()))?;
         Ok(name)
     }
-}
-
-fn manifest_belongs_to_install_dir(manifest: &IpcDriverManifest, dir: &Path) -> bool {
-    manifest.manifest_dir == dir || manifest.manifest_dir.parent() == Some(dir)
 }
 
 fn to_summary(manifest: &IpcDriverManifest) -> ExtensionSummary {

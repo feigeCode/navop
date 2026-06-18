@@ -360,6 +360,16 @@ impl IpcDriverRegistry {
         Ok(Self { drivers })
     }
 
+    pub fn load_driver_from_dir(dir: &Path) -> Result<Option<IpcDriverManifest>, DbError> {
+        if !dir.exists() {
+            return Ok(None);
+        }
+        let Some(driver_dir) = driver_manifest_dir_for(dir)? else {
+            return Ok(None);
+        };
+        load_manifest(&driver_dir).map(Some)
+    }
+
     pub fn empty() -> Self {
         Self {
             drivers: Vec::new(),

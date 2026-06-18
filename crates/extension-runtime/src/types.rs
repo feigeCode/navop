@@ -1,3 +1,4 @@
+#[cfg(feature = "wasm-components")]
 use std::path::PathBuf;
 
 use db_view::extension_menu::DbTreeExtensionMenuItem;
@@ -28,10 +29,14 @@ pub(super) struct RegisteredDbTreeMenuContribution {
 
 #[derive(Debug, Clone)]
 pub struct WasmRuntimeBinding {
+    #[cfg(feature = "wasm-components")]
     pub extension_id: String,
+    #[cfg(feature = "wasm-components")]
     pub runtime_key: String,
     pub kind: WasmRuntimeKind,
+    #[cfg(feature = "wasm-components")]
     pub module_path: PathBuf,
+    #[cfg(feature = "wasm-components")]
     pub config: extension_wasm::WasmRuntimeConfig,
     pub permissions: Vec<String>,
 }
@@ -49,6 +54,15 @@ pub enum ExtensionRuntimeError {
     CommandRegistry(#[from] CommandRegistryError),
     #[error("read composite extension root failed: {0}")]
     ReadCompositeRoot(std::io::Error),
+    #[error("wasm command not found: {command_id}")]
+    CommandNotFound { command_id: String },
+    #[error("wasm runtime binding not found for command `{command_id}`: {runtime_id}")]
+    RuntimeBindingNotFound {
+        command_id: String,
+        runtime_id: String,
+    },
+    #[error("command `{command_id}` is not a component wasm command")]
+    UnsupportedCommand { command_id: String },
 }
 
 pub(super) fn runtime_key(extension_id: &str, runtime_id: &str) -> String {

@@ -54,12 +54,13 @@ gpui = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 
 [features]
-default = []
+default = ["wasm-components"]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb"]
 compare = ["db/compare", "db_view/compare"]
 github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]
 github-updates = []
+wasm-components = ["extension-runtime/wasm-components"]
 
 [lints]
 workspace = true

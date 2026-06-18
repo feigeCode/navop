@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
+#[cfg(feature = "wasm-components")]
+use std::path::PathBuf;
 
 use db_view::extension_menu::DbTreeExtensionMenuItem;
 use serde_json::Value;
@@ -34,9 +36,11 @@ impl ExtensionRuntimeCatalog {
             if self.wasm_runtimes.contains_key(&key) {
                 return Err(ExtensionRuntimeError::DuplicateRuntime { id: key });
             }
+            #[cfg(feature = "wasm-components")]
+            let module_path = resolve_module_path(&manifest.manifest_dir, &runtime.module);
+            #[cfg(feature = "wasm-components")]
             let base_config = extension_wasm::WasmRuntimeConfig::default();
-            let module_path =
-                base_config.resolve_module_path(&manifest.manifest_dir, &runtime.module);
+            #[cfg(feature = "wasm-components")]
             let config = extension_wasm::WasmRuntimeConfig {
                 max_memory_mb: runtime.max_memory_mb,
                 fuel_per_call: runtime.fuel_per_call,
@@ -45,10 +49,14 @@ impl ExtensionRuntimeCatalog {
             self.wasm_runtimes.insert(
                 key.clone(),
                 WasmRuntimeBinding {
+                    #[cfg(feature = "wasm-components")]
                     extension_id: manifest.id.clone(),
+                    #[cfg(feature = "wasm-components")]
                     runtime_key: key,
                     kind: runtime.kind,
+                    #[cfg(feature = "wasm-components")]
                     module_path,
+                    #[cfg(feature = "wasm-components")]
                     config,
                     permissions: manifest.permissions.clone(),
                 },
@@ -162,6 +170,15 @@ impl ExtensionRuntimeCatalog {
             }
         }
     }
+}
+
+#[cfg(feature = "wasm-components")]
+fn resolve_module_path(manifest_dir: &Path, module: &str) -> PathBuf {
+    let path = Path::new(module);
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    manifest_dir.join(path).components().collect()
 }
 
 pub(super) fn load_installed_composite_manifests(

@@ -10,7 +10,7 @@ async-trait = { workspace = true }
 db = { workspace = true }
 db_view = { workspace = true }
 extension-component = { workspace = true }
-extension-wasm = { workspace = true }
+extension-wasm = { workspace = true, optional = true }
 extension_view = { workspace = true }
 flate2 = "1"
 futures = { workspace = true }
@@ -30,8 +30,9 @@ smol = { workspace = true }
 tempfile = "3"
 
 [features]
-default = []
+default = ["wasm-components"]
 github-marketplace = []
+wasm-components = ["dep:extension-wasm"]
 
 [lints]
 workspace = true

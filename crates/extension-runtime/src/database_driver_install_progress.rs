@@ -169,10 +169,12 @@ impl DriverInstallProgressState {
         self.progress_value = FINISHED_PROGRESS;
     }
 
+    #[cfg(test)]
     fn status(&self) -> &str {
         self.status.as_ref()
     }
 
+    #[cfg(test)]
     fn progress_value(&self) -> f32 {
         self.progress_value
     }

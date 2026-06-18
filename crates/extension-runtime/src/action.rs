@@ -12,7 +12,9 @@ impl ExtensionRuntimeCatalog {
         context: DbTreeExtensionActionContext,
         db_state: GlobalDbState,
     ) -> extension_wasm::WasmResult<Vec<ViewSpec>> {
-        let binding = self.component_binding_for_command(&context.command_id)?;
+        let binding = self
+            .component_binding_for_command(&context.command_id)
+            .map_err(|_| extension_wasm::WasmError::FunctionNotFound(context.command_id.clone()))?;
         if binding.extension_id != context.extension_id {
             return Err(extension_wasm::WasmError::FunctionNotFound(
                 context.command_id,
@@ -37,7 +39,9 @@ impl ExtensionRuntimeCatalog {
         db_state: GlobalDbState,
         event: ViewActionEvent,
     ) -> extension_wasm::WasmResult<()> {
-        let binding = self.component_binding_for_command(&context.command_id)?;
+        let binding = self
+            .component_binding_for_command(&context.command_id)
+            .map_err(|_| extension_wasm::WasmError::FunctionNotFound(context.command_id.clone()))?;
         if binding.extension_id != context.extension_id {
             return Err(extension_wasm::WasmError::FunctionNotFound(
                 context.command_id,
