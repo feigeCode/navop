@@ -768,6 +768,7 @@ fn append_er_diagram_item(items: &mut Vec<ContextMenuItem>, node_id: &str, node_
     ));
 }
 
+#[cfg(feature = "compare")]
 fn append_compare_items(items: &mut Vec<ContextMenuItem>, node_id: &str, node_type: DbNodeType) {
     // 数据比较：仅对表显示
     if matches!(node_type, DbNodeType::Table) {
@@ -794,6 +795,10 @@ fn append_compare_items(items: &mut Vec<ContextMenuItem>, node_id: &str, node_ty
             },
         ));
     }
+}
+
+#[cfg(not(feature = "compare"))]
+fn append_compare_items(_items: &mut Vec<ContextMenuItem>, _node_id: &str, _node_type: DbNodeType) {
 }
 
 pub fn get_table_designer_capabilities_for(
@@ -1002,6 +1007,7 @@ mod tests {
             transport: IpcDriverTransport::local_socket("demo.sock"),
             dialect: Default::default(),
             capabilities: None,
+            connection: Default::default(),
             methods: Vec::new(),
             ui: Default::default(),
             manifest_dir: PathBuf::from("."),
@@ -1135,6 +1141,36 @@ database:
             ),
             "导出结构和数据菜单项应存在于二级菜单中"
         );
+    }
+
+    #[test]
+    #[cfg(not(feature = "compare"))]
+    fn compare_context_menu_items_are_hidden_without_compare_feature() {
+        let mut table_items = Vec::new();
+        append_compare_items(&mut table_items, "table-1", DbNodeType::Table);
+        assert!(
+            !has_label(&table_items, "数据比较"),
+            "默认构建不应暴露未完成的数据比较入口"
+        );
+
+        let mut database_items = Vec::new();
+        append_compare_items(&mut database_items, "database-1", DbNodeType::Database);
+        assert!(
+            !has_label(&database_items, "结构比较"),
+            "默认构建不应暴露未完成的结构比较入口"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "compare")]
+    fn compare_context_menu_items_are_available_with_compare_feature() {
+        let mut table_items = Vec::new();
+        append_compare_items(&mut table_items, "table-1", DbNodeType::Table);
+        assert!(has_label(&table_items, "数据比较"));
+
+        let mut database_items = Vec::new();
+        append_compare_items(&mut database_items, "database-1", DbNodeType::Database);
+        assert!(has_label(&database_items, "结构比较"));
     }
 
     #[test]

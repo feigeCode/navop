@@ -416,6 +416,7 @@ mod tests {
             transport: IpcDriverTransport::local_socket("demo.sock"),
             dialect: Default::default(),
             capabilities: None,
+            connection: Default::default(),
             methods: Vec::new(),
             ui: Default::default(),
             manifest_dir: PathBuf::from("."),

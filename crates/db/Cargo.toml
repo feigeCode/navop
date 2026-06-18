@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 default = []
 builtin-duckdb = ["dep:duckdb"]
+compare = []
 
 [dependencies]
 anyhow.workspace = true

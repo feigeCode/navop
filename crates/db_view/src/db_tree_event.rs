@@ -366,11 +366,13 @@ impl DatabaseEventHandler {
                             Self::handle_dump_sql_file(node, *mode, global_state, window, cx);
                         }
                     }
+                    #[cfg(feature = "compare")]
                     DbTreeViewEvent::CompareData { node_id } => {
                         if let Some(node) = get_node(&node_id, cx) {
                             Self::handle_compare_data(node, window, cx);
                         }
                     }
+                    #[cfg(feature = "compare")]
                     DbTreeViewEvent::CompareSchema { node_id } => {
                         if let Some(node) = get_node(&node_id, cx) {
                             Self::handle_compare_schema(node, window, cx);
@@ -3727,6 +3729,7 @@ impl DatabaseEventHandler {
         });
     }
 
+    #[cfg(feature = "compare")]
     /// 处理数据比较事件
     fn handle_compare_data(node: DbNode, window: &mut Window, cx: &mut App) {
         use crate::compare::DataCompareWindow;
@@ -3740,6 +3743,7 @@ impl DatabaseEventHandler {
         );
     }
 
+    #[cfg(feature = "compare")]
     /// 处理结构比较事件
     fn handle_compare_schema(node: DbNode, window: &mut Window, cx: &mut App) {
         use crate::compare::SchemaCompareWindow;

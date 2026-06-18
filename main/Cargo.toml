@@ -56,6 +56,7 @@ tempfile = "3"
 [features]
 default = []
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb"]
+compare = ["db/compare", "db_view/compare"]
 github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]
 github-updates = []

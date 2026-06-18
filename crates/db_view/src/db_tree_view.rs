@@ -440,8 +440,10 @@ pub enum DbTreeViewEvent {
     RunSqlFile { node_id: String },
     /// 转储SQL文件（导出结构和/或数据）
     DumpSqlFile { node_id: String, mode: SqlDumpMode },
+    #[cfg(feature = "compare")]
     /// 数据比较
     CompareData { node_id: String },
+    #[cfg(feature = "compare")]
     /// 结构比较
     CompareSchema { node_id: String },
 }
