@@ -1,8 +1,13 @@
+use crate::external_driver_display::{
+    external_driver_icon_from_file_path, external_driver_icon_from_path,
+};
 use db::ipc::IpcDriverRegistry;
 use gpui::{Styled, px};
 use gpui_component::{Icon, IconName, Sizable};
 use one_core::storage::DatabaseType;
 use rust_i18n::t;
+use std::path::PathBuf;
+use tracing::info;
 
 const BUILTIN_EXTERNAL_DRIVER_IDS: &[&str] = &["duckdb"];
 
@@ -60,6 +65,8 @@ pub(super) enum NewConnectionKind {
         name: String,
         description: String,
         category: Option<String>,
+        icon_asset_path: Option<String>,
+        icon_file_path: Option<PathBuf>,
     },
 }
 
@@ -132,7 +139,19 @@ impl NewConnectionKind {
             Self::MongoDB => IconName::MongoDB.color().with_size(px(40.0)),
             Self::Serial => IconName::SerialPort.color().with_size(px(40.0)),
             Self::Database(db_type) => db_type.as_icon().with_size(px(40.0)),
-            Self::ExternalDatabase { .. } => IconName::Database.color().with_size(px(40.0)),
+            Self::ExternalDatabase {
+                icon_asset_path,
+                icon_file_path,
+                ..
+            } => {
+                if let Some(path) = icon_file_path {
+                    return external_driver_icon_from_file_path(path, px(40.0));
+                }
+                icon_asset_path
+                    .as_deref()
+                    .map(|path| external_driver_icon_from_path(path, px(40.0)))
+                    .unwrap_or_else(|| IconName::Database.color().with_size(px(40.0)))
+            }
         }
     }
 }
@@ -142,11 +161,25 @@ fn external_database_kinds(registry: &IpcDriverRegistry) -> Vec<NewConnectionKin
         .drivers()
         .iter()
         .filter(|driver| !is_builtin_external_driver(&driver.id))
-        .map(|driver| NewConnectionKind::ExternalDatabase {
-            driver_id: driver.id.clone(),
-            name: driver.name.clone(),
-            description: driver.description.clone(),
-            category: driver.category.clone(),
+        .map(|driver| {
+            let icon_asset_path = driver.preferred_icon_asset_path();
+            let icon_file_path = driver.preferred_icon_file_path();
+            info!(
+                target: "driver_icon",
+                driver_id = %driver.id,
+                name = %driver.name,
+                icon_asset_path = ?icon_asset_path,
+                icon_file_path = ?icon_file_path.as_ref().map(|path| path.display().to_string()),
+                "new connection listed external driver"
+            );
+            NewConnectionKind::ExternalDatabase {
+                driver_id: driver.id.clone(),
+                name: driver.name.clone(),
+                description: driver.description.clone(),
+                category: driver.category.clone(),
+                icon_asset_path,
+                icon_file_path,
+            }
         })
         .collect()
 }
@@ -236,6 +269,33 @@ mod tests {
                     NewConnectionCategory::DomesticDatabase
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn external_database_kind_uses_manifest_icon() {
+        let mut driver = manifest("custom", "Custom");
+        driver.ui.icon = "icons/custom.svg".to_string();
+        let registry = IpcDriverRegistry::from_drivers(vec![driver]);
+
+        let icon_paths =
+            external_database_kinds(&registry)
+                .into_iter()
+                .find_map(|kind| match kind {
+                    NewConnectionKind::ExternalDatabase {
+                        icon_asset_path,
+                        icon_file_path,
+                        ..
+                    } => Some((icon_asset_path, icon_file_path)),
+                    _ => None,
+                });
+
+        assert_eq!(
+            Some((
+                Some("driver://custom/icon.svg".to_string()),
+                Some(PathBuf::from("./icons/custom.svg"))
+            )),
+            icon_paths
         );
     }
 

@@ -4,6 +4,7 @@ use gpui::AssetSource;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[test]
@@ -359,14 +360,22 @@ fn registry_resolves_external_driver_display_metadata() {
     manifest.manifest_dir = PathBuf::from("/drivers/demo");
 
     assert_eq!(
-        Some("driver://demo/icon_color".to_string()),
+        Some("driver://demo/icon_color.svg".to_string()),
         manifest.preferred_icon_asset_path()
+    );
+    assert_eq!(
+        Some(PathBuf::from("/drivers/demo/icons/demo-color.svg")),
+        manifest.preferred_icon_file_path()
     );
 
     manifest.ui.icon_color = None;
     assert_eq!(
-        Some("driver://demo/icon".to_string()),
+        Some("driver://demo/icon.svg".to_string()),
         manifest.preferred_icon_asset_path()
+    );
+    assert_eq!(
+        Some(PathBuf::from("/drivers/demo/icons/demo.svg")),
+        manifest.preferred_icon_file_path()
     );
 
     manifest.ui.icon = "DuckDB".to_string();
@@ -374,6 +383,7 @@ fn registry_resolves_external_driver_display_metadata() {
         Some("icons/duckdb.svg".to_string()),
         manifest.preferred_icon_asset_path()
     );
+    assert_eq!(None, manifest.preferred_icon_file_path());
 
     let registry = IpcDriverRegistry::from_drivers(vec![manifest]);
     let config = DbConnectionConfig {
@@ -397,6 +407,42 @@ fn registry_resolves_external_driver_display_metadata() {
     assert_eq!(
         Some("icons/duckdb.svg".to_string()),
         display.icon_asset_path
+    );
+    assert_eq!(None, display.icon_file_path);
+}
+
+#[test]
+fn custom_color_icon_path_is_preferred_over_icon_path() {
+    let mut manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{
+            "id": "demo",
+            "name": "DemoDB",
+            "entry": { "command": "driver" },
+            "transport": { "name": "demo.sock" },
+            "ui": { "icon": "icons/demo.svg" }
+        }"#,
+    )
+    .unwrap();
+    manifest.manifest_dir = PathBuf::from("/drivers/demo");
+
+    assert_eq!(
+        Some("driver://demo/icon.svg".to_string()),
+        manifest.preferred_icon_asset_path()
+    );
+    assert_eq!(
+        Some(PathBuf::from("/drivers/demo/icons/demo.svg")),
+        manifest.preferred_icon_file_path()
+    );
+
+    manifest.ui.icon_color = Some("icons/demo-color.svg".to_string());
+
+    assert_eq!(
+        Some("driver://demo/icon_color.svg".to_string()),
+        manifest.preferred_icon_asset_path()
+    );
+    assert_eq!(
+        Some(PathBuf::from("/drivers/demo/icons/demo-color.svg")),
+        manifest.preferred_icon_file_path()
     );
 }
 
@@ -430,9 +476,16 @@ fn driver_asset_source_loads_declared_icon_resources() {
 
     let mono = source.load("driver://demo/icon").unwrap().unwrap();
     let color = source.load("driver://demo/icon_color").unwrap().unwrap();
+    let mono_with_ext = source.load("driver://demo/icon.svg").unwrap().unwrap();
+    let color_with_ext = source
+        .load("driver://demo/icon_color.svg")
+        .unwrap()
+        .unwrap();
 
     assert_eq!(&*mono, b"mono");
     assert_eq!(&*color, b"color");
+    assert_eq!(&*mono_with_ext, b"mono");
+    assert_eq!(&*color_with_ext, b"color");
 }
 
 #[test]

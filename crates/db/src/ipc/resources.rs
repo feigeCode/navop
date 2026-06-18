@@ -3,6 +3,7 @@ use gpui::AssetSource;
 use std::borrow::Cow;
 use std::path::Path;
 use std::sync::Arc;
+use tracing::{info, warn};
 
 type RegistryReloader = dyn Fn() -> IpcDriverRegistry + Send + Sync;
 
@@ -76,7 +77,7 @@ impl AssetSource for DriverAssetSource {
             .find_driver(driver_id)
             .ok_or_else(|| anyhow::anyhow!("driver not found: {}", driver_id))?;
 
-        let file_path = match resource {
+        let file_path = match resource_kind(resource) {
             "icon" => driver
                 .icon_path()
                 .ok_or_else(|| anyhow::anyhow!("driver '{}' has no icon", driver_id))?,
@@ -91,16 +92,53 @@ impl AssetSource for DriverAssetSource {
             }
         };
 
-        self.loader
-            .load_file(&file_path)
-            .map(Cow::Owned)
-            .map(Some)
-            .map_err(|error| {
-                anyhow::anyhow!("failed to load driver resource '{}': {}", path, error)
-            })
+        info!(
+            target: "driver_icon",
+            driver_id,
+            resource,
+            asset_path = path,
+            file_path = %file_path.display(),
+            exists = file_path.is_file(),
+            "loading driver asset file"
+        );
+
+        match self.loader.load_file(&file_path) {
+            Ok(bytes) => {
+                info!(
+                    target: "driver_icon",
+                    driver_id,
+                    resource,
+                    asset_path = path,
+                    file_path = %file_path.display(),
+                    bytes = bytes.len(),
+                    "loaded driver asset file"
+                );
+                Ok(Some(Cow::Owned(bytes)))
+            }
+            Err(error) => {
+                warn!(
+                    target: "driver_icon",
+                    driver_id,
+                    resource,
+                    asset_path = path,
+                    file_path = %file_path.display(),
+                    error = %error,
+                    "failed to load driver asset file"
+                );
+                Err(anyhow::anyhow!(
+                    "failed to load driver resource '{}': {}",
+                    path,
+                    error
+                ))
+            }
+        }
     }
 
     fn list(&self, _path: &str) -> Result<Vec<gpui::SharedString>, anyhow::Error> {
         Ok(Vec::new())
     }
+}
+
+fn resource_kind(resource: &str) -> &str {
+    resource.split_once('.').map_or(resource, |(kind, _)| kind)
 }

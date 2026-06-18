@@ -44,6 +44,7 @@ use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
 use crate::auth::{AuthService, show_auth_dialog};
+use crate::external_driver_display::external_driver_icon_for_config;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
 use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
@@ -2724,9 +2725,12 @@ impl HomePage {
                                 ConnectionType::Database => {
                                     let icon = conn
                                         .to_db_connection()
-                                        .map(|c| c.database_type.as_icon())
+                                        .map(|c| {
+                                            external_driver_icon_for_config(&c, px(40.0))
+                                                .unwrap_or_else(|| c.database_type.as_icon())
+                                        })
                                         .unwrap_or_else(|_| IconName::Database.color());
-                                    icon.with_size(px(40.0)).text_color(gpui::white())
+                                    icon.with_size(px(40.0))
                                 }
                                 ConnectionType::SshSftp => IconName::TerminalColor
                                     .color()

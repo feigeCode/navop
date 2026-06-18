@@ -11,7 +11,7 @@ pub mod registry;
 pub mod resources;
 
 pub use connection::ExternalDbConnection;
-pub use display::IpcDriverDisplay;
+pub use display::{IpcDriverDisplay, driver_icon_from_asset_path, driver_icon_from_file_path};
 pub use method_support::{MethodSet, MethodSupport};
 pub use plugin::ExternalDatabasePlugin;
 pub use registry::{

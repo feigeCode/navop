@@ -35,7 +35,10 @@ use crate::extension_menu::{
     DbTreeExtensionActionContext, DbTreeExtensionMenuContext, DbTreeExtensionMenuItem,
     DbTreeExtensionMenuRegistry, GlobalDbTreeExtensionActionHandler,
 };
-use db::{DbNode, DbNodeType, GlobalDbState};
+use db::{
+    DbNode, DbNodeType, GlobalDbState,
+    ipc::{driver_icon_from_asset_path, driver_icon_from_file_path},
+};
 use gpui_component::label::Label;
 use gpui_component::menu::PopupMenu;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
@@ -94,7 +97,7 @@ const EXTERNAL_DRIVER_ID_METADATA: &str = "external_driver_id";
 const EXTERNAL_DRIVER_NAME_METADATA: &str = "external_driver_name";
 
 fn connection_node(id: String, name: String, config: &DbConnectionConfig) -> DbNode {
-    let node = DbNode::new(
+    let mut node = DbNode::new(
         id.clone(),
         name,
         DbNodeType::Connection,
@@ -102,11 +105,8 @@ fn connection_node(id: String, name: String, config: &DbConnectionConfig) -> DbN
         config.database_type.clone(),
     );
     let metadata = external_driver_metadata(config);
-    if metadata.is_empty() {
-        node
-    } else {
-        node.with_metadata(metadata)
-    }
+    apply_connection_node_config(&mut node, config, metadata);
+    node
 }
 
 fn external_driver_metadata(config: &DbConnectionConfig) -> HashMap<String, String> {
@@ -122,23 +122,87 @@ fn external_driver_metadata_from_registry(
     if let Some(display) = registry.display_for_config(config) {
         metadata.insert(EXTERNAL_DRIVER_ID_METADATA.to_string(), display.driver_id);
         metadata.insert(EXTERNAL_DRIVER_NAME_METADATA.to_string(), display.name);
-        if let Some(icon_asset_path) = display.icon_asset_path {
-            metadata.insert(EXTERNAL_DRIVER_ICON_METADATA.to_string(), icon_asset_path);
+        let icon_asset_path = display.icon_asset_path;
+        let icon_file_path = display.icon_file_path;
+        if let Some(icon_path) = icon_file_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .or(icon_asset_path.clone())
+        {
+            tracing::info!(
+                target: "driver_icon",
+                connection_id = %config.id,
+                connection_name = %config.name,
+                database_type = ?config.database_type,
+                asset_path = ?icon_asset_path,
+                file_path = ?icon_file_path.as_ref().map(|path| path.display().to_string()),
+                stored_path = %icon_path,
+                "db tree stored external driver icon metadata"
+            );
+            metadata.insert(EXTERNAL_DRIVER_ICON_METADATA.to_string(), icon_path);
+        } else {
+            tracing::info!(
+                target: "driver_icon",
+                connection_id = %config.id,
+                connection_name = %config.name,
+                database_type = ?config.database_type,
+                "db tree display metadata had no icon path"
+            );
         }
+    } else if config.database_type.is_external() {
+        tracing::info!(
+            target: "driver_icon",
+            connection_id = %config.id,
+            connection_name = %config.name,
+            database_type = ?config.database_type,
+            "db tree could not resolve external driver display"
+        );
     }
     metadata
 }
 
 fn connection_node_icon(node: &DbNode) -> Icon {
-    node.metadata
-        .get(EXTERNAL_DRIVER_ICON_METADATA)
-        .map(|path| {
-            Icon::default()
-                .path(path.clone())
-                .color()
-                .with_size(ComponentSize::Large)
-        })
-        .unwrap_or_else(|| node.database_type.as_node_icon())
+    if let Some(path) = node.metadata.get(EXTERNAL_DRIVER_ICON_METADATA) {
+        let file_path = std::path::Path::new(path);
+        tracing::info!(
+            target: "driver_icon",
+            node_id = %node.id,
+            node_name = %node.name,
+            database_type = ?node.database_type,
+            asset_path = %path,
+            is_absolute = file_path.is_absolute(),
+            exists = file_path.is_file(),
+            "db tree selected external driver icon"
+        );
+        if file_path.is_absolute() {
+            return driver_icon_from_file_path(file_path.to_path_buf(), ComponentSize::Large);
+        }
+        return driver_icon_from_asset_path(path.clone(), ComponentSize::Large);
+    }
+
+    if node.database_type.is_external() {
+        tracing::info!(
+            target: "driver_icon",
+            node_id = %node.id,
+            node_name = %node.name,
+            database_type = ?node.database_type,
+            "db tree fell back to database type icon"
+        );
+    }
+    node.database_type.as_node_icon()
+}
+
+fn apply_connection_node_config(
+    node: &mut DbNode,
+    config: &DbConnectionConfig,
+    metadata: HashMap<String, String>,
+) {
+    node.name = config.name.to_string();
+    node.database_type = config.database_type.clone();
+    node.metadata.remove(EXTERNAL_DRIVER_ID_METADATA);
+    node.metadata.remove(EXTERNAL_DRIVER_NAME_METADATA);
+    node.metadata.remove(EXTERNAL_DRIVER_ICON_METADATA);
+    node.metadata.extend(metadata);
 }
 
 fn apply_db_selection_state(
@@ -872,7 +936,7 @@ impl DbTreeView {
             sync_selected_databases_for_connection(&mut self.selected_databases, connection);
 
             if let Some(node) = self.db_nodes.get_mut(&id) {
-                node.name = config.name.to_string();
+                apply_connection_node_config(node, &config, external_driver_metadata(&config));
                 let mut global_db_state = cx.global_mut::<GlobalDbState>().clone();
                 let conn_id = id.clone();
                 if let Some(exist_config) = global_db_state.get_config(&id) {
@@ -3027,6 +3091,56 @@ mod tests {
             Some(&"icons/duckdb.svg".to_string()),
             metadata.get(EXTERNAL_DRIVER_ICON_METADATA)
         );
+    }
+
+    #[test]
+    fn apply_connection_node_config_refreshes_external_driver_metadata() {
+        let mut node = build_node(
+            DbNodeType::Connection,
+            "old",
+            &[(EXTERNAL_DRIVER_ICON_METADATA, "driver://old/icon")],
+        );
+        let config = external_config("demo");
+        let metadata = HashMap::from([
+            (EXTERNAL_DRIVER_ID_METADATA.to_string(), "demo".to_string()),
+            (
+                EXTERNAL_DRIVER_ICON_METADATA.to_string(),
+                "driver://demo/icon".to_string(),
+            ),
+        ]);
+
+        apply_connection_node_config(&mut node, &config, metadata);
+
+        assert_eq!("saved", node.name);
+        assert_eq!(DatabaseType::external("demo"), node.database_type);
+        assert_eq!(
+            Some(&"driver://demo/icon".to_string()),
+            node.metadata.get(EXTERNAL_DRIVER_ICON_METADATA)
+        );
+    }
+
+    #[test]
+    fn apply_connection_node_config_clears_stale_external_driver_metadata() {
+        let mut node = build_node(
+            DbNodeType::Connection,
+            "old",
+            &[
+                (EXTERNAL_DRIVER_ID_METADATA, "demo"),
+                (EXTERNAL_DRIVER_NAME_METADATA, "DemoDB"),
+                (EXTERNAL_DRIVER_ICON_METADATA, "driver://demo/icon"),
+                ("custom", "kept"),
+            ],
+        );
+        let mut config = external_config("demo");
+        config.database_type = DatabaseType::MySQL;
+
+        apply_connection_node_config(&mut node, &config, HashMap::new());
+
+        assert_eq!(DatabaseType::MySQL, node.database_type);
+        assert!(!node.metadata.contains_key(EXTERNAL_DRIVER_ID_METADATA));
+        assert!(!node.metadata.contains_key(EXTERNAL_DRIVER_NAME_METADATA));
+        assert!(!node.metadata.contains_key(EXTERNAL_DRIVER_ICON_METADATA));
+        assert_eq!(Some(&"kept".to_string()), node.metadata.get("custom"));
     }
 
     #[test]
