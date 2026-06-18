@@ -5,7 +5,7 @@ use gpui::{
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div,
 };
 use gpui_component::input::{InputEvent, InputState};
-use gpui_component::{ActiveTheme, Icon, IconName, scroll::ScrollableElement, v_flex};
+use gpui_component::{ActiveTheme, Icon, IconName, v_flex};
 use one_core::tab_container::{TabContent, TabContentEvent};
 
 use crate::{ExtensionSummary, ExtensionViewHost, MarketplaceEntry};
@@ -100,13 +100,7 @@ impl Render for ExtensionManagerView {
                 .p_4()
                 .bg(cx.theme().background)
                 .child(self.render_toolbar(window, cx))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_y_scrollbar()
-                        .child(self.render_body(cx)),
-                ),
+                .child(div().flex_1().min_h_0().child(self.render_body(cx))),
         )
     }
 }

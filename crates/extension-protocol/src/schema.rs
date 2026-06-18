@@ -113,6 +113,7 @@ pub struct ObjectsParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectInfo {
     pub name: String,
+    #[serde(default = "default_object_kind")]
     pub kind: ObjectKind,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub comment: String,
@@ -129,6 +130,10 @@ pub struct ObjectInfo {
     pub updated_at: Option<String>,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub extra: Value,
+}
+
+fn default_object_kind() -> ObjectKind {
+    ObjectKind::Table
 }
 
 // ============================================================================
@@ -280,12 +285,18 @@ pub struct ViewsParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewInfo {
     pub name: String,
+    #[serde(default = "default_view_kind")]
     pub kind: ObjectKind, // View | MaterializedView
+    #[serde(default)]
     pub definition_sql: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub comment: String,
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub extra: Value,
+}
+
+fn default_view_kind() -> ObjectKind {
+    ObjectKind::View
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -593,6 +604,16 @@ mod tests {
     }
 
     #[test]
+    fn object_info_missing_kind_defaults_to_table_for_legacy_drivers() {
+        let parsed: ObjectInfo =
+            serde_json::from_str(r#"{"name":"users","comment":"legacy table"}"#).unwrap();
+
+        assert_eq!(parsed.name, "users");
+        assert_eq!(parsed.kind, ObjectKind::Table);
+        assert_eq!(parsed.comment, "legacy table");
+    }
+
+    #[test]
     fn column_info_full_round_trip() {
         let c = ColumnInfo {
             ordinal: 1,
@@ -669,6 +690,17 @@ mod tests {
         };
         let j = serde_json::to_string(&v).unwrap();
         assert!(j.contains(r#""kind":"materialized_view""#));
+    }
+
+    #[test]
+    fn view_info_missing_kind_defaults_to_view_for_legacy_drivers() {
+        let parsed: ViewInfo =
+            serde_json::from_str(r#"{"name":"v_users","comment":"legacy view"}"#).unwrap();
+
+        assert_eq!(parsed.name, "v_users");
+        assert_eq!(parsed.kind, ObjectKind::View);
+        assert_eq!(parsed.definition_sql, "");
+        assert_eq!(parsed.comment, "legacy view");
     }
 
     #[test]

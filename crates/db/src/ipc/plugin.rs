@@ -372,6 +372,25 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         quote_identifier_with(left, right, identifier)
     }
 
+    fn format_table_reference(&self, database: &str, schema: Option<&str>, table: &str) -> String {
+        let capabilities = self.driver.effective_capabilities();
+        if capabilities.supports_schema && !capabilities.uses_schema_as_database {
+            if let Some(schema) = schema.filter(|schema| !schema.trim().is_empty()) {
+                return format!(
+                    "{}.{}",
+                    self.quote_identifier(schema),
+                    self.quote_identifier(table)
+                );
+            }
+        }
+
+        format!(
+            "{}.{}",
+            self.quote_identifier(database),
+            self.quote_identifier(table)
+        )
+    }
+
     fn get_completion_info(&self) -> SqlCompletionInfo {
         SqlCompletionInfo::default().with_standard_sql()
     }
@@ -1726,6 +1745,37 @@ mod tests {
         assert_eq!(
             Some("singlefile:/tmp/from-extra.db".to_string()),
             lifecycle.physical_open_lock_key
+        );
+    }
+
+    #[test]
+    fn external_table_reference_uses_schema_when_manifest_supports_schema() {
+        let driver = driver_manifest("kingbase", true, "kingbase.connection");
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        assert_eq!(
+            "\"comi_ai_manager\".\"ai_agent_child_agent\"",
+            plugin.format_table_reference(
+                "ai_app",
+                Some("comi_ai_manager"),
+                "ai_agent_child_agent"
+            )
+        );
+    }
+
+    #[test]
+    fn external_table_reference_uses_database_when_schema_is_database() {
+        let mut driver = driver_manifest("mysqlish", true, "mysqlish.connection");
+        driver
+            .capabilities
+            .as_mut()
+            .expect("test manifest has capabilities")
+            .uses_schema_as_database = true;
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        assert_eq!(
+            "\"tenant_db\".\"events\"",
+            plugin.format_table_reference("tenant_db", Some("ignored_schema"), "events")
         );
     }
 

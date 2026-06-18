@@ -8,6 +8,7 @@ use gpui_component::{
     h_flex,
     input::Input,
     progress::Progress,
+    scroll::ScrollableElement,
     v_flex,
 };
 
@@ -61,7 +62,13 @@ impl ExtensionManagerView {
         self.ensure_marketplace_loaded(cx);
         let query_text = self.search.read(cx).text().to_string();
         let query = marketplace_filter_query(&query_text);
+        let content = match self.mode {
+            ExtensionManagerMode::Installed => self.render_installed(query, cx),
+            ExtensionManagerMode::Marketplace => self.render_marketplace(query, cx),
+        };
+
         v_flex()
+            .size_full()
             .gap_3()
             .child(self.render_tabs(cx))
             .child(
@@ -69,10 +76,13 @@ impl ExtensionManagerView {
                     .small()
                     .prefix(Icon::new(IconName::Search)),
             )
-            .child(match self.mode {
-                ExtensionManagerMode::Installed => self.render_installed(query, cx),
-                ExtensionManagerMode::Marketplace => self.render_marketplace(query, cx),
-            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .child(content),
+            )
             .into_any_element()
     }
 
@@ -137,6 +147,7 @@ impl ExtensionManagerView {
             return empty_state("尚未安装匹配的扩展", cx);
         }
         v_flex()
+            .w_full()
             .gap_3()
             .children(
                 list.into_iter()
@@ -156,6 +167,7 @@ impl ExtensionManagerView {
             return empty_state(message, cx);
         }
         v_flex()
+            .w_full()
             .gap_3()
             .children(
                 list.into_iter()

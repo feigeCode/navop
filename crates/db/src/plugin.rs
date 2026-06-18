@@ -2900,10 +2900,7 @@ mod tests {
         assert_eq!("`users`", plugin.quote_identifier("users"));
         assert!(plugin.capabilities().supports_functions);
 
-        assert_eq!(
-            " LIMIT 10 OFFSET 20",
-            plugin.format_pagination(10, 20, "")
-        );
+        assert_eq!(" LIMIT 10 OFFSET 20", plugin.format_pagination(10, 20, ""));
     }
 
     // ==================== is_query_stmt tests (AST-based) ====================
