@@ -58,6 +58,95 @@ pub struct SchemaInfo {
 }
 
 // ============================================================================
+// Object View
+// ============================================================================
+
+/// `schema/object_view` 请求的视图类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectViewKind {
+    Databases,
+    Schemas,
+    Tables,
+    Columns,
+    Indexes,
+    Views,
+    Functions,
+    Procedures,
+    Triggers,
+    Sequences,
+}
+
+impl ObjectViewKind {
+    /// 用作 wire JSON 的 snake_case 字面量。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Databases => "databases",
+            Self::Schemas => "schemas",
+            Self::Tables => "tables",
+            Self::Columns => "columns",
+            Self::Indexes => "indexes",
+            Self::Views => "views",
+            Self::Functions => "functions",
+            Self::Procedures => "procedures",
+            Self::Triggers => "triggers",
+            Self::Sequences => "sequences",
+        }
+    }
+}
+
+/// `schema/object_view` 请求参数。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectViewParams {
+    pub conn_id: ConnId,
+    pub view: ObjectViewKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+}
+
+/// `schema/object_view` 的列文本对齐。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectViewColumnAlign {
+    Left,
+    Center,
+    Right,
+}
+
+/// `schema/object_view` 的表头列定义。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectViewColumn {
+    /// 列 key,要求在同一个视图内唯一。
+    pub key: String,
+    /// 表头展示名。
+    pub name: String,
+    /// 列宽像素。省略时 host 使用默认列宽。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width_px: Option<f32>,
+    /// 文本对齐。省略时左对齐。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<ObjectViewColumnAlign>,
+}
+
+/// `schema/object_view` 响应。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ObjectView {
+    /// 视图标题。省略或空字符串时 host 使用默认标题。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// 要展示的字段及其表头元信息。字段顺序就是渲染顺序。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub columns: Vec<ObjectViewColumn>,
+    /// 行数据。每行顺序与 `columns` 对齐。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<Vec<String>>,
+}
+
+// ============================================================================
 // Objects(表 / 视图 / 类型 / 函数 / 触发器)
 // ============================================================================
 
@@ -789,6 +878,49 @@ mod tests {
         let jr = serde_json::to_string(&r).unwrap();
         assert!(jp.contains(r#""view":"v1""#));
         assert!(jr.contains(r#""is_materialized":false"#));
+    }
+
+    #[test]
+    fn object_view_params_and_result_round_trip() {
+        let p = ObjectViewParams {
+            conn_id: 9,
+            view: ObjectViewKind::Columns,
+            database: Some("main".into()),
+            schema: Some("public".into()),
+            table: Some("events".into()),
+        };
+        let r = ObjectView {
+            title: "Event Columns".into(),
+            columns: vec![
+                ObjectViewColumn {
+                    key: "name".into(),
+                    name: "Field".into(),
+                    width_px: Some(220.0),
+                    align: None,
+                },
+                ObjectViewColumn {
+                    key: "nullable".into(),
+                    name: "Null?".into(),
+                    width_px: Some(72.0),
+                    align: Some(ObjectViewColumnAlign::Right),
+                },
+            ],
+            rows: vec![vec!["id".into(), "false".into()]],
+        };
+
+        let parsed_params: ObjectViewParams =
+            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        let parsed_result: ObjectView =
+            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+
+        assert_eq!(ObjectViewKind::Columns, parsed_params.view);
+        assert_eq!("events", parsed_params.table.as_deref().unwrap());
+        assert_eq!(2, parsed_result.columns.len());
+        assert_eq!(
+            Some(ObjectViewColumnAlign::Right),
+            parsed_result.columns[1].align
+        );
+        assert_eq!("false", parsed_result.rows[0][1]);
     }
 
     #[test]

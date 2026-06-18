@@ -7,7 +7,7 @@
 //! 层硬编码字面量(打错字编译都过)。
 //!
 use extension_protocol::conn::ConnId;
-use extension_protocol::schema::ObjectKind;
+use extension_protocol::schema::{ObjectKind, ObjectViewKind};
 use one_core::storage::DbConnectionConfig;
 use serde_json::{Value, json};
 
@@ -119,6 +119,29 @@ pub fn schema_databases_params(conn_id: ConnId) -> Value {
 /// `schema/schemas` 参数。
 pub fn schema_schemas_params(conn_id: ConnId, database: &str) -> Value {
     json!({ "conn_id": conn_id, "database": database })
+}
+
+/// `schema/object_view` 参数。
+pub fn schema_object_view_params(
+    conn_id: ConnId,
+    view: ObjectViewKind,
+    database: Option<&str>,
+    schema: Option<&str>,
+    table: Option<&str>,
+) -> Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("conn_id".into(), json!(conn_id));
+    obj.insert("view".into(), json!(view.as_str()));
+    if let Some(db) = database {
+        obj.insert("database".into(), json!(db));
+    }
+    if let Some(s) = schema {
+        obj.insert("schema".into(), json!(s));
+    }
+    if let Some(t) = table {
+        obj.insert("table".into(), json!(t));
+    }
+    Value::Object(obj)
 }
 
 /// `schema/objects` 参数。
@@ -272,6 +295,23 @@ mod tests {
         let v = schema_columns_params(1, None, None, "users");
         assert_eq!(v["table"], json!("users"));
         assert_eq!(v["conn_id"], json!(1));
+    }
+
+    #[test]
+    fn schema_object_view_params_omits_empty_scope() {
+        let v = schema_object_view_params(
+            17,
+            ObjectViewKind::Columns,
+            Some("app"),
+            None,
+            Some("events"),
+        );
+
+        assert_eq!(v["conn_id"], json!(17));
+        assert_eq!(v["view"], json!("columns"));
+        assert_eq!(v["database"], json!("app"));
+        assert!(v.get("schema").is_none());
+        assert_eq!(v["table"], json!("events"));
     }
 
     #[test]

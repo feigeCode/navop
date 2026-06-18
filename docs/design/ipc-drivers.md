@@ -152,6 +152,163 @@ fall back to local SQL only when the method is not supported.
 containing the original SQL plus dialect fallback SQL so the driver can either
 execute native explain behavior or use the fallback template.
 
+## Object View Header Customization
+
+Drivers can customize the object-list table rendered by the database object
+panel with the optional `schema/object_view` method. This method is
+connection-bound and is called before the host falls back to the older
+`schema/databases`, `schema/objects`, `schema/columns`, `schema/indexes`, and
+other fixed mappings.
+
+Declare the method in `driver.json` when the driver implements it:
+
+```json
+{
+  "methods": [
+    "schema/object_view",
+    "schema/databases",
+    "schema/objects",
+    "schema/columns"
+  ]
+}
+```
+
+If the method is absent from `methods`, or the driver returns the standard
+not-supported error for this method, the host keeps the legacy object view
+behavior. This makes the method safe to add incrementally.
+
+### Request
+
+The host sends `schema/object_view` with these params:
+
+```json
+{
+  "conn_id": 12,
+  "view": "columns",
+  "database": "main",
+  "schema": "public",
+  "table": "events"
+}
+```
+
+Fields:
+
+- `conn_id`: injected by the host for connection-bound routing.
+- `view`: one of `databases`, `schemas`, `tables`, `columns`, `indexes`,
+  `views`, `functions`, `procedures`, `triggers`, or `sequences`.
+- `database`: present when the requested view is scoped to a database.
+- `schema`: present when the requested view is scoped to a schema.
+- `table`: present for table-scoped views such as `columns` and `indexes`.
+
+### Response
+
+Return the full table shape the host should render:
+
+```json
+{
+  "title": "Columns",
+  "columns": [
+    { "key": "name", "name": "Field", "width_px": 220 },
+    { "key": "type", "name": "Type", "width_px": 160 },
+    { "key": "nullable", "name": "Null?", "width_px": 72, "align": "right" },
+    { "key": "comment", "name": "Comment", "width_px": 260 }
+  ],
+  "rows": [
+    ["id", "BIGINT", "false", "primary key"],
+    ["payload", "JSON", "true", ""]
+  ]
+}
+```
+
+Response fields:
+
+- `title`: optional. Empty or omitted uses the host default title for that view.
+- `columns`: required for the custom view to be used. The order is the rendered
+  order, so omit fields the driver does not want to display.
+- `columns[].key`: stable column identifier, unique within the view.
+- `columns[].name`: header label shown to the user.
+- `columns[].width_px`: optional width in pixels. Omit it to use the host
+  default width.
+- `columns[].align`: optional text alignment: `left`, `center`, or `right`.
+  Omit it for left alignment.
+- `rows`: each row is an array of strings aligned with `columns`.
+
+The host normalizes row length to the number of rendered columns: extra values
+are ignored and missing values become empty strings. Drivers should still return
+exactly one value per column because it is easier to inspect and test.
+
+### Choosing Fields
+
+The driver owns the display field set for `schema/object_view`. For example, a
+time-series driver can render measurements with `name`, `tags`, `fields`, and
+`retention_policy` instead of forcing the generic `Name` / `Comment` columns.
+The same driver can render `columns` as `name`, `type`, `nullable`,
+`encoding`, and `compression` if those fields are important for that database.
+
+Keep the first column as the object name when the row represents a clickable
+database object. The current object panel uses the first cell for the row label
+and icon pairing.
+
+### Rust Driver Example
+
+A driver using `extension-driver` can handle the method in
+`DriverConnection::call`:
+
+```rust
+use extension_protocol::{error_codes, method, schema, ProtocolError};
+use serde_json::Value;
+
+fn call(&mut self, method_name: &str, params: &Value) -> Result<Value, ProtocolError> {
+    match method_name {
+        method::SCHEMA_OBJECT_VIEW => {
+            let params: schema::ObjectViewParams = serde_json::from_value(params.clone())
+                .map_err(|error| ProtocolError::new(
+                    error_codes::INVALID_PARAMS,
+                    error.to_string(),
+                ))?;
+            let view = match params.view {
+                schema::ObjectViewKind::Columns => schema::ObjectView {
+                    title: "Columns".into(),
+                    columns: vec![
+                        schema::ObjectViewColumn {
+                            key: "name".into(),
+                            name: "Field".into(),
+                            width_px: Some(220.0),
+                            align: None,
+                        },
+                        schema::ObjectViewColumn {
+                            key: "nullable".into(),
+                            name: "Null?".into(),
+                            width_px: Some(72.0),
+                            align: Some(schema::ObjectViewColumnAlign::Right),
+                        },
+                    ],
+                    rows: load_column_rows(&params.database, &params.schema, &params.table)?,
+                },
+                _ => {
+                    return Err(ProtocolError::new(
+                        error_codes::METHOD_NOT_FOUND,
+                        format!("unsupported object view: {}", params.view.as_str()),
+                    ));
+                }
+            };
+            serde_json::to_value(view).map_err(|error| ProtocolError::new(
+                error_codes::INTERNAL_ERROR,
+                error.to_string(),
+            ))
+        }
+        _ => Err(ProtocolError::new(
+            error_codes::METHOD_NOT_FOUND,
+            format!("unknown method: {method_name}"),
+        )),
+    }
+}
+```
+
+Unsupported `view` values should return `METHOD_NOT_FOUND` or another error
+that the driver adapter maps to `DbError::NotSupported`; the host treats that as
+the signal to fall back to legacy rendering for that object view.
+
 ## Display And Resources
 
 Driver display metadata resolves from the manifest:

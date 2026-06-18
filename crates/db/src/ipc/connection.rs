@@ -954,6 +954,7 @@ mod tests {
 
     #[test]
     fn auto_conn_id_is_required_for_connection_methods() {
+        assert!(method_requires_auto_conn_id(method::SCHEMA_OBJECT_VIEW));
         assert!(method_requires_auto_conn_id(method::SCHEMA_COLUMNS));
         assert!(method_requires_auto_conn_id(method::QUERY_START));
         assert!(method_requires_auto_conn_id(method::CURSOR_FETCH));
