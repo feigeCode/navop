@@ -294,6 +294,7 @@ mod tests {
         IpcDriverManifest {
             id: "dummy".into(),
             name: "Dummy".into(),
+            category: None,
             description: String::new(),
             version: String::new(),
             entry: IpcDriverEntry {

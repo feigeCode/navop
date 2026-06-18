@@ -6,23 +6,31 @@ use rust_i18n::t;
 
 const BUILTIN_EXTERNAL_DRIVER_IDS: &[&str] = &["duckdb"];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum NewConnectionCategory {
     All,
     Database,
+    DomesticDatabase,
     NoSql,
     Terminal,
 }
 
 impl NewConnectionCategory {
-    pub(super) fn all() -> [Self; 4] {
-        [Self::All, Self::Database, Self::NoSql, Self::Terminal]
+    pub(super) fn all() -> [Self; 5] {
+        [
+            Self::All,
+            Self::Database,
+            Self::DomesticDatabase,
+            Self::NoSql,
+            Self::Terminal,
+        ]
     }
 
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::All => "全部",
             Self::Database => "数据库",
+            Self::DomesticDatabase => "国产数据库",
             Self::NoSql => "NoSQL",
             Self::Terminal => "终端",
         }
@@ -32,6 +40,7 @@ impl NewConnectionCategory {
         match self {
             Self::All => IconName::AppsColor,
             Self::Database => IconName::Database,
+            Self::DomesticDatabase => IconName::Database,
             Self::NoSql => IconName::Server,
             Self::Terminal => IconName::Terminal,
         }
@@ -50,6 +59,7 @@ pub(super) enum NewConnectionKind {
         driver_id: String,
         name: String,
         description: String,
+        category: Option<String>,
     },
 }
 
@@ -100,7 +110,14 @@ impl NewConnectionKind {
         match self {
             Self::Ssh | Self::Terminal | Self::Serial => NewConnectionCategory::Terminal,
             Self::Redis | Self::MongoDB => NewConnectionCategory::NoSql,
-            Self::Database(_) | Self::ExternalDatabase { .. } => NewConnectionCategory::Database,
+            Self::Database(_) => NewConnectionCategory::Database,
+            Self::ExternalDatabase { category, .. } => {
+                if is_domestic_database_category(category.as_deref()) {
+                    NewConnectionCategory::DomesticDatabase
+                } else {
+                    NewConnectionCategory::Database
+                }
+            }
         }
     }
 
@@ -129,12 +146,17 @@ fn external_database_kinds(registry: &IpcDriverRegistry) -> Vec<NewConnectionKin
             driver_id: driver.id.clone(),
             name: driver.name.clone(),
             description: driver.description.clone(),
+            category: driver.category.clone(),
         })
         .collect()
 }
 
 fn is_builtin_external_driver(driver_id: &str) -> bool {
     BUILTIN_EXTERNAL_DRIVER_IDS.contains(&driver_id)
+}
+
+fn is_domestic_database_category(category: Option<&str>) -> bool {
+    category == Some("domestic_database")
 }
 
 #[cfg(test)]
@@ -161,7 +183,75 @@ mod tests {
         assert_eq!(ids, vec!["custom"]);
     }
 
+    #[test]
+    fn connection_categories_include_domestic_database() {
+        assert_eq!(
+            NewConnectionCategory::all(),
+            [
+                NewConnectionCategory::All,
+                NewConnectionCategory::Database,
+                NewConnectionCategory::DomesticDatabase,
+                NewConnectionCategory::NoSql,
+                NewConnectionCategory::Terminal,
+            ]
+        );
+        assert_eq!(
+            "国产数据库",
+            NewConnectionCategory::DomesticDatabase.label()
+        );
+    }
+
+    #[test]
+    fn ipc_database_driver_uses_manifest_category_for_domestic_database() {
+        let registry = IpcDriverRegistry::from_drivers(vec![
+            manifest("dm", "Dameng DM"),
+            manifest_with_category("kingbase", "KingbaseES", "domestic_database"),
+            manifest_with_category("gbase8s", "GBase 8s", "domestic_database"),
+            manifest("iotdb", "Apache IoTDB"),
+        ]);
+
+        let mut categories: Vec<(String, NewConnectionCategory)> =
+            external_database_kinds(&registry)
+                .into_iter()
+                .filter_map(|kind| match kind {
+                    NewConnectionKind::ExternalDatabase { ref driver_id, .. } => {
+                        Some((driver_id.clone(), kind.category()))
+                    }
+                    _ => None,
+                })
+                .collect();
+        categories.sort_by(|left, right| left.0.cmp(&right.0));
+
+        assert_eq!(
+            categories,
+            vec![
+                ("dm".to_string(), NewConnectionCategory::Database),
+                (
+                    "gbase8s".to_string(),
+                    NewConnectionCategory::DomesticDatabase
+                ),
+                ("iotdb".to_string(), NewConnectionCategory::Database),
+                (
+                    "kingbase".to_string(),
+                    NewConnectionCategory::DomesticDatabase
+                ),
+            ]
+        );
+    }
+
     fn manifest(id: &str, name: &str) -> IpcDriverManifest {
+        manifest_with_optional_category(id, name, None)
+    }
+
+    fn manifest_with_category(id: &str, name: &str, category: &str) -> IpcDriverManifest {
+        manifest_with_optional_category(id, name, Some(category.to_string()))
+    }
+
+    fn manifest_with_optional_category(
+        id: &str,
+        name: &str,
+        category: Option<String>,
+    ) -> IpcDriverManifest {
         IpcDriverManifest {
             id: id.to_string(),
             name: name.to_string(),
@@ -178,6 +268,7 @@ mod tests {
             connection: Default::default(),
             methods: Vec::new(),
             ui: Default::default(),
+            category,
             manifest_dir: PathBuf::from("."),
         }
     }

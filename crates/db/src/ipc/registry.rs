@@ -18,6 +18,8 @@ pub struct IpcDriverManifest {
     pub id: String,
     pub name: String,
     #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
     pub description: String,
     #[serde(default)]
     pub version: String,

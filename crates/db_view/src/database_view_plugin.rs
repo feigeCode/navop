@@ -997,6 +997,7 @@ mod tests {
         IpcDriverManifest {
             id: "demo".into(),
             name: "DemoDB".into(),
+            category: None,
             description: String::new(),
             version: String::new(),
             entry: IpcDriverEntry {

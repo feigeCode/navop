@@ -306,6 +306,7 @@ fn placeholder_driver_manifest(driver_id: &str) -> IpcDriverManifest {
     IpcDriverManifest {
         id: driver_id.to_string(),
         name: driver_id.to_string(),
+        category: None,
         description: String::new(),
         version: String::new(),
         entry: crate::ipc::registry::IpcDriverEntry {

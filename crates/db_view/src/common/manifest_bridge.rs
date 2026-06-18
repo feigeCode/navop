@@ -406,6 +406,7 @@ mod tests {
         IpcDriverManifest {
             id: "demo".into(),
             name: "Demo".into(),
+            category: None,
             description: String::new(),
             version: String::new(),
             entry: IpcDriverEntry {

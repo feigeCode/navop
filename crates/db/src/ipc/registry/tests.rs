@@ -17,6 +17,16 @@ fn parses_local_socket_transport() {
 }
 
 #[test]
+fn parses_driver_category() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{"id":"dm","name":"Dameng DM","category":"domestic_database","entry":{"command":"driver"},"transport":{"name":"dm.sock"}}"#,
+    )
+    .unwrap();
+
+    assert_eq!(Some("domestic_database"), manifest.category.as_deref());
+}
+
+#[test]
 fn parses_connection_lifecycle_policy() {
     let manifest: IpcDriverManifest = serde_json::from_str(
         r#"{
@@ -471,6 +481,7 @@ fn manifest(id: &str, name: &str) -> IpcDriverManifest {
     IpcDriverManifest {
         id: id.to_string(),
         name: name.to_string(),
+        category: None,
         description: String::new(),
         version: String::new(),
         entry: IpcDriverEntry {

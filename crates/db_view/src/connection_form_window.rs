@@ -61,6 +61,27 @@ fn external_driver_id_for_form(
         .or_else(|| external_driver_id_from_connection(conn))
 }
 
+fn external_driver_name_for_title(driver_id: Option<&str>) -> Option<String> {
+    driver_id.and_then(|driver_id| {
+        db::ipc::IpcDriverRegistry::load_default()
+            .find(driver_id)
+            .map(|driver| driver.name)
+    })
+}
+
+fn connection_title_for_locale(
+    locale: &str,
+    is_editing: bool,
+    db_type: &DatabaseType,
+    external_driver_name: Option<&str>,
+) -> String {
+    let db_type_label = external_driver_name
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| db_type.as_str());
+
+    db::translate_connection_title_for_locale(locale, is_editing, db_type_label)
+}
+
 impl ConnectionFormWindow {
     pub fn new(
         config: ConnectionFormWindowConfig,
@@ -75,10 +96,12 @@ impl ConnectionFormWindow {
             config.external_driver_id.as_deref(),
             config.editing_connection.as_ref(),
         );
-        let title: SharedString = db::translate_connection_title_for_locale(
+        let external_driver_name = external_driver_name_for_title(external_driver_id.as_deref());
+        let title: SharedString = connection_title_for_locale(
             locale().as_ref(),
             is_editing,
-            db_type.as_str(),
+            &db_type,
+            external_driver_name.as_deref(),
         )
         .into();
 
@@ -325,5 +348,26 @@ mod tests {
         let connection = stored_connection_with_extra_driver_param();
 
         assert_eq!(None, external_driver_id_from_connection(Some(&connection)));
+    }
+
+    #[test]
+    fn connection_title_uses_external_driver_name() {
+        assert_eq!(
+            "新建 Dameng DM 连接",
+            connection_title_for_locale(
+                "zh-CN",
+                false,
+                &DatabaseType::external("dm"),
+                Some("Dameng DM")
+            )
+        );
+    }
+
+    #[test]
+    fn connection_title_falls_back_to_database_type_name() {
+        assert_eq!(
+            "新建 External 连接",
+            connection_title_for_locale("zh-CN", false, &DatabaseType::external("dm"), None)
+        );
     }
 }
