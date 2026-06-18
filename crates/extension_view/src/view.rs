@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div,
 };
-use gpui_component::input::InputState;
+use gpui_component::input::{InputEvent, InputState};
 use gpui_component::{ActiveTheme, Icon, IconName, scroll::ScrollableElement, v_flex};
 use one_core::tab_container::{TabContent, TabContentEvent};
 
@@ -27,6 +27,7 @@ pub struct ExtensionManagerView {
     pub(crate) loading: bool,
     pub(crate) busy: Option<String>,
     pub(crate) status: SharedString,
+    pub(crate) _subscriptions: Vec<Subscription>,
 }
 
 impl ExtensionManagerView {
@@ -36,6 +37,18 @@ impl ExtensionManagerView {
         cx: &mut Context<Self>,
     ) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索扩展"));
+        let search_sub =
+            cx.subscribe_in(
+                &search,
+                window,
+                |view, _, event: &InputEvent, _, cx| match event {
+                    InputEvent::Change => cx.notify(),
+                    InputEvent::PressEnter { .. } => {
+                        view.load_marketplace_from_search_if_manifest_url(cx);
+                    }
+                    _ => {}
+                },
+            );
         let mut view = Self {
             host,
             focus_handle: cx.focus_handle(),
@@ -47,6 +60,7 @@ impl ExtensionManagerView {
             loading: false,
             busy: None,
             status: SharedString::from(""),
+            _subscriptions: vec![search_sub],
         };
         view.refresh_installed(cx);
         view

@@ -13,6 +13,12 @@ pub trait ExtensionViewHost: Send + Sync {
         http_client: Arc<dyn HttpClient>,
     ) -> BoxFuture<'static, anyhow::Result<Vec<MarketplaceEntry>>>;
 
+    fn load_marketplace_entries_from_url(
+        &self,
+        http_client: Arc<dyn HttpClient>,
+        manifest_url: String,
+    ) -> BoxFuture<'static, anyhow::Result<Vec<MarketplaceEntry>>>;
+
     fn review_marketplace_entry(
         &self,
         http_client: Arc<dyn HttpClient>,

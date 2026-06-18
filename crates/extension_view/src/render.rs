@@ -6,6 +6,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::Input,
+    progress::Progress,
     v_flex,
 };
 
@@ -13,6 +14,7 @@ use crate::{
     ExtensionKind, ExtensionManagerMode, ExtensionManagerView, ExtensionSummary, MarketplaceEntry,
     MarketplaceInstallState, filter_installed, filter_marketplace, marketplace_entry_install_id,
     marketplace_install_state,
+    state::{install_progress_value, marketplace_filter_query},
 };
 
 impl ExtensionManagerView {
@@ -54,7 +56,8 @@ impl ExtensionManagerView {
 
     pub(crate) fn render_body(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         self.ensure_marketplace_loaded(cx);
-        let query = self.search.read(cx).text().to_string();
+        let query_text = self.search.read(cx).text().to_string();
+        let query = marketplace_filter_query(&query_text);
         v_flex()
             .gap_3()
             .child(self.render_tabs(cx))
@@ -64,14 +67,16 @@ impl ExtensionManagerView {
                     .prefix(Icon::new(IconName::Search)),
             )
             .child(match self.mode {
-                ExtensionManagerMode::Installed => self.render_installed(&query, cx),
-                ExtensionManagerMode::Marketplace => self.render_marketplace(&query, cx),
+                ExtensionManagerMode::Installed => self.render_installed(query, cx),
+                ExtensionManagerMode::Marketplace => self.render_marketplace(query, cx),
             })
             .into_any_element()
     }
 
     fn render_title(&self, cx: &Context<Self>) -> impl IntoElement {
         v_flex()
+            .flex_1()
+            .min_w_0()
             .gap_1()
             .child(
                 div()
@@ -84,6 +89,16 @@ impl ExtensionManagerView {
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(self.status.clone()),
+            )
+            .when_some(
+                install_progress_value(self.busy.is_some()),
+                |this, value| {
+                    this.child(
+                        Progress::new("extension-install-progress")
+                            .xsmall()
+                            .value(value),
+                    )
+                },
             )
     }
 

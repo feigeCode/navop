@@ -6,6 +6,11 @@ pub(crate) fn format_status_error(prefix: &str, err: &anyhow::Error) -> String {
     truncate_status_message(format!("{prefix}: {detail}"))
 }
 
+pub(crate) fn format_notification_error(prefix: &str, err: &anyhow::Error) -> String {
+    let detail = collapse_status_whitespace(&format!("{err:#}"));
+    format!("{prefix}: {detail}")
+}
+
 fn collapse_status_whitespace(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -35,6 +40,19 @@ mod tests {
             message
         );
         assert!(!message.contains("Stack backtrace"));
+        assert!(!message.contains('\n'));
+    }
+
+    #[test]
+    fn notification_error_keeps_full_display_chain() {
+        let long_url = format!("https://example.test/{}.json", "a".repeat(260));
+        let err = anyhow::anyhow!("network down")
+            .context(format!("fetch release manifest from {long_url}"));
+
+        let message = format_notification_error("加载扩展市场失败", &err);
+
+        assert!(message.contains(&long_url));
+        assert!(message.contains("network down"));
         assert!(!message.contains('\n'));
     }
 }

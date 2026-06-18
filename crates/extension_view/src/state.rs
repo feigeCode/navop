@@ -1,7 +1,10 @@
 use gpui::SharedString;
 
-use crate::status_message::format_status_error;
+use crate::status_message::format_notification_error;
 use crate::{ExtensionManagerMode, MarketplaceEntry};
+
+const MANIFEST_JSON_SUFFIX: &str = ".json";
+const INSTALL_PROGRESS_VALUE: f32 = 65.0;
 
 pub(crate) fn should_auto_load_marketplace(
     mode: ExtensionManagerMode,
@@ -20,15 +23,52 @@ pub(crate) fn apply_marketplace_load_result(
     loading: &mut bool,
     status: &mut SharedString,
     outcome: anyhow::Result<Vec<MarketplaceEntry>>,
-) {
+) -> Option<String> {
     *loading = false;
     match outcome {
         Ok(entries) => {
             *marketplace_entries = entries;
             *status = format!("已加载 {} 个市场扩展", marketplace_entries.len()).into();
+            None
         }
-        Err(err) => *status = format_status_error("加载扩展市场失败", &err).into(),
+        Err(err) => {
+            *status = "加载扩展市场失败".into();
+            Some(format_notification_error("加载扩展市场失败", &err))
+        }
     }
+}
+
+pub(crate) fn marketplace_manifest_url_from_query(query: &str) -> Option<String> {
+    let trimmed = query.trim();
+    if !is_http_url(trimmed) {
+        return None;
+    }
+    has_json_path(trimmed).then(|| trimmed.to_string())
+}
+
+pub(crate) fn marketplace_filter_query(query: &str) -> &str {
+    if marketplace_manifest_url_from_query(query).is_some() {
+        ""
+    } else {
+        query
+    }
+}
+
+pub(crate) fn install_progress_value(is_installing: bool) -> Option<f32> {
+    is_installing.then_some(INSTALL_PROGRESS_VALUE)
+}
+
+fn is_http_url(value: &str) -> bool {
+    value.starts_with("https://") || value.starts_with("http://")
+}
+
+fn has_json_path(url: &str) -> bool {
+    let without_fragment = url.split('#').next().unwrap_or(url);
+    let path = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
+    path.to_ascii_lowercase().ends_with(MANIFEST_JSON_SUFFIX)
 }
 
 #[cfg(test)]
@@ -81,17 +121,52 @@ mod tests {
         let mut loading = true;
         let mut status = SharedString::from("正在加载扩展市场...");
 
-        apply_marketplace_load_result(
+        let notification = apply_marketplace_load_result(
             &mut entries,
             &mut loading,
             &mut status,
-            Err(anyhow::anyhow!("network down")),
+            Err(anyhow::anyhow!("network down")
+                .context("fetch release manifest from https://example.test/manifest.json")),
         );
 
         assert!(!loading);
         assert_eq!(["installed"], [entries[0].id.as_str()]);
-        assert!(status.as_ref().contains("加载扩展市场失败"));
-        assert!(status.as_ref().contains("network down"));
+        assert_eq!("加载扩展市场失败", status.as_ref());
+        let notification = notification.expect("失败时应该返回通知文案");
+        assert!(notification.contains("加载扩展市场失败"));
+        assert!(notification.contains("https://example.test/manifest.json"));
+        assert!(notification.contains("network down"));
+    }
+
+    #[test]
+    fn marketplace_manifest_url_from_query_accepts_http_json_manifest() {
+        assert_eq!(
+            Some("https://example.test/extensions/manifest.json".to_string()),
+            marketplace_manifest_url_from_query(" https://example.test/extensions/manifest.json ")
+        );
+        assert_eq!(
+            Some("http://example.test/manifest.json?ts=1".to_string()),
+            marketplace_manifest_url_from_query("http://example.test/manifest.json?ts=1")
+        );
+    }
+
+    #[test]
+    fn marketplace_manifest_url_from_query_rejects_plain_search_and_assets() {
+        assert_eq!(None, marketplace_manifest_url_from_query("rust"));
+        assert_eq!(
+            None,
+            marketplace_manifest_url_from_query("https://example.test/package.tar.gz")
+        );
+        assert_eq!(
+            None,
+            marketplace_manifest_url_from_query("/tmp/extensions/manifest.json")
+        );
+    }
+
+    #[test]
+    fn install_progress_value_only_shows_while_installing() {
+        assert_eq!(Some(65.0), install_progress_value(true));
+        assert_eq!(None, install_progress_value(false));
     }
 
     fn marketplace_entry(id: &str) -> MarketplaceEntry {

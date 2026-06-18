@@ -41,6 +41,22 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
         .boxed()
     }
 
+    fn load_marketplace_entries_from_url(
+        &self,
+        http_client: Arc<dyn HttpClient>,
+        manifest_url: String,
+    ) -> BoxFuture<'static, anyhow::Result<Vec<extension_view::MarketplaceEntry>>> {
+        async move {
+            let manifest = host_downloader::fetch_manifest_url(http_client, &manifest_url).await?;
+            Ok(manifest
+                .into_entries()
+                .into_iter()
+                .map(to_view_entry)
+                .collect())
+        }
+        .boxed()
+    }
+
     fn review_marketplace_entry(
         &self,
         http_client: Arc<dyn HttpClient>,
