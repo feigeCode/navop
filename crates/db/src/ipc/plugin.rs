@@ -26,25 +26,47 @@ use extension_protocol::{
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use sqlparser::dialect::{Dialect, GenericDialect};
 use std::collections::HashMap;
+use std::sync::Arc;
+
+type RegistryReloader = dyn Fn() -> IpcDriverRegistry + Send + Sync;
 
 #[derive(Clone)]
 pub struct ExternalDatabasePlugin {
     driver: IpcDriverManifest,
     registry: Option<IpcDriverRegistry>,
+    registry_reloader: Option<Arc<RegistryReloader>>,
 }
 
 impl ExternalDatabasePlugin {
     pub fn new() -> Self {
-        Self::with_registry(IpcDriverRegistry::load_default())
+        Self::with_registry_reloader(
+            IpcDriverRegistry::load_default(),
+            Arc::new(IpcDriverRegistry::load_default),
+        )
     }
 
     pub fn with_registry(registry: IpcDriverRegistry) -> Self {
+        Self::with_registry_source(registry, None)
+    }
+
+    pub fn with_registry_reloader(
+        registry: IpcDriverRegistry,
+        registry_reloader: Arc<RegistryReloader>,
+    ) -> Self {
+        Self::with_registry_source(registry, Some(registry_reloader))
+    }
+
+    fn with_registry_source(
+        registry: IpcDriverRegistry,
+        registry_reloader: Option<Arc<RegistryReloader>>,
+    ) -> Self {
         let driver = registry
             .find("duckdb")
             .unwrap_or_else(|| placeholder_driver_manifest("duckdb"));
         Self {
             driver,
             registry: Some(registry),
+            registry_reloader,
         }
     }
 
@@ -52,15 +74,25 @@ impl ExternalDatabasePlugin {
         Self {
             driver,
             registry: None,
+            registry_reloader: None,
         }
     }
 
     fn driver_for_config(&self, config: &DbConnectionConfig) -> Result<IpcDriverManifest, DbError> {
         let driver_id = driver_id_for_config(config)?;
         if let Some(registry) = &self.registry {
-            return registry.find(driver_id).ok_or_else(|| {
-                DbError::connection(format!("external driver '{}' not found", driver_id))
-            });
+            if let Some(driver) = registry.find(driver_id) {
+                return Ok(driver);
+            }
+            if let Some(reloader) = &self.registry_reloader {
+                if let Some(driver) = reloader().find(driver_id) {
+                    return Ok(driver);
+                }
+            }
+            return Err(DbError::connection(format!(
+                "external driver '{}' not found",
+                driver_id
+            )));
         }
         if driver_id != self.driver.id {
             return Err(DbError::connection(format!(
@@ -1694,6 +1726,40 @@ mod tests {
             Some("singlefile:/tmp/from-extra.db".to_string()),
             lifecycle.physical_open_lock_key
         );
+    }
+
+    #[test]
+    fn reloading_registry_finds_driver_added_after_plugin_creation() {
+        let driver = driver_manifest("duckdb", true, "duckdb.connection");
+        let plugin = ExternalDatabasePlugin::with_registry_reloader(
+            IpcDriverRegistry::empty(),
+            std::sync::Arc::new(move || IpcDriverRegistry::from_drivers(vec![driver.clone()])),
+        );
+        let mut config = DbConnectionConfig {
+            id: "duckdb-conn".into(),
+            name: "DuckDB".into(),
+            database_type: DatabaseType::DuckDB,
+            host: "/tmp/on-demand.duckdb".into(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params: Default::default(),
+        };
+
+        let resolved = plugin
+            .driver_for_config(&config)
+            .expect("installed DuckDB driver should be discovered after registry reload");
+
+        assert_eq!("duckdb", resolved.id);
+        assert!(resolved.effective_capabilities().supports_schema);
+
+        config.database_type = DatabaseType::external("missing");
+        let error = plugin.driver_for_config(&config).unwrap_err();
+        assert!(format!("{error}").contains("external driver 'missing' not found"));
     }
 
     #[test]

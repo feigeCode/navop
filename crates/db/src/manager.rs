@@ -221,7 +221,10 @@ fn default_duckdb_plugin(_registry: &IpcDriverRegistry) -> Arc<dyn DatabasePlugi
 
 #[cfg(not(feature = "builtin-duckdb"))]
 fn default_duckdb_plugin(registry: &IpcDriverRegistry) -> Arc<dyn DatabasePlugin> {
-    Arc::new(ExternalDatabasePlugin::with_registry(registry.clone()))
+    Arc::new(ExternalDatabasePlugin::with_registry_reloader(
+        registry.clone(),
+        Arc::new(IpcDriverRegistry::load_default),
+    ))
 }
 
 impl Default for DbManager {
