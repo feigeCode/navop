@@ -144,7 +144,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn external_database_kinds_skip_builtin_duckdb_driver() {
+    fn external_database_kinds_skip_builtin_duckdb_external_driver() {
         let registry = IpcDriverRegistry::from_drivers(vec![
             manifest("duckdb", "DuckDB"),
             manifest("custom", "Custom"),

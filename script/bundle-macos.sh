@@ -43,15 +43,6 @@ else
     echo "Warning: Icon file not found at ${ICNS_PATH}"
 fi
 
-if [ "${ONETCLI_BUNDLE_IPC_DRIVERS:-1}" != "0" ]; then
-    # Copy bundled IPC drivers into the standard macOS app resources directory.
-    bash "${PROJECT_DIR}/script/package-ipc-drivers.sh" \
-        "$TARGET" \
-        "$APP_DIR/Contents/Resources/ipc-drivers"
-else
-    echo "Skipping bundled IPC drivers; extensions are managed by the marketplace."
-fi
-
 # Write PkgInfo
 echo -n "APPL????" > "$APP_DIR/Contents/PkgInfo"
 

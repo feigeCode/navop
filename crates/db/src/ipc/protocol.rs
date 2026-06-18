@@ -17,7 +17,7 @@ pub use extension_protocol::method;
 /// 构造 `conn/open` 的 `config` 字段。
 ///
 /// driver 子进程读到这份 JSON 后自行反序列化为自己内部的 config struct
-/// (例如 `duckdb_driver::DbConnectionConfig` 只关心 host / database / extra_params)。
+/// (例如外部 DuckDB driver 只关心 host / database / extra_params)。
 pub fn driver_config_value(config: &DbConnectionConfig) -> Value {
     json!({
         "id": config.id,

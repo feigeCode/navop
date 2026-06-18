@@ -64,58 +64,32 @@ The DuckDB manifest uses a relative executable path:
 ```
 
 Relative commands are resolved against the manifest directory. In development,
-if the manifest directory does not contain the executable and the current target
-directory has a same-named binary, the registry rewrites the command to that
-absolute target binary.
+the driver package should be built and installed by the extension repository,
+not by this application repository.
 
 ## Discovery Order
 
-`IpcDriverRegistry::load_default()` scans driver roots in this order. The first
-manifest for a driver id wins.
+`IpcDriverRegistry::load_default()` scans installed database driver extensions
+from the user config directory:
 
-1. Paths from `ONETCLI_IPC_DRIVER_DIR`. Multiple paths can be supplied using the
-   platform path separator.
-2. User config directory: `<config-dir>/ipc-drivers`.
-3. Bundled application directories:
-   - macOS: `OnetCli.app/Contents/Resources/ipc-drivers`
-   - Linux package: `/usr/share/onetcli/ipc-drivers`
-   - Portable layout: `<executable-dir>/ipc-drivers`
-4. Debug-only workspace fallback: `crates/duckdb_driver`, only when the built
-   `duckdb_driver` binary exists beside the current debug executable.
+```text
+<config-dir>/extensions/database_drivers
+```
 
 The registry accepts both a root containing driver subdirectories and a direct
 single-driver directory containing `driver.json`.
 
 ## Packaging
 
-Use the shared packaging helper:
-
-```bash
-bash script/package-ipc-drivers.sh <target-triple> <destination-ipc-drivers-dir>
-```
-
-Examples:
-
-```bash
-bash script/package-ipc-drivers.sh aarch64-apple-darwin \
-  target/OnetCli.app/Contents/Resources/ipc-drivers
-
-bash script/package-ipc-drivers.sh x86_64-unknown-linux-gnu \
-  package/usr/share/onetcli/ipc-drivers
-
-bash script/package-ipc-drivers.sh x86_64-pc-windows-msvc \
-  package/ipc-drivers
-```
-
 The main application release workflow builds only `main`. IPC driver binaries
-and marketplace manifests are published by extension-specific release pipelines.
-Use the helper above from those pipelines, or for local manual packaging, when a
-driver package still needs the bundled-driver directory layout.
+and marketplace manifests are published by extension-specific release pipelines,
+currently in the external extensions repository. This repository owns the host
+runtime and registry contracts, not DuckDB driver production.
 
 ## UI Behavior
 
 DuckDB is still presented as the built-in `DatabaseType::DuckDB` connection type.
-When the `duckdb` IPC driver is available, `DuckDbPlugin` uses it internally.
+When the `duckdb` IPC driver is available, the DuckDB connection path uses it internally.
 The new-connection UI filters that driver out of the generic external driver
 list to avoid showing duplicate DuckDB entries.
 
@@ -216,7 +190,6 @@ Useful targeted checks:
 
 ```bash
 cargo test -p extension-driver -- --nocapture
-cargo test -p duckdb_driver -- --nocapture
 cargo test -p db ipc:: -- --nocapture
 cargo test -p db manager::tests -- --nocapture
 cargo test -p db_view common:: -- --nocapture
@@ -226,8 +199,7 @@ cargo test -p db_view connection_form_window::tests -- --nocapture
 cargo test -p db_view extension_menu -- --nocapture
 cargo test -p db_view table_designer_tab::tests -- --nocapture
 cargo test -p extension-runtime database_driver_install -- --nocapture
-cargo test -p db --test ipc_duckdb_driver -- --nocapture
-cargo test -p main new_connection::connection_kind::tests::external_database_kinds_skip_builtin_duckdb_driver -- --nocapture
+cargo test -p main new_connection::connection_kind::tests::external_database_kinds_skip_builtin_duckdb_external_driver -- --nocapture
 cargo check -p one-core -p db -p db_view -p extension-runtime -p main
 cargo fmt --check
 git diff --check

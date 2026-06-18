@@ -25,7 +25,6 @@ members = [
     "crates/extension-api",
     "crates/extension-component",
     "crates/extension-wasm",
-    "crates/duckdb_driver",
     "crates/er_flow",
     "crates/terminal",
     "crates/terminal_view",

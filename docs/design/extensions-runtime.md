@@ -124,7 +124,8 @@ The main crates are:
   connection workers.
 - `crates/db/src/ipc`: database-layer adapter that exposes IPC drivers through
   the existing `DatabasePlugin` and `DbConnection` traits.
-- `crates/duckdb_driver`: concrete DuckDB IPC driver.
+- External extension repositories: concrete database driver implementations,
+  such as the DuckDB IPC driver.
 
 ### Driver Manifest
 
@@ -188,13 +189,7 @@ only under the `x/...` namespace.
 
 `IpcDriverRegistry::load_default()` scans driver roots in this order:
 
-1. `ONETCLI_IPC_DRIVER_DIR`, using the platform path separator for multiple
-   roots.
-2. User config directory: `<config-dir>/ipc-drivers`.
-3. Bundled app directories, such as macOS
-   `OnetCli.app/Contents/Resources/ipc-drivers`.
-4. Debug-only workspace fallback for `crates/duckdb_driver` when the matching
-   binary exists next to the debug executable.
+1. User config directory: `<config-dir>/extensions/database_drivers`.
 
 The registry accepts either a root containing multiple driver directories or a
 single direct directory containing `driver.json`. The first manifest for a
@@ -569,9 +564,7 @@ Useful targeted checks when editing IPC runtime behavior:
 
 ```bash
 cargo test -p extension-driver -- --nocapture
-cargo test -p duckdb_driver -- --nocapture
 cargo test -p db ipc:: -- --nocapture
-cargo test -p db --test ipc_duckdb_driver -- --nocapture
 cargo check -p main -p db_view
 ```
 

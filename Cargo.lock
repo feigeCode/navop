@@ -3248,28 +3248,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "duckdb_driver"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "duckdb",
- "extension-driver",
- "extension-host",
- "extension-protocol",
- "hex",
- "interprocess",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "dummy"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
