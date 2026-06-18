@@ -12,15 +12,16 @@ use crate::extension::{
 };
 #[cfg(feature = "github-marketplace")]
 use crate::extension_downloader::DEFAULT_EXTENSION_MANIFEST_URL;
+use crate::extension_downloader::{
+    DownloadProgress, MarketplaceEntry, download_marketplace_entry_to_staging,
+    download_marketplace_entry_to_staging_with_progress, fetch_manifest_url,
+    install_marketplace_entry_generic,
+};
 #[cfg(not(feature = "github-marketplace"))]
 use crate::extension_downloader::{
     GITHUB_EXTENSION_MANIFEST_URL, fetch_manifest_url_with_fallback,
     github_extension_manifest_url_from_parts, manifest_urls_for_configured_url,
     manifest_urls_for_configured_url_with_github_fallback,
-};
-use crate::extension_downloader::{
-    MarketplaceEntry, download_marketplace_entry_to_staging, fetch_manifest_url,
-    install_marketplace_entry_generic,
 };
 
 #[test]
@@ -194,6 +195,46 @@ fn download_marketplace_entry_to_staging_verifies_sha256_and_extracts_tarball() 
         "https://example.test/fake_pg.tar.gz",
         client.take_requests()[0].uri
     );
+    fs::remove_dir_all(staging).unwrap();
+}
+
+#[test]
+fn download_marketplace_entry_to_staging_reports_progress() {
+    let tarball = database_driver_tarball_bytes();
+    let sha256 = sha256_hex(&tarball);
+    let client = Arc::new(FakeHttpClient::new(vec![binary_response(
+        200,
+        tarball.clone(),
+    )]));
+    let entry = marketplace_database_driver_entry(Some(sha256));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured_events = Arc::clone(&events);
+
+    let staging = smol::block_on(download_marketplace_entry_to_staging_with_progress(
+        client,
+        &entry,
+        Arc::new(move |progress| {
+            captured_events
+                .lock()
+                .expect("events 锁失败")
+                .push(progress);
+        }),
+    ))
+    .unwrap();
+
+    let events = events.lock().expect("events 锁失败");
+    assert!(matches!(
+        events.first(),
+        Some(DownloadProgress::Started { url }) if url == "https://example.test/fake_pg.tar.gz"
+    ));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        DownloadProgress::Bytes {
+            downloaded,
+            total: Some(total),
+        } if *downloaded > 0 && *total == tarball.len() as u64
+    )));
+    assert_eq!(Some(&DownloadProgress::Finished), events.last());
     fs::remove_dir_all(staging).unwrap();
 }
 
@@ -380,6 +421,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 fn binary_response(status: u16, body: Vec<u8>) -> anyhow::Result<http::Response<AsyncBody>> {
     http::Response::builder()
         .status(status)
+        .header(http::header::CONTENT_LENGTH, body.len().to_string())
         .body(AsyncBody::from(body))
         .map_err(|error| anyhow::anyhow!("构建响应失败: {}", error))
 }

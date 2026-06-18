@@ -18,9 +18,10 @@ pub use marketplace::MarketplaceEntry;
 #[cfg(test)]
 pub use marketplace::MarketplaceManifest;
 pub use transfer::{
-    DEFAULT_EXTENSION_MANIFEST_URL, GITHUB_EXTENSION_MANIFEST_URL,
-    download_marketplace_entry_to_staging, fetch_default_manifest_url, fetch_manifest_url,
-    fetch_manifest_url_with_fallback, github_extension_manifest_url_from_parts,
+    DEFAULT_EXTENSION_MANIFEST_URL, DownloadProgress, DownloadProgressCallback,
+    GITHUB_EXTENSION_MANIFEST_URL, download_marketplace_entry_to_staging,
+    download_marketplace_entry_to_staging_with_progress, fetch_default_manifest_url,
+    fetch_manifest_url, fetch_manifest_url_with_fallback, github_extension_manifest_url_from_parts,
     install_marketplace_entry_generic, manifest_urls_for_configured_url,
     manifest_urls_for_configured_url_with_github_fallback,
 };

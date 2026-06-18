@@ -1,6 +1,7 @@
 mod action;
 mod catalog;
 pub mod database_driver_install;
+mod database_driver_install_progress;
 pub mod extension;
 mod extension_action_handler;
 pub mod extension_db_gateway;

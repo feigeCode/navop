@@ -2,15 +2,24 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use futures::AsyncReadExt;
-use gpui::http_client::{AsyncBody, HttpClient, Method, Request};
+use gpui::http_client::{AsyncBody, HttpClient, Method, Request, http::header};
 
 use super::marketplace::{MarketplaceEntry, MarketplaceManifest};
 use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
 
-pub const GITHUB_EXTENSION_MANIFEST_URL: &str =
-    "https://github.com/feigeCode/onetcli/releases/latest/download/extension-manifest.json";
+pub const GITHUB_EXTENSION_MANIFEST_URL: &str = "https://github.com/feigeCode/onetcli-extensions/releases/latest/download/extension-manifest.json";
 pub const DEFAULT_EXTENSION_MANIFEST_URL: &str = GITHUB_EXTENSION_MANIFEST_URL;
 const EXTENSION_GITHUB_MANIFEST_URL_ENV: &str = "ONETCLI_EXTENSION_GITHUB_MANIFEST_URL";
+const DOWNLOAD_BUFFER_SIZE: usize = 16 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DownloadProgress {
+    Started { url: String },
+    Bytes { downloaded: u64, total: Option<u64> },
+    Finished,
+}
+
+pub type DownloadProgressCallback = Arc<dyn Fn(DownloadProgress) + Send + Sync>;
 
 #[cfg(not(feature = "github-marketplace"))]
 const EXTENSION_MANIFEST_PATH: &str = "extensions/manifest.json";
@@ -150,6 +159,14 @@ pub async fn download_marketplace_entry_to_staging(
     http_client: Arc<dyn HttpClient>,
     entry: &MarketplaceEntry,
 ) -> Result<PathBuf> {
+    download_marketplace_entry_to_staging_with_progress(http_client, entry, Arc::new(|_| {})).await
+}
+
+pub async fn download_marketplace_entry_to_staging_with_progress(
+    http_client: Arc<dyn HttpClient>,
+    entry: &MarketplaceEntry,
+    on_progress: DownloadProgressCallback,
+) -> Result<PathBuf> {
     let asset_urls = entry.download_urls();
     if asset_urls.is_empty() {
         anyhow::bail!("marketplace entry {} 缺少 asset_url", entry.id);
@@ -161,7 +178,13 @@ pub async fn download_marketplace_entry_to_staging(
 
     let mut last_error = None;
     for asset_url in asset_urls {
-        match download_asset_to_staging(&http_client, &asset_url, expected_sha256.as_deref()).await
+        match download_asset_to_staging(
+            &http_client,
+            &asset_url,
+            expected_sha256.as_deref(),
+            Arc::clone(&on_progress),
+        )
+        .await
         {
             Ok(staging) => return Ok(staging),
             Err(err) => {
@@ -178,8 +201,12 @@ async fn download_asset_to_staging(
     http_client: &Arc<dyn HttpClient>,
     asset_url: &str,
     expected_sha256: Option<&str>,
+    on_progress: DownloadProgressCallback,
 ) -> Result<PathBuf> {
-    let tarball = fetch_bytes(http_client, asset_url)
+    on_progress(DownloadProgress::Started {
+        url: asset_url.to_string(),
+    });
+    let tarball = fetch_bytes_with_progress(http_client, asset_url, on_progress)
         .await
         .with_context(|| format!("download asset {asset_url}"))?;
     if let Some(expected) = expected_sha256 {
@@ -206,6 +233,14 @@ pub async fn install_marketplace_entry_generic(
 }
 
 async fn fetch_bytes(client: &Arc<dyn HttpClient>, url: &str) -> Result<Vec<u8>> {
+    fetch_bytes_with_progress(client, url, Arc::new(|_| {})).await
+}
+
+async fn fetch_bytes_with_progress(
+    client: &Arc<dyn HttpClient>,
+    url: &str,
+    on_progress: DownloadProgressCallback,
+) -> Result<Vec<u8>> {
     let request = Request::builder()
         .method(Method::GET)
         .uri(url)
@@ -218,10 +253,28 @@ async fn fetch_bytes(client: &Arc<dyn HttpClient>, url: &str) -> Result<Vec<u8>>
     if !response.status().is_success() {
         anyhow::bail!("HTTP {} for {url}", response.status());
     }
+    let total = response
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
     let mut body = response.into_body();
     let mut buf = Vec::new();
-    body.read_to_end(&mut buf)
-        .await
-        .with_context(|| format!("read body from {url}"))?;
+    let mut chunk = vec![0; DOWNLOAD_BUFFER_SIZE];
+    loop {
+        let read = body
+            .read(&mut chunk)
+            .await
+            .with_context(|| format!("read body from {url}"))?;
+        if read == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..read]);
+        on_progress(DownloadProgress::Bytes {
+            downloaded: buf.len() as u64,
+            total,
+        });
+    }
+    on_progress(DownloadProgress::Finished);
     Ok(buf)
 }
