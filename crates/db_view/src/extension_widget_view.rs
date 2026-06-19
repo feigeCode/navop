@@ -163,8 +163,8 @@ impl Render for ExtensionWidgetView {
             div()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scrollbar()
-                .child(fields),
+                .overflow_hidden()
+                .child(div().size_full().overflow_y_scrollbar().child(fields)),
         )
         .child(actions)
     }

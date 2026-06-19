@@ -81,8 +81,8 @@ impl ExtensionManagerView {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scrollbar()
-                    .child(content),
+                    .overflow_hidden()
+                    .child(div().size_full().overflow_y_scrollbar().child(content)),
             )
             .into_any_element()
     }
