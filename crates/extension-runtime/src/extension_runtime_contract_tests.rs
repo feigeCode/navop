@@ -108,12 +108,20 @@ fn runtime_catalog_loads_compatible_extensions_from_composite_root() {
     std::fs::create_dir_all(root.path().join("_staging")).unwrap();
     std::fs::create_dir_all(root.path().join("noise")).unwrap();
 
-    let catalog = ExtensionRuntimeCatalog::from_installed_composite_root(root.path()).unwrap();
+    let report =
+        ExtensionRuntimeCatalog::from_installed_composite_root_with_report(root.path()).unwrap();
+    let catalog = report.catalog;
 
     assert!(
         catalog
             .component_permissions_for_command("example.echo")
             .is_ok()
+    );
+    assert_eq!(report.loaded.len(), 1);
+    assert_eq!(report.loaded[0].id, "com.example.echo");
+    assert_eq!(
+        report.loaded[0].wasm_runtimes,
+        vec!["com.example.echo::main".to_string()]
     );
 }
 

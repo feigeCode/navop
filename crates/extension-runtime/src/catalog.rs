@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use db_view::extension_menu::DbTreeExtensionMenuRegistry;
 use one_core::{
@@ -15,6 +16,8 @@ use super::types::{
     WasmRuntimeBinding,
 };
 
+static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
 #[derive(Debug)]
 pub struct ExtensionRuntimeCatalog {
     pub(super) commands: CommandRegistry,
@@ -23,6 +26,21 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) toolbar_slots: SlotRegistry,
     pub(super) menu_slots: SlotRegistry,
     pub(super) keybindings: Vec<RegisteredKeybindingContribution>,
+}
+
+#[derive(Debug)]
+pub struct ExtensionRuntimeCatalogLoadReport {
+    pub catalog: ExtensionRuntimeCatalog,
+    pub loaded: Vec<CompositeExtensionLoadedEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompositeExtensionLoadedEntry {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub dir: std::path::PathBuf,
+    pub wasm_runtimes: Vec<String>,
 }
 
 impl ExtensionRuntimeCatalog {
@@ -46,8 +64,31 @@ impl ExtensionRuntimeCatalog {
     }
 
     pub fn from_installed_composite_root(root: &Path) -> Result<Self, ExtensionRuntimeError> {
+        Ok(Self::from_installed_composite_root_with_report(root)?.catalog)
+    }
+
+    pub fn from_installed_composite_root_with_report(
+        root: &Path,
+    ) -> Result<ExtensionRuntimeCatalogLoadReport, ExtensionRuntimeError> {
         let manifests = load_installed_composite_manifests(root)?;
-        Self::from_manifests(manifests)
+        let loaded: Vec<_> = manifests
+            .iter()
+            .map(CompositeExtensionLoadedEntry::from_manifest)
+            .collect();
+        let catalog = Self::from_manifests(manifests)?;
+        let loaded_ids: Vec<_> = loaded.iter().map(|entry| entry.id.as_str()).collect();
+        let summary_key = format!("catalog:{}:{loaded_ids:?}", root.display());
+        if should_log_wasm_catalog_once(&summary_key) {
+            tracing::info!(
+                target: "extension_loader",
+                kind = "wasm",
+                root = %root.display(),
+                loaded = loaded.len(),
+                extensions = ?loaded_ids,
+                "loaded wasm composite extension catalog"
+            );
+        }
+        Ok(ExtensionRuntimeCatalogLoadReport { catalog, loaded })
     }
 
     pub fn db_tree_menu_registry(&self) -> DbTreeExtensionMenuRegistry {
@@ -94,5 +135,29 @@ impl ExtensionRuntimeCatalog {
             });
         }
         Ok(binding)
+    }
+}
+
+fn should_log_wasm_catalog_once(key: &str) -> bool {
+    let seen = WASM_CATALOG_LOG_KEYS.get_or_init(|| Mutex::new(HashSet::new()));
+    seen.lock()
+        .map(|mut seen| seen.insert(key.to_string()))
+        .unwrap_or(true)
+}
+
+impl CompositeExtensionLoadedEntry {
+    fn from_manifest(manifest: &Manifest) -> Self {
+        Self {
+            id: manifest.id.clone(),
+            name: manifest.name.clone(),
+            version: manifest.version.clone(),
+            dir: manifest.manifest_dir.clone(),
+            wasm_runtimes: manifest
+                .runtime
+                .wasm
+                .iter()
+                .map(|runtime| format!("{}::{}", manifest.id, runtime.id))
+                .collect(),
+        }
     }
 }

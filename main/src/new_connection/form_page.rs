@@ -69,6 +69,21 @@ fn build_database_form(
     window: &mut Window,
     cx: &mut Context<NewConnectionWindow>,
 ) -> NewConnectionFormResult {
+    if let Some(driver_id) = external_driver_id.as_deref() {
+        if db::ipc::IpcDriverRegistry::load_default()
+            .find(driver_id)
+            .is_none()
+        {
+            extension_runtime::database_driver_install::prompt_install_database_driver(
+                driver_id.to_string(),
+                driver_id.to_string(),
+                window,
+                cx,
+            );
+            return NewConnectionFormResult::Blocked;
+        }
+    }
+
     let Some(config) = parent.update(cx, |home, cx| {
         if !home.is_master_key_ready_for_new_connection() {
             return None;

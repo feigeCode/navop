@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::path::Path;
 #[cfg(feature = "wasm-components")]
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use db_view::extension_menu::DbTreeExtensionMenuItem;
 use serde_json::Value;
@@ -15,6 +17,8 @@ use super::types::{
     ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredKeybindingContribution,
     WasmRuntimeBinding, command_descriptor, runtime_key, slot_item_from_menu,
 };
+
+static WASM_REGISTRATION_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 impl ExtensionRuntimeCatalog {
     pub(super) fn register_manifest(
@@ -39,6 +43,10 @@ impl ExtensionRuntimeCatalog {
             #[cfg(feature = "wasm-components")]
             let module_path = resolve_module_path(&manifest.manifest_dir, &runtime.module);
             #[cfg(feature = "wasm-components")]
+            let module_path_for_log = module_path.display().to_string();
+            #[cfg(not(feature = "wasm-components"))]
+            let module_path_for_log = runtime.module.clone();
+            #[cfg(feature = "wasm-components")]
             let base_config = extension_wasm::WasmRuntimeConfig::default();
             #[cfg(feature = "wasm-components")]
             let config = extension_wasm::WasmRuntimeConfig {
@@ -46,6 +54,17 @@ impl ExtensionRuntimeCatalog {
                 fuel_per_call: runtime.fuel_per_call,
                 ..base_config
             };
+            tracing::debug!(
+                target: "extension_loader",
+                kind = "wasm",
+                extension_id = %manifest.id,
+                runtime_id = %runtime.id,
+                runtime_key = %key,
+                runtime_kind = ?runtime.kind,
+                module = %runtime.module,
+                module_path = %module_path_for_log,
+                "registered wasm runtime"
+            );
             self.wasm_runtimes.insert(
                 key.clone(),
                 WasmRuntimeBinding {
@@ -198,17 +217,47 @@ pub(super) fn load_installed_composite_manifests(
             continue;
         }
         match load_and_check(&entry.path(), &host_version, &host_apis) {
-            Ok(manifest) => manifests.push(manifest),
+            Ok(manifest) => {
+                let wasm_runtimes: Vec<_> = manifest
+                    .runtime
+                    .wasm
+                    .iter()
+                    .map(|runtime| runtime_key(&manifest.id, &runtime.id))
+                    .collect();
+                tracing::debug!(
+                    target: "extension_loader",
+                    kind = "wasm",
+                    extension_id = %manifest.id,
+                    name = %manifest.name,
+                    version = %manifest.version,
+                    path = %manifest.manifest_dir.display(),
+                    wasm_runtimes = ?wasm_runtimes,
+                    "loaded composite extension manifest"
+                );
+                manifests.push(manifest);
+            }
             Err(ManifestError::NotFound(_)) => {}
             Err(err) => {
-                tracing::warn!(
-                    "skip composite extension {} while building catalog: {err:?}",
-                    entry.path().display()
-                );
+                let key = format!("skip:{}:{err:?}", entry.path().display());
+                if should_log_wasm_registration_once(&key) {
+                    tracing::warn!(
+                        target: "extension_loader",
+                        kind = "wasm",
+                        "skip composite extension {} while building catalog: {err:?}",
+                        entry.path().display()
+                    );
+                }
             }
         }
     }
     Ok(manifests)
+}
+
+fn should_log_wasm_registration_once(key: &str) -> bool {
+    let seen = WASM_REGISTRATION_LOG_KEYS.get_or_init(|| Mutex::new(HashSet::new()));
+    seen.lock()
+        .map(|mut seen| seen.insert(key.to_string()))
+        .unwrap_or(true)
 }
 
 fn is_candidate_composite_dir(entry: &std::fs::DirEntry) -> bool {

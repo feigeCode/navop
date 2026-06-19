@@ -83,13 +83,13 @@ The default extension manifest source is resolved in this order:
    `ONETCLI_EXTENSION_GITHUB_MANIFEST_URL`, then build-time
    `ONETCLI_EXTENSION_GITHUB_MANIFEST_URL`, then the built-in GitHub fallback.
 
-The extension manifest should prefer Cloudflare/R2 asset URLs and include
-GitHub fallback URLs for every downloadable package. The client supports both
-global and target-specific asset fields:
+The extension manifest is schema v2. It declares installable artifacts only:
+file names, checksums, and the per-entry release tag needed to locate matching
+GitHub Release assets. It does not contain primary or fallback download URLs.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "release_version": "2026.06",
   "extensions": [
     {
@@ -97,55 +97,37 @@ global and target-specific asset fields:
       "kind": "database_driver",
       "name": "DuckDB",
       "version": "1.0.0",
-      "asset_url": "duckdb/1.0.0/duckdb.tar.gz",
-      "fallback_asset_url": "https://github.com/<org>/<repo>/releases/download/v1.0.0/duckdb.tar.gz",
-      "sha256": "<sha256>"
+      "release_tag": "duckdb-v1.0.0",
+      "artifacts": {
+        "x86_64-unknown-linux-gnu": {
+          "file": "duckdb-driver-x86_64-unknown-linux-gnu.tar.gz",
+          "sha256": "<sha256>"
+        },
+        "universal": {
+          "file": "duckdb-driver-universal.tar.gz",
+          "sha256": "<sha256>"
+        }
+      }
     }
   ]
 }
 ```
 
-Asset URLs may be absolute HTTP(S) URLs or relative paths. If an `asset_url`,
-`asset_urls`, `fallback_asset_url`, or `fallback_asset_urls` value does not
-start with `http://` or `https://`, the client resolves it against the directory
-containing the manifest URL. For example, an asset value
-`duckdb/1.0.0/duckdb.tar.gz` in
+Artifact keys are selectors. The client tries the exact native target triple,
+then an OS alias, then `universal`. Native IPC database drivers normally publish
+target-triple artifacts. WASM and other platform-independent extensions should
+publish a `universal` artifact.
+
+The client derives primary package URLs from the manifest location using
+`<id>/<version>/<file>`. For example, `duckdb` version `1.0.0` with file
+`duckdb-driver-x86_64-unknown-linux-gnu.tar.gz` in
 `https://onetcli.test.cn/extensions/manifest.json` resolves to
-`https://onetcli.test.cn/extensions/duckdb/1.0.0/duckdb.tar.gz`.
+`https://onetcli.test.cn/extensions/duckdb/1.0.0/duckdb-driver-x86_64-unknown-linux-gnu.tar.gz`.
 
-For platform-specific packages, use target triples first and OS names as
-fallback keys:
-
-```json
-{
-  "id": "duckdb",
-  "kind": "database_driver",
-  "name": "DuckDB",
-  "version": "1.0.0",
-  "asset_urls": {
-    "aarch64-apple-darwin": "duckdb/1.0.0/duckdb-aarch64-apple-darwin.tar.gz",
-    "x86_64-apple-darwin": "duckdb/1.0.0/duckdb-x86_64-apple-darwin.tar.gz",
-    "x86_64-unknown-linux-gnu": "duckdb/1.0.0/duckdb-x86_64-unknown-linux-gnu.tar.gz",
-    "x86_64-pc-windows-msvc": "duckdb/1.0.0/duckdb-x86_64-pc-windows-msvc.tar.gz"
-  },
-  "fallback_asset_urls": {
-    "aarch64-apple-darwin": "https://github.com/<org>/<repo>/releases/download/v1.0.0/duckdb-aarch64-apple-darwin.tar.gz",
-    "x86_64-apple-darwin": "https://github.com/<org>/<repo>/releases/download/v1.0.0/duckdb-x86_64-apple-darwin.tar.gz",
-    "x86_64-unknown-linux-gnu": "https://github.com/<org>/<repo>/releases/download/v1.0.0/duckdb-x86_64-unknown-linux-gnu.tar.gz",
-    "x86_64-pc-windows-msvc": "https://github.com/<org>/<repo>/releases/download/v1.0.0/duckdb-x86_64-pc-windows-msvc.tar.gz"
-  },
-  "sha256s": {
-    "aarch64-apple-darwin": "<sha256>",
-    "x86_64-apple-darwin": "<sha256>",
-    "x86_64-unknown-linux-gnu": "<sha256>",
-    "x86_64-pc-windows-msvc": "<sha256>"
-  }
-}
-```
-
-`github_asset_url` and `github_asset_urls` are accepted as aliases for the
-fallback fields. Non-language extension packages require sha256 validation
-metadata before installation.
+The client derives GitHub asset fallback URLs from its configured GitHub
+marketplace manifest URL and the entry's `release_tag` plus artifact `file`.
+Non-language extension packages require sha256 validation metadata before
+installation.
 
 ## Required GitHub Configuration
 

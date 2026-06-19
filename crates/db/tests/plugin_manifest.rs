@@ -106,6 +106,19 @@ fn manifest_types_round_trip_through_serde() {
 }
 
 #[test]
+fn ui_manifest_defaults_missing_actions_to_empty_actions() {
+    let manifest: DatabaseUiManifest = serde_json::from_str(
+        r#"{
+            "schema_version": 1,
+            "forms": []
+        }"#,
+    )
+    .expect("manifest without actions should deserialize");
+
+    assert!(manifest.actions.actions.is_empty());
+}
+
+#[test]
 fn visibility_rule_evaluator_covers_all_conditions() {
     let rule = FormVisibilityRule {
         when_field: "mode".into(),

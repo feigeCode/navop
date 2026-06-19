@@ -586,7 +586,57 @@ fn apply_external_driver_defaults(config: &mut DbFormConfig, driver: &IpcDriverM
     if config.title.trim().is_empty() {
         config.title = format!("{} ({})", translate("Common.new"), driver.name);
     }
+    apply_external_driver_empty_tab_defaults(config, driver);
     apply_external_driver_name_defaults(config, driver);
+}
+
+fn apply_external_driver_empty_tab_defaults(config: &mut DbFormConfig, driver: &IpcDriverManifest) {
+    for group in &mut config.tab_groups {
+        if !group.fields.is_empty() {
+            continue;
+        }
+
+        if let Some(default_group) = external_driver_default_tab(driver, &group.name) {
+            group.fields = default_group.fields;
+        }
+    }
+}
+
+fn external_driver_default_tab(driver: &IpcDriverManifest, tab_name: &str) -> Option<TabGroup> {
+    match tab_name {
+        "general" => find_tab(default_external_form_config(driver), "general"),
+        "ssh" => find_tab(DbFormConfig::mysql(), "ssh"),
+        "ssl" => find_compatible_ssl_tab(driver),
+        "notes" | "remark" => find_tab(DbFormConfig::mysql(), "notes").map(|mut group| {
+            group.name = tab_name.to_string();
+            group
+        }),
+        _ => None,
+    }
+}
+
+fn find_compatible_ssl_tab(driver: &IpcDriverManifest) -> Option<TabGroup> {
+    find_tab(external_driver_compatible_host_form(driver), "ssl")
+        .or_else(|| find_tab(DbFormConfig::mysql(), "ssl"))
+}
+
+fn external_driver_compatible_host_form(driver: &IpcDriverManifest) -> DbFormConfig {
+    match driver.dialect.compatible_database_type.as_ref() {
+        Some(DatabaseType::PostgreSQL) => DbFormConfig::postgres(),
+        Some(DatabaseType::SQLite) => DbFormConfig::sqlite(),
+        Some(DatabaseType::DuckDB) => DbFormConfig::duckdb(),
+        Some(DatabaseType::MSSQL) => DbFormConfig::mssql(),
+        Some(DatabaseType::Oracle) => DbFormConfig::oracle(),
+        Some(DatabaseType::ClickHouse) => DbFormConfig::clickhouse(),
+        _ => DbFormConfig::mysql(),
+    }
+}
+
+fn find_tab(config: DbFormConfig, tab_name: &str) -> Option<TabGroup> {
+    config
+        .tab_groups
+        .into_iter()
+        .find(|group| group.name == tab_name)
 }
 
 fn apply_external_driver_name_defaults(config: &mut DbFormConfig, driver: &IpcDriverManifest) {
@@ -993,6 +1043,24 @@ mod tests {
         })
     }
 
+    fn field_names(tab_group: &TabGroup) -> Vec<&str> {
+        tab_group
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect()
+    }
+
+    fn tab_fields<'a>(config: &'a DbFormConfig, tab_name: &str) -> Vec<&'a str> {
+        field_names(
+            config
+                .tab_groups
+                .iter()
+                .find(|group| group.name == tab_name)
+                .expect("tab should exist"),
+        )
+    }
+
     fn demo_driver() -> IpcDriverManifest {
         IpcDriverManifest {
             id: "demo".into(),
@@ -1101,6 +1169,104 @@ database:
         );
         assert_eq!("DemoDB", config.tab_groups[0].fields[0].default_value);
         assert_eq!("DemoDB", config.tab_groups[0].fields[0].placeholder);
+    }
+
+    #[test]
+    fn external_driver_empty_manifest_tabs_use_host_defaults() {
+        let mut driver = demo_driver();
+        driver.dialect.compatible_database_type = Some(DatabaseType::PostgreSQL);
+        let mut config = DbFormConfig {
+            db_type: DatabaseType::external("demo"),
+            title: "Driver Connection".into(),
+            hidden_params: HashMap::new(),
+            tab_groups: vec![
+                TabGroup::new("general", "General"),
+                TabGroup::new("ssl", "SSL"),
+                TabGroup::new("ssh", "SSH"),
+                TabGroup::new("remark", "Remark"),
+            ],
+        };
+
+        apply_external_driver_defaults(&mut config, &driver);
+
+        assert_eq!(
+            tab_fields(&config, "general"),
+            vec!["name", "host", "port", "username", "password", "database"]
+        );
+        assert_eq!(
+            tab_fields(&config, "ssl"),
+            vec![
+                "ssl_mode",
+                "ssl_root_cert_path",
+                "ssl_accept_invalid_certs",
+                "ssl_accept_invalid_hostnames"
+            ]
+        );
+        assert_eq!(
+            tab_fields(&config, "ssh"),
+            vec![
+                "ssh_tunnel_enabled",
+                "ssh_connection_id",
+                "ssh_host",
+                "ssh_port",
+                "ssh_username",
+                "ssh_auth_type",
+                "ssh_password",
+                "ssh_private_key_path",
+                "ssh_private_key_passphrase",
+                "ssh_target_host",
+                "ssh_target_port"
+            ]
+        );
+        assert_eq!(tab_fields(&config, "remark"), vec!["remark"]);
+    }
+
+    #[test]
+    fn external_driver_non_empty_manifest_tab_keeps_driver_fields() {
+        let mut config = DbFormConfig {
+            db_type: DatabaseType::external("demo"),
+            title: "Driver Connection".into(),
+            hidden_params: HashMap::new(),
+            tab_groups: vec![
+                TabGroup::new("general", "General")
+                    .field(FormField::new("dsn", "DSN", FormFieldType::Text).default("demo-dsn")),
+            ],
+        };
+
+        apply_external_driver_defaults(&mut config, &demo_driver());
+
+        assert_eq!(tab_fields(&config, "general"), vec!["dsn"]);
+    }
+
+    #[test]
+    fn external_driver_empty_ssh_tab_uses_host_defaults_for_file_compatible_driver() {
+        let mut driver = demo_driver();
+        driver.dialect.compatible_database_type = Some(DatabaseType::DuckDB);
+        let mut config = DbFormConfig {
+            db_type: DatabaseType::external("duckdb"),
+            title: "Driver Connection".into(),
+            hidden_params: HashMap::new(),
+            tab_groups: vec![TabGroup::new("ssh", "SSH")],
+        };
+
+        apply_external_driver_defaults(&mut config, &driver);
+
+        assert_eq!(
+            tab_fields(&config, "ssh"),
+            vec![
+                "ssh_tunnel_enabled",
+                "ssh_connection_id",
+                "ssh_host",
+                "ssh_port",
+                "ssh_username",
+                "ssh_auth_type",
+                "ssh_password",
+                "ssh_private_key_path",
+                "ssh_private_key_passphrase",
+                "ssh_target_host",
+                "ssh_target_port"
+            ]
+        );
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub struct DatabaseUiManifest {
     #[serde(default)]
     pub capabilities: DatabaseUiCapabilities,
     pub forms: Vec<DatabaseFormManifest>,
+    #[serde(default)]
     pub actions: DatabaseActionManifest,
 }
 

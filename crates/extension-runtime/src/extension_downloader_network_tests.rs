@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     fs,
     sync::{Arc, Mutex},
 };
@@ -35,8 +35,13 @@ fn fetch_manifest_url_parses_marketplace_manifest() {
                 "kind": "database_driver",
                 "name": "Fake PostgreSQL",
                 "version": "1.2.3",
-                "asset_url": "https://example.test/fake_pg.tar.gz",
-                "sha256": "abc"
+                "release_tag": "fake_pg-v1.2.3",
+                "artifacts": {
+                    "universal": {
+                        "file": "fake_pg-driver-universal.tar.gz",
+                        "sha256": "abc"
+                    }
+                }
             }]
         }"#,
     )]));
@@ -51,6 +56,10 @@ fn fetch_manifest_url_parses_marketplace_manifest() {
     let entries = manifest.into_entries();
     assert_eq!(1, entries.len());
     assert_eq!(ExtensionKind::DatabaseDriver, entries[0].kind);
+    assert_eq!(
+        Some("https://example.test/fake_pg/1.2.3/fake_pg-driver-universal.tar.gz".to_string()),
+        entries[0].asset_url()
+    );
     assert_eq!(
         "https://example.test/manifest.json",
         client.take_requests()[0].uri
@@ -113,31 +122,6 @@ fn github_marketplace_feature_points_to_github_manifest() {
     );
 }
 
-#[test]
-fn marketplace_entry_prefers_target_asset_and_sha256() {
-    let mut entry = marketplace_database_driver_entry(Some("fallback-sha".to_string()));
-    entry.asset_urls = HashMap::from([
-        (
-            "aarch64-apple-darwin".to_string(),
-            "https://example.test/duckdb-macos-arm64.tar.gz".to_string(),
-        ),
-        (
-            "macos".to_string(),
-            "https://example.test/duckdb-macos.tar.gz".to_string(),
-        ),
-    ]);
-    entry.sha256s = HashMap::from([("aarch64-apple-darwin".to_string(), "target-sha".to_string())]);
-
-    assert_eq!(
-        Some("https://example.test/duckdb-macos-arm64.tar.gz".to_string()),
-        entry.asset_url_for_keys(&["aarch64-apple-darwin", "macos"])
-    );
-    assert_eq!(
-        Some("target-sha".to_string()),
-        entry.sha256_for_keys(&["aarch64-apple-darwin", "macos"])
-    );
-}
-
 #[cfg(not(feature = "github-marketplace"))]
 #[test]
 fn fetch_default_manifest_url_falls_back_to_github_when_r2_fails() {
@@ -152,7 +136,13 @@ fn fetch_default_manifest_url_falls_back_to_github_when_r2_fails() {
                     "id": "rust",
                     "kind": "language",
                     "name": "Rust",
-                    "asset_url": "https://github.example.test/rust.tar.gz"
+                    "version": "1.0.0",
+                    "release_tag": "rust-v1.0.0",
+                    "artifacts": {
+                        "universal": {
+                            "file": "rust-universal.tar.gz"
+                        }
+                    }
                 }]
             }"#,
         ),
@@ -171,7 +161,7 @@ fn fetch_default_manifest_url_falls_back_to_github_when_r2_fails() {
         requests[0].uri
     );
     assert_eq!(
-        "https://github.com/feigeCode/onetcli/releases/latest/download/extension-manifest.json",
+        "https://github.com/feigeCode/onetcli-extensions/releases/latest/download/extension-manifest.json",
         requests[1].uri
     );
 }
@@ -246,9 +236,19 @@ fn download_marketplace_entry_to_staging_falls_back_to_github_asset() {
         Err(anyhow::anyhow!("r2 unavailable")),
         binary_response(200, tarball),
     ]));
-    let mut entry = marketplace_database_driver_entry(Some(sha256));
-    entry.asset_url = "https://onetcli.test.cn/extensions/fake_pg.tar.gz".to_string();
-    entry.fallback_asset_url = Some("https://github.example.test/fake_pg.tar.gz".to_string());
+    let entry = MarketplaceEntry::from_resolved_urls(
+        "fake_pg",
+        ExtensionKind::DatabaseDriver,
+        "Fake PostgreSQL",
+        "1.2.3",
+        "",
+        Vec::new(),
+        vec![
+            "https://onetcli.test.cn/extensions/fake_pg.tar.gz".to_string(),
+            "https://github.example.test/fake_pg.tar.gz".to_string(),
+        ],
+        Some(sha256),
+    );
 
     let staging = smol::block_on(download_marketplace_entry_to_staging(
         client.clone(),
@@ -270,7 +270,7 @@ fn download_marketplace_entry_to_staging_falls_back_to_github_asset() {
 }
 
 #[test]
-fn download_marketplace_entry_to_staging_resolves_relative_asset_urls_from_manifest_prefix() {
+fn download_marketplace_entry_to_staging_resolves_v2_primary_url_from_manifest_prefix() {
     let tarball = database_driver_tarball_bytes();
     let sha256 = sha256_hex(&tarball);
     let manifest = format!(
@@ -281,9 +281,13 @@ fn download_marketplace_entry_to_staging_resolves_relative_asset_urls_from_manif
                 "kind": "database_driver",
                 "name": "Fake PostgreSQL",
                 "version": "1.2.3",
-                "asset_url": "packages/missing.tar.gz",
-                "fallback_asset_url": "packages/fake_pg.tar.gz",
-                "sha256": "{sha256}"
+                "release_tag": "fake_pg-v1.2.3",
+                "artifacts": {{
+                    "universal": {{
+                        "file": "fake_pg-driver-universal.tar.gz",
+                        "sha256": "{sha256}"
+                    }}
+                }}
             }}]
         }}"#,
     );
@@ -313,11 +317,69 @@ fn download_marketplace_entry_to_staging_resolves_relative_asset_urls_from_manif
         requests[0].uri
     );
     assert_eq!(
-        "https://onetcli.test.cn/extensions/packages/missing.tar.gz",
+        "https://onetcli.test.cn/extensions/fake_pg/1.2.3/fake_pg-driver-universal.tar.gz",
         requests[1].uri
     );
     assert_eq!(
-        "https://onetcli.test.cn/extensions/packages/fake_pg.tar.gz",
+        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
+        requests[2].uri
+    );
+    fs::remove_dir_all(staging).unwrap();
+}
+
+#[test]
+fn download_marketplace_entry_to_staging_resolves_v2_artifact_and_host_github_fallback() {
+    let tarball = database_driver_tarball_bytes();
+    let sha256 = sha256_hex(&tarball);
+    let manifest = format!(
+        r#"{{
+            "schema_version": 2,
+            "extensions": [{{
+                "id": "fake_pg",
+                "kind": "database_driver",
+                "name": "Fake PostgreSQL",
+                "version": "1.2.3",
+                "release_tag": "fake_pg-v1.2.3",
+                "artifacts": {{
+                    "universal": {{
+                        "file": "fake_pg-driver-universal.tar.gz",
+                        "sha256": "{sha256}"
+                    }}
+                }}
+            }}]
+        }}"#,
+    );
+    let client = Arc::new(FakeHttpClient::new(vec![
+        FakeHttpClient::response(200, &manifest),
+        Err(anyhow::anyhow!("primary unavailable")),
+        binary_response(200, tarball),
+    ]));
+
+    let manifest = smol::block_on(fetch_manifest_url(
+        client.clone(),
+        "https://onetcli.test.cn/extensions/manifest.json",
+    ))
+    .unwrap();
+    let entries = manifest.into_entries();
+
+    let staging = smol::block_on(download_marketplace_entry_to_staging(
+        client.clone(),
+        &entries[0],
+    ))
+    .unwrap();
+
+    assert!(staging.join("driver.json").exists());
+    let requests = client.take_requests();
+    assert_eq!(
+        "https://onetcli.test.cn/extensions/manifest.json",
+        requests[0].uri
+    );
+    assert_eq!(
+        "https://onetcli.test.cn/extensions/fake_pg/1.2.3/fake_pg-driver-universal.tar.gz",
+        requests[1].uri
+    );
+    assert_eq!(
+        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
         requests[2].uri
     );
     fs::remove_dir_all(staging).unwrap();
@@ -374,20 +436,16 @@ fn install_marketplace_entry_generic_downloads_and_installs_database_driver() {
 }
 
 fn marketplace_database_driver_entry(sha256: Option<String>) -> MarketplaceEntry {
-    MarketplaceEntry {
-        id: "fake_pg".to_string(),
-        kind: ExtensionKind::DatabaseDriver,
-        name: "Fake PostgreSQL".to_string(),
-        version: "1.2.3".to_string(),
-        description: String::new(),
-        file_extensions: Vec::new(),
-        asset_url: "https://example.test/fake_pg.tar.gz".to_string(),
+    MarketplaceEntry::from_resolved_urls(
+        "fake_pg",
+        ExtensionKind::DatabaseDriver,
+        "Fake PostgreSQL",
+        "1.2.3",
+        "",
+        Vec::new(),
+        vec!["https://example.test/fake_pg.tar.gz".to_string()],
         sha256,
-        asset_urls: HashMap::new(),
-        sha256s: HashMap::new(),
-        fallback_asset_url: None,
-        fallback_asset_urls: HashMap::new(),
-    }
+    )
 }
 
 fn database_driver_tarball_bytes() -> Vec<u8> {

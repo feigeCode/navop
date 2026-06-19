@@ -234,20 +234,27 @@ fn to_view_entry(entry: host_downloader::MarketplaceEntry) -> extension_view::Ma
 }
 
 fn to_host_entry(entry: extension_view::MarketplaceEntry) -> host_downloader::MarketplaceEntry {
-    host_downloader::MarketplaceEntry {
-        id: entry.id,
-        kind: to_host_kind(entry.kind),
-        name: entry.name,
-        version: entry.version,
-        description: entry.description,
-        file_extensions: entry.file_extensions,
-        asset_url: entry.asset_url,
-        sha256: entry.sha256,
-        asset_urls: std::collections::HashMap::new(),
-        sha256s: std::collections::HashMap::new(),
-        fallback_asset_url: entry.fallback_asset_url,
-        fallback_asset_urls: std::collections::HashMap::new(),
+    let mut download_urls = Vec::new();
+    if !entry.asset_url.trim().is_empty() {
+        download_urls.push(entry.asset_url);
     }
+    if let Some(fallback_asset_url) = entry.fallback_asset_url {
+        if !fallback_asset_url.trim().is_empty()
+            && !download_urls.iter().any(|url| url == &fallback_asset_url)
+        {
+            download_urls.push(fallback_asset_url);
+        }
+    }
+    host_downloader::MarketplaceEntry::from_resolved_urls(
+        entry.id,
+        to_host_kind(entry.kind),
+        entry.name,
+        entry.version,
+        entry.description,
+        entry.file_extensions,
+        download_urls,
+        entry.sha256,
+    )
 }
 
 fn to_view_kind(kind: host_extension::ExtensionKind) -> extension_view::ExtensionKind {

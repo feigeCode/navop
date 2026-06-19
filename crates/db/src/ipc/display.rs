@@ -2,8 +2,6 @@ use crate::ipc::{IpcDriverManifest, IpcDriverRegistry};
 use gpui_component::{Icon, IconName, IconNamed, Sizable, Size};
 use one_core::storage::DbConnectionConfig;
 use std::path::{Path, PathBuf};
-use tracing::info;
-use tracing::debug;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpcDriverDisplay {
@@ -29,12 +27,12 @@ impl IpcDriverManifest {
     }
 
     pub fn icon_file_path(&self) -> Option<PathBuf> {
-        self.icon_file_path_for(&self.ui.icon, "icon")
+        self.icon_file_path_for(&self.ui.icon)
     }
 
     pub fn color_icon_file_path(&self) -> Option<PathBuf> {
         let icon = self.ui.icon_color.as_deref()?;
-        self.icon_file_path_for(icon, "icon_color")
+        self.icon_file_path_for(icon)
     }
 
     pub fn preferred_icon_file_path(&self) -> Option<PathBuf> {
@@ -45,43 +43,19 @@ impl IpcDriverManifest {
     fn icon_asset_path_for(&self, icon: &str, resource: &str) -> Option<String> {
         let icon = icon.trim();
         if icon.is_empty() {
-            debug!(
-                target: "driver_icon",
-                driver_id = %self.id,
-                resource,
-                "driver icon manifest value is empty"
-            );
             return None;
         }
         let asset_path = builtin_icon_asset_path(icon)
             .unwrap_or_else(|| format!("driver://{}/{resource}{}", self.id, icon_extension(icon)));
-        debug!(
-            target: "driver_icon",
-            driver_id = %self.id,
-            resource,
-            manifest_icon = icon,
-            asset_path = %asset_path,
-            manifest_dir = %self.manifest_dir.display(),
-            "resolved driver icon asset path"
-        );
         Some(asset_path)
     }
 
-    fn icon_file_path_for(&self, icon: &str, resource: &str) -> Option<PathBuf> {
+    fn icon_file_path_for(&self, icon: &str) -> Option<PathBuf> {
         let icon = icon.trim();
         if icon.is_empty() || builtin_icon_asset_path(icon).is_some() {
             return None;
         }
         let file_path = self.manifest_dir.join(icon);
-        debug!(
-            target: "driver_icon",
-            driver_id = %self.id,
-            resource,
-            manifest_icon = icon,
-            file_path = %file_path.display(),
-            exists = file_path.is_file(),
-            "resolved driver icon file path"
-        );
         Some(file_path)
     }
 }
@@ -102,11 +76,6 @@ impl IpcDriverRegistry {
         let driver = match self.find(driver_id) {
             Some(driver) => driver,
             None => {
-                debug!(
-                    target: "driver_icon",
-                    driver_id,
-                    "external driver display lookup missed registry"
-                );
                 return None;
             }
         };

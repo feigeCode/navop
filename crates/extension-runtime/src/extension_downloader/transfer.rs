@@ -33,7 +33,7 @@ pub async fn fetch_manifest_url(
         .with_context(|| format!("fetch release manifest from {url}"))?;
     let mut manifest: MarketplaceManifest =
         serde_json::from_slice(&bytes).context("parse release manifest")?;
-    manifest.resolve_asset_urls(url);
+    manifest.resolve_downloads(url, &configured_github_extension_manifest_url());
     Ok(manifest)
 }
 
@@ -167,9 +167,9 @@ pub async fn download_marketplace_entry_to_staging_with_progress(
     entry: &MarketplaceEntry,
     on_progress: DownloadProgressCallback,
 ) -> Result<PathBuf> {
-    let asset_urls = entry.download_urls();
-    if asset_urls.is_empty() {
-        anyhow::bail!("marketplace entry {} 缺少 asset_url", entry.id);
+    let download_urls = entry.download_urls();
+    if download_urls.is_empty() {
+        anyhow::bail!("marketplace entry {} 缺少可下载 artifact", entry.id);
     }
     let expected_sha256 = entry.sha256();
     if expected_sha256.is_none() && entry.kind != ExtensionKind::Language {
@@ -177,10 +177,10 @@ pub async fn download_marketplace_entry_to_staging_with_progress(
     }
 
     let mut last_error = None;
-    for asset_url in asset_urls {
+    for download_url in download_urls {
         match download_asset_to_staging(
             &http_client,
-            &asset_url,
+            &download_url,
             expected_sha256.as_deref(),
             Arc::clone(&on_progress),
         )

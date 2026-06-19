@@ -159,6 +159,62 @@ pub struct HomePage {
     master_key_dialog_open: bool,
 }
 
+fn external_driver_id_for_connection_form(
+    db_type: &DatabaseType,
+    editing_conn: Option<&StoredConnection>,
+) -> Option<String> {
+    db_type
+        .external_driver_id()
+        .map(str::to_string)
+        .or_else(|| {
+            editing_conn
+                .and_then(|connection| connection.to_db_connection().ok())
+                .and_then(|config| {
+                    config
+                        .database_type
+                        .external_driver_id()
+                        .map(str::to_string)
+                })
+        })
+}
+
+#[cfg(test)]
+mod external_driver_form_tests {
+    use super::*;
+    use one_core::storage::DbConnectionConfig;
+
+    fn stored_external_connection(driver_id: &str) -> StoredConnection {
+        StoredConnection::new_database(
+            "demo".to_string(),
+            DbConnectionConfig {
+                id: String::new(),
+                database_type: DatabaseType::external(driver_id),
+                name: "demo".to_string(),
+                host: "localhost".to_string(),
+                port: 0,
+                username: String::new(),
+                password: String::new(),
+                database: None,
+                service_name: None,
+                sid: None,
+                workspace_id: None,
+                extra_params: std::collections::HashMap::new(),
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn external_driver_id_for_connection_form_uses_editing_connection() {
+        let connection = stored_external_connection("dm");
+
+        assert_eq!(
+            Some("dm".to_string()),
+            external_driver_id_for_connection_form(&DatabaseType::MySQL, Some(&connection))
+        );
+    }
+}
+
 impl HomePage {
     pub fn new(
         tab_container: Entity<TabContainer>,
@@ -1380,7 +1436,7 @@ impl HomePage {
     pub(crate) fn show_connection_form(
         &mut self,
         db_type: DatabaseType,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.editing_connection_id.is_none() && !self.is_master_key_ready_for_new_connection() {
@@ -1390,6 +1446,26 @@ impl HomePage {
         let editing_conn = self
             .editing_connection_id
             .and_then(|id| self.connections.iter().find(|c| c.id == Some(id)).cloned());
+        if let Some(driver_id) =
+            external_driver_id_for_connection_form(&db_type, editing_conn.as_ref())
+        {
+            if db::ipc::IpcDriverRegistry::load_default()
+                .find(&driver_id)
+                .is_none()
+            {
+                let connection_name = editing_conn
+                    .as_ref()
+                    .map(|connection| connection.name.clone())
+                    .unwrap_or_else(|| driver_id.clone());
+                extension_runtime::database_driver_install::prompt_install_database_driver(
+                    driver_id,
+                    connection_name,
+                    window,
+                    cx,
+                );
+                return;
+            }
+        }
         let ssh_connections = self
             .connections
             .iter()

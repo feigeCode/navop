@@ -11,32 +11,17 @@ pub struct MarketplaceManifest {
     #[serde(default)]
     pub release_version: String,
     #[serde(default)]
-    pub languages: Vec<LegacyLanguageEntry>,
-    #[serde(default)]
     pub extensions: Vec<MarketplaceEntry>,
 }
 
 impl MarketplaceManifest {
     pub fn into_entries(self) -> Vec<MarketplaceEntry> {
-        if !self.extensions.is_empty() {
-            return self
-                .extensions
-                .into_iter()
-                .map(MarketplaceEntry::normalized)
-                .collect();
-        }
-        self.languages
-            .into_iter()
-            .map(MarketplaceEntry::from)
-            .collect()
+        self.extensions
     }
 
-    pub(crate) fn resolve_asset_urls(&mut self, manifest_url: &str) {
+    pub(crate) fn resolve_downloads(&mut self, manifest_url: &str, github_manifest_url: &str) {
         for entry in &mut self.extensions {
-            entry.resolve_asset_urls(manifest_url);
-        }
-        for entry in &mut self.languages {
-            entry.resolve_asset_urls(manifest_url);
+            entry.resolve_downloads(manifest_url, github_manifest_url);
         }
     }
 }
@@ -51,124 +36,114 @@ pub struct MarketplaceEntry {
     #[serde(default)]
     pub version: String,
     #[serde(default)]
+    pub release_tag: String,
+    #[serde(default)]
     pub description: String,
     #[serde(default)]
     pub file_extensions: Vec<String>,
     #[serde(default)]
-    pub asset_url: String,
-    #[serde(default)]
-    pub sha256: Option<String>,
-    #[serde(default)]
-    pub asset_urls: HashMap<String, String>,
-    #[serde(default)]
-    pub sha256s: HashMap<String, String>,
-    #[serde(default, alias = "github_asset_url")]
-    pub fallback_asset_url: Option<String>,
-    #[serde(default, alias = "github_asset_urls")]
-    pub fallback_asset_urls: HashMap<String, String>,
-}
-
-impl MarketplaceEntry {
-    fn normalized(mut self) -> Self {
-        if self.id.is_empty() {
-            self.id = self.name.clone();
-        }
-        self
-    }
-
-    pub(crate) fn asset_url(&self) -> Option<String> {
-        self.asset_url_for_keys(marketplace_target_keys())
-    }
-
-    pub(crate) fn sha256(&self) -> Option<String> {
-        self.sha256_for_keys(marketplace_target_keys())
-    }
-
-    pub(crate) fn download_urls(&self) -> Vec<String> {
-        let mut urls = Vec::new();
-        push_unique(&mut urls, self.asset_url());
-        push_unique(&mut urls, self.fallback_asset_url());
-        urls
-    }
-
-    pub(crate) fn asset_url_for_keys(&self, keys: &[&str]) -> Option<String> {
-        select_keyed_value(&self.asset_urls, keys).or_else(|| non_empty(self.asset_url.clone()))
-    }
-
-    pub(crate) fn sha256_for_keys(&self, keys: &[&str]) -> Option<String> {
-        select_keyed_value(&self.sha256s, keys).or_else(|| self.sha256.clone())
-    }
-
-    pub(crate) fn fallback_asset_url_for_keys(&self, keys: &[&str]) -> Option<String> {
-        select_keyed_value(&self.fallback_asset_urls, keys)
-            .or_else(|| self.fallback_asset_url.clone().and_then(non_empty))
-    }
-
-    pub(crate) fn fallback_asset_url(&self) -> Option<String> {
-        self.fallback_asset_url_for_keys(marketplace_target_keys())
-    }
-
-    fn resolve_asset_urls(&mut self, manifest_url: &str) {
-        self.asset_url = resolve_asset_url(manifest_url, &self.asset_url);
-        resolve_asset_url_map(manifest_url, &mut self.asset_urls);
-        if let Some(asset_url) = &mut self.fallback_asset_url {
-            *asset_url = resolve_asset_url(manifest_url, asset_url);
-        }
-        resolve_asset_url_map(manifest_url, &mut self.fallback_asset_urls);
-    }
+    pub artifacts: HashMap<String, MarketplaceArtifact>,
+    #[serde(skip)]
+    resolved_download_urls: Vec<String>,
+    #[serde(skip)]
+    resolved_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LegacyLanguageEntry {
-    pub name: String,
-    #[serde(default)]
-    pub version: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub file_extensions: Vec<String>,
-    pub asset_url: String,
+pub struct MarketplaceArtifact {
+    pub file: String,
     #[serde(default)]
     pub sha256: Option<String>,
 }
 
-impl From<&LegacyLanguageEntry> for MarketplaceEntry {
-    fn from(entry: &LegacyLanguageEntry) -> Self {
+impl MarketplaceEntry {
+    fn resolve_downloads(&mut self, manifest_url: &str, github_manifest_url: &str) {
+        if self.id.is_empty() {
+            self.id = self.name.clone();
+        }
+
+        let Some(artifact) = self.artifact_for_keys(marketplace_target_keys()) else {
+            return;
+        };
+
+        let github_url =
+            self.github_download_url(&artifact.file, manifest_url, github_manifest_url);
+        let mut urls = Vec::new();
+        if is_github_release_download_url(manifest_url) {
+            push_unique(&mut urls, github_url);
+        } else {
+            let primary_path = format!("{}/{}/{}", self.id, self.version, artifact.file);
+            push_unique(
+                &mut urls,
+                Some(resolve_asset_url(manifest_url, &primary_path)),
+            );
+            push_unique(&mut urls, github_url);
+        }
+
+        self.resolved_download_urls = urls;
+        self.resolved_sha256 = artifact.sha256.clone();
+    }
+
+    pub(crate) fn from_resolved_urls(
+        id: impl Into<String>,
+        kind: ExtensionKind,
+        name: impl Into<String>,
+        version: impl Into<String>,
+        description: impl Into<String>,
+        file_extensions: Vec<String>,
+        download_urls: Vec<String>,
+        sha256: Option<String>,
+    ) -> Self {
         Self {
-            id: entry.name.clone(),
-            kind: ExtensionKind::Language,
-            name: entry.name.clone(),
-            version: entry.version.clone(),
-            description: entry.description.clone(),
-            file_extensions: entry.file_extensions.clone(),
-            asset_url: entry.asset_url.clone(),
-            sha256: entry.sha256.clone(),
-            asset_urls: HashMap::new(),
-            sha256s: HashMap::new(),
-            fallback_asset_url: None,
-            fallback_asset_urls: HashMap::new(),
+            id: id.into(),
+            kind,
+            name: name.into(),
+            version: version.into(),
+            release_tag: String::new(),
+            description: description.into(),
+            file_extensions,
+            artifacts: HashMap::new(),
+            resolved_download_urls: download_urls,
+            resolved_sha256: sha256,
         }
     }
-}
 
-impl From<LegacyLanguageEntry> for MarketplaceEntry {
-    fn from(entry: LegacyLanguageEntry) -> Self {
-        Self::from(&entry)
+    pub(crate) fn asset_url(&self) -> Option<String> {
+        self.resolved_download_urls.first().cloned()
     }
-}
 
-impl LegacyLanguageEntry {
-    fn resolve_asset_urls(&mut self, manifest_url: &str) {
-        self.asset_url = resolve_asset_url(manifest_url, &self.asset_url);
+    pub(crate) fn sha256(&self) -> Option<String> {
+        self.resolved_sha256.clone()
+    }
+
+    pub(crate) fn download_urls(&self) -> Vec<String> {
+        self.resolved_download_urls.clone()
+    }
+
+    pub(crate) fn fallback_asset_url(&self) -> Option<String> {
+        self.resolved_download_urls.get(1).cloned()
+    }
+
+    pub(crate) fn artifact_for_keys(&self, keys: &[&str]) -> Option<MarketplaceArtifact> {
+        keys.iter()
+            .find_map(|key| self.artifacts.get(*key).cloned())
+    }
+
+    fn github_download_url(
+        &self,
+        file: &str,
+        manifest_url: &str,
+        github_manifest_url: &str,
+    ) -> Option<String> {
+        let release_tag = non_empty(self.release_tag.clone())?;
+        github_release_download_base(github_manifest_url)
+            .or_else(|| github_release_download_base(manifest_url))
+            .map(|base| format!("{base}{release_tag}/{file}"))
     }
 }
 
 fn default_marketplace_kind() -> ExtensionKind {
     ExtensionKind::Language
-}
-
-fn select_keyed_value(values: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| values.get(*key).cloned())
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -198,14 +173,21 @@ fn resolve_asset_url(manifest_url: &str, asset_url: &str) -> String {
         .unwrap_or_else(|| asset_url.to_string())
 }
 
-fn resolve_asset_url_map(manifest_url: &str, asset_urls: &mut HashMap<String, String>) {
-    for asset_url in asset_urls.values_mut() {
-        *asset_url = resolve_asset_url(manifest_url, asset_url);
-    }
-}
-
 fn has_http_url_scheme(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
+}
+
+fn is_github_release_download_url(url: &str) -> bool {
+    github_release_download_base(url).is_some()
+}
+
+fn github_release_download_base(url: &str) -> Option<String> {
+    let url = url.trim();
+    if !has_http_url_scheme(url) {
+        return None;
+    }
+    let releases_index = url.find("/releases/")?;
+    Some(format!("{}/releases/download/", &url[..releases_index]))
 }
 
 fn manifest_url_prefix(manifest_url: &str) -> Option<&str> {
@@ -220,20 +202,24 @@ fn manifest_url_prefix(manifest_url: &str) -> Option<&str> {
 fn marketplace_target_keys() -> &'static [&'static str] {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        return &["aarch64-apple-darwin", "macos"];
+        return &["aarch64-apple-darwin", "macos", "universal"];
     }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {
-        return &["x86_64-apple-darwin", "macos"];
+        return &["x86_64-apple-darwin", "macos", "universal"];
     }
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        return &["x86_64-unknown-linux-gnu", "linux"];
+        return &["x86_64-unknown-linux-gnu", "linux", "universal"];
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        return &["aarch64-unknown-linux-gnu", "linux", "universal"];
     }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
-        return &["x86_64-pc-windows-msvc", "windows"];
+        return &["x86_64-pc-windows-msvc", "windows", "universal"];
     }
     #[allow(unreachable_code)]
-    &[]
+    &["universal"]
 }

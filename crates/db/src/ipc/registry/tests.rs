@@ -114,6 +114,30 @@ fn scans_driver_manifests() {
 }
 
 #[test]
+fn scans_valid_driver_manifests_when_sibling_manifest_is_invalid() {
+    let temp = tempfile::tempdir().unwrap();
+    write_driver_manifest(temp.path(), "valid", "valid", "Valid");
+    let broken_dir = temp.path().join("broken");
+    fs::create_dir(&broken_dir).unwrap();
+    fs::write(
+        broken_dir.join(DRIVER_MANIFEST_FILE),
+        r#"{"id":"broken","name":"Broken","entry":{"command":"./driver"},"transport":{"name":""}}"#,
+    )
+    .unwrap();
+
+    let report = IpcDriverRegistry::load_from_dir_with_report(temp.path()).unwrap();
+    let registry = report.registry;
+
+    assert_eq!(registry.drivers().len(), 1);
+    assert_eq!(registry.find("valid").unwrap().name, "Valid");
+    assert_eq!(report.loaded.len(), 1);
+    assert_eq!(report.loaded[0].id, "valid");
+    assert_eq!(report.skipped.len(), 1);
+    assert_eq!(report.skipped[0].dir, broken_dir);
+    assert!(report.skipped[0].error.contains("local socket name"));
+}
+
+#[test]
 fn scans_single_wrapped_driver_directory() {
     let temp = tempfile::tempdir().unwrap();
     let outer_dir = temp.path().join("gbase8s");

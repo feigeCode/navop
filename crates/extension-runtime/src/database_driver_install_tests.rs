@@ -87,8 +87,13 @@ fn install_database_driver_from_marketplace_installs_matching_entry() {
                 "kind": "database_driver",
                 "name": "Custom",
                 "version": "1.2.3",
-                "asset_url": "https://example.test/custom.tar.gz",
-                "sha256": "{sha256}"
+                "release_tag": "custom-v1.2.3",
+                "artifacts": {{
+                    "universal": {{
+                        "file": "custom-driver-universal.tar.gz",
+                        "sha256": "{sha256}"
+                    }}
+                }}
             }}]
         }}"#
     );
@@ -134,20 +139,16 @@ fn external_config(driver_id: &str) -> DbConnectionConfig {
 }
 
 fn entry(id: &str, kind: ExtensionKind) -> MarketplaceEntry {
-    MarketplaceEntry {
-        id: id.to_string(),
+    MarketplaceEntry::from_resolved_urls(
+        id,
         kind,
-        name: id.to_string(),
-        version: "1.0.0".to_string(),
-        description: String::new(),
-        file_extensions: Vec::new(),
-        asset_url: format!("https://example.test/{id}.tar.gz"),
-        sha256: Some("hash".to_string()),
-        asset_urls: HashMap::new(),
-        sha256s: HashMap::new(),
-        fallback_asset_url: None,
-        fallback_asset_urls: HashMap::new(),
-    }
+        id,
+        "1.0.0",
+        "",
+        Vec::new(),
+        vec![format!("https://example.test/{id}.tar.gz")],
+        Some("hash".to_string()),
+    )
 }
 
 fn database_driver_tarball_bytes() -> Vec<u8> {

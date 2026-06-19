@@ -7,7 +7,6 @@ use gpui_component::{Icon, IconName, Sizable};
 use one_core::storage::DatabaseType;
 use rust_i18n::t;
 use std::path::PathBuf;
-use tracing::info;
 
 const BUILTIN_EXTERNAL_DRIVER_IDS: &[&str] = &["duckdb"];
 
@@ -164,14 +163,6 @@ fn external_database_kinds(registry: &IpcDriverRegistry) -> Vec<NewConnectionKin
         .map(|driver| {
             let icon_asset_path = driver.preferred_icon_asset_path();
             let icon_file_path = driver.preferred_icon_file_path();
-            info!(
-                target: "driver_icon",
-                driver_id = %driver.id,
-                name = %driver.name,
-                icon_asset_path = ?icon_asset_path,
-                icon_file_path = ?icon_file_path.as_ref().map(|path| path.display().to_string()),
-                "new connection listed external driver"
-            );
             NewConnectionKind::ExternalDatabase {
                 driver_id: driver.id.clone(),
                 name: driver.name.clone(),

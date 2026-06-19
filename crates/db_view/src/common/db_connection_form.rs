@@ -1031,25 +1031,67 @@ fn ssh_auth_requires_private_key(auth_type: &str) -> bool {
     normalized_ssh_auth_type(auth_type) == "private_key"
 }
 
-fn should_use_custom_ssh_tab(db_type: &DatabaseType) -> bool {
-    !db_type.is_external()
+const HOST_SSH_FIELD_NAMES: &[&str] = &[
+    "ssh_tunnel_enabled",
+    "ssh_connection_id",
+    "ssh_host",
+    "ssh_port",
+    "ssh_username",
+    "ssh_auth_type",
+    "ssh_password",
+    "ssh_private_key_path",
+    "ssh_private_key_passphrase",
+    "ssh_target_host",
+    "ssh_target_port",
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostSslTabKind {
+    MySql,
+    PostgreSql,
+    Mssql,
+}
+
+fn has_field(fields: &[FormField], field_name: &str) -> bool {
+    fields.iter().any(|field| field.name == field_name)
+}
+
+fn has_all_fields(fields: &[FormField], field_names: &[&str]) -> bool {
+    field_names
+        .iter()
+        .all(|field_name| has_field(fields, field_name))
+}
+
+fn should_use_custom_ssh_tab(db_type: &DatabaseType, fields: &[FormField]) -> bool {
+    !db_type.is_external() || has_all_fields(fields, HOST_SSH_FIELD_NAMES)
+}
+
+fn host_ssl_tab_kind(db_type: &DatabaseType, fields: &[FormField]) -> Option<HostSslTabKind> {
+    match db_type {
+        DatabaseType::MySQL => Some(HostSslTabKind::MySql),
+        DatabaseType::PostgreSQL => Some(HostSslTabKind::PostgreSql),
+        DatabaseType::MSSQL => Some(HostSslTabKind::Mssql),
+        _ if has_field(fields, "ssl_mode") => Some(HostSslTabKind::PostgreSql),
+        _ if has_field(fields, "encrypt") => Some(HostSslTabKind::Mssql),
+        _ if has_field(fields, "require_ssl") => Some(HostSslTabKind::MySql),
+        _ => None,
+    }
 }
 
 fn is_custom_ssl_enabled(
-    db_type: DatabaseType,
+    kind: HostSslTabKind,
     require_ssl: bool,
     ssl_mode: Option<&str>,
     encrypt: Option<&str>,
 ) -> bool {
-    match db_type {
-        DatabaseType::MySQL => require_ssl,
-        DatabaseType::PostgreSQL => ssl_mode
+    match kind {
+        HostSslTabKind::MySql => require_ssl,
+        HostSslTabKind::PostgreSql => ssl_mode
             .map(|value| !value.trim().eq_ignore_ascii_case("disable"))
             .unwrap_or(false),
-        DatabaseType::MSSQL => encrypt
+        HostSslTabKind::Mssql => encrypt
             .map(|value| !value.trim().eq_ignore_ascii_case("off"))
             .unwrap_or(false),
-        _ => false,
     }
 }
 
@@ -2013,29 +2055,27 @@ impl DbConnectionForm {
         self.set_field_value(field_name, if value { "true" } else { "false" }, window, cx);
     }
 
-    fn should_use_custom_ssl_tab(&self) -> bool {
-        matches!(
-            self.config.db_type.clone(),
-            DatabaseType::MySQL | DatabaseType::PostgreSQL | DatabaseType::MSSQL
-        )
-    }
-
-    fn is_ssl_enabled(&self, cx: &App) -> bool {
+    fn is_ssl_enabled(&self, kind: HostSslTabKind, cx: &App) -> bool {
         is_custom_ssl_enabled(
-            self.config.db_type.clone(),
+            kind,
             self.field_bool_value("require_ssl", cx),
             self.get_field_value("ssl_mode", cx).as_deref(),
             self.get_field_value("encrypt", cx).as_deref(),
         )
     }
 
-    fn toggle_ssl_enabled(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let next_enabled = !self.is_ssl_enabled(cx);
-        match self.config.db_type {
-            DatabaseType::MySQL => {
+    fn toggle_ssl_enabled(
+        &mut self,
+        kind: HostSslTabKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let next_enabled = !self.is_ssl_enabled(kind, cx);
+        match kind {
+            HostSslTabKind::MySql => {
                 self.set_bool_field_value("require_ssl", next_enabled, window, cx);
             }
-            DatabaseType::PostgreSQL => {
+            HostSslTabKind::PostgreSql => {
                 let next_mode = if next_enabled {
                     let current_mode = self
                         .get_field_value("ssl_mode", cx)
@@ -2050,7 +2090,7 @@ impl DbConnectionForm {
                 };
                 self.set_field_value("ssl_mode", &next_mode, window, cx);
             }
-            DatabaseType::MSSQL => {
+            HostSslTabKind::Mssql => {
                 let next_encrypt = if next_enabled {
                     let current_encrypt = self
                         .get_field_value("encrypt", cx)
@@ -2065,7 +2105,6 @@ impl DbConnectionForm {
                 };
                 self.set_field_value("encrypt", &next_encrypt, window, cx);
             }
-            _ => {}
         }
     }
 
@@ -2601,10 +2640,11 @@ impl DbConnectionForm {
 
     fn render_ssl_tab_content(
         &self,
+        kind: HostSslTabKind,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let ssl_enabled = self.is_ssl_enabled(cx);
+        let ssl_enabled = self.is_ssl_enabled(kind, cx);
 
         v_form()
             .layout(Axis::Horizontal)
@@ -2619,26 +2659,25 @@ impl DbConnectionForm {
                     .child(
                         Checkbox::new("db-ssl-enabled")
                             .checked(ssl_enabled)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_ssl_enabled(window, cx);
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.toggle_ssl_enabled(kind, window, cx);
                             })),
                     ),
             )
-            .when(ssl_enabled, |form| match self.config.db_type {
-                DatabaseType::MySQL => form
+            .when(ssl_enabled, |form| match kind {
+                HostSslTabKind::MySql => form
                     .child(self.render_field_by_name("verify_ca", cx))
                     .child(self.render_field_by_name("verify_identity", cx))
                     .child(self.render_field_by_name("ssl_root_cert_path", cx))
                     .child(self.render_field_by_name("tls_hostname_override", cx)),
-                DatabaseType::PostgreSQL => form
+                HostSslTabKind::PostgreSql => form
                     .child(self.render_field_by_name("ssl_mode", cx))
                     .child(self.render_field_by_name("ssl_root_cert_path", cx))
                     .child(self.render_field_by_name("ssl_accept_invalid_certs", cx))
                     .child(self.render_field_by_name("ssl_accept_invalid_hostnames", cx)),
-                DatabaseType::MSSQL => form
+                HostSslTabKind::Mssql => form
                     .child(self.render_field_by_name("encrypt", cx))
                     .child(self.render_field_by_name("trust_cert", cx)),
-                _ => form,
             })
             .into_any_element()
     }
@@ -2671,6 +2710,23 @@ impl Render for DbConnectionForm {
         let current_tab_group = &self.config.tab_groups[self.active_tab];
         let current_tab_fields = &current_tab_group.fields;
         let current_tab_name = current_tab_group.name.as_str();
+        let tab_content = if current_tab_name == "ssh"
+            && should_use_custom_ssh_tab(&self.config.db_type, current_tab_fields)
+        {
+            self.render_ssh_tab_content(window, cx)
+        } else if current_tab_name == "ssl" {
+            match host_ssl_tab_kind(&self.config.db_type, current_tab_fields) {
+                Some(kind) => self.render_ssl_tab_content(kind, window, cx),
+                None => self.render_standard_tab_content(
+                    current_tab_fields,
+                    field_input_offset,
+                    window,
+                    cx,
+                ),
+            }
+        } else {
+            self.render_standard_tab_content(current_tab_fields, field_input_offset, window, cx)
+        };
 
         v_flex()
             .gap_4()
@@ -2696,22 +2752,11 @@ impl Render for DbConnectionForm {
             )
             .child(
                 // Form fields for active tab
-                div().flex_1().min_h(px(250.)).overflow_y_scrollbar().child(
-                    match current_tab_name {
-                        "ssh" if should_use_custom_ssh_tab(&self.config.db_type) => {
-                            self.render_ssh_tab_content(window, cx)
-                        }
-                        "ssl" if self.should_use_custom_ssl_tab() => {
-                            self.render_ssl_tab_content(window, cx)
-                        }
-                        _ => self.render_standard_tab_content(
-                            current_tab_fields,
-                            field_input_offset,
-                            window,
-                            cx,
-                        ),
-                    },
-                ),
+                div()
+                    .flex_1()
+                    .min_h(px(250.))
+                    .overflow_y_scrollbar()
+                    .child(tab_content),
             )
     }
 }
@@ -2808,8 +2853,31 @@ mod tests {
     }
 
     #[test]
-    fn external_driver_ssh_tab_uses_manifest_fields() {
-        assert!(!should_use_custom_ssh_tab(&DatabaseType::external("iotdb")));
+    fn external_driver_host_ssh_fields_use_custom_ssh_tab() {
+        let ssh_tab = DbFormConfig::mysql()
+            .tab_groups
+            .into_iter()
+            .find(|group| group.name == "ssh")
+            .expect("MySQL should include the SSH tab");
+
+        assert!(should_use_custom_ssh_tab(
+            &DatabaseType::external("iotdb"),
+            &ssh_tab.fields
+        ));
+    }
+
+    #[test]
+    fn external_driver_custom_ssh_fields_use_standard_tab() {
+        let fields = vec![FormField::new(
+            "driver_ssh_endpoint",
+            "Driver SSH endpoint",
+            FormFieldType::Text,
+        )];
+
+        assert!(!should_use_custom_ssh_tab(
+            &DatabaseType::external("iotdb"),
+            &fields
+        ));
     }
 
     #[test]
@@ -2857,39 +2925,72 @@ mod tests {
 
     #[test]
     fn custom_ssl_enabled_matches_database_semantics() {
-        assert!(is_custom_ssl_enabled(DatabaseType::MySQL, true, None, None));
+        assert!(is_custom_ssl_enabled(
+            HostSslTabKind::MySql,
+            true,
+            None,
+            None
+        ));
         assert!(!is_custom_ssl_enabled(
-            DatabaseType::MySQL,
+            HostSslTabKind::MySql,
             false,
             None,
             None
         ));
 
         assert!(is_custom_ssl_enabled(
-            DatabaseType::PostgreSQL,
+            HostSslTabKind::PostgreSql,
             false,
             Some("prefer"),
             None,
         ));
         assert!(!is_custom_ssl_enabled(
-            DatabaseType::PostgreSQL,
+            HostSslTabKind::PostgreSql,
             false,
             Some("disable"),
             None,
         ));
 
         assert!(is_custom_ssl_enabled(
-            DatabaseType::MSSQL,
+            HostSslTabKind::Mssql,
             false,
             None,
             Some("required"),
         ));
         assert!(!is_custom_ssl_enabled(
-            DatabaseType::MSSQL,
+            HostSslTabKind::Mssql,
             false,
             None,
             Some("off"),
         ));
+    }
+
+    #[test]
+    fn external_driver_host_ssl_fields_use_custom_ssl_tab() {
+        let ssl_tab = DbFormConfig::postgres()
+            .tab_groups
+            .into_iter()
+            .find(|group| group.name == "ssl")
+            .expect("PostgreSQL should include the SSL tab");
+
+        assert_eq!(
+            Some(HostSslTabKind::PostgreSql),
+            host_ssl_tab_kind(&DatabaseType::external("opengauss"), &ssl_tab.fields)
+        );
+    }
+
+    #[test]
+    fn external_driver_custom_ssl_fields_use_standard_tab() {
+        let fields = vec![FormField::new(
+            "driver_ssl_profile",
+            "Driver SSL profile",
+            FormFieldType::Text,
+        )];
+
+        assert_eq!(
+            None,
+            host_ssl_tab_kind(&DatabaseType::external("opengauss"), &fields)
+        );
     }
 
     #[test]

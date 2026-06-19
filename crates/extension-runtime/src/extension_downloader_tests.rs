@@ -10,16 +10,25 @@ use crate::extension_downloader::{
 };
 
 #[test]
-fn marketplace_manifest_accepts_legacy_languages() {
+fn marketplace_manifest_accepts_v2_universal_language_artifact() {
     let manifest: MarketplaceManifest = serde_json::from_str(
         r#"{
+            "schema_version": 2,
             "release_version": "2026.05",
-            "languages": [{
+            "extensions": [{
+                "id": "rust",
+                "kind": "language",
                 "name": "rust",
                 "version": "0.24.0",
+                "release_tag": "rust-v0.24.0",
                 "description": "Rust syntax",
                 "file_extensions": ["rs"],
-                "asset_url": "https://example.test/rust.tar.gz"
+                "artifacts": {
+                    "universal": {
+                        "file": "rust-universal.tar.gz",
+                        "sha256": "abc"
+                    }
+                }
             }]
         }"#,
     )
@@ -33,6 +42,10 @@ fn marketplace_manifest_accepts_legacy_languages() {
     assert_eq!("rust", entries[0].name);
     assert_eq!("0.24.0", entries[0].version);
     assert_eq!(vec!["rs".to_string()], entries[0].file_extensions);
+    assert_eq!(
+        "rust-universal.tar.gz",
+        entries[0].artifacts["universal"].file
+    );
 }
 
 #[test]

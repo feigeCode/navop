@@ -115,6 +115,39 @@ fn prompt_install_driver<T>(
 ) where
     T: DatabaseDriverConnectionOpener,
 {
+    let connection_name = connection.name.clone();
+    prompt_install_driver_with_completion(
+        driver_id.clone(),
+        connection_name,
+        window,
+        cx,
+        move |home, window, cx| {
+            home.open_database_connection(&connection, workspace, window, cx);
+        },
+    );
+}
+
+pub fn prompt_install_database_driver<T>(
+    driver_id: String,
+    connection_name: String,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) where
+    T: 'static,
+{
+    prompt_install_driver_with_completion(driver_id, connection_name, window, cx, |_, _, _| {});
+}
+
+fn prompt_install_driver_with_completion<T, F>(
+    driver_id: String,
+    connection_name: String,
+    window: &mut Window,
+    cx: &mut Context<T>,
+    on_success: F,
+) where
+    T: 'static,
+    F: FnOnce(&mut T, &mut Window, &mut Context<T>) + 'static,
+{
     if ExtensionRegistry::global().is_none() {
         notify_error(window, cx, "扩展系统未初始化，无法安装数据库驱动");
         return;
@@ -125,14 +158,14 @@ fn prompt_install_driver<T>(
         "需要安装数据库驱动",
         Some(&format!(
             "连接「{}」需要安装「{}」数据库驱动。",
-            connection.name, driver_id
+            connection_name, driver_id
         )),
         &["下载并安装", "取消"],
         cx,
     );
     let http_client = cx.http_client();
     let window_handle = window.window_handle();
-    let progress_view = cx.new(|_| DriverInstallProgressView::new(&driver_id, &connection.name));
+    let progress_view = cx.new(|_| DriverInstallProgressView::new(&driver_id, &connection_name));
     let progress_view_weak = progress_view.downgrade();
     let progress_snapshot = Arc::new(Mutex::new(DriverInstallProgressSnapshot::default()));
     let progress_finished = Arc::new(AtomicBool::new(false));
@@ -168,11 +201,10 @@ fn prompt_install_driver<T>(
         finish_install_and_open(
             window_handle,
             this,
-            connection,
-            workspace,
             driver_id,
             progress_view_weak,
             outcome,
+            on_success,
             cx,
         );
     })
@@ -216,28 +248,25 @@ fn open_install_progress_dialog(
     });
 }
 
-fn finish_install_and_open<T>(
+fn finish_install_and_open<T: 'static>(
     window_handle: gpui::AnyWindowHandle,
-    home: WeakEntity<T>,
-    connection: StoredConnection,
-    workspace: Option<Workspace>,
+    target: WeakEntity<T>,
     driver_id: String,
     progress_view: gpui::WeakEntity<DriverInstallProgressView>,
     outcome: Result<(), String>,
+    on_success: impl FnOnce(&mut T, &mut Window, &mut Context<T>) + 'static,
     cx: &mut AsyncApp,
-) where
-    T: DatabaseDriverConnectionOpener,
-{
+) {
     if outcome.is_ok() {
         mark_driver_install_finished(&progress_view, cx);
     }
     let _ = cx.update_window(window_handle, |_, window, cx| {
         window.close_dialog(cx);
-        if let Some(home) = home.upgrade() {
-            home.update(cx, |home, cx| match outcome {
+        if let Some(target) = target.upgrade() {
+            target.update(cx, |target, cx| match outcome {
                 Ok(()) => {
                     notify_success(window, cx, format!("已安装 {driver_id} 数据库驱动"));
-                    home.open_database_connection(&connection, workspace, window, cx);
+                    on_success(target, window, cx);
                 }
                 Err(error) => notify_error(window, cx, format!("安装数据库驱动失败: {error}")),
             });

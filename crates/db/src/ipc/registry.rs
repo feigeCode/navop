@@ -6,12 +6,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use tracing::warn;
+use std::sync::{Mutex, OnceLock};
+use tracing::{debug, info, warn};
 
 mod discovery;
 mod entry;
 
 const DRIVER_MANIFEST_FILE: &str = "driver.json";
+static IPC_DRIVER_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IpcDriverManifest {
@@ -297,6 +299,28 @@ pub struct IpcDriverRegistry {
     drivers: Vec<IpcDriverManifest>,
 }
 
+#[derive(Clone, Debug)]
+pub struct IpcDriverRegistryLoadReport {
+    pub registry: IpcDriverRegistry,
+    pub loaded: Vec<IpcDriverLoadedEntry>,
+    pub skipped: Vec<IpcDriverSkippedEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IpcDriverLoadedEntry {
+    pub id: String,
+    pub name: String,
+    pub category: Option<String>,
+    pub version: String,
+    pub dir: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IpcDriverSkippedEntry {
+    pub dir: PathBuf,
+    pub error: String,
+}
+
 impl IpcDriverRegistry {
     pub fn load_default() -> Self {
         Self::load_from_dirs(&discovery::default_driver_dirs()).unwrap_or_else(|_| Self::empty())
@@ -311,8 +335,8 @@ impl IpcDriverRegistry {
         let mut drivers = Vec::new();
         let mut seen = HashSet::new();
         for dir in dirs {
-            let registry = match Self::load_from_dir(dir) {
-                Ok(registry) => registry,
+            let report = match Self::load_from_dir_with_report(dir) {
+                Ok(report) => report,
                 Err(error) => {
                     warn!(
                         path = %dir.display(),
@@ -322,28 +346,65 @@ impl IpcDriverRegistry {
                     continue;
                 }
             };
-            for driver in registry.drivers {
+            for driver in report.registry.drivers {
                 if seen.insert(driver.id.clone()) {
                     drivers.push(driver);
+                } else {
+                    let key = format!("duplicate:{}:{}", driver.id, driver.manifest_dir.display());
+                    if should_log_ipc_driver_once(&key) {
+                        warn!(
+                            target: "extension_loader",
+                            kind = "ipc",
+                            driver_id = %driver.id,
+                            name = %driver.name,
+                            path = %driver.manifest_dir.display(),
+                            "skipped duplicate ipc driver manifest"
+                        );
+                    }
                 }
             }
         }
         sort_drivers(&mut drivers);
+        let loaded_ids: Vec<_> = drivers.iter().map(|driver| driver.id.as_str()).collect();
+        let summary_key = format!("registry:{loaded_ids:?}");
+        if should_log_ipc_driver_once(&summary_key) {
+            info!(
+                target: "extension_loader",
+                kind = "ipc",
+                loaded = loaded_ids.len(),
+                drivers = ?loaded_ids,
+                "loaded ipc driver registry"
+            );
+        }
         Ok(Self { drivers })
     }
 
     pub fn load_from_dir(dir: &Path) -> Result<Self, DbError> {
+        Ok(Self::load_from_dir_with_report(dir)?.registry)
+    }
+
+    pub fn load_from_dir_with_report(dir: &Path) -> Result<IpcDriverRegistryLoadReport, DbError> {
         if !dir.exists() {
-            return Ok(Self::empty());
+            debug!(
+                target: "extension_loader",
+                kind = "ipc",
+                path = %dir.display(),
+                "ipc driver directory does not exist"
+            );
+            return Ok(IpcDriverRegistryLoadReport {
+                registry: Self::empty(),
+                loaded: Vec::new(),
+                skipped: Vec::new(),
+            });
         }
 
         let mut drivers = Vec::new();
+        let mut loaded = Vec::new();
+        let mut skipped = Vec::new();
         let mut root_is_wrapped_driver = false;
         if let Some(driver_dir) = driver_manifest_dir_for(dir)? {
             root_is_wrapped_driver = driver_dir != dir;
-            if let Ok(driver) = load_manifest(&driver_dir) {
-                drivers.push(driver);
-            }
+            load_manifest_into_report(&driver_dir, &mut drivers, &mut loaded, &mut skipped);
         }
 
         if !root_is_wrapped_driver {
@@ -351,15 +412,40 @@ impl IpcDriverRegistry {
                 let entry = entry.map_err(read_dir_error)?;
                 if entry.file_type().map_err(read_dir_error)?.is_dir() {
                     if let Some(driver_dir) = driver_manifest_dir_for(&entry.path())? {
-                        if let Ok(driver) = load_manifest(&driver_dir) {
-                            drivers.push(driver);
-                        }
+                        load_manifest_into_report(
+                            &driver_dir,
+                            &mut drivers,
+                            &mut loaded,
+                            &mut skipped,
+                        );
                     }
                 }
             }
         }
         sort_drivers(&mut drivers);
-        Ok(Self { drivers })
+        let loaded_ids: Vec<_> = loaded.iter().map(|entry| entry.id.as_str()).collect();
+        let skipped_dirs: Vec<_> = skipped
+            .iter()
+            .map(|entry| entry.dir.display().to_string())
+            .collect();
+        let summary_key = format!("dir:{}:{loaded_ids:?}:{skipped_dirs:?}", dir.display());
+        if should_log_ipc_driver_once(&summary_key) {
+            debug!(
+                target: "extension_loader",
+                kind = "ipc",
+                root = %dir.display(),
+                loaded = loaded.len(),
+                skipped = skipped.len(),
+                drivers = ?loaded_ids,
+                skipped_paths = ?skipped_dirs,
+                "scanned ipc driver directory"
+            );
+        }
+        Ok(IpcDriverRegistryLoadReport {
+            registry: Self { drivers },
+            loaded,
+            skipped,
+        })
     }
 
     pub fn load_driver_from_dir(dir: &Path) -> Result<Option<IpcDriverManifest>, DbError> {
@@ -409,6 +495,61 @@ fn load_manifest(driver_dir: &Path) -> Result<IpcDriverManifest, DbError> {
     manifest.validate()?;
     entry::resolve_entry_command(&mut manifest);
     Ok(manifest)
+}
+
+fn load_manifest_into_report(
+    driver_dir: &Path,
+    drivers: &mut Vec<IpcDriverManifest>,
+    loaded: &mut Vec<IpcDriverLoadedEntry>,
+    skipped: &mut Vec<IpcDriverSkippedEntry>,
+) {
+    match load_manifest(driver_dir) {
+        Ok(driver) => {
+            debug!(
+                target: "extension_loader",
+                kind = "ipc",
+                driver_id = %driver.id,
+                name = %driver.name,
+                version = %driver.version,
+                category = ?driver.category,
+                path = %driver.manifest_dir.display(),
+                command = %driver.entry.command,
+                "loaded ipc driver manifest"
+            );
+            loaded.push(IpcDriverLoadedEntry {
+                id: driver.id.clone(),
+                name: driver.name.clone(),
+                category: driver.category.clone(),
+                version: driver.version.clone(),
+                dir: driver.manifest_dir.clone(),
+            });
+            drivers.push(driver);
+        }
+        Err(error) => {
+            let error = error.to_string();
+            let key = format!("skip:{}:{error}", driver_dir.display());
+            if should_log_ipc_driver_once(&key) {
+                warn!(
+                    target: "extension_loader",
+                    kind = "ipc",
+                    path = %driver_dir.display(),
+                    error = %error,
+                    "skipped ipc driver manifest"
+                );
+            }
+            skipped.push(IpcDriverSkippedEntry {
+                dir: driver_dir.to_path_buf(),
+                error,
+            });
+        }
+    }
+}
+
+fn should_log_ipc_driver_once(key: &str) -> bool {
+    let seen = IPC_DRIVER_LOG_KEYS.get_or_init(|| Mutex::new(HashSet::new()));
+    seen.lock()
+        .map(|mut seen| seen.insert(key.to_string()))
+        .unwrap_or(true)
 }
 
 fn driver_manifest_dir_for(dir: &Path) -> Result<Option<PathBuf>, DbError> {
