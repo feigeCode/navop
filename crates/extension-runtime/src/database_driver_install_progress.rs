@@ -4,11 +4,14 @@ use gpui::{
     WeakEntity, Window, div, px,
 };
 use gpui_component::{ActiveTheme, Sizable, WindowExt, progress::Progress, v_flex};
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
-use std::time::Duration;
 
 const START_PROGRESS: f32 = 5.0;
 const INSTALLING_PROGRESS: f32 = 95.0;
@@ -28,7 +31,7 @@ pub(super) struct DriverInstallProgressState {
 
 #[derive(Default)]
 pub(super) struct DriverInstallProgressSnapshot {
-    progress: Option<DownloadProgress>,
+    progress: VecDeque<DownloadProgress>,
 }
 
 impl DriverInstallProgressView {
@@ -49,11 +52,19 @@ impl DriverInstallProgressView {
 
 impl DriverInstallProgressSnapshot {
     pub(super) fn set(&mut self, progress: DownloadProgress) {
-        self.progress = Some(progress);
+        if matches!(progress, DownloadProgress::Bytes { .. })
+            && matches!(self.progress.back(), Some(DownloadProgress::Bytes { .. }))
+        {
+            if let Some(last_progress) = self.progress.back_mut() {
+                *last_progress = progress;
+            }
+            return;
+        }
+        self.progress.push_back(progress);
     }
 
     fn take(&mut self) -> Option<DownloadProgress> {
-        self.progress.take()
+        self.progress.pop_front()
     }
 }
 
@@ -155,6 +166,12 @@ impl DriverInstallProgressState {
                 self.progress_value = byte_progress_value(downloaded, total);
                 self.status = format!("正在下载驱动 {:.0}%", self.progress_value).into();
             }
+            DownloadProgress::Failed {
+                error, retrying, ..
+            } => {
+                self.status = failed_source_status(&error, retrying).into();
+                self.progress_value = START_PROGRESS;
+            }
             DownloadProgress::Finished => self.mark_installing(),
         }
     }
@@ -209,6 +226,18 @@ fn byte_progress_value(downloaded: u64, total: Option<u64>) -> f32 {
     ((downloaded as f32 / total as f32) * 100.0).clamp(START_PROGRESS, 90.0)
 }
 
+fn failed_source_status(error: &str, retrying: bool) -> &'static str {
+    match (
+        error.contains("sha256 mismatch") || error.contains("verify sha256"),
+        retrying,
+    ) {
+        (true, true) => "当前下载源校验失败，正在切换到下一个源...",
+        (true, false) => "下载源校验失败，请稍后重试。",
+        (false, true) => "当前下载源失败，正在切换到下一个源...",
+        (false, false) => "下载源失败，请稍后重试。",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +266,78 @@ mod tests {
         state.mark_finished();
         assert_eq!("安装完成，正在打开连接...", state.status());
         assert_eq!(100.0, state.progress_value());
+    }
+
+    #[test]
+    fn progress_state_reports_failed_source_and_resets_for_retry() {
+        let mut state = DriverInstallProgressState::new("duckdb", "Local DuckDB");
+
+        state.apply_download_progress(DownloadProgress::Bytes {
+            downloaded: 80,
+            total: Some(100),
+        });
+        assert_eq!(80.0, state.progress_value());
+
+        state.apply_download_progress(DownloadProgress::Failed {
+            url: "https://onetcli.test.cn/extensions/duckdb.tar.gz".to_string(),
+            error: "sha256 mismatch".to_string(),
+            retrying: true,
+        });
+        assert_eq!("当前下载源校验失败，正在切换到下一个源...", state.status());
+        assert_eq!(5.0, state.progress_value());
+
+        state.apply_download_progress(DownloadProgress::Started {
+            url: "https://github.example.test/duckdb.tar.gz".to_string(),
+        });
+        assert_eq!("正在连接下载源...", state.status());
+        assert_eq!(5.0, state.progress_value());
+    }
+
+    #[test]
+    fn progress_snapshot_preserves_key_events_and_coalesces_byte_updates() {
+        let mut snapshot = DriverInstallProgressSnapshot::default();
+
+        snapshot.set(DownloadProgress::Started {
+            url: "https://onetcli.test.cn/extensions/duckdb.tar.gz".to_string(),
+        });
+        snapshot.set(DownloadProgress::Bytes {
+            downloaded: 20,
+            total: Some(100),
+        });
+        snapshot.set(DownloadProgress::Bytes {
+            downloaded: 40,
+            total: Some(100),
+        });
+        snapshot.set(DownloadProgress::Failed {
+            url: "https://onetcli.test.cn/extensions/duckdb.tar.gz".to_string(),
+            error: "sha256 mismatch".to_string(),
+            retrying: true,
+        });
+        snapshot.set(DownloadProgress::Started {
+            url: "https://github.example.test/duckdb.tar.gz".to_string(),
+        });
+
+        assert!(matches!(
+            snapshot.take(),
+            Some(DownloadProgress::Started { url })
+                if url == "https://onetcli.test.cn/extensions/duckdb.tar.gz"
+        ));
+        assert!(matches!(
+            snapshot.take(),
+            Some(DownloadProgress::Bytes {
+                downloaded: 40,
+                total: Some(100),
+            })
+        ));
+        assert!(matches!(
+            snapshot.take(),
+            Some(DownloadProgress::Failed { retrying: true, .. })
+        ));
+        assert!(matches!(
+            snapshot.take(),
+            Some(DownloadProgress::Started { url })
+                if url == "https://github.example.test/duckdb.tar.gz"
+        ));
+        assert_eq!(None, snapshot.take());
     }
 }

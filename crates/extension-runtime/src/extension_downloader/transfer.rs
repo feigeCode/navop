@@ -1,4 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, anyhow};
 use futures::AsyncReadExt;
@@ -11,11 +15,22 @@ pub const GITHUB_EXTENSION_MANIFEST_URL: &str = "https://github.com/feigeCode/on
 pub const DEFAULT_EXTENSION_MANIFEST_URL: &str = GITHUB_EXTENSION_MANIFEST_URL;
 const EXTENSION_GITHUB_MANIFEST_URL_ENV: &str = "ONETCLI_EXTENSION_GITHUB_MANIFEST_URL";
 const DOWNLOAD_BUFFER_SIZE: usize = 16 * 1024;
+const DOWNLOAD_PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(120);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DownloadProgress {
-    Started { url: String },
-    Bytes { downloaded: u64, total: Option<u64> },
+    Started {
+        url: String,
+    },
+    Bytes {
+        downloaded: u64,
+        total: Option<u64>,
+    },
+    Failed {
+        url: String,
+        error: String,
+        retrying: bool,
+    },
     Finished,
 }
 
@@ -176,8 +191,9 @@ pub async fn download_marketplace_entry_to_staging_with_progress(
         anyhow::bail!("marketplace entry {} 缺少 sha256", entry.id);
     }
 
+    let download_url_count = download_urls.len();
     let mut last_error = None;
-    for download_url in download_urls {
+    for (index, download_url) in download_urls.into_iter().enumerate() {
         match download_asset_to_staging(
             &http_client,
             &download_url,
@@ -188,7 +204,18 @@ pub async fn download_marketplace_entry_to_staging_with_progress(
         {
             Ok(staging) => return Ok(staging),
             Err(err) => {
-                tracing::warn!("扩展资产下载失败，尝试下一个源: {err:#}");
+                let error = format!("{err:#}");
+                let retrying = index + 1 < download_url_count;
+                on_progress(DownloadProgress::Failed {
+                    url: download_url,
+                    error: error.clone(),
+                    retrying,
+                });
+                if retrying {
+                    tracing::warn!("扩展资产下载失败，尝试下一个源: {error}");
+                } else {
+                    tracing::warn!("扩展资产下载失败，没有更多源: {error}");
+                }
                 last_error = Some(err);
             }
         }
@@ -206,7 +233,7 @@ async fn download_asset_to_staging(
     on_progress(DownloadProgress::Started {
         url: asset_url.to_string(),
     });
-    let tarball = fetch_bytes_with_progress(http_client, asset_url, on_progress)
+    let tarball = fetch_bytes_with_progress(http_client, asset_url, Arc::clone(&on_progress))
         .await
         .with_context(|| format!("download asset {asset_url}"))?;
     if let Some(expected) = expected_sha256 {
@@ -214,11 +241,12 @@ async fn download_asset_to_staging(
             .with_context(|| format!("verify sha256 for {asset_url}"))?;
     }
     let staging = super::make_staging_dir()?;
-    let result = super::extract_tarball_to(&tarball, &staging).map(|_| staging.clone());
-    if result.is_err() {
+    if let Err(err) = super::extract_tarball_to(&tarball, &staging) {
         let _ = std::fs::remove_dir_all(&staging);
+        return Err(err);
     }
-    result
+    on_progress(DownloadProgress::Finished);
+    Ok(staging)
 }
 
 pub async fn install_marketplace_entry_generic(
@@ -261,6 +289,8 @@ async fn fetch_bytes_with_progress(
     let mut body = response.into_body();
     let mut buf = Vec::new();
     let mut chunk = vec![0; DOWNLOAD_BUFFER_SIZE];
+    let mut last_progress_at = Instant::now();
+    let mut last_reported_downloaded = 0;
     loop {
         let read = body
             .read(&mut chunk)
@@ -270,11 +300,36 @@ async fn fetch_bytes_with_progress(
             break;
         }
         buf.extend_from_slice(&chunk[..read]);
-        on_progress(DownloadProgress::Bytes {
-            downloaded: buf.len() as u64,
+        let downloaded = buf.len() as u64;
+        if should_emit_byte_progress(
+            downloaded,
             total,
-        });
+            last_reported_downloaded,
+            last_progress_at.elapsed(),
+        ) {
+            on_progress(DownloadProgress::Bytes { downloaded, total });
+            last_reported_downloaded = downloaded;
+            last_progress_at = Instant::now();
+        }
     }
-    on_progress(DownloadProgress::Finished);
+    let downloaded = buf.len() as u64;
+    if downloaded > 0 && downloaded != last_reported_downloaded {
+        on_progress(DownloadProgress::Bytes { downloaded, total });
+    }
     Ok(buf)
+}
+
+fn should_emit_byte_progress(
+    downloaded: u64,
+    total: Option<u64>,
+    last_reported_downloaded: u64,
+    elapsed: Duration,
+) -> bool {
+    if downloaded == last_reported_downloaded {
+        return false;
+    }
+    if total.is_some_and(|total| total > 0 && downloaded >= total) {
+        return true;
+    }
+    elapsed >= DOWNLOAD_PROGRESS_EVENT_INTERVAL
 }

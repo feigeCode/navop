@@ -229,6 +229,74 @@ fn download_marketplace_entry_to_staging_reports_progress() {
 }
 
 #[test]
+fn download_marketplace_entry_to_staging_reports_failed_source_before_fallback() {
+    let tarball = database_driver_tarball_bytes();
+    let sha256 = sha256_hex(&tarball);
+    let client = Arc::new(FakeHttpClient::new(vec![
+        binary_response(200, b"not the expected tarball".to_vec()),
+        binary_response(200, tarball),
+    ]));
+    let entry = MarketplaceEntry::from_resolved_urls(
+        "fake_pg",
+        ExtensionKind::DatabaseDriver,
+        "Fake PostgreSQL",
+        "1.2.3",
+        "",
+        Vec::new(),
+        vec![
+            "https://onetcli.test.cn/extensions/fake_pg.tar.gz".to_string(),
+            "https://github.example.test/fake_pg.tar.gz".to_string(),
+        ],
+        Some(sha256),
+    );
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured_events = Arc::clone(&events);
+
+    let staging = smol::block_on(download_marketplace_entry_to_staging_with_progress(
+        client,
+        &entry,
+        Arc::new(move |progress| {
+            captured_events
+                .lock()
+                .expect("events 锁失败")
+                .push(progress);
+        }),
+    ))
+    .unwrap();
+
+    let events = events.lock().expect("events 锁失败");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        DownloadProgress::Failed {
+            url,
+            retrying: true,
+            ..
+        } if url == "https://onetcli.test.cn/extensions/fake_pg.tar.gz"
+    )));
+    let failed_index = events
+        .iter()
+        .position(|event| matches!(event, DownloadProgress::Failed { .. }))
+        .expect("missing failed progress event");
+    assert!(
+        !events[..failed_index]
+            .iter()
+            .any(|event| matches!(event, DownloadProgress::Finished))
+    );
+    let github_started_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                DownloadProgress::Started { url }
+                    if url == "https://github.example.test/fake_pg.tar.gz"
+            )
+        })
+        .expect("missing github started progress event");
+    assert!(failed_index < github_started_index);
+    fs::remove_dir_all(staging).unwrap();
+}
+
+#[test]
 fn download_marketplace_entry_to_staging_falls_back_to_github_asset() {
     let tarball = database_driver_tarball_bytes();
     let sha256 = sha256_hex(&tarball);
