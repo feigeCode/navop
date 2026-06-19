@@ -3,7 +3,7 @@ use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use extension_protocol::method;
 use one_core::storage::DatabaseType;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -54,9 +54,13 @@ pub struct IpcDriverConnection {
 pub struct IpcDriverEntry {
     pub command: String,
     #[serde(default)]
+    pub commands: HashMap<String, String>,
+    #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
     pub working_dir: Option<String>,
+    #[serde(default)]
+    pub env_from_config: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

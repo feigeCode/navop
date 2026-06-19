@@ -118,7 +118,7 @@ impl ExternalDatabasePlugin {
         driver: &IpcDriverManifest,
     ) -> Result<(), DbError> {
         let target = resolve_connection_target(config).await?;
-        let client = JsonRpcClient::start(driver).await?;
+        let client = JsonRpcClient::start_with_connection_config(driver, Some(config)).await?;
         let params = conn_test_params_value(config, &driver.id, (&target.host, target.port));
         let result = client.request_value(wire_method::CONN_TEST, params).await;
         client.shutdown().await;
@@ -349,8 +349,10 @@ fn placeholder_driver_manifest(driver_id: &str) -> IpcDriverManifest {
         version: String::new(),
         entry: crate::ipc::registry::IpcDriverEntry {
             command: String::new(),
+            commands: Default::default(),
             args: Vec::new(),
             working_dir: None,
+            env_from_config: Default::default(),
         },
         transport: crate::ipc::registry::IpcDriverTransport::local_socket(format!(
             "{driver_id}.sock"

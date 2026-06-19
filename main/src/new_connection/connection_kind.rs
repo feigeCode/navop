@@ -310,8 +310,10 @@ mod tests {
             version: String::new(),
             entry: IpcDriverEntry {
                 command: "./driver".to_string(),
+                commands: Default::default(),
                 args: Vec::new(),
                 working_dir: None,
+                env_from_config: Default::default(),
             },
             transport: IpcDriverTransport::local_socket(format!("{id}.sock")),
             dialect: Default::default(),

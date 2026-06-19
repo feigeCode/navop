@@ -12,20 +12,27 @@ pub(super) fn resolve_entry_command(manifest: &mut IpcDriverManifest) {
 }
 
 pub(super) fn resolve_relative_entry_command(manifest: &mut IpcDriverManifest, exe_dir: &Path) {
-    let command = Path::new(&manifest.entry.command);
-    if command.is_absolute() {
+    resolve_relative_command(&mut manifest.entry.command, &manifest.manifest_dir, exe_dir);
+    for command in manifest.entry.commands.values_mut() {
+        resolve_relative_command(command, &manifest.manifest_dir, exe_dir);
+    }
+}
+
+fn resolve_relative_command(command: &mut String, manifest_dir: &Path, exe_dir: &Path) {
+    let command_path = Path::new(command);
+    if command_path.is_absolute() {
         return;
     }
-    if manifest.manifest_dir.join(command).is_file() {
+    if manifest_dir.join(command_path).is_file() {
         return;
     }
 
-    let Some(file_name) = command.file_name() else {
+    let Some(file_name) = command_path.file_name() else {
         return;
     };
     let sibling = exe_dir.join(file_name);
     if sibling.is_file() {
-        manifest.entry.command = sibling.to_string_lossy().into_owned();
+        *command = sibling.to_string_lossy().into_owned();
     }
 }
 

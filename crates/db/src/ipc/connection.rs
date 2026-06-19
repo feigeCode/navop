@@ -622,7 +622,8 @@ impl DbConnection for ExternalDbConnection {
     async fn connect(&mut self) -> Result<(), DbError> {
         self.tunnel = None;
         let target = resolve_connection_target(&self.config).await?;
-        let client = JsonRpcClient::start(&self.driver).await?;
+        let client =
+            JsonRpcClient::start_with_connection_config(&self.driver, Some(&self.config)).await?;
 
         // 解析生效 method 集合:init 动态声明优先,manifest 静态声明回退,都无则 legacy。
         let init_methods: Vec<String> = client.session().methods.iter().cloned().collect();
