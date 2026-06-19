@@ -699,45 +699,22 @@ mod tests {
 
     #[cfg(not(feature = "github-updates"))]
     fn current_target_key() -> &'static str {
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        {
-            return "aarch64-apple-darwin";
-        }
-        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        {
-            return "x86_64-apple-darwin";
-        }
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        {
-            return "x86_64-unknown-linux-gnu";
-        }
-        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        {
-            return "x86_64-pc-windows-msvc";
-        }
-        #[allow(unreachable_code)]
-        "unsupported-target"
+        super::custom_api::platform_download_keys_for(std::env::consts::OS, std::env::consts::ARCH)
+            .first()
+            .copied()
+            .unwrap_or("unsupported-target")
     }
 
     #[cfg(not(feature = "github-updates"))]
     fn expected_archive_name() -> &'static str {
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        {
-            return "onetcli-aarch64-apple-darwin.tar.gz";
+        let archive = super::github_release::expected_archive_name_for(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        );
+        if archive.is_empty() {
+            "unsupported-target"
+        } else {
+            archive
         }
-        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        {
-            return "onetcli-x86_64-apple-darwin.tar.gz";
-        }
-        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        {
-            return "onetcli-x86_64-unknown-linux-gnu.tar.gz";
-        }
-        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        {
-            return "onetcli-x86_64-pc-windows-msvc.zip";
-        }
-        #[allow(unreachable_code)]
-        "unsupported-target"
     }
 }

@@ -11,21 +11,19 @@ const GITHUB_REPO: &str = "onetcli";
 const GITHUB_API_URL: &str = "https://api.github.com/repos/feigeCode/onetcli/releases/latest";
 const GITHUB_USER_AGENT: &str = "onetcli-updater";
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const EXPECTED_ARCHIVE_NAME: &str = "onetcli-aarch64-apple-darwin.tar.gz";
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-const EXPECTED_ARCHIVE_NAME: &str = "onetcli-x86_64-apple-darwin.tar.gz";
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const EXPECTED_ARCHIVE_NAME: &str = "onetcli-x86_64-unknown-linux-gnu.tar.gz";
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-const EXPECTED_ARCHIVE_NAME: &str = "onetcli-x86_64-pc-windows-msvc.zip";
-#[cfg(not(any(
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(target_os = "macos", target_arch = "x86_64"),
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "windows", target_arch = "x86_64")
-)))]
-const EXPECTED_ARCHIVE_NAME: &str = "";
+const EXPECTED_ARCHIVE_NAME: &str =
+    expected_archive_name_for(std::env::consts::OS, std::env::consts::ARCH);
+
+pub(crate) const fn expected_archive_name_for(os: &str, arch: &str) -> &'static str {
+    match (os.as_bytes(), arch.as_bytes()) {
+        (b"macos", b"aarch64") => "onetcli-aarch64-apple-darwin.tar.gz",
+        (b"macos", b"x86_64") => "onetcli-x86_64-apple-darwin.tar.gz",
+        (b"linux", b"x86_64") => "onetcli-x86_64-unknown-linux-gnu.tar.gz",
+        (b"linux", b"aarch64") => "onetcli-aarch64-unknown-linux-gnu.tar.gz",
+        (b"windows", b"x86_64") => "onetcli-x86_64-pc-windows-msvc.zip",
+        _ => "",
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct GithubReleaseAsset {
@@ -164,6 +162,14 @@ mod tests {
         assert_eq!(
             info.download_url.as_deref(),
             Some("https://example.com/update")
+        );
+    }
+
+    #[test]
+    fn expected_archive_name_includes_linux_arm64() {
+        assert_eq!(
+            "onetcli-aarch64-unknown-linux-gnu.tar.gz",
+            expected_archive_name_for("linux", "aarch64")
         );
     }
 

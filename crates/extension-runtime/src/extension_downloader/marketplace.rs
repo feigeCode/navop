@@ -200,26 +200,70 @@ fn manifest_url_prefix(manifest_url: &str) -> Option<&str> {
 }
 
 fn marketplace_target_keys() -> &'static [&'static str] {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        return &["aarch64-apple-darwin", "macos", "universal"];
+    marketplace_target_keys_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+pub(crate) fn marketplace_target_keys_for(os: &str, arch: &str) -> &'static [&'static str] {
+    match (os, arch) {
+        ("macos", "aarch64") => &["aarch64-apple-darwin", "macos", "universal"],
+        ("macos", "x86_64") => &["x86_64-apple-darwin", "macos", "universal"],
+        ("linux", "x86_64") => &["x86_64-unknown-linux-gnu", "linux", "universal"],
+        ("linux", "aarch64") => &["aarch64-unknown-linux-gnu", "linux", "universal"],
+        ("windows", "x86_64") => &["x86_64-pc-windows-msvc", "windows", "universal"],
+        _ => &["universal"],
     }
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
-        return &["x86_64-apple-darwin", "macos", "universal"];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marketplace_target_keys_include_linux_arm64() {
+        assert_eq!(
+            &["aarch64-unknown-linux-gnu", "linux", "universal"],
+            marketplace_target_keys_for("linux", "aarch64")
+        );
     }
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    {
-        return &["x86_64-unknown-linux-gnu", "linux", "universal"];
+
+    #[test]
+    fn artifact_selection_prefers_linux_arm64_before_linux_fallback() {
+        let entry = MarketplaceEntry {
+            id: "duckdb".to_string(),
+            kind: ExtensionKind::DatabaseDriver,
+            name: "DuckDB".to_string(),
+            version: "1.0.0".to_string(),
+            release_tag: "duckdb-v1.0.0".to_string(),
+            description: String::new(),
+            file_extensions: Vec::new(),
+            artifacts: HashMap::from([
+                (
+                    "linux".to_string(),
+                    MarketplaceArtifact {
+                        file: "duckdb-driver-linux.tar.gz".to_string(),
+                        sha256: Some("linux-sha".to_string()),
+                    },
+                ),
+                (
+                    "aarch64-unknown-linux-gnu".to_string(),
+                    MarketplaceArtifact {
+                        file: "duckdb-driver-aarch64-unknown-linux-gnu.tar.gz".to_string(),
+                        sha256: Some("linux-arm64-sha".to_string()),
+                    },
+                ),
+            ]),
+            resolved_download_urls: Vec::new(),
+            resolved_sha256: None,
+        };
+
+        let artifact = entry
+            .artifact_for_keys(marketplace_target_keys_for("linux", "aarch64"))
+            .expect("linux arm64 应选择专属 artifact");
+
+        assert_eq!(
+            "duckdb-driver-aarch64-unknown-linux-gnu.tar.gz",
+            artifact.file
+        );
+        assert_eq!(Some("linux-arm64-sha"), artifact.sha256.as_deref());
     }
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    {
-        return &["aarch64-unknown-linux-gnu", "linux", "universal"];
-    }
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    {
-        return &["x86_64-pc-windows-msvc", "windows", "universal"];
-    }
-    #[allow(unreachable_code)]
-    &["universal"]
 }

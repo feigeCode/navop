@@ -69,6 +69,17 @@ pub(crate) fn select_fallback_download_url(response: &UpdateResponse) -> Option<
     select_fallback_download_url_for_keys(response, platform_download_keys())
 }
 
+pub(crate) fn platform_download_keys_for(os: &str, arch: &str) -> &'static [&'static str] {
+    match (os, arch) {
+        ("macos", "aarch64") => &["aarch64-apple-darwin", "macos"],
+        ("macos", "x86_64") => &["x86_64-apple-darwin", "macos"],
+        ("linux", "x86_64") => &["x86_64-unknown-linux-gnu", "linux"],
+        ("linux", "aarch64") => &["aarch64-unknown-linux-gnu", "linux"],
+        ("windows", "x86_64") => &["x86_64-pc-windows-msvc", "windows"],
+        _ => &[],
+    }
+}
+
 fn select_download_url_for_keys(
     response: &UpdateResponse,
     default_download_url: Option<String>,
@@ -98,24 +109,7 @@ fn select_keyed_value(values: &Option<HashMap<String, String>>, keys: &[&str]) -
 }
 
 fn platform_download_keys() -> &'static [&'static str] {
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        return &["aarch64-apple-darwin", "macos"];
-    }
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
-        return &["x86_64-apple-darwin", "macos"];
-    }
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    {
-        return &["x86_64-unknown-linux-gnu", "linux"];
-    }
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    {
-        return &["x86_64-pc-windows-msvc", "windows"];
-    }
-    #[allow(unreachable_code)]
-    &[]
+    platform_download_keys_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
 #[cfg(test)]
@@ -179,6 +173,14 @@ mod tests {
                 &response,
                 &["x86_64-unknown-linux-gnu", "linux"]
             )
+        );
+    }
+
+    #[test]
+    fn platform_download_keys_include_linux_arm64() {
+        assert_eq!(
+            &["aarch64-unknown-linux-gnu", "linux"],
+            platform_download_keys_for("linux", "aarch64")
         );
     }
 }
