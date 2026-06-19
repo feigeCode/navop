@@ -130,6 +130,68 @@ The connection config sent over IPC includes both:
 - `database_type_key`: the storage key such as `DuckDB` or `External:iotdb`.
 - `driver_id`: the concrete external driver id.
 
+## SSH Tunnel Contract
+
+SSH tunneling is host-managed. IPC drivers must not implement their own SSH
+client, key loading, agent integration, keepalive, reconnect, or port-forward
+logic.
+
+When a database connection enables SSH tunneling, the host opens a local port
+forward before calling the driver. The driver still receives a normal
+`conn/open` request. The `config.host` and `config.port` fields in that request
+are the authoritative endpoint the driver must connect to:
+
+```json
+{
+  "driver_id": "iotdb",
+  "config": {
+    "host": "127.0.0.1",
+    "port": 15432,
+    "username": "root",
+    "password": "secret",
+    "database": "main",
+    "extra_params": {
+      "ssh_tunnel_enabled": "true",
+      "ssh_target_host": "db.internal",
+      "ssh_target_port": "6667"
+    }
+  }
+}
+```
+
+Driver rules:
+
+- Always connect to `config.host` and `config.port`; do not rebuild the endpoint
+  from `extra_params`, stored form fields, or driver defaults.
+- Use the same endpoint resolution for `conn/open` and `conn/test`. If a driver
+  implements `conn/test`, it must test `config.host` and `config.port` exactly
+  as `conn/open` would use them.
+- Ignore SSH-specific fields such as `ssh_tunnel_enabled`, `ssh_connection_id`,
+  `ssh_host`, `ssh_port`, `ssh_username`, `ssh_auth_type`, `ssh_password`,
+  `ssh_private_key_path`, `ssh_private_key_passphrase`, `ssh_target_host`,
+  `ssh_target_port`, and `ssh_timeout` for network dialing. These fields are
+  host inputs, not driver inputs.
+- Do not call `host/ssh/open_tunnel` from process-based database drivers for
+  ordinary database connections. The host owns the tunnel lifecycle and keeps it
+  alive for the database connection.
+- Treat `ConnOptions.ssh_tunnel.session_ref` as a future host/runtime contract,
+  not as a requirement for current driver implementations. Current IPC database
+  drivers should use the mapped `config.host` and `config.port`.
+- If TLS hostname verification is required and the database is reached through
+  `127.0.0.1`, expose or honor a driver-specific TLS server-name/hostname
+  override field instead of using SSH fields to recover the original remote
+  address.
+
+Manifest rules:
+
+- A driver may expose SSH fields in its connection form so users can configure a
+  host-managed tunnel.
+- Use the field ids above when the form is intended to interoperate with the
+  host-managed tunnel resolver.
+- The driver process must still ignore those SSH fields during dialing; their
+  only purpose is to let the host create the local forwarding endpoint before
+  the request reaches the driver.
+
 ## Manifest SQL And Dialect Contract
 
 The manifest dialect is the host SQL-generation contract for external drivers.

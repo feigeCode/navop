@@ -19,14 +19,26 @@ pub use extension_protocol::method;
 /// driver 子进程读到这份 JSON 后自行反序列化为自己内部的 config struct
 /// (例如外部 DuckDB driver 只关心 host / database / extra_params)。
 pub fn driver_config_value(config: &DbConnectionConfig) -> Value {
+    driver_config_value_with_target(config, &config.host, config.port)
+}
+
+/// 构造 `conn/open` 的 `config` 字段,但使用宿主解析后的实际连接目标。
+///
+/// IPC driver 不负责 SSH/TCP tunnel;宿主若启用了 SSH 隧道,会先建立本地端口转发,
+/// 再把这里的 host/port 改成本地映射地址。
+pub fn driver_config_value_with_target(
+    config: &DbConnectionConfig,
+    target_host: &str,
+    target_port: u16,
+) -> Value {
     json!({
         "id": config.id,
         "database_type": config.database_type.as_str(),
         "database_type_key": config.database_type.storage_key(),
         "driver_id": config.database_type.external_driver_id(),
         "name": config.name,
-        "host": config.host,
-        "port": config.port,
+        "host": target_host,
+        "port": target_port,
         "username": config.username,
         "password": config.password,
         "database": config.database,
@@ -268,6 +280,23 @@ mod tests {
         assert!(
             value["driver_id"].is_null(),
             "driver id must come from DatabaseType::External"
+        );
+    }
+
+    #[test]
+    fn driver_config_value_with_target_overrides_host_and_port_only() {
+        let config = config_with_extra_driver_param();
+
+        let value = driver_config_value_with_target(&config, "127.0.0.1", 15432);
+
+        assert_eq!(json!("127.0.0.1"), value["host"]);
+        assert_eq!(json!(15432), value["port"]);
+        assert_eq!(json!("demo"), value["name"]);
+        assert_eq!(json!("MySQL"), value["database_type_key"]);
+        assert_eq!(
+            json!("iotdb"),
+            value["extra_params"]["external_driver_id"],
+            "driver-specific extra params must still be passed through"
         );
     }
 

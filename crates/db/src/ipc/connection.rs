@@ -19,9 +19,10 @@ use crate::ipc::client::JsonRpcClient;
 use crate::ipc::method_support::{MethodSet, MethodSupport};
 use crate::ipc::protocol::{
     conn_only_params, conn_use_params, cursor_close_params, cursor_fetch_params,
-    driver_config_value, exec_batch_params, exec_run_params, query_start_params,
+    driver_config_value_with_target, exec_batch_params, exec_run_params, query_start_params,
 };
 use crate::ipc::registry::IpcDriverManifest;
+use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, SqlErrorInfo, truncate_str};
 use async_trait::async_trait;
 use extension_protocol::conn::ConnId;
@@ -30,6 +31,7 @@ use extension_protocol::row::{CellValue, ColumnSpec, Row};
 use one_core::storage::DbConnectionConfig;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use ssh::LocalPortForwardTunnel;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -47,6 +49,7 @@ pub(crate) const WIRE_PREFIX: &str = "/*onetcli-ipc-wire*/ ";
 pub struct ExternalDbConnection {
     config: DbConnectionConfig,
     driver: IpcDriverManifest,
+    tunnel: Option<LocalPortForwardTunnel>,
     /// `Arc` 让 `request` 能短锁拿 clone 后立刻释放,允许多 caller 并发调用
     /// `JsonRpcClient` 的 request 接口。
     client: Mutex<Option<Arc<JsonRpcClient>>>,
@@ -63,6 +66,7 @@ impl ExternalDbConnection {
         Self {
             config,
             driver,
+            tunnel: None,
             client: Mutex::new(None),
             conn_id: StdMutex::new(None),
             method_set: StdMutex::new(MethodSet::legacy()),
@@ -616,6 +620,8 @@ impl DbConnection for ExternalDbConnection {
     }
 
     async fn connect(&mut self) -> Result<(), DbError> {
+        self.tunnel = None;
+        let target = resolve_connection_target(&self.config).await?;
         let client = JsonRpcClient::start(&self.driver).await?;
 
         // 解析生效 method 集合:init 动态声明优先,manifest 静态声明回退,都无则 legacy。
@@ -626,10 +632,11 @@ impl DbConnection for ExternalDbConnection {
         // conn/open
         let open_params = json!({
             "driver_id": self.driver.id,
-            "config": driver_config_value(&self.config),
+            "config": driver_config_value_with_target(&self.config, &target.host, target.port),
         });
         let open_result: ConnOpenOutput = client.request(method::CONN_OPEN, open_params).await?;
 
+        self.tunnel = target.tunnel;
         self.set_conn_id(Some(open_result.conn_id));
         *self.client.lock().await = Some(Arc::new(client));
         Ok(())
@@ -649,6 +656,7 @@ impl DbConnection for ExternalDbConnection {
             // shutdown 子进程:graceful shutdown RPC + abort reader + kill child。
             client_arc.shutdown().await;
         }
+        self.tunnel = None;
         Ok(())
     }
 

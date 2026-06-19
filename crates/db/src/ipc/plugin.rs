@@ -7,7 +7,7 @@ use crate::import_export::{
 };
 use crate::ipc::client::JsonRpcClient;
 use crate::ipc::connection::{ExternalDbConnection, WIRE_PREFIX};
-use crate::ipc::protocol::driver_config_value;
+use crate::ipc::protocol::driver_config_value_with_target;
 use crate::ipc::registry::{IpcDriverManifest, IpcDriverRegistry, LimitStyle};
 use crate::mssql::MsSqlPlugin;
 use crate::mysql::MySqlPlugin;
@@ -16,6 +16,7 @@ use crate::plugin::{ConnectionLifecycle, DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use crate::postgresql::PostgresPlugin;
 use crate::sqlite::SqlitePlugin;
+use crate::ssh_tunnel::resolve_connection_target;
 use crate::streaming_parser::StreamingSqlParser;
 use crate::types::*;
 use anyhow::Result;
@@ -116,11 +117,9 @@ impl ExternalDatabasePlugin {
         config: &DbConnectionConfig,
         driver: &IpcDriverManifest,
     ) -> Result<(), DbError> {
+        let target = resolve_connection_target(config).await?;
         let client = JsonRpcClient::start(driver).await?;
-        let params = serde_json::json!({
-            "driver_id": driver.id,
-            "config": driver_config_value(config),
-        });
+        let params = conn_test_params_value(config, &driver.id, (&target.host, target.port));
         let result = client.request_value(wire_method::CONN_TEST, params).await;
         client.shutdown().await;
 
@@ -392,6 +391,17 @@ fn conn_test_value_to_result(driver_id: &str, value: serde_json::Value) -> Resul
         message.push_str(&result.warnings.join("; "));
     }
     Err(DbError::connection(message))
+}
+
+fn conn_test_params_value(
+    config: &DbConnectionConfig,
+    driver_id: &str,
+    target: (&str, u16),
+) -> serde_json::Value {
+    serde_json::json!({
+        "driver_id": driver_id,
+        "config": driver_config_value_with_target(config, target.0, target.1),
+    })
 }
 
 impl Default for ExternalDatabasePlugin {
@@ -2309,6 +2319,38 @@ mod tests {
             }
             other => panic!("expected Query error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn conn_test_params_use_resolved_connection_target() {
+        let mut extra_params = HashMap::new();
+        extra_params.insert("ssh_tunnel_enabled".to_string(), "true".to_string());
+        extra_params.insert("ssh_target_host".to_string(), "db.internal".to_string());
+        extra_params.insert("ssh_target_port".to_string(), "6667".to_string());
+        let config = DbConnectionConfig {
+            id: "iotdb-conn".into(),
+            name: "IoTDB".into(),
+            database_type: DatabaseType::external("iotdb"),
+            host: "db.internal".into(),
+            port: 6667,
+            username: "root".into(),
+            password: "secret".into(),
+            database: Some("main".into()),
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params,
+        };
+
+        let params = conn_test_params_value(&config, "iotdb", ("127.0.0.1", 16667));
+
+        assert_eq!(serde_json::json!("iotdb"), params["driver_id"]);
+        assert_eq!(serde_json::json!("127.0.0.1"), params["config"]["host"]);
+        assert_eq!(serde_json::json!(16667), params["config"]["port"]);
+        assert_eq!(
+            serde_json::json!("db.internal"),
+            params["config"]["extra_params"]["ssh_target_host"]
+        );
     }
 
     #[test]
