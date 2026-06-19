@@ -3,6 +3,7 @@ use gpui_component::{Icon, IconName, IconNamed, Sizable, Size};
 use one_core::storage::DbConnectionConfig;
 use std::path::{Path, PathBuf};
 use tracing::info;
+use tracing::debug;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpcDriverDisplay {
@@ -44,7 +45,7 @@ impl IpcDriverManifest {
     fn icon_asset_path_for(&self, icon: &str, resource: &str) -> Option<String> {
         let icon = icon.trim();
         if icon.is_empty() {
-            info!(
+            debug!(
                 target: "driver_icon",
                 driver_id = %self.id,
                 resource,
@@ -54,7 +55,7 @@ impl IpcDriverManifest {
         }
         let asset_path = builtin_icon_asset_path(icon)
             .unwrap_or_else(|| format!("driver://{}/{resource}{}", self.id, icon_extension(icon)));
-        info!(
+        debug!(
             target: "driver_icon",
             driver_id = %self.id,
             resource,
@@ -72,7 +73,7 @@ impl IpcDriverManifest {
             return None;
         }
         let file_path = self.manifest_dir.join(icon);
-        info!(
+        debug!(
             target: "driver_icon",
             driver_id = %self.id,
             resource,
@@ -101,7 +102,7 @@ impl IpcDriverRegistry {
         let driver = match self.find(driver_id) {
             Some(driver) => driver,
             None => {
-                info!(
+                debug!(
                     target: "driver_icon",
                     driver_id,
                     "external driver display lookup missed registry"
@@ -115,20 +116,6 @@ impl IpcDriverRegistry {
             icon_asset_path: driver.preferred_icon_asset_path(),
             icon_file_path: driver.preferred_icon_file_path(),
         };
-        let display_driver_id = display.driver_id.as_str();
-        let display_name = display.name.as_str();
-        let display_icon_asset_path = display.icon_asset_path.as_deref();
-        let display_icon_file_path = display.icon_file_path.as_ref().map(|path| path.display());
-        info!(
-            target: "driver_icon",
-            driver_id = %display_driver_id,
-            name = %display_name,
-            icon_asset_path = ?display_icon_asset_path,
-            icon_file_path = ?display_icon_file_path,
-            ui_icon = %driver.ui.icon,
-            ui_icon_color = ?driver.ui.icon_color,
-            "resolved external driver display"
-        );
         Some(display)
     }
 
