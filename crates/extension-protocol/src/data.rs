@@ -145,6 +145,7 @@ pub struct StreamReadParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamReadResult {
     /// 数据 chunk,base64 编码(MessagePack 可换 bin)。
+    #[serde(default)]
     pub data: String,
     #[serde(default)]
     pub done: bool,
@@ -374,6 +375,14 @@ mod tests {
         let parsed: StreamReadResult = serde_json::from_str(&j).unwrap();
         assert_eq!(parsed.data, "AAECAw==");
         assert!(!parsed.done);
+    }
+
+    #[test]
+    fn stream_read_result_done_chunk_defaults_to_empty_data() {
+        let parsed: StreamReadResult = serde_json::from_str(r#"{"done":true}"#).unwrap();
+
+        assert_eq!(parsed.data, "");
+        assert!(parsed.done);
     }
 
     #[test]

@@ -189,6 +189,7 @@ impl Default for CreateTableOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildCreateTableResult {
+    #[serde(default)]
     pub sql: String,
     /// 拆分的多条 statement(某些方言索引 / FK 必须分开)。
     #[serde(default)]
@@ -416,6 +417,15 @@ mod tests {
         let j = serde_json::to_string(&r).unwrap();
         let parsed: BuildCreateTableResult = serde_json::from_str(&j).unwrap();
         assert_eq!(parsed.statements.len(), 2);
+    }
+
+    #[test]
+    fn build_create_table_result_missing_sql_defaults_for_statement_only_drivers() {
+        let parsed: BuildCreateTableResult =
+            serde_json::from_str(r#"{"statements":["CREATE TABLE users (id INT)"]}"#).unwrap();
+
+        assert_eq!(parsed.sql, "");
+        assert_eq!(parsed.statements, vec!["CREATE TABLE users (id INT)"]);
     }
 
     #[test]

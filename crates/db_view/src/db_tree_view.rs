@@ -129,34 +129,8 @@ fn external_driver_metadata_from_registry(
             .map(|path| path.display().to_string())
             .or(icon_asset_path.clone())
         {
-            tracing::info!(
-                target: "driver_icon",
-                connection_id = %config.id,
-                connection_name = %config.name,
-                database_type = ?config.database_type,
-                asset_path = ?icon_asset_path,
-                file_path = ?icon_file_path.as_ref().map(|path| path.display().to_string()),
-                stored_path = %icon_path,
-                "db tree stored external driver icon metadata"
-            );
             metadata.insert(EXTERNAL_DRIVER_ICON_METADATA.to_string(), icon_path);
-        } else {
-            tracing::info!(
-                target: "driver_icon",
-                connection_id = %config.id,
-                connection_name = %config.name,
-                database_type = ?config.database_type,
-                "db tree display metadata had no icon path"
-            );
         }
-    } else if config.database_type.is_external() {
-        tracing::info!(
-            target: "driver_icon",
-            connection_id = %config.id,
-            connection_name = %config.name,
-            database_type = ?config.database_type,
-            "db tree could not resolve external driver display"
-        );
     }
     metadata
 }
@@ -164,30 +138,10 @@ fn external_driver_metadata_from_registry(
 fn connection_node_icon(node: &DbNode) -> Icon {
     if let Some(path) = node.metadata.get(EXTERNAL_DRIVER_ICON_METADATA) {
         let file_path = std::path::Path::new(path);
-        tracing::info!(
-            target: "driver_icon",
-            node_id = %node.id,
-            node_name = %node.name,
-            database_type = ?node.database_type,
-            asset_path = %path,
-            is_absolute = file_path.is_absolute(),
-            exists = file_path.is_file(),
-            "db tree selected external driver icon"
-        );
         if file_path.is_absolute() {
             return driver_icon_from_file_path(file_path.to_path_buf(), ComponentSize::Large);
         }
         return driver_icon_from_asset_path(path.clone(), ComponentSize::Large);
-    }
-
-    if node.database_type.is_external() {
-        tracing::info!(
-            target: "driver_icon",
-            node_id = %node.id,
-            node_name = %node.name,
-            database_type = ?node.database_type,
-            "db tree fell back to database type icon"
-        );
     }
     node.database_type.as_node_icon()
 }

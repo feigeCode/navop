@@ -245,6 +245,7 @@ pub struct ColumnsParams {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ColumnInfo {
     /// 列序号(1-based,匹配 SQL 标准)。
+    #[serde(default)]
     pub ordinal: u32,
     pub name: String,
     /// 通用语义化类型,例如 `text` / `uuid` / `int4`。
@@ -295,6 +296,7 @@ pub struct IndexesParams {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IndexInfo {
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub table: String,
     pub columns: Vec<String>,
     /// `btree` / `hash` / `gin` / `gist` / `fulltext` / ...
@@ -326,6 +328,7 @@ pub struct ForeignKeysParams {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ForeignKeyInfo {
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub from_table: String,
     pub from_columns: Vec<String>,
     pub to_table: String,
@@ -352,6 +355,7 @@ pub struct ChecksParams {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CheckInfo {
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub table: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<String>,
@@ -452,6 +456,7 @@ pub struct TriggersParams {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TriggerInfo {
     pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub table: String,
     /// `before` / `after` / `instead_of`。
     pub timing: String,
@@ -731,6 +736,17 @@ mod tests {
     }
 
     #[test]
+    fn column_info_missing_ordinal_defaults_for_legacy_drivers() {
+        let parsed: ColumnInfo =
+            serde_json::from_str(r#"{"name":"id","type":"INTEGER","nullable":false}"#).unwrap();
+
+        assert_eq!(parsed.ordinal, 0);
+        assert_eq!(parsed.name, "id");
+        assert_eq!(parsed.type_str, "INTEGER");
+        assert!(!parsed.nullable);
+    }
+
+    #[test]
     fn index_info_with_where_clause() {
         let i = IndexInfo {
             name: "idx_active".into(),
@@ -750,6 +766,18 @@ mod tests {
     }
 
     #[test]
+    fn index_info_missing_table_defaults_for_legacy_drivers() {
+        let parsed: IndexInfo =
+            serde_json::from_str(r#"{"name":"idx_users_id","columns":["id"],"is_unique":true}"#)
+                .unwrap();
+
+        assert_eq!(parsed.name, "idx_users_id");
+        assert_eq!(parsed.table, "");
+        assert_eq!(parsed.columns, vec!["id".to_string()]);
+        assert!(parsed.is_unique);
+    }
+
+    #[test]
     fn foreign_key_info_round_trip() {
         let fk = ForeignKeyInfo {
             name: "fk_user".into(),
@@ -766,6 +794,31 @@ mod tests {
         assert_eq!(parsed.from_columns, vec!["user_id".to_string()]);
         assert_eq!(parsed.on_delete.as_deref(), Some("cascade"));
         assert!(parsed.on_update.is_none());
+    }
+
+    #[test]
+    fn foreign_key_info_missing_from_table_defaults_for_table_scoped_drivers() {
+        let parsed: ForeignKeyInfo = serde_json::from_str(
+            r#"{"name":"fk_user","from_columns":["user_id"],"to_table":"users","to_columns":["id"]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.name, "fk_user");
+        assert_eq!(parsed.from_table, "");
+        assert_eq!(parsed.from_columns, vec!["user_id".to_string()]);
+        assert_eq!(parsed.to_table, "users");
+    }
+
+    #[test]
+    fn check_info_missing_table_defaults_for_table_scoped_drivers() {
+        let parsed: CheckInfo = serde_json::from_str(
+            r#"{"name":"events_payload_check","definition":"payload IS NOT NULL"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.name, "events_payload_check");
+        assert_eq!(parsed.table, "");
+        assert_eq!(parsed.definition.as_deref(), Some("payload IS NOT NULL"));
     }
 
     #[test]
@@ -828,6 +881,18 @@ mod tests {
         };
         let j = serde_json::to_string(&t).unwrap();
         let parsed: TriggerInfo = serde_json::from_str(&j).unwrap();
+        assert_eq!(parsed.timing, "after");
+        assert_eq!(parsed.event, "update");
+    }
+
+    #[test]
+    fn trigger_info_missing_table_defaults_for_table_scoped_drivers() {
+        let parsed: TriggerInfo =
+            serde_json::from_str(r#"{"name":"tg_audit","timing":"after","event":"update"}"#)
+                .unwrap();
+
+        assert_eq!(parsed.name, "tg_audit");
+        assert_eq!(parsed.table, "");
         assert_eq!(parsed.timing, "after");
         assert_eq!(parsed.event, "update");
     }

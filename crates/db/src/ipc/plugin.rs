@@ -885,7 +885,10 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             )
             .await?
             .unwrap_or_default();
-        Ok(triggers.into_iter().map(trigger_info_from_wire).collect())
+        Ok(triggers
+            .into_iter()
+            .map(|trigger| trigger_info_from_wire(trigger, Some(table)))
+            .collect())
     }
 
     async fn list_table_checks(
@@ -907,7 +910,10 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             )
             .await?
             .unwrap_or_default();
-        Ok(checks.into_iter().map(check_info_from_wire).collect())
+        Ok(checks
+            .into_iter()
+            .map(|check| check_info_from_wire(check, Some(table)))
+            .collect())
     }
 
     async fn list_functions(
@@ -1032,7 +1038,10 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             )
             .await?
             .unwrap_or_default();
-        Ok(triggers.into_iter().map(trigger_info_from_wire).collect())
+        Ok(triggers
+            .into_iter()
+            .map(|trigger| trigger_info_from_wire(trigger, None))
+            .collect())
     }
 
     async fn list_triggers_view(
@@ -1631,10 +1640,14 @@ fn foreign_key_from_wire(foreign_key: wire_schema::ForeignKeyInfo) -> ForeignKey
     }
 }
 
-fn check_info_from_wire(check: wire_schema::CheckInfo) -> CheckInfo {
+fn check_info_from_wire(check: wire_schema::CheckInfo, fallback_table: Option<&str>) -> CheckInfo {
     CheckInfo {
         name: check.name,
-        table_name: check.table,
+        table_name: if check.table.is_empty() {
+            fallback_table.unwrap_or_default().to_string()
+        } else {
+            check.table
+        },
         definition: check.definition,
     }
 }
@@ -1663,10 +1676,17 @@ fn function_info_from_wire(function: wire_schema::FunctionInfo) -> FunctionInfo 
     }
 }
 
-fn trigger_info_from_wire(trigger: wire_schema::TriggerInfo) -> TriggerInfo {
+fn trigger_info_from_wire(
+    trigger: wire_schema::TriggerInfo,
+    fallback_table: Option<&str>,
+) -> TriggerInfo {
     TriggerInfo {
         name: trigger.name,
-        table_name: trigger.table,
+        table_name: if trigger.table.is_empty() {
+            fallback_table.unwrap_or_default().to_string()
+        } else {
+            trigger.table
+        },
         event: trigger.event,
         timing: trigger.timing,
         definition: trigger.definition,
@@ -1902,7 +1922,7 @@ mod tests {
         async fn driver_request_value(
             &self,
             method: &str,
-            _params: serde_json::Value,
+            params: serde_json::Value,
         ) -> Result<serde_json::Value, DbError> {
             match method {
                 wire_method::SCHEMA_DATABASES => Ok(serde_json::json!([{
@@ -1920,11 +1940,20 @@ mod tests {
                 }])),
                 wire_method::SCHEMA_CHECKS => Ok(serde_json::json!([{
                     "name": "events_payload_check",
-                    "table": "events",
                     "definition": "payload IS NOT NULL",
                     "comment": "",
                     "extra": null
                 }])),
+                wire_method::SCHEMA_TRIGGERS if params.get("table").is_some() => {
+                    Ok(serde_json::json!([{
+                        "name": "events_audit_trigger",
+                        "timing": "after",
+                        "event": "insert",
+                        "definition": "INSERT INTO audit VALUES (NEW.id)",
+                        "comment": "",
+                        "extra": null
+                    }]))
+                }
                 wire_method::SCHEMA_OBJECT_VIEW => self
                     .object_view
                     .clone()
@@ -2309,6 +2338,23 @@ mod tests {
             Some("payload IS NOT NULL".to_string()),
             checks[0].definition
         );
+    }
+
+    #[tokio::test]
+    async fn table_triggers_fill_table_from_request_when_driver_omits_it() {
+        let plugin = ExternalDatabasePlugin::new();
+        let connection = DriverRequestOnlyConnection::new();
+
+        let triggers = plugin
+            .list_table_triggers(&connection, "main", None, "events")
+            .await
+            .unwrap();
+
+        assert_eq!(1, triggers.len());
+        assert_eq!("events_audit_trigger", triggers[0].name);
+        assert_eq!("events", triggers[0].table_name);
+        assert_eq!("insert", triggers[0].event);
+        assert_eq!("after", triggers[0].timing);
     }
 
     #[test]
