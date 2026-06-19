@@ -1070,8 +1070,10 @@ mod tests {
             version: String::new(),
             entry: IpcDriverEntry {
                 command: "driver".into(),
+                commands: Default::default(),
                 args: Vec::new(),
                 working_dir: None,
+                env_from_config: Default::default(),
             },
             transport: IpcDriverTransport::local_socket("demo.sock"),
             dialect: Default::default(),
