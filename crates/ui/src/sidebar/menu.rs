@@ -275,10 +275,13 @@ impl SidebarItem for SidebarMenuItem {
                                     .justify_between()
                                     .overflow_x_hidden()
                                     .child(
-                                        h_flex()
-                                            .flex_1()
-                                            .overflow_x_hidden()
-                                            .child(self.label.clone()),
+                                        h_flex().flex_1().overflow_x_hidden().child(
+                                            div()
+                                                .flex_1()
+                                                .whitespace_nowrap()
+                                                .overflow_x_hidden()
+                                                .child(self.label.clone()),
+                                        ),
                                     )
                                     .when_some(self.suffix.clone(), |this, suffix| {
                                         this.child(suffix(window, cx).into_any_element())
