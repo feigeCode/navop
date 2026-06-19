@@ -433,7 +433,8 @@ fn row_to_strings(row: Row) -> Vec<Option<String>> {
 /// 设计考虑:宿主层(`QueryResult`)把列值统一存为 `Option<String>`,这是历史
 /// 选择(参考 SqlitePlugin / MySqlPlugin)。本翻译尽量保持「人可读」+ 「数据无损」:
 /// - 数值:`to_string()`
-/// - decimal/uuid/datetime:已经是字符串,直接透传
+/// - decimal/uuid:已经是字符串,直接透传
+/// - datetime:归一到宿主表格常用的空格分隔格式
 /// - bytes:`0x...` hex 化,保持宿主表格中的二进制展示稳定
 /// - json / array / map / geo / custom:`to_string()` 让 caller 看到原 JSON
 fn cell_to_string(cell: CellValue) -> Option<String> {
@@ -449,8 +450,8 @@ fn cell_to_string(cell: CellValue) -> Option<String> {
         | CellValue::Uuid { value }
         | CellValue::Date { value }
         | CellValue::Time { value }
-        | CellValue::Datetime { value }
         | CellValue::Duration { value } => Some(value),
+        CellValue::Datetime { value } => Some(format_ipc_datetime(&value)),
         CellValue::Bytes { value } => {
             // wire 上是 base64,宿主查询表格统一展示为 hex(`0x...`)。
             match base64::engine::general_purpose::STANDARD.decode(value.as_bytes()) {
@@ -463,6 +464,34 @@ fn cell_to_string(cell: CellValue) -> Option<String> {
         CellValue::Map { value } => Some(Value::Object(value).to_string()),
         CellValue::Geo { value, .. } => Some(value),
         CellValue::Custom { subtype, raw } => Some(format!("custom:{subtype}({raw})")),
+    }
+}
+
+fn format_ipc_datetime(value: &str) -> String {
+    if let Ok(datetime) = chrono::DateTime::parse_from_rfc3339(value) {
+        return format_naive_datetime(datetime.naive_local());
+    }
+
+    let parsed = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"));
+    match parsed {
+        Ok(datetime) => format_naive_datetime(datetime),
+        Err(_) => value.to_string(),
+    }
+}
+
+fn format_naive_datetime(datetime: chrono::NaiveDateTime) -> String {
+    let micros = datetime.and_utc().timestamp_subsec_micros();
+    if micros == 0 {
+        datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+    } else if micros % 1_000 == 0 {
+        format!(
+            "{}.{:03}",
+            datetime.format("%Y-%m-%d %H:%M:%S"),
+            micros / 1_000
+        )
+    } else {
+        format!("{}.{:06}", datetime.format("%Y-%m-%d %H:%M:%S"), micros)
     }
 }
 
@@ -1024,6 +1053,22 @@ mod tests {
                 value: "550e8400-e29b-41d4-a716-446655440000".into()
             }),
             Some("550e8400-e29b-41d4-a716-446655440000".to_string())
+        );
+    }
+
+    #[test]
+    fn cell_to_string_formats_ipc_datetime_for_table_display() {
+        assert_eq!(
+            cell_to_string(CellValue::Datetime {
+                value: "2026-04-27T15:08:53.085Z".into()
+            }),
+            Some("2026-04-27 15:08:53.085".to_string())
+        );
+        assert_eq!(
+            cell_to_string(CellValue::Datetime {
+                value: "2026-04-27T15:08:53".into()
+            }),
+            Some("2026-04-27 15:08:53".to_string())
         );
     }
 
