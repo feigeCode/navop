@@ -114,6 +114,7 @@ jobs:
             --pattern "onetcli-aarch64-apple-darwin.tar.gz" \
             --pattern "onetcli-x86_64-apple-darwin.tar.gz" \
             --pattern "onetcli-x86_64-unknown-linux-gnu.tar.gz" \
+            --pattern "onetcli-aarch64-unknown-linux-gnu.tar.gz" \
             --pattern "onetcli-x86_64-pc-windows-msvc.zip" \
             --pattern "onetcli-aarch64-apple-darwin.dmg" \
             --pattern "onetcli-x86_64-apple-darwin.dmg" \
@@ -129,6 +130,7 @@ jobs:
             onetcli-aarch64-apple-darwin.tar.gz \
             onetcli-x86_64-apple-darwin.tar.gz \
             onetcli-x86_64-unknown-linux-gnu.tar.gz \
+            onetcli-aarch64-unknown-linux-gnu.tar.gz \
             onetcli-x86_64-pc-windows-msvc.zip \
             onetcli-aarch64-apple-darwin.dmg \
             onetcli-x86_64-apple-darwin.dmg \
@@ -143,6 +145,7 @@ jobs:
             onetcli-aarch64-apple-darwin.tar.gz \
             onetcli-x86_64-apple-darwin.tar.gz \
             onetcli-x86_64-unknown-linux-gnu.tar.gz \
+            onetcli-aarch64-unknown-linux-gnu.tar.gz \
             onetcli-x86_64-pc-windows-msvc.zip \
             onetcli-aarch64-apple-darwin.dmg \
             onetcli-x86_64-apple-darwin.dmg; do
@@ -183,6 +186,7 @@ jobs:
             "aarch64-apple-darwin": "onetcli-aarch64-apple-darwin.tar.gz",
             "x86_64-apple-darwin": "onetcli-x86_64-apple-darwin.tar.gz",
             "x86_64-unknown-linux-gnu": "onetcli-x86_64-unknown-linux-gnu.tar.gz",
+            "aarch64-unknown-linux-gnu": "onetcli-aarch64-unknown-linux-gnu.tar.gz",
             "x86_64-pc-windows-msvc": "onetcli-x86_64-pc-windows-msvc.zip",
           };
 
@@ -269,6 +273,7 @@ jobs:
             onetcli-aarch64-apple-darwin.tar.gz \
             onetcli-x86_64-apple-darwin.tar.gz \
             onetcli-x86_64-unknown-linux-gnu.tar.gz \
+            onetcli-aarch64-unknown-linux-gnu.tar.gz \
             onetcli-x86_64-pc-windows-msvc.zip \
             onetcli-aarch64-apple-darwin.dmg \
             onetcli-x86_64-apple-darwin.dmg \
