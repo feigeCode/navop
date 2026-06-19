@@ -53,16 +53,16 @@ pub fn get_license_service(cx: &App) -> Arc<LicenseService> {
 
 pub fn offline_license_public_key() -> Result<[u8; 32], String> {
     if OFFLINE_LICENSE_PUBLIC_KEY_BASE64.trim().is_empty() {
-        return Err("未配置离线 License 公钥".to_string());
+        return Err(t!("License.offline_public_key_missing").to_string());
     }
 
     let decoded = BASE64
         .decode(OFFLINE_LICENSE_PUBLIC_KEY_BASE64.as_bytes())
-        .map_err(|e| format!("离线 License 公钥解码失败: {}", e))?;
+        .map_err(|e| t!("License.offline_public_key_decode_failed", error = e).to_string())?;
 
     let bytes: [u8; 32] = decoded
         .try_into()
-        .map_err(|_| "离线 License 公钥长度错误".to_string())?;
+        .map_err(|_| t!("License.offline_public_key_invalid_length").to_string())?;
 
     Ok(bytes)
 }

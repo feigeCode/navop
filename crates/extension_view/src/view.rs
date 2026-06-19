@@ -7,6 +7,7 @@ use gpui::{
 use gpui_component::input::{InputEvent, InputState};
 use gpui_component::{ActiveTheme, Icon, IconName, v_flex};
 use one_core::tab_container::{TabContent, TabContentEvent};
+use rust_i18n::t;
 
 use crate::{ExtensionSummary, ExtensionViewHost, MarketplaceEntry};
 
@@ -36,7 +37,8 @@ impl ExtensionManagerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索扩展"));
+        let search = cx
+            .new(|cx| InputState::new(window, cx).placeholder(t!("Extension.search").to_string()));
         let search_sub =
             cx.subscribe_in(
                 &search,
@@ -83,7 +85,7 @@ impl TabContent for ExtensionManagerView {
     }
 
     fn title(&self, _cx: &App) -> SharedString {
-        SharedString::from("扩展")
+        SharedString::from(t!("Extension.tab_title").to_string())
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {

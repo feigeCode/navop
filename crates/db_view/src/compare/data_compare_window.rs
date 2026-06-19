@@ -148,7 +148,7 @@ impl DataCompareWindow {
                 sync_statement_list,
                 progress: cx.new(|_| None),
                 compare_target: cx.new(|_| None),
-                status: cx.new(|_| "就绪".to_string()),
+                status: cx.new(|_| t!("Compare.ready").to_string()),
                 is_running: cx.new(|_| false),
                 is_executing: cx.new(|_| false),
                 compare_task: None,
@@ -233,7 +233,11 @@ impl DataCompareWindow {
     }
 
     pub fn popup_title_for(source_node: &DbNode) -> String {
-        format!("数据比较 - {}", source_node.name)
+        t!(
+            "Compare.data_compare_title",
+            name = source_node.name.clone()
+        )
+        .to_string()
     }
 
     fn start_compare(&mut self, cx: &mut Context<Self>) {
@@ -255,8 +259,13 @@ impl DataCompareWindow {
             *running = true;
             cx.notify();
         });
-        self.set_progress(Some(CompareProgress::phase("正在准备比较…")), cx);
-        self.set_status("正在比较数据…", cx);
+        self.set_progress(
+            Some(CompareProgress::phase(
+                t!("Compare.preparing_compare").to_string(),
+            )),
+            cx,
+        );
+        self.set_status(t!("Compare.comparing_data").to_string(), cx);
 
         let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<CompareProgress>();
 
@@ -312,9 +321,12 @@ impl DataCompareWindow {
                             *slot = Some(compare_target);
                             cx.notify();
                         });
-                        view.set_status("数据比较完成", cx);
+                        view.set_status(t!("Compare.data_compare_complete").to_string(), cx);
                     }
-                    Err(error) => view.set_status(format!("比较失败:{error}"), cx),
+                    Err(error) => view.set_status(
+                        t!("Compare.compare_failed", error = error.to_string()).to_string(),
+                        cx,
+                    ),
                 }
                 cx.notify();
             });
@@ -404,7 +416,7 @@ impl DataCompareWindow {
             cx.notify();
         });
         self.set_progress(None, cx);
-        self.set_status("已取消", cx);
+        self.set_status(t!("Compare.cancelled").to_string(), cx);
         cx.notify();
     }
 

@@ -1,6 +1,7 @@
 use db::compare::{SyncPlan, SyncPlanSummary, SyncStatement, SyncStatementKind};
 use db::{DbNode, DbNodeType};
 use one_core::storage::DatabaseType;
+use rust_i18n::t;
 
 use crate::compare::sync_statement_picker::selected_sync_sql_text_for_ids;
 use crate::compare::window_params::{
@@ -21,7 +22,7 @@ fn data_compare_popup_title_uses_source_table() {
 
     assert_eq!(
         DataCompareWindow::popup_title_for(&node),
-        "数据比较 - users"
+        t!("Compare.data_compare_title", name = "users").to_string()
     );
 }
 
@@ -37,7 +38,7 @@ fn schema_compare_popup_title_uses_source_scope() {
 
     assert_eq!(
         SchemaCompareWindow::popup_title_for(&node),
-        "结构比较 - app"
+        t!("Compare.schema_compare_title", name = "app").to_string()
     );
 }
 

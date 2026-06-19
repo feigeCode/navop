@@ -4,6 +4,7 @@ use gpui::{App, Entity, IntoElement, ParentElement, Styled, Window, div};
 use gpui_component::{
     ActiveTheme, WindowExt, dialog::DialogButtonProps, notification::Notification, v_flex,
 };
+use rust_i18n::t;
 
 use crate::{
     DownloadedMarketplaceExtension, ExtensionManagerView, MarketplaceInstallOutcome,
@@ -21,12 +22,22 @@ impl ExtensionManagerView {
     ) {
         match outcome {
             MarketplaceInstallOutcome::Installed(summary) => {
-                self.status = format!("已安装 {}", summary.name).into();
+                self.status = t!("Extension.installed_name", name = summary.name.clone())
+                    .to_string()
+                    .into();
                 self.refresh_after_extension_change(cx);
-                window.push_notification(Notification::success("扩展安装完成"), cx);
+                window.push_notification(
+                    Notification::success(t!("Extension.install_complete").to_string()),
+                    cx,
+                );
             }
             MarketplaceInstallOutcome::NeedsPermission(downloaded) => {
-                self.status = format!("{} 需要权限确认", downloaded.entry.name).into();
+                self.status = t!(
+                    "Extension.permission_required",
+                    name = downloaded.entry.name.clone()
+                )
+                .to_string()
+                .into();
                 self.open_permission_dialog(downloaded, entity, window, cx);
             }
         }
@@ -48,14 +59,14 @@ impl ExtensionManagerView {
             let ok_staging = staging_for_ok.clone();
             let cancel_staging = staging_for_cancel.clone();
             dialog
-                .title(format!("确认安装 {entry_name}"))
+                .title(t!("Extension.confirm_install", name = entry_name.clone()).to_string())
                 .width(gpui::px(520.0))
                 .child(permission_review_body(&downloaded.review, cx))
                 .confirm()
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text("允许并安装")
-                        .cancel_text("取消"),
+                        .ok_text(t!("Extension.allow_and_install").to_string())
+                        .cancel_text(t!("Common.cancel").to_string()),
                 )
                 .on_ok(move |_, window, cx| {
                     entity_for_ok.update(cx, |view: &mut ExtensionManagerView, cx| {
@@ -67,7 +78,7 @@ impl ExtensionManagerView {
                     cleanup_staging(cancel_staging.clone());
                     entity_for_cancel.update(cx, |view: &mut ExtensionManagerView, cx| {
                         view.busy = None;
-                        view.status = "已取消安装".into();
+                        view.status = t!("Extension.install_cancelled").to_string().into();
                         cx.notify();
                     });
                     true
@@ -78,14 +89,22 @@ impl ExtensionManagerView {
     fn install_confirmed_staging(&mut self, staging: PathBuf, window: &mut Window, cx: &mut App) {
         match self.host.install_confirmed_staging(staging) {
             Ok(summary) => {
-                self.status = format!("已安装 {}", summary.name).into();
+                self.status = t!("Extension.installed_name", name = summary.name.clone())
+                    .to_string()
+                    .into();
                 self.refresh_after_extension_change(cx);
-                window.push_notification(Notification::success("扩展安装完成"), cx);
+                window.push_notification(
+                    Notification::success(t!("Extension.install_complete").to_string()),
+                    cx,
+                );
             }
             Err(err) => {
                 self.busy = None;
-                let message = format_notification_error("扩展安装失败", &err);
-                self.status = format_status_error("安装失败", &err).into();
+                let message =
+                    format_notification_error(&t!("Extension.install_failed").to_string(), &err);
+                self.status =
+                    format_status_error(&t!("Extension.install_failed_short").to_string(), &err)
+                        .into();
                 window.push_notification(Notification::error(message).autohide(false), cx);
             }
         }
@@ -101,13 +120,13 @@ fn permission_review_body(review: &PermissionReviewModel, cx: &App) -> impl Into
         .gap_3()
         .p_4()
         .child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().foreground)
-                .child(format!(
-                    "该扩展声明了 {} 个高危权限。请确认你信任该扩展来源。",
-                    review.high_risk_count
-                )),
+            div().text_sm().text_color(cx.theme().foreground).child(
+                t!(
+                    "Extension.high_risk_permission_summary",
+                    count = review.high_risk_count
+                )
+                .to_string(),
+            ),
         )
         .child(
             div()

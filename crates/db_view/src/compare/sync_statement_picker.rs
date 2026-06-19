@@ -14,6 +14,7 @@ use gpui_component::{
     tag::Tag,
     v_flex,
 };
+use rust_i18n::t;
 
 pub(super) type SyncStatementListState = Entity<ListState<SyncStatementListDelegate>>;
 
@@ -71,9 +72,14 @@ pub(super) fn selected_sync_sql_summary_for_ids(
         .count();
     let skipped = plan.statements.len().saturating_sub(selected);
     if skipped == 0 {
-        format!("已选 {selected} 条同步语句")
+        t!("Compare.sync_statements_selected", selected = selected).to_string()
     } else {
-        format!("已选 {selected} 条同步语句,跳过 {skipped} 条")
+        t!(
+            "Compare.sync_statements_selected_skipped",
+            selected = selected,
+            skipped = skipped
+        )
+        .to_string()
     }
 }
 
@@ -115,14 +121,19 @@ fn picker_header(
 ) -> impl IntoElement {
     h_flex()
         .justify_between()
-        .child(div().text_sm().font_semibold().child("同步语句"))
+        .child(
+            div()
+                .text_sm()
+                .font_semibold()
+                .child(t!("Compare.sync_statements").to_string()),
+        )
         .child(
             h_flex()
                 .gap_1()
                 .child(
                     Button::new("sync-select-all")
                         .small()
-                        .child("全选")
+                        .child(t!("Common.select_all").to_string())
                         .on_click({
                             let all = all_ids;
                             let sel = selected_ids.clone();
@@ -137,7 +148,7 @@ fn picker_header(
                 .child(
                     Button::new("sync-select-none")
                         .small()
-                        .child("全不选")
+                        .child(t!("Common.deselect_all").to_string())
                         .on_click({
                             let sel = selected_ids.clone();
                             move |_, _, cx| {
@@ -152,7 +163,7 @@ fn picker_header(
                     Button::new("sync-select-safe")
                         .small()
                         .ghost()
-                        .child("仅安全")
+                        .child(t!("Compare.select_safe_only").to_string())
                         .on_click({
                             let safe = safe_ids;
                             let sel = selected_ids;
@@ -221,7 +232,7 @@ impl ListDelegate for SyncStatementListDelegate {
             .p_3()
             .text_sm()
             .text_color(cx.theme().muted_foreground)
-            .child("暂无同步语句")
+            .child(t!("Compare.no_sync_statements").to_string())
     }
 
     fn perform_search(
@@ -254,7 +265,7 @@ fn statement_row(
         .object_name
         .clone()
         .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "未命名对象".to_string());
+        .unwrap_or_else(|| t!("Compare.unnamed_object").to_string());
     let destructive = statement.destructive;
     let sql_preview = sql_preview(&statement.sql);
 
@@ -275,7 +286,12 @@ fn statement_row(
                         .child(kind_tag(&statement.kind))
                         .child(div().flex_1().min_w_0().truncate().text_sm().child(object))
                         .when(destructive, |this| {
-                            this.child(Tag::danger().small().outline().child("破坏性"))
+                            this.child(
+                                Tag::danger()
+                                    .small()
+                                    .outline()
+                                    .child(t!("Compare.destructive").to_string()),
+                            )
                         }),
                 )
                 .child(
@@ -306,18 +322,18 @@ fn statement_row(
 fn kind_tag(kind: &SyncStatementKind) -> impl IntoElement {
     use SyncStatementKind::*;
     let (tag, label) = match kind {
-        CreateTable => (Tag::success(), "建表"),
-        DropTable => (Tag::danger(), "删表"),
-        AlterTable => (Tag::warning(), "改表"),
-        CreateIndex => (Tag::success(), "建索引"),
-        DropIndex => (Tag::danger(), "删索引"),
-        Insert => (Tag::success(), "插入"),
-        Update => (Tag::warning(), "更新"),
-        Delete => (Tag::danger(), "删除"),
-        Comment => (Tag::info(), "注释"),
-        Unknown => (Tag::secondary(), "其他"),
+        CreateTable => (Tag::success(), t!("Compare.statement_create_table")),
+        DropTable => (Tag::danger(), t!("Compare.statement_drop_table")),
+        AlterTable => (Tag::warning(), t!("Compare.statement_alter_table")),
+        CreateIndex => (Tag::success(), t!("Compare.statement_create_index")),
+        DropIndex => (Tag::danger(), t!("Compare.statement_drop_index")),
+        Insert => (Tag::success(), t!("Compare.statement_insert")),
+        Update => (Tag::warning(), t!("Compare.statement_update")),
+        Delete => (Tag::danger(), t!("Compare.statement_delete")),
+        Comment => (Tag::info(), t!("Compare.statement_comment")),
+        Unknown => (Tag::secondary(), t!("Compare.statement_unknown")),
     };
-    tag.small().child(label)
+    tag.small().child(label.to_string())
 }
 
 fn sql_preview(sql: &str) -> String {

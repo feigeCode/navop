@@ -1,0 +1,145 @@
+_version: 2
+
+Common:
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+    zh-HK: 取消
+  refresh:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 刷新
+
+Extension:
+  tab_title:
+    en: Extensions
+    zh-CN: 扩展
+    zh-HK: 擴展
+  manager_title:
+    en: Extension Manager
+    zh-CN: 扩展管理
+    zh-HK: 擴展管理
+  search:
+    en: Search extensions
+    zh-CN: 搜索扩展
+    zh-HK: 搜尋擴展
+  local_install:
+    en: Local Install
+    zh-CN: 本地安装
+    zh-HK: 本機安裝
+  installed:
+    en: Installed
+    zh-CN: 已安装
+    zh-HK: 已安裝
+  marketplace:
+    en: Marketplace
+    zh-CN: 扩展市场
+    zh-HK: 擴展市場
+  no_installed_matches:
+    en: No matching installed extensions
+    zh-CN: 尚未安装匹配的扩展
+    zh-HK: 尚未安裝匹配的擴展
+  loading_marketplace:
+    en: Loading extension marketplace...
+    zh-CN: 正在加载扩展市场...
+    zh-HK: 正在載入擴展市場...
+  no_marketplace_matches:
+    en: No matching marketplace extensions
+    zh-CN: 没有匹配的市场扩展
+    zh-HK: 沒有匹配的市場擴展
+  install:
+    en: Install
+    zh-CN: 安装
+    zh-HK: 安裝
+  update:
+    en: Update
+    zh-CN: 更新
+    zh-HK: 更新
+  uninstall:
+    en: Uninstall
+    zh-CN: 卸载
+    zh-HK: 解除安裝
+  kind_language:
+    en: Language
+    zh-CN: 语言
+    zh-HK: 語言
+  kind_database_driver:
+    en: Database Driver
+    zh-CN: 数据库驱动
+    zh-HK: 資料庫驅動
+  kind_composite:
+    en: Composite Extension
+    zh-CN: 复合扩展
+    zh-HK: 複合擴展
+  read_installed_failed:
+    en: "Failed to read extension list: %{error}"
+    zh-CN: "读取扩展列表失败: %{error}"
+    zh-HK: "讀取擴展列表失敗: %{error}"
+  select_archive:
+    en: Select Extension Archive
+    zh-CN: 选择扩展压缩包
+    zh-HK: 選擇擴展壓縮包
+  installing:
+    en: "Installing %{name}..."
+    zh-CN: "正在安装 %{name}..."
+    zh-HK: "正在安裝 %{name}..."
+  install_started:
+    en: Extension install started
+    zh-CN: 扩展安装已开始
+    zh-HK: 擴展安裝已開始
+  installed_name:
+    en: "Installed %{name}"
+    zh-CN: "已安装 %{name}"
+    zh-HK: "已安裝 %{name}"
+  install_complete:
+    en: Extension installed
+    zh-CN: 扩展安装完成
+    zh-HK: 擴展安裝完成
+  install_failed:
+    en: Extension install failed
+    zh-CN: 扩展安装失败
+    zh-HK: 擴展安裝失敗
+  install_failed_short:
+    en: Install failed
+    zh-CN: 安装失败
+    zh-HK: 安裝失敗
+  permission_required:
+    en: "%{name} requires permission confirmation"
+    zh-CN: "%{name} 需要权限确认"
+    zh-HK: "%{name} 需要權限確認"
+  confirm_install:
+    en: "Confirm Install %{name}"
+    zh-CN: "确认安装 %{name}"
+    zh-HK: "確認安裝 %{name}"
+  allow_and_install:
+    en: Allow and Install
+    zh-CN: 允许并安装
+    zh-HK: 允許並安裝
+  install_cancelled:
+    en: Install cancelled
+    zh-CN: 已取消安装
+    zh-HK: 已取消安裝
+  high_risk_permission_summary:
+    en: "This extension declares %{count} high-risk permission(s). Confirm that you trust its source."
+    zh-CN: "该扩展声明了 %{count} 个高危权限。请确认你信任该扩展来源。"
+    zh-HK: "該擴展聲明了 %{count} 個高危權限。請確認你信任該擴展來源。"
+  uninstalled:
+    en: "Uninstalled %{name}"
+    zh-CN: "已卸载 %{name}"
+    zh-HK: "已解除安裝 %{name}"
+  uninstall_failed:
+    en: Extension uninstall failed
+    zh-CN: 扩展卸载失败
+    zh-HK: 擴展解除安裝失敗
+  loaded_installed:
+    en: "%{count} local extension(s) loaded"
+    zh-CN: "已加载 %{count} 个本地扩展"
+    zh-HK: "已載入 %{count} 個本機擴展"
+  loaded_marketplace:
+    en: "%{count} marketplace extension(s) loaded"
+    zh-CN: "已加载 %{count} 个市场扩展"
+    zh-HK: "已載入 %{count} 個市場擴展"
+  load_marketplace_failed:
+    en: Failed to load extension marketplace
+    zh-CN: 加载扩展市场失败
+    zh-HK: 載入擴展市場失敗

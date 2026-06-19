@@ -124,9 +124,9 @@ pub(crate) fn register_connection_for_compare<T>(connection_id: &str, cx: &mut C
 
 pub(super) fn data_truncation_note(result: &DataCompareResult) -> Option<String> {
     match (result.source_truncated, result.target_truncated) {
-        (true, true) => Some("源/目标数据均已截断,仅比较前若干行".to_string()),
-        (true, false) => Some("源数据已截断,仅比较前若干行".to_string()),
-        (false, true) => Some("目标数据已截断,仅比较前若干行".to_string()),
+        (true, true) => Some(t!("Compare.data_truncated_both").to_string()),
+        (true, false) => Some(t!("Compare.data_truncated_source").to_string()),
+        (false, true) => Some(t!("Compare.data_truncated_target").to_string()),
         (false, false) => None,
     }
 }
@@ -140,12 +140,30 @@ pub(super) fn stat_cards_row(
 ) -> impl IntoElement {
     h_flex()
         .gap_2()
-        .child(stat_card("+", added, "新增", cx.theme().success, cx))
-        .child(stat_card("−", removed, "删除", cx.theme().danger, cx))
-        .child(stat_card("~", modified, "修改", cx.theme().warning, cx))
+        .child(stat_card(
+            "+",
+            added,
+            t!("Compare.added").to_string(),
+            cx.theme().success,
+            cx,
+        ))
+        .child(stat_card(
+            "−",
+            removed,
+            t!("Compare.removed").to_string(),
+            cx.theme().danger,
+            cx,
+        ))
+        .child(stat_card(
+            "~",
+            modified,
+            t!("Compare.modified").to_string(),
+            cx.theme().warning,
+            cx,
+        ))
 }
 
-fn stat_card(sign: &str, count: usize, label: &str, color: Hsla, cx: &App) -> impl IntoElement {
+fn stat_card(sign: &str, count: usize, label: String, color: Hsla, cx: &App) -> impl IntoElement {
     v_flex()
         .flex_1()
         .px_3()
@@ -165,7 +183,7 @@ fn stat_card(sign: &str, count: usize, label: &str, color: Hsla, cx: &App) -> im
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(label.to_string()),
+                .child(label),
         )
 }
 
@@ -191,11 +209,15 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
     cx: &mut Context<T>,
 ) {
     let Some(target) = target else {
-        set_status(&status, "请先执行比较,再执行同步 SQL", cx);
+        set_status(
+            &status,
+            t!("Compare.sync_sql_compare_first").to_string(),
+            cx,
+        );
         return;
     };
     if sql.trim().is_empty() {
-        set_status(&status, "没有可执行的同步 SQL", cx);
+        set_status(&status, t!("Compare.sync_sql_empty").to_string(), cx);
         return;
     }
 
@@ -204,7 +226,7 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
         *executing = true;
         cx.notify();
     });
-    set_status(&status, "正在执行同步 SQL…", cx);
+    set_status(&status, t!("Compare.sync_sql_executing").to_string(), cx);
 
     cx.spawn(async move |_, cx: &mut AsyncApp| {
         let result = execute_sync_sql(target, sql, db_state, cx).await;
@@ -214,10 +236,16 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
                 cx.notify();
             });
             match result {
-                Ok(count) => {
-                    set_status_app(&status, format!("同步 SQL 执行完成:{count} 条结果"), cx)
-                }
-                Err(error) => set_status_app(&status, format!("执行失败:{error}"), cx),
+                Ok(count) => set_status_app(
+                    &status,
+                    t!("Compare.sync_sql_executed", count = count).to_string(),
+                    cx,
+                ),
+                Err(error) => set_status_app(
+                    &status,
+                    t!("Compare.execution_failed", error = error.to_string()).to_string(),
+                    cx,
+                ),
             }
         });
     })
@@ -286,7 +314,7 @@ pub(super) fn sync_sql_editor_state(window: &mut Window, cx: &mut App) -> Entity
             .line_number(true)
             .multi_line(true)
             .soft_wrap(false)
-            .placeholder("比较完成后,选中的同步语句将在此生成,可手动编辑后执行")
+            .placeholder(t!("Compare.sync_sql_placeholder").to_string())
     })
 }
 
@@ -304,7 +332,12 @@ pub(super) fn sql_editor_panel(
         .child(
             h_flex()
                 .justify_between()
-                .child(div().text_sm().font_semibold().child("同步 SQL"))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_semibold()
+                        .child(t!("Compare.sync_sql").to_string()),
+                )
                 .child(Clipboard::new(copy_id).value(copy_value)),
         )
         .child(

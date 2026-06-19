@@ -2429,7 +2429,7 @@ impl KeyValueView {
                                         .icon(IconName::Maximize)
                                         .ghost()
                                         .with_size(Size::Medium)
-                                        .tooltip("查看完整值")
+                                        .tooltip(t!("RedisTool.view_full_value").to_string())
                                         .on_click({
                                             let view = view.clone();
                                             let title = preview_title.clone();
@@ -2561,7 +2561,7 @@ impl KeyValueView {
                                         .icon(IconName::Maximize)
                                         .ghost()
                                         .with_size(Size::Medium)
-                                        .tooltip("查看完整值")
+                                        .tooltip(t!("RedisTool.view_full_value").to_string())
                                         .on_click({
                                             let view = view.clone();
                                             let title = preview_title.clone();
@@ -2778,7 +2778,7 @@ impl KeyValueView {
                                         .icon(IconName::Maximize)
                                         .ghost()
                                         .with_size(Size::Medium)
-                                        .tooltip("查看完整值")
+                                        .tooltip(t!("RedisTool.view_full_value").to_string())
                                         .on_click({
                                             let view = view.clone();
                                             let title = preview_title.clone();
@@ -2923,7 +2923,7 @@ impl KeyValueView {
                                         .icon(IconName::Maximize)
                                         .ghost()
                                         .with_size(Size::Medium)
-                                        .tooltip("查看完整值")
+                                        .tooltip(t!("RedisTool.view_full_value").to_string())
                                         .on_click({
                                             let view = view.clone();
                                             let title = preview_title.clone();
@@ -3109,7 +3109,7 @@ impl KeyValueView {
                                         .icon(IconName::Maximize)
                                         .ghost()
                                         .with_size(Size::Medium)
-                                        .tooltip("查看完整值")
+                                        .tooltip(t!("RedisTool.view_full_value").to_string())
                                         .on_click(
                                             move |_, window, cx| {
                                                 view.update(cx, |v, cx| {

@@ -46,6 +46,10 @@ Common:
     en: Next
     zh-CN: 下一步
     zh-HK: 下一步
+  previous:
+    en: Previous
+    zh-CN: 上一步
+    zh-HK: 上一步
 
 # 首页
 Home:
@@ -153,6 +157,14 @@ Home:
     en: Open SFTP
     zh-CN: 打开 SFTP
     zh-HK: 打開 SFTP
+  open_connection:
+    en: Open Connection
+    zh-CN: 打开连接
+    zh-HK: 開啟連線
+  extensions:
+    en: Extensions
+    zh-CN: 扩展
+    zh-HK: 擴展
   edit_connection:
     en: Edit Connection
     zh-CN: 编辑连接
@@ -169,6 +181,14 @@ Home:
     en: Team
     zh-CN: 团队
     zh-HK: 團隊
+  duplicate_name:
+    en: "%{name} (Copy)"
+    zh-CN: "%{name} (副本)"
+    zh-HK: "%{name} (副本)"
+  duplicate_name_numbered:
+    en: "%{name} (Copy %{index})"
+    zh-CN: "%{name} (副本 %{index})"
+    zh-HK: "%{name} (副本 %{index})"
 
 # 团队同步
 TeamSync:
@@ -492,6 +512,57 @@ Connection:
     en: "Connection \"%{conn_name}\" is in use and must be closed before deletion.\n\nPlease close the connection first before deleting."
     zh-CN: "连接 \"%{conn_name}\" 正在使用中，删除前需要先关闭该连接。\n\n请先关闭该连接后再进行删除。"
     zh-HK: "連線 \"%{conn_name}\" 正在使用中，刪除前需要先關閉該連線。\n\n請先關閉該連線後再進行刪除。"
+
+# 新建连接
+NewConnection:
+  category_all:
+    en: All
+    zh-CN: 全部
+    zh-HK: 全部
+  category_database:
+    en: Database
+    zh-CN: 数据库
+    zh-HK: 資料庫
+  category_domestic_database:
+    en: Domestic Database
+    zh-CN: 国产数据库
+    zh-HK: 國產資料庫
+  category_terminal:
+    en: Terminal
+    zh-CN: 终端
+    zh-HK: 終端
+  select_type_title:
+    en: Select connection type
+    zh-CN: 选择连接类型
+    zh-HK: 選擇連線類型
+  select_type_hint:
+    en: Select a type, then click Next, or double-click to open the connection form.
+    zh-CN: 单击选择后点击下一步，或双击直接进入连接表单。
+    zh-HK: 單擊選擇後點擊下一步，或雙擊直接進入連線表單。
+  description_ssh:
+    en: Remote server terminal and file connection
+    zh-CN: 远程服务器终端与文件连接
+    zh-HK: 遠端伺服器終端與檔案連線
+  description_terminal:
+    en: Open a local terminal tab
+    zh-CN: 打开一个本地终端标签页
+    zh-HK: 開啟一個本機終端標籤頁
+  description_redis:
+    en: Redis standalone, sentinel, or cluster connection
+    zh-CN: Redis 单机、哨兵或集群连接
+    zh-HK: Redis 單機、哨兵或叢集連線
+  description_mongodb:
+    en: MongoDB database connection
+    zh-CN: MongoDB 数据库连接
+    zh-HK: MongoDB 資料庫連線
+  description_serial:
+    en: Serial device connection
+    zh-CN: 串口设备连接
+    zh-HK: 串口裝置連線
+  description_database:
+    en: Relational database connection
+    zh-CN: 关系型数据库连接
+    zh-HK: 關聯式資料庫連線
 
 # 设置页面
 Settings:
@@ -1123,79 +1194,107 @@ License:
     en: This feature requires a Pro subscription
     zh-CN: 此功能需要 Pro 订阅
     zh-HK: 此功能需要 Pro 訂閱
+  import_offline:
+    en: Import Offline License
+    zh-CN: 导入离线 License
+    zh-HK: 匯入離線 License
+  select_file:
+    en: Select License File
+    zh-CN: 选择 License 文件
+    zh-HK: 選擇 License 檔案
+  import_success:
+    en: Offline License imported successfully
+    zh-CN: 离线 License 导入成功
+    zh-HK: 離線 License 匯入成功
+  import_failed:
+    en: "Failed to import offline License: %{error}"
+    zh-CN: "离线 License 导入失败: %{error}"
+    zh-HK: "離線 License 匯入失敗: %{error}"
+  offline_public_key_missing:
+    en: Offline License public key is not configured
+    zh-CN: 未配置离线 License 公钥
+    zh-HK: 未設定離線 License 公鑰
+  offline_public_key_decode_failed:
+    en: "Failed to decode offline License public key: %{error}"
+    zh-CN: "离线 License 公钥解码失败: %{error}"
+    zh-HK: "離線 License 公鑰解碼失敗: %{error}"
+  offline_public_key_invalid_length:
+    en: Offline License public key length is invalid
+    zh-CN: 离线 License 公钥长度错误
+    zh-HK: 離線 License 公鑰長度錯誤
 
 # 应用更新
 Update:
   title:
-    en: 发现新版本
+    en: New version available
     zh-CN: 发现新版本
     zh-HK: 发现新版本
   message:
-    en: "已发布新版本 %{latest}（当前 %{current}），是否立即更新？"
+    en: "Version %{latest} is available (current %{current}). Update now?"
     zh-CN: "已发布新版本 %{latest}（当前 %{current}），是否立即更新？"
     zh-HK: "已發布新版本 %{latest}（當前 %{current}），是否立即更新？"
   action_download:
-    en: 下载更新
+    en: Download Update
     zh-CN: 下载更新
     zh-HK: 下載更新
   action_install:
-    en: 立即更新
+    en: Update Now
     zh-CN: 立即更新
     zh-HK: 立即更新
   action_downloading:
-    en: 下载中...
+    en: Downloading...
     zh-CN: 下载中...
     zh-HK: 下載中...
   action_applying:
-    en: 更新中...
+    en: Updating...
     zh-CN: 更新中...
     zh-HK: 更新中...
   later:
-    en: 稍后再说
+    en: Later
     zh-CN: 稍后再说
     zh-HK: 稍后再说
   release_notes:
-    en: 更新内容
+    en: Release Notes
     zh-CN: 更新内容
     zh-HK: 更新内容
   ready:
-    en: 准备开始下载更新。
+    en: Ready to download the update.
     zh-CN: 准备开始下载更新。
     zh-HK: 準備開始下載更新。
   downloading:
-    en: 正在下载更新，请稍候...
+    en: Downloading the update. Please wait...
     zh-CN: 正在下载更新，请稍候...
     zh-HK: 正在下載更新，請稍候...
   download_complete:
-    en: 下载完成，请点击“立即更新”开始安装。
+    en: Download complete. Click "Update Now" to start installing.
     zh-CN: 下载完成，请点击“立即更新”开始安装。
     zh-HK: 下載完成，請點擊「立即更新」開始安裝。
   applying:
-    en: 正在安装更新，请稍候...
+    en: Installing the update. Please wait...
     zh-CN: 正在安装更新，请稍候...
     zh-HK: 正在安裝更新，請稍候...
   download_failed:
-    en: 下载失败，请重试。
+    en: Download failed. Please try again.
     zh-CN: 下载失败，请重试。
     zh-HK: 下載失敗，請重試。
   apply_failed:
-    en: 更新失败，请稍后重试。
+    en: Update failed. Please try again later.
     zh-CN: 更新失败，请稍后重试。
     zh-HK: 更新失敗，請稍後重試。
   error_prefix:
-    en: 错误
+    en: Error
     zh-CN: 错误
     zh-HK: 錯誤
   missing_download_url:
-    en: 缺少下载地址，无法更新。
+    en: Download URL is missing. The update cannot continue.
     zh-CN: 缺少下载地址，无法更新。
     zh-HK: 缺少下載地址，無法更新。
   missing_download_file:
-    en: 未找到下载文件，请重新下载后再更新。
+    en: Downloaded file was not found. Please download the update again.
     zh-CN: 未找到下载文件，请重新下载后再更新。
     zh-HK: 未找到下載文件，請重新下載後再更新。
   downloading_blocked:
-    en: 正在下载更新，请稍后关闭。
+    en: Update download is in progress. Please close this later.
     zh-CN: 正在下载更新，请稍后关闭。
     zh-HK: 正在下載更新，請稍後關閉。
   network_check_failed:

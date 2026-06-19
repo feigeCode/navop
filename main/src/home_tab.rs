@@ -1102,7 +1102,7 @@ impl HomePage {
         let list_for_focus = list.clone();
         window.open_dialog(cx, move |dialog, _window, cx| {
             dialog
-                .title("打开连接".to_string())
+                .title(t!("Home.open_connection").to_string())
                 .w(px(520.0))
                 .child(
                     v_flex().gap_2().child(
@@ -2151,7 +2151,7 @@ impl HomePage {
                     .child(
                         Button::new("open_extensions")
                             .icon(IconName::GalleryVerticalEnd)
-                            .label("扩展")
+                            .label(t!("Home.extensions").to_string())
                             .w_full()
                             .justify_start()
                             .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
@@ -2999,7 +2999,7 @@ impl HomePage {
 
 /// 生成复制连接的唯一名称
 fn generate_duplicate_name(original_name: &str, existing_names: &HashSet<String>) -> String {
-    let base_name = format!("{} (副本)", original_name);
+    let base_name = t!("Home.duplicate_name", name = original_name).to_string();
 
     if !existing_names.contains(&base_name) {
         return base_name;
@@ -3007,7 +3007,12 @@ fn generate_duplicate_name(original_name: &str, existing_names: &HashSet<String>
 
     // 如果基础名称已存在，添加数字序号
     for i in 2..100 {
-        let name = format!("{} (副本 {})", original_name, i);
+        let name = t!(
+            "Home.duplicate_name_numbered",
+            name = original_name,
+            index = i
+        )
+        .to_string();
         if !existing_names.contains(&name) {
             return name;
         }

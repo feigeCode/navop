@@ -11,6 +11,7 @@ use gpui_component::{
     scroll::ScrollableElement,
     v_flex,
 };
+use rust_i18n::t;
 
 use crate::{
     ExtensionKind, ExtensionManagerMode, ExtensionManagerView, ExtensionSummary, MarketplaceEntry,
@@ -40,7 +41,7 @@ impl ExtensionManagerView {
                         Button::new("extension-manager-local")
                             .small()
                             .icon(IconName::File)
-                            .label("本地安装")
+                            .label(t!("Extension.local_install").to_string())
                             .on_click(cx.listener(|view, _, _, cx| {
                                 view.select_local_tarball(cx);
                             })),
@@ -49,7 +50,7 @@ impl ExtensionManagerView {
                         Button::new("extension-manager-refresh")
                             .small()
                             .icon(IconName::Refresh)
-                            .label("刷新")
+                            .label(t!("Common.refresh").to_string())
                             .on_click(cx.listener(move |view, _, _, cx| match view.mode {
                                 ExtensionManagerMode::Installed => view.refresh_installed(cx),
                                 ExtensionManagerMode::Marketplace => view.load_marketplace(cx),
@@ -95,7 +96,7 @@ impl ExtensionManagerView {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("扩展管理"),
+                    .child(t!("Extension.manager_title").to_string()),
             )
             .child(
                 div()
@@ -120,14 +121,22 @@ impl ExtensionManagerView {
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .gap_2()
-            .child(self.render_mode_button(ExtensionManagerMode::Installed, "已安装", cx))
-            .child(self.render_mode_button(ExtensionManagerMode::Marketplace, "扩展市场", cx))
+            .child(self.render_mode_button(
+                ExtensionManagerMode::Installed,
+                t!("Extension.installed").to_string(),
+                cx,
+            ))
+            .child(self.render_mode_button(
+                ExtensionManagerMode::Marketplace,
+                t!("Extension.marketplace").to_string(),
+                cx,
+            ))
     }
 
     fn render_mode_button(
         &self,
         mode: ExtensionManagerMode,
-        label: &'static str,
+        label: String,
         cx: &mut Context<Self>,
     ) -> Button {
         Button::new(format!("extension-manager-mode-{label}"))
@@ -144,7 +153,7 @@ impl ExtensionManagerView {
     fn render_installed(&self, query: &str, cx: &Context<Self>) -> gpui::AnyElement {
         let list = filter_installed(&self.installed, query, None);
         if list.is_empty() {
-            return empty_state("尚未安装匹配的扩展", cx);
+            return empty_state(t!("Extension.no_installed_matches").to_string(), cx);
         }
         v_flex()
             .w_full()
@@ -160,9 +169,9 @@ impl ExtensionManagerView {
         let list = filter_marketplace(&self.marketplace_entries, query, None);
         if list.is_empty() {
             let message = if self.loading {
-                "正在加载扩展市场..."
+                t!("Extension.loading_marketplace").to_string()
             } else {
-                "没有匹配的市场扩展"
+                t!("Extension.no_marketplace_matches").to_string()
             };
             return empty_state(message, cx);
         }
@@ -185,7 +194,7 @@ impl ExtensionManagerView {
         let action = Button::new(format!("extension-manager-uninstall-{}", summary.name))
             .small()
             .danger()
-            .label("卸载")
+            .label(t!("Extension.uninstall").to_string())
             .on_click(cx.listener(move |view, _, window, cx| {
                 view.uninstall_extension(summary_for_click.clone(), window, cx);
             }));
@@ -206,9 +215,9 @@ impl ExtensionManagerView {
     ) -> gpui::AnyElement {
         let state = marketplace_install_state(&self.installed, &entry);
         let label = match state {
-            MarketplaceInstallState::NotInstalled => "安装",
-            MarketplaceInstallState::Installed => "已安装",
-            MarketplaceInstallState::UpdateAvailable => "更新",
+            MarketplaceInstallState::NotInstalled => t!("Extension.install").to_string(),
+            MarketplaceInstallState::Installed => t!("Extension.installed").to_string(),
+            MarketplaceInstallState::UpdateAvailable => t!("Extension.update").to_string(),
         };
         let disabled =
             self.loading || self.busy.is_some() || state == MarketplaceInstallState::Installed;
@@ -233,7 +242,7 @@ impl ExtensionManagerView {
 }
 
 fn extension_card(
-    kind: &'static str,
+    kind: String,
     name: String,
     version: String,
     description: String,
@@ -288,7 +297,7 @@ fn marketplace_description(entry: &MarketplaceEntry) -> String {
     format!("{id} - {}", entry.asset_url)
 }
 
-fn empty_state(message: &'static str, cx: &Context<ExtensionManagerView>) -> gpui::AnyElement {
+fn empty_state(message: String, cx: &Context<ExtensionManagerView>) -> gpui::AnyElement {
     v_flex()
         .items_center()
         .justify_center()
@@ -299,10 +308,10 @@ fn empty_state(message: &'static str, cx: &Context<ExtensionManagerView>) -> gpu
         .into_any_element()
 }
 
-fn kind_label(kind: ExtensionKind) -> &'static str {
+fn kind_label(kind: ExtensionKind) -> String {
     match kind {
-        ExtensionKind::Language => "语言",
-        ExtensionKind::DatabaseDriver => "数据库驱动",
-        ExtensionKind::Composite => "复合扩展",
+        ExtensionKind::Language => t!("Extension.kind_language").to_string(),
+        ExtensionKind::DatabaseDriver => t!("Extension.kind_database_driver").to_string(),
+        ExtensionKind::Composite => t!("Extension.kind_composite").to_string(),
     }
 }

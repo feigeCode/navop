@@ -1,4 +1,5 @@
 use db::compare::SyncPlan;
+use rust_i18n::t;
 
 /// 同步计划预览视图
 pub struct SyncPlanView {
@@ -15,14 +16,15 @@ impl SyncPlanView {
     }
 
     pub fn summary_text(&self) -> String {
-        format!(
-            "INSERT: {} | UPDATE: {} | DELETE: {} | DDL: {} | 总计: {}",
-            self.plan.summary.insert_count,
-            self.plan.summary.update_count,
-            self.plan.summary.delete_count,
-            self.plan.summary.ddl_count,
-            self.plan.summary.total_count
+        t!(
+            "Compare.sync_plan_summary",
+            insert = self.plan.summary.insert_count,
+            update = self.plan.summary.update_count,
+            delete = self.plan.summary.delete_count,
+            ddl = self.plan.summary.ddl_count,
+            total = self.plan.summary.total_count
         )
+        .to_string()
     }
 
     pub fn sql_text(&self) -> &str {

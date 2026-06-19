@@ -1,4 +1,5 @@
 use gpui::SharedString;
+use rust_i18n::t;
 
 use crate::status_message::format_notification_error;
 use crate::{ExtensionManagerMode, MarketplaceEntry};
@@ -28,12 +29,20 @@ pub(crate) fn apply_marketplace_load_result(
     match outcome {
         Ok(entries) => {
             *marketplace_entries = entries;
-            *status = format!("已加载 {} 个市场扩展", marketplace_entries.len()).into();
+            *status = t!(
+                "Extension.loaded_marketplace",
+                count = marketplace_entries.len()
+            )
+            .to_string()
+            .into();
             None
         }
         Err(err) => {
-            *status = "加载扩展市场失败".into();
-            Some(format_notification_error("加载扩展市场失败", &err))
+            *status = t!("Extension.load_marketplace_failed").to_string().into();
+            Some(format_notification_error(
+                &t!("Extension.load_marketplace_failed").to_string(),
+                &err,
+            ))
         }
     }
 }
@@ -98,7 +107,7 @@ mod tests {
     fn marketplace_load_success_replaces_entries_and_clears_loading() {
         let mut entries = vec![marketplace_entry("old")];
         let mut loading = true;
-        let mut status = SharedString::from("正在加载扩展市场...");
+        let mut status = SharedString::from(t!("Extension.loading_marketplace").to_string());
 
         apply_marketplace_load_result(
             &mut entries,
@@ -112,14 +121,17 @@ mod tests {
             ["rust", "sql"],
             [entries[0].id.as_str(), entries[1].id.as_str()]
         );
-        assert_eq!("已加载 2 个市场扩展", status.as_ref());
+        assert_eq!(
+            t!("Extension.loaded_marketplace", count = 2).to_string(),
+            status.as_ref()
+        );
     }
 
     #[test]
     fn marketplace_load_failure_clears_loading_and_keeps_existing_entries() {
         let mut entries = vec![marketplace_entry("installed")];
         let mut loading = true;
-        let mut status = SharedString::from("正在加载扩展市场...");
+        let mut status = SharedString::from(t!("Extension.loading_marketplace").to_string());
 
         let notification = apply_marketplace_load_result(
             &mut entries,
@@ -131,9 +143,12 @@ mod tests {
 
         assert!(!loading);
         assert_eq!(["installed"], [entries[0].id.as_str()]);
-        assert_eq!("加载扩展市场失败", status.as_ref());
+        assert_eq!(
+            t!("Extension.load_marketplace_failed").to_string(),
+            status.as_ref()
+        );
         let notification = notification.expect("失败时应该返回通知文案");
-        assert!(notification.contains("加载扩展市场失败"));
+        assert!(notification.contains(t!("Extension.load_marketplace_failed").as_ref()));
         assert!(notification.contains("https://example.test/manifest.json"));
         assert!(notification.contains("network down"));
     }

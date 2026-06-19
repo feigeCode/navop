@@ -8,6 +8,7 @@ use db::{
     QueryResult, TableDataRequest, TableDataResponse, TableInfo,
 };
 use gpui::AsyncApp;
+use rust_i18n::t;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -58,7 +59,11 @@ pub async fn execute_data_compare(
 ) -> anyhow::Result<DataCompareResult> {
     report(
         &progress_tx,
-        CompareProgress::steps("正在读取源表结构", 1, DATA_COMPARE_TOTAL_STEPS),
+        CompareProgress::steps(
+            t!("Compare.reading_source_table_schema").to_string(),
+            1,
+            DATA_COMPARE_TOTAL_STEPS,
+        ),
     );
     let source_columns = load_table_columns(
         &db_state,
@@ -71,7 +76,11 @@ pub async fn execute_data_compare(
     .await?;
     report(
         &progress_tx,
-        CompareProgress::steps("正在读取目标表结构", 2, DATA_COMPARE_TOTAL_STEPS),
+        CompareProgress::steps(
+            t!("Compare.reading_target_table_schema").to_string(),
+            2,
+            DATA_COMPARE_TOTAL_STEPS,
+        ),
     );
     let target_columns = load_table_columns(
         &db_state,
@@ -86,20 +95,32 @@ pub async fn execute_data_compare(
 
     report(
         &progress_tx,
-        CompareProgress::steps("正在加载源表数据", 3, DATA_COMPARE_TOTAL_STEPS),
+        CompareProgress::steps(
+            t!("Compare.loading_source_table_data").to_string(),
+            3,
+            DATA_COMPARE_TOTAL_STEPS,
+        ),
     );
     let source_response =
         load_table_data(&db_state, cx, SourceSide::Source, &params, &key_columns).await?;
     report(
         &progress_tx,
-        CompareProgress::steps("正在加载目标表数据", 4, DATA_COMPARE_TOTAL_STEPS),
+        CompareProgress::steps(
+            t!("Compare.loading_target_table_data").to_string(),
+            4,
+            DATA_COMPARE_TOTAL_STEPS,
+        ),
     );
     let target_response =
         load_table_data(&db_state, cx, SourceSide::Target, &params, &key_columns).await?;
 
     report(
         &progress_tx,
-        CompareProgress::steps("正在比较数据", 5, DATA_COMPARE_TOTAL_STEPS),
+        CompareProgress::steps(
+            t!("Compare.comparing_data").to_string(),
+            5,
+            DATA_COMPARE_TOTAL_STEPS,
+        ),
     );
     build_data_compare_result(params, key_columns, source_response, target_response)
 }
@@ -136,6 +157,8 @@ pub async fn execute_schema_compare(
     cx: &mut AsyncApp,
 ) -> anyhow::Result<SchemaCompareResult> {
     let options = SchemaCompareOptions::default();
+    let source_label = t!("Compare.source").to_string();
+    let target_label = t!("Compare.target").to_string();
     let source_tables = load_schema_tables(
         &db_state,
         cx,
@@ -143,7 +166,7 @@ pub async fn execute_schema_compare(
         params.source_database,
         params.source_schema,
         &progress_tx,
-        "源",
+        &source_label,
     )
     .await?;
     let target_tables = load_schema_tables(
@@ -153,10 +176,13 @@ pub async fn execute_schema_compare(
         params.target_database,
         params.target_schema,
         &progress_tx,
-        "目标",
+        &target_label,
     )
     .await?;
-    report(&progress_tx, CompareProgress::phase("正在比较结构"));
+    report(
+        &progress_tx,
+        CompareProgress::phase(t!("Compare.comparing_schema").to_string()),
+    );
     let result = compare_schemas(source_tables, target_tables, options)?;
     Ok(result)
 }
@@ -281,7 +307,9 @@ async fn load_schema_tables(
 ) -> anyhow::Result<Vec<TableSchema>> {
     report(
         progress_tx,
-        CompareProgress::phase(format!("正在加载{side_label}表列表")),
+        CompareProgress::phase(
+            t!("Compare.loading_table_list", side = side_label.to_string()).to_string(),
+        ),
     );
     let tables = db_state
         .list_tables(cx, connection_id.clone(), database.clone(), schema.clone())
@@ -292,7 +320,15 @@ async fn load_schema_tables(
     for (index, table) in tables.into_iter().enumerate() {
         report(
             progress_tx,
-            CompareProgress::steps(format!("正在读取{side_label}表结构"), index + 1, total),
+            CompareProgress::steps(
+                t!(
+                    "Compare.reading_table_schema",
+                    side = side_label.to_string()
+                )
+                .to_string(),
+                index + 1,
+                total,
+            ),
         );
         schemas.push(
             load_single_table_schema(

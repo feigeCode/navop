@@ -31,13 +31,13 @@ impl NewConnectionCategory {
         ]
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub(super) fn label(self) -> String {
         match self {
-            Self::All => "全部",
-            Self::Database => "数据库",
-            Self::DomesticDatabase => "国产数据库",
-            Self::NoSql => "NoSQL",
-            Self::Terminal => "终端",
+            Self::All => t!("NewConnection.category_all").to_string(),
+            Self::Database => t!("NewConnection.category_database").to_string(),
+            Self::DomesticDatabase => t!("NewConnection.category_domestic_database").to_string(),
+            Self::NoSql => "NoSQL".to_string(),
+            Self::Terminal => t!("NewConnection.category_terminal").to_string(),
         }
     }
 
@@ -103,12 +103,12 @@ impl NewConnectionKind {
 
     pub(super) fn description(&self) -> String {
         match self {
-            Self::Ssh => "远程服务器终端与文件连接".to_string(),
-            Self::Terminal => "打开一个本地终端标签页".to_string(),
-            Self::Redis => "Redis 单机、哨兵或集群连接".to_string(),
-            Self::MongoDB => "MongoDB 数据库连接".to_string(),
-            Self::Serial => "串口设备连接".to_string(),
-            Self::Database(_) => "关系型数据库连接".to_string(),
+            Self::Ssh => t!("NewConnection.description_ssh").to_string(),
+            Self::Terminal => t!("NewConnection.description_terminal").to_string(),
+            Self::Redis => t!("NewConnection.description_redis").to_string(),
+            Self::MongoDB => t!("NewConnection.description_mongodb").to_string(),
+            Self::Serial => t!("NewConnection.description_serial").to_string(),
+            Self::Database(_) => t!("NewConnection.description_database").to_string(),
             Self::ExternalDatabase { description, .. } => description.clone(),
         }
     }
@@ -229,7 +229,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            "国产数据库",
+            t!("NewConnection.category_domestic_database").to_string(),
             NewConnectionCategory::DomesticDatabase.label()
         );
     }

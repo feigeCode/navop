@@ -242,13 +242,13 @@ impl NewConnectionWindow {
                             .text_lg()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(cx.theme().foreground)
-                            .child("选择连接类型"),
+                            .child(t!("NewConnection.select_type_title").to_string()),
                     )
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("单击选择后点击下一步，或双击直接进入连接表单。"),
+                            .child(t!("NewConnection.select_type_hint").to_string()),
                     ),
             )
             .child(grid)
@@ -374,7 +374,7 @@ impl NewConnectionWindow {
                 Button::new("back-to-new-connection-kind")
                     .small()
                     .outline()
-                    .label("上一步")
+                    .label(t!("Common.previous").to_string())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.go_back_to_selection(cx);
                     })),

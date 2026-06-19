@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use gpui::{App, AppContext, AsyncApp, Context, PathPromptOptions, WeakEntity, Window};
 use gpui_component::{WindowExt, notification::Notification};
+use rust_i18n::t;
 
 use crate::state::{
     apply_marketplace_load_result, marketplace_manifest_url_from_query,
@@ -16,7 +17,9 @@ impl ExtensionManagerView {
             Ok(installed) => self.set_installed(installed),
             Err(err) => {
                 self.installed.clear();
-                self.status = format!("读取扩展列表失败: {err}").into();
+                self.status = t!("Extension.read_installed_failed", error = err.to_string())
+                    .to_string()
+                    .into();
             }
         }
         cx.notify();
@@ -28,7 +31,7 @@ impl ExtensionManagerView {
         }
         self.marketplace_load_attempted = true;
         self.loading = true;
-        self.status = "正在加载扩展市场...".into();
+        self.status = t!("Extension.loading_marketplace").to_string().into();
         let http_client = cx.http_client();
         let manifest_url = self.marketplace_manifest_url(cx);
         let entity = cx.entity().downgrade();
@@ -51,7 +54,7 @@ impl ExtensionManagerView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("选择扩展压缩包".into()),
+            prompt: Some(t!("Extension.select_archive").to_string().into()),
         });
         let entity = cx.entity().downgrade();
         cx.spawn(async move |_, cx| {
@@ -74,7 +77,9 @@ impl ExtensionManagerView {
             return;
         }
         self.busy = Some(entry.id.clone());
-        self.status = format!("正在安装 {}...", entry.name).into();
+        self.status = t!("Extension.installing", name = entry.name.clone())
+            .to_string()
+            .into();
         let http_client = cx.http_client();
         let entity = cx.entity().downgrade();
         let task = cx.background_spawn(self.host.review_marketplace_entry(http_client, entry));
@@ -82,7 +87,10 @@ impl ExtensionManagerView {
             finish_extension_action(entity, task.await, cx);
         })
         .detach();
-        window.push_notification(Notification::info("扩展安装已开始").autohide(true), cx);
+        window.push_notification(
+            Notification::info(t!("Extension.install_started").to_string()).autohide(true),
+            cx,
+        );
         cx.notify();
     }
 
@@ -94,13 +102,22 @@ impl ExtensionManagerView {
     ) {
         match self.host.uninstall(&summary) {
             Ok(name) => {
-                self.status = format!("已卸载 {name}").into();
+                self.status = t!("Extension.uninstalled", name = name.clone())
+                    .to_string()
+                    .into();
                 self.refresh_after_extension_change(cx);
-                window.push_notification(Notification::success(format!("已卸载 {name}")), cx);
+                window.push_notification(
+                    Notification::success(t!("Extension.uninstalled", name = name).to_string()),
+                    cx,
+                );
             }
             Err(err) => {
-                self.status = format_status_error("卸载失败", &err).into();
-                window.push_notification(Notification::error("扩展卸载失败"), cx);
+                self.status =
+                    format_status_error(&t!("Extension.uninstall_failed").to_string(), &err).into();
+                window.push_notification(
+                    Notification::error(t!("Extension.uninstall_failed").to_string()),
+                    cx,
+                );
             }
         }
         cx.notify();
@@ -131,7 +148,9 @@ impl ExtensionManagerView {
 
     fn set_installed(&mut self, installed: Vec<ExtensionSummary>) {
         self.installed = installed;
-        self.status = format!("已加载 {} 个本地扩展", self.installed.len()).into();
+        self.status = t!("Extension.loaded_installed", count = self.installed.len())
+            .to_string()
+            .into();
     }
 
     fn refresh_installed_from_host(&mut self) {
@@ -187,8 +206,15 @@ fn finish_extension_action(
                 }
                 Err(err) => {
                     view.busy = None;
-                    let message = format_notification_error("扩展安装失败", &err);
-                    view.status = format_status_error("安装失败", &err).into();
+                    let message = format_notification_error(
+                        &t!("Extension.install_failed").to_string(),
+                        &err,
+                    );
+                    view.status = format_status_error(
+                        &t!("Extension.install_failed_short").to_string(),
+                        &err,
+                    )
+                    .into();
                     window.push_notification(Notification::error(message).autohide(false), cx);
                 }
             });
@@ -258,8 +284,11 @@ impl ExtensionManagerView {
                 self.finish_marketplace_outcome(outcome, entity, window, cx);
             }
             Err(err) => {
-                let message = format_notification_error("扩展安装失败", &err);
-                self.status = format_status_error("安装失败", &err).into();
+                let message =
+                    format_notification_error(&t!("Extension.install_failed").to_string(), &err);
+                self.status =
+                    format_status_error(&t!("Extension.install_failed_short").to_string(), &err)
+                        .into();
                 window.push_notification(Notification::error(message).autohide(false), cx);
             }
         }

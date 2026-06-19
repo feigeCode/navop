@@ -750,6 +750,10 @@ RedisTool:
     en: "Redis connection is not ready yet"
     zh-CN: "Redis 连接尚未建立"
     zh-HK: "Redis 連線尚未建立"
+  view_full_value:
+    en: "View full value"
+    zh-CN: "查看完整值"
+    zh-HK: "查看完整值"
 
 # Redis 发布订阅
 RedisPubSub:

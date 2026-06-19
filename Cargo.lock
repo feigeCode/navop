@@ -3707,6 +3707,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "one-core",
+ "rust-i18n",
  "semver",
  "tempfile",
 ]

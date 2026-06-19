@@ -2988,10 +2988,18 @@ Compare:
     en: Data Compare
     zh-CN: 数据比较
     zh-HK: 資料比較
+  data_compare_title:
+    en: "Data Compare - %{name}"
+    zh-CN: "数据比较 - %{name}"
+    zh-HK: "資料比較 - %{name}"
   schema_compare:
     en: Schema Compare
     zh-CN: 结构比较
     zh-HK: 結構比較
+  schema_compare_title:
+    en: "Schema Compare - %{name}"
+    zh-CN: "结构比较 - %{name}"
+    zh-HK: "結構比較 - %{name}"
   key_columns:
     en: Key Columns
     zh-CN: 主键列
@@ -3012,6 +3020,186 @@ Compare:
     en: Start Compare
     zh-CN: 开始比较
     zh-HK: 開始比較
+  ready:
+    en: Ready
+    zh-CN: 就绪
+    zh-HK: 就緒
+  preparing_compare:
+    en: Preparing compare...
+    zh-CN: 正在准备比较…
+    zh-HK: 正在準備比較…
+  comparing_data:
+    en: Comparing data...
+    zh-CN: 正在比较数据…
+    zh-HK: 正在比較資料…
+  comparing_schema:
+    en: Comparing schema...
+    zh-CN: 正在比较结构…
+    zh-HK: 正在比較結構…
+  data_compare_complete:
+    en: Data compare complete
+    zh-CN: 数据比较完成
+    zh-HK: 資料比較完成
+  schema_compare_complete:
+    en: Schema compare complete
+    zh-CN: 结构比较完成
+    zh-HK: 結構比較完成
+  compare_failed:
+    en: "Compare failed: %{error}"
+    zh-CN: "比较失败:%{error}"
+    zh-HK: "比較失敗:%{error}"
+  cancelled:
+    en: Cancelled
+    zh-CN: 已取消
+    zh-HK: 已取消
+  reading_source_table_schema:
+    en: Reading source table schema
+    zh-CN: 正在读取源表结构
+    zh-HK: 正在讀取來源表結構
+  reading_target_table_schema:
+    en: Reading target table schema
+    zh-CN: 正在读取目标表结构
+    zh-HK: 正在讀取目標表結構
+  loading_source_table_data:
+    en: Loading source table data
+    zh-CN: 正在加载源表数据
+    zh-HK: 正在載入來源表資料
+  loading_target_table_data:
+    en: Loading target table data
+    zh-CN: 正在加载目标表数据
+    zh-HK: 正在載入目標表資料
+  loading_table_list:
+    en: "Loading %{side} table list"
+    zh-CN: "正在加载%{side}表列表"
+    zh-HK: "正在載入%{side}表列表"
+  reading_table_schema:
+    en: "Reading %{side} table schema"
+    zh-CN: "正在读取%{side}表结构"
+    zh-HK: "正在讀取%{side}表結構"
+  data_truncated_both:
+    en: Source and target data were truncated; only the first rows were compared.
+    zh-CN: 源/目标数据均已截断,仅比较前若干行
+    zh-HK: 來源/目標資料均已截斷，僅比較前若干列
+  data_truncated_source:
+    en: Source data was truncated; only the first rows were compared.
+    zh-CN: 源数据已截断,仅比较前若干行
+    zh-HK: 來源資料已截斷，僅比較前若干列
+  data_truncated_target:
+    en: Target data was truncated; only the first rows were compared.
+    zh-CN: 目标数据已截断,仅比较前若干行
+    zh-HK: 目標資料已截斷，僅比較前若干列
+  added:
+    en: Added
+    zh-CN: 新增
+    zh-HK: 新增
+  removed:
+    en: Removed
+    zh-CN: 删除
+    zh-HK: 刪除
+  modified:
+    en: Modified
+    zh-CN: 修改
+    zh-HK: 修改
+  sync_statements:
+    en: Sync Statements
+    zh-CN: 同步语句
+    zh-HK: 同步語句
+  sync_statements_selected:
+    en: "%{selected} sync statement(s) selected"
+    zh-CN: "已选 %{selected} 条同步语句"
+    zh-HK: "已選 %{selected} 條同步語句"
+  sync_statements_selected_skipped:
+    en: "%{selected} sync statement(s) selected, %{skipped} skipped"
+    zh-CN: "已选 %{selected} 条同步语句,跳过 %{skipped} 条"
+    zh-HK: "已選 %{selected} 條同步語句，跳過 %{skipped} 條"
+  select_safe_only:
+    en: Safe Only
+    zh-CN: 仅安全
+    zh-HK: 僅安全
+  no_sync_statements:
+    en: No sync statements
+    zh-CN: 暂无同步语句
+    zh-HK: 暫無同步語句
+  destructive:
+    en: Destructive
+    zh-CN: 破坏性
+    zh-HK: 破壞性
+  unnamed_object:
+    en: Unnamed object
+    zh-CN: 未命名对象
+    zh-HK: 未命名物件
+  statement_create_table:
+    en: Create Table
+    zh-CN: 建表
+    zh-HK: 建表
+  statement_drop_table:
+    en: Drop Table
+    zh-CN: 删表
+    zh-HK: 刪表
+  statement_alter_table:
+    en: Alter Table
+    zh-CN: 改表
+    zh-HK: 改表
+  statement_create_index:
+    en: Create Index
+    zh-CN: 建索引
+    zh-HK: 建索引
+  statement_drop_index:
+    en: Drop Index
+    zh-CN: 删索引
+    zh-HK: 刪索引
+  statement_insert:
+    en: Insert
+    zh-CN: 插入
+    zh-HK: 插入
+  statement_update:
+    en: Update
+    zh-CN: 更新
+    zh-HK: 更新
+  statement_delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  statement_comment:
+    en: Comment
+    zh-CN: 注释
+    zh-HK: 註解
+  statement_unknown:
+    en: Other
+    zh-CN: 其他
+    zh-HK: 其他
+  sync_sql:
+    en: Sync SQL
+    zh-CN: 同步 SQL
+    zh-HK: 同步 SQL
+  sync_sql_placeholder:
+    en: Selected sync statements will be generated here after compare finishes. You can edit them before executing.
+    zh-CN: 比较完成后,选中的同步语句将在此生成,可手动编辑后执行
+    zh-HK: 比較完成後，選中的同步語句將在此生成，可手動編輯後執行
+  sync_sql_compare_first:
+    en: Run compare before executing sync SQL
+    zh-CN: 请先执行比较,再执行同步 SQL
+    zh-HK: 請先執行比較，再執行同步 SQL
+  sync_sql_empty:
+    en: No sync SQL to execute
+    zh-CN: 没有可执行的同步 SQL
+    zh-HK: 沒有可執行的同步 SQL
+  sync_sql_executing:
+    en: Executing sync SQL...
+    zh-CN: 正在执行同步 SQL…
+    zh-HK: 正在執行同步 SQL…
+  sync_sql_executed:
+    en: "Sync SQL executed: %{count} result(s)"
+    zh-CN: "同步 SQL 执行完成:%{count} 条结果"
+    zh-HK: "同步 SQL 執行完成:%{count} 條結果"
+  execution_failed:
+    en: "Execution failed: %{error}"
+    zh-CN: "执行失败:%{error}"
+    zh-HK: "執行失敗:%{error}"
+  sync_plan_summary:
+    en: "INSERT: %{insert} | UPDATE: %{update} | DELETE: %{delete} | DDL: %{ddl} | Total: %{total}"
+    zh-CN: "INSERT: %{insert} | UPDATE: %{update} | DELETE: %{delete} | DDL: %{ddl} | 总计: %{total}"
+    zh-HK: "INSERT: %{insert} | UPDATE: %{update} | DELETE: %{delete} | DDL: %{ddl} | 總計: %{total}"
 
 # 团队同步
 TeamSync:

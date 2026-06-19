@@ -1100,7 +1100,7 @@ fn render_account_section(_window: &mut Window, cx: &App) -> gpui::AnyElement {
                     .child(
                         Button::new("import-license-button")
                             .icon(IconName::File)
-                            .label("导入离线 License")
+                            .label(t!("License.import_offline").to_string())
                             .on_click(move |_, window, cx| {
                                 let public_key = match offline_license_public_key() {
                                     Ok(key) => key,
@@ -1114,7 +1114,7 @@ fn render_account_section(_window: &mut Window, cx: &App) -> gpui::AnyElement {
                                     files: true,
                                     directories: false,
                                     multiple: false,
-                                    prompt: Some("选择 License 文件".into()),
+                                    prompt: Some(t!("License.select_file").to_string().into()),
                                 });
 
                                 window
@@ -1128,10 +1128,14 @@ fn render_account_section(_window: &mut Window, cx: &App) -> gpui::AnyElement {
                                                         None,
                                                     );
                                                 let message = match result {
-                                                    Ok(_) => "离线 License 导入成功".to_string(),
-                                                    Err(err) => {
-                                                        format!("离线 License 导入失败: {}", err)
+                                                    Ok(_) => {
+                                                        t!("License.import_success").to_string()
                                                     }
+                                                    Err(err) => t!(
+                                                        "License.import_failed",
+                                                        error = err.to_string()
+                                                    )
+                                                    .to_string(),
                                                 };
                                                 let _ = cx.update(|_view, cx: &mut App| {
                                                     if let Some(window_id) = cx.active_window() {
