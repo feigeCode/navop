@@ -7,14 +7,18 @@ use gpui_component::{ActiveTheme, Icon, IconName};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_desktop::{
     RemoteDesktopConnectionOptions, RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol,
-    RemoteDesktopRuntime, RemoteDesktopSize, RemoteMouseButton, create_backend,
+    RemoteDesktopRuntime, RemoteDesktopSize, RemoteKey, RemoteMouseButton, RemoteNamedKey,
+    create_backend,
 };
 
 use crate::ime_guard::RemoteDesktopImeGuard;
 use crate::keyboard::keystroke_to_remote_key_for_protocol;
 use crate::modifiers::modifier_inputs;
 use crate::pixels::rgba_to_render_image;
-use crate::pointer::{LocalBounds, scale_window_pointer_position};
+use crate::pointer::{LocalBounds, scale_filled_window_pointer_position};
+use crate::shortcuts::{
+    ClipboardShortcut, clipboard_shortcut_inputs, is_clipboard_platform_shortcut,
+};
 
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(800);
 const RESIZE_MIN_INTERVAL: Duration = Duration::from_millis(1200);
@@ -22,14 +26,39 @@ const RESIZE_DELTA_THRESHOLD: u16 = 16;
 const CLIPBOARD_SYNC_INTERVAL: Duration = Duration::from_millis(500);
 const RDP_DISPLAY_MIN_SIZE: f32 = 200.0;
 const RDP_DISPLAY_MAX_SIZE: f32 = 8192.0;
+const REMOTE_DESKTOP_CONTEXT: &str = "RemoteDesktopView";
+
+#[cfg(target_os = "macos")]
+const REMOTE_COPY_SHORTCUT: &str = "cmd-c";
+#[cfg(not(target_os = "macos"))]
+const REMOTE_COPY_SHORTCUT: &str = "ctrl-shift-c";
+#[cfg(target_os = "macos")]
+const REMOTE_PASTE_SHORTCUT: &str = "cmd-v";
+#[cfg(not(target_os = "macos"))]
+const REMOTE_PASTE_SHORTCUT: &str = "ctrl-shift-v";
+
+actions!(
+    remote_desktop_view,
+    [SendTab, SendShiftTab, RemoteCopy, RemotePaste]
+);
+
+fn remote_desktop_tab_title(title: &str, tab_index: Option<usize>) -> String {
+    if let Some(index) = tab_index {
+        format!("{title}({index})")
+    } else {
+        title.to_string()
+    }
+}
 
 pub struct RemoteDesktopViewConfig {
     pub options: RemoteDesktopConnectionOptions,
+    pub title: String,
     pub tab_index: Option<usize>,
 }
 
 pub struct RemoteDesktopView {
     options: RemoteDesktopConnectionOptions,
+    title: String,
     input_tx: Option<tokio::sync::mpsc::UnboundedSender<RemoteDesktopInput>>,
     output_rx: Option<std::sync::mpsc::Receiver<RemoteDesktopOutput>>,
     focus_handle: FocusHandle,
@@ -63,6 +92,7 @@ impl RemoteDesktopView {
 
         Self {
             options: config.options,
+            title: config.title,
             input_tx: None,
             output_rx: None,
             focus_handle,
@@ -234,6 +264,10 @@ impl RemoteDesktopView {
     }
 
     fn handle_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if is_clipboard_platform_shortcut(&event.keystroke) {
+            cx.stop_propagation();
+            return;
+        }
         if let Some(key) =
             keystroke_to_remote_key_for_protocol(&event.keystroke, self.options.protocol)
         {
@@ -243,6 +277,10 @@ impl RemoteDesktopView {
     }
 
     fn handle_key_up(&mut self, event: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if is_clipboard_platform_shortcut(&event.keystroke) {
+            cx.stop_propagation();
+            return;
+        }
         if let Some(key) =
             keystroke_to_remote_key_for_protocol(&event.keystroke, self.options.protocol)
         {
@@ -252,6 +290,61 @@ impl RemoteDesktopView {
             });
         }
         cx.stop_propagation();
+    }
+
+    fn send_tab(&mut self, _: &SendTab, _window: &mut Window, cx: &mut Context<Self>) {
+        self.send_key_press(RemoteKey::Named(RemoteNamedKey::Tab));
+        cx.stop_propagation();
+    }
+
+    fn send_shift_tab(&mut self, _: &SendShiftTab, _window: &mut Window, cx: &mut Context<Self>) {
+        self.send_input(RemoteDesktopInput::Key {
+            key: RemoteKey::Named(RemoteNamedKey::Shift),
+            pressed: true,
+        });
+        self.send_key_press(RemoteKey::Named(RemoteNamedKey::Tab));
+        self.send_input(RemoteDesktopInput::Key {
+            key: RemoteKey::Named(RemoteNamedKey::Shift),
+            pressed: false,
+        });
+        cx.stop_propagation();
+    }
+
+    fn remote_copy(&mut self, _: &RemoteCopy, _window: &mut Window, cx: &mut Context<Self>) {
+        self.send_clipboard_shortcut(ClipboardShortcut::Copy);
+        cx.stop_propagation();
+    }
+
+    fn remote_paste(&mut self, _: &RemotePaste, _window: &mut Window, cx: &mut Context<Self>) {
+        self.send_local_clipboard_to_remote(cx);
+        self.send_clipboard_shortcut(ClipboardShortcut::Paste);
+        cx.stop_propagation();
+    }
+
+    fn send_key_press(&self, key: RemoteKey) {
+        self.send_input(RemoteDesktopInput::Key {
+            key: key.clone(),
+            pressed: true,
+        });
+        self.send_input(RemoteDesktopInput::Key {
+            key,
+            pressed: false,
+        });
+    }
+
+    fn send_clipboard_shortcut(&self, shortcut: ClipboardShortcut) {
+        for input in clipboard_shortcut_inputs(self.options.protocol, shortcut) {
+            self.send_input(input);
+        }
+    }
+
+    fn send_local_clipboard_to_remote(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        self.last_clipboard_text = Some(text.clone());
+        self.last_clipboard_sync_at = Some(Instant::now());
+        self.send_input(RemoteDesktopInput::ClipboardText { text });
     }
 
     fn handle_modifiers_changed(
@@ -277,7 +370,7 @@ impl RemoteDesktopView {
             return;
         };
         let bounds = self.pointer_bounds(window);
-        let Some((x, y)) = scale_window_pointer_position(
+        let Some((x, y)) = scale_filled_window_pointer_position(
             pixels_to_f32(position.x),
             pixels_to_f32(position.y),
             bounds,
@@ -401,16 +494,7 @@ impl TabContent for RemoteDesktopView {
     }
 
     fn title(&self, _cx: &App) -> SharedString {
-        let base = match self.options.protocol {
-            RemoteDesktopProtocol::Rdp => "RDP",
-            RemoteDesktopProtocol::Vnc => "VNC",
-        };
-
-        if let Some(index) = self.tab_index {
-            SharedString::from(format!("{base}({index})"))
-        } else {
-            SharedString::from(base)
-        }
+        SharedString::from(remote_desktop_tab_title(&self.title, self.tab_index))
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
@@ -450,6 +534,11 @@ impl Render for RemoteDesktopView {
             .justify_center()
             .overflow_hidden()
             .track_focus(&self.focus_handle)
+            .key_context(REMOTE_DESKTOP_CONTEXT)
+            .on_action(cx.listener(Self::send_tab))
+            .on_action(cx.listener(Self::send_shift_tab))
+            .on_action(cx.listener(Self::remote_copy))
+            .on_action(cx.listener(Self::remote_paste))
             .capture_key_down(cx.listener(Self::handle_key_down))
             .capture_key_up(cx.listener(Self::handle_key_up))
             .on_modifiers_changed(cx.listener(Self::handle_modifiers_changed))
@@ -523,7 +612,7 @@ impl Render for RemoteDesktopView {
                 .size_full(),
             )
             .when_some(self.frame.clone(), |this, frame| {
-                this.child(img(frame).max_w_full().max_h_full())
+                this.child(img(frame).size_full().object_fit(ObjectFit::Fill))
             })
             .when(self.frame.is_none(), |this| {
                 this.child(
@@ -573,7 +662,22 @@ impl Render for RemoteDesktopView {
     }
 }
 
-pub fn init(_cx: &mut App) {}
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("tab", SendTab, Some(REMOTE_DESKTOP_CONTEXT)),
+        KeyBinding::new("shift-tab", SendShiftTab, Some(REMOTE_DESKTOP_CONTEXT)),
+        KeyBinding::new(
+            REMOTE_COPY_SHORTCUT,
+            RemoteCopy,
+            Some(REMOTE_DESKTOP_CONTEXT),
+        ),
+        KeyBinding::new(
+            REMOTE_PASTE_SHORTCUT,
+            RemotePaste,
+            Some(REMOTE_DESKTOP_CONTEXT),
+        ),
+    ]);
+}
 
 pub fn refresh_keybindings(_cx: &mut App) {}
 
@@ -609,5 +713,17 @@ mod tests {
             (1300, 726)
         ));
         assert!(super::is_meaningful_resize_delta(None, (1280, 720)));
+    }
+
+    #[test]
+    fn tab_title_uses_connection_name_and_duplicate_index() {
+        assert_eq!(
+            "prod-rdp",
+            super::remote_desktop_tab_title("prod-rdp", None)
+        );
+        assert_eq!(
+            "prod-rdp(2)",
+            super::remote_desktop_tab_title("prod-rdp", Some(2))
+        );
     }
 }

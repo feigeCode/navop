@@ -156,10 +156,21 @@ mod tests {
         assert_eq!(key("space"), Some(RemoteKey::Scancode(0x0039)));
         assert_eq!(key("?"), Some(RemoteKey::Scancode(0x0035)));
         assert_eq!(key("up"), Some(RemoteKey::Scancode(0xe048)));
+        assert_eq!(key("tab"), Some(RemoteKey::Scancode(0x000f)));
     }
 
     fn key(source: &str) -> Option<RemoteKey> {
         let keystroke = Keystroke::parse(source).expect("valid test keystroke");
         keystroke_to_remote_key_for_protocol(&keystroke, RemoteDesktopProtocol::Rdp)
+    }
+
+    #[test]
+    fn maps_vnc_tab_to_named_remote_key() {
+        let keystroke = Keystroke::parse("tab").expect("valid test keystroke");
+
+        assert_eq!(
+            Some(RemoteKey::Named(RemoteNamedKey::Tab)),
+            keystroke_to_remote_key_for_protocol(&keystroke, RemoteDesktopProtocol::Vnc)
+        );
     }
 }

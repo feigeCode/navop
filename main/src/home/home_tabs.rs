@@ -354,8 +354,17 @@ impl HomePage {
         } else {
             None
         };
-        let view =
-            cx.new(|cx| RemoteDesktopView::new(RemoteDesktopViewConfig { options, tab_index }, cx));
+        let title = conn.name.clone();
+        let view = cx.new(|cx| {
+            RemoteDesktopView::new(
+                RemoteDesktopViewConfig {
+                    options,
+                    title,
+                    tab_index,
+                },
+                cx,
+            )
+        });
         self.tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, tab_kind, view);
             tc.add_and_activate_tab_with_focus(tab, window, cx);

@@ -38,6 +38,24 @@ pub fn scale_pointer_position(
     ))
 }
 
+pub fn scale_filled_pointer_position(
+    local_x: f32,
+    local_y: f32,
+    local_width: f32,
+    local_height: f32,
+    remote_width: u16,
+    remote_height: u16,
+) -> Option<(u16, u16)> {
+    if local_width <= 0.0 || local_height <= 0.0 || remote_width == 0 || remote_height == 0 {
+        return None;
+    }
+
+    Some((
+        scale_coordinate(local_x, local_width, remote_width),
+        scale_coordinate(local_y, local_height, remote_height),
+    ))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LocalBounds {
     pub left: f32,
@@ -54,6 +72,23 @@ pub fn scale_window_pointer_position(
     remote_height: u16,
 ) -> Option<(u16, u16)> {
     scale_pointer_position(
+        window_x - bounds.left,
+        window_y - bounds.top,
+        bounds.width,
+        bounds.height,
+        remote_width,
+        remote_height,
+    )
+}
+
+pub fn scale_filled_window_pointer_position(
+    window_x: f32,
+    window_y: f32,
+    bounds: LocalBounds,
+    remote_width: u16,
+    remote_height: u16,
+) -> Option<(u16, u16)> {
+    scale_filled_pointer_position(
         window_x - bounds.left,
         window_y - bounds.top,
         bounds.width,
@@ -105,6 +140,37 @@ mod tests {
                 },
                 1280,
                 720,
+            )
+        );
+    }
+
+    #[test]
+    fn scales_filled_pointer_against_full_content_bounds() {
+        assert_eq!(
+            Some((0, 0)),
+            scale_filled_pointer_position(0.0, 0.0, 1280.0, 720.0, 1024, 768)
+        );
+        assert_eq!(
+            Some((512, 384)),
+            scale_filled_pointer_position(640.0, 360.0, 1280.0, 720.0, 1024, 768)
+        );
+    }
+
+    #[test]
+    fn filled_window_position_subtracts_header_bounds() {
+        assert_eq!(
+            Some((512, 384)),
+            scale_filled_window_pointer_position(
+                640.0,
+                456.0,
+                LocalBounds {
+                    left: 0.0,
+                    top: 96.0,
+                    width: 1280.0,
+                    height: 720.0,
+                },
+                1024,
+                768,
             )
         );
     }

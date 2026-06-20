@@ -12,6 +12,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+vnc_client = { package = "vnc-rs", version = "0.5.3" }
 
 [dev-dependencies]
 proptest = { workspace = true }

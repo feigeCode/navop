@@ -65,6 +65,45 @@ impl RgbaFramebuffer {
 
         Ok(())
     }
+
+    pub fn copy_rect(
+        &mut self,
+        src_x: u16,
+        src_y: u16,
+        dst_x: u16,
+        dst_y: u16,
+        width: u16,
+        height: u16,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(src_x <= self.width, "source x is outside framebuffer");
+        anyhow::ensure!(src_y <= self.height, "source y is outside framebuffer");
+        anyhow::ensure!(dst_x <= self.width, "destination x is outside framebuffer");
+        anyhow::ensure!(dst_y <= self.height, "destination y is outside framebuffer");
+        anyhow::ensure!(
+            src_x.saturating_add(width) <= self.width,
+            "source width exceeds framebuffer"
+        );
+        anyhow::ensure!(
+            src_y.saturating_add(height) <= self.height,
+            "source height exceeds framebuffer"
+        );
+        anyhow::ensure!(
+            dst_x.saturating_add(width) <= self.width,
+            "destination width exceeds framebuffer"
+        );
+        anyhow::ensure!(
+            dst_y.saturating_add(height) <= self.height,
+            "destination height exceeds framebuffer"
+        );
+
+        let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+        for row in 0..height as usize {
+            let start = ((src_y as usize + row) * self.width as usize + src_x as usize) * 4;
+            let end = start + width as usize * 4;
+            pixels.extend_from_slice(&self.rgba[start..end]);
+        }
+        self.patch_rgba_rect(dst_x, dst_y, width, height, &pixels)
+    }
 }
 
 #[cfg(test)]
@@ -84,5 +123,16 @@ mod tests {
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255,
             ]
         );
+    }
+
+    #[test]
+    fn copy_rect_uses_source_snapshot_before_writing_destination() {
+        let mut fb = RgbaFramebuffer::new(3, 1);
+        let pixels = [1, 0, 0, 255, 2, 0, 0, 255, 3, 0, 0, 255];
+        fb.patch_rgba_rect(0, 0, 3, 1, &pixels).unwrap();
+
+        fb.copy_rect(0, 0, 1, 0, 2, 1).unwrap();
+
+        assert_eq!(fb.as_rgba(), &[1, 0, 0, 255, 1, 0, 0, 255, 2, 0, 0, 255]);
     }
 }

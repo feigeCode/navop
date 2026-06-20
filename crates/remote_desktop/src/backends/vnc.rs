@@ -1,6 +1,6 @@
+use crate::backends::vnc_rfb::run_vnc_thread;
 use crate::{
-    RemoteDesktopBackend, RemoteDesktopConnectionOptions, RemoteDesktopInput, RemoteDesktopOutput,
-    RemoteDesktopRuntime, RemoteDesktopSize,
+    RemoteDesktopBackend, RemoteDesktopConnectionOptions, RemoteDesktopRuntime, RemoteDesktopSize,
 };
 
 pub struct VncBackend {
@@ -20,23 +20,11 @@ impl RemoteDesktopBackend for VncBackend {
     ) -> anyhow::Result<RemoteDesktopRuntime> {
         let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
         let (output_tx, output_rx) = std::sync::mpsc::channel();
-        let destination = self.options.destination.clone();
+        let options = self.options;
 
         std::thread::Builder::new()
             .name("remote-desktop-vnc".to_string())
-            .spawn(move || {
-                let _ = output_tx.send(RemoteDesktopOutput::Status(format!(
-                    "connecting to VNC {destination}"
-                )));
-                while let Some(input) = input_rx.blocking_recv() {
-                    if matches!(input, RemoteDesktopInput::Close) {
-                        break;
-                    }
-                }
-                let _ = output_tx.send(RemoteDesktopOutput::Terminated(
-                    "VNC session closed".to_string(),
-                ));
-            })?;
+            .spawn(move || run_vnc_thread(options, &mut input_rx, output_tx))?;
 
         Ok(RemoteDesktopRuntime {
             input_tx,
