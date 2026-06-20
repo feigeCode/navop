@@ -7,14 +7,21 @@ description: 基于本地 git tag 和提交历史整理 OnetCli 最近版本与�
 
 本页基于当前仓库的本地 `git tag` 和提交历史整理，适合在官网中展示最近版本的产品变化。完整发布包、安装文件和历史版本仍以 [GitHub Releases](https://github.com/feigeCode/onetcli/releases) 为准。
 
-## 开发中
+## v0.5.0
 
-当前分支在 `v0.4.8` 之后还有一组终端 AI 交互改动，尚未归入正式 tag：
+发布时间：2026-06-20
 
-- 新增终端 AI 命令流入口。
-- 尝试将终端 AI 结果以内联 transcript / flow block 形式呈现。
-- 优化终端 AI overlay 控件。
-- 修复终端 AI transcript 字符集重置、布局流和错误后释放终端等问题。
+这一版重点围绕扩展市场拆分、外部数据库驱动、数据库比较、更新分发和终端体验进行增强。
+
+- 将扩展包构建和发布拆分到独立仓库，支持多源扩展清单、插件 manifest 下载解析和 GitHub fallback。
+- 新增扩展运行时、组件 API、WASM host runtime、扩展重新加载入口和安装进度展示。
+- 支持 manifest 驱动的 IPC 数据库驱动契约，补齐外部驱动连接表单、对象元数据、图标显示和 SSH 隧道路由。
+- 新增数据库数据比较和结构比较能力，支持比较窗口、任务执行器、同步计划 SQL 生成、进度显示和编辑器功能。
+- 增强更新分发链路，新增 GitHub Release fallback、linux arm64 发布包选择和 aarch64 linux release artifact。
+- 优化终端关闭确认、清屏和连接 LRU 处理，并禁用 TUI 内终端历史提示。
+- 优化数据库对象表格列宽调整、Datetime 格式化展示、表触发器和检查项表名回退处理。
+- 支持数据库连接引用 SSH 隧道、SSH 连接过滤和代理设置下的 LLM 客户端构建。
+- 修复扩展资源相对路径、外部驱动目录包装格式、用户可见文案本地化、滚动条显示和 SyntaxHighlighter 初始化警告等问题。
 
 ## v0.4.8
 
