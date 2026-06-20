@@ -35,7 +35,9 @@ use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, ConnectionType, DatabaseType, GlobalStorageState,
-    PendingCloudDeletionRepository, RedisMode, StoredConnection, Workspace, WorkspaceRepository,
+    PendingCloudDeletionRepository, RedisMode, RemoteDesktopParams,
+    RemoteDesktopProtocol as StoredRemoteDesktopProtocol, StoredConnection, Workspace,
+    WorkspaceRepository,
 };
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
 use redis_view::{RedisFormWindow, RedisFormWindowConfig};
@@ -50,6 +52,9 @@ use crate::home::home_strategy::build_connection_open_strategy;
 use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
 use crate::new_connection::NewConnectionWindow;
+use crate::new_connection::remote_desktop_form::{
+    RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
+};
 use crate::setting_tab::GlobalCurrentUser;
 use crate::user_avatar::render_user_avatar;
 
@@ -212,6 +217,39 @@ mod external_driver_form_tests {
             Some("dm".to_string()),
             external_driver_id_for_connection_form(&DatabaseType::MySQL, Some(&connection))
         );
+    }
+
+    #[test]
+    fn remote_desktop_connection_info_uses_remote_desktop_params() {
+        let params = RemoteDesktopParams {
+            protocol: StoredRemoteDesktopProtocol::Rdp,
+            host: "10.0.0.8".to_string(),
+            port: 3389,
+            username: Some("administrator".to_string()),
+            password: None,
+            domain: None,
+            read_only: false,
+        };
+
+        assert_eq!(
+            "administrator@10.0.0.8:3389",
+            remote_desktop_connection_info(&params)
+        );
+    }
+
+    #[test]
+    fn remote_desktop_connection_info_omits_missing_username() {
+        let params = RemoteDesktopParams {
+            protocol: StoredRemoteDesktopProtocol::Vnc,
+            host: "10.0.0.9".to_string(),
+            port: 5900,
+            username: None,
+            password: None,
+            domain: None,
+            read_only: false,
+        };
+
+        assert_eq!("10.0.0.9:5900", remote_desktop_connection_info(&params));
     }
 }
 
@@ -1624,6 +1662,45 @@ impl HomePage {
         );
     }
 
+    pub(crate) fn show_remote_desktop_form(
+        &mut self,
+        protocol: StoredRemoteDesktopProtocol,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editing_connection_id.is_none() && !self.is_master_key_ready_for_new_connection() {
+            return;
+        }
+
+        let connection_type = protocol.connection_type();
+        let editing_conn = self.editing_connection_id.and_then(|id| {
+            self.connections
+                .iter()
+                .find(|c| c.id == Some(id) && c.connection_type == connection_type)
+                .cloned()
+        });
+
+        let config = RemoteDesktopFormWindowConfig {
+            protocol,
+            editing_connection: editing_conn,
+            workspaces: self.workspaces.clone(),
+            teams: get_cached_team_options(cx),
+        };
+
+        self.editing_connection_id = None;
+
+        open_popup_window(
+            PopupWindowOptions::new(if config.editing_connection.is_some() {
+                t!("RemoteDesktopForm.title_edit", protocol = protocol.label()).to_string()
+            } else {
+                t!("RemoteDesktopForm.title_new", protocol = protocol.label()).to_string()
+            })
+            .size(700.0, 560.0),
+            move |window, cx| cx.new(|cx| RemoteDesktopFormWindow::new(config, window, cx)),
+            cx,
+        );
+    }
+
     pub(crate) fn ensure_master_key_ready_for_new_connection(
         &mut self,
         window: &mut Window,
@@ -2329,6 +2406,23 @@ impl HomePage {
                     }
                 }
             }
+            ConnectionType::Rdp | ConnectionType::Vnc => {
+                if let Ok(params) = conn.to_ssh_params() {
+                    if params.host.to_lowercase().contains(query) {
+                        return true;
+                    }
+                    if params.port.to_string().contains(query) {
+                        return true;
+                    }
+                    if params.username.to_lowercase().contains(query) {
+                        return true;
+                    }
+                    let conn_str = format!("{}@{}:{}", params.username, params.host, params.port);
+                    if conn_str.to_lowercase().contains(query) {
+                        return true;
+                    }
+                }
+            }
             ConnectionType::Redis => {
                 if let Ok(params) = conn.to_redis_params() {
                     if params.host.to_lowercase().contains(query) {
@@ -2756,6 +2850,22 @@ impl HomePage {
                                                 this.editing_connection_id = Some(conn_id);
                                                 this.show_serial_form(window, cx);
                                             }
+                                            ConnectionType::Rdp => {
+                                                this.editing_connection_id = Some(conn_id);
+                                                this.show_remote_desktop_form(
+                                                    StoredRemoteDesktopProtocol::Rdp,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                            ConnectionType::Vnc => {
+                                                this.editing_connection_id = Some(conn_id);
+                                                this.show_remote_desktop_form(
+                                                    StoredRemoteDesktopProtocol::Vnc,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
                                             _ => {}
                                         }
                                     }
@@ -2821,6 +2931,10 @@ impl HomePage {
                                     .with_size(px(40.0))
                                     .text_color(gpui::white()),
                                 ConnectionType::Serial => IconName::SerialPort
+                                    .color()
+                                    .with_size(px(40.0))
+                                    .text_color(gpui::white()),
+                                ConnectionType::Rdp | ConnectionType::Vnc => IconName::Monitor
                                     .color()
                                     .with_size(px(40.0))
                                     .text_color(gpui::white()),
@@ -2940,6 +3054,38 @@ impl HomePage {
                                     this
                                 }
                             })
+                            .when(
+                                matches!(
+                                    conn.connection_type,
+                                    ConnectionType::Rdp | ConnectionType::Vnc
+                                ),
+                                |this| {
+                                    if let Ok(params) = conn.to_remote_desktop_params() {
+                                        let conn_info = remote_desktop_connection_info(&params);
+                                        let tooltip_text: SharedString = conn_info.clone().into();
+                                        this.child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "conn-info-{}",
+                                                    conn.id.unwrap_or(0)
+                                                )))
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .whitespace_nowrap()
+                                                .max_w_full()
+                                                .tooltip(move |window, cx| {
+                                                    Tooltip::new(tooltip_text.clone())
+                                                        .build(window, cx)
+                                                })
+                                                .child(conn_info),
+                                        )
+                                    } else {
+                                        this
+                                    }
+                                },
+                            )
                             .when(conn.connection_type == ConnectionType::Redis, |this| {
                                 if let Ok(params) = conn.to_redis_params() {
                                     let conn_info = match params.mode {
@@ -3070,6 +3216,13 @@ impl HomePage {
             );
 
         card.into_any_element()
+    }
+}
+
+fn remote_desktop_connection_info(params: &RemoteDesktopParams) -> String {
+    match params.username.as_deref() {
+        Some(username) => format!("{}@{}:{}", username, params.host, params.port),
+        None => format!("{}:{}", params.host, params.port),
     }
 }
 

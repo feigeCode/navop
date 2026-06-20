@@ -1,0 +1,77 @@
+use gpui::{App, AppContext, Context, Entity, Window};
+use gpui_component::input::InputState;
+use one_core::storage::RemoteDesktopProtocol;
+use rust_i18n::t;
+
+use super::RemoteDesktopFormWindow;
+
+pub(super) struct RemoteDesktopInputs {
+    pub(super) name: Entity<InputState>,
+    pub(super) host: Entity<InputState>,
+    pub(super) port: Entity<InputState>,
+    pub(super) username: Entity<InputState>,
+    pub(super) password: Entity<InputState>,
+    pub(super) domain: Entity<InputState>,
+}
+
+pub(super) fn create_inputs(
+    protocol: RemoteDesktopProtocol,
+    window: &mut Window,
+    cx: &mut Context<RemoteDesktopFormWindow>,
+) -> RemoteDesktopInputs {
+    RemoteDesktopInputs {
+        name: cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("RemoteDesktopForm.placeholder_name").to_string())
+        }),
+        host: cx.new(|cx| InputState::new(window, cx).placeholder("10.2.178.12")),
+        port: cx.new(|cx| input_with_value(protocol.default_port().to_string(), window, cx)),
+        username: cx.new(|cx| InputState::new(window, cx).placeholder("administrator")),
+        password: cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("RemoteDesktopForm.placeholder_password").to_string())
+                .masked(true)
+        }),
+        domain: cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("RemoteDesktopForm.placeholder_domain").to_string())
+        }),
+    }
+}
+
+fn input_with_value(
+    value: String,
+    window: &mut Window,
+    cx: &mut Context<InputState>,
+) -> InputState {
+    let mut state = InputState::new(window, cx);
+    state.set_value(&value, window, cx);
+    state
+}
+
+pub(super) fn parse_u16(value: &str, label: &str) -> Result<u16, String> {
+    value
+        .trim()
+        .parse::<u16>()
+        .map_err(|_| t!("RemoteDesktopForm.invalid_number", field = label).to_string())
+}
+
+pub(super) fn non_empty_text(input: &Entity<InputState>, cx: &App) -> Option<String> {
+    let value = input_text(input, cx).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+pub(super) fn input_text(input: &Entity<InputState>, cx: &App) -> String {
+    input.read(cx).text().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_u16;
+
+    #[test]
+    fn parses_port() {
+        assert_eq!(Ok(3389), parse_u16("3389", "Port"));
+        assert!(parse_u16("abc", "Port").is_err());
+    }
+}

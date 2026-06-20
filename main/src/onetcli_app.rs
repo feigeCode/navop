@@ -181,6 +181,7 @@ pub fn init(cx: &mut App) {
     terminal_view::init(cx);
     redis_view::init(cx);
     mongodb_view::init(cx);
+    remote_desktop_view::init(cx);
     crate::home_tab::init(cx);
     cx.bind_keys(init_keybindings(cx));
     init_action_handlers(cx);
@@ -203,6 +204,7 @@ pub fn refresh_keybindings(cx: &mut App) {
     db_view::sql_editor_view::refresh_keybindings(cx);
     terminal_view::refresh_keybindings(cx);
     redis_view::refresh_keybindings(cx);
+    remote_desktop_view::refresh_keybindings(cx);
     one_ui::refresh_keybindings(cx);
     remote_file_editor::refresh_keybindings(cx);
 }

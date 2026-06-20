@@ -1,6 +1,7 @@
 use crate::home_tab::HomePage;
 use gpui::{Context, Window};
 use one_core::storage::{ConnectionType, StoredConnection, Workspace};
+use remote_desktop::RemoteDesktopProtocol;
 
 pub(crate) trait ConnectionOpenStrategy {
     fn open(self: Box<Self>, home: &mut HomePage, window: &mut Window, cx: &mut Context<HomePage>);
@@ -25,6 +26,14 @@ pub(crate) fn build_connection_open_strategy(
             workspace,
         }),
         ConnectionType::Serial => Box::new(SerialOpenStrategy { connection }),
+        ConnectionType::Rdp => Box::new(RemoteDesktopOpenStrategy {
+            connection,
+            protocol: RemoteDesktopProtocol::Rdp,
+        }),
+        ConnectionType::Vnc => Box::new(RemoteDesktopOpenStrategy {
+            connection,
+            protocol: RemoteDesktopProtocol::Vnc,
+        }),
         _ => Box::new(NoopOpenStrategy),
     }
 }
@@ -107,6 +116,21 @@ struct SerialOpenStrategy {
 impl ConnectionOpenStrategy for SerialOpenStrategy {
     fn open(self: Box<Self>, home: &mut HomePage, window: &mut Window, cx: &mut Context<HomePage>) {
         home.open_serial_terminal(self.connection, window, cx);
+    }
+}
+
+struct RemoteDesktopOpenStrategy {
+    connection: StoredConnection,
+    protocol: RemoteDesktopProtocol,
+}
+
+impl ConnectionOpenStrategy for RemoteDesktopOpenStrategy {
+    fn open(self: Box<Self>, home: &mut HomePage, window: &mut Window, cx: &mut Context<HomePage>) {
+        let RemoteDesktopOpenStrategy {
+            connection,
+            protocol,
+        } = *self;
+        home.open_remote_desktop(connection, protocol, window, cx);
     }
 }
 
