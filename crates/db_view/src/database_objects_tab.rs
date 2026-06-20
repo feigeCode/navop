@@ -3,10 +3,10 @@ use crate::db_tree_view::get_icon_for_node_type;
 use db::{DbNode, DbNodeType, GlobalDbState, ObjectView};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, MouseDownEvent,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    WeakEntity, Window, div, px, uniform_list,
+    AnyElement, App, AppContext, AsyncApp, Context, DragMoveEvent, Entity, EntityId, EventEmitter,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
+    MouseDownEvent, ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement,
+    Styled, Subscription, WeakEntity, Window, div, px, uniform_list,
 };
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -28,6 +28,8 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
+
+const HEADER_RESIZE_HANDLE_WIDTH: Pixels = px(6.0);
 
 fn format_timestamp(ts: i64) -> String {
     use chrono::{DateTime, Local};
@@ -129,6 +131,18 @@ pub struct DatabaseObjects {
     current_node: Option<DbNode>,
     selected_indices: HashSet<usize>,
     _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone)]
+struct ResizeObjectColumn {
+    entity_id: EntityId,
+    col_ix: usize,
+}
+
+impl Render for ResizeObjectColumn {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size(px(0.0))
+    }
 }
 
 impl DatabaseObjects {
@@ -343,6 +357,18 @@ impl DatabaseObjects {
                 .map(|(idx, _)| idx)
                 .collect();
         }
+    }
+
+    fn resize_column(columns: &mut [Column], col_ix: usize, width: Pixels) {
+        let Some(column) = columns.get_mut(col_ix) else {
+            return;
+        };
+
+        if !column.resizable {
+            return;
+        }
+
+        column.width = width.max(column.min_width).min(column.max_width);
     }
 
     fn load_connection_list_view(
@@ -673,9 +699,10 @@ impl DatabaseObjects {
         &self,
         columns: &[Column],
         show_row_number: bool,
-        cx: &App,
-    ) -> impl IntoElement {
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut header = h_flex()
+            .w_full()
             .h(px(32.))
             .px_2()
             .items_center()
@@ -702,13 +729,11 @@ impl DatabaseObjects {
             );
         }
 
-        let is_last_column = columns.len();
         for (col_ix, column) in columns.iter().enumerate() {
-            let is_last = col_ix == is_last_column - 1;
             header = header.child(
                 div()
-                    .when(!is_last, |el| el.w(column.width))
-                    .when(is_last, |el| el.flex_1())
+                    .relative()
+                    .w(column.width)
                     .h_full()
                     .px_2()
                     .text_sm()
@@ -719,15 +744,76 @@ impl DatabaseObjects {
                             .flex()
                             .items_center()
                             .child(column.name.clone()),
-                    ),
+                    )
+                    .child(self.render_column_resize_handle(col_ix, column, cx)),
             );
         }
 
-        header
+        header.into_any_element()
+    }
+
+    fn render_column_resize_handle(
+        &self,
+        col_ix: usize,
+        column: &Column,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if !column.resizable {
+            return div().into_any_element();
+        }
+
+        let group_id = SharedString::from(format!("database-object-column-resize:{col_ix}"));
+        div()
+            .id(("database-object-column-resize", col_ix))
+            .group(group_id.clone())
+            .absolute()
+            .right_0()
+            .top_0()
+            .bottom_0()
+            .w(HEADER_RESIZE_HANDLE_WIDTH)
+            .cursor_col_resize()
+            .occlude()
+            .flex()
+            .justify_end()
+            .items_center()
+            .child(
+                div()
+                    .h_full()
+                    .w(px(1.0))
+                    .bg(cx.theme().table_row_border)
+                    .group_hover(&group_id, |el| el.bg(cx.theme().border)),
+            )
+            .on_drag_move(cx.listener(
+                move |this, e: &DragMoveEvent<ResizeObjectColumn>, _window, cx| {
+                    let drag = e.drag(cx);
+                    if drag.entity_id != cx.entity_id() || drag.col_ix != col_ix {
+                        return;
+                    }
+
+                    let Some(width) = this.columns.get(col_ix).map(|column| column.width) else {
+                        return;
+                    };
+                    let delta = e.event.position.x - e.bounds.center().x;
+                    Self::resize_column(&mut this.columns, col_ix, width + delta);
+                    cx.notify();
+                },
+            ))
+            .on_drag(
+                ResizeObjectColumn {
+                    entity_id: cx.entity_id(),
+                    col_ix,
+                },
+                |drag, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                },
+            )
+            .into_any_element()
     }
 
     fn render_row(&self, args: ObjectRowRenderArgs<'_>, cx: &App) -> impl IntoElement {
         let mut row = h_flex()
+            .w_full()
             .h(one_ui::table_row_height(cx))
             .px_2()
             .items_center()
@@ -744,7 +830,6 @@ impl DatabaseObjects {
             );
         }
 
-        let is_last_column = args.columns.len();
         for (col_ix, column) in args.columns.iter().enumerate() {
             let cell_value = args.row_values.get(col_ix).cloned().unwrap_or_default();
             let tooltip_text = cell_value.clone();
@@ -765,14 +850,11 @@ impl DatabaseObjects {
                 div().child(cell_value).into_any_element()
             };
 
-            // 最后一列使用 flex_1 自动填充剩余空间，其他列使用固定宽度
-            let is_last = col_ix == is_last_column - 1;
             let cell_id = SharedString::from(format!("cell-{}-{}", args.row_ix, col_ix));
             row = row.child(
                 div()
                     .id(cell_id)
-                    .when(!is_last, |el| el.w(column.width))
-                    .when(is_last, |el| el.flex_1())
+                    .w(column.width)
                     .px_2()
                     .overflow_hidden()
                     .text_ellipsis()
@@ -1213,6 +1295,34 @@ mod tests {
             DatabaseObjectsEvent::AddDatabaseToTree { node }
                 if node.node_type == DbNodeType::Schema && node.name == "public"
         ));
+    }
+
+    #[test]
+    fn resize_column_updates_width_with_minimum_bound() {
+        let mut columns = vec![
+            Column::new("name", "Name").width(px(200.0)),
+            Column::new("type", "Type").width(px(120.0)),
+        ];
+
+        DatabaseObjects::resize_column(&mut columns, 0, px(260.0));
+        assert_eq!(px(260.0), columns[0].width);
+
+        DatabaseObjects::resize_column(&mut columns, 0, px(8.0));
+        assert_eq!(px(20.0), columns[0].width);
+    }
+
+    #[test]
+    fn resize_column_ignores_invalid_and_non_resizable_columns() {
+        let mut columns = vec![
+            Column::new("name", "Name")
+                .width(px(200.0))
+                .resizable(false),
+        ];
+
+        DatabaseObjects::resize_column(&mut columns, 0, px(260.0));
+        DatabaseObjects::resize_column(&mut columns, 99, px(320.0));
+
+        assert_eq!(px(200.0), columns[0].width);
     }
 }
 
