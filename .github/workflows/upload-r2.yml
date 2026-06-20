@@ -241,22 +241,20 @@ jobs:
           );
           NODE
 
-      - name: Configure Cloudflare R2 credentials
-        if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
-          aws-region: auto
-
       - name: Upload release assets and update manifest to R2
         if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REGION: auto
+          AWS_EC2_METADATA_DISABLED: true
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
-          R2_ENDPOINT="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          set -euo pipefail
+          endpoint="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
           upload_object() {
             local source="$1"
@@ -264,7 +262,7 @@ jobs:
             local content_type="$3"
             local cache_control="$4"
             aws s3 cp "$source" "s3://${CLOUDFLARE_R2_BUCKET}/${key}" \
-              --endpoint-url "$R2_ENDPOINT" \
+              --endpoint-url "$endpoint" \
               --content-type "$content_type" \
               --cache-control "$cache_control"
           }
