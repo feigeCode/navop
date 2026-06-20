@@ -190,20 +190,31 @@ impl ExtensionManagerView {
         summary: ExtensionSummary,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
-        let summary_for_click = summary.clone();
-        let action = Button::new(format!("extension-manager-uninstall-{}", summary.name))
+        let action_busy = self.busy.is_some();
+        let summary_for_reload = summary.clone();
+        let reload = Button::new(format!("extension-manager-reload-{}", summary.name))
+            .small()
+            .icon(IconName::Refresh)
+            .label(t!("Extension.reload").to_string())
+            .disabled(action_busy)
+            .on_click(cx.listener(move |view, _, window, cx| {
+                view.reload_extension(summary_for_reload.clone(), window, cx);
+            }));
+        let summary_for_uninstall = summary.clone();
+        let uninstall = Button::new(format!("extension-manager-uninstall-{}", summary.name))
             .small()
             .danger()
             .label(t!("Extension.uninstall").to_string())
+            .disabled(action_busy)
             .on_click(cx.listener(move |view, _, window, cx| {
-                view.uninstall_extension(summary_for_click.clone(), window, cx);
+                view.uninstall_extension(summary_for_uninstall.clone(), window, cx);
             }));
         extension_card(
             kind_label(summary.kind),
             summary.name,
             summary.version,
             summary.description,
-            action,
+            vec![reload, uninstall],
             cx,
         )
     }
@@ -235,7 +246,7 @@ impl ExtensionManagerView {
             entry.name.clone(),
             entry.version.clone(),
             marketplace_description(&entry),
-            action,
+            vec![action],
             cx,
         )
     }
@@ -246,7 +257,7 @@ fn extension_card(
     name: String,
     version: String,
     description: String,
-    action: Button,
+    actions: Vec<Button>,
     cx: &Context<ExtensionManagerView>,
 ) -> gpui::AnyElement {
     v_flex()
@@ -285,7 +296,7 @@ fn extension_card(
                 .text_color(cx.theme().muted_foreground)
                 .child(description),
         )
-        .child(h_flex().justify_end().child(action))
+        .child(h_flex().justify_end().gap_2().children(actions))
         .into_any_element()
 }
 

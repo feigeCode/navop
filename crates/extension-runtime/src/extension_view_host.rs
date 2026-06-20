@@ -116,14 +116,82 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
         registry.uninstall(to_host_kind(summary.kind), &summary.name)
     }
 
+    fn reload(
+        &self,
+        summary: &extension_view::ExtensionSummary,
+        cx: &mut App,
+    ) -> anyhow::Result<Vec<extension_view::ExtensionSummary>> {
+        ensure_extension_path_still_installed(summary)?;
+        if summary.kind == extension_view::ExtensionKind::Language {
+            gpui_component::highlighter::LanguageRegistry::singleton().unregister(&summary.name);
+        }
+        reload_extension_runtime(cx);
+        let installed = self.list_installed()?;
+        ensure_reloaded_path_present(summary, &installed)?;
+        Ok(installed)
+    }
+
     fn refresh_after_extension_change(&self, cx: &mut App) {
-        crate::refresh_global_runtime_catalog(cx);
-        crate::extension::refresh_runtime_contributions(cx);
+        reload_extension_runtime(cx);
     }
 }
 
 fn registry() -> anyhow::Result<&'static std::sync::RwLock<host_extension::ExtensionRegistry>> {
     host_extension::ExtensionRegistry::global().ok_or_else(|| anyhow::anyhow!("扩展系统未初始化"))
+}
+
+fn ensure_extension_path_still_installed(
+    summary: &extension_view::ExtensionSummary,
+) -> anyhow::Result<()> {
+    let registry = registry()?;
+    let registry = registry
+        .read()
+        .map_err(|err| anyhow::anyhow!("registry lock poisoned: {err}"))?;
+    let root = registry.root_for(to_host_kind(summary.kind));
+    if !summary.path.starts_with(&root) || !summary.path.exists() {
+        anyhow::bail!(
+            "extension {} not found at {}",
+            summary.name,
+            summary.path.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_reloaded_path_present(
+    summary: &extension_view::ExtensionSummary,
+    installed: &[extension_view::ExtensionSummary],
+) -> anyhow::Result<()> {
+    if installed.iter().any(|item| item.path == summary.path) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "extension {} did not load from {} after reload",
+        summary.name,
+        summary.path.display()
+    );
+}
+
+fn reload_extension_runtime(cx: &mut App) {
+    reload_language_extensions();
+    crate::refresh_global_runtime_catalog(cx);
+    crate::extension::refresh_runtime_contributions(cx);
+}
+
+fn reload_language_extensions() {
+    let Some(root) = crate::extension::extensions_root() else {
+        return;
+    };
+    match crate::extension::load_language_extensions_from_root(&root) {
+        Ok(report) => {
+            if !report.failed.is_empty() {
+                tracing::warn!("语言扩展重新加载失败: {:?}", report.failed);
+            }
+        }
+        Err(err) => {
+            tracing::warn!("重新加载语言扩展失败: {err:?}");
+        }
+    }
 }
 
 fn review_downloaded_extension(

@@ -31,5 +31,11 @@ pub trait ExtensionViewHost: Send + Sync {
 
     fn uninstall(&self, summary: &ExtensionSummary) -> anyhow::Result<String>;
 
+    fn reload(
+        &self,
+        summary: &ExtensionSummary,
+        cx: &mut App,
+    ) -> anyhow::Result<Vec<ExtensionSummary>>;
+
     fn refresh_after_extension_change(&self, cx: &mut App);
 }

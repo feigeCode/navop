@@ -2,7 +2,7 @@ use gpui::SharedString;
 use rust_i18n::t;
 
 use crate::status_message::format_notification_error;
-use crate::{ExtensionManagerMode, MarketplaceEntry};
+use crate::{ExtensionManagerMode, ExtensionSummary, MarketplaceEntry};
 
 const MANIFEST_JSON_SUFFIX: &str = ".json";
 const INSTALL_PROGRESS_VALUE: f32 = 28.0;
@@ -65,6 +65,18 @@ pub(crate) fn marketplace_filter_query(query: &str) -> &str {
 
 pub(crate) fn install_progress_value(is_installing: bool) -> Option<f32> {
     is_installing.then_some(INSTALL_PROGRESS_VALUE)
+}
+
+pub(crate) fn apply_installed_reload_success(
+    installed: &mut Vec<ExtensionSummary>,
+    busy: &mut Option<String>,
+    status: &mut SharedString,
+    name: &str,
+    reloaded: Vec<ExtensionSummary>,
+) {
+    *installed = reloaded;
+    *busy = None;
+    *status = t!("Extension.reloaded", name = name).to_string().into();
 }
 
 fn is_http_url(value: &str) -> bool {
@@ -182,6 +194,37 @@ mod tests {
     fn install_progress_value_only_shows_while_installing() {
         assert_eq!(Some(28.0), install_progress_value(true));
         assert_eq!(None, install_progress_value(false));
+    }
+
+    #[test]
+    fn installed_reload_success_replaces_entries_and_clears_busy_state() {
+        let mut installed = vec![marketplace_summary("old", "1.0.0")];
+        let mut busy = Some("reload:old".to_string());
+        let mut status = SharedString::from("正在重新加载 old...");
+
+        apply_installed_reload_success(
+            &mut installed,
+            &mut busy,
+            &mut status,
+            "old",
+            vec![marketplace_summary("old", "1.0.1")],
+        );
+
+        assert_eq!(None, busy);
+        assert_eq!(["1.0.1"], [installed[0].version.as_str()]);
+        assert_eq!(
+            t!("Extension.reloaded", name = "old").to_string(),
+            status.as_ref()
+        );
+    }
+
+    fn marketplace_summary(name: &str, version: &str) -> crate::ExtensionSummary {
+        crate::ExtensionSummary::new(
+            ExtensionKind::Composite,
+            name,
+            version,
+            std::path::PathBuf::from(format!("/tmp/{name}")),
+        )
     }
 
     fn marketplace_entry(id: &str) -> MarketplaceEntry {

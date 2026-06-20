@@ -55,6 +55,10 @@ Extension:
     en: Update
     zh-CN: 更新
     zh-HK: 更新
+  reload:
+    en: Reload
+    zh-CN: 重新加载
+    zh-HK: 重新載入
   uninstall:
     en: Uninstall
     zh-CN: 卸载
@@ -127,6 +131,18 @@ Extension:
     en: "Uninstalled %{name}"
     zh-CN: "已卸载 %{name}"
     zh-HK: "已解除安裝 %{name}"
+  reloading:
+    en: "Reloading %{name}..."
+    zh-CN: "正在重新加载 %{name}..."
+    zh-HK: "正在重新載入 %{name}..."
+  reloaded:
+    en: "Reloaded %{name}"
+    zh-CN: "已重新加载 %{name}"
+    zh-HK: "已重新載入 %{name}"
+  reload_failed:
+    en: Extension reload failed
+    zh-CN: 扩展重新加载失败
+    zh-HK: 擴展重新載入失敗
   uninstall_failed:
     en: Extension uninstall failed
     zh-CN: 扩展卸载失败

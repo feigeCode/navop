@@ -5,8 +5,8 @@ use gpui_component::{WindowExt, notification::Notification};
 use rust_i18n::t;
 
 use crate::state::{
-    apply_marketplace_load_result, marketplace_manifest_url_from_query,
-    should_auto_load_marketplace,
+    apply_installed_reload_success, apply_marketplace_load_result,
+    marketplace_manifest_url_from_query, should_auto_load_marketplace,
 };
 use crate::status_message::{format_notification_error, format_status_error};
 use crate::{ExtensionManagerView, ExtensionSummary, MarketplaceEntry, MarketplaceInstallOutcome};
@@ -118,6 +118,53 @@ impl ExtensionManagerView {
                     Notification::error(t!("Extension.uninstall_failed").to_string()),
                     cx,
                 );
+            }
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn reload_extension(
+        &mut self,
+        summary: ExtensionSummary,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy.is_some() {
+            return;
+        }
+        let name = summary.name.clone();
+        self.busy = Some(format!("reload:{name}"));
+        self.status = t!("Extension.reloading", name = name.clone())
+            .to_string()
+            .into();
+        match self.host.reload(&summary, cx) {
+            Ok(installed) => {
+                let reloaded_name = installed
+                    .iter()
+                    .find(|installed| installed.path == summary.path)
+                    .map(|installed| installed.name.clone())
+                    .unwrap_or(name);
+                apply_installed_reload_success(
+                    &mut self.installed,
+                    &mut self.busy,
+                    &mut self.status,
+                    &reloaded_name,
+                    installed,
+                );
+                window.push_notification(
+                    Notification::success(
+                        t!("Extension.reloaded", name = reloaded_name).to_string(),
+                    ),
+                    cx,
+                );
+            }
+            Err(err) => {
+                self.busy = None;
+                self.status =
+                    format_status_error(&t!("Extension.reload_failed").to_string(), &err).into();
+                let message =
+                    format_notification_error(&t!("Extension.reload_failed").to_string(), &err);
+                window.push_notification(Notification::error(message).autohide(false), cx);
             }
         }
         cx.notify();
