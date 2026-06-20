@@ -315,7 +315,11 @@ fn parses_dialect_sql_generation_contract() {
                 "limit_style":"offset_fetch",
                 "bool_true":"1",
                 "bool_false":"0",
-                "explain_template":"EXPLAIN QUERY PLAN {sql}"
+                "explain_template":"EXPLAIN QUERY PLAN {sql}",
+                "table_reference_schema_mode":"prefer_schema",
+                "row_id_column":"ROWID",
+                "row_id_alias":"__rowid__",
+                "default_order_by":"ROWID"
             }
         }"#,
     )
@@ -329,6 +333,13 @@ fn parses_dialect_sql_generation_contract() {
         Some("EXPLAIN QUERY PLAN {sql}"),
         manifest.dialect.explain_template.as_deref()
     );
+    assert_eq!(
+        TableReferenceSchemaMode::PreferSchema,
+        manifest.dialect.table_reference_schema_mode
+    );
+    assert_eq!(Some("ROWID"), manifest.dialect.row_id_column.as_deref());
+    assert_eq!(Some("__rowid__"), manifest.dialect.row_id_alias.as_deref());
+    assert_eq!(Some("ROWID"), manifest.dialect.default_order_by.as_deref());
 }
 
 #[test]

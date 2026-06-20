@@ -1,6 +1,6 @@
 use crate::clickhouse::ClickHousePlugin;
 use crate::connection::{DbConnection, DbError};
-use crate::executor::SqlSource;
+use crate::executor::{QueryResult, SqlResult, SqlSource};
 use crate::import_export::{
     ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportProgressSender,
     ImportResult,
@@ -8,7 +8,9 @@ use crate::import_export::{
 use crate::ipc::client::JsonRpcClient;
 use crate::ipc::connection::{ExternalDbConnection, WIRE_PREFIX};
 use crate::ipc::protocol::driver_config_value_with_target;
-use crate::ipc::registry::{IpcDriverManifest, IpcDriverRegistry, LimitStyle};
+use crate::ipc::registry::{
+    IpcDriverManifest, IpcDriverRegistry, LimitStyle, TableReferenceSchemaMode,
+};
 use crate::mssql::MsSqlPlugin;
 use crate::mysql::MySqlPlugin;
 use crate::oracle::OraclePlugin;
@@ -25,6 +27,7 @@ use extension_protocol::{
     conn::ConnTestResult, ddl as wire_ddl, method as wire_method, schema as wire_schema,
 };
 use one_core::storage::{DatabaseType, DbConnectionConfig};
+use rust_i18n::t;
 use sqlparser::dialect::{Dialect, GenericDialect};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -425,7 +428,11 @@ impl DatabasePlugin for ExternalDatabasePlugin {
 
     fn format_table_reference(&self, database: &str, schema: Option<&str>, table: &str) -> String {
         let capabilities = self.driver.effective_capabilities();
-        if capabilities.supports_schema && !capabilities.uses_schema_as_database {
+        if matches!(
+            self.driver.dialect.table_reference_schema_mode,
+            TableReferenceSchemaMode::PreferSchema
+        ) || (capabilities.supports_schema && !capabilities.uses_schema_as_database)
+        {
             if let Some(schema) = schema.filter(|schema| !schema.trim().is_empty()) {
                 return format!(
                     "{}.{}",
@@ -499,6 +506,102 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             )
             .await?;
         Ok(infos.into_iter().map(|database| database.name).collect())
+    }
+
+    async fn query_table_data(
+        &self,
+        connection: &dyn DbConnection,
+        request: TableDataRequest,
+    ) -> Result<TableDataResponse> {
+        let start_time = std::time::Instant::now();
+
+        let where_clause = match request.where_clause {
+            Some(ref clause) if !clause.trim().is_empty() => format!(" WHERE {}", clause.trim()),
+            _ => String::new(),
+        };
+        let mut order_clause = match request.order_by_clause {
+            Some(ref clause) if !clause.trim().is_empty() => format!(" ORDER BY {}", clause.trim()),
+            _ => String::new(),
+        };
+
+        if order_clause.is_empty() {
+            if let Some(default_order_by) = self
+                .driver
+                .dialect
+                .default_order_by
+                .as_deref()
+                .filter(|order_by| !order_by.trim().is_empty())
+            {
+                order_clause = format!(" ORDER BY {}", default_order_by.trim());
+            }
+        }
+
+        let offset = (request.page.saturating_sub(1)) * request.page_size;
+        let table_ref = self.format_table_reference(
+            &request.database,
+            request.schema.as_deref(),
+            &request.table,
+        );
+
+        let count_sql = format!("SELECT COUNT(*) FROM {}{}", table_ref, where_clause);
+        let total_count = match connection.query(&count_sql).await? {
+            SqlResult::Query(result) => result
+                .rows
+                .first()
+                .and_then(|row| row.first())
+                .and_then(|value| value.as_ref())
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0),
+            _ => 0,
+        };
+
+        let pagination = self.format_pagination(request.page_size, offset, &order_clause);
+        let data_sql = if let Some(row_id_column) = self
+            .driver
+            .dialect
+            .row_id_column
+            .as_deref()
+            .filter(|column| !column.trim().is_empty())
+        {
+            let row_id_alias = self
+                .driver
+                .dialect
+                .row_id_alias
+                .as_deref()
+                .filter(|alias| !alias.trim().is_empty())
+                .unwrap_or("__rowid__");
+            format!(
+                "SELECT {} AS {}, t.* FROM {} t{}{}{}",
+                row_id_column.trim(),
+                self.quote_identifier(row_id_alias.trim()),
+                table_ref,
+                where_clause,
+                order_clause,
+                pagination
+            )
+        } else {
+            format!(
+                "SELECT * FROM {}{}{}{}",
+                table_ref, where_clause, order_clause, pagination
+            )
+        };
+
+        let sql_result = connection.query(&data_sql).await?;
+        let duration = start_time.elapsed().as_millis();
+
+        let query_result = match sql_result {
+            SqlResult::Query(query_result) => Ok::<QueryResult, anyhow::Error>(query_result),
+            SqlResult::Exec(_) => anyhow::bail!(t!("Error.query_type_error")),
+            SqlResult::Error(sql_error_info) => anyhow::bail!(sql_error_info.message),
+        }?;
+
+        Ok(TableDataResponse {
+            query_result,
+            total_count,
+            page: request.page,
+            page_size: request.page_size,
+            duration,
+        })
     }
 
     async fn list_databases_view(&self, connection: &dyn DbConnection) -> Result<ObjectView> {
@@ -1840,6 +1943,7 @@ fn normalize_object_view_row(mut row: Vec<String>, column_count: usize) -> Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::QueryResult;
     use crate::connection::StreamingProgress;
     use crate::executor::{ExecOptions, SqlResult, SqlSource};
     use crate::ipc::connection::WIRE_PREFIX;
@@ -1850,6 +1954,24 @@ mod tests {
         config: DbConnectionConfig,
         supports_alter_table_builder: bool,
         object_view: Option<serde_json::Value>,
+    }
+
+    struct RecordingQueryConnection {
+        config: DbConnectionConfig,
+        queries: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingQueryConnection {
+        fn new() -> Self {
+            Self {
+                config: DriverRequestOnlyConnection::new().config,
+                queries: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn queries(&self) -> Vec<String> {
+            self.queries.lock().expect("queries mutex poisoned").clone()
+        }
     }
 
     impl DriverRequestOnlyConnection {
@@ -1989,6 +2111,75 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl DbConnection for RecordingQueryConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, database: Option<String>) {
+            self.config.database = database;
+        }
+
+        async fn connect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> Result<Vec<SqlResult>, DbError> {
+            Err(DbError::query("execute should not be used by table data"))
+        }
+
+        async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+            self.queries
+                .lock()
+                .expect("queries mutex poisoned")
+                .push(query.to_string());
+            if query.starts_with("SELECT COUNT(*)") {
+                return Ok(SqlResult::Query(QueryResult {
+                    sql: query.to_string(),
+                    columns: vec!["COUNT".into()],
+                    column_meta: vec![],
+                    rows: vec![vec![Some("1".into())]],
+                    elapsed_ms: 0,
+                }));
+            }
+            Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: vec!["__rowid__".into(), "ID".into()],
+                column_meta: vec![],
+                rows: vec![vec![Some("AAABBB".into()), Some("1".into())]],
+                elapsed_ms: 0,
+            }))
+        }
+
+        async fn current_database(&self) -> Result<Option<String>, DbError> {
+            Ok(None)
+        }
+
+        async fn switch_database(&self, _database: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: mpsc::Sender<StreamingProgress>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
+    }
+
     fn driver_manifest(id: &str, supports_schema: bool, form_title: &str) -> IpcDriverManifest {
         let mut driver: IpcDriverManifest = serde_json::from_str(&format!(
             r#"{{
@@ -2104,6 +2295,48 @@ mod tests {
         assert_eq!(
             "\"tenant_db\".\"events\"",
             plugin.format_table_reference("tenant_db", Some("ignored_schema"), "events")
+        );
+    }
+
+    #[test]
+    fn external_table_reference_can_prefer_schema_from_manifest() {
+        let mut driver = driver_manifest("ownerdb", true, "ownerdb.connection");
+        driver.dialect.table_reference_schema_mode = TableReferenceSchemaMode::PreferSchema;
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        assert_eq!(
+            "\"APP\".\"EVENTS\"",
+            plugin.format_table_reference("", Some("APP"), "EVENTS")
+        );
+    }
+
+    #[tokio::test]
+    async fn external_table_data_uses_manifest_row_id_query() {
+        let mut driver = driver_manifest("ownerdb", true, "ownerdb.connection");
+        driver.dialect.limit_style = LimitStyle::OffsetFetch;
+        driver.dialect.table_reference_schema_mode = TableReferenceSchemaMode::PreferSchema;
+        driver.dialect.row_id_column = Some("ROWID".to_string());
+        driver.dialect.row_id_alias = Some("__rowid__".to_string());
+        driver.dialect.default_order_by = Some("ROWID".to_string());
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+        let connection = RecordingQueryConnection::new();
+
+        let response = plugin
+            .query_table_data(
+                &connection,
+                TableDataRequest::new("", "EVENTS")
+                    .with_schema("APP")
+                    .with_page(1, 25),
+            )
+            .await
+            .expect("table data query should succeed");
+
+        assert_eq!(1, response.total_count);
+        let queries = connection.queries();
+        assert_eq!("SELECT COUNT(*) FROM \"APP\".\"EVENTS\"", queries[0]);
+        assert_eq!(
+            "SELECT ROWID AS \"__rowid__\", t.* FROM \"APP\".\"EVENTS\" t ORDER BY ROWID OFFSET 0 ROWS FETCH NEXT 25 ROWS ONLY",
+            queries[1]
         );
     }
 

@@ -101,6 +101,14 @@ pub struct IpcDriverDialect {
     #[serde(default)]
     pub explain_template: Option<String>,
     #[serde(default)]
+    pub table_reference_schema_mode: TableReferenceSchemaMode,
+    #[serde(default)]
+    pub row_id_column: Option<String>,
+    #[serde(default)]
+    pub row_id_alias: Option<String>,
+    #[serde(default)]
+    pub default_order_by: Option<String>,
+    #[serde(default)]
     pub compatible_database_type: Option<DatabaseType>,
     #[serde(default)]
     pub supports_schema: bool,
@@ -133,6 +141,10 @@ impl Default for IpcDriverDialect {
             bool_true: default_bool_true(),
             bool_false: default_bool_false(),
             explain_template: None,
+            table_reference_schema_mode: TableReferenceSchemaMode::default(),
+            row_id_column: None,
+            row_id_alias: None,
+            default_order_by: None,
             compatible_database_type: None,
             supports_schema: false,
             supports_sequences: false,
@@ -172,6 +184,14 @@ pub enum LimitStyle {
     #[default]
     LimitOffset,
     OffsetFetch,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TableReferenceSchemaMode {
+    #[default]
+    Auto,
+    PreferSchema,
 }
 
 fn default_identifier_quote_left() -> String {

@@ -202,6 +202,14 @@ It currently includes:
 - `limit_style`: `limit_offset` or `offset_fetch`.
 - `bool_true` and `bool_false` literals.
 - `explain_template`, used as the fallback SQL carried with `sql/explain`.
+- `table_reference_schema_mode`: `auto` or `prefer_schema`. Use
+  `prefer_schema` when host-generated object SQL should qualify tables as
+  `schema.table` even if the driver also treats schemas as database-like
+  navigation nodes.
+- `row_id_column` and `row_id_alias`, used by host-generated table-data SQL to
+  expose a stable hidden row identifier for editable result sets.
+- `default_order_by`, used when paginated table-data SQL needs a deterministic
+  order and the request did not specify one.
 
 Host-side SQL builders must use the driver dialect uniformly. The external
 plugin's local fallback covers column changes and index changes, including
