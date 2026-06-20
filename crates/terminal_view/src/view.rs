@@ -21,7 +21,7 @@ use std::cell::{Cell as StdCell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use crate::addon::{
@@ -354,6 +354,21 @@ fn terminal_application_mode_active(mode: TermMode) -> bool {
     mode.intersects(TermMode::MOUSE_MODE)
         || mode.contains(TermMode::FOCUS_IN_OUT)
         || mode.contains(TermMode::DISAMBIGUATE_ESC_CODES)
+}
+
+fn local_tui_application_active(mode: TermMode) -> bool {
+    mode.contains(TermMode::ALT_SCREEN) || terminal_application_mode_active(mode)
+}
+
+fn should_confirm_local_terminal_close(
+    connection_kind: TerminalConnectionKind,
+    command_running: bool,
+    mode: TermMode,
+    child_exited: Option<i32>,
+) -> bool {
+    connection_kind == TerminalConnectionKind::Local
+        && child_exited.is_none()
+        && (command_running || local_tui_application_active(mode))
 }
 
 const HISTORY_PROMPT_DROPDOWN_MIN_WIDTH: f32 = 300.0;
@@ -709,6 +724,8 @@ pub struct TerminalView {
     history_prompt: HistoryPromptState,
     /// shell prompt 当前是否处于可输入阶段，由 OSC 133 生命周期维护。
     shell_prompt_input_active: bool,
+    /// 本地 shell 命令是否处于执行阶段，由 OSC 133;C 到下一次 prompt/input 维护。
+    local_command_running: bool,
     /// InlineSuggest 防抖任务（30ms 延迟刷新建议）
     suggestion_debounce: Option<gpui::Task<()>>,
     /// `cd` 目录补全的独立 SFTP 连接
@@ -844,6 +861,71 @@ impl ScrollbarHandle for TerminalScrollbarHandle {
 }
 
 impl TerminalView {
+    fn send_close_confirmation(
+        sender: &Arc<StdMutex<Option<tokio::sync::oneshot::Sender<bool>>>>,
+        confirmed: bool,
+    ) {
+        if let Ok(mut guard) = sender.lock() {
+            if let Some(sender) = guard.take() {
+                let _ = sender.send(confirmed);
+            }
+        }
+    }
+
+    fn close_terminal_now(&mut self, cx: &mut Context<Self>) {
+        self.release_active_connection(cx);
+        self.terminal.read(cx).shutdown();
+    }
+
+    fn confirm_local_terminal_close(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<bool> {
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        let tx = Arc::new(StdMutex::new(Some(tx)));
+        let tx_ok = tx.clone();
+        let tx_cancel = tx;
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let tx_ok = tx_ok.clone();
+            let tx_cancel = tx_cancel.clone();
+            dialog
+                .title(t!("LocalTerminalClose.title").to_string())
+                .w(px(420.))
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(t!("LocalTerminalClose.message").to_string())
+                        .child(t!("LocalTerminalClose.warning").to_string()),
+                )
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t!("Common.close").to_string())
+                        .cancel_text(t!("Common.cancel").to_string()),
+                )
+                .on_ok(move |_, _, _| {
+                    TerminalView::send_close_confirmation(&tx_ok, true);
+                    true
+                })
+                .on_cancel(move |_, _, _| {
+                    TerminalView::send_close_confirmation(&tx_cancel, false);
+                    true
+                })
+                .overlay_closable(false)
+                .close_button(false)
+        });
+
+        cx.spawn(async move |this, cx| {
+            let confirmed = rx.await.unwrap_or(false);
+            if confirmed {
+                let _ = this.update(cx, |this, cx| this.close_terminal_now(cx));
+            }
+            confirmed
+        })
+    }
+
     fn release_active_connection(&self, cx: &mut Context<Self>) {
         let Some(connection_id) = self.terminal.read(cx).connection_id() else {
             return;
@@ -1067,6 +1149,7 @@ impl TerminalView {
             ime_state: None,
             history_prompt: HistoryPromptState::default(),
             shell_prompt_input_active: false,
+            local_command_running: false,
             suggestion_debounce: None,
             cd_completion_client: None,
             cd_completion_cache: HashMap::new(),
@@ -1814,11 +1897,22 @@ impl TerminalView {
             "terminal model event observed"
         );
         match event {
-            TerminalModelEvent::InputStart => self.shell_prompt_input_active = true,
-            TerminalModelEvent::PromptStart | TerminalModelEvent::CommandStart => {
-                self.shell_prompt_input_active = false;
+            TerminalModelEvent::InputStart => {
+                self.shell_prompt_input_active = true;
+                self.local_command_running = false;
             }
-            TerminalModelEvent::ChildExit(_) => self.shell_prompt_input_active = false,
+            TerminalModelEvent::PromptStart => {
+                self.shell_prompt_input_active = false;
+                self.local_command_running = false;
+            }
+            TerminalModelEvent::CommandStart => {
+                self.shell_prompt_input_active = false;
+                self.local_command_running = true;
+            }
+            TerminalModelEvent::ChildExit(_) => {
+                self.shell_prompt_input_active = false;
+                self.local_command_running = false;
+            }
             _ => {}
         }
 
@@ -3854,13 +3948,24 @@ impl TabContent for TerminalView {
     fn try_close(
         &mut self,
         _tab_id: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
-        // tab 会立即从容器中移除，先同步回收活跃状态，避免主页残留“连接使用中”标记。
-        self.release_active_connection(cx);
-        // 关闭终端连接
-        self.terminal.read(cx).shutdown();
+        let should_confirm = {
+            let terminal = self.terminal.read(cx);
+            should_confirm_local_terminal_close(
+                terminal.connection_kind(),
+                self.local_command_running,
+                terminal.mode(),
+                terminal.child_exited(),
+            )
+        };
+
+        if should_confirm {
+            return self.confirm_local_terminal_close(window, cx);
+        }
+
+        self.close_terminal_now(cx);
         Task::ready(true)
     }
 }
@@ -4320,11 +4425,12 @@ mod tests {
         has_trailing_line_continuation, has_unterminated_shell_quote, history_prompt_available,
         history_prompt_dropdown_origin, history_prompt_overlay_bounds, mouse_button_code,
         multiline_non_empty_line_count, sgr_mouse_button_report, sgr_mouse_mode_enabled,
-        sgr_mouse_wheel_report, should_defer_inline_history_prompt_input_to_text_system,
-        should_defer_sgr_left_press, should_dismiss_history_prompt_for_keystroke,
-        should_dismiss_history_prompt_for_mouse, should_dismiss_history_prompt_for_scroll,
-        should_reset_history_prompt_for_terminal_event, should_scroll_to_bottom_on_user_input,
-        should_start_selection_from_pending_sgr_press, take_whole_scroll_lines,
+        sgr_mouse_wheel_report, should_confirm_local_terminal_close,
+        should_defer_inline_history_prompt_input_to_text_system, should_defer_sgr_left_press,
+        should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
+        should_dismiss_history_prompt_for_scroll, should_reset_history_prompt_for_terminal_event,
+        should_scroll_to_bottom_on_user_input, should_start_selection_from_pending_sgr_press,
+        take_whole_scroll_lines,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
@@ -4332,6 +4438,48 @@ mod tests {
     use gpui::{Bounds, Keystroke, Modifiers, MouseButton, Point, px, size};
     use std::cell::Cell as StdCell;
     use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
+
+    #[test]
+    fn local_terminal_close_confirms_while_command_is_running() {
+        assert!(should_confirm_local_terminal_close(
+            TerminalConnectionKind::Local,
+            true,
+            TermMode::empty(),
+            None,
+        ));
+    }
+
+    #[test]
+    fn local_terminal_close_confirms_while_tui_is_running() {
+        assert!(should_confirm_local_terminal_close(
+            TerminalConnectionKind::Local,
+            false,
+            TermMode::ALT_SCREEN,
+            None,
+        ));
+    }
+
+    #[test]
+    fn local_terminal_close_does_not_confirm_when_shell_is_idle() {
+        assert!(!should_confirm_local_terminal_close(
+            TerminalConnectionKind::Local,
+            false,
+            TermMode::empty(),
+            None,
+        ));
+    }
+
+    #[test]
+    fn terminal_close_confirmation_is_only_for_local_terminals() {
+        for kind in [TerminalConnectionKind::Ssh, TerminalConnectionKind::Serial] {
+            assert!(!should_confirm_local_terminal_close(
+                kind,
+                true,
+                TermMode::ALT_SCREEN,
+                None,
+            ));
+        }
+    }
 
     #[test]
     fn take_whole_scroll_lines_preserves_fractional_remainder() {

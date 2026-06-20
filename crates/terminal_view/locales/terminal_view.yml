@@ -775,6 +775,20 @@ TerminalSidebar:
     zh-CN: "粘贴到终端"
     zh-HK: "貼上到終端"
 
+LocalTerminalClose:
+  title:
+    en: Close local terminal?
+    zh-CN: 关闭本地终端？
+    zh-HK: 關閉本機終端？
+  message:
+    en: A command or terminal application is still running in this local terminal.
+    zh-CN: 当前本地终端中仍有命令或终端应用正在运行。
+    zh-HK: 目前本機終端中仍有命令或終端應用正在執行。
+  warning:
+    en: Closing it will terminate the process and any unsaved terminal state may be lost.
+    zh-CN: 关闭后将终止该进程，未保存的终端状态可能会丢失。
+    zh-HK: 關閉後將終止該行程，未儲存的終端狀態可能會遺失。
+
 ServerMonitor:
   title:
     en: Server Monitor
