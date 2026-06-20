@@ -1535,6 +1535,40 @@ impl Terminal {
         self.current_working_dir.as_deref()
     }
 
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    /// 获取当前可见屏幕文本，供外部只读集成使用。
+    pub fn visible_text(&self) -> String {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let display_offset = grid.display_offset();
+        let mut lines = Vec::with_capacity(term.screen_lines());
+
+        for screen_line in 0..term.screen_lines() {
+            let grid_line = screen_line as i32 - display_offset as i32;
+            if grid_line < -(term.history_size() as i32) || grid_line >= term.screen_lines() as i32
+            {
+                lines.push(String::new());
+                continue;
+            }
+
+            let line = &grid[Line(grid_line)];
+            let text: String = line[..].iter().map(|cell| cell.c).collect();
+            lines.push(
+                text.trim_end_matches(|c: char| c == ' ' || c == '\0')
+                    .to_string(),
+            );
+        }
+
+        lines.join("\n")
+    }
+
     pub fn history_suggestions(&self, prefix: &str, limit: usize) -> Vec<String> {
         collect_history_suggestions_with_cwd(
             &self.session_history,
@@ -1589,6 +1623,11 @@ impl Terminal {
         if let Some(ref backend) = self.backend {
             backend.write(data.to_vec());
         }
+    }
+
+    /// 写入来自外部集成的输入，例如 Public MCP。
+    pub fn write_external_input(&self, data: &[u8]) {
+        self.write(data);
     }
 
     /// 调整终端大小

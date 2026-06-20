@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 # Terminal core
 terminal = { workspace = true }
+public_mcp = { workspace = true }
 ssh = { workspace = true }
 sftp = { workspace = true }
 remote_file_editor = { workspace = true, features = ["ui"] }
@@ -31,3 +32,4 @@ tokio = { workspace = true }
 serialport = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }

@@ -30,6 +30,7 @@ extension-runtime = { workspace = true }
 extension_view = { workspace = true }
 terminal = { workspace = true }
 terminal_view = { workspace = true }
+public_mcp = { workspace = true }
 sftp_view = { workspace = true }
 redis_view = { workspace = true }
 mongodb_view = { workspace = true }

@@ -5,6 +5,7 @@ pub mod cd_completion;
 pub mod highlight_presets;
 pub mod history_prompt;
 pub mod keys;
+pub mod public_mcp;
 pub mod serial_form_window;
 pub mod settings;
 pub mod sidebar;

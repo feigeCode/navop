@@ -11,6 +11,7 @@ mod home_tab;
 mod license;
 pub mod new_connection;
 mod onetcli_app;
+mod public_mcp_runtime;
 mod setting_tab;
 mod settings;
 mod update;
