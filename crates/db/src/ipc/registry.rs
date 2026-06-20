@@ -529,17 +529,6 @@ fn load_manifest_into_report(
 ) {
     match load_manifest(driver_dir) {
         Ok(driver) => {
-            debug!(
-                target: "extension_loader",
-                kind = "ipc",
-                driver_id = %driver.id,
-                name = %driver.name,
-                version = %driver.version,
-                category = ?driver.category,
-                path = %driver.manifest_dir.display(),
-                command = %driver.entry.command,
-                "loaded ipc driver manifest"
-            );
             loaded.push(IpcDriverLoadedEntry {
                 id: driver.id.clone(),
                 name: driver.name.clone(),
