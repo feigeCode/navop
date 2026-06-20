@@ -22,7 +22,6 @@ The R2 workflow uploads:
 
 ```text
 releases/<tag>/<asset>
-releases/latest/<asset>
 updates/latest.json
 ```
 
