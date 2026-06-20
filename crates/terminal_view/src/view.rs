@@ -330,7 +330,9 @@ fn should_dismiss_history_prompt_for_scroll(lines: i32) -> bool {
 fn should_reset_history_prompt_for_terminal_event(event: &TerminalModelEvent) -> bool {
     matches!(
         event,
-        TerminalModelEvent::PromptStart | TerminalModelEvent::InputStart
+        TerminalModelEvent::PromptStart
+            | TerminalModelEvent::InputStart
+            | TerminalModelEvent::CommandStart
     )
 }
 
@@ -338,11 +340,20 @@ fn history_prompt_available(
     autocomplete_enabled: bool,
     connection_kind: TerminalConnectionKind,
     mode: TermMode,
+    shell_prompt_input_active: bool,
 ) -> bool {
     autocomplete_enabled
         && connection_kind == TerminalConnectionKind::Ssh
+        && shell_prompt_input_active
+        && !terminal_application_mode_active(mode)
         && !mode.contains(TermMode::ALT_SCREEN)
         && !mode.contains(TermMode::VI)
+}
+
+fn terminal_application_mode_active(mode: TermMode) -> bool {
+    mode.intersects(TermMode::MOUSE_MODE)
+        || mode.contains(TermMode::FOCUS_IN_OUT)
+        || mode.contains(TermMode::DISAMBIGUATE_ESC_CODES)
 }
 
 const HISTORY_PROMPT_DROPDOWN_MIN_WIDTH: f32 = 300.0;
@@ -696,6 +707,8 @@ pub struct TerminalView {
 
     ime_state: Option<ImeState>,
     history_prompt: HistoryPromptState,
+    /// shell prompt 当前是否处于可输入阶段，由 OSC 133 生命周期维护。
+    shell_prompt_input_active: bool,
     /// InlineSuggest 防抖任务（30ms 延迟刷新建议）
     suggestion_debounce: Option<gpui::Task<()>>,
     /// `cd` 目录补全的独立 SFTP 连接
@@ -1053,6 +1066,7 @@ impl TerminalView {
             terminal_bounds: Bounds::default(),
             ime_state: None,
             history_prompt: HistoryPromptState::default(),
+            shell_prompt_input_active: false,
             suggestion_debounce: None,
             cd_completion_client: None,
             cd_completion_cache: HashMap::new(),
@@ -1230,7 +1244,12 @@ impl TerminalView {
         let terminal = self.terminal.read(cx);
         let mode = terminal.mode();
         let connection_kind = terminal.connection_kind();
-        history_prompt_available(self.autocomplete_enabled, connection_kind, mode)
+        history_prompt_available(
+            self.autocomplete_enabled,
+            connection_kind,
+            mode,
+            self.shell_prompt_input_active,
+        )
     }
 
     fn log_history_prompt_state(&self, reason: &str, detail: &str, cx: &App) {
@@ -1794,6 +1813,15 @@ impl TerminalView {
             reset = should_reset_history_prompt_for_terminal_event(event),
             "terminal model event observed"
         );
+        match event {
+            TerminalModelEvent::InputStart => self.shell_prompt_input_active = true,
+            TerminalModelEvent::PromptStart | TerminalModelEvent::CommandStart => {
+                self.shell_prompt_input_active = false;
+            }
+            TerminalModelEvent::ChildExit(_) => self.shell_prompt_input_active = false,
+            _ => {}
+        }
+
         if should_reset_history_prompt_for_terminal_event(event) {
             self.dismiss_history_prompt();
             self.log_history_prompt_state("terminal_event_reset", "prompt lifecycle event", cx);
@@ -1811,7 +1839,9 @@ impl TerminalView {
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 cx.notify();
             }
-            TerminalModelEvent::PromptStart | TerminalModelEvent::InputStart => {
+            TerminalModelEvent::PromptStart
+            | TerminalModelEvent::InputStart
+            | TerminalModelEvent::CommandStart => {
                 cx.notify();
             }
             TerminalModelEvent::TitleChanged(_) => {
@@ -4565,11 +4595,13 @@ mod tests {
             true,
             TerminalConnectionKind::Local,
             mode,
+            true,
         ));
         assert!(!history_prompt_available(
             false,
             TerminalConnectionKind::Local,
             mode,
+            true,
         ));
     }
 
@@ -4581,16 +4613,51 @@ mod tests {
             true,
             TerminalConnectionKind::Local,
             mode,
+            true,
         ));
         assert!(!history_prompt_available(
             true,
             TerminalConnectionKind::Local,
             mode,
+            true,
         ));
         assert!(history_prompt_available(
             true,
             TerminalConnectionKind::Ssh,
             mode,
+            true,
+        ));
+    }
+
+    #[test]
+    fn history_prompt_is_unavailable_in_terminal_application_modes() {
+        for mode in [
+            TermMode::FOCUS_IN_OUT,
+            TermMode::MOUSE_MODE,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+        ] {
+            assert!(!history_prompt_available(
+                true,
+                TerminalConnectionKind::Ssh,
+                mode,
+                true,
+            ));
+        }
+    }
+
+    #[test]
+    fn history_prompt_requires_active_shell_prompt_input() {
+        assert!(!history_prompt_available(
+            true,
+            TerminalConnectionKind::Ssh,
+            TermMode::empty(),
+            false,
+        ));
+        assert!(history_prompt_available(
+            true,
+            TerminalConnectionKind::Ssh,
+            TermMode::empty(),
+            true,
         ));
     }
 
@@ -4778,6 +4845,9 @@ mod tests {
         ));
         assert!(should_reset_history_prompt_for_terminal_event(
             &TerminalModelEvent::PromptStart
+        ));
+        assert!(should_reset_history_prompt_for_terminal_event(
+            &TerminalModelEvent::CommandStart
         ));
         assert!(!should_reset_history_prompt_for_terminal_event(
             &TerminalModelEvent::Wakeup

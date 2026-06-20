@@ -289,7 +289,7 @@ impl SshBackend {
                                             }
                                         }
                                         OscEvent::CommandStart => {
-                                            // 133;C: 命令开始执行
+                                            let _ = event_tx.send(TerminalEvent::CommandStart);
                                         }
                                         OscEvent::CommandFinished { exit_code } => {
                                             // 133;D: 命令执行完毕

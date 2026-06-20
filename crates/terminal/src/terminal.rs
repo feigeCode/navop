@@ -68,6 +68,8 @@ pub enum TerminalModelEvent {
     PromptStart,
     /// shell prompt 已渲染完成，用户可以输入（OSC 133;B）
     InputStart,
+    /// shell 命令开始执行（OSC 133;C）
+    CommandStart,
     /// 终端标题已更改
     TitleChanged(String),
     /// 终端响铃
@@ -1458,6 +1460,9 @@ impl Terminal {
             }
             TerminalEvent::InputStart => {
                 cx.emit(TerminalModelEvent::InputStart);
+            }
+            TerminalEvent::CommandStart => {
+                cx.emit(TerminalModelEvent::CommandStart);
             }
             TerminalEvent::TitleChanged(title) => {
                 self.title = title.clone();
