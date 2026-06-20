@@ -286,7 +286,6 @@ jobs:
               content_type="application/gzip"
             fi
             upload_object "artifacts/${file}" "releases/${RELEASE_TAG}/${file}" "$content_type" "public, max-age=31536000, immutable"
-            upload_object "artifacts/${file}" "releases/latest/${file}" "$content_type" "public, max-age=300"
           done
 
           upload_object "artifacts/updates/latest.json" "updates/latest.json" "application/json; charset=utf-8" "no-cache"
