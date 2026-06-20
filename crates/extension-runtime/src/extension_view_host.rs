@@ -93,6 +93,8 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
             asset_url: path.display().to_string(),
             sha256: None,
             fallback_asset_url: None,
+            manifest_url: None,
+            manifest_fallback_url: None,
         };
         review_downloaded_extension(staging, kind, entry)
     }
@@ -220,6 +222,9 @@ fn to_view_entry(entry: host_downloader::MarketplaceEntry) -> extension_view::Ma
     let asset_url = entry.asset_url().unwrap_or_default();
     let fallback_asset_url = entry.fallback_asset_url();
     let sha256 = entry.sha256();
+    let manifest_urls = entry.extension_manifest_urls();
+    let manifest_url = manifest_urls.first().cloned();
+    let manifest_fallback_url = manifest_urls.get(1).cloned();
     extension_view::MarketplaceEntry {
         id: entry.id,
         kind: to_view_kind(entry.kind),
@@ -230,6 +235,8 @@ fn to_view_entry(entry: host_downloader::MarketplaceEntry) -> extension_view::Ma
         asset_url,
         sha256,
         fallback_asset_url,
+        manifest_url,
+        manifest_fallback_url,
     }
 }
 
@@ -245,6 +252,21 @@ fn to_host_entry(entry: extension_view::MarketplaceEntry) -> host_downloader::Ma
             download_urls.push(fallback_asset_url);
         }
     }
+    let mut manifest_urls = Vec::new();
+    if let Some(manifest_url) = entry.manifest_url {
+        if !manifest_url.trim().is_empty() {
+            manifest_urls.push(manifest_url);
+        }
+    }
+    if let Some(manifest_fallback_url) = entry.manifest_fallback_url {
+        if !manifest_fallback_url.trim().is_empty()
+            && !manifest_urls
+                .iter()
+                .any(|url| url == &manifest_fallback_url)
+        {
+            manifest_urls.push(manifest_fallback_url);
+        }
+    }
     host_downloader::MarketplaceEntry::from_resolved_urls(
         entry.id,
         to_host_kind(entry.kind),
@@ -255,6 +277,7 @@ fn to_host_entry(entry: extension_view::MarketplaceEntry) -> host_downloader::Ma
         download_urls,
         entry.sha256,
     )
+    .with_manifest_urls(manifest_urls)
 }
 
 fn to_view_kind(kind: host_extension::ExtensionKind) -> extension_view::ExtensionKind {
@@ -307,5 +330,44 @@ mod tests {
         assert_eq!(Some("Database"), view.icon.as_deref());
         assert_eq!(Some("fake_pg"), view.driver_id.as_deref());
         assert_eq!(Some(15432), view.default_port);
+    }
+
+    #[test]
+    fn marketplace_entry_conversion_preserves_extension_manifest_url() {
+        let mut manifest: host_downloader::MarketplaceManifest = serde_json::from_str(
+            r#"{
+                "schema_version": 2,
+                "extensions": [{
+                    "id": "fake_pg",
+                    "kind": "database_driver",
+                    "name": "Fake PostgreSQL",
+                    "version": "1.2.3",
+                    "release_tag": "fake_pg-v1.2.3",
+                    "manifest": "fake_pg/manifest.json"
+                }]
+            }"#,
+        )
+        .unwrap();
+        manifest.resolve_downloads(
+            "https://onetcli.test.cn/extensions/manifest.json",
+            "https://github.com/feigeCode/onetcli-extensions/releases/latest/download/extension-manifest.json",
+        );
+        let host_entry = manifest.into_entries().remove(0);
+
+        let view_entry = to_view_entry(host_entry);
+        let round_tripped = to_host_entry(view_entry);
+
+        assert!(round_tripped.needs_extension_manifest());
+        assert_eq!(
+            Some("https://onetcli.test.cn/extensions/fake_pg/manifest.json".to_string()),
+            round_tripped.extension_manifest_url()
+        );
+        assert_eq!(
+            vec![
+                "https://onetcli.test.cn/extensions/fake_pg/manifest.json".to_string(),
+                "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/extension-manifest.json".to_string(),
+            ],
+            round_tripped.extension_manifest_urls()
+        );
     }
 }

@@ -195,6 +195,8 @@ mod tests {
             asset_url: format!("https://example.test/{id}.tar.gz"),
             sha256: None,
             fallback_asset_url: None,
+            manifest_url: None,
+            manifest_fallback_url: None,
         }
     }
 }

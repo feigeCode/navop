@@ -182,6 +182,7 @@ pub async fn download_marketplace_entry_to_staging_with_progress(
     entry: &MarketplaceEntry,
     on_progress: DownloadProgressCallback,
 ) -> Result<PathBuf> {
+    let entry = resolve_entry_downloads_if_needed(&http_client, entry).await?;
     let download_urls = entry.download_urls();
     if download_urls.is_empty() {
         anyhow::bail!("marketplace entry {} 缺少可下载 artifact", entry.id);
@@ -222,6 +223,53 @@ pub async fn download_marketplace_entry_to_staging_with_progress(
     }
 
     Err(last_error.unwrap_or_else(|| anyhow!("marketplace entry {} 没有可用下载源", entry.id)))
+}
+
+async fn resolve_entry_downloads_if_needed(
+    http_client: &Arc<dyn HttpClient>,
+    entry: &MarketplaceEntry,
+) -> Result<MarketplaceEntry> {
+    if !entry.needs_extension_manifest() {
+        return Ok(entry.clone());
+    }
+    let manifest_urls = entry.extension_manifest_urls();
+    if manifest_urls.is_empty() {
+        anyhow::bail!("marketplace entry {} 缺少插件 manifest 地址", entry.id);
+    }
+
+    let mut last_error = None;
+    for manifest_url in manifest_urls {
+        match fetch_resolved_entry_manifest(http_client, entry, &manifest_url).await {
+            Ok(entry) => return Ok(entry),
+            Err(err) => {
+                tracing::warn!("插件 manifest 加载失败，尝试下一个源: {err:#}");
+                last_error = Some(err);
+            }
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| anyhow!("marketplace entry {} 没有可用插件 manifest", entry.id)))
+}
+
+async fn fetch_resolved_entry_manifest(
+    http_client: &Arc<dyn HttpClient>,
+    entry: &MarketplaceEntry,
+    manifest_url: &str,
+) -> Result<MarketplaceEntry> {
+    let bytes = fetch_bytes(http_client, manifest_url)
+        .await
+        .with_context(|| format!("fetch extension manifest from {manifest_url}"))?;
+    let manifest: MarketplaceManifest =
+        serde_json::from_slice(&bytes).context("parse extension manifest")?;
+    entry
+        .resolved_from_extension_manifest(manifest, manifest_url)
+        .ok_or_else(|| {
+            anyhow!(
+                "extension manifest {manifest_url} missing entry {}",
+                entry.id
+            )
+        })
 }
 
 async fn download_asset_to_staging(

@@ -399,7 +399,17 @@ fn download_marketplace_entry_to_staging_resolves_v2_primary_url_from_manifest_p
 fn download_marketplace_entry_to_staging_resolves_v2_artifact_and_host_github_fallback() {
     let tarball = database_driver_tarball_bytes();
     let sha256 = sha256_hex(&tarball);
-    let manifest = format!(
+    let marketplace_manifest = r#"{
+        "schema_version": 2,
+        "extensions": [{
+            "id": "fake_pg",
+            "kind": "database_driver",
+            "name": "Fake PostgreSQL",
+            "version": "1.2.3",
+            "manifest": "fake_pg/manifest.json"
+        }]
+    }"#;
+    let extension_manifest = format!(
         r#"{{
             "schema_version": 2,
             "extensions": [{{
@@ -418,7 +428,8 @@ fn download_marketplace_entry_to_staging_resolves_v2_artifact_and_host_github_fa
         }}"#,
     );
     let client = Arc::new(FakeHttpClient::new(vec![
-        FakeHttpClient::response(200, &manifest),
+        FakeHttpClient::response(200, marketplace_manifest),
+        FakeHttpClient::response(200, &extension_manifest),
         Err(anyhow::anyhow!("primary unavailable")),
         binary_response(200, tarball),
     ]));
@@ -443,12 +454,86 @@ fn download_marketplace_entry_to_staging_resolves_v2_artifact_and_host_github_fa
         requests[0].uri
     );
     assert_eq!(
-        "https://onetcli.test.cn/extensions/fake_pg/1.2.3/fake_pg-driver-universal.tar.gz",
+        "https://onetcli.test.cn/extensions/fake_pg/manifest.json",
         requests[1].uri
     );
     assert_eq!(
-        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
+        "https://onetcli.test.cn/extensions/fake_pg/1.2.3/fake_pg-driver-universal.tar.gz",
         requests[2].uri
+    );
+    assert_eq!(
+        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
+        requests[3].uri
+    );
+    fs::remove_dir_all(staging).unwrap();
+}
+
+#[test]
+fn download_marketplace_entry_to_staging_falls_back_to_github_extension_manifest() {
+    let tarball = database_driver_tarball_bytes();
+    let sha256 = sha256_hex(&tarball);
+    let marketplace_manifest = r#"{
+        "schema_version": 2,
+        "extensions": [{
+            "id": "fake_pg",
+            "kind": "database_driver",
+            "name": "Fake PostgreSQL",
+            "version": "1.2.3",
+            "release_tag": "fake_pg-v1.2.3",
+            "manifest": "fake_pg/manifest.json"
+        }]
+    }"#;
+    let extension_manifest = format!(
+        r#"{{
+            "schema_version": 2,
+            "extensions": [{{
+                "id": "fake_pg",
+                "kind": "database_driver",
+                "name": "Fake PostgreSQL",
+                "version": "1.2.3",
+                "release_tag": "fake_pg-v1.2.3",
+                "artifacts": {{
+                    "universal": {{
+                        "file": "fake_pg-driver-universal.tar.gz",
+                        "sha256": "{sha256}"
+                    }}
+                }}
+            }}]
+        }}"#,
+    );
+    let client = Arc::new(FakeHttpClient::new(vec![
+        FakeHttpClient::response(200, marketplace_manifest),
+        Err(anyhow::anyhow!("r2 extension manifest unavailable")),
+        FakeHttpClient::response(200, &extension_manifest),
+        binary_response(200, tarball),
+    ]));
+
+    let manifest = smol::block_on(fetch_manifest_url(
+        client.clone(),
+        "https://onetcli.test.cn/extensions/manifest.json",
+    ))
+    .unwrap();
+    let entries = manifest.into_entries();
+
+    let staging = smol::block_on(download_marketplace_entry_to_staging(
+        client.clone(),
+        &entries[0],
+    ))
+    .unwrap();
+
+    assert!(staging.join("driver.json").exists());
+    let requests = client.take_requests();
+    assert_eq!(
+        "https://onetcli.test.cn/extensions/fake_pg/manifest.json",
+        requests[1].uri
+    );
+    assert_eq!(
+        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/extension-manifest.json",
+        requests[2].uri
+    );
+    assert_eq!(
+        "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/fake_pg-driver-universal.tar.gz",
+        requests[3].uri
     );
     fs::remove_dir_all(staging).unwrap();
 }

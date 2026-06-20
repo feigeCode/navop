@@ -71,8 +71,9 @@ GitHub-only app updates and GitHub-only extension marketplace manifests.
 
 ## Extension Marketplace
 
-This repository owns the marketplace consumption mechanism. Extension-specific
-pipelines own extension package builds and the marketplace manifest publication.
+This repository owns the marketplace consumption mechanism. The extension
+repository owns extension package builds, the committed marketplace index, and
+plugin manifest publication.
 
 The default extension manifest source is resolved in this order:
 
@@ -83,14 +84,40 @@ The default extension manifest source is resolved in this order:
    `ONETCLI_EXTENSION_GITHUB_MANIFEST_URL`, then build-time
    `ONETCLI_EXTENSION_GITHUB_MANIFEST_URL`, then the built-in GitHub fallback.
 
-The extension manifest is schema v2. It declares installable artifacts only:
-file names, checksums, and the per-entry release tag needed to locate matching
-GitHub Release assets. It does not contain primary or fallback download URLs.
+The marketplace index is schema v2. It declares installable extension metadata
+and the relative plugin manifest path only. It does not contain artifact lists,
+primary package URLs, or fallback package URLs. The official extension
+repository maintains this index directly as `manifest.json`; upload automation
+publishes that file to `extensions/manifest.json`.
 
 ```json
 {
   "schema_version": 2,
   "release_version": "2026.06",
+  "extensions": [
+    {
+      "id": "duckdb",
+      "kind": "database_driver",
+      "name": "DuckDB",
+      "version": "1.0.0",
+      "release_tag": "duckdb-v1.0.0",
+      "description": "DuckDB embedded analytical database IPC driver",
+      "file_extensions": [],
+      "manifest": "duckdb/manifest.json"
+    }
+  ]
+}
+```
+
+Each extension also publishes a plugin manifest. The plugin manifest is schema
+v2 and declares installable artifacts only: file names, checksums, and the
+per-entry release tag needed to locate matching GitHub Release assets. It does
+not contain primary or fallback download URLs.
+
+```json
+{
+  "schema_version": 2,
+  "release_version": "duckdb-v1.0.0",
   "extensions": [
     {
       "id": "duckdb",
@@ -118,14 +145,19 @@ then an OS alias, then `universal`. Native IPC database drivers normally publish
 target-triple artifacts. WASM and other platform-independent extensions should
 publish a `universal` artifact.
 
-The client derives primary package URLs from the manifest location using
-`<id>/<version>/<file>`. For example, `duckdb` version `1.0.0` with file
-`duckdb-driver-x86_64-unknown-linux-gnu.tar.gz` in
-`https://onetcli.test.cn/extensions/manifest.json` resolves to
+The client loads the marketplace index first, then loads the selected entry's
+plugin manifest. For R2, the plugin manifest is published at
+`extensions/<id>/manifest.json`, and package URLs are resolved from that plugin
+manifest directory using `<version>/<file>`. For example, `duckdb` version
+`1.0.0` with file `duckdb-driver-x86_64-unknown-linux-gnu.tar.gz` in
+`https://onetcli.test.cn/extensions/duckdb/manifest.json` resolves to
 `https://onetcli.test.cn/extensions/duckdb/1.0.0/duckdb-driver-x86_64-unknown-linux-gnu.tar.gz`.
 
-The client derives GitHub asset fallback URLs from its configured GitHub
-marketplace manifest URL and the entry's `release_tag` plus artifact `file`.
+If the R2 plugin manifest is unavailable, the client derives a GitHub plugin
+manifest fallback URL from the configured GitHub manifest base and the entry's
+`release_tag`: `<github releases download base>/<release_tag>/extension-manifest.json`.
+The client derives GitHub artifact fallback URLs from the same release tag plus
+the selected artifact `file`.
 Non-language extension packages require sha256 validation metadata before
 installation.
 

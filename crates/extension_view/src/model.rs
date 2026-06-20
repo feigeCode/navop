@@ -79,6 +79,8 @@ pub struct MarketplaceEntry {
     pub asset_url: String,
     pub sha256: Option<String>,
     pub fallback_asset_url: Option<String>,
+    pub manifest_url: Option<String>,
+    pub manifest_fallback_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

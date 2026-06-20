@@ -104,6 +104,8 @@ mod tests {
             asset_url: "https://example.test/ext.tar.gz".to_string(),
             sha256: None,
             fallback_asset_url: None,
+            manifest_url: None,
+            manifest_fallback_url: None,
         }
     }
 }

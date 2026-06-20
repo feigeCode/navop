@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::extension::ExtensionKind;
 
+const EXTENSION_RELEASE_MANIFEST_FILE: &str = "extension-manifest.json";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketplaceManifest {
     #[serde(default)]
@@ -42,11 +44,19 @@ pub struct MarketplaceEntry {
     #[serde(default)]
     pub file_extensions: Vec<String>,
     #[serde(default)]
+    pub manifest: String,
+    #[serde(default)]
     pub artifacts: HashMap<String, MarketplaceArtifact>,
     #[serde(skip)]
     resolved_download_urls: Vec<String>,
     #[serde(skip)]
     resolved_sha256: Option<String>,
+    #[serde(skip)]
+    source_manifest_url: Option<String>,
+    #[serde(skip)]
+    github_manifest_url: Option<String>,
+    #[serde(skip)]
+    resolved_manifest_urls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +72,9 @@ impl MarketplaceEntry {
             self.id = self.name.clone();
         }
 
+        self.source_manifest_url = Some(manifest_url.to_string());
+        self.github_manifest_url = Some(github_manifest_url.to_string());
+
         let Some(artifact) = self.artifact_for_keys(marketplace_target_keys()) else {
             return;
         };
@@ -72,7 +85,11 @@ impl MarketplaceEntry {
         if is_github_release_download_url(manifest_url) {
             push_unique(&mut urls, github_url);
         } else {
-            let primary_path = format!("{}/{}/{}", self.id, self.version, artifact.file);
+            let primary_path = if self.is_extension_manifest_url(manifest_url) {
+                format!("{}/{}", self.version, artifact.file)
+            } else {
+                format!("{}/{}/{}", self.id, self.version, artifact.file)
+            };
             push_unique(
                 &mut urls,
                 Some(resolve_asset_url(manifest_url, &primary_path)),
@@ -102,10 +119,34 @@ impl MarketplaceEntry {
             release_tag: String::new(),
             description: description.into(),
             file_extensions,
+            manifest: String::new(),
             artifacts: HashMap::new(),
             resolved_download_urls: download_urls,
             resolved_sha256: sha256,
+            source_manifest_url: None,
+            github_manifest_url: None,
+            resolved_manifest_urls: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_manifest_urls(mut self, manifest_urls: Vec<String>) -> Self {
+        self.resolved_manifest_urls =
+            manifest_urls
+                .into_iter()
+                .filter_map(non_empty)
+                .fold(Vec::new(), |mut urls, url| {
+                    push_unique(&mut urls, Some(url));
+                    urls
+                });
+        if let Some(github_manifest_url) = self
+            .resolved_manifest_urls
+            .iter()
+            .find(|url| is_github_release_download_url(url))
+            .cloned()
+        {
+            self.github_manifest_url = Some(github_manifest_url);
+        }
+        self
     }
 
     pub(crate) fn asset_url(&self) -> Option<String> {
@@ -129,6 +170,45 @@ impl MarketplaceEntry {
             .find_map(|key| self.artifacts.get(*key).cloned())
     }
 
+    pub(crate) fn needs_extension_manifest(&self) -> bool {
+        (!self.manifest.trim().is_empty() || !self.resolved_manifest_urls.is_empty())
+            && self.artifacts.is_empty()
+    }
+
+    pub(crate) fn extension_manifest_url(&self) -> Option<String> {
+        if let Some(manifest_url) = self.resolved_manifest_urls.first() {
+            return Some(manifest_url.clone());
+        }
+        let manifest = non_empty(self.manifest.clone())?;
+        if has_http_url_scheme(&manifest) {
+            return Some(manifest);
+        }
+        let source = self.source_manifest_url.as_deref()?;
+        Some(resolve_asset_url(source, &manifest))
+    }
+
+    pub(crate) fn extension_manifest_urls(&self) -> Vec<String> {
+        let mut urls = self.resolved_manifest_urls.clone();
+        push_unique(&mut urls, self.extension_manifest_url());
+        push_unique(&mut urls, self.github_extension_manifest_url());
+        urls
+    }
+
+    pub(crate) fn resolved_from_extension_manifest(
+        &self,
+        mut manifest: MarketplaceManifest,
+        manifest_url: &str,
+    ) -> Option<Self> {
+        manifest.resolve_downloads(
+            manifest_url,
+            self.github_manifest_url.as_deref().unwrap_or_default(),
+        );
+        manifest
+            .extensions
+            .into_iter()
+            .find(|entry| entry.id == self.id || (!self.name.is_empty() && entry.name == self.name))
+    }
+
     fn github_download_url(
         &self,
         file: &str,
@@ -139,6 +219,24 @@ impl MarketplaceEntry {
         github_release_download_base(github_manifest_url)
             .or_else(|| github_release_download_base(manifest_url))
             .map(|base| format!("{base}{release_tag}/{file}"))
+    }
+
+    fn github_extension_manifest_url(&self) -> Option<String> {
+        let release_tag = non_empty(self.release_tag.clone())?;
+        self.github_manifest_url
+            .as_deref()
+            .and_then(github_release_download_base)
+            .or_else(|| {
+                self.source_manifest_url
+                    .as_deref()
+                    .and_then(github_release_download_base)
+            })
+            .map(|base| format!("{base}{release_tag}/{EXTENSION_RELEASE_MANIFEST_FILE}"))
+    }
+
+    fn is_extension_manifest_url(&self, manifest_url: &str) -> bool {
+        let path = strip_url_query(manifest_url).trim_end_matches('/');
+        path.ends_with(&format!("/{}/manifest.json", self.id))
     }
 }
 
@@ -199,6 +297,12 @@ fn manifest_url_prefix(manifest_url: &str) -> Option<&str> {
     Some(&without_query[..=path_slash])
 }
 
+fn strip_url_query(url: &str) -> &str {
+    let url = url.trim();
+    let path_end = url.find(['?', '#']).unwrap_or(url.len());
+    &url[..path_end]
+}
+
 fn marketplace_target_keys() -> &'static [&'static str] {
     marketplace_target_keys_for(std::env::consts::OS, std::env::consts::ARCH)
 }
@@ -236,6 +340,7 @@ mod tests {
             release_tag: "duckdb-v1.0.0".to_string(),
             description: String::new(),
             file_extensions: Vec::new(),
+            manifest: String::new(),
             artifacts: HashMap::from([
                 (
                     "linux".to_string(),
@@ -254,6 +359,9 @@ mod tests {
             ]),
             resolved_download_urls: Vec::new(),
             resolved_sha256: None,
+            source_manifest_url: None,
+            github_manifest_url: None,
+            resolved_manifest_urls: Vec::new(),
         };
 
         let artifact = entry
