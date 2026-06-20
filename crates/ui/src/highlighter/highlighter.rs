@@ -4,6 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use gpui::{HighlightStyle, SharedString};
 
 use ropey::{ChunkCursor, Rope};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{
@@ -413,17 +414,17 @@ impl SyntaxHighlighter {
 
         let mut timed_out = false;
         let start = Instant::now();
-        let mut progress = |_: &tree_sitter::ParseState| -> bool {
+        let mut progress = |_: &tree_sitter::ParseState| -> ControlFlow<()> {
             let Some(budget) = timeout else {
-                return false;
+                return ControlFlow::Continue(());
             };
 
             if start.elapsed() > budget {
                 timed_out = true;
-                return true;
+                return ControlFlow::Break(());
             }
 
-            false
+            ControlFlow::Continue(())
         };
         let options = ParseOptions::new().progress_callback(&mut progress);
 

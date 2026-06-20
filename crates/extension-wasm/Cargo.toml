@@ -7,8 +7,8 @@ publish.workspace = true
 [dependencies]
 extension-component = { workspace = true }
 thiserror.workspace = true
-wasmtime = "37.0.3"
-wasmtime-wasi = "37.0.3"
+wasmtime = "=36.0.9"
+wasmtime-wasi = "=36.0.9"
 
 [dev-dependencies]
 async-trait = { workspace = true }
