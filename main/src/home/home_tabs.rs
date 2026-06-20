@@ -8,6 +8,8 @@ use mongodb_view::MongoTabView;
 use one_core::storage::{ConnectionType, StoredConnection, Workspace};
 use one_core::tab_container::TabItem;
 use redis_view::RedisTabView;
+use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
+use remote_desktop_view::{RemoteDesktopView, RemoteDesktopViewConfig};
 use sftp_view::{SftpView, SftpViewEvent};
 use terminal::LocalConfig;
 use terminal_view::{
@@ -313,6 +315,49 @@ impl HomePage {
         // 添加标签页
         let tab = TabItem::new(tab_id, "sftp", sftp_view);
         self.tab_container.update(cx, |tc, cx| {
+            tc.add_and_activate_tab_with_focus(tab, window, cx);
+        });
+    }
+
+    pub(crate) fn open_remote_desktop(
+        &mut self,
+        conn: StoredConnection,
+        protocol: RemoteDesktopProtocol,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(options) = remote_desktop_options(&conn, protocol) else {
+            tracing::warn!(
+                connection_id = ?conn.id,
+                connection_name = %conn.name,
+                "failed to parse remote desktop connection params"
+            );
+            return;
+        };
+        let conn_id = conn.id.unwrap_or(0);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let tab_kind = remote_desktop_tab_kind(protocol);
+        let tab_id = format!("{tab_kind}-{conn_id}-{timestamp}");
+        let prefix = format!("{tab_kind}-{conn_id}-");
+        let existing_count = self
+            .tab_container
+            .read(cx)
+            .tabs()
+            .iter()
+            .filter(|tab| tab.id().starts_with(&prefix))
+            .count();
+        let tab_index = if existing_count > 0 {
+            Some(existing_count + 1)
+        } else {
+            None
+        };
+        let view =
+            cx.new(|cx| RemoteDesktopView::new(RemoteDesktopViewConfig { options, tab_index }, cx));
+        self.tab_container.update(cx, |tc, cx| {
+            let tab = TabItem::new(tab_id, tab_kind, view);
             tc.add_and_activate_tab_with_focus(tab, window, cx);
         });
     }
@@ -653,5 +698,27 @@ impl HomePage {
                 // 其他类型暂不支持复制
             }
         }
+    }
+}
+
+fn remote_desktop_options(
+    conn: &StoredConnection,
+    protocol: RemoteDesktopProtocol,
+) -> Option<RemoteDesktopConnectionOptions> {
+    let params = conn.to_remote_desktop_params().ok()?;
+    Some(RemoteDesktopConnectionOptions {
+        protocol,
+        destination: format!("{}:{}", params.host, params.port),
+        username: params.username,
+        password: params.password,
+        domain: params.domain,
+        read_only: params.read_only,
+    })
+}
+
+fn remote_desktop_tab_kind(protocol: RemoteDesktopProtocol) -> &'static str {
+    match protocol {
+        RemoteDesktopProtocol::Rdp => "rdp",
+        RemoteDesktopProtocol::Vnc => "vnc",
     }
 }

@@ -2,13 +2,16 @@ use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindow
 use gpui::{AnyView, AnyWindowHandle, AppContext, Context, Entity, Window};
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
 use one_core::cloud_sync::get_cached_team_options;
-use one_core::storage::{ConnectionType, DatabaseType};
+use one_core::storage::{ConnectionType, DatabaseType, RemoteDesktopProtocol};
 use redis_view::{RedisFormWindow, RedisFormWindowConfig};
 use terminal_view::{SerialFormWindow, SerialFormWindowConfig, SshFormWindow, SshFormWindowConfig};
 
 use crate::home_tab::HomePage;
 use crate::new_connection::NewConnectionWindow;
 use crate::new_connection::connection_kind::NewConnectionKind;
+use crate::new_connection::remote_desktop_form::{
+    RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
+};
 
 pub(crate) enum NewConnectionFormResult {
     Form(AnyView),
@@ -37,6 +40,8 @@ impl NewConnectionFormPage for NewConnectionKind {
         match self {
             Self::Terminal => open_terminal_tab(parent, parent_window, cx),
             Self::Ssh => build_ssh_form(parent, window, cx),
+            Self::Rdp => build_remote_desktop_form(parent, RemoteDesktopProtocol::Rdp, window, cx),
+            Self::Vnc => build_remote_desktop_form(parent, RemoteDesktopProtocol::Vnc, window, cx),
             Self::Redis => build_redis_form(parent, window, cx),
             Self::MongoDB => build_mongo_form(parent, window, cx),
             Self::Serial => build_serial_form(parent, window, cx),
@@ -47,6 +52,40 @@ impl NewConnectionFormPage for NewConnectionKind {
             }
         }
     }
+}
+
+fn build_remote_desktop_form(
+    parent: Entity<HomePage>,
+    protocol: RemoteDesktopProtocol,
+    window: &mut Window,
+    cx: &mut Context<NewConnectionWindow>,
+) -> NewConnectionFormResult {
+    let Some(config) = parent.update(cx, |home, cx| {
+        if !home.is_master_key_ready_for_new_connection() {
+            return None;
+        }
+        let connection_type = protocol.connection_type();
+        let editing_connection = home.editing_connection_id.and_then(|id| {
+            home.connections
+                .iter()
+                .find(|c| c.id == Some(id) && c.connection_type == connection_type)
+                .cloned()
+        });
+        home.editing_connection_id = None;
+        Some(RemoteDesktopFormWindowConfig {
+            protocol,
+            editing_connection,
+            workspaces: home.workspaces.clone(),
+            teams: get_cached_team_options(cx),
+        })
+    }) else {
+        return NewConnectionFormResult::Blocked;
+    };
+
+    NewConnectionFormResult::Form(
+        cx.new(|cx| RemoteDesktopFormWindow::new(config, window, cx))
+            .into(),
+    )
 }
 
 fn open_terminal_tab(

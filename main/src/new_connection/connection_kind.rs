@@ -55,6 +55,8 @@ impl NewConnectionCategory {
 pub(super) enum NewConnectionKind {
     Ssh,
     Terminal,
+    Rdp,
+    Vnc,
     Redis,
     MongoDB,
     Serial,
@@ -74,6 +76,8 @@ impl NewConnectionKind {
         let mut items = vec![
             Self::Ssh,
             Self::Terminal,
+            Self::Rdp,
+            Self::Vnc,
             Self::Redis,
             Self::MongoDB,
             Self::Serial,
@@ -92,6 +96,8 @@ impl NewConnectionKind {
         match self {
             Self::Ssh => "SSH / SFTP".to_string(),
             Self::Terminal => "Terminal".to_string(),
+            Self::Rdp => "RDP".to_string(),
+            Self::Vnc => "VNC".to_string(),
             Self::Redis => "Redis".to_string(),
             Self::MongoDB => "MongoDB".to_string(),
             Self::Serial => t!("Serial.new").to_string(),
@@ -104,6 +110,8 @@ impl NewConnectionKind {
         match self {
             Self::Ssh => t!("NewConnection.description_ssh").to_string(),
             Self::Terminal => t!("NewConnection.description_terminal").to_string(),
+            Self::Rdp => t!("NewConnection.description_rdp").to_string(),
+            Self::Vnc => t!("NewConnection.description_vnc").to_string(),
             Self::Redis => t!("NewConnection.description_redis").to_string(),
             Self::MongoDB => t!("NewConnection.description_mongodb").to_string(),
             Self::Serial => t!("NewConnection.description_serial").to_string(),
@@ -114,7 +122,9 @@ impl NewConnectionKind {
 
     pub(super) fn category(&self) -> NewConnectionCategory {
         match self {
-            Self::Ssh | Self::Terminal | Self::Serial => NewConnectionCategory::Terminal,
+            Self::Ssh | Self::Terminal | Self::Rdp | Self::Vnc | Self::Serial => {
+                NewConnectionCategory::Terminal
+            }
             Self::Redis | Self::MongoDB => NewConnectionCategory::NoSql,
             Self::Database(_) => NewConnectionCategory::Database,
             Self::ExternalDatabase { category, .. } => {
@@ -134,6 +144,7 @@ impl NewConnectionKind {
                 .mono()
                 .text_color(gpui::rgb(0x8b5cf6))
                 .with_size(px(40.0)),
+            Self::Rdp | Self::Vnc => IconName::Monitor.color().with_size(px(40.0)),
             Self::Redis => IconName::Redis.color().with_size(px(40.0)),
             Self::MongoDB => IconName::MongoDB.color().with_size(px(40.0)),
             Self::Serial => IconName::SerialPort.color().with_size(px(40.0)),
@@ -222,6 +233,21 @@ mod tests {
         assert_eq!(
             t!("NewConnection.category_domestic_database").to_string(),
             NewConnectionCategory::DomesticDatabase.label()
+        );
+    }
+
+    #[test]
+    fn remote_desktop_kinds_are_available_from_new_connection() {
+        let kinds = NewConnectionKind::all();
+        assert!(kinds.contains(&NewConnectionKind::Rdp));
+        assert!(kinds.contains(&NewConnectionKind::Vnc));
+        assert_eq!(
+            NewConnectionKind::Rdp.category(),
+            NewConnectionCategory::Terminal
+        );
+        assert_eq!(
+            NewConnectionKind::Vnc.category(),
+            NewConnectionCategory::Terminal
         );
     }
 

@@ -35,7 +35,8 @@ use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, ConnectionType, DatabaseType, GlobalStorageState,
-    PendingCloudDeletionRepository, RedisMode, StoredConnection, Workspace, WorkspaceRepository,
+    PendingCloudDeletionRepository, RedisMode, SshParams, StoredConnection, Workspace,
+    WorkspaceRepository,
 };
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
 use redis_view::{RedisFormWindow, RedisFormWindowConfig};
@@ -2329,6 +2330,23 @@ impl HomePage {
                     }
                 }
             }
+            ConnectionType::Rdp | ConnectionType::Vnc => {
+                if let Ok(params) = conn.to_ssh_params() {
+                    if params.host.to_lowercase().contains(query) {
+                        return true;
+                    }
+                    if params.port.to_string().contains(query) {
+                        return true;
+                    }
+                    if params.username.to_lowercase().contains(query) {
+                        return true;
+                    }
+                    let conn_str = format!("{}@{}:{}", params.username, params.host, params.port);
+                    if conn_str.to_lowercase().contains(query) {
+                        return true;
+                    }
+                }
+            }
             ConnectionType::Redis => {
                 if let Ok(params) = conn.to_redis_params() {
                     if params.host.to_lowercase().contains(query) {
@@ -2756,6 +2774,7 @@ impl HomePage {
                                                 this.editing_connection_id = Some(conn_id);
                                                 this.show_serial_form(window, cx);
                                             }
+                                            ConnectionType::Rdp | ConnectionType::Vnc => {}
                                             _ => {}
                                         }
                                     }
@@ -2821,6 +2840,10 @@ impl HomePage {
                                     .with_size(px(40.0))
                                     .text_color(gpui::white()),
                                 ConnectionType::Serial => IconName::SerialPort
+                                    .color()
+                                    .with_size(px(40.0))
+                                    .text_color(gpui::white()),
+                                ConnectionType::Rdp | ConnectionType::Vnc => IconName::Monitor
                                     .color()
                                     .with_size(px(40.0))
                                     .text_color(gpui::white()),
@@ -2940,6 +2963,38 @@ impl HomePage {
                                     this
                                 }
                             })
+                            .when(
+                                matches!(
+                                    conn.connection_type,
+                                    ConnectionType::Rdp | ConnectionType::Vnc
+                                ),
+                                |this| {
+                                    if let Ok(params) = conn.to_ssh_params() {
+                                        let conn_info = remote_desktop_connection_info(&params);
+                                        let tooltip_text: SharedString = conn_info.clone().into();
+                                        this.child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "conn-info-{}",
+                                                    conn.id.unwrap_or(0)
+                                                )))
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .whitespace_nowrap()
+                                                .max_w_full()
+                                                .tooltip(move |window, cx| {
+                                                    Tooltip::new(tooltip_text.clone())
+                                                        .build(window, cx)
+                                                })
+                                                .child(conn_info),
+                                        )
+                                    } else {
+                                        this
+                                    }
+                                },
+                            )
                             .when(conn.connection_type == ConnectionType::Redis, |this| {
                                 if let Ok(params) = conn.to_redis_params() {
                                     let conn_info = match params.mode {
@@ -3071,6 +3126,10 @@ impl HomePage {
 
         card.into_any_element()
     }
+}
+
+fn remote_desktop_connection_info(params: &SshParams) -> String {
+    format!("{}@{}:{}", params.username, params.host, params.port)
 }
 
 /// 生成复制连接的唯一名称

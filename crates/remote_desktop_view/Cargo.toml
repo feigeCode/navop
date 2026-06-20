@@ -1,0 +1,20 @@
+[package]
+name = "remote_desktop_view"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+one-core = { workspace = true }
+one-ui = { workspace = true }
+remote_desktop = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+image = { workspace = true }
+smallvec = { workspace = true }
+
+[lints]
+workspace = true

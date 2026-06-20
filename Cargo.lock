@@ -6647,6 +6647,8 @@ dependencies = [
  "one-core",
  "one-ui",
  "redis_view",
+ "remote_desktop",
+ "remote_desktop_view",
  "remote_file_editor",
  "reqwest_client",
  "rust-i18n",
@@ -9332,6 +9334,36 @@ name = "regex-syntax"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
+
+[[package]]
+name = "remote_desktop"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "remote_desktop_view"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "image",
+ "one-core",
+ "one-ui",
+ "remote_desktop",
+ "smallvec",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "remote_file_editor"
