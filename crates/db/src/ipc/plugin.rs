@@ -83,13 +83,13 @@ impl ExternalDatabasePlugin {
     fn driver_for_config(&self, config: &DbConnectionConfig) -> Result<IpcDriverManifest, DbError> {
         let driver_id = driver_id_for_config(config)?;
         if let Some(registry) = &self.registry {
-            if let Some(driver) = registry.find(driver_id) {
-                return Ok(driver);
-            }
             if let Some(reloader) = &self.registry_reloader {
                 if let Some(driver) = reloader().find(driver_id) {
                     return Ok(driver);
                 }
+            }
+            if let Some(driver) = registry.find(driver_id) {
+                return Ok(driver);
             }
             return Err(DbError::connection(format!(
                 "external driver '{}' not found",
@@ -2139,6 +2139,40 @@ mod tests {
         config.database_type = DatabaseType::external("missing");
         let error = plugin.driver_for_config(&config).unwrap_err();
         assert!(format!("{error}").contains("external driver 'missing' not found"));
+    }
+
+    #[test]
+    fn reloading_registry_prefers_updated_manifest_for_existing_driver_id() {
+        let mut stale = driver_manifest("duckdb", true, "duckdb.connection");
+        stale.dialect.identifier_quote_left = "`".to_string();
+        stale.dialect.identifier_quote_right = Some("`".to_string());
+        let mut fresh = stale.clone();
+        fresh.dialect.identifier_quote_left = "\"".to_string();
+        fresh.dialect.identifier_quote_right = Some("\"".to_string());
+
+        let plugin = ExternalDatabasePlugin::with_registry_reloader(
+            IpcDriverRegistry::from_drivers(vec![stale]),
+            std::sync::Arc::new(move || IpcDriverRegistry::from_drivers(vec![fresh.clone()])),
+        );
+        let config = DbConnectionConfig {
+            id: "duckdb-conn".into(),
+            name: "DuckDB".into(),
+            database_type: DatabaseType::DuckDB,
+            host: "/tmp/reloaded.duckdb".into(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params: Default::default(),
+        };
+
+        let driver = plugin.driver_for_config(&config).unwrap();
+        let reloaded_plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        assert_eq!("\"value\"", reloaded_plugin.quote_identifier("value"));
     }
 
     #[test]

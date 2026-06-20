@@ -215,18 +215,17 @@ impl DbManager {
             DatabaseType::MSSQL => Ok(Arc::clone(&self.mssql)),
             DatabaseType::Oracle => Ok(Arc::clone(&self.oracle)),
             DatabaseType::External { driver_id } => {
+                if let Some(driver) = (self.external_registry_reloader)().find(driver_id) {
+                    return Ok(Arc::new(ExternalDatabasePlugin::for_driver(driver))
+                        as Arc<dyn DatabasePlugin>);
+                }
                 if let Some(plugin) = self.external_drivers.get(driver_id).cloned() {
                     return Ok(plugin);
                 }
-                (self.external_registry_reloader)()
-                    .find(driver_id)
-                    .map(|driver| {
-                        Arc::new(ExternalDatabasePlugin::for_driver(driver))
-                            as Arc<dyn DatabasePlugin>
-                    })
-                    .ok_or_else(|| {
-                        DbError::connection(format!("external driver '{}' not found", driver_id))
-                    })
+                Err(DbError::connection(format!(
+                    "external driver '{}' not found",
+                    driver_id
+                )))
             }
         }
     }
@@ -3384,6 +3383,34 @@ mod tests {
 
         assert_eq!(DatabaseType::external("dm"), plugin.name());
         assert!(plugin.capabilities().supports_schema);
+    }
+
+    #[test]
+    fn db_manager_reloads_updated_external_driver_manifest_for_existing_id() {
+        let mut stale = external_driver_manifest("oracle-go", "\"", true);
+        stale
+            .capabilities
+            .as_mut()
+            .expect("test manifest has capabilities")
+            .uses_schema_as_database = false;
+        let mut fresh = stale.clone();
+        fresh
+            .capabilities
+            .as_mut()
+            .expect("test manifest has capabilities")
+            .uses_schema_as_database = true;
+        fresh.dialect.uses_schema_as_database = true;
+
+        let manager = DbManager::with_external_registry_reloader(
+            IpcDriverRegistry::from_drivers(vec![stale]),
+            Arc::new(move || IpcDriverRegistry::from_drivers(vec![fresh.clone()])),
+        );
+
+        let plugin = manager
+            .get_plugin(&DatabaseType::external("oracle-go"))
+            .unwrap();
+
+        assert!(plugin.capabilities().uses_schema_as_database);
     }
 
     #[test]
