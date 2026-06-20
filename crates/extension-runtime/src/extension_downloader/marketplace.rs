@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::extension::ExtensionKind;
 
 const EXTENSION_RELEASE_MANIFEST_FILE: &str = "extension-manifest.json";
+const DEFAULT_GITHUB_RELEASE_DOWNLOAD_BASE: &str =
+    "https://github.com/feigeCode/onetcli-extensions/releases/download/";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketplaceManifest {
@@ -218,6 +220,7 @@ impl MarketplaceEntry {
         let release_tag = non_empty(self.release_tag.clone())?;
         github_release_download_base(github_manifest_url)
             .or_else(|| github_release_download_base(manifest_url))
+            .or_else(|| Some(DEFAULT_GITHUB_RELEASE_DOWNLOAD_BASE.to_string()))
             .map(|base| format!("{base}{release_tag}/{file}"))
     }
 
@@ -231,6 +234,7 @@ impl MarketplaceEntry {
                     .as_deref()
                     .and_then(github_release_download_base)
             })
+            .or_else(|| Some(DEFAULT_GITHUB_RELEASE_DOWNLOAD_BASE.to_string()))
             .map(|base| format!("{base}{release_tag}/{EXTENSION_RELEASE_MANIFEST_FILE}"))
     }
 

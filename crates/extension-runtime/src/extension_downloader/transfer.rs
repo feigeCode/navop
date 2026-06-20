@@ -11,7 +11,8 @@ use gpui::http_client::{AsyncBody, HttpClient, Method, Request, http::header};
 use super::marketplace::{MarketplaceEntry, MarketplaceManifest};
 use crate::extension::{ExtensionKind, ExtensionRegistry, ExtensionSummary};
 
-pub const GITHUB_EXTENSION_MANIFEST_URL: &str = "https://github.com/feigeCode/onetcli-extensions/releases/latest/download/extension-manifest.json";
+pub const GITHUB_EXTENSION_MANIFEST_URL: &str =
+    "https://raw.githubusercontent.com/feigeCode/onetcli-extensions/main/manifest.json";
 pub const DEFAULT_EXTENSION_MANIFEST_URL: &str = GITHUB_EXTENSION_MANIFEST_URL;
 const EXTENSION_GITHUB_MANIFEST_URL_ENV: &str = "ONETCLI_EXTENSION_GITHUB_MANIFEST_URL";
 const DOWNLOAD_BUFFER_SIZE: usize = 16 * 1024;

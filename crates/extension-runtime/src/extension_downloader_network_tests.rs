@@ -104,11 +104,11 @@ fn configured_manifest_urls_use_injected_github_fallback() {
     assert_eq!(
         vec![
             "https://onetcli.test.cn/extensions/manifest.json".to_string(),
-            "https://github.example.test/onetcli-extensions/releases/latest/download/extension-manifest.json".to_string(),
+            "https://raw.githubusercontent.example.test/feigeCode/onetcli-extensions/main/manifest.json".to_string(),
         ],
         manifest_urls_for_configured_url_with_github_fallback(
             Some("https://onetcli.test.cn/extensions/manifest.json".to_string()),
-            "https://github.example.test/onetcli-extensions/releases/latest/download/extension-manifest.json".to_string(),
+            "https://raw.githubusercontent.example.test/feigeCode/onetcli-extensions/main/manifest.json".to_string(),
         )
     );
 }
@@ -117,7 +117,7 @@ fn configured_manifest_urls_use_injected_github_fallback() {
 #[test]
 fn github_marketplace_feature_points_to_github_manifest() {
     assert_eq!(
-        "https://github.com/feigeCode/onetcli/releases/latest/download/extension-manifest.json",
+        "https://raw.githubusercontent.com/feigeCode/onetcli-extensions/main/manifest.json",
         DEFAULT_EXTENSION_MANIFEST_URL
     );
 }
@@ -161,7 +161,7 @@ fn fetch_default_manifest_url_falls_back_to_github_when_r2_fails() {
         requests[0].uri
     );
     assert_eq!(
-        "https://github.com/feigeCode/onetcli-extensions/releases/latest/download/extension-manifest.json",
+        "https://raw.githubusercontent.com/feigeCode/onetcli-extensions/main/manifest.json",
         requests[1].uri
     );
 }
