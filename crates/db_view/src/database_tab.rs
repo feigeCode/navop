@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::path::PathBuf;
 
 use crate::chatdb::db_connection_selector::{DbSelectorContext, SelectorSourceMode};
 use crate::database_objects_tab::DatabaseObjectsPanel;
@@ -6,7 +7,10 @@ use crate::db_tree_event::DatabaseEventHandler;
 use crate::db_tree_view::DbTreeView;
 use crate::sidebar::{DatabaseSidebar, DatabaseSidebarEvent};
 use crate::sql_editor_view::SqlEditorTab;
-use db::GlobalDbState;
+use db::{
+    GlobalDbState,
+    ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path},
+};
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Axis, Bounds, Context, Element, Entity, EventEmitter,
     FocusHandle, Focusable, FontWeight, Hsla, InteractiveElement, IntoElement, MouseMoveEvent,
@@ -18,7 +22,7 @@ use one_core::ai_chat::{CodeBlockAction, LanguageMatcher};
 use one_core::layout::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
 };
-use one_core::storage::{ActiveConnections, Workspace};
+use one_core::storage::{ActiveConnections, DbConnectionConfig, Workspace};
 use one_core::{
     storage::StoredConnection,
     tab_container::{TabContainer, TabContent, TabContentEvent, TabItem},
@@ -31,6 +35,46 @@ const PANEL_MIN_SIZE: Pixels = px(100.0);
 const TREE_PANEL_DEFAULT_SIZE: Pixels = px(250.0);
 const CHAT_SIDEBAR_MIN_WIDTH: Pixels = px(360.0);
 const CHAT_SIDEBAR_DEFAULT_WIDTH: Pixels = px(420.0);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DatabaseTabIconSource {
+    Asset(String),
+    File(PathBuf),
+}
+
+impl DatabaseTabIconSource {
+    fn into_icon(self, size: Size) -> Icon {
+        match self {
+            DatabaseTabIconSource::Asset(path) => driver_icon_from_asset_path(path, size),
+            DatabaseTabIconSource::File(path) => driver_icon_from_file_path(path, size),
+        }
+    }
+}
+
+fn external_driver_tab_icon_source_from_registry(
+    config: &DbConnectionConfig,
+    registry: &IpcDriverRegistry,
+) -> Option<DatabaseTabIconSource> {
+    let display = registry.display_for_config(config)?;
+    if let Some(path) = display.icon_file_path {
+        return Some(DatabaseTabIconSource::File(path));
+    }
+    display.icon_asset_path.map(DatabaseTabIconSource::Asset)
+}
+
+fn database_tab_icon_from_registry(
+    config: &DbConnectionConfig,
+    registry: &IpcDriverRegistry,
+) -> Icon {
+    external_driver_tab_icon_source_from_registry(config, registry)
+        .map(|source| source.into_icon(Size::Medium))
+        .unwrap_or_else(|| config.database_type.as_node_icon().with_size(Size::Medium))
+}
+
+fn database_tab_icon(config: &DbConnectionConfig) -> Icon {
+    let registry = IpcDriverRegistry::load_default();
+    database_tab_icon_from_registry(config, &registry)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResizingPanel {
@@ -476,7 +520,7 @@ impl TabContent for DatabaseTabView {
             match db_connection {
                 None => Some(IconName::Database.color()),
                 Some(result) => match result {
-                    Ok(conn) => Some(conn.database_type.as_node_icon().with_size(Size::Medium)),
+                    Ok(conn) => Some(database_tab_icon(&conn)),
                     Err(_) => Some(IconName::Database.color().with_size(Size::Medium)),
                 },
             }
@@ -550,6 +594,84 @@ impl TabContent for DatabaseTabView {
 
             true
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use db::ipc::{IpcDriverManifest, IpcDriverRegistry};
+    use one_core::storage::DatabaseType;
+    use std::collections::HashMap;
+
+    fn external_config(driver_id: &str) -> DbConnectionConfig {
+        DbConnectionConfig {
+            id: "1".to_string(),
+            database_type: DatabaseType::external(driver_id),
+            name: "saved".to_string(),
+            host: "localhost".to_string(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params: HashMap::new(),
+        }
+    }
+
+    fn driver_manifest(icon: &str) -> IpcDriverManifest {
+        let mut manifest: IpcDriverManifest = serde_json::from_str(&format!(
+            r#"{{
+                "id": "demo",
+                "name": "DemoDB",
+                "entry": {{ "command": "driver" }},
+                "transport": {{ "name": "demo.sock" }},
+                "ui": {{ "icon": "{icon}" }}
+            }}"#,
+        ))
+        .unwrap();
+        manifest.manifest_dir = PathBuf::from("/drivers/demo");
+        manifest
+    }
+
+    #[test]
+    fn external_database_tab_icon_uses_builtin_driver_asset_icon() {
+        let registry = IpcDriverRegistry::from_drivers(vec![driver_manifest("DuckDB")]);
+        let source =
+            external_driver_tab_icon_source_from_registry(&external_config("demo"), &registry);
+
+        assert_eq!(
+            Some(DatabaseTabIconSource::Asset("icons/duckdb.svg".to_string())),
+            source
+        );
+    }
+
+    #[test]
+    fn external_database_tab_icon_prefers_driver_file_icon() {
+        let registry = IpcDriverRegistry::from_drivers(vec![driver_manifest("icons/demo.svg")]);
+        let source =
+            external_driver_tab_icon_source_from_registry(&external_config("demo"), &registry);
+
+        assert_eq!(
+            Some(DatabaseTabIconSource::File(PathBuf::from(
+                "/drivers/demo/icons/demo.svg"
+            ))),
+            source
+        );
+    }
+
+    #[test]
+    fn builtin_database_tab_icon_does_not_use_external_driver_source() {
+        let registry = IpcDriverRegistry::from_drivers(vec![driver_manifest("DuckDB")]);
+        let mut config = external_config("demo");
+        config.database_type = DatabaseType::MySQL;
+
+        assert_eq!(
+            None,
+            external_driver_tab_icon_source_from_registry(&config, &registry)
+        );
     }
 }
 
