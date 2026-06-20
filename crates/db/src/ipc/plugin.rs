@@ -1616,6 +1616,7 @@ fn index_info_from_wire(index: wire_schema::IndexInfo) -> IndexInfo {
         name: index.name,
         columns: index.columns,
         is_unique: index.is_unique,
+        is_primary: index.is_primary,
         index_type: index.kind,
     }
 }

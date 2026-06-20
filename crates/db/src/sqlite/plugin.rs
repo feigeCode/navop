@@ -911,6 +911,7 @@ impl DatabasePlugin for SqlitePlugin {
                     name: index_name,
                     columns,
                     is_unique,
+                    is_primary: false,
                     index_type: None,
                 });
             }

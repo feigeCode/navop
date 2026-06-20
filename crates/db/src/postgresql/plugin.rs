@@ -1355,6 +1355,7 @@ impl DatabasePlugin for PostgresPlugin {
                         name: index_name,
                         columns: Vec::new(),
                         is_unique,
+                        is_primary: false,
                         index_type: Some("btree".to_string()),
                     })
                     .columns

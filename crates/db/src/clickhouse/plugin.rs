@@ -925,6 +925,7 @@ impl DatabasePlugin for ClickHousePlugin {
                         name: name.clone(),
                         columns,
                         is_unique: false,
+                        is_primary: false,
                         index_type: Some(format!(
                             "{} (granularity: {})",
                             index_type_str,

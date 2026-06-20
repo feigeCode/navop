@@ -127,7 +127,7 @@ pub(crate) fn build_table_design_from_metadata(
 
     let index_defs: Vec<IndexDefinition> = indexes
         .iter()
-        .filter(|idx| idx.name.to_uppercase() != "PRIMARY")
+        .filter(|idx| !idx.is_primary && idx.name.to_uppercase() != "PRIMARY")
         .map(|idx| IndexDefinition {
             name: idx.name.clone(),
             columns: idx.columns.clone(),
@@ -1643,6 +1643,18 @@ impl ColumnsEditor {
         }
     }
 
+    fn ensure_loaded_type_option(data_types: &mut Vec<String>, base_type: &str) -> usize {
+        if let Some(idx) = data_types
+            .iter()
+            .position(|t| t.eq_ignore_ascii_case(base_type))
+        {
+            return idx;
+        }
+
+        data_types.push(base_type.to_string());
+        data_types.len() - 1
+    }
+
     fn add_column(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let name_input = cx
             .new(|cx| InputState::new(window, cx).placeholder(t!("Table.column_name").to_string()));
@@ -2029,17 +2041,13 @@ impl ColumnsEditor {
                 input
             });
 
-            let select_type_items = SearchableVec::new(self.data_types.clone());
             let parsed_type = plugin
                 .as_ref()
                 .map(|p| p.parse_column_type(&col.data_type))
                 .unwrap_or_else(|| fallback_parse_column_type(&col.data_type));
             let base_type = parsed_type.base_type.clone();
-            let type_idx = self
-                .data_types
-                .iter()
-                .position(|t| t.to_uppercase() == base_type.to_uppercase())
-                .unwrap_or(0);
+            let type_idx = Self::ensure_loaded_type_option(&mut self.data_types, &base_type);
+            let select_type_items = SearchableVec::new(self.data_types.clone());
             let type_select = cx.new(|cx| {
                 SelectState::new(
                     select_type_items,
@@ -2821,7 +2829,7 @@ impl IndexesEditor {
         self._subscriptions.clear();
 
         for idx in indexes {
-            if idx.name.to_uppercase() == "PRIMARY" {
+            if idx.is_primary || idx.name.to_uppercase() == "PRIMARY" {
                 continue;
             }
 
@@ -3508,6 +3516,46 @@ mod tests {
 
         let no_change = db::plugin::merge_alter_sql(String::new(), Vec::new());
         assert_eq!(no_change, "-- No changes detected");
+    }
+
+    #[test]
+    fn test_loaded_column_type_missing_from_picker_is_preserved() {
+        let mut data_types = vec!["INT".to_string(), "VARCHAR".to_string()];
+
+        let idx = ColumnsEditor::ensure_loaded_type_option(&mut data_types, "jsonb");
+
+        assert_eq!(idx, 2);
+        assert_eq!(data_types, vec!["INT", "VARCHAR", "jsonb"]);
+    }
+
+    #[test]
+    fn test_primary_indexes_with_database_specific_names_are_not_editable_indexes() {
+        let design = build_table_design_from_metadata(
+            DatabaseType::PostgreSQL,
+            "app".to_string(),
+            "users".to_string(),
+            &[],
+            &[
+                IndexInfo {
+                    name: "users_pkey".to_string(),
+                    columns: vec!["id".to_string()],
+                    is_unique: true,
+                    is_primary: true,
+                    index_type: Some("btree".to_string()),
+                },
+                IndexInfo {
+                    name: "idx_users_email".to_string(),
+                    columns: vec!["email".to_string()],
+                    is_unique: true,
+                    is_primary: false,
+                    index_type: Some("btree".to_string()),
+                },
+            ],
+            None,
+        );
+
+        assert_eq!(design.indexes.len(), 1);
+        assert_eq!(design.indexes[0].name, "idx_users_email");
     }
 
     #[test]

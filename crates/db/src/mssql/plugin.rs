@@ -1313,6 +1313,7 @@ impl DatabasePlugin for MsSqlPlugin {
                         name: index_name.clone(),
                         columns: vec![],
                         is_unique,
+                        is_primary: false,
                         index_type: Some(index_type),
                     })
                     .columns

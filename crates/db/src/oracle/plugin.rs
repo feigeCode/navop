@@ -1175,6 +1175,7 @@ impl DatabasePlugin for OraclePlugin {
                         name: index_name.clone(),
                         columns: vec![],
                         is_unique,
+                        is_primary: false,
                         index_type: Some(index_type),
                     })
                     .columns

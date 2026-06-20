@@ -595,6 +595,7 @@ mod tests {
             name: "idx_orders_id".to_string(),
             columns: vec!["id".to_string()],
             is_unique: true,
+            is_primary: false,
             index_type: None,
         }];
         let foreign_keys = vec![ForeignKeyDefinition {

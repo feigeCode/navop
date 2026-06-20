@@ -244,6 +244,8 @@ pub struct IndexInfo {
     pub name: String,
     pub columns: Vec<String>,
     pub is_unique: bool,
+    #[serde(default)]
+    pub is_primary: bool,
     pub index_type: Option<String>,
 }
 
