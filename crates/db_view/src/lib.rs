@@ -22,6 +22,7 @@ mod extension_widget_tests;
 pub mod extension_widget_view;
 mod extension_widget_view_controls;
 mod import_export;
+pub mod search_shortcut;
 pub mod settings;
 mod sidebar;
 pub mod sql_editor;

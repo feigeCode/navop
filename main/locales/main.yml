@@ -1111,6 +1111,14 @@ Settings:
       en: Toggle Vi Mode
       zh-CN: 切换 Vi 模式
       zh-HK: 切換 Vi 模式
+    database_focus_search:
+      en: Focus Search
+      zh-CN: 聚焦搜索
+      zh-HK: 聚焦搜尋
+    database_open_table_query:
+      en: Query Selected Table
+      zh-CN: 查询选中表
+      zh-HK: 查詢選中表
     sql_run_query:
       en: Run Query
       zh-CN: 执行查询

@@ -989,6 +989,10 @@ Query:
     en: New Query
     zh-CN: 新建查询
     zh-HK: 新建查詢
+  query_table:
+    en: Query Table
+    zh-CN: 查询表
+    zh-HK: 查詢表
   no_sql_to_compress:
     en: No SQL statement to compress
     zh-CN: 没有待压缩的SQL语句
@@ -2121,6 +2125,10 @@ TableDataGrid:
     en: Refresh
     zh-CN: 刷新
     zh-HK: 重新整理
+  search_placeholder:
+    en: Search current page
+    zh-CN: 搜索当前页
+    zh-HK: 搜尋當前頁
   add_row:
     en: Add Row
     zh-CN: 添加行
