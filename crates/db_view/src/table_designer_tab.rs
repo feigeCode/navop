@@ -1,10 +1,11 @@
+use crate::search_shortcut::{DB_SEARCH_CONTEXT, FocusSearchInput, focus_search_input};
 use futures::channel::oneshot;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle,
-    Window, div, px, uniform_list,
+    AnyElement, App, AsyncApp, Context, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement,
+    Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
+    UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
@@ -43,6 +44,44 @@ use gpui_component::select::SearchableVec;
 use one_core::storage::DatabaseType;
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
 use rust_i18n::t;
+
+const COLUMN_EDITOR_RESIZE_HANDLE_WIDTH: Pixels = px(6.0);
+const COLUMN_EDITOR_COLUMN_COUNT: usize = 7;
+const COLUMN_NAME_COL: usize = 0;
+const COLUMN_TYPE_COL: usize = 1;
+const COLUMN_LENGTH_COL: usize = 2;
+const COLUMN_SCALE_COL: usize = 3;
+const COLUMN_NULLABLE_COL: usize = 4;
+const COLUMN_PRIMARY_KEY_COL: usize = 5;
+const COLUMN_AUTO_INCREMENT_COL: usize = 6;
+const COLUMN_DRAG_HANDLE_WIDTH: Pixels = px(24.0);
+const COLUMN_EDITOR_DEFAULT_WIDTHS: [Pixels; COLUMN_EDITOR_COLUMN_COUNT] = [
+    px(160.0),
+    px(140.0),
+    px(60.0),
+    px(60.0),
+    px(50.0),
+    px(50.0),
+    px(50.0),
+];
+const COLUMN_EDITOR_MIN_WIDTHS: [Pixels; COLUMN_EDITOR_COLUMN_COUNT] = [
+    px(96.0),
+    px(96.0),
+    px(48.0),
+    px(48.0),
+    px(42.0),
+    px(42.0),
+    px(42.0),
+];
+const COLUMN_EDITOR_MAX_WIDTHS: [Pixels; COLUMN_EDITOR_COLUMN_COUNT] = [
+    px(360.0),
+    px(320.0),
+    px(160.0),
+    px(160.0),
+    px(120.0),
+    px(120.0),
+    px(140.0),
+];
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DesignerTab {
@@ -1478,10 +1517,23 @@ impl Render for DragColumn {
     }
 }
 
+#[derive(Clone)]
+struct ResizeColumnEditorColumn {
+    entity_id: EntityId,
+    col_ix: usize,
+}
+
+impl Render for ResizeColumnEditorColumn {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size(px(0.0))
+    }
+}
+
 pub struct ColumnsEditor {
     focus_handle: FocusHandle,
     columns: Vec<ColumnEditorRow>,
     selected_index: Option<usize>,
+    column_widths: [Pixels; COLUMN_EDITOR_COLUMN_COUNT],
     data_types: Vec<String>,
     charsets: Vec<CharsetInfo>,
     database_type: DatabaseType,
@@ -1512,6 +1564,15 @@ struct ColumnEditorRow {
 }
 
 impl ColumnsEditor {
+    fn on_action_focus_search(
+        &mut self,
+        _: &FocusSearchInput,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        focus_search_input(&self.search_input, window, cx);
+    }
+
     pub fn new(
         database_type: DatabaseType,
         charsets: Vec<CharsetInfo>,
@@ -1539,6 +1600,7 @@ impl ColumnsEditor {
             focus_handle,
             columns: vec![],
             selected_index: None,
+            column_widths: COLUMN_EDITOR_DEFAULT_WIDTHS,
             data_types,
             charsets,
             database_type,
@@ -1550,6 +1612,26 @@ impl ColumnsEditor {
             _search_subscription: search_sub,
             _subscriptions: vec![],
         }
+    }
+
+    fn resize_column_width(
+        widths: &mut [Pixels; COLUMN_EDITOR_COLUMN_COUNT],
+        col_ix: usize,
+        width: Pixels,
+    ) {
+        let Some(column_width) = widths.get_mut(col_ix) else {
+            return;
+        };
+        *column_width = width
+            .max(COLUMN_EDITOR_MIN_WIDTHS[col_ix])
+            .min(COLUMN_EDITOR_MAX_WIDTHS[col_ix]);
+    }
+
+    fn column_width(&self, col_ix: usize) -> Pixels {
+        self.column_widths
+            .get(col_ix)
+            .copied()
+            .unwrap_or(COLUMN_EDITOR_DEFAULT_WIDTHS[COLUMN_NAME_COL])
     }
 
     fn update_collation_for_charset(
@@ -2375,7 +2457,7 @@ impl ColumnsEditor {
             .into_any_element()
     }
 
-    fn render_table_header(&self, cx: &Context<Self>) -> AnyElement {
+    fn render_table_header(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .gap_3()
             .px_3()
@@ -2383,65 +2465,120 @@ impl ColumnsEditor {
             .bg(cx.theme().muted.opacity(0.5))
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(div().w(px(24.)))
-            .child(
-                div()
-                    .w(px(160.))
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("Table.column_name").to_string()),
-            )
-            .child(
-                div()
-                    .w(px(140.))
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("Table.type").to_string()),
-            )
-            .child(
-                div()
-                    .w(px(60.))
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("Table.length").to_string()),
-            )
-            .child(
-                div()
-                    .w(px(60.))
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("Table.decimal_places").to_string()),
-            )
-            .child(
-                div()
-                    .w(px(50.))
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .text_center()
-                    .child(t!("Table.nullable").to_string()),
-            )
-            .child(
-                div()
-                    .w(px(50.))
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .text_center()
-                    .child(t!("Table.primary_key").to_string()),
-            )
-            .child(
-                div()
-                    .w(px(50.))
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .text_center()
-                    .child(t!("Table.auto_increment_column").to_string()),
-            )
+            .child(div().w(COLUMN_DRAG_HANDLE_WIDTH))
+            .child(self.render_header_cell(
+                COLUMN_NAME_COL,
+                t!("Table.column_name").to_string(),
+                false,
+                cx,
+            ))
+            .child(self.render_header_cell(
+                COLUMN_TYPE_COL,
+                t!("Table.type").to_string(),
+                false,
+                cx,
+            ))
+            .child(self.render_header_cell(
+                COLUMN_LENGTH_COL,
+                t!("Table.length").to_string(),
+                false,
+                cx,
+            ))
+            .child(self.render_header_cell(
+                COLUMN_SCALE_COL,
+                t!("Table.decimal_places").to_string(),
+                false,
+                cx,
+            ))
+            .child(self.render_header_cell(
+                COLUMN_NULLABLE_COL,
+                t!("Table.nullable").to_string(),
+                true,
+                cx,
+            ))
+            .child(self.render_header_cell(
+                COLUMN_PRIMARY_KEY_COL,
+                t!("Table.primary_key").to_string(),
+                true,
+                cx,
+            ))
+            .child(self.render_header_cell(
+                COLUMN_AUTO_INCREMENT_COL,
+                t!("Table.auto_increment_column").to_string(),
+                true,
+                cx,
+            ))
             .child(
                 div()
                     .flex_1()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child(t!("Table.comment").to_string()),
+            )
+            .into_any_element()
+    }
+
+    fn render_header_cell(
+        &self,
+        col_ix: usize,
+        label: String,
+        centered: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .relative()
+            .w(self.column_width(col_ix))
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .when(centered, |this| this.text_center())
+            .child(label)
+            .child(self.render_column_resize_handle(col_ix, cx))
+            .into_any_element()
+    }
+
+    fn render_column_resize_handle(&self, col_ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let group_id = SharedString::from(format!("column-editor-resize:{col_ix}"));
+        div()
+            .id(("column-editor-resize", col_ix))
+            .group(group_id.clone())
+            .absolute()
+            .right_0()
+            .top_0()
+            .bottom_0()
+            .w(COLUMN_EDITOR_RESIZE_HANDLE_WIDTH)
+            .cursor_col_resize()
+            .occlude()
+            .flex()
+            .justify_end()
+            .child(
+                div()
+                    .h_full()
+                    .w(px(1.0))
+                    .bg(cx.theme().border.opacity(0.4))
+                    .group_hover(&group_id, |el| el.bg(cx.theme().primary)),
+            )
+            .on_drag_move(cx.listener(
+                move |this, e: &DragMoveEvent<ResizeColumnEditorColumn>, _window, cx| {
+                    let drag = e.drag(cx);
+                    if drag.entity_id != cx.entity_id() || drag.col_ix != col_ix {
+                        return;
+                    }
+
+                    let width = this.column_width(col_ix);
+                    let delta = e.event.position.x - e.bounds.center().x;
+                    Self::resize_column_width(&mut this.column_widths, col_ix, width + delta);
+                    cx.notify();
+                },
+            ))
+            .on_drag(
+                ResizeColumnEditorColumn {
+                    entity_id: cx.entity_id(),
+                    col_ix,
+                },
+                |drag, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                },
             )
             .into_any_element()
     }
@@ -2476,7 +2613,7 @@ impl ColumnsEditor {
             .child(
                 div()
                     .id(("col-row-drag-handle", idx))
-                    .w(px(24.))
+                    .w(COLUMN_DRAG_HANDLE_WIDTH)
                     .flex()
                     .items_center()
                     .justify_center()
@@ -2493,51 +2630,65 @@ impl ColumnsEditor {
             )
             .child(
                 div()
-                    .w(px(160.))
+                    .w(self.column_width(COLUMN_NAME_COL))
                     .child(Input::new(&row.name_input).w_full().small()),
             )
             .child(
                 div()
-                    .w(px(140.))
+                    .w(self.column_width(COLUMN_TYPE_COL))
                     .child(Select::new(&row.type_select).w_full().small()),
             )
             .child(
                 div()
-                    .w(px(60.))
+                    .w(self.column_width(COLUMN_LENGTH_COL))
                     .child(Input::new(&row.length_input).w_full().small()),
             )
             .child(
                 div()
-                    .w(px(60.))
+                    .w(self.column_width(COLUMN_SCALE_COL))
                     .child(Input::new(&row.scale_input).w_full().small()),
             )
             .child(
-                div().w(px(50.)).flex().justify_center().child(
-                    Checkbox::new(("null", idx))
-                        .checked(row.nullable)
-                        .small()
-                        .on_click(
-                            cx.listener(move |this, _, _window, cx| this.toggle_nullable(idx, cx)),
-                        ),
-                ),
+                div()
+                    .w(self.column_width(COLUMN_NULLABLE_COL))
+                    .flex()
+                    .justify_center()
+                    .child(
+                        Checkbox::new(("null", idx))
+                            .checked(row.nullable)
+                            .small()
+                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                this.toggle_nullable(idx, cx)
+                            })),
+                    ),
             )
             .child(
-                div().w(px(50.)).flex().justify_center().child(
-                    Checkbox::new(("pk", idx))
-                        .checked(row.is_pk)
-                        .small()
-                        .on_click(cx.listener(move |this, _, _window, cx| this.toggle_pk(idx, cx))),
-                ),
+                div()
+                    .w(self.column_width(COLUMN_PRIMARY_KEY_COL))
+                    .flex()
+                    .justify_center()
+                    .child(
+                        Checkbox::new(("pk", idx))
+                            .checked(row.is_pk)
+                            .small()
+                            .on_click(
+                                cx.listener(move |this, _, _window, cx| this.toggle_pk(idx, cx)),
+                            ),
+                    ),
             )
             .child(
-                div().w(px(50.)).flex().justify_center().child(
-                    Checkbox::new(("ai", idx))
-                        .checked(row.auto_increment)
-                        .small()
-                        .on_click(cx.listener(move |this, _, _window, cx| {
-                            this.toggle_auto_increment(idx, cx)
-                        })),
-                ),
+                div()
+                    .w(self.column_width(COLUMN_AUTO_INCREMENT_COL))
+                    .flex()
+                    .justify_center()
+                    .child(
+                        Checkbox::new(("ai", idx))
+                            .checked(row.auto_increment)
+                            .small()
+                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                this.toggle_auto_increment(idx, cx)
+                            })),
+                    ),
             )
             .child(
                 div()
@@ -2669,6 +2820,9 @@ impl Render for ColumnsEditor {
 
         v_flex()
             .size_full()
+            .track_focus(&self.focus_handle)
+            .key_context(DB_SEARCH_CONTEXT)
+            .on_action(cx.listener(Self::on_action_focus_search))
             .child(self.render_header(cx))
             .child(self.render_table_header(cx))
             .child(
@@ -3286,6 +3440,35 @@ mod tests {
         clickhouse::ClickHousePlugin, mssql::MsSqlPlugin, mysql::MySqlPlugin, oracle::OraclePlugin,
         plugin::DatabasePlugin, postgresql::PostgresPlugin, sqlite::SqlitePlugin,
     };
+
+    #[test]
+    fn column_editor_resize_updates_width_with_bounds() {
+        let mut widths = COLUMN_EDITOR_DEFAULT_WIDTHS;
+
+        ColumnsEditor::resize_column_width(&mut widths, COLUMN_NAME_COL, px(260.0));
+        assert_eq!(px(260.0), widths[COLUMN_NAME_COL]);
+
+        ColumnsEditor::resize_column_width(&mut widths, COLUMN_NAME_COL, px(8.0));
+        assert_eq!(
+            COLUMN_EDITOR_MIN_WIDTHS[COLUMN_NAME_COL],
+            widths[COLUMN_NAME_COL]
+        );
+
+        ColumnsEditor::resize_column_width(&mut widths, COLUMN_NAME_COL, px(900.0));
+        assert_eq!(
+            COLUMN_EDITOR_MAX_WIDTHS[COLUMN_NAME_COL],
+            widths[COLUMN_NAME_COL]
+        );
+    }
+
+    #[test]
+    fn column_editor_resize_ignores_invalid_column_index() {
+        let mut widths = COLUMN_EDITOR_DEFAULT_WIDTHS;
+
+        ColumnsEditor::resize_column_width(&mut widths, COLUMN_EDITOR_COLUMN_COUNT, px(260.0));
+
+        assert_eq!(COLUMN_EDITOR_DEFAULT_WIDTHS, widths);
+    }
 
     fn build_col(name: &str) -> ColumnDefinition {
         ColumnDefinition {
