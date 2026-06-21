@@ -83,6 +83,26 @@ impl ExternalDatabasePlugin {
         }
     }
 
+    fn is_oracle_compatible(&self) -> bool {
+        matches!(
+            self.driver.dialect.compatible_database_type,
+            Some(DatabaseType::Oracle)
+        )
+    }
+
+    fn oracle_table_save_request(&self, request: &TableSaveRequest) -> TableSaveRequest {
+        let mut request = request.clone();
+        let uses_schema_as_database = self.driver.dialect.uses_schema_as_database
+            || self.driver.effective_capabilities().uses_schema_as_database;
+        if request.schema.is_none()
+            && uses_schema_as_database
+            && !request.database.trim().is_empty()
+        {
+            request.schema = Some(request.database.clone());
+        }
+        request
+    }
+
     fn driver_for_config(&self, config: &DbConnectionConfig) -> Result<IpcDriverManifest, DbError> {
         let driver_id = driver_id_for_config(config)?;
         if let Some(registry) = &self.registry {
@@ -1355,6 +1375,28 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         )
     }
 
+    fn generate_table_changes_sql(&self, request: &TableSaveRequest) -> String {
+        if self.is_oracle_compatible() {
+            let oracle_plugin = OraclePlugin::new();
+            return oracle_plugin
+                .generate_table_changes_sql(&self.oracle_table_save_request(request));
+        }
+
+        let mut sql_statements = Vec::new();
+
+        for change in &request.changes {
+            if let Some(sql) = self.build_table_change_sql(request, change) {
+                sql_statements.push(sql);
+            }
+        }
+
+        if sql_statements.is_empty() {
+            t!("Error.no_changes").to_string()
+        } else {
+            sql_statements.join(";\n\n") + ";"
+        }
+    }
+
     fn rename_table(&self, _database: &str, old_name: &str, new_name: &str) -> String {
         format!(
             "ALTER TABLE {} RENAME TO {}",
@@ -1974,6 +2016,19 @@ mod tests {
         }
     }
 
+    fn column_info(name: &str, data_type: &str, is_primary_key: bool) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            is_nullable: !is_primary_key,
+            is_primary_key,
+            default_value: None,
+            comment: None,
+            charset: None,
+            collation: None,
+        }
+    }
+
     impl DriverRequestOnlyConnection {
         fn new() -> Self {
             Self {
@@ -2308,6 +2363,68 @@ mod tests {
             "\"APP\".\"EVENTS\"",
             plugin.format_table_reference("", Some("APP"), "EVENTS")
         );
+    }
+
+    #[test]
+    fn external_oracle_table_changes_use_oracle_date_literals() {
+        let mut driver = driver_manifest("oracle-go", true, "oracle.connection");
+        driver.dialect.compatible_database_type = Some(DatabaseType::Oracle);
+        driver.dialect.uses_schema_as_database = true;
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+        let request = TableSaveRequest {
+            database: "APP".to_string(),
+            schema: None,
+            table: "EVENTS".to_string(),
+            columns: vec![
+                column_info("ID", "NUMBER", true),
+                column_info("STARTED_AT", "DATE", false),
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Added {
+                data: vec!["1".to_string(), "2026-06-21 14:05:06".to_string()],
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert_eq!(
+            "INSERT INTO \"APP\".\"EVENTS\" (\"ID\", \"STARTED_AT\") VALUES ('1', TO_DATE('2026-06-21 14:05:06', 'YYYY-MM-DD HH24:MI:SS'));",
+            sql
+        );
+    }
+
+    #[test]
+    fn external_oracle_table_changes_use_oracle_lob_literals() {
+        let mut driver = driver_manifest("oracle-go", true, "oracle.connection");
+        driver.dialect.compatible_database_type = Some(DatabaseType::Oracle);
+        driver.dialect.uses_schema_as_database = true;
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+        let request = TableSaveRequest {
+            database: "APP".to_string(),
+            schema: None,
+            table: "DOCS".to_string(),
+            columns: vec![
+                column_info("ID", "NUMBER", true),
+                column_info("BODY", "CLOB", false),
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Updated {
+                original_data: vec!["1".to_string(), "old".to_string()],
+                changes: vec![TableCellChange {
+                    column_index: 1,
+                    column_name: "BODY".to_string(),
+                    old_value: "old".to_string(),
+                    new_value: "a".repeat(3_050),
+                }],
+                rowid: Some("AAABBB".to_string()),
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert!(sql.contains("UPDATE \"APP\".\"DOCS\" SET \"BODY\" = TO_CLOB('"));
+        assert!(sql.contains(" || TO_CLOB('"));
+        assert!(sql.contains("WHERE ROWID = 'AAABBB'"));
     }
 
     #[tokio::test]
