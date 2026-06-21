@@ -5,8 +5,11 @@ use gpui::{
     Window, actions, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _, Size, WindowExt, button::Button,
-    h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Size, WindowExt,
+    button::Button,
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    v_flex,
 };
 use one_ui::edit_table::{Column, EditTable, EditTableEvent, EditTableState};
 use one_ui::{create_large_text_editor_with_content, large_text_values_equivalent};
@@ -15,6 +18,7 @@ use rust_xlsxwriter::Workbook;
 use tracing::{error, log::trace};
 
 use crate::import_export::table_export_view::DataExportView;
+use crate::search_shortcut::{DB_SEARCH_CONTEXT, FocusSearchInput, focus_search_input};
 use crate::sql_editor::SqlEditor;
 use crate::table_data::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
 use crate::table_data::filter_editor::{FilterEditorEvent, TableFilterEditor, TableSchema};
@@ -334,6 +338,10 @@ fn build_xlsx_bytes(rows: &[Vec<String>]) -> Result<Vec<u8>, String> {
     workbook.save_to_buffer().map_err(|error| error.to_string())
 }
 
+fn table_has_unsaved_changes(editing_cell: Option<(usize, usize)>, change_count: usize) -> bool {
+    editing_cell.is_some() || change_count > 0
+}
+
 /// 数据表格组件
 pub struct DataGrid {
     /// 组件配置
@@ -350,6 +358,10 @@ pub struct DataGrid {
     filter_editor: Entity<TableFilterEditor>,
     /// 过滤器事件订阅
     _filter_sub: Option<Subscription>,
+    /// 当前页本地搜索输入框
+    search_input: Entity<InputState>,
+    /// 搜索输入框事件订阅
+    _search_sub: Option<Subscription>,
     /// 侧边栏大文本编辑器是否已为当前表格打开
     is_large_text_editor_sidebar_open: bool,
 }
@@ -373,6 +385,11 @@ impl DataGrid {
         });
         let focus_handle = cx.focus_handle();
         let filter_editor = cx.new(|cx| TableFilterEditor::new(window, cx));
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("TableDataGrid.search_placeholder").to_string())
+                .clean_on_escape()
+        });
         let table_data_info = cx.new(|_| TableDataInfo::default());
 
         let mut result = Self {
@@ -383,11 +400,14 @@ impl DataGrid {
             table_data_info,
             filter_editor,
             _filter_sub: None,
+            search_input,
+            _search_sub: None,
             is_large_text_editor_sidebar_open: false,
         };
         result.bind_table_event(window, cx);
         if is_table_data {
             result.bind_filter_event(window, cx);
+            result.bind_search_event(window, cx);
             result.load_data_with_clauses(1, cx);
         }
         result
@@ -423,6 +443,39 @@ impl DataGrid {
             },
         );
         self._filter_sub = Some(sub);
+    }
+
+    fn bind_search_event(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let sub = cx.subscribe_in(
+            &self.search_input,
+            window,
+            |this: &mut DataGrid, input, evt: &InputEvent, _window, cx| {
+                if let InputEvent::Change = evt {
+                    let query = input.read(cx).text().to_string();
+                    this.apply_row_search_query(query, cx);
+                }
+            },
+        );
+        self._search_sub = Some(sub);
+    }
+
+    fn apply_row_search_query(&mut self, query: String, cx: &mut Context<Self>) {
+        self.table.update(cx, |state, cx| {
+            state.delegate_mut().set_row_search_query(query);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    fn on_action_focus_search(
+        &mut self,
+        _: &FocusSearchInput,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.config.usage == DataGridUsage::TableData {
+            focus_search_input(&self.search_input, window, cx);
+        }
     }
 
     // ========== 公共访问器 ==========
@@ -1452,7 +1505,8 @@ impl DataGrid {
     }
 
     pub fn has_unsaved_changes(&self, cx: &App) -> bool {
-        !self.get_changes(cx).is_empty()
+        let table = self.table.read(cx);
+        table_has_unsaved_changes(table.editing_cell(), table.delegate().get_changes().len())
     }
 
     // ========== 复制为 SQL 语句 ==========
@@ -1718,6 +1772,9 @@ impl DataGrid {
     }
 
     pub fn save_changes(&self, window: &mut Window, cx: &mut App) {
+        self.table.update(cx, |state, cx| {
+            state.commit_cell_edit(window, cx);
+        });
         self.handle_save_changes(&ClickEvent::default(), window, cx);
     }
 
@@ -1725,9 +1782,12 @@ impl DataGrid {
         &self,
         tab_container: Entity<TabContainer>,
         tab_id: String,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) {
+        self.table.update(cx, |state, cx| {
+            state.commit_cell_edit(window, cx);
+        });
         let changes = self.get_changes(cx);
         if changes.is_empty() {
             if let Some(window_id) = cx.active_window() {
@@ -2321,6 +2381,19 @@ impl DataGrid {
                 )
             })
             .child(div().flex_1())
+            .when(self.config.usage == DataGridUsage::TableData, |this| {
+                this.child(
+                    div().w(px(220.)).child(
+                        Input::new(&self.search_input)
+                            .prefix(
+                                Icon::new(IconName::Search).text_color(cx.theme().muted_foreground),
+                            )
+                            .cleanable(true)
+                            .small()
+                            .w_full(),
+                    ),
+                )
+            })
             .when(
                 self.config.usage == DataGridUsage::TableData && editable,
                 |this| {
@@ -2627,9 +2700,12 @@ impl Render for DataGrid {
                     .on_action(cx.listener(Self::handle_page_change_2000))
                     .on_action(cx.listener(Self::handle_page_change_10000))
                     .on_action(cx.listener(Self::handle_page_change_100000))
+                    .on_action(cx.listener(Self::on_action_focus_search))
+                    .key_context(DB_SEARCH_CONTEXT)
             })
             .size_full()
             .gap_0()
+            .track_focus(&self.focus_handle)
             .child(self.render_toolbar(window, cx))
             .when(is_table_data, |this| {
                 this.child(
@@ -2666,6 +2742,8 @@ impl Clone for DataGrid {
             table_data_info: self.table_data_info.clone(),
             filter_editor: self.filter_editor.clone(),
             _filter_sub: None,
+            search_input: self.search_input.clone(),
+            _search_sub: None,
             is_large_text_editor_sidebar_open: self.is_large_text_editor_sidebar_open,
         }
     }
@@ -2691,6 +2769,7 @@ mod tests {
     use super::{
         ExportFormat, LargeTextEditorRoute, TableMetadata, build_header_order_by_clause,
         build_large_text_editor_title, collect_delete_row_indices, resolve_large_text_editor_route,
+        table_has_unsaved_changes,
     };
     use db::DbManager;
     use gpui::SharedString;
@@ -2709,6 +2788,21 @@ mod tests {
         let columns = vec![SharedString::from("id"), SharedString::from("body")];
         let metadata = TableMetadata::new("news").with_columns(vec!["id", "body"]);
         (rows, columns, metadata)
+    }
+
+    #[test]
+    fn table_has_unsaved_changes_when_cell_is_still_editing() {
+        assert!(table_has_unsaved_changes(Some((0, 1)), 0));
+    }
+
+    #[test]
+    fn table_has_unsaved_changes_when_delegate_has_pending_changes() {
+        assert!(table_has_unsaved_changes(None, 1));
+    }
+
+    #[test]
+    fn table_has_no_unsaved_changes_without_editing_or_pending_changes() {
+        assert!(!table_has_unsaved_changes(None, 0));
     }
 
     fn read_xlsx_entry(bytes: &[u8], entry_name: &str) -> String {
