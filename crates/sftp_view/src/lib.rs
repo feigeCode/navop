@@ -9,9 +9,9 @@ pub use file_list_panel::{
 };
 
 use gpui::{
-    App, AsyncApp, Context, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable,
-    FontWeight, Hsla, IntoElement, MouseButton, ParentElement, Render, SharedString, Styled,
-    WeakEntity, Window, actions, div, prelude::*, px,
+    AnyElement, App, AsyncApp, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
+    Focusable, FontWeight, Hsla, IntoElement, MouseButton, ParentElement, Render, SharedString,
+    Styled, WeakEntity, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
@@ -40,7 +40,10 @@ use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_file_editor::open_remote_file_editor;
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
-use ssh::{JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth, SshConnectConfig};
+use ssh::{
+    ChannelEvent, JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth, SshChannel,
+    SshConnectConfig, SshSessionManager,
+};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -177,6 +180,18 @@ struct LocalFileEntry {
     size: u64,
     modified: SystemTime,
     is_dir: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ActiveExtract {
+    name: String,
+    path: String,
+}
+
+struct RemoteCommandOutput {
+    stdout: String,
+    stderr: String,
+    exit_status: u32,
 }
 
 impl TransferClientPool {
@@ -328,6 +343,204 @@ fn join_remote_path(base: &str, name: &str) -> String {
     }
 }
 
+fn remote_path_parent(path: &str) -> String {
+    if path == "/" || path.is_empty() {
+        ".".to_string()
+    } else {
+        let trimmed = path.trim_end_matches('/');
+        match trimmed.rfind('/') {
+            Some(0) => "/".to_string(),
+            Some(pos) => trimmed[..pos].to_string(),
+            None => ".".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArchiveKind {
+    Zip,
+    Tar,
+    TarGz,
+    Tgz,
+    TarBz2,
+    Tbz2,
+    TarXz,
+    Txz,
+    Gzip,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExtractConflictAction {
+    Overwrite,
+    SkipExisting,
+}
+
+pub(crate) fn archive_kind_for_name(name: &str) -> Option<ArchiveKind> {
+    let lower = name.to_lowercase();
+    [
+        (".tar.gz", ArchiveKind::TarGz),
+        (".tar.bz2", ArchiveKind::TarBz2),
+        (".tar.xz", ArchiveKind::TarXz),
+        (".tgz", ArchiveKind::Tgz),
+        (".tbz2", ArchiveKind::Tbz2),
+        (".txz", ArchiveKind::Txz),
+        (".tar", ArchiveKind::Tar),
+        (".zip", ArchiveKind::Zip),
+        (".gz", ArchiveKind::Gzip),
+    ]
+    .into_iter()
+    .find_map(|(suffix, kind)| lower.ends_with(suffix).then_some(kind))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+pub(crate) fn build_remote_extract_command(
+    path: &str,
+    name: &str,
+    action: ExtractConflictAction,
+) -> Option<String> {
+    let quoted_path = shell_quote(path);
+    let quoted_parent = shell_quote(&remote_path_parent(path));
+    let tar_skip = match action {
+        ExtractConflictAction::Overwrite => "",
+        ExtractConflictAction::SkipExisting => " --skip-old-files",
+    };
+
+    match (archive_kind_for_name(name)?, action) {
+        (ArchiveKind::Zip, ExtractConflictAction::Overwrite) => {
+            Some(format!("unzip -o -- {quoted_path} -d {quoted_parent}"))
+        }
+        (ArchiveKind::Zip, ExtractConflictAction::SkipExisting) => {
+            Some(format!("unzip -n -- {quoted_path} -d {quoted_parent}"))
+        }
+        (ArchiveKind::Tar, _) => Some(format!(
+            "tar{tar_skip} -xf {quoted_path} -C {quoted_parent}"
+        )),
+        (ArchiveKind::TarGz | ArchiveKind::Tgz, _) => Some(format!(
+            "tar{tar_skip} -xzf {quoted_path} -C {quoted_parent}"
+        )),
+        (ArchiveKind::TarBz2 | ArchiveKind::Tbz2, _) => Some(format!(
+            "tar{tar_skip} -xjf {quoted_path} -C {quoted_parent}"
+        )),
+        (ArchiveKind::TarXz | ArchiveKind::Txz, _) => Some(format!(
+            "tar{tar_skip} -xJf {quoted_path} -C {quoted_parent}"
+        )),
+        (ArchiveKind::Gzip, ExtractConflictAction::Overwrite) => {
+            Some(format!("gzip -dkf -- {quoted_path}"))
+        }
+        (ArchiveKind::Gzip, ExtractConflictAction::SkipExisting) => Some(format!(
+            "test -e {} || gzip -dk -- {quoted_path}",
+            shell_quote(&remote_gzip_target_path(path))
+        )),
+    }
+}
+
+fn remote_gzip_target_path(path: &str) -> String {
+    path.strip_suffix(".gz").unwrap_or(path).to_string()
+}
+
+fn build_archive_top_level_conflict_check_command(path: &str, list_command: String) -> String {
+    let quoted_parent = shell_quote(&remote_path_parent(path));
+    format!(
+        "parent={quoted_parent}; tmp=$(mktemp) || exit 2; if ! {list_command} > \"$tmp\" 2>/dev/null; then rm -f \"$tmp\"; exit 2; fi; awk -F/ 'NF {{ print $1 }}' \"$tmp\" | sort -u | while IFS= read -r entry; do [ -n \"$entry\" ] || continue; if [ -e \"$parent/$entry\" ]; then printf '%s\\n' \"$entry\"; exit 7; fi; done; status=$?; rm -f \"$tmp\"; if [ \"$status\" -eq 7 ]; then exit 0; fi; exit 1"
+    )
+}
+
+pub(crate) fn build_remote_extract_conflict_check_command(
+    path: &str,
+    name: &str,
+) -> Option<String> {
+    let quoted_path = shell_quote(path);
+    match archive_kind_for_name(name)? {
+        ArchiveKind::Zip => Some(build_archive_top_level_conflict_check_command(
+            path,
+            format!("unzip -Z1 -- {quoted_path}"),
+        )),
+        ArchiveKind::Tar
+        | ArchiveKind::TarGz
+        | ArchiveKind::Tgz
+        | ArchiveKind::TarBz2
+        | ArchiveKind::Tbz2
+        | ArchiveKind::TarXz
+        | ArchiveKind::Txz => Some(build_archive_top_level_conflict_check_command(
+            path,
+            format!("tar -tf {quoted_path}"),
+        )),
+        ArchiveKind::Gzip => Some(format!(
+            "test -e {}",
+            shell_quote(&remote_gzip_target_path(path))
+        )),
+    }
+}
+
+pub(crate) async fn exec_remote_command(
+    session_manager: Arc<SshSessionManager>,
+    command: &str,
+) -> anyhow::Result<String> {
+    let output = exec_remote_command_output(session_manager, command).await?;
+    if output.exit_status != 0 {
+        anyhow::bail!(
+            "remote command exited with status {}: {}",
+            output.exit_status,
+            output.stderr
+        );
+    }
+
+    Ok(output.stdout)
+}
+
+pub(crate) async fn exec_remote_command_output(
+    session_manager: Arc<SshSessionManager>,
+    command: &str,
+) -> anyhow::Result<RemoteCommandOutput> {
+    let mut channel = session_manager.open_channel().await?;
+    channel.exec(command).await?;
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut exit_status = 0u32;
+
+    while let Some(event) = channel.recv().await {
+        match event {
+            ChannelEvent::Data(data) => stdout.extend(data),
+            ChannelEvent::ExtendedData { data, .. } => stderr.extend(data),
+            ChannelEvent::ExitStatus(status) => exit_status = status,
+            ChannelEvent::ExitSignal {
+                signal_name,
+                error_message,
+            } => {
+                anyhow::bail!("remote command failed with signal {signal_name}: {error_message}");
+            }
+            ChannelEvent::Eof | ChannelEvent::Close => break,
+        }
+    }
+
+    let _ = channel.close().await;
+    Ok(RemoteCommandOutput {
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
+        exit_status,
+    })
+}
+
+pub(crate) async fn remote_extract_has_conflict(
+    session_manager: Arc<SshSessionManager>,
+    command: &str,
+) -> anyhow::Result<bool> {
+    let output = exec_remote_command_output(session_manager, command).await?;
+    match output.exit_status {
+        0 => Ok(true),
+        1 => Ok(false),
+        status => anyhow::bail!(
+            "remote conflict check exited with status {}: {}",
+            status,
+            output.stderr
+        ),
+    }
+}
+
 fn should_apply_remote_listing(current_path: &str, listed_path: &str) -> bool {
     current_path == listed_path
 }
@@ -462,6 +675,7 @@ pub struct SftpView {
     transfer_queue: TransferQueue,
     next_task_id: usize,
     transfer_client_pool: Arc<Mutex<TransferClientPool>>,
+    active_extract: Option<ActiveExtract>,
 
     focus_handle: FocusHandle,
 
@@ -723,6 +937,7 @@ impl SftpView {
             transfer_queue: TransferQueue::new(MAX_CONCURRENT_TRANSFERS),
             next_task_id: 0,
             transfer_client_pool,
+            active_extract: None,
             focus_handle,
             is_dragging_over_local: false,
             is_dragging_over_remote: false,
@@ -3871,110 +4086,141 @@ impl SftpView {
             )
     }
 
+    fn render_extract_queue_row(
+        &self,
+        extract: ActiveExtract,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let tooltip_name = extract.path.clone();
+
+        h_flex()
+            .gap_2()
+            .items_center()
+            .child(Spinner::new().small())
+            .child(Icon::new(IconName::Unarchive).small())
+            .child(
+                div()
+                    .id("extract-name")
+                    .text_sm()
+                    .min_w(px(120.))
+                    .max_w(px(250.))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(extract.name)
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(tooltip_name.clone()).build(window, cx)
+                    }),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .text_xs()
+                    .w(px(90.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("Extract.running").to_string()),
+            )
+            .into_any_element()
+    }
+
     fn render_transfer_queue(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active_tasks = self.transfer_queue.active_tasks();
 
-        if active_tasks.is_empty() {
+        if active_tasks.is_empty() && self.active_extract.is_none() {
             return div().into_any_element();
         }
 
-        v_flex()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .p_2()
-            .gap_1()
-            .children(active_tasks.into_iter().map(|task| {
-                let is_delete_op = matches!(
-                    &task.operation,
-                    TransferOperation::DeleteRemote { .. } | TransferOperation::DeleteLocal { .. }
-                );
+        let mut rows = Vec::new();
+        for task in active_tasks {
+            let is_delete_op = matches!(
+                &task.operation,
+                TransferOperation::DeleteRemote { .. } | TransferOperation::DeleteLocal { .. }
+            );
 
-                let (icon, label) = match &task.operation {
-                    TransferOperation::Upload { local_path, .. } => (
-                        IconName::ArrowUp,
-                        local_path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default(),
-                    ),
-                    TransferOperation::Download { remote_path, .. } => {
-                        let name = remote_path.rsplit('/').next().unwrap_or(remote_path);
-                        (IconName::ArrowDown, name.to_string())
-                    }
-                    TransferOperation::DeleteRemote { entries, .. } => (
-                        IconName::Remove,
-                        t!("Delete.delete_n_items", count = entries.len()).to_string(),
-                    ),
-                    TransferOperation::DeleteLocal { entries, .. } => (
-                        IconName::Remove,
-                        t!("Delete.delete_n_items", count = entries.len()).to_string(),
-                    ),
-                };
+            let (icon, label) = match &task.operation {
+                TransferOperation::Upload { local_path, .. } => (
+                    IconName::ArrowUp,
+                    local_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                ),
+                TransferOperation::Download { remote_path, .. } => {
+                    let name = remote_path.rsplit('/').next().unwrap_or(remote_path);
+                    (IconName::ArrowDown, name.to_string())
+                }
+                TransferOperation::DeleteRemote { entries, .. } => (
+                    IconName::Remove,
+                    t!("Delete.delete_n_items", count = entries.len()).to_string(),
+                ),
+                TransferOperation::DeleteLocal { entries, .. } => (
+                    IconName::Remove,
+                    t!("Delete.delete_n_items", count = entries.len()).to_string(),
+                ),
+            };
 
-                let transferred = task.shared_progress.transferred.load(Ordering::Relaxed);
-                let total = task.shared_progress.total.load(Ordering::Relaxed);
-                let speed_bits = task.shared_progress.speed.load(Ordering::Relaxed);
-                let speed = f64::from_bits(speed_bits);
-                let is_scanning = task.shared_progress.scanning.load(Ordering::Relaxed);
+            let transferred = task.shared_progress.transferred.load(Ordering::Relaxed);
+            let total = task.shared_progress.total.load(Ordering::Relaxed);
+            let speed_bits = task.shared_progress.speed.load(Ordering::Relaxed);
+            let speed = f64::from_bits(speed_bits);
+            let is_scanning = task.shared_progress.scanning.load(Ordering::Relaxed);
 
-                let current_file = task
-                    .shared_progress
-                    .current_file
-                    .read()
-                    .ok()
-                    .and_then(|g| g.clone());
-                let current_file_transferred = task
-                    .shared_progress
-                    .current_file_transferred
-                    .load(Ordering::Relaxed);
-                let current_file_total = task
-                    .shared_progress
-                    .current_file_total
-                    .load(Ordering::Relaxed);
+            let current_file = task
+                .shared_progress
+                .current_file
+                .read()
+                .ok()
+                .and_then(|g| g.clone());
+            let current_file_transferred = task
+                .shared_progress
+                .current_file_transferred
+                .load(Ordering::Relaxed);
+            let current_file_total = task
+                .shared_progress
+                .current_file_total
+                .load(Ordering::Relaxed);
 
-                let progress_pct = if total > 0 {
-                    (transferred as f64 / total as f64 * 100.0) as u32
-                } else {
-                    0
-                };
+            let progress_pct = if total > 0 {
+                (transferred as f64 / total as f64 * 100.0) as u32
+            } else {
+                0
+            };
 
-                let current_file_pct = if current_file_total > 0 {
-                    (current_file_transferred as f64 / current_file_total as f64 * 100.0) as u32
-                } else {
-                    0
-                };
+            let current_file_pct = if current_file_total > 0 {
+                (current_file_transferred as f64 / current_file_total as f64 * 100.0) as u32
+            } else {
+                0
+            };
 
-                let task_id = task.id;
-                let is_running = task.state == TransferTaskState::Running;
-                let has_current_file = current_file.is_some();
+            let task_id = task.id;
+            let is_running = task.state == TransferTaskState::Running;
+            let has_current_file = current_file.is_some();
 
-                // 对于删除操作，显示当前正在删除的文件名
-                let display_name = if is_delete_op {
-                    if is_scanning {
-                        t!("Delete.scanning").to_string()
-                    } else if let Some(ref file) = current_file {
-                        t!("Delete.deleting", name = file).to_string()
-                    } else {
-                        label.clone()
-                    }
+            let display_name = if is_delete_op {
+                if is_scanning {
+                    t!("Delete.scanning").to_string()
                 } else if let Some(ref file) = current_file {
-                    format!("{} - {}", label, file)
+                    t!("Delete.deleting", name = file).to_string()
                 } else {
                     label.clone()
-                };
-                let tooltip_name = display_name.clone();
+                }
+            } else if let Some(ref file) = current_file {
+                format!("{} - {}", label, file)
+            } else {
+                label.clone()
+            };
+            let tooltip_name = display_name.clone();
 
-                // 对于删除操作，始终使用总体进度
-                let display_progress = if is_scanning {
-                    0
-                } else if is_delete_op {
-                    progress_pct
-                } else if has_current_file {
-                    current_file_pct
-                } else {
-                    progress_pct
-                };
+            let display_progress = if is_scanning {
+                0
+            } else if is_delete_op {
+                progress_pct
+            } else if has_current_file {
+                current_file_pct
+            } else {
+                progress_pct
+            };
 
+            rows.push(
                 h_flex()
                     .gap_2()
                     .items_center()
@@ -4048,7 +4294,20 @@ impl SftpView {
                                 this.cancel_transfer(task_id, cx);
                             })),
                     )
-            }))
+                    .into_any_element(),
+            );
+        }
+
+        if let Some(extract) = self.active_extract.clone() {
+            rows.push(self.render_extract_queue_row(extract, cx));
+        }
+
+        v_flex()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .p_2()
+            .gap_1()
+            .children(rows)
             .into_any_element()
     }
 
@@ -4770,5 +5029,100 @@ mod tests {
             Path::new("/tmp/b"),
             Path::new("/tmp/a")
         ));
+    }
+
+    #[test]
+    fn archive_kind_detects_supported_remote_archives() {
+        assert_eq!(
+            Some(super::ArchiveKind::Zip),
+            super::archive_kind_for_name("APP.ZIP")
+        );
+        assert_eq!(
+            Some(super::ArchiveKind::TarGz),
+            super::archive_kind_for_name("release.tar.gz")
+        );
+        assert_eq!(
+            Some(super::ArchiveKind::Tgz),
+            super::archive_kind_for_name("release.tgz")
+        );
+        assert_eq!(None, super::archive_kind_for_name("notes.txt"));
+    }
+
+    #[test]
+    fn build_remote_extract_command_quotes_paths_and_uses_archive_parent() {
+        assert_eq!(
+            Some("unzip -o -- '/srv/a'\\''b/app.zip' -d '/srv/a'\\''b'".to_string()),
+            super::build_remote_extract_command(
+                "/srv/a'b/app.zip",
+                "app.zip",
+                super::ExtractConflictAction::Overwrite
+            )
+        );
+        assert_eq!(
+            Some("tar -xzf '/tmp/release.tar.gz' -C '/tmp'".to_string()),
+            super::build_remote_extract_command(
+                "/tmp/release.tar.gz",
+                "release.tar.gz",
+                super::ExtractConflictAction::Overwrite
+            )
+        );
+        assert_eq!(
+            None,
+            super::build_remote_extract_command(
+                "/tmp/readme.md",
+                "readme.md",
+                super::ExtractConflictAction::Overwrite
+            )
+        );
+    }
+
+    #[test]
+    fn build_remote_extract_command_can_skip_existing_targets() {
+        assert_eq!(
+            Some("unzip -n -- '/tmp/app.zip' -d '/tmp'".to_string()),
+            super::build_remote_extract_command(
+                "/tmp/app.zip",
+                "app.zip",
+                super::ExtractConflictAction::SkipExisting
+            )
+        );
+        assert_eq!(
+            Some("tar --skip-old-files -xzf '/tmp/release.tar.gz' -C '/tmp'".to_string()),
+            super::build_remote_extract_command(
+                "/tmp/release.tar.gz",
+                "release.tar.gz",
+                super::ExtractConflictAction::SkipExisting
+            )
+        );
+        assert_eq!(
+            Some("test -e '/tmp/app.log' || gzip -dk -- '/tmp/app.log.gz'".to_string()),
+            super::build_remote_extract_command(
+                "/tmp/app.log.gz",
+                "app.log.gz",
+                super::ExtractConflictAction::SkipExisting
+            )
+        );
+    }
+
+    #[test]
+    fn build_remote_extract_conflict_check_command_detects_existing_targets() {
+        assert_eq!(
+            Some("test -e '/tmp/app.log'".to_string()),
+            super::build_remote_extract_conflict_check_command("/tmp/app.log.gz", "app.log.gz")
+        );
+
+        let zip_command =
+            super::build_remote_extract_conflict_check_command("/srv/a'b/app.zip", "app.zip")
+                .unwrap();
+        assert!(zip_command.contains("parent='/srv/a'\\''b'"));
+        assert!(zip_command.contains("unzip -Z1 -- '/srv/a'\\''b/app.zip'"));
+        assert!(zip_command.contains("[ -e \"$parent/$entry\" ]"));
+
+        let tar_command = super::build_remote_extract_conflict_check_command(
+            "/tmp/release.tar.gz",
+            "release.tar.gz",
+        )
+        .unwrap();
+        assert!(tar_command.contains("tar -tf '/tmp/release.tar.gz'"));
     }
 }

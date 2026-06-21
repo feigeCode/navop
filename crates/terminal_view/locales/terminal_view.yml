@@ -1137,6 +1137,54 @@ FileManager:
     en: Download
     zh-CN: 下载
     zh-HK: 下載
+  rename:
+    en: Rename
+    zh-CN: 重命名
+    zh-HK: 重命名
+  rename_placeholder:
+    en: Enter new name
+    zh-CN: 输入新名称
+    zh-HK: 輸入新名稱
+  rename_failed:
+    en: "Failed to rename: %{error}"
+    zh-CN: "重命名失败: %{error}"
+    zh-HK: "重命名失敗: %{error}"
+  extract:
+    en: Extract
+    zh-CN: 解压
+    zh-HK: 解壓
+  extract_success:
+    en: Extract completed
+    zh-CN: 解压完成
+    zh-HK: 解壓完成
+  extract_running:
+    en: Extracting...
+    zh-CN: 正在解压...
+    zh-HK: 正在解壓...
+  extract_conflict_title:
+    en: Extract Conflict
+    zh-CN: 解压冲突
+    zh-HK: 解壓衝突
+  extract_conflict_message:
+    en: "Existing files may be overwritten while extracting %{name}. Choose how to continue."
+    zh-CN: "解压 %{name} 可能会影响已有文件，请选择处理方式。"
+    zh-HK: "解壓 %{name} 可能會影響已有文件，請選擇處理方式。"
+  extract_skip_existing:
+    en: Skip Existing
+    zh-CN: 跳过已有
+    zh-HK: 跳過已有
+  extract_check_failed:
+    en: "Failed to check existing files before extract: %{error}"
+    zh-CN: "解压前检查已有文件失败: %{error}"
+    zh-HK: "解壓前檢查已有文件失敗: %{error}"
+  extract_failed:
+    en: "Failed to extract: %{error}"
+    zh-CN: "解压失败: %{error}"
+    zh-HK: "解壓失敗: %{error}"
+  extract_unsupported:
+    en: Unsupported archive type
+    zh-CN: 不支持的压缩包类型
+    zh-HK: 不支持的壓縮包類型
   delete:
     en: Delete
     zh-CN: 删除

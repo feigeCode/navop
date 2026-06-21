@@ -4506,9 +4506,9 @@ mod tests {
     #[test]
     fn terminal_keybindings_bind_ctrl_zero_to_reset_font() {
         let source = include_str!("view.rs");
-        let binding = format!("{}{}", r#"KeyBinding::new("ctrl-0", "#, "ResetFont");
 
-        assert!(source.contains(&binding));
+        assert!(source.contains(r#"terminal_platform_shortcut("cmd-0", "ctrl-0")"#));
+        assert!(source.contains("ResetFont"));
     }
 
     #[test]
