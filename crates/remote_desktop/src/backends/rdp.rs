@@ -14,22 +14,47 @@ const MAX_INPUTS_PER_POLL: usize = 256;
 
 pub struct RdpBackend {
     options: RemoteDesktopConnectionOptions,
+    helper: HelperProcessConfig,
 }
 
 impl RdpBackend {
-    pub fn new(options: RemoteDesktopConnectionOptions) -> Self {
-        Self { options }
+    pub fn new_with_helper(
+        options: RemoteDesktopConnectionOptions,
+        helper: HelperProcessConfig,
+    ) -> Self {
+        Self { options, helper }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct HelperProcessConfig {
+    command: PathBuf,
+    args: Vec<String>,
+    working_dir: PathBuf,
+}
+
+impl HelperProcessConfig {
+    pub fn new(command: PathBuf, args: Vec<String>, working_dir: PathBuf) -> Self {
+        Self {
+            command,
+            args,
+            working_dir,
+        }
     }
 }
 
 impl RemoteDesktopBackend for RdpBackend {
+    fn name(&self) -> &'static str {
+        "remote-desktop-helper"
+    }
+
     fn start(
         self: Box<Self>,
         initial_size: RemoteDesktopSize,
     ) -> anyhow::Result<RemoteDesktopRuntime> {
         let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
         let (output_tx, output_rx) = std::sync::mpsc::channel();
-        let helper_path = resolve_helper_path()?;
+        let helper = self.helper.clone();
         let mut connect = HelperRequest::connect_from_options(&self.options, initial_size);
 
         std::thread::Builder::new()
@@ -39,7 +64,7 @@ impl RemoteDesktopBackend for RdpBackend {
                 let mut reconnect_attempt = 0usize;
                 loop {
                     match run_helper_session(
-                        &helper_path,
+                        &helper,
                         &mut connect,
                         &mut latest_clipboard_text,
                         &mut input_rx,
@@ -55,7 +80,7 @@ impl RemoteDesktopBackend for RdpBackend {
                                 reconnect_attempt = 0;
                             }
                             if manual {
-                                send_status(&output_tx, "reconnecting RDP session");
+                                send_status(&output_tx, "reconnecting remote desktop session");
                                 continue;
                             }
                             let delay = reconnect_delay(reconnect_attempt);
@@ -103,17 +128,17 @@ enum RemoteInputBatch {
 }
 
 fn run_helper_session(
-    helper_path: &PathBuf,
+    helper: &HelperProcessConfig,
     connect: &mut HelperRequest,
     latest_clipboard_text: &mut Option<String>,
     input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
     output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
 ) -> HelperRunResult {
     let Ok((mut helper, mut stdin, signal_rx)) =
-        start_helper_session(helper_path, connect, latest_clipboard_text, output_tx)
+        start_helper_session(helper, connect, latest_clipboard_text, output_tx)
     else {
         return HelperRunResult::Reconnect {
-            reason: "failed to start RDP helper".to_string(),
+            reason: "failed to start remote desktop helper".to_string(),
             manual: false,
             was_connected: false,
         };
@@ -149,7 +174,7 @@ fn run_helper_session(
 }
 
 fn start_helper_session(
-    helper_path: &PathBuf,
+    helper: &HelperProcessConfig,
     connect: &HelperRequest,
     latest_clipboard_text: &Option<String>,
     output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
@@ -161,16 +186,16 @@ fn start_helper_session(
     ),
     (),
 > {
-    send_status(output_tx, "starting RDP helper");
-    let Some(mut helper) = spawn_helper(helper_path, output_tx.clone()) else {
+    send_status(output_tx, "starting remote desktop helper");
+    let Some(mut helper) = spawn_helper(helper, output_tx.clone()) else {
         return Err(());
     };
     let Some(stdout) = helper.stdout.take() else {
-        send_failure(output_tx, "RDP helper stdout unavailable");
+        send_failure(output_tx, "remote desktop helper stdout unavailable");
         return Err(());
     };
     let Some(mut stdin) = helper.stdin.take() else {
-        send_failure(output_tx, "RDP helper stdin unavailable");
+        send_failure(output_tx, "remote desktop helper stdin unavailable");
         return Err(());
     };
     let (signal_tx, signal_rx) = std::sync::mpsc::channel();
@@ -203,7 +228,7 @@ fn handle_backend_signals(
             BackendSignal::OutputEnded => {
                 close_helper(helper, stdin, output_tx);
                 return Some(reconnect_result(
-                    "RDP helper output ended".to_string(),
+                    "remote desktop helper output ended".to_string(),
                     false,
                     *was_connected,
                 ));
@@ -438,10 +463,12 @@ fn send_status(output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>, message
 }
 
 fn spawn_helper(
-    helper_path: &PathBuf,
+    helper: &HelperProcessConfig,
     output_tx: std::sync::mpsc::Sender<RemoteDesktopOutput>,
 ) -> Option<std::process::Child> {
-    match Command::new(helper_path)
+    match Command::new(&helper.command)
+        .args(&helper.args)
+        .current_dir(&helper.working_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -450,8 +477,8 @@ fn spawn_helper(
         Ok(child) => Some(child),
         Err(error) => {
             let message = format!(
-                "failed to start RDP helper {}: {error}",
-                helper_path.display()
+                "failed to start remote desktop helper {}: {error}",
+                helper.command.display()
             );
             send_failure(&output_tx, &message);
             None
@@ -471,7 +498,10 @@ fn spawn_output_reader(
                 match line {
                     Ok(line) => forward_helper_line(&line, &output_tx, &signal_tx),
                     Err(error) => {
-                        send_failure(&output_tx, &format!("failed to read RDP helper: {error}"));
+                        send_failure(
+                            &output_tx,
+                            &format!("failed to read remote desktop helper: {error}"),
+                        );
                         break;
                     }
                 }
@@ -498,7 +528,10 @@ fn forward_helper_line(
             };
             let _ = output_tx.send(output);
         }
-        Err(error) => send_failure(output_tx, &format!("invalid RDP helper event: {error}")),
+        Err(error) => send_failure(
+            output_tx,
+            &format!("invalid remote desktop helper event: {error}"),
+        ),
     }
 }
 
@@ -546,42 +579,6 @@ fn rdp_capabilities() -> RemoteDesktopCapabilities {
     RemoteDesktopCapabilities {
         clipboard_text: true,
         ..RemoteDesktopCapabilities::rdp_mvp()
-    }
-}
-
-fn resolve_helper_path() -> anyhow::Result<PathBuf> {
-    if let Some(path) = std::env::var_os("ONETCLI_RDP_HELPER").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(path));
-    }
-
-    for path in candidate_helper_paths()? {
-        if path.is_file() {
-            return Ok(path);
-        }
-    }
-
-    anyhow::bail!("RDP helper not found; build tools/rdp-helper or set ONETCLI_RDP_HELPER")
-}
-
-fn candidate_helper_paths() -> anyhow::Result<Vec<PathBuf>> {
-    let name = helper_binary_name();
-    let mut paths = Vec::new();
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(parent) = exe.parent()
-    {
-        paths.push(parent.join(name));
-    }
-    let cwd = std::env::current_dir()?;
-    paths.push(cwd.join("tools/rdp-helper/target/debug").join(name));
-    paths.push(cwd.join("target/debug").join(name));
-    Ok(paths)
-}
-
-fn helper_binary_name() -> &'static str {
-    if cfg!(windows) {
-        "onetcli-rdp-helper.exe"
-    } else {
-        "onetcli-rdp-helper"
     }
 }
 

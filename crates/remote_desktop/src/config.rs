@@ -1,9 +1,28 @@
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RemoteDesktopProtocol {
     Rdp,
     Vnc,
+}
+
+impl RemoteDesktopProtocol {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Rdp => "RDP",
+            Self::Vnc => "VNC",
+        }
+    }
+
+    pub fn provider_id(self) -> &'static str {
+        match self {
+            Self::Rdp => "rdp",
+            Self::Vnc => "vnc",
+        }
+    }
 }
 
 #[derive(Clone)]

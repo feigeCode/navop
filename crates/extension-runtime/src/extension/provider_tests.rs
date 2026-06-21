@@ -2,14 +2,26 @@ use std::{fs, sync::Arc};
 
 use super::{
     DatabaseDriverExtensionProvider, ExtensionKind, ExtensionProvider, ExtensionRegistry,
-    LanguageExtensionProvider, builtin_registry, load_language_extensions_from_root,
+    LanguageExtensionProvider, RemoteDesktopProviderExtensionProvider, builtin_registry,
+    load_language_extensions_from_root,
 };
 
 #[test]
 fn extension_kind_maps_stable_directories() {
     assert_eq!("languages", ExtensionKind::Language.dir_name());
     assert_eq!("database_drivers", ExtensionKind::DatabaseDriver.dir_name());
+    assert_eq!(
+        "remote_desktop_providers",
+        ExtensionKind::RemoteDesktopProvider.dir_name()
+    );
     assert_eq!("composite", ExtensionKind::Composite.dir_name());
+}
+
+#[test]
+fn extension_kind_parses_remote_desktop_provider() {
+    let kind: ExtensionKind = serde_json::from_str(r#""remote_desktop_provider""#).unwrap();
+
+    assert_eq!(ExtensionKind::RemoteDesktopProvider, kind);
 }
 
 #[test]
@@ -155,17 +167,86 @@ fn database_driver_provider_install_from_dir_accepts_single_wrapped_driver_direc
 }
 
 #[test]
+fn remote_desktop_provider_lists_installed_provider_summaries() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("extensions");
+    let provider_dir = root.join("remote_desktop_providers").join("rdp");
+    fs::create_dir_all(&provider_dir).unwrap();
+    fs::write(
+        provider_dir.join("remote_desktop_provider.json"),
+        remote_desktop_provider_json("rdp", "RDP", "rdp", "./onetcli-rdp-helper"),
+    )
+    .unwrap();
+
+    let mut registry = ExtensionRegistry::new(root);
+    registry.register_provider(Arc::new(RemoteDesktopProviderExtensionProvider));
+
+    let list = registry
+        .list_installed_of(ExtensionKind::RemoteDesktopProvider)
+        .expect("remote desktop providers should list");
+
+    assert_eq!(1, list.len());
+    assert_eq!(ExtensionKind::RemoteDesktopProvider, list[0].kind);
+    assert_eq!("rdp", list[0].name);
+    assert_eq!("1.2.3", list[0].version);
+    assert_eq!("RDP provider", list[0].description);
+    assert_eq!(Some("Monitor"), list[0].icon.as_deref());
+    assert_eq!(Some(3389), list[0].default_port);
+}
+
+#[test]
+fn remote_desktop_provider_install_from_dir_requires_manifest() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let empty_dir = tmp.path().join("remote_desktop_providers").join("empty");
+    fs::create_dir_all(&empty_dir).unwrap();
+
+    let provider = RemoteDesktopProviderExtensionProvider;
+    let err = provider.install_from_dir(&empty_dir).unwrap_err();
+
+    assert!(err.to_string().contains("remote_desktop_provider"));
+}
+
+#[test]
 fn builtin_registry_registers_all_extension_providers() {
     let tmp = tempfile::TempDir::new().unwrap();
     let registry = builtin_registry(tmp.path().join("extensions"));
 
     assert!(registry.provider(ExtensionKind::Language).is_some());
     assert!(registry.provider(ExtensionKind::DatabaseDriver).is_some());
+    assert!(
+        registry
+            .provider(ExtensionKind::RemoteDesktopProvider)
+            .is_some()
+    );
     assert!(registry.provider(ExtensionKind::Composite).is_some());
     assert_eq!(
         tmp.path().join("extensions/languages"),
         registry.root_for(ExtensionKind::Language)
     );
+}
+
+fn remote_desktop_provider_json(id: &str, name: &str, protocol: &str, command: &str) -> String {
+    format!(
+        r#"{{
+            "id": "{id}",
+            "name": "{name}",
+            "description": "{name} provider",
+            "version": "1.2.3",
+            "protocol": "{protocol}",
+            "entry": {{ "command": "{command}" }},
+            "capabilities": {{
+                "resize": "remote_resize",
+                "clipboard_text": true,
+                "cursor_shape": true,
+                "audio": false,
+                "file_transfer": false
+            }},
+            "ui": {{
+                "icon": "Monitor",
+                "default_port": 3389
+            }}
+        }}"#
+    )
 }
 
 #[test]

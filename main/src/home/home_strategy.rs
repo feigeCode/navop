@@ -65,6 +65,20 @@ impl ConnectionOpenStrategy for DatabaseOpenStrategy {
     }
 }
 
+impl extension_runtime::remote_desktop_provider_install::RemoteDesktopConnectionOpener
+    for HomePage
+{
+    fn open_remote_desktop_connection(
+        &mut self,
+        connection: &StoredConnection,
+        protocol: RemoteDesktopProtocol,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_remote_desktop(connection.clone(), protocol, window, cx);
+    }
+}
+
 impl extension_runtime::database_driver_install::DatabaseDriverConnectionOpener for HomePage {
     fn open_database_connection(
         &mut self,
@@ -130,7 +144,9 @@ impl ConnectionOpenStrategy for RemoteDesktopOpenStrategy {
             connection,
             protocol,
         } = *self;
-        home.open_remote_desktop(connection, protocol, window, cx);
+        extension_runtime::remote_desktop_provider_install::open_remote_desktop_connection_with_provider_guard(
+            home, connection, protocol, window, cx,
+        );
     }
 }
 

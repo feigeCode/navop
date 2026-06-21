@@ -156,6 +156,7 @@ fn package_install_name(staging_dir: &Path, kind: ExtensionKind) -> Result<Strin
     let manifest_file = match kind {
         ExtensionKind::Language => "manifest.json",
         ExtensionKind::DatabaseDriver => "driver.json",
+        ExtensionKind::RemoteDesktopProvider => "remote_desktop_provider.json",
         ExtensionKind::Composite => "extension.json",
     };
     let manifest_path = staging_dir.join(manifest_file);

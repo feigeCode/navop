@@ -17,6 +17,7 @@ futures = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 one-core = { workspace = true }
+remote_desktop = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
