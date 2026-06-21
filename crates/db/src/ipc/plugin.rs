@@ -307,6 +307,37 @@ impl ExternalDatabasePlugin {
         }
     }
 
+    async fn connectionless_ddl_build(
+        &self,
+        op: wire_ddl::DdlBuildOp,
+        payload: serde_json::Value,
+    ) -> Result<Option<wire_ddl::BuildDdlResult>> {
+        if !self
+            .driver
+            .methods
+            .iter()
+            .any(|method| method == wire_method::DDL_BUILD)
+        {
+            return Ok(None);
+        }
+        let client = JsonRpcClient::start(&self.driver).await?;
+        let params = serde_json::to_value(wire_ddl::BuildDdlParams {
+            conn_id: None,
+            op,
+            payload,
+        })?;
+        let result = client
+            .request::<wire_ddl::BuildDdlResult>(wire_method::DDL_BUILD, params)
+            .await;
+        client.shutdown().await;
+
+        match result {
+            Ok(result) => Ok(Some(result)),
+            Err(DbError::NotSupported(_)) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     async fn custom_object_view(
         &self,
         connection: &dyn DbConnection,
@@ -1094,6 +1125,10 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         self.driver.ui.form.clone().unwrap_or_default()
     }
 
+    fn external_driver_manifest(&self) -> Option<IpcDriverManifest> {
+        Some(self.driver.clone())
+    }
+
     async fn list_procedures(
         &self,
         connection: &dyn DbConnection,
@@ -1287,6 +1322,25 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         )
     }
 
+    async fn build_create_database_sql_async(
+        &self,
+        request: &crate::plugin::DatabaseOperationRequest,
+    ) -> Result<String> {
+        let Some(result) = self
+            .connectionless_ddl_build(
+                wire_ddl::DdlBuildOp::CreateDatabase,
+                serde_json::json!({
+                    "database_name": request.database_name,
+                    "field_values": request.field_values,
+                }),
+            )
+            .await?
+        else {
+            return Ok(self.build_create_database_sql(request));
+        };
+        Ok(join_ddl_statements(result.statements, None))
+    }
+
     fn build_modify_database_sql(
         &self,
         request: &crate::plugin::DatabaseOperationRequest,
@@ -1299,6 +1353,26 @@ impl DatabasePlugin for ExternalDatabasePlugin {
 
     fn build_drop_database_sql(&self, database_name: &str) -> String {
         format!("DROP DATABASE {}", self.quote_identifier(database_name))
+    }
+
+    async fn build_drop_database_sql_async(&self, database_name: &str) -> Result<String> {
+        let Some(result) = self
+            .connectionless_ddl_build(
+                wire_ddl::DdlBuildOp::DropDatabase,
+                serde_json::json!({
+                    "name": database_name,
+                    "database_name": database_name,
+                }),
+            )
+            .await?
+        else {
+            return Ok(self.build_drop_database_sql(database_name));
+        };
+        Ok(join_ddl_statements(result.statements, None))
+    }
+
+    async fn drop_database_async(&self, database: &str) -> Result<String> {
+        self.build_drop_database_sql_async(database).await
     }
 
     fn build_limit_clause(&self) -> String {

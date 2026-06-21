@@ -965,7 +965,7 @@ impl GlobalDbState {
             .get_config(&config_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", config_id))?;
         let plugin = self.get_plugin(&config.database_type)?;
-        let sql = plugin.drop_database(&database_name);
+        let sql = plugin.drop_database_async(&database_name).await?;
 
         let result = self.execute_with_session(cx, config, sql, None).await?;
 

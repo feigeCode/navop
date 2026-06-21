@@ -499,6 +499,10 @@ pub trait DatabasePlugin: Send + Sync {
         DatabaseUiManifest::default()
     }
 
+    fn external_driver_manifest(&self) -> Option<crate::ipc::IpcDriverManifest> {
+        None
+    }
+
     fn resolve_reference_data(
         &self,
         kind: ReferenceDataKind,
@@ -555,11 +559,22 @@ pub trait DatabasePlugin: Send + Sync {
     /// Build SQL for creating a new database
     fn build_create_database_sql(&self, request: &DatabaseOperationRequest) -> String;
 
+    async fn build_create_database_sql_async(
+        &self,
+        request: &DatabaseOperationRequest,
+    ) -> Result<String> {
+        Ok(self.build_create_database_sql(request))
+    }
+
     /// Build SQL for modifying an existing database
     fn build_modify_database_sql(&self, request: &DatabaseOperationRequest) -> String;
 
     /// Build SQL for dropping a database
     fn build_drop_database_sql(&self, database_name: &str) -> String;
+
+    async fn build_drop_database_sql_async(&self, database_name: &str) -> Result<String> {
+        Ok(self.build_drop_database_sql(database_name))
+    }
 
     // === Schema Management Operations ===
     /// Build SQL for creating a new schema
@@ -2278,6 +2293,10 @@ pub trait DatabasePlugin: Send + Sync {
             "DROP DATABASE IF EXISTS {}",
             self.quote_identifier(database)
         )
+    }
+
+    async fn drop_database_async(&self, database: &str) -> Result<String> {
+        Ok(self.drop_database(database))
     }
 
     /// Drop table
