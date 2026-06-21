@@ -35,6 +35,9 @@ use crate::extension_menu::{
     DbTreeExtensionActionContext, DbTreeExtensionMenuContext, DbTreeExtensionMenuItem,
     DbTreeExtensionMenuRegistry, GlobalDbTreeExtensionActionHandler,
 };
+use crate::search_shortcut::{
+    DB_SEARCH_CONTEXT, FocusSearchInput, OpenSelectedTableQuery, focus_search_input,
+};
 use db::{
     DbNode, DbNodeType, GlobalDbState,
     ipc::{driver_icon_from_asset_path, driver_icon_from_file_path},
@@ -535,6 +538,32 @@ pub struct DbTreeView {
 }
 
 impl DbTreeView {
+    fn on_action_focus_search(
+        &mut self,
+        _: &FocusSearchInput,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        focus_search_input(&self.search_input, window, cx);
+    }
+
+    fn on_action_open_selected_table_query(
+        &mut self,
+        _: &OpenSelectedTableQuery,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(node_id) = self.selected_node_id.clone() else {
+            return;
+        };
+        let Some(node) = self.db_nodes.get(&node_id) else {
+            return;
+        };
+        if matches!(node.node_type, DbNodeType::Table | DbNodeType::View) {
+            cx.emit(DbTreeViewEvent::CreateNewQuery { node_id });
+        }
+    }
+
     /// 将 ContextMenuItem 渲染到 PopupMenu
     fn render_context_menu_items(
         menu: PopupMenu,
@@ -2372,6 +2401,10 @@ impl Render for DbTreeView {
         v_flex()
             .id("db-tree-view")
             .size_full()
+            .track_focus(&self.focus_handle)
+            .key_context(DB_SEARCH_CONTEXT)
+            .on_action(cx.listener(Self::on_action_focus_search))
+            .on_action(cx.listener(Self::on_action_open_selected_table_query))
             .bg(cx.theme().sidebar)
             .child({
                 let view_for_collapse = cx.entity();

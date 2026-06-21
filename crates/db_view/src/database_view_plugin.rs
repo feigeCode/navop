@@ -332,6 +332,7 @@ impl ManifestDatabaseViewPlugin {
             index += 1;
         }
 
+        insert_query_table_context_menu_item(&mut items, node_type, node_id);
         items
     }
 
@@ -478,6 +479,25 @@ fn context_menu_rank(node_type: DbNodeType, action_id: DatabaseActionId) -> usiz
         },
         _ => 900,
     }
+}
+
+fn insert_query_table_context_menu_item(
+    items: &mut Vec<ContextMenuItem>,
+    node_type: DbNodeType,
+    node_id: &str,
+) {
+    if !matches!(node_type, DbNodeType::Table | DbNodeType::View) {
+        return;
+    }
+
+    let query_item = ContextMenuItem::item(
+        translate("Query.query_table"),
+        DbTreeViewEvent::CreateNewQuery {
+            node_id: node_id.to_string(),
+        },
+    );
+    let insert_index = items.len().min(2);
+    items.insert(insert_index, query_item);
 }
 
 fn context_menu_group(node_type: DbNodeType, action: &DatabaseActionDescriptor) -> Option<String> {
@@ -1460,6 +1480,13 @@ database:
             has_label(&items, &translate("Table.design_table")),
             "设计表菜单项不应因 toolbar_scope 过滤而丢失"
         );
+    }
+
+    #[test]
+    fn table_context_menu_includes_query_table_action() {
+        let items = mysql_manifest_plugin().build_context_menu("node-1", DbNodeType::Table);
+
+        assert!(has_label(&items, &translate("Query.query_table")));
     }
 
     #[test]
