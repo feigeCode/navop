@@ -18,9 +18,7 @@ pub(crate) struct UpdateResponse {
     #[serde(default)]
     pub(crate) sha256: Option<String>,
     #[serde(default)]
-    sha256s: Option<HashMap<String, String>>,
-    #[serde(default)]
-    pub(crate) release_page_url: Option<String>,
+    sha256s: Option<HashMap<String, String>>
 }
 
 pub(crate) async fn fetch_update_info(

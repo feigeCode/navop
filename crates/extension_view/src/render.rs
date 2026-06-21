@@ -38,6 +38,15 @@ impl ExtensionManagerView {
                 h_flex()
                     .gap_2()
                     .child(
+                        Button::new("extension-manager-offline-download")
+                            .small()
+                            .icon(IconName::Globe)
+                            .label(t!("Extension.offline_download").to_string())
+                            .on_click(|_, _, cx| {
+                                crate::offline_package_dialog::show_offline_package_dialog(cx);
+                            }),
+                    )
+                    .child(
                         Button::new("extension-manager-local")
                             .small()
                             .icon(IconName::File)
