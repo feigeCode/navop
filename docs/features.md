@@ -5,7 +5,7 @@ description: 了解 OnetCli 如何用纯 Rust、GPUI 和 GPU 渲染整合数据�
 
 # 功能
 
-OnetCli 是一个纯 Rust 构建的高性能一体化运维工作台。它不是 WebView 套壳，而是基于 GPUI 构建的原生桌面应用，用一套工作区收拢数据库、Redis、MongoDB、SSH/SFTP、终端和 AI 辅助能力。
+OnetCli 是一个纯 Rust 构建的高性能一体化运维工作台。它不是 WebView 套壳，而是基于 GPUI 构建的原生桌面应用，用一套工作区收拢数据库、Redis、MongoDB、SSH/SFTP、终端、远程桌面和 AI 辅助能力。
 
 ![OnetCli 主应用工作台](/screenshots/app.png)
 
@@ -33,6 +33,17 @@ OnetCli 将多种数据库连接放进同一个桌面工作台，适合日常查
 - Oracle
 - ClickHouse
 - DuckDB
+
+通过扩展市场还可按需安装国产与特色数据库驱动：
+
+- 达梦 DM
+- 金仓 KingbaseES
+- 南大通用 GBase 8s
+- OceanBase
+- openGauss
+- Apache IoTDB
+- 纯 Go Oracle（无需 Oracle Instant Client）
+
 - Redis
 - MongoDB
 
@@ -63,6 +74,10 @@ SFTP 能力覆盖远程目录浏览、文件传输和终端侧栏联动。终端
 ![SFTP 文件管理](/screenshots/sftp.png)
 
 ![终端内置 SFTP 侧栏](/screenshots/sftp_sidebar.png)
+
+## 远程桌面（RDP 与 VNC）
+
+通过可安装的远程桌面 provider，OnetCli 可以在应用内直接打开 RDP 和 VNC 会话：经 RDP 连接 Windows 桌面，或连接任意 VNC 服务端，远程运维操作与数据库、终端、文件共用同一个工作台上下文。
 
 ## 远程文件编辑
 

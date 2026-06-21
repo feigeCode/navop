@@ -5,7 +5,7 @@
 
   <h1>OnetCli</h1>
 
-  <p><strong>数据库、SSH、SFTP、终端、监控与 AI 一体化的原生桌面工作台。</strong></p>
+  <p><strong>数据库、SSH、SFTP、终端、远程桌面、监控与 AI 一体化的原生桌面工作台。</strong></p>
 
   <p>
     基于 <a href="https://gpui.rs">GPUI</a> 构建 · Rust 原生桌面应用 · GPU 加速渲染
@@ -27,10 +27,18 @@
     <img src="https://img.shields.io/badge/ClickHouse-FFCC01?logo=clickhouse&logoColor=black" alt="ClickHouse" />
     <img src="https://img.shields.io/badge/SQL%20Server-CC2927?logo=microsoftsqlserver&logoColor=white" alt="SQL Server" />
     <img src="https://img.shields.io/badge/Oracle-F80000?logo=oracle&logoColor=white" alt="Oracle" />
+    <img src="https://img.shields.io/badge/Dameng%20DM-C71D23" alt="达梦 DM" />
+    <img src="https://img.shields.io/badge/KingbaseES-005BAC" alt="金仓 KingbaseES" />
+    <img src="https://img.shields.io/badge/GBase%208s-1E73BE" alt="GBase 8s" />
+    <img src="https://img.shields.io/badge/OceanBase-1B9A8C" alt="OceanBase" />
+    <img src="https://img.shields.io/badge/openGauss-005EB8" alt="openGauss" />
+    <img src="https://img.shields.io/badge/Apache%20IoTDB-1B3A6B?logo=apache&logoColor=white" alt="Apache IoTDB" />
     <img src="https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white" alt="Redis" />
     <img src="https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white" alt="MongoDB" />
     <img src="https://img.shields.io/badge/SSH-111827?logo=gnubash&logoColor=white" alt="SSH" />
     <img src="https://img.shields.io/badge/SFTP-2563EB?logo=filezilla&logoColor=white" alt="SFTP" />
+    <img src="https://img.shields.io/badge/RDP-0078D4" alt="RDP" />
+    <img src="https://img.shields.io/badge/VNC-5C2D91" alt="VNC" />
   </p>
 
   <p>
@@ -57,7 +65,7 @@
     </td>
     <td width="50%">
       <h3>日常运维集中到一个工作区</h3>
-      <p>数据库管理、SSH 终端、SFTP 文件传输、串口连接和本地终端都在同一个应用中完成。</p>
+      <p>数据库管理、SSH 终端、SFTP 文件传输、串口连接、本地终端以及远程桌面（RDP/VNC）都在同一个应用中完成。</p>
     </td>
   </tr>
   <tr>
@@ -78,6 +86,8 @@
 
 在同一界面连接 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle 和 ClickHouse。可浏览数据库、Schema、表、字段、索引、外键、过程、函数、触发器和序列等对象，具体能力取决于数据库类型。
 
+在内置驱动之外，OnetCli 还提供扩展市场，可按需安装达梦 DM、金仓 KingbaseES、南大通用 GBase 8s、OceanBase、openGauss、Apache IoTDB 的数据库驱动，以及一个无需 Oracle Instant Client 的纯 Go Oracle 驱动。安装后会与内置数据库一同出现在连接列表中。
+
 ### SQL 编辑器与 Schema 工具
 
 提供 SQL 编辑、语法相关能力、Schema 浏览、表结构编辑、查询执行、Explain 支持与 ER 图等数据库工作流。
@@ -93,6 +103,10 @@
 ### 远程文件编辑
 
 可直接在 OnetCli 内编辑远程文件，支持语法高亮和自动补全。无需额外打开其他编辑器，也无需在终端和文件工具之间来回切换。
+
+### 远程桌面（RDP 与 VNC）
+
+通过可安装的远程桌面 provider 打开 RDP 和 VNC 会话。可经 RDP 连接 Windows 机器，或连接任意 VNC 服务端，在数据库、终端和文件所在的同一个工作台里直接操作远程桌面。
 
 ### 监控与图表
 
@@ -152,7 +166,7 @@ sudo xattr -rd com.apple.quarantine /Applications/OnetCli.app
 
 ### Oracle 支持
 
-Oracle 连接需要安装 [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html)（Basic 包）。请下载与你平台匹配的版本，并确保库文件在系统库搜索路径中。
+内置 Oracle 驱动需要安装 [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html)（Basic 包），请下载与平台匹配的版本并确保库文件位于系统库搜索路径中。如果不想依赖 Instant Client，可从扩展市场安装纯 Go 版 Oracle 驱动。
 
 ## 快速开始
 
@@ -213,9 +227,11 @@ cargo fmt --check
 |------|------|
 | UI 框架 | [GPUI](https://gpui.rs) |
 | 编程语言 | Rust |
-| 数据库驱动 | tokio-postgres, mysql_async, rusqlite, tiberius, oracle, clickhouse |
+| 数据库驱动 | tokio-postgres, mysql_async, rusqlite, tiberius, oracle, clickhouse, duckdb |
+| 数据库扩展 | 达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB、纯 Go Oracle |
 | Redis / MongoDB | redis, mongodb |
 | SSH / SFTP | russh, russh-sftp |
+| 远程桌面 | 经扩展运行时加载的 RDP / VNC provider |
 | 终端仿真 | alacritty_terminal |
 | 文本编辑 | ropey, tree-sitter, sqlparser |
 | AI | llm-connector |
@@ -227,13 +243,13 @@ cargo fmt --check
 <details>
 <summary><strong>支持哪些数据库？</strong></summary>
 
-OnetCli 内置支持 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle 和 ClickHouse，同时包含专用 Redis 与 MongoDB 视图。
+OnetCli 内置支持 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle 和 ClickHouse，同时包含专用 Redis 与 MongoDB 视图。扩展市场还提供达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB 以及纯 Go Oracle 驱动，让国产和特色数据库也能纳入同一个工作台。
 </details>
 
 <details>
 <summary><strong>Oracle 是否需要额外配置？</strong></summary>
 
-需要。Oracle 连接依赖 Oracle Instant Client，并且库文件需要位于系统库搜索路径中。
+内置 Oracle 驱动需要 Oracle Instant Client，且库文件需位于系统库搜索路径中。你也可以从扩展市场安装纯 Go 版 Oracle 驱动，无需依赖 Instant Client。
 </details>
 
 <details>

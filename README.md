@@ -5,7 +5,7 @@
 
   <h1>OnetCli</h1>
 
-  <p><strong>Native all-in-one workspace for databases, SSH, SFTP, terminals, monitoring, and AI.</strong></p>
+  <p><strong>Native all-in-one workspace for databases, SSH, SFTP, terminals, remote desktop, monitoring, and AI.</strong></p>
 
   <p>
     Built with <a href="https://gpui.rs">GPUI</a> · Rust native desktop · GPU-accelerated rendering
@@ -27,10 +27,18 @@
     <img src="https://img.shields.io/badge/ClickHouse-FFCC01?logo=clickhouse&logoColor=black" alt="ClickHouse" />
     <img src="https://img.shields.io/badge/SQL%20Server-CC2927?logo=microsoftsqlserver&logoColor=white" alt="SQL Server" />
     <img src="https://img.shields.io/badge/Oracle-F80000?logo=oracle&logoColor=white" alt="Oracle" />
+    <img src="https://img.shields.io/badge/Dameng%20DM-C71D23" alt="Dameng DM" />
+    <img src="https://img.shields.io/badge/KingbaseES-005BAC" alt="KingbaseES" />
+    <img src="https://img.shields.io/badge/GBase%208s-1E73BE" alt="GBase 8s" />
+    <img src="https://img.shields.io/badge/OceanBase-1B9A8C" alt="OceanBase" />
+    <img src="https://img.shields.io/badge/openGauss-005EB8" alt="openGauss" />
+    <img src="https://img.shields.io/badge/Apache%20IoTDB-1B3A6B?logo=apache&logoColor=white" alt="Apache IoTDB" />
     <img src="https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white" alt="Redis" />
     <img src="https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white" alt="MongoDB" />
     <img src="https://img.shields.io/badge/SSH-111827?logo=gnubash&logoColor=white" alt="SSH" />
     <img src="https://img.shields.io/badge/SFTP-2563EB?logo=filezilla&logoColor=white" alt="SFTP" />
+    <img src="https://img.shields.io/badge/RDP-0078D4" alt="RDP" />
+    <img src="https://img.shields.io/badge/VNC-5C2D91" alt="VNC" />
   </p>
 
   <p>
@@ -57,7 +65,7 @@
     </td>
     <td width="50%">
       <h3>One workspace for daily ops</h3>
-      <p>Database management, SSH terminals, SFTP file transfer, serial connections, and local terminals live in one app.</p>
+      <p>Database management, SSH terminals, SFTP file transfer, serial connections, local terminals, and remote desktop (RDP/VNC) live in one app.</p>
     </td>
   </tr>
   <tr>
@@ -78,6 +86,8 @@
 
 Connect to MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse from a single interface. Browse schemas, tables, columns, indexes, foreign keys, procedures, functions, triggers, and sequences where supported.
 
+Beyond the built-in drivers, OnetCli ships an extension marketplace that adds database drivers for Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and a pure-Go Oracle driver that runs without Oracle Instant Client. Install the ones you need and they appear alongside the built-in connections.
+
 ### SQL Editor & Schema Tools
 
 Work with a SQL editor backed by syntax tooling, schema-aware browsing, table structure editing, query execution, explain support, and ER diagrams.
@@ -93,6 +103,10 @@ Open integrated SSH sessions, manage SFTP files, connect to serial devices, and 
 ### Remote File Editing
 
 Edit remote files directly inside OnetCli with syntax highlighting and autocomplete. No need to open another editor or switch back and forth between terminal and file tools.
+
+### Remote Desktop (RDP & VNC)
+
+Open RDP and VNC sessions through installable remote desktop providers. Connect to Windows machines over RDP, or to any VNC server, and drive the remote desktop from the same workspace where your databases, terminals, and files live.
 
 ### Monitoring & Charts
 
@@ -152,7 +166,7 @@ sudo xattr -rd com.apple.quarantine /Applications/OnetCli.app
 
 ### Oracle Support
 
-Oracle connections require [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html) (Basic package). Download the version matching your platform and ensure the libraries are in your library search path.
+The built-in Oracle driver requires [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client/downloads.html) (Basic package). Download the version matching your platform and ensure the libraries are in your library search path. Alternatively, install the pure-Go Oracle driver from the extension marketplace, which has no Instant Client dependency.
 
 ## Getting Started
 
@@ -213,9 +227,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 |----------|--------------|
 | UI Framework | [GPUI](https://gpui.rs) |
 | Language | Rust |
-| Databases | tokio-postgres, mysql_async, rusqlite, tiberius, oracle, clickhouse |
+| Databases | tokio-postgres, mysql_async, rusqlite, tiberius, oracle, clickhouse, duckdb |
+| Database extensions | Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, pure-Go Oracle |
 | Redis / MongoDB | redis, mongodb |
 | SSH / SFTP | russh, russh-sftp |
+| Remote Desktop | RDP & VNC providers via extension runtime |
 | Terminal | alacritty_terminal |
 | Text Editing | ropey, tree-sitter, sqlparser |
 | AI | llm-connector |
@@ -227,13 +243,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 <details>
 <summary><strong>Which databases are supported?</strong></summary>
 
-OnetCli has built-in database support for MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse. It also includes dedicated Redis and MongoDB views.
+OnetCli has built-in database support for MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse, plus dedicated Redis and MongoDB views. The extension marketplace adds Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and a pure-Go Oracle driver, so domestic and specialty databases are covered alongside the mainstream ones.
 </details>
 
 <details>
 <summary><strong>Does Oracle need extra setup?</strong></summary>
 
-Yes. Oracle connections require Oracle Instant Client to be installed and available through your system library search path.
+Yes. The built-in Oracle driver requires Oracle Instant Client to be installed and available through your system library search path. You can also install the pure-Go Oracle driver from the extension marketplace, which runs without Instant Client.
 </details>
 
 <details>

@@ -6,7 +6,7 @@
                 <h1>纯 Rust 构建的高性能一体化运维工作台</h1>
                 <p class="hero-description">
                     OnetCli 基于 GPUI 与 Rust 原生技术栈开发，走 GPU 加速渲染路线，不依赖 WebView。
-                    数据库、Redis、MongoDB、SSH/SFTP、终端会话和 AI 助手，在一个高性能桌面工作台里连续完成。
+                    数据库、Redis、MongoDB、SSH/SFTP、终端会话、远程桌面（RDP/VNC）和 AI 助手，在一个高性能桌面工作台里连续完成。
                 </p>
                 <div class="hero-actions">
                     <a class="primary-action" href="https://github.com/feigeCode/onetcli/releases" target="_blank" rel="noreferrer">
@@ -18,8 +18,10 @@
                 </div>
                 <div class="hero-chips">
                     <span>多数据库连接</span>
+                    <span>国产数据库扩展</span>
                     <span>Redis / MongoDB</span>
                     <span>SSH / SFTP</span>
+                    <span>远程桌面 RDP / VNC</span>
                     <span>本地与远程终端</span>
                     <span>AI SQL 助手</span>
                     <span>纯 Rust 原生渲染</span>
@@ -45,8 +47,8 @@
                 <span>Key 浏览、值查看、集群场景和日常缓存排查</span>
             </article>
             <article>
-                <strong>MongoDB</strong>
-                <span>集合浏览、文档查看、查询支持和 NoSQL 数据探索</span>
+                <strong>RDP / VNC</strong>
+                <span>应用内打开 RDP 与 VNC 远程桌面，远程运维不再跳出工作台</span>
             </article>
         </section>
 
@@ -90,6 +92,8 @@
             </div>
             <div class="feature-grid">
                 <article class="feature-card"><span>DB</span><h3>数据库连接管理</h3><p>按项目或环境组织连接，快速进入 MySQL、PostgreSQL、SQLite、SQL Server、Oracle、ClickHouse、DuckDB 等数据库工作区。</p></article>
+                <article class="feature-card"><span>+</span><h3>国产与扩展数据库</h3><p>通过扩展市场按需安装达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB，以及免 Instant Client 的纯 Go Oracle 驱动。</p></article>
+                <article class="feature-card"><span>RD</span><h3>远程桌面 RDP / VNC</h3><p>应用内打开 RDP 与 VNC 会话，连接 Windows 桌面或任意 VNC 服务端，远程操作与数据库、终端、文件共用同一上下文。</p></article>
                 <article class="feature-card"><span>SQL</span><h3>SQL 编辑与对象浏览</h3><p>浏览表、视图、函数和字段信息，执行 SQL，查看结果，并在同一界面理解结构和数据。</p></article>
                 <article class="feature-card"><span>RS</span><h3>纯 Rust 原生桌面</h3><p>基于 GPUI 构建，采用 GPU 渲染，不依赖 WebView，目标是更低资源占用、更快响应和更稳定的桌面体验。</p></article>
                 <article class="feature-card"><span>KV</span><h3>Redis 工作台</h3><p>提供 Redis Key 浏览、值查看、缓存排查和集群场景支持，让缓存数据也纳入统一工作流。</p></article>
@@ -242,7 +246,7 @@
                 <div>
                     <h2>先下载桌面版，5 分钟跑通第一个连接</h2>
                     <p>
-                        体验纯 Rust 原生性能，将数据库、Redis、MongoDB、SSH/SFTP、远程编辑和 AI 工作流统一到一个桌面入口。
+                        体验纯 Rust 原生性能，将数据库、Redis、MongoDB、SSH/SFTP、远程桌面、远程编辑和 AI 工作流统一到一个桌面入口。
                     </p>
                 </div>
                 <div class="download-actions">
@@ -292,7 +296,9 @@ const structuredData = JSON.stringify(
                 "Database management",
                 "Redis key browsing",
                 "MongoDB document browsing",
+                "Domestic and specialty database extensions",
                 "SSH and SFTP",
+                "RDP and VNC remote desktop",
                 "AI SQL assistant",
             ],
         },
@@ -322,6 +328,14 @@ const structuredData = JSON.stringify(
                     acceptedAnswer: {
                         "@type": "Answer",
                         text: "支持。OnetCli 提供 Redis Key 浏览、值查看、集群场景支持，也提供 MongoDB 集合浏览、文档查看和查询能力。",
+                    },
+                },
+                {
+                    "@type": "Question",
+                    name: "是否支持国产数据库和远程桌面？",
+                    acceptedAnswer: {
+                        "@type": "Answer",
+                        text: "支持。OnetCli 通过扩展市场提供达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB 等国产与特色数据库驱动，并可打开 RDP 和 VNC 远程桌面会话，远程操作与数据库、终端工作流共用同一个桌面工作台。",
                     },
                 },
             ],
