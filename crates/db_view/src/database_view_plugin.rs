@@ -548,6 +548,9 @@ pub fn create_connection_form_for(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<DbConnectionForm> {
+    if let Some(config) = duckdb_ipc_connection_form_config(&database_type, cx) {
+        return cx.new(|cx| DbConnectionForm::new(config, window, cx));
+    }
     manifest_plugin(database_type, cx).create_connection_form(window, cx)
 }
 
@@ -563,23 +566,105 @@ pub fn create_external_connection_form_for(
 
 fn external_form_config(driver: &IpcDriverManifest, cx: &mut App) -> Option<DbFormConfig> {
     let database_type = DatabaseType::external(driver.id.clone());
+    external_form_config_for_database_type(driver, database_type, cx)
+}
+
+fn duckdb_ipc_connection_form_config(
+    database_type: &DatabaseType,
+    cx: &mut App,
+) -> Option<DbFormConfig> {
+    if database_type != &DatabaseType::DuckDB {
+        return None;
+    }
+    let db_state = cx.global::<db::GlobalDbState>();
+    let duckdb_plugin = db_state.get_plugin(&DatabaseType::DuckDB).ok()?;
+    if duckdb_plugin.name() != DatabaseType::external("duckdb") {
+        return None;
+    }
+    let driver = IpcDriverRegistry::load_default().find("duckdb")?;
+    let plugin_type = DatabaseType::external(driver.id.clone());
+    let plugin = db_state.get_plugin(&plugin_type).ok()?;
+    duckdb_ipc_form_config_with_plugin(&driver, plugin.as_ref())
+}
+
+fn external_form_config_for_database_type(
+    driver: &IpcDriverManifest,
+    database_type: DatabaseType,
+    cx: &mut App,
+) -> Option<DbFormConfig> {
+    let plugin_type = DatabaseType::external(driver.id.clone());
     let plugin = cx
         .global::<db::GlobalDbState>()
-        .get_plugin(&database_type)
+        .get_plugin(&plugin_type)
         .ok()?;
-    let mut config = if let Some(manifest) = driver.ui.form.clone() {
-        let form = find_form(&manifest, DatabaseFormKind::Connection)?;
-        to_connection_form_config_with_text_resolver(
-            database_type.clone(),
-            &form,
-            plugin.as_ref(),
-            |key| translate_external_driver_text(driver, key),
-        )
-    } else {
-        default_external_form_config(driver)
-    };
+    external_form_config_with_plugin(driver, database_type, plugin.as_ref())
+}
+
+fn external_form_config_with_plugin(
+    driver: &IpcDriverManifest,
+    database_type: DatabaseType,
+    plugin: &dyn DatabasePlugin,
+) -> Option<DbFormConfig> {
+    let mut config = raw_external_form_config_with_plugin(driver, database_type, plugin)?;
     apply_external_driver_defaults(&mut config, driver);
     Some(config)
+}
+
+fn raw_external_form_config_with_plugin(
+    driver: &IpcDriverManifest,
+    database_type: DatabaseType,
+    plugin: &dyn DatabasePlugin,
+) -> Option<DbFormConfig> {
+    let mut config = if let Some(manifest) = driver.ui.form.clone() {
+        let form = find_form(&manifest, DatabaseFormKind::Connection)?;
+        to_connection_form_config_with_text_resolver(database_type.clone(), &form, plugin, |key| {
+            translate_external_driver_text(driver, key)
+        })
+    } else {
+        default_external_form_config_for_database_type(driver, database_type)
+    };
+    if config.title.trim().is_empty() {
+        config.title = format!("{} ({})", translate("Common.new"), driver.name);
+    }
+    Some(config)
+}
+
+fn duckdb_ipc_form_config_with_plugin(
+    driver: &IpcDriverManifest,
+    plugin: &dyn DatabasePlugin,
+) -> Option<DbFormConfig> {
+    let mut config = raw_external_form_config_with_plugin(driver, DatabaseType::DuckDB, plugin)?;
+    apply_duckdb_host_defaults(&mut config);
+    apply_external_driver_defaults(&mut config, driver);
+    Some(config)
+}
+
+fn apply_duckdb_host_defaults(config: &mut DbFormConfig) {
+    let host_defaults = DbFormConfig::duckdb();
+    for group in &mut config.tab_groups {
+        let Some(default_group) = host_defaults
+            .tab_groups
+            .iter()
+            .find(|default_group| default_group.name == group.name)
+        else {
+            continue;
+        };
+        for field in &mut group.fields {
+            let Some(default_field) = default_group
+                .fields
+                .iter()
+                .find(|default_field| default_field.name == field.name)
+            else {
+                continue;
+            };
+            if field.default_value.trim().is_empty() {
+                field.default_value = default_field.default_value.clone();
+            }
+            if field.placeholder.trim().is_empty() {
+                field.placeholder = default_field.placeholder.clone();
+            }
+        }
+    }
 }
 
 fn apply_external_driver_defaults(config: &mut DbFormConfig, driver: &IpcDriverManifest) {
@@ -668,6 +753,16 @@ fn translate_external_driver_text(driver: &IpcDriverManifest, key_or_text: &str)
 }
 
 fn default_external_form_config(driver: &IpcDriverManifest) -> DbFormConfig {
+    default_external_form_config_for_database_type(
+        driver,
+        DatabaseType::external(driver.id.clone()),
+    )
+}
+
+fn default_external_form_config_for_database_type(
+    driver: &IpcDriverManifest,
+    database_type: DatabaseType,
+) -> DbFormConfig {
     let t = |driver_key: &str, fallback_key: &str| -> String {
         let text = translate_external_driver_text(driver, driver_key);
         if text != driver_key {
@@ -694,7 +789,7 @@ fn default_external_form_config(driver: &IpcDriverManifest) -> DbFormConfig {
     };
 
     DbFormConfig {
-        db_type: DatabaseType::external(driver.id.clone()),
+        db_type: database_type,
         title,
         hidden_params: HashMap::new(),
         tab_groups: vec![
@@ -1024,8 +1119,11 @@ fn action_id(action: &DatabaseActionDescriptor) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use db::ipc::{IpcDriverEntry, IpcDriverManifest, IpcDriverTransport};
+    use db::ipc::{ExternalDatabasePlugin, IpcDriverEntry, IpcDriverManifest, IpcDriverTransport};
     use db::mysql::MySqlPlugin;
+    use db::plugin_manifest::{
+        DatabaseFormField, DatabaseFormFieldType, DatabaseFormManifest, DatabaseFormTab,
+    };
     use std::path::PathBuf;
 
     fn mysql_manifest_plugin() -> ManifestDatabaseViewPlugin {
@@ -1059,6 +1157,66 @@ mod tests {
                 .find(|group| group.name == tab_name)
                 .expect("tab should exist"),
         )
+    }
+
+    fn config_field<'a>(config: &'a DbFormConfig, field_name: &str) -> &'a FormField {
+        config
+            .tab_groups
+            .iter()
+            .flat_map(|group| group.fields.iter())
+            .find(|field| field.name == field_name)
+            .expect("field should exist")
+    }
+
+    fn manifest_field(
+        id: &str,
+        label_i18n_key: &str,
+        field_type: DatabaseFormFieldType,
+    ) -> DatabaseFormField {
+        DatabaseFormField {
+            id: id.into(),
+            label_i18n_key: label_i18n_key.into(),
+            field_type,
+            required: true,
+            default_value: None,
+            placeholder_i18n_key: None,
+            help_i18n_key: None,
+            options: Vec::new(),
+            options_source: None,
+            visible_when: Vec::new(),
+            default_when: Vec::new(),
+            disabled_when_editing: false,
+            rows: None,
+            min: None,
+            max: None,
+        }
+    }
+
+    fn duckdb_driver_form() -> DatabaseUiManifest {
+        DatabaseUiManifest {
+            forms: vec![DatabaseFormManifest {
+                kind: DatabaseFormKind::Connection,
+                title_i18n_key: "connection.title".into(),
+                submit_i18n_key: "Common.save".into(),
+                tabs: vec![DatabaseFormTab {
+                    id: "general".into(),
+                    label_i18n_key: "ConnectionForm.general".into(),
+                    fields: vec![
+                        manifest_field(
+                            "name",
+                            "ConnectionForm.connection_name",
+                            DatabaseFormFieldType::Text,
+                        ),
+                        manifest_field(
+                            "host",
+                            "database.connection.field.host",
+                            DatabaseFormFieldType::FilePath,
+                        ),
+                    ],
+                }],
+            }],
+            ..DatabaseUiManifest::default()
+        }
     }
 
     fn demo_driver() -> IpcDriverManifest {
@@ -1144,6 +1302,29 @@ database:
         let config = default_external_form_config(&driver);
 
         assert_eq!("Driver Connection", config.title);
+    }
+
+    #[test]
+    fn duckdb_ipc_form_keeps_builtin_type_and_applies_host_defaults() {
+        let temp = temp_test_dir("duckdb-ipc-host-defaults");
+        let mut driver = demo_driver_with_locales(&temp);
+        driver.id = "duckdb".into();
+        driver.name = "DuckDB".into();
+        driver.ui.form = Some(duckdb_driver_form());
+        let plugin = ExternalDatabasePlugin::for_driver(driver.clone());
+
+        let config = duckdb_ipc_form_config_with_plugin(&driver, &plugin)
+            .expect("DuckDB IPC form should be converted");
+        let name = config_field(&config, "name");
+        let host = config_field(&config, "host");
+
+        assert_eq!(DatabaseType::DuckDB, config.db_type);
+        assert_eq!("Driver Connection", config.title);
+        assert_eq!("Local DuckDB", name.default_value);
+        assert_eq!("My DuckDB Database", name.placeholder);
+        assert_eq!("Driver Host", host.label);
+        assert!(host.default_value.ends_with("onetcli_default.duckdb"));
+        assert_eq!("/path/to/database.duckdb", host.placeholder);
     }
 
     #[test]
