@@ -241,10 +241,22 @@ SSH:
     en: Jump Username
     zh-CN: 跳板机用户名
     zh-HK: 跳板機用戶名
+  jump_auth_method:
+    en: Jump Auth
+    zh-CN: 跳板机认证
+    zh-HK: 跳板機認證
   jump_password:
     en: Jump Password
     zh-CN: 跳板机密码
     zh-HK: 跳板機密碼
+  jump_key_path:
+    en: Jump Key Path
+    zh-CN: 跳板机私钥路径
+    zh-HK: 跳板機私鑰路徑
+  jump_passphrase:
+    en: Jump Passphrase
+    zh-CN: 跳板机私钥密码
+    zh-HK: 跳板機私鑰密碼
   jump_mfa_required:
     en: Please fill in the jump server MFA field and test again.
     zh-CN: 请填写跳板机 MFA 后重新测试。
