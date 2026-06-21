@@ -2934,7 +2934,11 @@ impl HomePage {
                                     .color()
                                     .with_size(px(40.0))
                                     .text_color(gpui::white()),
-                                ConnectionType::Rdp | ConnectionType::Vnc => IconName::Monitor
+                                ConnectionType::Rdp => IconName::Rdp
+                                    .color()
+                                    .with_size(px(40.0))
+                                    .text_color(gpui::white()),
+                                ConnectionType::Vnc => IconName::Vnc
                                     .color()
                                     .with_size(px(40.0))
                                     .text_color(gpui::white()),

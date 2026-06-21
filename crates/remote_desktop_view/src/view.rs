@@ -498,7 +498,10 @@ impl TabContent for RemoteDesktopView {
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
-        Some(IconName::Monitor.color())
+        Some(match self.options.protocol {
+            RemoteDesktopProtocol::Rdp => IconName::Rdp.color(),
+            RemoteDesktopProtocol::Vnc => IconName::Vnc.color(),
+        })
     }
 
     fn closeable(&self, _cx: &App) -> bool {

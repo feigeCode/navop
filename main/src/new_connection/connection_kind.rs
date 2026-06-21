@@ -144,7 +144,8 @@ impl NewConnectionKind {
                 .mono()
                 .text_color(gpui::rgb(0x8b5cf6))
                 .with_size(px(40.0)),
-            Self::Rdp | Self::Vnc => IconName::Monitor.color().with_size(px(40.0)),
+            Self::Rdp => IconName::Rdp.color().with_size(px(40.0)),
+            Self::Vnc => IconName::Vnc.color().with_size(px(40.0)),
             Self::Redis => IconName::Redis.color().with_size(px(40.0)),
             Self::MongoDB => IconName::MongoDB.color().with_size(px(40.0)),
             Self::Serial => IconName::SerialPort.color().with_size(px(40.0)),

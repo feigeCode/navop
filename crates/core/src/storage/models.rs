@@ -122,7 +122,8 @@ impl ConnectionType {
             ConnectionType::MongoDB => IconName::MongoDB,
             ConnectionType::ChatDB => IconName::AI,
             ConnectionType::Serial => IconName::SerialPort,
-            ConnectionType::Rdp | ConnectionType::Vnc => IconName::Monitor,
+            ConnectionType::Rdp => IconName::Rdp,
+            ConnectionType::Vnc => IconName::Vnc,
         }
     }
 }
