@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use crate::{
     RemoteDesktopBackend, RemoteDesktopCapabilities, RemoteDesktopConnectionOptions,
-    RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopRuntime, RemoteDesktopSize,
+    RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopRuntime,
+    RemoteDesktopSize,
     helper_protocol::{HelperEvent, HelperRequest, decode_event_line, encode_request_line},
 };
 
@@ -56,6 +57,7 @@ impl RemoteDesktopBackend for RdpBackend {
         let (output_tx, output_rx) = std::sync::mpsc::channel();
         let helper = self.helper.clone();
         let mut connect = HelperRequest::connect_from_options(&self.options, initial_size);
+        let protocol = self.options.protocol;
 
         std::thread::Builder::new()
             .name("remote-desktop-rdp".to_string())
@@ -69,6 +71,7 @@ impl RemoteDesktopBackend for RdpBackend {
                         &mut latest_clipboard_text,
                         &mut input_rx,
                         &output_tx,
+                        protocol,
                     ) {
                         HelperRunResult::Closed | HelperRunResult::InputClosed => break,
                         HelperRunResult::Reconnect {
@@ -133,6 +136,7 @@ fn run_helper_session(
     latest_clipboard_text: &mut Option<String>,
     input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
     output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    protocol: RemoteDesktopProtocol,
 ) -> HelperRunResult {
     let Ok((mut helper, mut stdin, signal_rx)) =
         start_helper_session(helper, connect, latest_clipboard_text, output_tx)
@@ -163,6 +167,7 @@ fn run_helper_session(
             &mut stdin,
             output_tx,
             was_connected,
+            protocol,
         ) {
             return result;
         }
@@ -246,6 +251,7 @@ fn handle_remote_input(
     stdin: &mut std::process::ChildStdin,
     output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
     was_connected: bool,
+    protocol: RemoteDesktopProtocol,
 ) -> Option<HelperRunResult> {
     let inputs = match drain_remote_inputs(input_rx) {
         RemoteInputBatch::Inputs(inputs) => inputs,
@@ -271,7 +277,7 @@ fn handle_remote_input(
             }
             input => {
                 remember_reconnect_state(&input, connect, latest_clipboard_text);
-                if let Some(reason) = forward_remote_input(input, stdin, output_tx) {
+                if let Some(reason) = forward_remote_input(input, stdin, output_tx, protocol) {
                     close_helper(helper, stdin, output_tx);
                     return Some(reconnect_result(reason, false, was_connected));
                 }
@@ -328,8 +334,9 @@ fn forward_remote_input(
     input: RemoteDesktopInput,
     stdin: &mut std::process::ChildStdin,
     output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    protocol: RemoteDesktopProtocol,
 ) -> Option<String> {
-    let request = HelperRequest::from_remote_input(&input)?;
+    let request = HelperRequest::from_remote_input_for_protocol(&input, protocol)?;
     write_request(stdin, &request, output_tx)
         .err()
         .map(|_| "failed to send RDP helper request".to_string())

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::backends::rdp_keyboard::remote_key_to_scancode;
 use crate::{
-    RemoteDesktopConnectionOptions, RemoteDesktopInput, RemoteDesktopSize, RemoteKey,
-    RemoteMouseButton, RemoteNamedKey,
+    RemoteDesktopConnectionOptions, RemoteDesktopInput, RemoteDesktopProtocol, RemoteDesktopSize,
+    RemoteKey, RemoteMouseButton, RemoteNamedKey,
 };
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +41,10 @@ pub enum HelperRequest {
         extended: bool,
         pressed: bool,
     },
+    KeySym {
+        keysym: u32,
+        pressed: bool,
+    },
     Text {
         text: String,
     },
@@ -66,6 +70,13 @@ impl HelperRequest {
     }
 
     pub fn from_remote_input(input: &RemoteDesktopInput) -> Option<Self> {
+        Self::from_remote_input_for_protocol(input, RemoteDesktopProtocol::Rdp)
+    }
+
+    pub fn from_remote_input_for_protocol(
+        input: &RemoteDesktopInput,
+        protocol: RemoteDesktopProtocol,
+    ) -> Option<Self> {
         Some(match input {
             RemoteDesktopInput::Resize { width, height } => Self::Resize {
                 width: *width,
@@ -80,7 +91,7 @@ impl HelperRequest {
                 vertical: *vertical,
                 units: *units,
             },
-            RemoteDesktopInput::Key { key, pressed } => key_request(key, *pressed)?,
+            RemoteDesktopInput::Key { key, pressed } => key_request(key, *pressed, protocol)?,
             RemoteDesktopInput::Text { text } => Self::Text { text: text.clone() },
             RemoteDesktopInput::ClipboardText { text } => {
                 Self::ClipboardText { text: text.clone() }
@@ -138,6 +149,11 @@ impl fmt::Debug for HelperRequest {
                 .debug_struct("Key")
                 .field("code", code)
                 .field("extended", extended)
+                .field("pressed", pressed)
+                .finish(),
+            Self::KeySym { keysym, pressed } => f
+                .debug_struct("KeySym")
+                .field("keysym", keysym)
                 .field("pressed", pressed)
                 .finish(),
             Self::Text { text } => f.debug_struct("Text").field("text", text).finish(),
@@ -246,7 +262,18 @@ where
     Ok(line)
 }
 
-fn key_request(key: &RemoteKey, pressed: bool) -> Option<HelperRequest> {
+fn key_request(
+    key: &RemoteKey,
+    pressed: bool,
+    protocol: RemoteDesktopProtocol,
+) -> Option<HelperRequest> {
+    match protocol {
+        RemoteDesktopProtocol::Rdp => rdp_key_request(key, pressed),
+        RemoteDesktopProtocol::Vnc => vnc_key_request(key, pressed),
+    }
+}
+
+fn rdp_key_request(key: &RemoteKey, pressed: bool) -> Option<HelperRequest> {
     let scancode = match key {
         RemoteKey::Character(character) => character_to_scancode(*character)?,
         _ => remote_key_to_scancode(key)?,
@@ -256,6 +283,60 @@ fn key_request(key: &RemoteKey, pressed: bool) -> Option<HelperRequest> {
         code: scancode.code,
         extended: scancode.extended,
         pressed,
+    })
+}
+
+fn vnc_key_request(key: &RemoteKey, pressed: bool) -> Option<HelperRequest> {
+    match key {
+        RemoteKey::Character(character) => Some(HelperRequest::KeySym {
+            keysym: character_to_keysym(*character),
+            pressed,
+        }),
+        RemoteKey::KeySym(keysym) => Some(HelperRequest::KeySym {
+            keysym: *keysym,
+            pressed,
+        }),
+        RemoteKey::Named(named) => Some(HelperRequest::KeySym {
+            keysym: named_key_to_keysym(*named)?,
+            pressed,
+        }),
+        RemoteKey::Scancode(_) => rdp_key_request(key, pressed),
+    }
+}
+
+fn character_to_keysym(character: char) -> u32 {
+    let codepoint = character as u32;
+    if codepoint <= 0xff {
+        codepoint
+    } else {
+        0x0100_0000 | codepoint
+    }
+}
+
+fn named_key_to_keysym(key: RemoteNamedKey) -> Option<u32> {
+    Some(match key {
+        RemoteNamedKey::Escape => 0xff1b,
+        RemoteNamedKey::Backspace => 0xff08,
+        RemoteNamedKey::Tab => 0xff09,
+        RemoteNamedKey::Enter => 0xff0d,
+        RemoteNamedKey::Space => 0x20,
+        RemoteNamedKey::Insert => 0xff63,
+        RemoteNamedKey::Delete => 0xffff,
+        RemoteNamedKey::Home => 0xff50,
+        RemoteNamedKey::End => 0xff57,
+        RemoteNamedKey::PageUp => 0xff55,
+        RemoteNamedKey::PageDown => 0xff56,
+        RemoteNamedKey::ArrowUp => 0xff52,
+        RemoteNamedKey::ArrowDown => 0xff54,
+        RemoteNamedKey::ArrowLeft => 0xff51,
+        RemoteNamedKey::ArrowRight => 0xff53,
+        RemoteNamedKey::Shift => 0xffe1,
+        RemoteNamedKey::Control => 0xffe3,
+        RemoteNamedKey::Alt => 0xffe9,
+        RemoteNamedKey::Meta => 0xffeb,
+        RemoteNamedKey::CapsLock => 0xffe5,
+        RemoteNamedKey::F(index @ 1..=35) => 0xffbe + u32::from(index - 1),
+        RemoteNamedKey::F(_) => return None,
     })
 }
 
@@ -389,6 +470,44 @@ mod tests {
             Some(HelperRequest::Key {
                 code: 0x48,
                 extended: true,
+                pressed: true,
+            })
+        );
+    }
+
+    #[test]
+    fn vnc_character_key_converts_to_helper_keysym() {
+        let request = HelperRequest::from_remote_input_for_protocol(
+            &crate::RemoteDesktopInput::Key {
+                key: crate::RemoteKey::Character(':'),
+                pressed: true,
+            },
+            crate::RemoteDesktopProtocol::Vnc,
+        );
+
+        assert_eq!(
+            request,
+            Some(HelperRequest::KeySym {
+                keysym: b':' as u32,
+                pressed: true,
+            })
+        );
+    }
+
+    #[test]
+    fn vnc_named_key_converts_to_helper_keysym() {
+        let request = HelperRequest::from_remote_input_for_protocol(
+            &crate::RemoteDesktopInput::Key {
+                key: crate::RemoteKey::Named(crate::RemoteNamedKey::Tab),
+                pressed: true,
+            },
+            crate::RemoteDesktopProtocol::Vnc,
+        );
+
+        assert_eq!(
+            request,
+            Some(HelperRequest::KeySym {
+                keysym: 0xff09,
                 pressed: true,
             })
         );

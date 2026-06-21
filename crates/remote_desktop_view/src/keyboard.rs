@@ -173,4 +173,19 @@ mod tests {
             keystroke_to_remote_key_for_protocol(&keystroke, RemoteDesktopProtocol::Vnc)
         );
     }
+
+    #[test]
+    fn maps_vnc_modified_printable_keys_to_characters() {
+        let colon = Keystroke::parse("shift-;->:").expect("valid test keystroke");
+        let question = Keystroke::parse("shift-/->?").expect("valid test keystroke");
+
+        assert_eq!(
+            Some(RemoteKey::Character(':')),
+            keystroke_to_remote_key_for_protocol(&colon, RemoteDesktopProtocol::Vnc)
+        );
+        assert_eq!(
+            Some(RemoteKey::Character('?')),
+            keystroke_to_remote_key_for_protocol(&question, RemoteDesktopProtocol::Vnc)
+        );
+    }
 }
