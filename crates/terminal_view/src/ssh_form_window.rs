@@ -5,7 +5,7 @@ use gpui::{
     WeakEntity, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Sizable, Size, TitleBar,
+    ActiveTheme, Disableable, IconName, Sizable, Size, TitleBar,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -15,8 +15,8 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use one_core::cloud_sync::{GlobalCloudUser, TeamOption};
-use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
+use one_core::cloud_sync::{GlobalCloudUser, TeamOption, get_cached_team_options};
+use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
@@ -117,6 +117,7 @@ pub struct SshFormWindow {
     editing_id: Option<i64>,
     editing_cloud_id: Option<String>,
     editing_last_synced_at: Option<i64>,
+    editing_owner_id: Option<String>,
 
     // 当前活动标签页索引
     active_tab: usize,
@@ -242,6 +243,10 @@ impl SshFormWindow {
             .editing_connection
             .as_ref()
             .and_then(|c| c.last_synced_at);
+        let editing_owner_id = config
+            .editing_connection
+            .as_ref()
+            .and_then(|c| c.owner_id.clone());
 
         let title: SharedString = if is_editing {
             t!("SSH.edit").to_string()
@@ -510,6 +515,7 @@ impl SshFormWindow {
             editing_id,
             editing_cloud_id,
             editing_last_synced_at,
+            editing_owner_id,
             active_tab: 0,
             name_input,
             host_input,
@@ -566,6 +572,25 @@ impl SshFormWindow {
             .selected_value()
             .cloned()
             .flatten()
+    }
+
+    fn reload_team_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let selected = self.get_team_id(cx);
+        let mut items = vec![TeamSelectItem::personal()];
+        items.extend(
+            get_cached_team_options(cx)
+                .iter()
+                .map(TeamSelectItem::from_team),
+        );
+        self.team_select.update(cx, |select, cx| {
+            select.set_items(items, window, cx);
+            select.set_selected_value(&selected, window, cx);
+        });
+    }
+
+    fn request_team_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        emit_connection_event(ConnectionDataEvent::CloudSyncRequested, cx);
+        self.reload_team_options(window, cx);
     }
 
     fn build_ssh_params(&self, cx: &App) -> Option<SshParams> {
@@ -945,9 +970,11 @@ impl SshFormWindow {
         let mut conn = StoredConnection::new_ssh(name, params, workspace_id);
         conn.sync_enabled = self.sync_enabled; // 设置同步状态
         conn.team_id = self.get_team_id(cx);
-        if !self.is_editing {
-            conn.owner_id = GlobalCloudUser::get_user(cx).map(|u| u.id);
-        }
+        conn.owner_id = if self.is_editing {
+            self.editing_owner_id.clone()
+        } else {
+            GlobalCloudUser::get_user(cx).map(|u| u.id)
+        };
         if self.is_editing {
             conn.id = self.editing_id;
             conn.cloud_id = self.editing_cloud_id.clone();
@@ -1106,10 +1133,23 @@ impl SshFormWindow {
                 &t!("SSH.workspace"),
                 Select::new(&self.workspace_select).w_full(),
             ))
-            .child(self.render_form_row(
-                &t!("TeamSync.team_label"),
-                Select::new(&self.team_select).w_full(),
-            ))
+            .child(
+                self.render_form_row(
+                    &t!("TeamSync.team_label"),
+                    h_flex()
+                        .gap_2()
+                        .child(Select::new(&self.team_select).w_full())
+                        .child(
+                            Button::new("sync-ssh-teams")
+                                .icon(IconName::Refresh)
+                                .ghost()
+                                .tooltip(t!("Home.sync_tooltip"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.request_team_sync(window, cx);
+                                })),
+                        ),
+                ),
+            )
             .child(
                 self.render_form_row(
                     &t!("ConnectionForm.cloud_sync"),

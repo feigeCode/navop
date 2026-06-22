@@ -6,7 +6,8 @@ mod view;
 use gpui::{App, Context, Entity, FocusHandle, SharedString, Window};
 use gpui_component::input::InputState;
 use gpui_component::select::SelectState;
-use one_core::cloud_sync::{GlobalCloudUser, TeamOption};
+use one_core::cloud_sync::{GlobalCloudUser, TeamOption, get_cached_team_options};
+use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
 use one_core::storage::{RemoteDesktopParams, RemoteDesktopProtocol, StoredConnection, Workspace};
 use rust_i18n::t;
 
@@ -189,15 +190,38 @@ impl RemoteDesktopFormWindow {
         );
         connection.sync_enabled = self.sync_enabled;
         connection.team_id = self.team_id(cx);
-        if !self.is_editing {
-            connection.owner_id = GlobalCloudUser::get_user(cx).map(|user| user.id);
-        }
+        connection.owner_id = if self.is_editing {
+            self.editing_connection
+                .as_ref()
+                .and_then(|connection| connection.owner_id.clone())
+        } else {
+            GlobalCloudUser::get_user(cx).map(|user| user.id)
+        };
         if self.is_editing {
             connection.id = self.editing_id;
             connection.cloud_id = self.editing_cloud_id.clone();
             connection.last_synced_at = self.editing_last_synced_at;
         }
         persist_connection(connection, self.is_editing, cx)
+    }
+
+    fn reload_team_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let selected = self.team_id(cx);
+        let mut items = vec![TeamSelectItem::personal()];
+        items.extend(
+            get_cached_team_options(cx)
+                .iter()
+                .map(TeamSelectItem::from_team),
+        );
+        self.team_select.update(cx, |select, cx| {
+            select.set_items(items, window, cx);
+            select.set_selected_value(&selected, window, cx);
+        });
+    }
+
+    fn request_team_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        emit_connection_event(ConnectionDataEvent::CloudSyncRequested, cx);
+        self.reload_team_options(window, cx);
     }
 
     fn connection_name(&self, params: &RemoteDesktopParams, cx: &App) -> String {

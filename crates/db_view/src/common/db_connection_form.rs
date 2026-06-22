@@ -24,7 +24,8 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use one_core::cloud_sync::{GlobalCloudUser, TeamOption};
+use one_core::cloud_sync::{GlobalCloudUser, TeamOption, get_cached_team_options};
+use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
@@ -1434,6 +1435,30 @@ impl DbConnectionForm {
         cx.notify();
     }
 
+    fn reload_team_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let selected = self
+            .team_select
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .flatten();
+        let mut items = vec![TeamSelectItem::personal()];
+        items.extend(
+            get_cached_team_options(cx)
+                .iter()
+                .map(TeamSelectItem::from_team),
+        );
+        self.team_select.update(cx, |select, cx| {
+            select.set_items(items, window, cx);
+            select.set_selected_value(&selected, window, cx);
+        });
+    }
+
+    fn request_team_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        emit_connection_event(ConnectionDataEvent::CloudSyncRequested, cx);
+        self.reload_team_options(window, cx);
+    }
+
     pub fn set_ssh_connections(
         &mut self,
         connections: Vec<StoredConnection>,
@@ -2311,7 +2336,20 @@ impl DbConnectionForm {
                         .label(t!("TeamSync.team_label").to_string())
                         .items_center()
                         .label_justify_end()
-                        .child(Select::new(&self.team_select).w_full()),
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(Select::new(&self.team_select).w_full())
+                                .child(
+                                    Button::new("sync-db-teams")
+                                        .icon(IconName::Refresh)
+                                        .ghost()
+                                        .tooltip(t!("Home.sync_tooltip"))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.request_team_sync(window, cx);
+                                        })),
+                                ),
+                        ),
                 )
                 .child(
                     field()

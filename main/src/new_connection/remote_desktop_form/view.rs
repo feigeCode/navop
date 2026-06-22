@@ -4,7 +4,7 @@ use gpui::{
     px,
 };
 use gpui_component::{
-    ActiveTheme, Sizable, TitleBar,
+    ActiveTheme, IconName, Sizable, TitleBar,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -57,10 +57,23 @@ impl RemoteDesktopFormWindow {
                 t!("RemoteDesktopForm.label_workspace").to_string(),
                 Select::new(&self.workspace_select).w_full(),
             ))
-            .child(self.render_form_row(
-                t!("RemoteDesktopForm.label_team").to_string(),
-                Select::new(&self.team_select).w_full(),
-            ))
+            .child(
+                self.render_form_row(
+                    t!("RemoteDesktopForm.label_team").to_string(),
+                    h_flex()
+                        .gap_2()
+                        .child(Select::new(&self.team_select).w_full())
+                        .child(
+                            Button::new("sync-remote-desktop-teams")
+                                .icon(IconName::Refresh)
+                                .ghost()
+                                .tooltip(t!("Home.sync_tooltip"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.request_team_sync(window, cx);
+                                })),
+                        ),
+                ),
+            )
             .child(self.render_read_only_row(cx))
             .child(self.render_sync_row(cx))
     }

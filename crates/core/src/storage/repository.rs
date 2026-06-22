@@ -647,7 +647,7 @@ pub struct TeamKeyCache {
     pub encrypted_team_key: Option<String>,
     pub last_verified_at: Option<i64>,
     pub updated_at: i64,
-    /// 当前用户在该团队中的角色（owner / member）
+    /// 当前用户在该团队中的角色（owner / admin / member）
     pub role: Option<String>,
 }
 

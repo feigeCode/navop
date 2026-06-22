@@ -392,6 +392,9 @@ impl HomePage {
                     ConnectionDataEvent::SchemaChanged { .. } => {
                         // SchemaChanged 由 db_tree_view 处理，此处无需操作
                     }
+                    ConnectionDataEvent::CloudSyncRequested => {
+                        this.trigger_sync(cx);
+                    }
                 },
             )
             .detach();
