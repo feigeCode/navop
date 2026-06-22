@@ -219,8 +219,12 @@ impl SyncEngine {
                         continue;
                     };
                     match self.upload_connection(local_conn).await {
-                        Ok(cloud_id) => {
-                            match self.update_sync_status(local_id, Some(cloud_id), None, None) {
+                        Ok(created_cloud_data) => {
+                            match self.update_sync_status_after_cloud_write(
+                                local_conn,
+                                &created_cloud_data,
+                                None,
+                            ) {
                                 Ok(()) => {
                                     result.uploaded += 1;
                                     tracing::info!("[上传] 成功: {}", local_conn.name);
@@ -255,14 +259,9 @@ impl SyncEngine {
                     };
                     match self.update_cloud_connection(local_conn, cloud_data).await {
                         Ok(updated_cloud_data) => {
-                            let synced_at = Self::connection_synced_at_after_cloud_write(
+                            match self.update_sync_status_after_cloud_write(
                                 local_conn,
                                 &updated_cloud_data,
-                            );
-                            match self.update_sync_status(
-                                local_id,
-                                Some(updated_cloud_data.id),
-                                Some(synced_at),
                                 None,
                             ) {
                                 Ok(()) => {
@@ -666,7 +665,7 @@ impl SyncEngine {
         Ok(resolved)
     }
 
-    async fn upload_connection(&self, conn: &StoredConnection) -> Result<String, SyncError> {
+    async fn upload_connection(&self, conn: &StoredConnection) -> Result<CloudSyncData, SyncError> {
         let teams = self.get_cached_teams();
         let workspace_cloud_id = self.workspace_cloud_id_for_local_id(conn.workspace_id)?;
         let cloud_data = {
@@ -687,7 +686,7 @@ impl SyncEngine {
             .await
             .map_err(|e| SyncError::NetworkError(e.to_string()))?;
 
-        Ok(created.id)
+        Ok(created)
     }
 
     async fn update_cloud_connection(
@@ -801,6 +800,46 @@ impl SyncEngine {
         Ok(())
     }
 
+    fn update_sync_status_after_cloud_write(
+        &self,
+        snapshot: &StoredConnection,
+        cloud_data: &CloudSyncData,
+        error: Option<String>,
+    ) -> Result<(), SyncError> {
+        let repo = self
+            .storage
+            .get::<ConnectionRepository>()
+            .ok_or_else(|| SyncError::StorageError("ConnectionRepository not found".to_string()))?;
+        let local_id = snapshot
+            .id
+            .ok_or_else(|| SyncError::StorageError("连接缺少本地 ID".to_string()))?;
+        let current = repo
+            .get(local_id)
+            .map_err(|e| SyncError::StorageError(e.to_string()))?
+            .unwrap_or_else(|| snapshot.clone());
+        let synced_at = Self::connection_synced_at_after_cloud_write(snapshot, cloud_data);
+        let pending_updated_at =
+            Self::pending_updated_at_after_cloud_write(snapshot, &current, synced_at);
+
+        if let Some(updated_at) = pending_updated_at {
+            repo.update_sync_status_with_updated_at(
+                local_id,
+                Some(cloud_data.id.clone()),
+                Some(synced_at),
+                updated_at,
+            )
+        } else {
+            repo.update_sync_status(local_id, Some(cloud_data.id.clone()), Some(synced_at))
+        }
+        .map_err(|e| SyncError::StorageError(e.to_string()))?;
+
+        if let Some(err) = error {
+            tracing::warn!("[同步状态] 连接 {} 同步出错: {}", local_id, err);
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn connection_synced_at_after_cloud_write(
         local_conn: &StoredConnection,
         cloud_data: &CloudSyncData,
@@ -810,6 +849,35 @@ impl SyncEngine {
         Self::current_timestamp()
             .max(local_updated)
             .max(cloud_updated)
+    }
+
+    pub(crate) fn pending_updated_at_after_cloud_write(
+        snapshot: &StoredConnection,
+        current: &StoredConnection,
+        synced_at: i64,
+    ) -> Option<i64> {
+        if !Self::connection_content_changed(snapshot, current) {
+            return None;
+        }
+
+        let current_updated_at = current.updated_at.unwrap_or(0);
+        if current_updated_at > synced_at {
+            None
+        } else {
+            Some(synced_at + 1)
+        }
+    }
+
+    fn connection_content_changed(snapshot: &StoredConnection, current: &StoredConnection) -> bool {
+        snapshot.name != current.name
+            || snapshot.connection_type != current.connection_type
+            || snapshot.params != current.params
+            || snapshot.workspace_id != current.workspace_id
+            || snapshot.selected_databases != current.selected_databases
+            || snapshot.remark != current.remark
+            || snapshot.sync_enabled != current.sync_enabled
+            || snapshot.team_id != current.team_id
+            || snapshot.owner_id != current.owner_id
     }
 
     pub(crate) fn connection_cloud_write_target(
@@ -856,9 +924,10 @@ impl SyncEngine {
             );
         }
 
-        let cloud_id = self.upload_connection(&conflict.local).await?;
-        let synced_at = Self::current_timestamp().max(conflict.local.updated_at.unwrap_or(0));
-        self.update_sync_status(local_id, Some(cloud_id), Some(synced_at), None)
+        let created_cloud_data = self.upload_connection(&conflict.local).await?;
+        let synced_at =
+            Self::connection_synced_at_after_cloud_write(&conflict.local, &created_cloud_data);
+        self.update_sync_status(local_id, Some(created_cloud_data.id), Some(synced_at), None)
     }
 
     pub(crate) fn apply_cloud_deleted_connection_conflict(
@@ -1142,5 +1211,30 @@ mod tests {
         let target = SyncEngine::connection_cloud_write_target(&placeholder, Some(&deleted));
 
         assert!(target.is_none());
+    }
+
+    #[test]
+    fn cloud_write_marks_mid_sync_local_edit_pending_even_in_same_second() {
+        let snapshot = stored_connection(100);
+        let mut current = snapshot.clone();
+        current.name = "edited".to_string();
+        current.updated_at = snapshot.updated_at;
+        let synced_at = 120;
+
+        let pending_updated_at =
+            SyncEngine::pending_updated_at_after_cloud_write(&snapshot, &current, synced_at);
+
+        assert_eq!(Some(121), pending_updated_at);
+    }
+
+    #[test]
+    fn cloud_write_does_not_mark_unchanged_connection_pending() {
+        let snapshot = stored_connection(100);
+        let current = snapshot.clone();
+
+        let pending_updated_at =
+            SyncEngine::pending_updated_at_after_cloud_write(&snapshot, &current, 120);
+
+        assert_eq!(None, pending_updated_at);
     }
 }
