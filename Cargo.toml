@@ -28,6 +28,8 @@ members = [
     "crates/er_flow",
     "crates/terminal",
     "crates/terminal_view",
+    "crates/port_forwarding",
+    "crates/port_forwarding_view",
     "crates/remote_desktop",
     "crates/remote_desktop_view",
     "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor"]
@@ -88,6 +90,8 @@ ssh = { path = "crates/ssh" }
 sftp = { path = "crates/sftp" }
 terminal = { path = "crates/terminal" }
 terminal_view = { path = "crates/terminal_view" }
+port_forwarding = { path = "crates/port_forwarding" }
+port_forwarding_view = { path = "crates/port_forwarding_view" }
 remote_desktop = { path = "crates/remote_desktop" }
 remote_desktop_view = { path = "crates/remote_desktop_view" }
 sftp_view = { path = "crates/sftp_view" }

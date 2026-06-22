@@ -26,6 +26,7 @@ pub(crate) fn build_connection_open_strategy(
             workspace,
         }),
         ConnectionType::Serial => Box::new(SerialOpenStrategy { connection }),
+        ConnectionType::PortForwarding => Box::new(PortForwardingOpenStrategy { connection }),
         ConnectionType::Rdp => Box::new(RemoteDesktopOpenStrategy {
             connection,
             protocol: RemoteDesktopProtocol::Rdp,
@@ -130,6 +131,16 @@ struct SerialOpenStrategy {
 impl ConnectionOpenStrategy for SerialOpenStrategy {
     fn open(self: Box<Self>, home: &mut HomePage, window: &mut Window, cx: &mut Context<HomePage>) {
         home.open_serial_terminal(self.connection, window, cx);
+    }
+}
+
+struct PortForwardingOpenStrategy {
+    connection: StoredConnection,
+}
+
+impl ConnectionOpenStrategy for PortForwardingOpenStrategy {
+    fn open(self: Box<Self>, home: &mut HomePage, window: &mut Window, cx: &mut Context<HomePage>) {
+        home.open_port_forwarding(self.connection, window, cx);
     }
 }
 

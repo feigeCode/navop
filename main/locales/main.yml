@@ -69,6 +69,18 @@ Home:
     en: New Connection
     zh-CN: 新建连接
     zh-HK: 新建連線
+  port_forwarding_started:
+    en: "Port Forwarding %{name} started on %{addr}"
+    zh-CN: "端口转发 %{name} 已启动：%{addr}"
+    zh-HK: "端口轉發 %{name} 已啟動：%{addr}"
+  port_forwarding_failed:
+    en: "Port Forwarding %{name} failed: %{error}"
+    zh-CN: "端口转发 %{name} 启动失败：%{error}"
+    zh-HK: "端口轉發 %{name} 啟動失敗：%{error}"
+  port_forwarding_missing_ssh:
+    en: Referenced SSH server was not found.
+    zh-CN: 找不到引用的 SSH 服务器。
+    zh-HK: 找不到引用的 SSH 伺服器。
   connection_count:
     en: "%{count} connections"
     zh-CN: "%{count} 个连接"
@@ -571,10 +583,24 @@ NewConnection:
     en: Serial device connection
     zh-CN: 串口设备连接
     zh-HK: 串口裝置連線
+  description_port_forwarding:
+    en: SSH local port forwarding or SOCKS tunnel
+    zh-CN: SSH 本地端口转发或 SOCKS 隧道
+    zh-HK: SSH 本地端口轉發或 SOCKS 隧道
   description_database:
     en: Relational database connection
     zh-CN: 关系型数据库连接
     zh-HK: 關聯式資料庫連線
+
+PortForwarding:
+  new:
+    en: Port Forwarding
+    zh-CN: 端口转发
+    zh-HK: 端口轉發
+  edit:
+    en: Edit Port Forwarding
+    zh-CN: 编辑端口转发
+    zh-HK: 編輯端口轉發
 
 # 远程桌面连接表单
 RemoteDesktopForm:

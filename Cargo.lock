@@ -6532,6 +6532,8 @@ dependencies = [
  "mongodb_view",
  "one-core",
  "one-ui",
+ "port_forwarding",
+ "port_forwarding_view",
  "redis_view",
  "remote_desktop",
  "remote_desktop_view",
@@ -8299,6 +8301,28 @@ dependencies = [
  "cpubits",
  "cpufeatures 0.3.0",
  "universal-hash 0.6.1",
+]
+
+[[package]]
+name = "port_forwarding"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "one-core",
+ "ssh",
+ "tokio",
+]
+
+[[package]]
+name = "port_forwarding_view"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "one-core",
+ "rust-i18n",
+ "tracing",
 ]
 
 [[package]]

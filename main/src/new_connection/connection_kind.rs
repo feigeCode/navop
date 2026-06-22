@@ -60,6 +60,7 @@ pub(super) enum NewConnectionKind {
     Redis,
     MongoDB,
     Serial,
+    PortForwarding,
     Database(DatabaseType),
     ExternalDatabase {
         driver_id: String,
@@ -81,6 +82,7 @@ impl NewConnectionKind {
             Self::Redis,
             Self::MongoDB,
             Self::Serial,
+            Self::PortForwarding,
         ];
         items.extend(
             DatabaseType::builtin_all()
@@ -101,6 +103,7 @@ impl NewConnectionKind {
             Self::Redis => "Redis".to_string(),
             Self::MongoDB => "MongoDB".to_string(),
             Self::Serial => t!("Serial.new").to_string(),
+            Self::PortForwarding => t!("PortForwarding.new").to_string(),
             Self::Database(db_type) => db_type.as_str().to_string(),
             Self::ExternalDatabase { name, .. } => name.clone(),
         }
@@ -115,6 +118,7 @@ impl NewConnectionKind {
             Self::Redis => t!("NewConnection.description_redis").to_string(),
             Self::MongoDB => t!("NewConnection.description_mongodb").to_string(),
             Self::Serial => t!("NewConnection.description_serial").to_string(),
+            Self::PortForwarding => t!("NewConnection.description_port_forwarding").to_string(),
             Self::Database(_) => t!("NewConnection.description_database").to_string(),
             Self::ExternalDatabase { description, .. } => description.clone(),
         }
@@ -122,9 +126,12 @@ impl NewConnectionKind {
 
     pub(super) fn category(&self) -> NewConnectionCategory {
         match self {
-            Self::Ssh | Self::Terminal | Self::Rdp | Self::Vnc | Self::Serial => {
-                NewConnectionCategory::Terminal
-            }
+            Self::Ssh
+            | Self::Terminal
+            | Self::Rdp
+            | Self::Vnc
+            | Self::Serial
+            | Self::PortForwarding => NewConnectionCategory::Terminal,
             Self::Redis | Self::MongoDB => NewConnectionCategory::NoSql,
             Self::Database(_) => NewConnectionCategory::Database,
             Self::ExternalDatabase { category, .. } => {
@@ -149,6 +156,7 @@ impl NewConnectionKind {
             Self::Redis => IconName::Redis.color().with_size(px(40.0)),
             Self::MongoDB => IconName::MongoDB.color().with_size(px(40.0)),
             Self::Serial => IconName::SerialPort.color().with_size(px(40.0)),
+            Self::PortForwarding => IconName::Network.color().with_size(px(40.0)),
             Self::Database(db_type) => db_type.as_icon().with_size(px(40.0)),
             Self::ExternalDatabase {
                 icon_asset_path,

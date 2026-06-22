@@ -1,0 +1,87 @@
+_version: 2
+
+Common:
+  none:
+    en: None
+    zh-CN: 无
+  cancel:
+    en: Cancel
+    zh-CN: 取消
+  ok:
+    en: OK
+    zh-CN: 确定
+
+ConnectionForm:
+  cloud_sync:
+    en: Cloud Sync
+    zh-CN: 云同步
+  cloud_sync_desc:
+    en: Sync this connection after saving.
+    zh-CN: 保存后同步此连接。
+
+TeamSync:
+  personal:
+    en: Personal
+    zh-CN: 个人
+  team_label:
+    en: Team
+    zh-CN: 团队
+
+PortForwarding:
+  new:
+    en: New Port Forwarding
+    zh-CN: 新建端口转发
+  edit:
+    en: Edit Port Forwarding
+    zh-CN: 编辑端口转发
+  name:
+    en: Name
+    zh-CN: 名称
+  name_placeholder:
+    en: Optional display name
+    zh-CN: 可选显示名称
+  ssh_connection:
+    en: SSH Server
+    zh-CN: SSH 服务器
+  ssh_connection_placeholder:
+    en: Select an SSH/SFTP server
+    zh-CN: 选择 SSH/SFTP 服务器
+  kind:
+    en: Type
+    zh-CN: 类型
+  bind_host:
+    en: Bind Host
+    zh-CN: 绑定地址
+  bind_port:
+    en: Bind Port
+    zh-CN: 绑定端口
+  target_host:
+    en: Target Host
+    zh-CN: 目标地址
+  target_port:
+    en: Target Port
+    zh-CN: 目标端口
+  workspace:
+    en: Workspace
+    zh-CN: 工作区
+  remark:
+    en: Remark
+    zh-CN: 备注
+  remark_placeholder:
+    en: Optional notes
+    zh-CN: 可选备注
+  validation_ssh:
+    en: Select an SSH server.
+    zh-CN: 请选择 SSH 服务器。
+  validation_bind_host:
+    en: Bind host is required.
+    zh-CN: 绑定地址不能为空。
+  validation_target_host:
+    en: Target host is required for local forwarding.
+    zh-CN: 本地转发需要填写目标地址。
+  validation_target_port:
+    en: Target port is required for local forwarding.
+    zh-CN: 本地转发需要填写目标端口。
+  validation_number:
+    en: "%{field} must be a valid port number."
+    zh-CN: "%{field} 必须是有效端口。"
