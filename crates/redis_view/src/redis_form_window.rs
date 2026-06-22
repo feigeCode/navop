@@ -6,7 +6,7 @@ use gpui::{
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Sizable, Size, TitleBar,
+    ActiveTheme, Disableable, IconName, Sizable, Size, TitleBar,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -16,8 +16,8 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use one_core::cloud_sync::{GlobalCloudUser, TeamOption};
-use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
+use one_core::cloud_sync::{GlobalCloudUser, TeamOption, get_cached_team_options};
+use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
@@ -138,6 +138,7 @@ pub struct RedisFormWindow {
     editing_id: Option<i64>,
     editing_cloud_id: Option<String>,
     editing_last_synced_at: Option<i64>,
+    editing_owner_id: Option<String>,
 
     // 当前活动标签页索引
     active_tab: usize,
@@ -192,6 +193,10 @@ impl RedisFormWindow {
             .editing_connection
             .as_ref()
             .and_then(|c| c.last_synced_at);
+        let editing_owner_id = config
+            .editing_connection
+            .as_ref()
+            .and_then(|c| c.owner_id.clone());
 
         let title: SharedString = if is_editing {
             t!("Redis.edit").to_string()
@@ -407,6 +412,7 @@ impl RedisFormWindow {
             editing_id,
             editing_cloud_id,
             editing_last_synced_at,
+            editing_owner_id,
             active_tab: 0,
             name_input,
             host_input,
@@ -446,6 +452,25 @@ impl RedisFormWindow {
             .selected_value()
             .cloned()
             .flatten()
+    }
+
+    fn reload_team_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let selected = self.get_team_id(cx);
+        let mut items = vec![TeamSelectItem::personal()];
+        items.extend(
+            get_cached_team_options(cx)
+                .iter()
+                .map(TeamSelectItem::from_team),
+        );
+        self.team_select.update(cx, |select, cx| {
+            select.set_items(items, window, cx);
+            select.set_selected_value(&selected, window, cx);
+        });
+    }
+
+    fn request_team_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        emit_connection_event(ConnectionDataEvent::CloudSyncRequested, cx);
+        self.reload_team_options(window, cx);
     }
 
     /// 构建 RedisParams
@@ -615,6 +640,7 @@ impl RedisFormWindow {
         let editing_id = self.editing_id;
         let editing_cloud_id = self.editing_cloud_id.clone();
         let editing_last_synced_at = self.editing_last_synced_at;
+        let editing_owner_id = self.editing_owner_id.clone();
 
         let storage = cx
             .global::<one_core::storage::GlobalStorageState>()
@@ -631,9 +657,11 @@ impl RedisFormWindow {
                 conn.sync_enabled = sync_enabled;
                 conn.remark = remark;
                 conn.team_id = team_id;
-                if !is_editing {
-                    conn.owner_id = owner_id;
-                }
+                conn.owner_id = if is_editing {
+                    editing_owner_id
+                } else {
+                    owner_id
+                };
 
                 if is_editing {
                     conn.id = editing_id;
@@ -710,10 +738,23 @@ impl RedisFormWindow {
                 &t!("Redis.workspace"),
                 Select::new(&self.workspace_select).w_full(),
             ))
-            .child(self.render_form_row(
-                &t!("TeamSync.team_label"),
-                Select::new(&self.team_select).w_full(),
-            ))
+            .child(
+                self.render_form_row(
+                    &t!("TeamSync.team_label"),
+                    h_flex()
+                        .gap_2()
+                        .child(Select::new(&self.team_select).w_full())
+                        .child(
+                            Button::new("sync-redis-teams")
+                                .icon(IconName::Refresh)
+                                .ghost()
+                                .tooltip(t!("Home.sync_tooltip"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.request_team_sync(window, cx);
+                                })),
+                        ),
+                ),
+            )
             .child(
                 self.render_form_row(
                     &t!("ConnectionForm.cloud_sync"),

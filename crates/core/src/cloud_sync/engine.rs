@@ -13,11 +13,11 @@ use super::generic_sync::generic_sync;
 use super::sync_type::SyncTypeHandler;
 use super::workspace_sync::WorkspaceSyncType;
 use crate::cloud_sync::client::CloudApiClient;
-use crate::cloud_sync::models::{ConflictResolution, SyncResult, Team};
+use crate::cloud_sync::models::{ConflictResolution, SyncResult, Team, TeamRole};
 use crate::cloud_sync::queue::OperationQueue;
 use crate::cloud_sync::service::{CloudSyncService, SyncError};
 use crate::crypto;
-use crate::storage::{StorageManager, TeamKeyCacheRepository};
+use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -261,16 +261,17 @@ impl SyncEngine {
             match self.cloud_client.list_team_members(&team.id).await {
                 Ok(members) => {
                     if let Some(member) = members.iter().find(|m| m.user_id == user_id) {
-                        let role_str = match member.role {
-                            crate::cloud_sync::models::TeamRole::Owner => "owner",
-                            crate::cloud_sync::models::TeamRole::Member => "member",
-                        };
-                        // 更新已有缓存的 role 字段
-                        if let Ok(Some(mut cache)) = repo.get(&team.id) {
-                            cache.role = Some(role_str.to_string());
-                            if let Err(e) = repo.upsert(&cache) {
-                                tracing::warn!("[同步] 更新团队 {} 角色缓存失败: {}", team.id, e);
+                        let existing_cache = match repo.get(&team.id) {
+                            Ok(cache) => cache,
+                            Err(e) => {
+                                tracing::warn!("[同步] 读取团队 {} 缓存失败: {}", team.id, e);
+                                None
                             }
+                        };
+                        let cache =
+                            team_key_cache_for_cloud_team(team, member.role, existing_cache);
+                        if let Err(e) = repo.upsert(&cache) {
+                            tracing::warn!("[同步] 更新团队 {} 缓存失败: {}", team.id, e);
                         }
                     }
                 }
@@ -437,5 +438,78 @@ impl SyncEngine {
                 Ok(())
             }
         }
+    }
+}
+
+fn team_key_cache_for_cloud_team(
+    team: &Team,
+    role: TeamRole,
+    existing: Option<TeamKeyCache>,
+) -> TeamKeyCache {
+    let (encrypted_team_key, last_verified_at) = existing
+        .map(|cache| (cache.encrypted_team_key, cache.last_verified_at))
+        .unwrap_or((None, None));
+
+    TeamKeyCache {
+        team_id: team.id.clone(),
+        team_name: team.name.clone(),
+        key_version: team.key_version,
+        encrypted_team_key,
+        last_verified_at,
+        updated_at: team.updated_at,
+        role: Some(role.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::team_key_cache_for_cloud_team;
+    use crate::cloud_sync::models::{Team, TeamRole};
+    use crate::storage::TeamKeyCache;
+
+    fn team() -> Team {
+        Team {
+            id: "team-1".to_string(),
+            name: "Platform".to_string(),
+            owner_id: "owner-1".to_string(),
+            description: None,
+            key_verification: None,
+            key_version: 7,
+            created_at: 100,
+            updated_at: 200,
+        }
+    }
+
+    #[test]
+    fn builds_team_cache_for_cloud_team_without_existing_key() {
+        let cache = team_key_cache_for_cloud_team(&team(), TeamRole::Admin, None);
+
+        assert_eq!("team-1", cache.team_id);
+        assert_eq!("Platform", cache.team_name);
+        assert_eq!(7, cache.key_version);
+        assert_eq!(None, cache.encrypted_team_key);
+        assert_eq!(None, cache.last_verified_at);
+        assert_eq!(Some("admin".to_string()), cache.role);
+    }
+
+    #[test]
+    fn preserving_existing_team_key_when_cloud_team_metadata_changes() {
+        let existing = TeamKeyCache {
+            team_id: "team-1".to_string(),
+            team_name: "Old name".to_string(),
+            key_version: 3,
+            encrypted_team_key: Some("encrypted-key".to_string()),
+            last_verified_at: Some(1234),
+            updated_at: 5678,
+            role: Some("member".to_string()),
+        };
+
+        let cache = team_key_cache_for_cloud_team(&team(), TeamRole::Owner, Some(existing));
+
+        assert_eq!("Platform", cache.team_name);
+        assert_eq!(7, cache.key_version);
+        assert_eq!(Some("encrypted-key".to_string()), cache.encrypted_team_key);
+        assert_eq!(Some(1234), cache.last_verified_at);
+        assert_eq!(Some("owner".to_string()), cache.role);
     }
 }

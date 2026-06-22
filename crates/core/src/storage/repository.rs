@@ -290,6 +290,22 @@ impl ConnectionRepository {
         })
     }
 
+    pub fn update_sync_status_with_updated_at(
+        &self,
+        id: i64,
+        cloud_id: Option<String>,
+        last_synced_at: Option<i64>,
+        updated_at: i64,
+    ) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections SET cloud_id = ?1, last_synced_at = ?2, updated_at = ?3 WHERE id = ?4",
+                params![cloud_id, last_synced_at, updated_at, id],
+            )?;
+            Ok(())
+        })
+    }
+
     /// 记录连接最近一次被打开的时间，不影响内容更新时间和云同步判断。
     pub fn touch_last_used(&self, id: i64) -> Result<()> {
         let ts = now();
@@ -647,7 +663,7 @@ pub struct TeamKeyCache {
     pub encrypted_team_key: Option<String>,
     pub last_verified_at: Option<i64>,
     pub updated_at: i64,
-    /// 当前用户在该团队中的角色（owner / member）
+    /// 当前用户在该团队中的角色（owner / admin / member）
     pub role: Option<String>,
 }
 

@@ -269,6 +269,8 @@ pub struct Team {
 pub enum TeamRole {
     #[serde(rename = "owner")]
     Owner,
+    #[serde(rename = "admin")]
+    Admin,
     #[serde(rename = "member")]
     Member,
 }
@@ -277,6 +279,7 @@ impl std::fmt::Display for TeamRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TeamRole::Owner => write!(f, "owner"),
+            TeamRole::Admin => write!(f, "admin"),
             TeamRole::Member => write!(f, "member"),
         }
     }

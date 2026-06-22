@@ -47,14 +47,14 @@ pub(super) struct TeamSelectItem {
 }
 
 impl TeamSelectItem {
-    fn personal() -> Self {
+    pub(super) fn personal() -> Self {
         Self {
             id: None,
             name: t!("TeamSync.personal").to_string(),
         }
     }
 
-    fn from_team(team: &TeamOption) -> Self {
+    pub(super) fn from_team(team: &TeamOption) -> Self {
         Self {
             id: Some(team.id.clone()),
             name: team.name.clone(),

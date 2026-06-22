@@ -135,14 +135,36 @@ pub fn can_edit_connection(conn: &StoredConnection, cx: &App) -> bool {
         return true;
     }
 
-    // 团队 owner 可编辑所有
+    // 团队 owner/admin 可编辑团队连接
     if let Some(storage) = cx.try_global::<GlobalStorageState>() {
         if let Some(repo) = storage.storage.get::<TeamKeyCacheRepository>() {
             if let Ok(Some(cache)) = repo.get(team_id) {
-                return cache.role.as_deref() == Some("owner");
+                return role_can_edit_team_connection(cache.role.as_deref());
             }
         }
     }
 
     false
+}
+
+fn role_can_edit_team_connection(role: Option<&str>) -> bool {
+    matches!(role, Some("owner" | "admin"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::role_can_edit_team_connection;
+
+    #[test]
+    fn owner_and_admin_roles_can_edit_team_connections() {
+        assert!(role_can_edit_team_connection(Some("owner")));
+        assert!(role_can_edit_team_connection(Some("admin")));
+    }
+
+    #[test]
+    fn member_and_missing_roles_cannot_edit_team_connections() {
+        assert!(!role_can_edit_team_connection(Some("member")));
+        assert!(!role_can_edit_team_connection(Some("unknown")));
+        assert!(!role_can_edit_team_connection(None));
+    }
 }

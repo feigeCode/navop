@@ -1,0 +1,95 @@
+{
+  "meta": {
+    "title": "OnetCli",
+    "description": "資料庫、SSH、SFTP、終端、遠端桌面、監控與 AI 一體化的原生桌面工作台。"
+  },
+  "nav": {
+    "features": "功能",
+    "download": "下載",
+    "dashboard": "團隊",
+    "login": "登入",
+    "logout": "登出"
+  },
+  "home": {
+    "eyebrow": "原生桌面工作台",
+    "title": "OnetCli",
+    "subtitle": "統一管理資料庫、SSH、SFTP、終端、遠端桌面、監控與 AI 工作流。團隊管理與共享連線讓協作從同一個工作台進入。",
+    "subtitleLines": [
+      "統一管理資料庫、SSH、SFTP、終端、遠端桌面、監控與 AI 工作流。",
+      "團隊管理與共享連線，讓協作從同一個工作台進入。"
+    ],
+    "primary": "進入團隊後台",
+    "secondary": "查看 GitHub",
+    "capabilitiesTitle": "從連線管理到資料分析，一個工作台完成",
+    "capabilitiesCopy": "OnetCli 面向每天都要連資料庫、上伺服器、查日誌、傳檔案、寫 SQL 和處理資料的開發者與運維團隊。少開幾個視窗，把高頻工作放回同一個上下文。",
+    "capabilities": [
+      {
+        "title": "多資料庫連線與查詢",
+        "copy": "管理 MySQL、PostgreSQL、SQLite、Oracle、ClickHouse、Redis、MongoDB 等連線，快速進入表結構、查詢和資料查看。"
+      },
+      {
+        "title": "SSH、SFTP 與遠端終端",
+        "copy": "連接伺服器後直接開啟終端、瀏覽遠端檔案、拖曳上傳下載，並在一個應用裡完成常見遠端操作。"
+      },
+      {
+        "title": "AI 輔助 SQL 與資料處理",
+        "copy": "讓 AI 幫你生成 SQL、解釋查詢結果、整理資料思路，減少在資料庫、文件和聊天視窗之間來回切換。"
+      },
+      {
+        "title": "遠端桌面與共享連線",
+        "copy": "把 RDP、VNC、Serial 等連線和團隊常用資源統一管理，成員可以圍繞同一批連線協作。"
+      }
+    ],
+    "featuresTitle": "為高頻運維工作設計",
+    "featuresCopy": "OnetCli 把連線管理、資料查詢、遠端終端和 AI 輔助放在一個原生應用裡，減少工具切換。",
+    "teamEyebrow": "團隊工作台",
+    "teamTitle": "團隊管理與共享連線",
+    "teamCopy": "建立團隊、邀請成員，並把常用連線安全地共享給協作成員。桌面端仍負責連線使用和本地工作流。",
+    "ctaTitle": "準備好管理你的團隊工作台了嗎？",
+    "ctaCopy": "建立帳號後可以建立團隊、邀請成員，並共享常用連線。"
+  },
+  "features": {
+    "database": "資料庫工作區",
+    "databaseCopy": "連接 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle、ClickHouse 和擴充驅動。",
+    "ssh": "SSH / SFTP",
+    "sshCopy": "開啟遠端終端、瀏覽檔案、拖曳上傳，並直接編輯遠端檔案。",
+    "ai": "AI 資料助手",
+    "aiCopy": "生成 SQL、解釋查詢、分析資料，並把結果轉成圖表。",
+    "team": "團隊管理",
+    "teamCopy": "提供成員管理和共享連線能力，讓團隊在同一個工作台協作。"
+  },
+  "auth": {
+    "loginTitle": "登入 OnetCli",
+    "registerTitle": "建立帳號",
+    "email": "信箱",
+    "password": "密碼",
+    "name": "顯示名稱",
+    "loginButton": "登入",
+    "registerButton": "註冊並驗證信箱",
+    "needAccount": "還沒有帳號？",
+    "hasAccount": "已有帳號？",
+    "goRegister": "建立帳號",
+    "goLogin": "返回登入"
+  },
+  "dashboard": {
+    "title": "團隊控制台",
+    "subtitle": "管理團隊、成員和角色。桌面端同步資料保持加密，不在官網後台直接解密或修改。",
+    "createTeam": "建立團隊",
+    "teamName": "團隊名稱",
+    "description": "描述",
+    "members": "成員",
+    "invite": "新增成員",
+    "inviteEmail": "成員信箱",
+    "role": "角色",
+    "save": "儲存",
+    "remove": "移除",
+    "roleGuideTitle": "角色權限說明",
+    "roleDescriptions": {
+      "owner": "Owner 可以管理團隊、成員、管理員和所有者。",
+      "admin": "Admin 可以新增成員、管理一般成員和共享連線。",
+      "member": "Member 可以使用團隊共享的連線和工作台資源。"
+    },
+    "noManagePermission": "目前帳號只能查看成員資訊，不能新增成員或管理角色。",
+    "empty": "還沒有團隊。"
+  }
+}

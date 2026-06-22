@@ -22,6 +22,8 @@ pub enum ConnectionDataEvent {
         database: String,
         schema: Option<String>,
     },
+    /// 请求执行一次云同步（由表单等非首页入口触发）
+    CloudSyncRequested,
 }
 
 /// 全局连接数据通知器

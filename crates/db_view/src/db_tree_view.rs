@@ -869,6 +869,7 @@ impl DbTreeView {
                     }
                 }
             }
+            ConnectionDataEvent::CloudSyncRequested => {}
         }
     }
 

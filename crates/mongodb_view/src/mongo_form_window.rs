@@ -16,8 +16,8 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use one_core::cloud_sync::{GlobalCloudUser, TeamOption};
-use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
+use one_core::cloud_sync::{GlobalCloudUser, TeamOption, get_cached_team_options};
+use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{MongoDBParams, StoredConnection, Workspace};
@@ -109,6 +109,7 @@ pub struct MongoFormWindow {
     editing_id: Option<i64>,
     editing_cloud_id: Option<String>,
     editing_last_synced_at: Option<i64>,
+    editing_owner_id: Option<String>,
 
     active_tab: usize,
 
@@ -149,6 +150,10 @@ impl MongoFormWindow {
             .editing_connection
             .as_ref()
             .and_then(|c| c.last_synced_at);
+        let editing_owner_id = config
+            .editing_connection
+            .as_ref()
+            .and_then(|c| c.owner_id.clone());
 
         let title: SharedString = if is_editing {
             t!("MongoForm.edit_connection_title").to_string()
@@ -378,6 +383,7 @@ impl MongoFormWindow {
             editing_id,
             editing_cloud_id,
             editing_last_synced_at,
+            editing_owner_id,
             active_tab: 0,
             name_input,
             host_input,
@@ -416,6 +422,25 @@ impl MongoFormWindow {
             .selected_value()
             .cloned()
             .flatten()
+    }
+
+    fn reload_team_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let selected = self.get_team_id(cx);
+        let mut items = vec![TeamSelectItem::personal()];
+        items.extend(
+            get_cached_team_options(cx)
+                .iter()
+                .map(TeamSelectItem::from_team),
+        );
+        self.team_select.update(cx, |select, cx| {
+            select.set_items(items, window, cx);
+            select.set_selected_value(&selected, window, cx);
+        });
+    }
+
+    fn request_team_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        emit_connection_event(ConnectionDataEvent::CloudSyncRequested, cx);
+        self.reload_team_options(window, cx);
     }
 
     fn build_parameters(&self, cx: &App) -> Result<MongoDBParams, String> {
@@ -589,10 +614,10 @@ impl MongoFormWindow {
 
         let workspace_id = self.get_workspace_id(cx);
         let team_id = self.get_team_id(cx);
-        let owner_id = if !self.is_editing {
-            GlobalCloudUser::get_user(cx).map(|u| u.id)
+        let owner_id = if self.is_editing {
+            self.editing_owner_id.clone()
         } else {
-            None
+            GlobalCloudUser::get_user(cx).map(|u| u.id)
         };
         let remark = {
             let value = self.remark_input.read(cx).text().to_string();
@@ -619,9 +644,7 @@ impl MongoFormWindow {
                 connection.sync_enabled = sync_enabled;
                 connection.remark = remark;
                 connection.team_id = team_id;
-                if !is_editing {
-                    connection.owner_id = owner_id;
-                }
+                connection.owner_id = owner_id;
 
                 if is_editing {
                     connection.id = editing_id;
@@ -716,10 +739,23 @@ impl MongoFormWindow {
                 t!("MongoForm.workspace_label").as_ref(),
                 Select::new(&self.workspace_select).w_full(),
             ))
-            .child(self.render_form_row(
-                t!("TeamSync.team_label").as_ref(),
-                Select::new(&self.team_select).w_full(),
-            ))
+            .child(
+                self.render_form_row(
+                    t!("TeamSync.team_label").as_ref(),
+                    h_flex()
+                        .gap_2()
+                        .child(Select::new(&self.team_select).w_full())
+                        .child(
+                            Button::new("sync-mongo-teams")
+                                .icon(IconName::Refresh)
+                                .ghost()
+                                .tooltip(t!("Home.sync_tooltip"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.request_team_sync(window, cx);
+                                })),
+                        ),
+                ),
+            )
             .child(
                 self.render_form_row(
                     t!("MongoForm.cloud_sync_label").as_ref(),
