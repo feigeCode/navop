@@ -137,7 +137,11 @@ fn snapshot_for_terminal(session_id: String, terminal: &Terminal) -> TerminalSes
 fn host_label(terminal: &Terminal) -> String {
     terminal
         .connection_name()
-        .or_else(|| terminal.ssh_config().map(|config| config.ssh_config.host.as_str()))
+        .or_else(|| {
+            terminal
+                .ssh_config()
+                .map(|config| config.ssh_config.host.as_str())
+        })
         .unwrap_or("ssh terminal")
         .to_string()
 }

@@ -7,6 +7,7 @@ pub enum ExtensionKind {
     Language,
     DatabaseDriver,
     RemoteDesktopProvider,
+    McpHelper,
     Composite,
 }
 

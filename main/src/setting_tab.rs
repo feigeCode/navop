@@ -4,6 +4,7 @@ use crate::app_init::is_valid_system_hotkey;
 use crate::auth::get_auth_service;
 use crate::license::{get_license_service, offline_license_public_key};
 use crate::settings::llm_providers_view::LlmProvidersView;
+use crate::settings::mcp_settings::mcp_setting_group;
 use crate::update;
 use gpui::http_client::{AsyncBody, Method, Request};
 use gpui::prelude::FluentBuilder;
@@ -414,6 +415,7 @@ impl SettingsPanel {
                                 t!("Settings.General.Database.table_row_height_desc").to_string(),
                             ),
                         ]),
+                    mcp_setting_group(&default_settings.mcp),
                     SettingGroup::new()
                         .title(t!("Settings.General.Log.group_title"))
                         .item(

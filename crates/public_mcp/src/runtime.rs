@@ -1,11 +1,12 @@
+use crate::approval::PublicMcpApprovalManager;
 use crate::discovery::{
-    DiscoveryDocument, PublicMcpMode, public_mcp_discovery_path, remove_discovery,
-    write_discovery,
+    DiscoveryDocument, PublicMcpMode, public_mcp_discovery_path, remove_discovery, write_discovery,
 };
 use crate::permissions::PermissionMode;
 use crate::protocol::PublicMcpServer;
 use crate::registry::PublicMcpRegistry;
 use crate::server::LoopbackMcpServer;
+use crate::tools::PublicMcpToolRegistry;
 use anyhow::Result;
 use rand::RngCore;
 use serde::Serialize;
@@ -41,8 +42,13 @@ impl PublicMcpRuntime {
         mode: PublicMcpMode,
         permission_mode: PermissionMode,
     ) -> Result<Self> {
-        Self::start_with_discovery_path(registry, mode, permission_mode, public_mcp_discovery_path())
-            .await
+        Self::start_with_discovery_path(
+            registry,
+            mode,
+            permission_mode,
+            public_mcp_discovery_path(),
+        )
+        .await
     }
 
     pub async fn start_with_discovery_path(
@@ -51,9 +57,40 @@ impl PublicMcpRuntime {
         permission_mode: PermissionMode,
         discovery_path: PathBuf,
     ) -> Result<Self> {
+        let tool_registry = PublicMcpToolRegistry::terminal(registry);
+        Self::start_with_tool_registry(tool_registry, mode, permission_mode, discovery_path).await
+    }
+
+    pub async fn start_with_tool_registry(
+        tool_registry: PublicMcpToolRegistry,
+        mode: PublicMcpMode,
+        permission_mode: PermissionMode,
+        discovery_path: PathBuf,
+    ) -> Result<Self> {
+        Self::start_with_tool_registry_and_approval(
+            tool_registry,
+            mode,
+            permission_mode,
+            discovery_path,
+            PublicMcpApprovalManager::default(),
+        )
+        .await
+    }
+
+    pub async fn start_with_tool_registry_and_approval(
+        tool_registry: PublicMcpToolRegistry,
+        mode: PublicMcpMode,
+        permission_mode: PermissionMode,
+        discovery_path: PathBuf,
+        approval_manager: PublicMcpApprovalManager,
+    ) -> Result<Self> {
         let _ = remove_discovery(&discovery_path);
         let token = generate_token();
-        let protocol = PublicMcpServer::new(registry, permission_mode);
+        let protocol = PublicMcpServer::with_tool_registry_and_approval(
+            tool_registry,
+            permission_mode,
+            approval_manager,
+        );
         let server = LoopbackMcpServer::bind(protocol, token.clone()).await?;
         let document = DiscoveryDocument::new(std::process::id(), server.bind_addr(), token, mode);
         write_discovery(&discovery_path, &document)?;
@@ -69,6 +106,10 @@ impl PublicMcpRuntime {
 
     pub fn discovery_path(&self) -> &PathBuf {
         &self.discovery_path
+    }
+
+    pub fn client_count(&self) -> usize {
+        self.server.client_count()
     }
 }
 

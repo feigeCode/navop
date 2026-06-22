@@ -24,3 +24,28 @@ fn write_operations_follow_permission_mode() {
         decide_permission(PermissionMode::Allow, PublicMcpOperationKind::WriteTerminal)
     );
 }
+
+#[test]
+fn internal_function_calls_follow_permission_mode() {
+    assert_eq!(
+        ApprovalDecision::Deny,
+        decide_permission(
+            PermissionMode::Deny,
+            PublicMcpOperationKind::CallInternalFunction
+        )
+    );
+    assert_eq!(
+        ApprovalDecision::Ask,
+        decide_permission(
+            PermissionMode::Ask,
+            PublicMcpOperationKind::CallInternalFunction
+        )
+    );
+    assert_eq!(
+        ApprovalDecision::Allow,
+        decide_permission(
+            PermissionMode::Allow,
+            PublicMcpOperationKind::CallInternalFunction
+        )
+    );
+}

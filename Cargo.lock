@@ -6567,9 +6567,9 @@ dependencies = [
  "mongodb_view",
  "one-core",
  "one-ui",
- "public_mcp",
  "port_forwarding",
  "port_forwarding_view",
+ "public_mcp",
  "redis_view",
  "remote_desktop",
  "remote_desktop_view",
@@ -6587,6 +6587,7 @@ dependencies = [
  "terminal",
  "terminal_view",
  "tokio",
+ "tool_runtime",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -8680,6 +8681,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "dirs 6.0.0",
+ "futures",
  "rand 0.8.5",
  "rmcp",
  "serde",
@@ -8687,6 +8689,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tool_runtime",
  "tracing",
  "uuid",
 ]
@@ -11959,6 +11962,16 @@ name = "toml_writer"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fcc842091f2def52017664b53082ecbbeb5c7731092bad69d2c63050401dfd64"
+
+[[package]]
+name = "tool_runtime"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tower"

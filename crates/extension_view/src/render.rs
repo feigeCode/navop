@@ -333,6 +333,7 @@ fn kind_label(kind: ExtensionKind) -> String {
         ExtensionKind::Language => t!("Extension.kind_language").to_string(),
         ExtensionKind::DatabaseDriver => t!("Extension.kind_database_driver").to_string(),
         ExtensionKind::RemoteDesktopProvider => "Remote Desktop".to_string(),
+        ExtensionKind::McpHelper => "MCP Helper".to_string(),
         ExtensionKind::Composite => t!("Extension.kind_composite").to_string(),
     }
 }

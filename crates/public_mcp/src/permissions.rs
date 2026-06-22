@@ -13,6 +13,7 @@ pub enum PermissionMode {
 pub enum PublicMcpOperationKind {
     ReadTerminal,
     WriteTerminal,
+    CallInternalFunction,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

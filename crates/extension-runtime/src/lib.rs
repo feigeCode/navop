@@ -10,6 +10,7 @@ pub mod extension_downloader;
 mod extension_package_layout;
 mod extension_view_host;
 mod global;
+pub mod mcp_helper_install;
 mod registration;
 pub mod remote_desktop_provider_install;
 mod types;

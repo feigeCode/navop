@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 const DISCOVERY_VERSION: u32 = 1;
 const APP_NAME: &str = "onetcli";
 const DISCOVERY_FILE_NAME: &str = "public-mcp.json";
+const TOKEN_HEX_LEN: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,6 +48,30 @@ impl DiscoveryDocument {
 
     pub fn socket_addr(&self) -> Result<SocketAddr> {
         Ok(format!("{}:{}", self.host, self.port).parse()?)
+    }
+
+    pub fn validate_for_stdio_bridge(&self) -> Result<()> {
+        if self.version != DISCOVERY_VERSION {
+            bail!(
+                "unsupported public MCP discovery version {} (expected {})",
+                self.version,
+                DISCOVERY_VERSION
+            );
+        }
+        if self.app != APP_NAME {
+            bail!("unexpected app `{}` in public MCP discovery", self.app);
+        }
+        let addr = self.socket_addr()?;
+        if !addr.ip().is_loopback() {
+            bail!(
+                "public MCP discovery must point to a loopback address, got {}",
+                addr.ip()
+            );
+        }
+        if !is_valid_token(&self.token) {
+            bail!("invalid token in public MCP discovery");
+        }
+        Ok(())
     }
 }
 
@@ -101,4 +126,8 @@ fn write_user_only_file(path: &Path, bytes: Vec<u8>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn is_valid_token(token: &str) -> bool {
+    token.len() == TOKEN_HEX_LEN && token.as_bytes().iter().all(|byte| byte.is_ascii_hexdigit())
 }

@@ -16,11 +16,13 @@ rmcp = { version = "1.7.0", features = ["server", "transport-async-rw"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["io-std", "io-util", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["io-std", "io-util", "net", "process", "rt-multi-thread", "sync", "time"] }
+tool_runtime = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+futures = { workspace = true }
 tempfile = "3"
 
 [lints]

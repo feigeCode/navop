@@ -55,6 +55,25 @@ Common:
     zh-CN: 无
     zh-HK: 無
 
+# MCP 审批
+McpApproval:
+  dialog_title:
+    en: MCP Approval
+    zh-CN: MCP 审批
+    zh-HK: MCP 審批
+  approve:
+    en: Approve
+    zh-CN: 允许
+    zh-HK: 允許
+  deny:
+    en: Deny
+    zh-CN: 拒绝
+    zh-HK: 拒絕
+  pending_count:
+    en: "%{count} more requests waiting"
+    zh-CN: "还有 %{count} 个请求等待审批"
+    zh-HK: "還有 %{count} 個請求等待審批"
+
 # 首页
 Home:
   title:
@@ -133,6 +152,30 @@ Home:
     en: Sync data with cloud
     zh-CN: 与云端同步数据
     zh-HK: 與雲端同步數據
+  mcp_enable:
+    en: MCP
+    zh-CN: MCP
+    zh-HK: MCP
+  mcp_disable:
+    en: MCP
+    zh-CN: MCP
+    zh-HK: MCP
+  mcp_enable_tooltip:
+    en: Enable MCP server
+    zh-CN: 启用 MCP Server
+    zh-HK: 啟用 MCP Server
+  mcp_disable_tooltip:
+    en: Disable MCP server
+    zh-CN: 关闭 MCP Server
+    zh-HK: 關閉 MCP Server
+  mcp_enabled_notification:
+    en: MCP server enabled
+    zh-CN: MCP Server 已启用
+    zh-HK: MCP Server 已啟用
+  mcp_disabled_notification:
+    en: MCP server disabled
+    zh-CN: MCP Server 已关闭
+    zh-HK: MCP Server 已關閉
   conflict_tooltip:
     en: "%{count} sync conflicts need to be resolved"
     zh-CN: "%{count} 个同步冲突需要解决"
@@ -868,6 +911,232 @@ Settings:
         en: Set the height of database table and editable grid rows (24-100 pixels)
         zh-CN: 设置数据库表和可编辑表格的行高（24-100像素）
         zh-HK: 設置資料庫表和可編輯表格的行高（24-100像素）
+
+    Mcp:
+      group_title:
+        en: MCP
+        zh-CN: MCP
+        zh-HK: MCP
+      server_enabled:
+        en: Enable MCP Server
+        zh-CN: 启用 MCP Server
+        zh-HK: 啟用 MCP Server
+      server_enabled_desc:
+        en: Start the shared MCP endpoint for external clients and internal tool callers
+        zh-CN: 为外部客户端和内部工具调用启动统一 MCP 端点
+        zh-HK: 為外部客戶端和內部工具調用啟動統一 MCP 端點
+      server_mode:
+        en: Server Mode
+        zh-CN: Server 模式
+        zh-HK: Server 模式
+      server_mode_desc:
+        en: Choose whether discovery is temporary for the current app session or persistent across launches
+        zh-CN: 选择 discovery 配置仅用于当前应用会话，还是跨启动保持
+        zh-HK: 選擇 discovery 配置僅用於當前應用會話，還是跨啟動保持
+      server_mode_temporary:
+        en: Temporary
+        zh-CN: 临时
+        zh-HK: 臨時
+      server_mode_persistent:
+        en: Persistent
+        zh-CN: 持久
+        zh-HK: 持久
+      permission_mode:
+        en: Permission Mode
+        zh-CN: 权限模式
+        zh-HK: 權限模式
+      permission_mode_desc:
+        en: Control how sensitive MCP tool calls are handled by default
+        zh-CN: 控制敏感 MCP 工具调用的默认处理方式
+        zh-HK: 控制敏感 MCP 工具調用的默認處理方式
+      permission_mode_deny:
+        en: Deny
+        zh-CN: 拒绝
+        zh-HK: 拒絕
+      permission_mode_ask:
+        en: Ask
+        zh-CN: 询问
+        zh-HK: 詢問
+      permission_mode_allow:
+        en: Allow
+        zh-CN: 允许
+        zh-HK: 允許
+      status:
+        en: Runtime Status
+        zh-CN: 运行状态
+        zh-HK: 運行狀態
+      status_desc:
+        en: Current MCP server lifecycle state, bind address, and discovery file
+        zh-CN: 当前 MCP Server 生命周期状态、监听地址和 discovery 文件
+        zh-HK: 當前 MCP Server 生命週期狀態、監聽地址和 discovery 檔案
+      status_disabled:
+        en: Disabled
+        zh-CN: 已关闭
+        zh-HK: 已關閉
+      status_starting:
+        en: Starting
+        zh-CN: 启动中
+        zh-HK: 啟動中
+      status_running:
+        en: Running
+        zh-CN: 运行中
+        zh-HK: 運行中
+      status_failed:
+        en: Failed
+        zh-CN: 启动失败
+        zh-HK: 啟動失敗
+      install_client_config:
+        en: Install
+        zh-CN: 安装
+        zh-HK: 安裝
+      install_helper:
+        en: Install MCP Helper
+        zh-CN: 安装 MCP Helper
+        zh-HK: 安裝 MCP Helper
+      install_helper_desc:
+        en: Download the public MCP helper from the extension marketplace before writing client configs
+        zh-CN: 从扩展市场下载 Public MCP helper，然后再写入客户端配置
+        zh-HK: 從擴展市場下載 Public MCP helper，然後再寫入客戶端配置
+      install_helper_button:
+        en: Download
+        zh-CN: 下载
+        zh-HK: 下載
+      install_helper_started:
+        en: Installing MCP helper from extension marketplace...
+        zh-CN: 正在从扩展市场安装 MCP helper...
+        zh-HK: 正在從擴展市場安裝 MCP helper...
+      install_helper_already_running:
+        en: MCP helper installation is already running
+        zh-CN: MCP helper 正在安装中
+        zh-HK: MCP helper 正在安裝中
+      install_helper_success:
+        en: "MCP helper installed: %{path}"
+        zh-CN: "MCP helper 已安装：%{path}"
+        zh-HK: "MCP helper 已安裝：%{path}"
+      install_helper_failed:
+        en: "Failed to install MCP helper: %{error}"
+        zh-CN: "MCP helper 安装失败：%{error}"
+        zh-HK: "MCP helper 安裝失敗：%{error}"
+      helper_status_installed:
+        en: "Installed at %{path}"
+        zh-CN: "已安装：%{path}"
+        zh-HK: "已安裝：%{path}"
+      helper_status_missing:
+        en: "Expected at %{path}"
+        zh-CN: "预期路径：%{path}"
+        zh-HK: "預期路徑：%{path}"
+      helper_status_unusable:
+        en: "MCP helper is not executable: %{path}"
+        zh-CN: "MCP helper 不可执行：%{path}"
+        zh-HK: "MCP helper 不可執行：%{path}"
+      helper_status_installing:
+        en: Installing from extension marketplace...
+        zh-CN: 正在从扩展市场安装...
+        zh-HK: 正在從擴展市場安裝...
+      helper_status_connecting:
+        en: Connecting to download source...
+        zh-CN: 正在连接下载源...
+        zh-HK: 正在連接下載源...
+      helper_status_downloading:
+        en: "Downloading MCP helper %{percent}%"
+        zh-CN: "正在下载 MCP helper %{percent}%"
+        zh-HK: "正在下載 MCP helper %{percent}%"
+      helper_status_downloading_unknown:
+        en: Downloading MCP helper...
+        zh-CN: 正在下载 MCP helper...
+        zh-HK: 正在下載 MCP helper...
+      helper_status_retrying:
+        en: Download source failed, retrying...
+        zh-CN: 下载源失败，正在重试...
+        zh-HK: 下載源失敗，正在重試...
+      helper_status_installing_package:
+        en: Installing MCP helper...
+        zh-CN: 正在安装 MCP helper...
+        zh-HK: 正在安裝 MCP helper...
+      install_codex_config:
+        en: Install Codex MCP Config
+        zh-CN: 安装 Codex MCP 配置
+        zh-HK: 安裝 Codex MCP 配置
+      install_codex_config_desc:
+        en: Write or update the managed OnetCli MCP server entry in ~/.codex/config.toml
+        zh-CN: 在 ~/.codex/config.toml 中写入或更新 OnetCli MCP Server 托管配置
+        zh-HK: 在 ~/.codex/config.toml 中寫入或更新 OnetCli MCP Server 託管配置
+      install_claude_config:
+        en: Install Claude MCP Config
+        zh-CN: 安装 Claude MCP 配置
+        zh-HK: 安裝 Claude MCP 配置
+      install_claude_config_desc:
+        en: Write or update the OnetCli MCP server entry in Claude Desktop config
+        zh-CN: 在 Claude Desktop 配置中写入或更新 OnetCli MCP Server
+        zh-HK: 在 Claude Desktop 配置中寫入或更新 OnetCli MCP Server
+      install_client_config_success:
+        en: "MCP client config installed: %{path}"
+        zh-CN: "MCP 客户端配置已安装：%{path}"
+        zh-HK: "MCP 客戶端配置已安裝：%{path}"
+      install_client_config_failed:
+        en: "Failed to install MCP client config: %{error}"
+        zh-CN: "MCP 客户端配置安装失败：%{error}"
+        zh-HK: "MCP 客戶端配置安裝失敗：%{error}"
+      client_config_status_up_to_date:
+        en: Up to date
+        zh-CN: 已是最新
+        zh-HK: 已是最新
+      client_config_status_not_installed:
+        en: Not installed
+        zh-CN: 未安装
+        zh-HK: 未安裝
+      client_config_status_needs_repair:
+        en: Needs repair
+        zh-CN: 需要修复
+        zh-HK: 需要修復
+      client_config_status_missing_helper:
+        en: MCP helper not installed
+        zh-CN: MCP helper 未安装
+        zh-HK: MCP helper 未安裝
+      client_config_status_unusable_helper:
+        en: MCP helper is not executable
+        zh-CN: MCP helper 不可执行
+        zh-HK: MCP helper 不可執行
+      toolset_terminal:
+        en: Terminal Tools
+        zh-CN: 终端工具
+        zh-HK: 終端工具
+      toolset_terminal_desc:
+        en: Expose active terminal sessions through MCP
+        zh-CN: 通过 MCP 暴露当前终端会话
+        zh-HK: 通過 MCP 暴露當前終端會話
+      toolset_sftp:
+        en: SFTP Tools
+        zh-CN: SFTP 工具
+        zh-HK: SFTP 工具
+      toolset_sftp_desc:
+        en: Expose remote file operations through MCP
+        zh-CN: 通过 MCP 暴露远程文件操作
+        zh-HK: 通過 MCP 暴露遠程檔案操作
+      toolset_database:
+        en: Database Tools
+        zh-CN: 数据库工具
+        zh-HK: 資料庫工具
+      toolset_database_desc:
+        en: Expose database inspection and query tools through MCP
+        zh-CN: 通过 MCP 暴露数据库查看和查询工具
+        zh-HK: 通過 MCP 暴露資料庫查看和查詢工具
+      toolset_redis:
+        en: Redis Tools
+        zh-CN: Redis 工具
+        zh-HK: Redis 工具
+      toolset_redis_desc:
+        en: Expose Redis command and inspection tools through MCP
+        zh-CN: 通过 MCP 暴露 Redis 命令和查看工具
+        zh-HK: 通過 MCP 暴露 Redis 命令和查看工具
+      toolset_internal_functions:
+        en: Internal Function Tools
+        zh-CN: 内部函数工具
+        zh-HK: 內部函數工具
+      toolset_internal_functions_desc:
+        en: Expose selected internal application functions through MCP
+        zh-CN: 通过 MCP 暴露选定的应用内部函数
+        zh-HK: 通過 MCP 暴露選定的應用內部函數
 
     Log:
       group_title:

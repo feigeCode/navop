@@ -5,6 +5,7 @@ use public_mcp::server::LoopbackMcpServer;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
+use tokio::time::{Duration, sleep};
 
 #[tokio::test]
 async fn loopback_server_rejects_wrong_token_before_json_rpc() {
@@ -45,6 +46,33 @@ async fn loopback_server_handles_json_rpc_after_token_handshake() {
     let response: serde_json::Value = serde_json::from_str(&line).unwrap();
 
     assert_eq!(json!(1), response["id"]);
-    assert_eq!("onetcli-public-mcp", response["result"]["serverInfo"]["name"]);
+    assert_eq!(
+        "onetcli-public-mcp",
+        response["result"]["serverInfo"]["name"]
+    );
     assert_eq!("2025-11-25", response["result"]["protocolVersion"]);
+}
+
+#[tokio::test]
+async fn loopback_server_tracks_active_client_connections() {
+    let protocol = PublicMcpServer::new(PublicMcpRegistry::default(), PermissionMode::Allow);
+    let server = LoopbackMcpServer::bind(protocol, "correct-token".to_string())
+        .await
+        .unwrap();
+
+    let stream = TcpStream::connect(server.bind_addr()).await.unwrap();
+    wait_for_client_count(&server, 1).await;
+
+    drop(stream);
+    wait_for_client_count(&server, 0).await;
+}
+
+async fn wait_for_client_count(server: &LoopbackMcpServer, expected: usize) {
+    for _ in 0..20 {
+        if server.client_count() == expected {
+            return;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(expected, server.client_count());
 }
