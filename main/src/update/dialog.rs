@@ -21,7 +21,7 @@ use gpui_component::{
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use rust_i18n::t;
-use crate::update::github_release::GITHUB_API_URL;
+use crate::update::github_release::{GITHUB_LATEST_RELEASE_URL};
 use super::UpdateDialogInfo;
 use super::download::{build_download_path, download_update_file_from_sources, verify_sha256};
 use super::install::start_install_update;
@@ -342,7 +342,7 @@ impl Render for UpdateDialogView {
             t!("Update.action_download").to_string()
         };
 
-        let release_page_url =  GITHUB_API_URL;
+        let release_page_url =  GITHUB_LATEST_RELEASE_URL;
 
         v_flex()
             .gap_3()

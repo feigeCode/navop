@@ -9,6 +9,7 @@ use super::UpdateDialogInfo;
 const GITHUB_OWNER: &str = "feigeCode";
 const GITHUB_REPO: &str = "onetcli";
 pub const GITHUB_API_URL: &str = "https://api.github.com/repos/feigeCode/onetcli/releases/latest";
+pub const GITHUB_LATEST_RELEASE_URL: &str = "https://github.com/feigeCode/onetcli/releases/latest";
 const GITHUB_USER_AGENT: &str = "onetcli-updater";
 
 const EXPECTED_ARCHIVE_NAME: &str =
