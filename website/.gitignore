@@ -1,9 +1,0 @@
-.next/
-node_modules/
-dist/
-coverage/
-*.tsbuildinfo
-.env
-.env.local
-.env.*.local
-!.env.example
