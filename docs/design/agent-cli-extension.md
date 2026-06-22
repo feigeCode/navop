@@ -1,4 +1,4 @@
-# OnetCli Agent CLI Extension Design
+# OnetCli Agent CLI Main Package And Extension Design
 
 ## 背景
 
@@ -12,7 +12,8 @@ SFTP、端口转发、数据库驱动和扩展运行时已经存在，但这些�
 - agent 通过命令行发现连接、查询数据库、执行 SSH 命令、读取远端文件。
 - skill 只依赖 CLI contract，不直接依赖 Rust 内部 API、数据库驱动细节或
   SSH 密钥路径。
-- 第三方能力尽量通过 OnetCli 扩展安装，而不是要求修改主程序。
+- CLI host 和核心高权限命令随主包发布，第三方和高级能力通过 OnetCli
+  扩展安装，避免每个新工具都修改主程序。
 
 ## 目标
 
@@ -20,7 +21,8 @@ SFTP、端口转发、数据库驱动和扩展运行时已经存在，但这些�
    非交互模式和结构化错误。
 2. 支持 Codex 这类具备 PTY 能力的 agent 使用交互式 SSH shell。
 3. 复用现有连接存储、数据库执行、SSH、SFTP、端口转发和扩展运行时。
-4. 允许扩展包向 `onetcli` 安装新命令，而不修改主程序命令解析代码。
+4. 将 CLI host 和核心命令放入主包，允许扩展包向 `onetcli` 安装增量命令，
+   而不修改主程序命令解析代码。
 5. 将高权限能力纳入权限、审计和 allowlist 管理。
 6. 保持 `onetcli` 无参数启动桌面应用的现有行为。
 
@@ -35,12 +37,14 @@ SFTP、端口转发、数据库驱动和扩展运行时已经存在，但这些�
 
 1. **核心能力内核化**：数据库、SSH、SFTP、连接读取和审计属于 host 能力。
    这些能力直接关系到凭据和本地安全，不能交给任意扩展进程自由实现。
-2. **扩展贡献命令**：扩展可以声明 CLI 命令、参数 schema、权限和 runtime。
-   Host 负责安装、发现、权限校验、审计和调用。
-3. **默认结构化输出**：agent mode 默认 JSON；human mode 可使用 table/text。
-4. **交互与非交互分离**：`ssh exec` 用于确定性调用，`ssh shell` 用于 PTY
+2. **主包提供 CLI host**：命令解析、输出 envelope、agent policy、审计、
+   核心数据库/SSH/SFTP 命令随 `onetcli` 主包发布。
+3. **扩展贡献增量命令**：扩展可以声明 CLI 命令、参数 schema、权限和
+   runtime。Host 负责安装、发现、权限校验、审计和调用。
+4. **默认结构化输出**：agent mode 默认 JSON；human mode 可使用 table/text。
+5. **交互与非交互分离**：`ssh exec` 用于确定性调用，`ssh shell` 用于 PTY
    会话。
-5. **可组合 contract**：命令输出能被 skill、脚本、CI 和后续 MCP server 复用。
+6. **可组合 contract**：命令输出能被 skill、脚本、CI 和后续 MCP server 复用。
 
 ## 总体架构
 
@@ -54,7 +58,7 @@ Codex / Skill / Human
         |
         +-- cli mode
               |
-              +-- core command router
+              +-- main-package CLI host
               |     +-- connection
               |     +-- db
               |     +-- ssh
@@ -69,9 +73,55 @@ Codex / Skill / Human
                     +-- runtime.ipc / runtime.wasm
 ```
 
-CLI mode 应尽量运行在不初始化 GPUI 的路径上。核心命令复用 `one-core`、
-`db`、`ssh`、`sftp` 等 crate。扩展命令通过扩展运行时调用，但扩展拿到的
-是受限 host API，而不是裸露的本地 secret。
+CLI mode 应尽量运行在不初始化 GPUI 的路径上。CLI host 与核心命令由主包
+内置，复用 `one-core`、`db`、`ssh`、`sftp` 等 crate。扩展命令通过扩展
+运行时调用，但扩展拿到的是受限 host API，而不是裸露的本地 secret。
+
+## 主包内置策略
+
+第一阶段推荐将 CLI 放入主包，而不是将 CLI 本身做成扩展。主包包含：
+
+1. `onetcli` 命令入口和 CLI/GUI app 分流。
+2. `crates/cli` 内部 crate。
+3. 连接发现、数据库查询、SSH exec/shell、SFTP 读取等核心命令。
+4. 统一 JSON envelope、exit code、审计和 agent policy。
+5. 扩展 CLI contribution 的发现与调用入口。
+
+主包不包含：
+
+1. 第三方数据库驱动二进制。
+2. 第三方运维工具或业务诊断工具。
+3. agent skill 的自动安装产物。
+4. 每个扩展命令的具体实现。
+
+这些增量能力继续通过 extension marketplace 安装。
+
+### 体积判断
+
+CLI host 本身不是体积大头。命令解析、JSON 输出、policy、审计和 dispatch
+属于普通 Rust 业务代码，预计对 release 二进制体积影响较小。
+
+真正影响体积的是桌面 UI、数据库客户端、加密/SSH、Wasm runtime、native
+库和静态 bundled 驱动。当前主程序已经依赖数据库、SSH、扩展运行时和多种
+视图能力，所以把 CLI host 放入主包通常不会重复引入一份大依赖。
+
+体积控制规则：
+
+1. 不为了 CLI 把第三方数据库驱动改成 builtin。
+2. 不把扩展 helper、skill 文件和业务诊断脚本静态编入主二进制。
+3. `crates/cli` 只依赖 service 层，不依赖 GPUI view 层。
+4. 新增依赖优先选择轻量库；命令解析可优先评估 `pico-args` 或已有依赖，
+   只有需要完整 help/schema 生成时再使用更重 parser。
+5. 发布前用 release binary size 做基线比较，CLI host 增量应作为验收指标。
+
+建议的体积验收：
+
+```text
+1. 记录加入 CLI 前后的 release `onetcli` 大小。
+2. 记录压缩安装包大小。
+3. 若仅加入 CLI host 和核心 dispatch，增量明显异常时检查新增依赖树。
+4. 第三方驱动和扩展命令不计入主包体积，应在各自扩展包中统计。
+```
 
 ## 命令模型
 
@@ -212,10 +262,12 @@ stdout/stderr：
 }
 ```
 
-## 扩展安装模型
+## 扩展增量安装模型
 
-推荐方案：在现有 composite extension 上增加 CLI contribution，而不是第一
-阶段新增独立 `cli_extensions` kind。
+CLI host 和核心命令放在主包。扩展安装只用于增加第三方或高级命令。
+
+推荐方案：在现有 composite extension 上增加 CLI contribution，而不是新增
+独立 `cli_extensions` kind，也不是把 CLI host 本身做成扩展。
 
 理由：
 
@@ -243,7 +295,8 @@ stdout/stderr：
 ```
 
 扩展包通过现有 extension marketplace 安装。CLI mode 和 GUI mode 都从
-`ExtensionRegistry` 读取 composite extensions。
+`ExtensionRegistry` 读取 composite extensions。未安装任何扩展时，主包内置
+的 `connection`、`db`、`ssh`、`sftp` 命令仍然可用。
 
 ### Manifest 扩展示例
 
@@ -535,10 +588,13 @@ onetcli ssh shell prod-web --transcript <path>
 
 ```text
 main
-  -> CLI entry and command router
+  -> app/cli entry split, GUI launcher
 
 one-core
   -> storage, connection repository, key storage, agent policy
+
+cli
+  -> command parser, dispatch, output envelope, audit, extension CLI registry
 
 db
   -> DbManager, DbConnection, SqlResult, IPC driver integration
@@ -556,7 +612,7 @@ extension-host / extension-protocol
   -> process runtime transport for extension CLI handlers
 ```
 
-需要新增的内部 crate 可以命名为：
+需要新增的内部 crate 命名为：
 
 ```text
 crates/cli
@@ -570,7 +626,7 @@ crates/cli
 4. agent policy enforcement。
 5. audit writer。
 
-`main/src/main.rs` 只做最薄分流：
+`crates/cli` 随主包编译进 `onetcli`。`main/src/main.rs` 只做最薄分流：
 
 ```text
 if cli::should_handle_cli_args(args) {
@@ -588,15 +644,17 @@ launch_gpui_app();
 
 推荐演进：
 
-1. 第一阶段在 macOS/Linux 上实现并验证 CLI。
-2. Windows 上拆分二进制：
+1. 第一阶段保持单主包、单入口设计，在 macOS/Linux 上实现并验证 CLI。
+2. Windows 上优先评估能否保留同一主包但调整入口/subsystem 策略。
+3. 只有当 Windows console 与 GUI 体验无法兼容时，再拆分二进制：
 
 ```text
 onetcli      -> console subsystem, CLI first, no args may launch GUI
 onetcli-gui  -> windows subsystem, GUI launcher
 ```
 
-3. 安装包中保留 `onetcli` 命令供 agent 调用。
+4. 即使拆分二进制，也不改变主包发布策略：安装包中必须保留 `onetcli`
+   命令供 agent 调用。
 
 ## MVP
 
@@ -626,6 +684,8 @@ MVP 验收标准：
 4. JSON 输出和错误 envelope 稳定。
 5. `ssh shell` 可在真实 TTY 下交互，并在退出后恢复终端状态。
 6. agent mode 默认不执行写操作。
+7. CLI host 随主包发布，未安装扩展时核心命令仍可用。
+8. 记录 release 二进制和安装包体积基线，确认 CLI host 增量可接受。
 
 ## 扩展化阶段
 
@@ -647,11 +707,11 @@ MVP 验收标准：
 
 ## 方案取舍
 
-### 方案 A：所有 CLI 都内置
+### 方案 A：所有 CLI 和第三方命令都内置
 
 优点：实现最快，安全边界清晰。
 
-缺点：扩展能力差，每个新命令都要改主程序。
+缺点：扩展能力差，每个新命令都要改主程序，长期会让主包体积和发布节奏失控。
 
 ### 方案 B：新增独立 CLI extension kind
 
@@ -659,15 +719,16 @@ MVP 验收标准：
 
 缺点：会复制 composite extension 的安装、权限、marketplace 和 runtime 逻辑。
 
-### 方案 C：Composite extension 增加 CLI contribution
+### 方案 C：CLI host 放主包，Composite extension 增加 CLI contribution
 
-优点：复用现有扩展体系，扩展可同时贡献 UI、命令、skill、runtime。主程序只需要
-加载 contribution registry。
+优点：核心 agent 能力开箱即用；CLI host 体积增量可控；扩展可同时贡献 UI、
+命令、skill、runtime；第三方能力不需要进入主二进制。
 
-缺点：manifest schema 需要扩展，catalog 需要识别 CLI contribution。
+缺点：manifest schema 需要扩展，catalog 需要识别 CLI contribution；主包
+需要维护一个稳定 CLI host contract。
 
-推荐方案是 C。核心数据库、SSH、SFTP 命令先内置，第三方和高级能力通过
-composite extension 贡献 CLI 命令安装。
+推荐方案是 C。CLI host 和核心数据库、SSH、SFTP 命令随主包发布，第三方和
+高级能力通过 composite extension 贡献 CLI 命令安装。
 
 ## 开放问题
 
@@ -675,12 +736,15 @@ composite extension 贡献 CLI 命令安装。
 2. `ssh shell` 是否默认允许 agent 使用，还是需要用户显式 allow。
 3. 扩展携带的 skill 是否由 OnetCli 自动安装到 Codex，还是只导出给用户安装。
 4. 扩展 runtime 的 CLI handler 优先支持 IPC 还是 Wasm component。
-5. Windows 是否第一阶段就拆分 `onetcli` 和 `onetcli-gui`。
+5. Windows 是否需要在后续阶段拆分 `onetcli` 和 `onetcli-gui`，还是通过
+   subsystem/launcher 策略保持单主包体验。
 
 ## 建议决策
 
-1. 采用 composite extension CLI contribution，不新增独立扩展 kind。
-2. 第一阶段先实现核心内置命令，保证 skill 能马上调用数据库和 SSH。
-3. `ssh exec` 作为 skill 默认入口，`ssh shell` 作为 Codex/human 的 PTY 入口。
-4. Agent mode 下默认只读，写操作和交互式 shell 由 policy 显式放开。
-5. 所有输出先稳定 JSON envelope，再补 table/text。
+1. CLI host 与核心命令放入主包，不把 CLI 本身做成扩展。
+2. 采用 composite extension CLI contribution，不新增独立扩展 kind。
+3. 第一阶段先实现核心内置命令，保证 skill 能马上调用数据库和 SSH。
+4. `ssh exec` 作为 skill 默认入口，`ssh shell` 作为 Codex/human 的 PTY 入口。
+5. Agent mode 下默认只读，写操作和交互式 shell 由 policy 显式放开。
+6. 所有输出先稳定 JSON envelope，再补 table/text。
+7. release 前记录体积基线，确保 CLI host 增量没有异常依赖引入。
