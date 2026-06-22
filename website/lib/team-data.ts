@@ -121,8 +121,21 @@ export async function getPendingTeamInvitations(teamId: string) {
     .order("created_at", { ascending: false });
 
   if (error) {
+    if (isMissingTeamInvitationsTableError(error)) {
+      return [];
+    }
     throw error;
   }
 
   return (data ?? []) as InvitationRow[];
+}
+
+export function isMissingTeamInvitationsTableError(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const candidate = error as { code?: unknown; message?: unknown };
+  return candidate.code === "PGRST205" &&
+    typeof candidate.message === "string" &&
+    candidate.message.includes("team_invitations");
 }
