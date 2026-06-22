@@ -73,28 +73,23 @@
   },
   "dashboard": {
     "title": "Team console",
-    "subtitle": "Manage teams, members, invitations, and roles. Desktop sync data stays encrypted and is not decrypted or modified by the website.",
+    "subtitle": "Manage teams, members, and roles. Desktop sync data stays encrypted and is not decrypted or modified by the website.",
     "createTeam": "Create team",
     "teamName": "Team name",
     "description": "Description",
     "members": "Members",
-    "invite": "Invite member",
+    "invite": "Add member",
     "inviteEmail": "Member email",
     "role": "Role",
     "save": "Save",
     "remove": "Remove",
-    "pendingInvitations": "Pending invitations",
-    "noPendingInvitations": "No pending invitations.",
-    "expiresAt": "Expires",
-    "revoke": "Revoke",
     "roleGuideTitle": "Role permissions",
     "roleDescriptions": {
       "owner": "Owner can manage the team, members, admins, and owners.",
-      "admin": "Admin can invite members, manage regular members, and manage shared connections.",
+      "admin": "Admin can add members, manage regular members, and manage shared connections.",
       "member": "Member can use team shared connections and workspace resources."
     },
-    "noManagePermission": "This account can view members, but cannot manage invitations or roles.",
-    "empty": "No teams yet.",
-    "audit": "Audit events"
+    "noManagePermission": "This account can view members, but cannot add members or manage roles.",
+    "empty": "No teams yet."
   }
 }

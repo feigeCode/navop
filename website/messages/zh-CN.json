@@ -73,28 +73,23 @@
   },
   "dashboard": {
     "title": "团队控制台",
-    "subtitle": "管理团队、成员、邀请和角色。桌面端同步数据保持加密，不在官网后台直接解密或修改。",
+    "subtitle": "管理团队、成员和角色。桌面端同步数据保持加密，不在官网后台直接解密或修改。",
     "createTeam": "创建团队",
     "teamName": "团队名称",
     "description": "描述",
     "members": "成员",
-    "invite": "邀请成员",
+    "invite": "添加成员",
     "inviteEmail": "成员邮箱",
     "role": "角色",
     "save": "保存",
     "remove": "移除",
-    "pendingInvitations": "待处理邀请",
-    "noPendingInvitations": "暂无待处理邀请。",
-    "expiresAt": "过期时间",
-    "revoke": "撤销",
     "roleGuideTitle": "角色权限说明",
     "roleDescriptions": {
       "owner": "Owner 可以管理团队、成员、管理员和所有者。",
-      "admin": "Admin 可以邀请成员、管理普通成员和共享连接。",
+      "admin": "Admin 可以添加成员、管理普通成员和共享连接。",
       "member": "Member 可以使用团队共享的连接和工作台资源。"
     },
-    "noManagePermission": "当前账号只能查看成员信息，不能管理邀请或角色。",
-    "empty": "还没有团队。",
-    "audit": "审计事件"
+    "noManagePermission": "当前账号只能查看成员信息，不能添加成员或管理角色。",
+    "empty": "还没有团队。"
   }
 }

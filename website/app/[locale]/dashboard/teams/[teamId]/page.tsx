@@ -2,14 +2,13 @@ import { redirect } from "next/navigation";
 import { SiteHeader } from "@/components/site-header";
 import { SubmitButton } from "@/components/team-form";
 import {
-  inviteMemberAction,
+  addMemberAction,
   removeMemberAction,
-  revokeInvitationAction,
   updateMemberRoleAction
 } from "@/app/[locale]/dashboard/actions";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getDictionary, isLocale, localePath, type Locale } from "@/lib/i18n";
-import { getPendingTeamInvitations, getTeamMembers } from "@/lib/team-data";
+import { getTeamMembers } from "@/lib/team-data";
 import {
   canAssignRole,
   canManageMembers,
@@ -35,10 +34,7 @@ export default async function TeamPage({
     redirect(localePath(locale, "/login"));
   }
 
-  const [members, invitations] = await Promise.all([
-    getTeamMembers(teamId),
-    getPendingTeamInvitations(teamId)
-  ]);
+  const members = await getTeamMembers(teamId);
   const currentRole = members.find((member) => member.user_id === data.user.id)?.role ?? null;
   const canManage = currentRole ? canManageMembers(currentRole) : false;
   const assignableRoles = currentRole ? teamRoles.filter((role) => canAssignRole(currentRole, role)) : [];
@@ -54,7 +50,7 @@ export default async function TeamPage({
             <div className="panel-body stack">
               <RoleGuide descriptions={dict.dashboard.roleDescriptions} title={dict.dashboard.roleGuideTitle} />
               {canManage ? (
-                <form className="form-grid" action={inviteMemberAction}>
+                <form className="form-grid" action={addMemberAction}>
                   <input type="hidden" name="locale" value={locale} />
                   <input type="hidden" name="teamId" value={teamId} />
                   <input className="input" type="email" name="email" placeholder={dict.dashboard.inviteEmail} required />
@@ -75,7 +71,7 @@ export default async function TeamPage({
                 <tbody>
                   {members.map((member) => (
                     <tr key={member.id}>
-                      <td>{member.profile?.email || member.user_id}</td>
+                      <td>{member.email}</td>
                       <td>
                         <form action={updateMemberRoleAction} className="inline-actions">
                           <input type="hidden" name="locale" value={locale} />
@@ -116,37 +112,6 @@ export default async function TeamPage({
               </table>
             </div>
           </div>
-          <div className="panel">
-            <div className="panel-header"><h2>{dict.dashboard.pendingInvitations}</h2></div>
-            <div className="panel-body">
-              {invitations.length === 0 ? <p className="muted">{dict.dashboard.noPendingInvitations}</p> : (
-                <table className="table">
-                  <thead>
-                    <tr><th>Email</th><th>{dict.dashboard.role}</th><th>{dict.dashboard.expiresAt}</th><th /></tr>
-                  </thead>
-                  <tbody>
-                    {invitations.map((invitation) => (
-                      <tr key={invitation.id}>
-                        <td>{invitation.email}</td>
-                        <td><span className="role-pill">{invitation.role}</span></td>
-                        <td>{formatDate(invitation.expires_at, locale)}</td>
-                        <td>
-                          <form action={revokeInvitationAction}>
-                            <input type="hidden" name="locale" value={locale} />
-                            <input type="hidden" name="teamId" value={teamId} />
-                            <input type="hidden" name="invitationId" value={invitation.id} />
-                            <button className="button danger" type="submit" disabled={!canManage}>
-                              {dict.dashboard.revoke}
-                            </button>
-                          </form>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
         </div>
       </main>
     </div>
@@ -185,12 +150,4 @@ function canSelectRole(actorRole: TeamRole | null, targetRole: TeamRole, nextRol
   if (nextRole === targetRole) return true;
   if (!canUpdateMemberRole(actorRole, targetRole)) return false;
   return canAssignRole(actorRole!, nextRole);
-}
-
-function formatDate(value: string | null, locale: Locale) {
-  if (!value) return "-";
-  return new Intl.DateTimeFormat(locale, {
-    dateStyle: "medium",
-    timeStyle: "short"
-  }).format(new Date(value));
 }

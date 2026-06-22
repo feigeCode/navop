@@ -1,38 +1,24 @@
-create extension if not exists pgcrypto;
+drop trigger if exists on_auth_user_created on auth.users;
+drop function if exists public.handle_new_user();
+drop function if exists public.invite_team_member(uuid, text, text);
+drop function if exists public.revoke_team_invitation(uuid);
 
-create table if not exists public.teams (
-  id uuid primary key default gen_random_uuid(),
-  name text not null,
-  owner_id uuid not null references auth.users(id) on delete cascade,
-  description text,
-  key_verification text,
-  key_version integer not null default 1,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
+drop table if exists public.team_invitations cascade;
+drop table if exists public.audit_events cascade;
+drop table if exists public.profiles cascade;
 
-create table if not exists public.team_members (
-  id uuid primary key default gen_random_uuid(),
-  team_id uuid not null references public.teams(id) on delete cascade,
-  user_id uuid not null references auth.users(id) on delete cascade,
-  email text not null,
-  role text not null default 'member',
-  joined_at timestamptz not null default now(),
-  constraint team_members_role_check check (role in ('owner', 'admin', 'member'))
-);
-
-alter table public.teams add column if not exists description text;
-alter table public.teams add column if not exists key_verification text;
-alter table public.teams add column if not exists key_version integer not null default 1;
-alter table public.teams add column if not exists created_at timestamptz not null default now();
-alter table public.teams add column if not exists updated_at timestamptz not null default now();
 alter table public.team_members add column if not exists email text;
-alter table public.team_members add column if not exists role text not null default 'member';
-alter table public.team_members add column if not exists joined_at timestamptz not null default now();
 
-alter table public.team_members drop constraint if exists team_members_role_check;
-alter table public.team_members
-  add constraint team_members_role_check check (role in ('owner', 'admin', 'member'));
+update public.team_members tm
+set email = lower(au.email)
+from auth.users au
+where tm.user_id = au.id and tm.email is null;
+
+update public.team_members
+set email = user_id::text
+where email is null;
+
+alter table public.team_members alter column email set not null;
 
 create unique index if not exists team_members_team_user_idx
 on public.team_members(team_id, user_id);
@@ -196,18 +182,3 @@ begin
   delete from public.team_members where id = p_member_id;
 end;
 $$;
-
-alter table public.teams enable row level security;
-alter table public.team_members enable row level security;
-
-drop policy if exists teams_select_members on public.teams;
-create policy teams_select_members on public.teams
-for select using (public.current_team_role(id) is not null);
-
-drop policy if exists teams_update_managers on public.teams;
-create policy teams_update_managers on public.teams
-for update using (public.can_manage_team_members(id)) with check (public.can_manage_team_members(id));
-
-drop policy if exists team_members_select_team_members on public.team_members;
-create policy team_members_select_team_members on public.team_members
-for select using (public.current_team_role(team_id) is not null);

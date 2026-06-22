@@ -61,12 +61,11 @@ The migration creates or updates:
 
 - `teams`
 - `team_members`
-- `profiles`
-- `team_invitations`
-- `audit_events`
-- `admin` support in `team_members.role`
-- RPC helpers for creating teams, inviting members, updating roles, and removing members
-- RLS policies for profiles, invitations, and audit events
+- `email` and `admin` support in `team_members`
+- RPC helpers for creating teams, adding an existing user by email, updating roles, and removing members
+- RLS policies for teams and members
+
+The team-management schema intentionally avoids profile, invitation, and audit tables. Adding a member is a single RPC call that resolves the email through Supabase Auth and returns an error when the user does not exist yet.
 
 It assumes Supabase Auth is enabled. The desktop sync table `sync_data` remains owned by the desktop sync schema.
 

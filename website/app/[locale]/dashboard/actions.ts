@@ -33,13 +33,13 @@ export async function createTeamAction(formData: FormData) {
   redirect(localePath(locale, `/dashboard/teams/${data}`));
 }
 
-export async function inviteMemberAction(formData: FormData) {
+export async function addMemberAction(formData: FormData) {
   const locale = readLocale(formData);
   const teamId = String(formData.get("teamId") ?? "");
   const email = String(formData.get("email") ?? "");
   const role = readRole(formData);
   const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.rpc("invite_team_member", {
+  const { error } = await supabase.rpc("add_team_member_by_email", {
     p_team_id: teamId,
     p_email: email,
     p_role: role
@@ -75,21 +75,6 @@ export async function removeMemberAction(formData: FormData) {
   const supabase = await createSupabaseServerClient();
   const { error } = await supabase.rpc("remove_team_member", {
     p_member_id: memberId
-  });
-
-  if (error) {
-    redirect(`${localePath(locale, `/dashboard/teams/${teamId}`)}?error=${encodeURIComponent(error.message)}`);
-  }
-  revalidatePath(localePath(locale, `/dashboard/teams/${teamId}`));
-}
-
-export async function revokeInvitationAction(formData: FormData) {
-  const locale = readLocale(formData);
-  const teamId = String(formData.get("teamId") ?? "");
-  const invitationId = String(formData.get("invitationId") ?? "");
-  const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.rpc("revoke_team_invitation", {
-    p_invitation_id: invitationId
   });
 
   if (error) {

@@ -73,28 +73,23 @@
   },
   "dashboard": {
     "title": "團隊控制台",
-    "subtitle": "管理團隊、成員、邀請和角色。桌面端同步資料保持加密，不在官網後台直接解密或修改。",
+    "subtitle": "管理團隊、成員和角色。桌面端同步資料保持加密，不在官網後台直接解密或修改。",
     "createTeam": "建立團隊",
     "teamName": "團隊名稱",
     "description": "描述",
     "members": "成員",
-    "invite": "邀請成員",
+    "invite": "新增成員",
     "inviteEmail": "成員信箱",
     "role": "角色",
     "save": "儲存",
     "remove": "移除",
-    "pendingInvitations": "待處理邀請",
-    "noPendingInvitations": "暫無待處理邀請。",
-    "expiresAt": "過期時間",
-    "revoke": "撤銷",
     "roleGuideTitle": "角色權限說明",
     "roleDescriptions": {
       "owner": "Owner 可以管理團隊、成員、管理員和所有者。",
-      "admin": "Admin 可以邀請成員、管理一般成員和共享連線。",
+      "admin": "Admin 可以新增成員、管理一般成員和共享連線。",
       "member": "Member 可以使用團隊共享的連線和工作台資源。"
     },
-    "noManagePermission": "目前帳號只能查看成員資訊，不能管理邀請或角色。",
-    "empty": "還沒有團隊。",
-    "audit": "審計事件"
+    "noManagePermission": "目前帳號只能查看成員資訊，不能新增成員或管理角色。",
+    "empty": "還沒有團隊。"
   }
 }
