@@ -5,7 +5,7 @@ use one_core::storage::{ConnectionRepository, StoredConnection};
 
 use super::RemoteDesktopFormWindow;
 
-pub(super) fn persist_connection(
+pub fn persist_connection(
     mut connection: StoredConnection,
     is_editing: bool,
     cx: &mut Context<RemoteDesktopFormWindow>,
@@ -25,7 +25,7 @@ pub(super) fn persist_connection(
     Ok(connection)
 }
 
-pub(super) fn emit_saved_connection(
+pub fn emit_saved_connection(
     connection: StoredConnection,
     is_editing: bool,
     cx: &mut Context<RemoteDesktopFormWindow>,

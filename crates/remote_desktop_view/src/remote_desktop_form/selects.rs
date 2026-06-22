@@ -7,8 +7,8 @@ use rust_i18n::t;
 use super::{RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig};
 
 #[derive(Clone, Default, PartialEq)]
-pub(super) struct WorkspaceSelectItem {
-    pub(super) id: Option<i64>,
+pub struct WorkspaceSelectItem {
+    pub id: Option<i64>,
     name: String,
 }
 
@@ -41,20 +41,20 @@ impl SelectItem for WorkspaceSelectItem {
 }
 
 #[derive(Clone, Default, PartialEq)]
-pub(super) struct TeamSelectItem {
-    pub(super) id: Option<String>,
+pub struct TeamSelectItem {
+    pub id: Option<String>,
     name: String,
 }
 
 impl TeamSelectItem {
-    pub(super) fn personal() -> Self {
+    pub fn personal() -> Self {
         Self {
             id: None,
             name: t!("TeamSync.personal").to_string(),
         }
     }
 
-    pub(super) fn from_team(team: &TeamOption) -> Self {
+    pub fn from_team(team: &TeamOption) -> Self {
         Self {
             id: Some(team.id.clone()),
             name: team.name.clone(),
@@ -74,7 +74,7 @@ impl SelectItem for TeamSelectItem {
     }
 }
 
-pub(super) fn create_workspace_select(
+pub fn create_workspace_select(
     config: &RemoteDesktopFormWindowConfig,
     window: &mut Window,
     cx: &mut Context<RemoteDesktopFormWindow>,
@@ -89,7 +89,7 @@ pub(super) fn create_workspace_select(
     cx.new(|cx| SelectState::new(items, Some(Default::default()), window, cx))
 }
 
-pub(super) fn create_team_select(
+pub fn create_team_select(
     config: &RemoteDesktopFormWindowConfig,
     window: &mut Window,
     cx: &mut Context<RemoteDesktopFormWindow>,

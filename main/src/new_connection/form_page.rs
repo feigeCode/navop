@@ -10,7 +10,7 @@ use terminal_view::{SerialFormWindow, SerialFormWindowConfig, SshFormWindow, Ssh
 use crate::home_tab::HomePage;
 use crate::new_connection::NewConnectionWindow;
 use crate::new_connection::connection_kind::NewConnectionKind;
-use crate::new_connection::remote_desktop_form::{
+use remote_desktop_view::remote_desktop_form::{
     RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
 };
 

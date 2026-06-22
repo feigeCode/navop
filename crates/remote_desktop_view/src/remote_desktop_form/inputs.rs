@@ -5,16 +5,16 @@ use rust_i18n::t;
 
 use super::RemoteDesktopFormWindow;
 
-pub(super) struct RemoteDesktopInputs {
-    pub(super) name: Entity<InputState>,
-    pub(super) host: Entity<InputState>,
-    pub(super) port: Entity<InputState>,
-    pub(super) username: Entity<InputState>,
-    pub(super) password: Entity<InputState>,
-    pub(super) domain: Entity<InputState>,
+pub struct RemoteDesktopInputs {
+    pub name: Entity<InputState>,
+    pub host: Entity<InputState>,
+    pub port: Entity<InputState>,
+    pub username: Entity<InputState>,
+    pub password: Entity<InputState>,
+    pub domain: Entity<InputState>,
 }
 
-pub(super) fn create_inputs(
+pub fn create_inputs(
     protocol: RemoteDesktopProtocol,
     window: &mut Window,
     cx: &mut Context<RemoteDesktopFormWindow>,
@@ -49,19 +49,19 @@ fn input_with_value(
     state
 }
 
-pub(super) fn parse_u16(value: &str, label: &str) -> Result<u16, String> {
+pub fn parse_u16(value: &str, label: &str) -> Result<u16, String> {
     value
         .trim()
         .parse::<u16>()
         .map_err(|_| t!("RemoteDesktopForm.invalid_number", field = label).to_string())
 }
 
-pub(super) fn non_empty_text(input: &Entity<InputState>, cx: &App) -> Option<String> {
+pub fn non_empty_text(input: &Entity<InputState>, cx: &App) -> Option<String> {
     let value = input_text(input, cx).trim().to_string();
     (!value.is_empty()).then_some(value)
 }
 
-pub(super) fn input_text(input: &Entity<InputState>, cx: &App) -> String {
+pub fn input_text(input: &Entity<InputState>, cx: &App) -> String {
     input.read(cx).text().to_string()
 }
 

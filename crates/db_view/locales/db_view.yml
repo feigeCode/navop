@@ -1,5 +1,11 @@
 _version: 2
 
+Home:
+  sync_tooltip:
+    en: Sync data with cloud
+    zh-CN: 与云端同步数据
+    zh-HK: 與雲端同步數據
+
 # 通用操作
 Common:
   ok:
@@ -417,10 +423,6 @@ ConnectionForm:
     en: Username/Schema
     zh-CN: 用户名/Schema
     zh-HK: 使用者名稱/Schema
-  charset:
-    en: Character Set
-    zh-CN: 字符集
-    zh-HK: 字元集
   default_tablespace:
     en: Default Tablespace
     zh-CN: 默认表空间

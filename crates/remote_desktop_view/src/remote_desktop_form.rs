@@ -17,14 +17,14 @@ use self::selects::{
     TeamSelectItem, WorkspaceSelectItem, create_team_select, create_workspace_select,
 };
 
-pub(crate) struct RemoteDesktopFormWindowConfig {
+pub struct RemoteDesktopFormWindowConfig {
     pub protocol: RemoteDesktopProtocol,
     pub editing_connection: Option<StoredConnection>,
     pub workspaces: Vec<Workspace>,
     pub teams: Vec<TeamOption>,
 }
 
-pub(crate) struct RemoteDesktopFormWindow {
+pub struct RemoteDesktopFormWindow {
     protocol: RemoteDesktopProtocol,
     focus_handle: FocusHandle,
     title: SharedString,
@@ -47,7 +47,7 @@ pub(crate) struct RemoteDesktopFormWindow {
 }
 
 impl RemoteDesktopFormWindow {
-    pub(crate) fn new(
+    pub fn new(
         config: RemoteDesktopFormWindowConfig,
         window: &mut Window,
         cx: &mut Context<Self>,

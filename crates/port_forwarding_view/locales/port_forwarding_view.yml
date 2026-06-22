@@ -18,6 +18,12 @@ ConnectionForm:
   cloud_sync_desc:
     en: Sync this connection after saving.
     zh-CN: 保存后同步此连接。
+    
+Home:
+  sync_tooltip:
+    en: Sync data with cloud
+    zh-CN: 与云端同步数据
+    zh-HK: 與雲端同步數據
 
 TeamSync:
   personal:

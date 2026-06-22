@@ -1,5 +1,11 @@
 _version: 2
 
+Home:
+  sync_tooltip:
+    en: Sync data with cloud
+    zh-CN: 与云端同步数据
+    zh-HK: 與雲端同步數據
+
 # 主题
 Theme:
   midnight:
