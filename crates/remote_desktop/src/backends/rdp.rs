@@ -473,7 +473,10 @@ fn spawn_helper(
     helper: &HelperProcessConfig,
     output_tx: std::sync::mpsc::Sender<RemoteDesktopOutput>,
 ) -> Option<std::process::Child> {
-    match Command::new(&helper.command)
+    let mut command = Command::new(&helper.command);
+    process_util::configure_background_child(&mut command);
+
+    match command
         .args(&helper.args)
         .current_dir(&helper.working_dir)
         .stdin(Stdio::piped())

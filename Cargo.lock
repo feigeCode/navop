@@ -3534,6 +3534,7 @@ dependencies = [
  "async-trait",
  "extension-protocol",
  "interprocess",
+ "process-util",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -8558,6 +8559,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "process-util"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "profiling"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9223,6 +9231,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "one-core",
+ "process-util",
  "proptest",
  "serde",
  "serde_json",

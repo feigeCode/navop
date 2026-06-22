@@ -13,6 +13,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 one-core = { workspace = true }
+process-util = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
