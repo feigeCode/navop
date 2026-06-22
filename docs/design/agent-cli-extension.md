@@ -1,34 +1,38 @@
-# OnetCli Agent CLI Main Package And Extension Design
+# OnetCli Agent Tool Runtime, CLI, Function Calling And MCP Design
 
 ## 背景
 
 OnetCli 目前的 `onetcli` 二进制默认启动 GPUI 桌面应用。数据库、SSH、
 SFTP、端口转发、数据库驱动和扩展运行时已经存在，但这些能力主要服务于
-桌面 UI。为了让 Codex 等 agent 通过 skill 稳定调用本机能力，`onetcli`
-需要提供 headless CLI。
+桌面 UI。为了让 Codex 等 agent 通过 skill、function calling、MCP 或 CLI
+稳定调用本机能力，`onetcli` 需要提供主包内置的 headless tool runtime。
 
-这个 CLI 不是简单的应用启动器。它应成为一层稳定的本地能力接口：
+这个能力层不是简单的应用启动器。它应成为一层稳定的本地 tool 接口：
 
-- agent 通过命令行发现连接、查询数据库、执行 SSH 命令、读取远端文件。
-- skill 只依赖 CLI contract，不直接依赖 Rust 内部 API、数据库驱动细节或
-  SSH 密钥路径。
-- CLI host 和核心高权限命令随主包发布，第三方和高级能力通过 OnetCli
+- agent 通过 CLI、function calling 或 MCP 发现连接、查询数据库、执行 SSH
+  命令、读取远端文件。
+- skill、function calling adapter 和 MCP server 只依赖 tool contract，不
+  直接依赖 Rust 内部 API、数据库驱动细节或 SSH 密钥路径。
+- Tool runtime、CLI host 和核心高权限工具随主包发布，第三方和高级能力通过 OnetCli
   扩展安装，避免每个新工具都修改主程序。
 
 ## 目标
 
-1. 提供 agent-friendly 的 CLI contract：稳定 JSON、稳定 exit code、超时、
-   非交互模式和结构化错误。
+1. 提供 agent-friendly 的 tool contract：稳定 schema、稳定 JSON、稳定
+   exit code、超时、非交互模式和结构化错误。
 2. 支持 Codex 这类具备 PTY 能力的 agent 使用交互式 SSH shell。
 3. 复用现有连接存储、数据库执行、SSH、SFTP、端口转发和扩展运行时。
-4. 将 CLI host 和核心命令放入主包，允许扩展包向 `onetcli` 安装增量命令，
-   而不修改主程序命令解析代码。
+4. 将 Tool Runtime、CLI host 和核心工具放入主包，让 CLI、function calling
+   和 MCP server 复用同一套能力实现。
 5. 将高权限能力纳入权限、审计和 allowlist 管理。
 6. 保持 `onetcli` 无参数启动桌面应用的现有行为。
+7. 允许扩展包向 runtime 贡献增量 tools，再选择暴露到 CLI、MCP 或 function
+   calling，而不修改主程序命令解析代码。
 
 ## 非目标
 
-1. 第一阶段不实现完整 MCP server。CLI contract 先作为 skill 的稳定底座。
+1. 第一阶段不要求完整产品化 MCP server。Tool Runtime 和 CLI 先作为 skill
+   的稳定底座，已有 `public_mcp` 可以作为 MCP adapter 原型继续演进。
 2. 不让第三方扩展直接读取本地密钥、密码或连接数据库文件。
 3. 不让 agent 依赖 UI 自动化来完成数据库、SSH 或文件操作。
 4. 不在第一阶段实现所有数据库管理功能；优先支持查询、schema、连接测试。
@@ -37,14 +41,17 @@ SFTP、端口转发、数据库驱动和扩展运行时已经存在，但这些�
 
 1. **核心能力内核化**：数据库、SSH、SFTP、连接读取和审计属于 host 能力。
    这些能力直接关系到凭据和本地安全，不能交给任意扩展进程自由实现。
-2. **主包提供 CLI host**：命令解析、输出 envelope、agent policy、审计、
-   核心数据库/SSH/SFTP 命令随 `onetcli` 主包发布。
-3. **扩展贡献增量命令**：扩展可以声明 CLI 命令、参数 schema、权限和
-   runtime。Host 负责安装、发现、权限校验、审计和调用。
-4. **默认结构化输出**：agent mode 默认 JSON；human mode 可使用 table/text。
-5. **交互与非交互分离**：`ssh exec` 用于确定性调用，`ssh shell` 用于 PTY
+2. **主包提供 Tool Runtime**：tool registry、tool descriptor、schema、
+   policy、approval、audit、核心数据库/SSH/SFTP 工具随 `onetcli` 主包发布。
+3. **Adapter 不拥有业务能力**：CLI、function calling、MCP server 只负责协议
+   和格式转换，最终都调用同一个 `ToolRegistry`。
+4. **扩展贡献增量工具**：扩展可以声明 tool、参数 schema、权限、adapter 暴露
+   方式和 runtime。Host 负责安装、发现、权限校验、审计和调用。
+5. **默认结构化输出**：agent mode 默认 JSON；human mode 可使用 table/text。
+6. **交互与非交互分离**：`ssh exec` 用于确定性调用，`ssh shell` 用于 PTY
    会话。
-6. **可组合 contract**：命令输出能被 skill、脚本、CI 和后续 MCP server 复用。
+7. **可组合 contract**：tool 输出能被 skill、脚本、CI、function calling 和
+   MCP server 复用。
 
 ## 总体架构
 
@@ -56,78 +63,304 @@ Codex / Skill / Human
         |
         +-- app mode: no args -> launch GPUI app
         |
-        +-- cli mode
+        +-- tool runtime
               |
-              +-- main-package CLI host
-              |     +-- connection
-              |     +-- db
-              |     +-- ssh
-              |     +-- sftp
-              |     +-- extension
-              |     +-- agent policy
+              +-- builtin tool registry
+              |     +-- connection.list / connection.show / connection.test
+              |     +-- db.query / db.schema / db.exec
+              |     +-- ssh.exec / ssh.shell / ssh.tunnel / ssh.socks
+              |     +-- sftp.list / sftp.read
+              |     +-- agent.policy / audit
               |
-              +-- CLI extension registry
-                    |
-                    +-- installed composite extensions
-                    +-- contributes.cli.commands
-                    +-- runtime.ipc / runtime.wasm
+              +-- extension tool registry
+              |     +-- installed composite extensions
+              |     +-- contributes.tools
+              |     +-- runtime.ipc / runtime.wasm
+              |
+              +-- adapters
+                    +-- CLI adapter
+                    +-- function calling adapter
+                    +-- MCP adapter / public_mcp
 ```
 
-CLI mode 应尽量运行在不初始化 GPUI 的路径上。CLI host 与核心命令由主包
-内置，复用 `one-core`、`db`、`ssh`、`sftp` 等 crate。扩展命令通过扩展
-运行时调用，但扩展拿到的是受限 host API，而不是裸露的本地 secret。
+Headless adapter 应尽量运行在不初始化 GPUI 的路径上。Tool Runtime 与核心
+工具由主包内置，复用 `one-core`、`db`、`ssh`、`sftp` 等 crate。扩展工具
+通过扩展运行时调用，但扩展拿到的是受限 host API，而不是裸露的本地 secret。
+
+## Tool Runtime 统一内核
+
+核心抽象应先于 CLI/MCP/function calling 存在。建议新增内部 crate：
+
+```text
+crates/tool_runtime
+```
+
+或命名为：
+
+```text
+crates/capabilities
+```
+
+本文后续用 `tool_runtime` 表示这层。
+
+### Tool Descriptor
+
+每个内置或扩展工具提供统一描述：
+
+```rust
+pub struct ToolDescriptor {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+    pub output_schema: serde_json::Value,
+    pub permissions: Vec<ToolPermission>,
+    pub mode: ToolMode,
+    pub adapters: Vec<ToolAdapter>,
+    pub cli: Option<CliToolMetadata>,
+}
+```
+
+工具模式用于 adapter 能力过滤：
+
+```rust
+pub enum ToolMode {
+    Deterministic,
+    Interactive,
+    LongRunning,
+    Streaming,
+}
+```
+
+Adapter 声明用于决定同一工具暴露到哪里：
+
+```rust
+pub enum ToolAdapter {
+    Cli,
+    FunctionCalling,
+    Mcp,
+    Gui,
+}
+```
+
+例如：
+
+```text
+db.query:
+  mode = Deterministic
+  adapters = Cli, FunctionCalling, Mcp
+
+ssh.exec:
+  mode = Deterministic
+  adapters = Cli, FunctionCalling, Mcp
+
+ssh.shell:
+  mode = Interactive
+  adapters = Cli
+
+ssh.session.create/read/write/close:
+  mode = Streaming or LongRunning
+  adapters = Mcp, FunctionCalling
+```
+
+### Tool Handler
+
+业务能力通过 handler 实现：
+
+```rust
+#[async_trait]
+pub trait ToolHandler: Send + Sync {
+    fn descriptor(&self) -> ToolDescriptor;
+
+    async fn call(
+        &self,
+        ctx: ToolContext,
+        input: serde_json::Value,
+    ) -> Result<ToolResult, ToolError>;
+}
+```
+
+`ToolContext` 统一携带权限、审批、审计、调用方和取消信息：
+
+```rust
+pub struct ToolContext {
+    pub actor: ToolActor,
+    pub adapter: ToolAdapter,
+    pub permission_mode: PermissionMode,
+    pub approver: ApprovalManager,
+    pub audit: AuditSink,
+    pub cancel: CancellationToken,
+}
+```
+
+### Tool Registry
+
+`ToolRegistry` 是所有入口的唯一分发点：
+
+```rust
+pub struct ToolRegistry {
+    handlers: BTreeMap<String, Arc<dyn ToolHandler>>,
+}
+```
+
+要求：
+
+1. 启动时拒绝重复 tool id。
+2. `list(adapter)` 根据 adapter 和 policy 过滤工具。
+3. `call(id, input, ctx)` 做 schema 校验、permission、approval、audit，再调用
+   handler。
+4. 内置工具和扩展工具使用同一个 registry。
+5. CLI、function calling、MCP adapter 不直接访问数据库、SSH 或连接存储。
+
+### Adapter 映射
+
+CLI：
+
+```bash
+onetcli db query prod --sql "select 1" --readonly --format json
+```
+
+内部映射为：
+
+```json
+{
+  "tool": "db.query",
+  "input": {
+    "connection": "prod",
+    "sql": "select 1",
+    "readonly": true
+  }
+}
+```
+
+通用调试入口：
+
+```bash
+onetcli tool list --format json
+onetcli tool schema db.query --format json
+onetcli tool call db.query --input '{"connection":"prod","sql":"select 1","readonly":true}'
+```
+
+Function calling：
+
+```text
+ToolDescriptor -> JSON schema function definition
+function call arguments -> ToolRegistry.call()
+ToolResult -> function call result
+```
+
+MCP：
+
+```text
+ToolDescriptor -> rmcp Tool
+MCP list_tools -> ToolRegistry.list(Mcp)
+MCP call_tool -> ToolRegistry.call()
+ToolResult -> CallToolResult::structured
+```
+
+不要让 MCP 或 function calling 通过 shell 执行 `onetcli` 子进程。它们应直接复用
+`tool_runtime`，避免进程开销、错误结构丢失、权限上下文分裂、取消/超时和审计
+重复实现。
+
+## public_mcp 参考实现
+
+`mcp-dev` worktree 中的 `crates/public_mcp` 已经实现了一部分可复用原型：
+
+1. `PublicMcpToolProvider`：provider 暴露 `tools()` 和 `call_tool()`。
+2. `PublicMcpToolRegistry`：聚合 provider，拒绝重复 tool name，并按 name
+   dispatch。
+3. `PublicMcpServer`：通过 `rmcp::ServerHandler` 实现 `list_tools` 和
+   `call_tool`。
+4. `PermissionMode`、`PublicMcpOperationKind`、`ApprovalManager`：将写终端、
+   内部函数调用等高风险操作接入 allow/ask/deny。
+5. `LoopbackMcpServer` + discovery file + token handshake + stdio bridge：主应用
+   在 loopback 上启动 MCP runtime，外部 stdio helper 通过 discovery 文件连接。
+6. `InternalFunctionToolProvider`：用 `name + arguments` 暴露应用内注册函数。
+7. `ToolAnnotations`：把 read-only/destructive/idempotent/open-world 语义传给 MCP
+   客户端。
+
+这些设计可以保留为 MCP adapter 的基础，但最终边界应调整为：
+
+```text
+tool_runtime
+  -> owns ToolDescriptor / ToolRegistry / ToolHandler / ToolContext / permission / audit
+
+public_mcp
+  -> adapts ToolDescriptor to rmcp::Tool
+  -> adapts MCP call_tool to ToolRegistry.call()
+  -> keeps loopback runtime, discovery, token handshake, stdio bridge
+
+main
+  -> builds tool registry from builtin tools + extension tools + active UI session providers
+```
+
+也就是说，`public_mcp` 不应长期拥有唯一的 tool registry。它应该从主包
+`tool_runtime` 读取 tool 列表，并只处理 MCP 协议、discovery 和 transport。
+
+当前 `public_mcp` 中的 terminal session 工具可以迁移成：
+
+```text
+public_mcp.list_sessions      -> terminal.session.list
+public_mcp.terminal_snapshot  -> terminal.session.snapshot
+public_mcp.terminal_write     -> terminal.session.write
+```
+
+迁移时保留兼容 alias，避免已有 MCP 客户端配置立即失效。
 
 ## 主包内置策略
 
-第一阶段推荐将 CLI 放入主包，而不是将 CLI 本身做成扩展。主包包含：
+第一阶段推荐将 Tool Runtime 和 CLI adapter 放入主包，而不是将 CLI 本身做成扩展。
+主包包含：
 
 1. `onetcli` 命令入口和 CLI/GUI app 分流。
-2. `crates/cli` 内部 crate。
-3. 连接发现、数据库查询、SSH exec/shell、SFTP 读取等核心命令。
-4. 统一 JSON envelope、exit code、审计和 agent policy。
-5. 扩展 CLI contribution 的发现与调用入口。
+2. `crates/tool_runtime` 内部 crate。
+3. `crates/cli` adapter crate。
+4. 连接发现、数据库查询、SSH exec/shell、SFTP 读取等核心工具。
+5. 统一 ToolResult、JSON envelope、exit code、审计和 agent policy。
+6. 扩展 tool contribution 的发现与调用入口。
 
 主包不包含：
 
 1. 第三方数据库驱动二进制。
 2. 第三方运维工具或业务诊断工具。
 3. agent skill 的自动安装产物。
-4. 每个扩展命令的具体实现。
+4. 每个扩展工具的具体实现。
 
 这些增量能力继续通过 extension marketplace 安装。
 
 ### 体积判断
 
-CLI host 本身不是体积大头。命令解析、JSON 输出、policy、审计和 dispatch
+Tool Runtime 和 CLI host 本身不是体积大头。命令解析、JSON 输出、policy、审计和 dispatch
 属于普通 Rust 业务代码，预计对 release 二进制体积影响较小。
 
 真正影响体积的是桌面 UI、数据库客户端、加密/SSH、Wasm runtime、native
 库和静态 bundled 驱动。当前主程序已经依赖数据库、SSH、扩展运行时和多种
-视图能力，所以把 CLI host 放入主包通常不会重复引入一份大依赖。
+视图能力，所以把 Tool Runtime 和 CLI host 放入主包通常不会重复引入一份大依赖。
 
 体积控制规则：
 
 1. 不为了 CLI 把第三方数据库驱动改成 builtin。
 2. 不把扩展 helper、skill 文件和业务诊断脚本静态编入主二进制。
-3. `crates/cli` 只依赖 service 层，不依赖 GPUI view 层。
-4. 新增依赖优先选择轻量库；命令解析可优先评估 `pico-args` 或已有依赖，
+3. `crates/tool_runtime` 只依赖 service 层，不依赖 GPUI view 层。
+4. `crates/cli` 只做 adapter，不实现数据库、SSH、SFTP 业务能力。
+5. 新增依赖优先选择轻量库；命令解析可优先评估 `pico-args` 或已有依赖，
    只有需要完整 help/schema 生成时再使用更重 parser。
-5. 发布前用 release binary size 做基线比较，CLI host 增量应作为验收指标。
+6. 发布前用 release binary size 做基线比较，Tool Runtime + CLI host 增量应作为验收指标。
 
 建议的体积验收：
 
 ```text
 1. 记录加入 CLI 前后的 release `onetcli` 大小。
 2. 记录压缩安装包大小。
-3. 若仅加入 CLI host 和核心 dispatch，增量明显异常时检查新增依赖树。
-4. 第三方驱动和扩展命令不计入主包体积，应在各自扩展包中统计。
+3. 若仅加入 Tool Runtime、CLI host 和核心 dispatch，增量明显异常时检查新增依赖树。
+4. 第三方驱动和扩展工具不计入主包体积，应在各自扩展包中统计。
 ```
 
 ## 命令模型
 
 ### Core Commands
 
-核心命令由主程序内置，作为 skill 的第一批稳定 contract：
+核心工具由主程序内置，并通过稳定 CLI path 暴露给 skill：
 
 ```bash
 onetcli connection list --format json
@@ -203,7 +436,8 @@ onetcli ssh shell prod-web --transcript ~/.onetcli/audit/sessions/session.log
   "ok": true,
   "data": {},
   "meta": {
-    "command": "db.query",
+    "tool": "db.query",
+    "adapter": "cli",
     "elapsed_ms": 18,
     "connection": "prod",
     "format_version": "1"
@@ -222,7 +456,8 @@ onetcli ssh shell prod-web --transcript ~/.onetcli/audit/sessions/session.log
     "hint": "check host, port, credentials, ssh tunnel, or driver installation"
   },
   "meta": {
-    "command": "db.query",
+    "tool": "db.query",
+    "adapter": "cli",
     "elapsed_ms": 1024,
     "connection": "prod",
     "format_version": "1"
@@ -264,17 +499,18 @@ stdout/stderr：
 
 ## 扩展增量安装模型
 
-CLI host 和核心命令放在主包。扩展安装只用于增加第三方或高级命令。
+Tool Runtime、CLI host 和核心工具放在主包。扩展安装只用于增加第三方或高级工具。
 
-推荐方案：在现有 composite extension 上增加 CLI contribution，而不是新增
-独立 `cli_extensions` kind，也不是把 CLI host 本身做成扩展。
+推荐方案：在现有 composite extension 上增加 `tools` contribution，而不是新增
+独立 `cli_extensions` kind，也不是把 Tool Runtime 或 CLI host 本身做成扩展。
 
 理由：
 
 1. 现有扩展系统已经支持 `extension.json`、权限、runtime、marketplace、
    安装目录和卸载流程。
-2. `extension.json` 已有 `contributes.commands`，可以自然扩展为
-   `contributes.cli.commands`。
+2. `extension.json` 已有 `contributes.commands`，可以演进为更通用的
+   `contributes.tools`，再通过 tool metadata 选择暴露到 CLI、MCP 或
+   function calling。
 3. 第三方扩展通常不只提供 CLI，也可能提供菜单、UI action、Wasm action 和
    agent 能力描述。Composite extension 更适合作为聚合包。
 4. 避免同时维护两套扩展安装、权限、签名和 marketplace 逻辑。
@@ -294,9 +530,9 @@ CLI host 和核心命令放在主包。扩展安装只用于增加第三方或�
     onetcli-db/SKILL.md
 ```
 
-扩展包通过现有 extension marketplace 安装。CLI mode 和 GUI mode 都从
+扩展包通过现有 extension marketplace 安装。CLI mode、MCP mode 和 GUI mode 都从
 `ExtensionRegistry` 读取 composite extensions。未安装任何扩展时，主包内置
-的 `connection`、`db`、`ssh`、`sftp` 命令仍然可用。
+的 `connection`、`db`、`ssh`、`sftp` 工具及 CLI path 仍然可用。
 
 ### Manifest 扩展示例
 
@@ -310,7 +546,10 @@ CLI host 和核心命令放在主包。扩展安装只用于增加第三方或�
     "onetcli": ">=0.7.0"
   },
   "permissions": [
-    "cli:commands:contribute",
+    "tools:contribute",
+    "cli:tools:expose",
+    "mcp:tools:expose",
+    "function_calling:tools:expose",
     "db:connections:list",
     "db:query:readonly",
     "ssh:exec"
@@ -331,29 +570,34 @@ CLI host 和核心命令放在主包。扩展安装只用于增加第三方或�
     ]
   },
   "contributes": {
-    "cli": {
-      "commands": [
-        {
-          "id": "example.inspect",
-          "name": "inspect",
-          "path": ["example", "inspect"],
-          "summary": "Inspect a saved connection with extension logic.",
-          "handler": {
-            "kind": "ipc",
-            "runtime_id": "tools",
-            "method": "cli/execute"
+    "tools": [
+      {
+        "id": "example.inspect",
+        "title": "Inspect",
+        "description": "Inspect a saved connection with extension logic.",
+        "adapters": ["cli", "mcp", "function_calling"],
+        "cli": {
+          "path": ["example", "inspect"]
+        },
+        "handler": {
+          "kind": "ipc",
+          "runtime_id": "tools",
+          "method": "tool/call"
+        },
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "connection": { "type": "string" },
+            "format": { "type": "string", "enum": ["json", "text"] }
           },
-          "args_schema": {
-            "type": "object",
-            "properties": {
-              "connection": { "type": "string" },
-              "format": { "type": "string", "enum": ["json", "text"] }
-            },
-            "required": ["connection"]
-          }
-        }
-      ]
-    },
+          "required": ["connection"]
+        },
+        "output_schema": {
+          "type": "object"
+        },
+        "permissions": ["connection:read"]
+      }
+    ],
     "skills": [
       {
         "id": "onetcli-example",
@@ -365,12 +609,12 @@ CLI host 和核心命令放在主包。扩展安装只用于增加第三方或�
 }
 ```
 
-当前 `ContributesManifest` 中没有 `cli` 和 `skills` 字段。实现时需要新增
+当前 `ContributesManifest` 中没有 `tools` 和 `skills` 字段。实现时需要新增
 结构化字段，并保持未知字段向后兼容。
 
-### CLI Command Path
+### Adapter 暴露路径
 
-扩展命令被挂载到：
+扩展 tool 被挂载到完整 CLI 路径：
 
 ```bash
 onetcli ext <extension-id> <command>
@@ -384,8 +628,8 @@ onetcli example inspect prod --format json
 
 短路径有冲突风险，因此规则如下：
 
-1. 内置命令优先级最高。
-2. 扩展短路径不能覆盖内置命令。
+1. 内置 CLI 命令优先级最高。
+2. 扩展短路径不能覆盖内置命令或内置 tool 的 CLI path。
 3. 多个扩展声明同一短路径时，默认禁用该短路径，只允许完整路径：
 
 ```bash
@@ -394,16 +638,24 @@ onetcli ext com.example.onetcli-tools inspect prod
 
 4. 用户可以在本地 policy 中显式指定短路径归属。
 
+Function calling 和 MCP 暴露规则：
+
+1. 只有声明对应 adapter 的 tool 才能出现在 function calling 或 MCP tool list。
+2. `ToolMode::Interactive` 默认不能暴露到 function calling。
+3. `ToolMode::LongRunning` 或 `Streaming` 暴露到 function calling 时必须使用
+   session 化工具，例如 `ssh.session.create/read/write/close`。
+4. MCP adapter 可以暴露 session 化工具，但不直接暴露裸 UI 内部对象。
+
 ## 扩展运行时调用
 
-扩展 CLI 命令不直接继承用户 shell 权限。Host 调用扩展 runtime，并传入结构化
+扩展 tool 不直接继承用户 shell 权限。Host 调用扩展 runtime，并传入结构化
 request：
 
 ```json
 {
-  "command_id": "example.inspect",
-  "argv": ["prod"],
-  "options": {
+  "tool_id": "example.inspect",
+  "input": {
+    "connection": "prod",
     "format": "json"
   },
   "stdin": null,
@@ -426,7 +678,7 @@ request：
   "data": {},
   "meta": {
     "extension_id": "com.example.onetcli-tools",
-    "command_id": "example.inspect"
+    "tool_id": "example.inspect"
   }
 }
 ```
@@ -445,9 +697,11 @@ extension runtime
 新增权限建议：
 
 ```text
-cli:commands:contribute
-cli:interactive
-cli:process:spawn
+tools:contribute
+cli:tools:expose
+mcp:tools:expose
+function_calling:tools:expose
+process:spawn
 
 connection:list
 connection:read
@@ -469,7 +723,7 @@ agent:skill:contribute
 权限分两层校验：
 
 1. **扩展安装时**：高风险权限需要用户批准。
-2. **命令执行时**：检查扩展权限、agent policy、连接 allowlist 和命令参数。
+2. **Tool 调用时**：检查扩展权限、agent policy、连接 allowlist 和 tool 参数。
 
 默认策略：
 
@@ -486,8 +740,8 @@ agent:skill:contribute
 onetcli agent policy show --format json
 onetcli agent allow connection prod-readonly
 onetcli agent deny connection payroll
-onetcli agent allow command db.query
-onetcli agent allow command ssh.exec --connection prod-web
+onetcli agent allow tool db.query
+onetcli agent allow tool ssh.exec --connection prod-web
 ```
 
 策略文件建议放在：
@@ -504,19 +758,19 @@ onetcli agent allow command ssh.exec --connection prod-web
   "connections": {
     "prod-readonly": {
       "agent_enabled": true,
-      "allowed_commands": ["db.schema", "db.query"],
+      "allowed_tools": ["db.schema", "db.query"],
       "readonly": true
     },
     "prod-web": {
       "agent_enabled": true,
-      "allowed_commands": ["ssh.exec", "ssh.shell"],
+      "allowed_tools": ["ssh.exec", "ssh.shell"],
       "interactive": true
     }
   },
   "extensions": {
     "com.example.onetcli-tools": {
       "enabled": true,
-      "allowed_commands": ["example.inspect"]
+      "allowed_tools": ["example.inspect"]
     }
   }
 }
@@ -534,7 +788,7 @@ onetcli skill list --format json
 onetcli skill export onetcli-db --target codex
 ```
 
-Skill 内容应依赖稳定 CLI contract：
+Skill 内容应依赖稳定 tool contract，并通过 CLI adapter 调用：
 
 ```text
 1. 调用 `onetcli connection list --type database --format json` 发现连接。
@@ -545,16 +799,18 @@ Skill 内容应依赖稳定 CLI contract：
 ```
 
 这样 extension marketplace 可以分发能力和 skill，但 agent 端仍依赖统一
-`onetcli` 命令。
+tool contract；Codex skill 可以优先用 CLI adapter，其他 agent 可通过 MCP 或
+function calling adapter 使用同一工具。
 
 ## 审计
 
-所有 agent mode 命令写入审计日志：
+所有 agent mode tool 调用写入审计日志：
 
 ```text
 timestamp
 actor: human | agent
-command: db.query | ssh.exec | extension command id
+tool: db.query | ssh.exec | extension tool id
+adapter: cli | mcp | function_calling | gui
 connection id/name
 readonly/write
 interactive: true/false
@@ -588,13 +844,22 @@ onetcli ssh shell prod-web --transcript <path>
 
 ```text
 main
-  -> app/cli entry split, GUI launcher
+  -> app/tool adapter entry split, GUI launcher
 
 one-core
   -> storage, connection repository, key storage, agent policy
 
+tool_runtime
+  -> ToolDescriptor, ToolRegistry, ToolHandler, ToolContext, ToolResult, policy, audit
+
 cli
-  -> command parser, dispatch, output envelope, audit, extension CLI registry
+  -> CLI parser, CLI path mapping, table/json rendering, ToolRegistry adapter
+
+public_mcp
+  -> MCP protocol adapter, rmcp transport, loopback runtime, discovery, stdio bridge
+
+function_calling
+  -> function schema export, function call adapter, ToolRegistry adapter
 
 db
   -> DbManager, DbConnection, SqlResult, IPC driver integration
@@ -606,31 +871,54 @@ sftp
   -> remote file operations
 
 extension-runtime
-  -> extension registry, marketplace, composite manifest, CLI contributions
+  -> extension registry, marketplace, composite manifest, tool contributions
 
 extension-host / extension-protocol
-  -> process runtime transport for extension CLI handlers
+  -> process runtime transport for extension tool handlers
 ```
 
-需要新增的内部 crate 命名为：
+需要新增或调整的内部 crate：
 
 ```text
+crates/tool_runtime
 crates/cli
+crates/public_mcp
 ```
 
-它负责：
+`crates/tool_runtime` 负责：
 
-1. command parser 和 dispatch。
-2. unified output envelope。
-3. extension CLI registry。
-4. agent policy enforcement。
-5. audit writer。
+1. tool descriptor / handler / registry。
+2. unified ToolResult / ToolError。
+3. tool permission、approval、audit。
+4. builtin tool registration。
+5. extension tool registration。
 
-`crates/cli` 随主包编译进 `onetcli`。`main/src/main.rs` 只做最薄分流：
+`crates/cli` 负责：
+
+1. command parser。
+2. CLI path 到 tool id 的映射。
+3. table/json 输出。
+4. exit code 映射。
+5. `onetcli tool list/schema/call` 调试入口。
+
+`crates/public_mcp` 参考 `mcp-dev` worktree 继续演进，但长期只作为 MCP adapter：
+
+1. 将 `ToolDescriptor` 转换为 `rmcp::Tool`。
+2. 将 `call_tool` 转发到 `ToolRegistry.call()`。
+3. 保留 loopback runtime、discovery file、token handshake 和 stdio bridge。
+4. 保留 approval UI 通道，但审批请求应使用统一 `ToolContext`。
+
+`crates/tool_runtime`、`crates/cli` 和 `crates/public_mcp` 随主包编译进 `onetcli`。
+`main/src/main.rs` 只做最薄分流：
 
 ```text
 if cli::should_handle_cli_args(args) {
     cli::run(args).await;
+    return;
+}
+
+if mcp::should_handle_mcp_args(args) {
+    public_mcp::run_stdio_or_server(args).await;
     return;
 }
 
@@ -661,6 +949,10 @@ onetcli-gui  -> windows subsystem, GUI launcher
 第一阶段实现：
 
 ```bash
+onetcli tool list --format json
+onetcli tool schema db.query --format json
+onetcli tool call db.query --input '{"connection":"local","sql":"select 1","readonly":true}'
+
 onetcli connection list --format json
 onetcli connection show <connection> --format json
 onetcli db schema <connection> --format json
@@ -672,79 +964,94 @@ onetcli ssh shell <connection>
 同时定义但可延后实现：
 
 ```bash
-onetcli extension cli list --format json
+onetcli mcp serve
+onetcli extension tool list --format json
 onetcli agent policy show --format json
 ```
 
 MVP 验收标准：
 
 1. `onetcli` 无参数仍启动桌面应用。
-2. CLI 命令不初始化 GPUI。
-3. 数据库和 SSH 命令可以复用已保存连接。
-4. JSON 输出和错误 envelope 稳定。
-5. `ssh shell` 可在真实 TTY 下交互，并在退出后恢复终端状态。
-6. agent mode 默认不执行写操作。
-7. CLI host 随主包发布，未安装扩展时核心命令仍可用。
-8. 记录 release 二进制和安装包体积基线，确认 CLI host 增量可接受。
+2. CLI tool 调用不初始化 GPUI。
+3. `onetcli tool call db.query ...` 和 `onetcli db query ...` 调用同一个 handler。
+4. 数据库和 SSH tool 可以复用已保存连接。
+5. JSON 输出、ToolResult 和错误 envelope 稳定。
+6. `ssh shell` 可在真实 TTY 下交互，并在退出后恢复终端状态。
+7. agent mode 默认不执行写操作。
+8. Tool Runtime 和 CLI host 随主包发布，未安装扩展时核心工具仍可用。
+9. 记录 release 二进制和安装包体积基线，确认 Tool Runtime + CLI host 增量可接受。
+10. `public_mcp` 的 registry 迁移路径明确：MCP adapter 能从统一 registry 暴露
+    至少一个只读 tool。
 
 ## 扩展化阶段
 
 第二阶段实现：
 
-1. `ContributesManifest` 增加 `cli` 和 `skills` 字段。
-2. `ExtensionRuntimeCatalog` 加载 installed composite extensions 的 CLI
+1. `ContributesManifest` 增加 `tools` 和 `skills` 字段。
+2. `ExtensionRuntimeCatalog` 加载 installed composite extensions 的 tool
    contributions。
-3. `onetcli extension cli list` 展示扩展命令。
-4. `onetcli ext <extension-id> <command>` 调用扩展 handler。
-5. marketplace 安装包支持携带 CLI contribution 和 skill 文件。
+3. `onetcli extension tool list` 展示扩展工具。
+4. `onetcli ext <extension-id> <tool>` 调用扩展 tool handler。
+5. marketplace 安装包支持携带 tool contribution 和 skill 文件。
+6. function calling adapter 从 `ToolDescriptor` 导出函数 schema。
 
 第三阶段实现：
 
 1. agent policy UI 和 CLI。
 2. 扩展短路径冲突解析。
 3. transcript 和审计查询。
-4. MCP server 复用同一套 `crates/cli` service contract。
+4. MCP server 复用同一套 `crates/tool_runtime` contract。
+5. `public_mcp` 旧工具名提供 alias，并逐步迁移到统一 tool id。
 
 ## 方案取舍
 
-### 方案 A：所有 CLI 和第三方命令都内置
+### 方案 A：所有 CLI、function calling、MCP adapter 和第三方工具都各自实现
 
-优点：实现最快，安全边界清晰。
+优点：局部实现最快。
 
-缺点：扩展能力差，每个新命令都要改主程序，长期会让主包体积和发布节奏失控。
+缺点：数据库、SSH、权限、审计、错误结构和 schema 会重复实现，长期不可维护。
 
-### 方案 B：新增独立 CLI extension kind
+### 方案 B：以 CLI 为核心，MCP/function calling 通过执行 CLI 子进程复用
 
-优点：语义清晰，安装目录独立。
+优点：短期接入成本低，外部 agent 能快速调用。
 
-缺点：会复制 composite extension 的安装、权限、marketplace 和 runtime 逻辑。
+缺点：多一层进程开销，取消/超时/streaming/approval 难统一，错误结构容易丢失，
+内部 function calling 也会被迫走 shell。
 
-### 方案 C：CLI host 放主包，Composite extension 增加 CLI contribution
+### 方案 C：Tool Runtime 放主包，CLI/function calling/MCP 都是 adapter
 
-优点：核心 agent 能力开箱即用；CLI host 体积增量可控；扩展可同时贡献 UI、
-命令、skill、runtime；第三方能力不需要进入主二进制。
+优点：核心 agent 能力开箱即用；Tool Runtime 体积增量可控；CLI、function
+calling、MCP、GUI/workflow 复用同一套能力；扩展可同时贡献 tool、UI、skill、
+runtime；第三方能力不需要进入主二进制。
 
-缺点：manifest schema 需要扩展，catalog 需要识别 CLI contribution；主包
-需要维护一个稳定 CLI host contract。
+缺点：需要先定义稳定 ToolDescriptor/ToolHandler/ToolResult；`public_mcp`
+现有 registry 需要迁移成 adapter。
 
-推荐方案是 C。CLI host 和核心数据库、SSH、SFTP 命令随主包发布，第三方和
-高级能力通过 composite extension 贡献 CLI 命令安装。
+推荐方案是 C。Tool Runtime、CLI host 和核心数据库、SSH、SFTP 工具随主包发布，
+第三方和高级能力通过 composite extension 贡献 tools，并选择暴露到 CLI、
+function calling 或 MCP。
 
 ## 开放问题
 
 1. 第一版 agent policy 是连接标签还是独立 policy 文件。
 2. `ssh shell` 是否默认允许 agent 使用，还是需要用户显式 allow。
 3. 扩展携带的 skill 是否由 OnetCli 自动安装到 Codex，还是只导出给用户安装。
-4. 扩展 runtime 的 CLI handler 优先支持 IPC 还是 Wasm component。
+4. 扩展 runtime 的 tool handler 优先支持 IPC 还是 Wasm component。
 5. Windows 是否需要在后续阶段拆分 `onetcli` 和 `onetcli-gui`，还是通过
    subsystem/launcher 策略保持单主包体验。
+6. `public_mcp` 已有工具名是否保留永久 alias，还是设定废弃周期。
+7. Function calling adapter 是只给主应用内置 agent 使用，还是也导出给外部 SDK。
 
 ## 建议决策
 
-1. CLI host 与核心命令放入主包，不把 CLI 本身做成扩展。
-2. 采用 composite extension CLI contribution，不新增独立扩展 kind。
-3. 第一阶段先实现核心内置命令，保证 skill 能马上调用数据库和 SSH。
-4. `ssh exec` 作为 skill 默认入口，`ssh shell` 作为 Codex/human 的 PTY 入口。
-5. Agent mode 下默认只读，写操作和交互式 shell 由 policy 显式放开。
-6. 所有输出先稳定 JSON envelope，再补 table/text。
-7. release 前记录体积基线，确保 CLI host 增量没有异常依赖引入。
+1. Tool Runtime、CLI host 与核心工具放入主包，不把 CLI 本身做成扩展。
+2. CLI、function calling、MCP server 都作为 adapter 调用同一个 `ToolRegistry`。
+3. `public_mcp` 参考实现继续保留 loopback/discovery/approval/stdio bridge，但
+   tool registry 下沉到 `crates/tool_runtime`。
+4. 采用 composite extension `tools` contribution，不新增独立扩展 kind。
+5. 第一阶段先实现核心内置工具，保证 skill 能马上调用数据库和 SSH。
+6. `ssh exec` 作为 skill/function calling/MCP 默认入口，`ssh shell` 作为
+   Codex/human 的 CLI PTY 入口。
+7. Agent mode 下默认只读，写操作和交互式 shell 由 policy 显式放开。
+8. 所有输出先稳定 ToolResult/JSON envelope，再补 CLI table/text。
+9. release 前记录体积基线，确保 Tool Runtime + CLI host 增量没有异常依赖引入。
