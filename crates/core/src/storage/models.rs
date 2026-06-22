@@ -127,7 +127,7 @@ impl ConnectionType {
             ConnectionType::MongoDB => IconName::MongoDB,
             ConnectionType::ChatDB => IconName::AI,
             ConnectionType::Serial => IconName::SerialPort,
-            ConnectionType::PortForwarding => IconName::Network,
+            ConnectionType::PortForwarding => IconName::PortForwardingColor,
             ConnectionType::Rdp => IconName::Rdp,
             ConnectionType::Vnc => IconName::Vnc,
         }

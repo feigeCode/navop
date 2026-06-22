@@ -156,7 +156,7 @@ impl NewConnectionKind {
             Self::Redis => IconName::Redis.color().with_size(px(40.0)),
             Self::MongoDB => IconName::MongoDB.color().with_size(px(40.0)),
             Self::Serial => IconName::SerialPort.color().with_size(px(40.0)),
-            Self::PortForwarding => IconName::Network.color().with_size(px(40.0)),
+            Self::PortForwarding => IconName::PortForwardingColor.color().with_size(px(40.0)),
             Self::Database(db_type) => db_type.as_icon().with_size(px(40.0)),
             Self::ExternalDatabase {
                 icon_asset_path,

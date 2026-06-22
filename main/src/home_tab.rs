@@ -57,11 +57,11 @@ use crate::home::home_strategy::build_connection_open_strategy;
 use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
 use crate::new_connection::NewConnectionWindow;
+use crate::setting_tab::GlobalCurrentUser;
+use crate::user_avatar::render_user_avatar;
 use remote_desktop_view::remote_desktop_form::{
     RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
 };
-use crate::setting_tab::GlobalCurrentUser;
-use crate::user_avatar::render_user_avatar;
 
 actions!(home_tab, [OpenConnectionQuickOpen, NewConnectionShortcut]);
 
@@ -3115,7 +3115,7 @@ impl HomePage {
                                     .color()
                                     .with_size(px(40.0))
                                     .text_color(gpui::white()),
-                                ConnectionType::PortForwarding => IconName::Network
+                                ConnectionType::PortForwarding => IconName::PortForwardingColor
                                     .color()
                                     .with_size(px(40.0))
                                     .text_color(gpui::white()),
