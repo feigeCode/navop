@@ -5,7 +5,7 @@
 
   <h1>OnetCli</h1>
 
-  <p><strong>数据库、SSH、SFTP、终端、远程桌面、监控与 AI 一体化的原生桌面工作台。</strong></p>
+  <p><strong>数据库、SSH、SFTP、端口转发、终端、远程桌面、监控与 AI 一体化的原生桌面工作台。</strong></p>
 
   <p>
     基于 <a href="https://gpui.rs">GPUI</a> 构建 · Rust 原生桌面应用 · GPU 加速渲染
@@ -37,6 +37,7 @@
     <img src="https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white" alt="MongoDB" />
     <img src="https://img.shields.io/badge/SSH-111827?logo=gnubash&logoColor=white" alt="SSH" />
     <img src="https://img.shields.io/badge/SFTP-2563EB?logo=filezilla&logoColor=white" alt="SFTP" />
+    <img src="https://img.shields.io/badge/Port%20Forwarding-0F766E" alt="端口转发" />
     <img src="https://img.shields.io/badge/RDP-0078D4" alt="RDP" />
     <img src="https://img.shields.io/badge/VNC-5C2D91" alt="VNC" />
   </p>
@@ -55,6 +56,13 @@
   </p>
 </div>
 
+## v0.6.5 更新亮点
+
+- 新增端口转发连接，支持 SSH 本地端口转发和动态 SOCKS 隧道。
+- 端口转发可从「新建连接」中创建，支持保存、编辑、搜索、工作区/团队归属和云同步配置。
+- 修复 Windows 上启动数据库 IPC 插件、RDP helper、VNC helper 时弹出 `cmd` 终端窗口的问题。
+- 更新远程桌面、扩展市场数据库驱动相关截图与文档说明。
+
 ## 为什么选择 OnetCli？
 
 <table>
@@ -65,7 +73,7 @@
     </td>
     <td width="50%">
       <h3>日常运维集中到一个工作区</h3>
-      <p>数据库管理、SSH 终端、SFTP 文件传输、串口连接、本地终端以及远程桌面（RDP/VNC）都在同一个应用中完成。</p>
+      <p>数据库管理、SSH 终端、SFTP 文件传输、端口转发、串口连接、本地终端以及远程桌面（RDP/VNC）都在同一个应用中完成。</p>
     </td>
   </tr>
   <tr>
@@ -96,9 +104,13 @@
 
 专用 Redis 视图支持键浏览、值查看与集群连接。MongoDB 视图支持集合浏览、文档查看与查询。
 
-### SSH、SFTP、串口与终端
+### SSH、SFTP、端口转发、串口与终端
 
-集成 SSH 会话、SFTP 文件管理、串口连接和本地终端，支持多标签页同时操作。终端内置 SFTP 侧边栏，可直接拖拽上传文件，也支持 SFTP 路径收藏和常用目录快速跳转。
+集成 SSH 会话、SFTP 文件管理、端口转发、串口连接和本地终端，支持多标签页同时操作。终端内置 SFTP 侧边栏，可直接拖拽上传文件，也支持 SFTP 路径收藏和常用目录快速跳转。
+
+### 端口转发
+
+基于已有 SSH/SFTP 服务器创建可复用的 SSH 端口转发连接。OnetCli 支持用于数据库、内部 HTTP 服务等场景的本地端口转发，也支持动态 SOCKS 隧道，方便把本地工具流量经远程主机转发。
 
 ### 远程文件编辑
 
@@ -172,9 +184,10 @@ sudo xattr -rd com.apple.quarantine /Applications/OnetCli.app
 
 1. 打开 OnetCli，创建第一个数据库连接。
 2. 添加 SSH 主机并打开远程终端。
-3. 打开 SFTP 文件管理，浏览远程目录或传输文件。
-4. 尝试 Redis Key 浏览或 MongoDB 文档浏览。
-5. 在 SQL 或数据分析工作流中使用 AI 助手。
+3. 基于该 SSH 主机创建端口转发连接，用于本地隧道或 SOCKS 代理。
+4. 打开 SFTP 文件管理，浏览远程目录或传输文件。
+5. 尝试 Redis Key 浏览或 MongoDB 文档浏览。
+6. 在 SQL 或数据分析工作流中使用 AI 助手。
 
 ## 从源码构建
 
@@ -230,7 +243,7 @@ cargo fmt --check
 | 数据库驱动 | tokio-postgres, mysql_async, rusqlite, tiberius, oracle, clickhouse, duckdb |
 | 数据库扩展 | 达梦 DM、金仓 KingbaseES、GBase 8s、OceanBase、openGauss、Apache IoTDB、纯 Go Oracle |
 | Redis / MongoDB | redis, mongodb |
-| SSH / SFTP | russh, russh-sftp |
+| SSH / SFTP / 端口转发 | russh, russh-sftp, 基于 SSH direct-tcpip 的 SOCKS5 |
 | 远程桌面 | 经扩展运行时加载的 RDP / VNC provider |
 | 终端仿真 | alacritty_terminal |
 | 文本编辑 | ropey, tree-sitter, sqlparser |

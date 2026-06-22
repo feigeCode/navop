@@ -5,7 +5,7 @@
 
   <h1>OnetCli</h1>
 
-  <p><strong>Native all-in-one workspace for databases, SSH, SFTP, terminals, remote desktop, monitoring, and AI.</strong></p>
+  <p><strong>Native all-in-one workspace for databases, SSH, SFTP, port forwarding, terminals, remote desktop, monitoring, and AI.</strong></p>
 
   <p>
     Built with <a href="https://gpui.rs">GPUI</a> · Rust native desktop · GPU-accelerated rendering
@@ -37,6 +37,7 @@
     <img src="https://img.shields.io/badge/MongoDB-47A248?logo=mongodb&logoColor=white" alt="MongoDB" />
     <img src="https://img.shields.io/badge/SSH-111827?logo=gnubash&logoColor=white" alt="SSH" />
     <img src="https://img.shields.io/badge/SFTP-2563EB?logo=filezilla&logoColor=white" alt="SFTP" />
+    <img src="https://img.shields.io/badge/Port%20Forwarding-0F766E" alt="Port Forwarding" />
     <img src="https://img.shields.io/badge/RDP-0078D4" alt="RDP" />
     <img src="https://img.shields.io/badge/VNC-5C2D91" alt="VNC" />
   </p>
@@ -55,6 +56,13 @@
   </p>
 </div>
 
+## What's New in v0.6.5
+
+- Added Port Forwarding connections for SSH local forwarding and dynamic SOCKS tunnels.
+- Port forwarding entries can be created from the New Connection flow, saved, edited, searched, assigned to workspaces/teams, and synced like other connections.
+- Fixed visible `cmd` windows on Windows when launching database IPC plugins, RDP helpers, and VNC helpers.
+- Updated screenshots and documentation for remote desktop and extension marketplace database drivers.
+
 ## Why OnetCli?
 
 <table>
@@ -65,7 +73,7 @@
     </td>
     <td width="50%">
       <h3>One workspace for daily ops</h3>
-      <p>Database management, SSH terminals, SFTP file transfer, serial connections, local terminals, and remote desktop (RDP/VNC) live in one app.</p>
+      <p>Database management, SSH terminals, SFTP file transfer, port forwarding, serial connections, local terminals, and remote desktop (RDP/VNC) live in one app.</p>
     </td>
   </tr>
   <tr>
@@ -96,9 +104,13 @@ Work with a SQL editor backed by syntax tooling, schema-aware browsing, table st
 
 Use the dedicated Redis viewer for key browsing, value inspection, and cluster connections. Explore MongoDB collections, inspect documents, and run queries from the same workspace.
 
-### SSH, SFTP, Serial & Terminal
+### SSH, SFTP, Port Forwarding, Serial & Terminal
 
-Open integrated SSH sessions, manage SFTP files, connect to serial devices, and keep local terminals in multi-tab sessions. The terminal includes an SFTP sidebar with drag-and-drop upload support, path favorites, and quick jumps to frequently used directories.
+Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and keep local terminals in multi-tab sessions. The terminal includes an SFTP sidebar with drag-and-drop upload support, path favorites, and quick jumps to frequently used directories.
+
+### Port Forwarding
+
+Create reusable SSH port forwarding connections from existing SSH/SFTP servers. OnetCli supports local forwarding for services such as databases or internal HTTP endpoints, plus dynamic SOCKS tunnels for routing tools through a remote host.
 
 ### Remote File Editing
 
@@ -172,9 +184,10 @@ The built-in Oracle driver requires [Oracle Instant Client](https://www.oracle.c
 
 1. Open OnetCli and create your first database connection.
 2. Add an SSH host and open a remote terminal.
-3. Open SFTP file management to browse remote directories or transfer files.
-4. Try Redis key browsing or MongoDB document browsing.
-5. Use the AI assistant in SQL or data analysis workflows.
+3. Create a port forwarding connection from that SSH host when you need a local tunnel or SOCKS proxy.
+4. Open SFTP file management to browse remote directories or transfer files.
+5. Try Redis key browsing or MongoDB document browsing.
+6. Use the AI assistant in SQL or data analysis workflows.
 
 ## Build From Source
 
@@ -230,7 +243,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 | Databases | tokio-postgres, mysql_async, rusqlite, tiberius, oracle, clickhouse, duckdb |
 | Database extensions | Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, pure-Go Oracle |
 | Redis / MongoDB | redis, mongodb |
-| SSH / SFTP | russh, russh-sftp |
+| SSH / SFTP / Port Forwarding | russh, russh-sftp, SOCKS5 over SSH direct-tcpip |
 | Remote Desktop | RDP & VNC providers via extension runtime |
 | Terminal | alacritty_terminal |
 | Text Editing | ropey, tree-sitter, sqlparser |
