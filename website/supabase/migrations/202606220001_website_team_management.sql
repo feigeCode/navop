@@ -1,3 +1,32 @@
+create extension if not exists pgcrypto;
+
+create table if not exists public.teams (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  owner_id uuid not null references auth.users(id) on delete cascade,
+  description text,
+  key_verification text,
+  key_version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.team_members (
+  id uuid primary key default gen_random_uuid(),
+  team_id uuid not null references public.teams(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  role text not null default 'member',
+  joined_at timestamptz not null default now()
+);
+
+alter table public.teams add column if not exists description text;
+alter table public.teams add column if not exists key_verification text;
+alter table public.teams add column if not exists key_version integer not null default 1;
+alter table public.teams add column if not exists created_at timestamptz not null default now();
+alter table public.teams add column if not exists updated_at timestamptz not null default now();
+alter table public.team_members add column if not exists role text not null default 'member';
+alter table public.team_members add column if not exists joined_at timestamptz not null default now();
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text,

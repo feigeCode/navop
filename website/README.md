@@ -18,15 +18,37 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Required environment variables:
+Local Supabase is the default. Start it before opening the dashboard:
 
 ```bash
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-NEXT_PUBLIC_SITE_URL=http://localhost:3000
+supabase start
+supabase db push
 ```
 
+Environment variables are only needed when you want to override the local stack:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<local-or-remote-anon-key>
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
+ONETCLI_ONE_HUB_AUTH_PATH=
+```
+
+Formal login uses Supabase Auth in the website. During local development only, the server client can also read the desktop app session from:
+
+```text
+~/Library/Application Support/one-hub/auth.json
+```
+
+That shortcut is only for checking the dashboard/team-management flow against a local Supabase session. It is ignored when `NODE_ENV=production`, and you can disable it locally with `ONETCLI_ENABLE_ONE_HUB_AUTH=0`. Set `ONETCLI_ONE_HUB_AUTH_PATH` to point at a different auth file. The token file is read only on the server side and must never be committed.
+
 ## Supabase Setup
+
+The local Supabase config lives in:
+
+```text
+supabase/config.toml
+```
 
 Apply the migration in:
 
@@ -34,21 +56,18 @@ Apply the migration in:
 supabase/migrations/202606220001_website_team_management.sql
 ```
 
-The migration assumes the existing OnetCli Supabase project already has:
+The migration creates or updates:
 
 - `teams`
 - `team_members`
-- `sync_data`
-- Supabase Auth enabled
-
-It adds:
-
 - `profiles`
 - `team_invitations`
 - `audit_events`
 - `admin` support in `team_members.role`
 - RPC helpers for creating teams, inviting members, updating roles, and removing members
 - RLS policies for profiles, invitations, and audit events
+
+It assumes Supabase Auth is enabled. The desktop sync table `sync_data` remains owned by the desktop sync schema.
 
 ## Migration Out Of This Worktree
 
