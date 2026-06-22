@@ -22,4 +22,9 @@ describe("team management migration", () => {
     expect(migration).toContain("key_version integer");
     expect(migration).toContain("joined_at timestamptz");
   });
+
+  test("provides an RPC for revoking pending invitations", () => {
+    expect(migration).toContain("create or replace function public.revoke_team_invitation");
+    expect(migration).toContain("set revoked_at = now()");
+  });
 });

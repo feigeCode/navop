@@ -259,6 +259,33 @@ begin
 end;
 $$;
 
+create or replace function public.revoke_team_invitation(p_invitation_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_team_id uuid;
+begin
+  select team_id into v_team_id
+  from public.team_invitations
+  where id = p_invitation_id and accepted_at is null and revoked_at is null;
+
+  if v_team_id is null then
+    raise exception 'Invitation not found';
+  end if;
+
+  if not public.can_manage_team_members(v_team_id) then
+    raise exception 'Insufficient team permissions';
+  end if;
+
+  update public.team_invitations set revoked_at = now() where id = p_invitation_id;
+  insert into public.audit_events (team_id, actor_id, event_type, target_id)
+  values (v_team_id, auth.uid(), 'invitation.revoked', p_invitation_id);
+end;
+$$;
+
 alter table public.profiles enable row level security;
 alter table public.teams enable row level security;
 alter table public.team_members enable row level security;

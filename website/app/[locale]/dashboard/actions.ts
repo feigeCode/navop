@@ -82,3 +82,18 @@ export async function removeMemberAction(formData: FormData) {
   }
   revalidatePath(localePath(locale, `/dashboard/teams/${teamId}`));
 }
+
+export async function revokeInvitationAction(formData: FormData) {
+  const locale = readLocale(formData);
+  const teamId = String(formData.get("teamId") ?? "");
+  const invitationId = String(formData.get("invitationId") ?? "");
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase.rpc("revoke_team_invitation", {
+    p_invitation_id: invitationId
+  });
+
+  if (error) {
+    redirect(`${localePath(locale, `/dashboard/teams/${teamId}`)}?error=${encodeURIComponent(error.message)}`);
+  }
+  revalidatePath(localePath(locale, `/dashboard/teams/${teamId}`));
+}

@@ -14,11 +14,12 @@ This directory is intentionally self-contained so it can be copied into a new re
 
 ```bash
 npm install
-cp .env.example .env.local
 npm run dev
 ```
 
-Local Supabase is the default. Start it before opening the dashboard:
+When this directory is run inside the OnetCli monorepo, `next.config.mjs` also loads the nearest ancestor `.env.local`, so the root-level `SUPABASE_URL` and `SUPABASE_ANON_KEY` can be reused. If the website is moved into a standalone repository, copy `.env.example` to `.env.local`.
+
+Local Supabase is the fallback when no Supabase environment variables are configured. Start it before opening the dashboard:
 
 ```bash
 supabase start

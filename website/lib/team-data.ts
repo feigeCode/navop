@@ -22,6 +22,14 @@ export type TeamMemberView = {
   } | null;
 };
 
+export type TeamInvitationView = {
+  id: string;
+  email: string;
+  role: TeamRole;
+  expires_at: string | null;
+  created_at: string | null;
+};
+
 type MembershipRow = {
   role: TeamRole;
   teams: {
@@ -45,6 +53,14 @@ type ProfileRow = {
   email: string | null;
   display_name: string | null;
   avatar_url: string | null;
+};
+
+type InvitationRow = {
+  id: string;
+  email: string;
+  role: TeamRole;
+  expires_at: string | null;
+  created_at: string | null;
 };
 
 export async function listCurrentUserTeams(userId: string) {
@@ -92,4 +108,21 @@ export async function getTeamMembers(teamId: string) {
     joined_at: row.joined_at,
     profile: profileMap.get(row.user_id) ?? null
   })) as TeamMemberView[];
+}
+
+export async function getPendingTeamInvitations(teamId: string) {
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("team_invitations")
+    .select("id,email,role,expires_at,created_at")
+    .eq("team_id", teamId)
+    .is("accepted_at", null)
+    .is("revoked_at", null)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []) as InvitationRow[];
 }

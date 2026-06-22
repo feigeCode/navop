@@ -258,6 +258,13 @@ textarea {
   color: var(--danger);
 }
 
+.button:disabled,
+.select:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  transform: none;
+}
+
 .button.subtle {
   background: var(--surface-muted);
 }

@@ -81,6 +81,19 @@
     "invite": "Invite member",
     "inviteEmail": "Member email",
     "role": "Role",
+    "save": "Save",
+    "remove": "Remove",
+    "pendingInvitations": "Pending invitations",
+    "noPendingInvitations": "No pending invitations.",
+    "expiresAt": "Expires",
+    "revoke": "Revoke",
+    "roleGuideTitle": "Role permissions",
+    "roleDescriptions": {
+      "owner": "Owner can manage the team, members, admins, and owners.",
+      "admin": "Admin can invite members, manage regular members, and manage shared connections.",
+      "member": "Member can use team shared connections and workspace resources."
+    },
+    "noManagePermission": "This account can view members, but cannot manage invitations or roles.",
     "empty": "No teams yet.",
     "audit": "Audit events"
   }
