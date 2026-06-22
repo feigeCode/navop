@@ -55,6 +55,7 @@ use crate::external_driver_display::external_driver_icon_for_config;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
 use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
+use crate::home::mcp_quick_toggle::mcp_quick_toggle_state;
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
 use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
@@ -2084,6 +2085,7 @@ impl HomePage {
 
     fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
+        let view_for_mcp_toggle = view.clone();
 
         let workspace_filter_open = self.workspace_filter_open;
         let workspace_filter =
@@ -2095,6 +2097,7 @@ impl HomePage {
         let has_master_key = crypto::has_master_key();
         let has_conflicts = !self.pending_conflicts.is_empty();
         let conflict_count = self.pending_conflicts.len();
+        let mcp_toggle = mcp_quick_toggle_state(crate::public_mcp_runtime::mcp_server_enabled(cx));
 
         h_flex()
             .gap_3()
@@ -2205,6 +2208,31 @@ impl HomePage {
                             .cleanable(true)
                             .w(px(240.0))
                             .bg(cx.theme().muted),
+                    )
+                    // MCP 快捷开关
+                    .child(
+                        Button::new("mcp-quick-toggle")
+                            .icon(IconName::Network)
+                            .label(t!(mcp_toggle.label_key).to_string())
+                            .ghost()
+                            .when(mcp_toggle.enabled, |button| button.success())
+                            .when(!mcp_toggle.enabled, |button| {
+                                button.text_color(cx.theme().muted_foreground)
+                            })
+                            .tooltip(t!(mcp_toggle.tooltip_key))
+                            .on_click(move |_, window, cx| {
+                                crate::public_mcp_runtime::set_mcp_server_enabled(
+                                    cx,
+                                    !mcp_toggle.enabled,
+                                );
+                                view_for_mcp_toggle.update(cx, |_this, cx| {
+                                    cx.notify();
+                                });
+                                window.push_notification(
+                                    t!(mcp_toggle.notification_key).to_string(),
+                                    cx,
+                                );
+                            }),
                     )
                     // 刷新按钮
                     .child(

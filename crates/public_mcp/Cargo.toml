@@ -1,0 +1,29 @@
+[package]
+name = "public_mcp"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "onetcli-public-mcp"
+path = "src/bin/onetcli_public_mcp.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+rand = { workspace = true }
+rmcp = { version = "1.7.0", features = ["server", "transport-async-rw"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "net", "process", "rt-multi-thread", "sync", "time"] }
+tool_runtime = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+futures = { workspace = true }
+tempfile = "3"
+
+[lints]
+workspace = true

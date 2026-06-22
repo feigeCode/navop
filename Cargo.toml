@@ -25,7 +25,9 @@ members = [
     "crates/extension-api",
     "crates/extension-component",
     "crates/extension-wasm",
+    "crates/tool_runtime",
     "crates/er_flow",
+    "crates/public_mcp",
     "crates/terminal",
     "crates/terminal_view",
     "crates/port_forwarding",
@@ -83,6 +85,8 @@ tracing = "0.1.41"
 
 
 reqwest_client = { path = "crates/reqwest_client" }
+public_mcp = { path = "crates/public_mcp" }
+tool_runtime = { path = "crates/tool_runtime" }
 db = { path = "crates/db" }
 db_view = { path = "crates/db_view" }
 redis_view = { path = "crates/redis_view" }

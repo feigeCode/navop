@@ -32,6 +32,7 @@ use crate::cd_completion::{
     CdCompletionQuery, build_cd_completion_suggestions, parse_cd_completion_query,
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
+use crate::public_mcp::{TerminalPublicMcpCommand, TerminalPublicMcpRegistration};
 use crate::settings::{
     GlobalTerminalLocalSettings, TerminalHighlightRule, TerminalSettings, TerminalSettingsEvent,
     current_settings, update_settings,
@@ -441,6 +442,7 @@ enum ResizingPanel {
 
 pub fn init(cx: &mut App) {
     crate::settings::init_settings(cx);
+    crate::public_mcp::init(cx);
     cx.bind_keys(init_keybindings(cx));
 }
 
@@ -766,6 +768,7 @@ pub struct TerminalView {
 
     scrollbar_metrics: Rc<RefCell<TerminalScrollbarMetrics>>,
     scrollbar_handle: TerminalScrollbarHandle,
+    public_mcp_registration: Option<TerminalPublicMcpRegistration>,
 }
 
 /// Mouse interaction state
@@ -873,6 +876,7 @@ impl TerminalView {
     }
 
     fn close_terminal_now(&mut self, cx: &mut Context<Self>) {
+        self.unregister_public_mcp_session(cx);
         self.release_active_connection(cx);
         self.terminal.read(cx).shutdown();
     }
@@ -1170,10 +1174,60 @@ impl TerminalView {
             view_bounds: Bounds::default(),
             scrollbar_metrics,
             scrollbar_handle,
+            public_mcp_registration: None,
         };
         let initial_settings = current_settings(cx);
         this.apply_settings_snapshot(&initial_settings, window, cx);
+        this.register_public_mcp_session(cx);
         this
+    }
+
+    fn register_public_mcp_session(&mut self, cx: &mut Context<Self>) {
+        let Some((registration, mut command_rx)) = ({
+            let terminal = self.terminal.read(cx);
+            crate::public_mcp::register_terminal(terminal, cx)
+        }) else {
+            return;
+        };
+
+        self.public_mcp_registration = Some(registration);
+        cx.spawn(async move |this, cx| {
+            while let Some(command) = command_rx.recv().await {
+                let _ = this.update(cx, |this, cx| {
+                    this.handle_public_mcp_command(command, cx);
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn refresh_public_mcp_session(&self, cx: &mut Context<Self>) {
+        let Some(registration) = &self.public_mcp_registration else {
+            return;
+        };
+        registration.refresh(self.terminal.read(cx));
+    }
+
+    fn unregister_public_mcp_session(&mut self, cx: &mut Context<Self>) {
+        if let Some(registration) = self.public_mcp_registration.take() {
+            registration.unregister(cx);
+        }
+    }
+
+    fn handle_public_mcp_command(
+        &mut self,
+        command: TerminalPublicMcpCommand,
+        cx: &mut Context<Self>,
+    ) {
+        match command {
+            TerminalPublicMcpCommand::VisibleText(sender) => {
+                let _ = sender.send(Ok(self.terminal.read(cx).visible_text()));
+            }
+            TerminalPublicMcpCommand::Write(data, sender) => {
+                self.terminal.read(cx).write_external_input(&data);
+                let _ = sender.send(Ok(()));
+            }
+        }
     }
 
     fn handle_terminal_settings_event(
@@ -1915,6 +1969,7 @@ impl TerminalView {
             }
             _ => {}
         }
+        self.refresh_public_mcp_session(cx);
 
         if should_reset_history_prompt_for_terminal_event(event) {
             self.dismiss_history_prompt();

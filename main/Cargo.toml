@@ -30,6 +30,8 @@ extension-runtime = { workspace = true }
 extension_view = { workspace = true }
 terminal = { workspace = true }
 terminal_view = { workspace = true }
+public_mcp = { workspace = true }
+tool_runtime = { workspace = true }
 port_forwarding = { workspace = true }
 port_forwarding_view = { workspace = true }
 sftp_view = { workspace = true }
