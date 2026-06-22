@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use anyhow::Result;
+use chrono::{DateTime, FixedOffset};
 use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use rust_i18n::t;
@@ -61,11 +62,405 @@ pub const ORACLE_DATA_TYPES: &[(&str, &str)] = &[
 pub struct OraclePlugin;
 
 static ORACLE_UI_MANIFEST: LazyLock<DatabaseUiManifest> = LazyLock::new(build_oracle_ui_manifest);
+const ORACLE_SQL_LITERAL_CHUNK_BYTES: usize = 3000;
+const ORACLE_DATE_FORMAT: &str = "YYYY-MM-DD";
+const ORACLE_DATETIME_FORMAT: &str = "YYYY-MM-DD HH24:MI:SS";
+const ORACLE_DATETIME_FRACTION_FORMAT: &str = "YYYY-MM-DD HH24:MI:SS.FF6";
+const ORACLE_DATETIME_TZ_FORMAT: &str = "YYYY-MM-DD HH24:MI:SS TZH:TZM";
+const ORACLE_DATETIME_TZ_FRACTION_FORMAT: &str = "YYYY-MM-DD HH24:MI:SS.FF6 TZH:TZM";
 
 impl OraclePlugin {
     pub fn new() -> Self {
         Self
     }
+
+    fn table_change_value_expr(&self, value: &str, column: Option<&ColumnInfo>) -> String {
+        if value == "NULL" || value.is_empty() {
+            return "NULL".to_string();
+        }
+
+        if let Some(expr) = oracle_temporal_value_expr(value, column) {
+            return expr;
+        }
+
+        if is_oracle_lob_column(column) {
+            return oracle_lob_literal_expr(value, column);
+        }
+
+        if escaped_sql_literal_len(value) > ORACLE_SQL_LITERAL_CHUNK_BYTES {
+            return oracle_chunked_string_literal_expr(value);
+        }
+
+        oracle_string_literal(value)
+    }
+
+    fn build_oracle_table_change_sql(
+        &self,
+        request: &TableSaveRequest,
+        change: &TableRowChange,
+    ) -> Option<String> {
+        match change {
+            TableRowChange::Added { .. } => self.build_oracle_added_sql(request, change),
+            TableRowChange::Updated { .. } => self.build_oracle_updated_sql(request, change),
+            TableRowChange::Deleted { .. } => self.build_oracle_deleted_sql(request, change),
+        }
+    }
+
+    fn oracle_table_ident(&self, request: &TableSaveRequest) -> String {
+        self.format_table_reference(&request.database, request.schema.as_deref(), &request.table)
+    }
+
+    fn build_oracle_added_sql(
+        &self,
+        request: &TableSaveRequest,
+        change: &TableRowChange,
+    ) -> Option<String> {
+        let TableRowChange::Added { data } = change else {
+            return None;
+        };
+        if data.is_empty() {
+            return None;
+        }
+
+        let columns: Vec<String> = request
+            .columns
+            .iter()
+            .map(|column| self.quote_identifier(&column.name))
+            .collect();
+        let values: Vec<String> = data
+            .iter()
+            .enumerate()
+            .map(|(ix, value)| self.table_change_value_expr(value, request.columns.get(ix)))
+            .collect();
+
+        Some(format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            self.oracle_table_ident(request),
+            columns.join(", "),
+            values.join(", ")
+        ))
+    }
+
+    fn build_oracle_updated_sql(
+        &self,
+        request: &TableSaveRequest,
+        change: &TableRowChange,
+    ) -> Option<String> {
+        let TableRowChange::Updated {
+            original_data,
+            changes,
+            rowid,
+        } = change
+        else {
+            return None;
+        };
+        if changes.is_empty() {
+            return None;
+        }
+
+        let set_clause = self.oracle_update_set_clause(request, changes);
+        if let Some(rid) = rowid {
+            return Some(format!(
+                "UPDATE {} SET {} WHERE {} = {}",
+                self.oracle_table_ident(request),
+                set_clause.join(", "),
+                self.rowid_column_name(),
+                oracle_string_literal(rid)
+            ));
+        }
+
+        let (where_clause, limit_clause) =
+            self.build_where_and_limit_clause(request, original_data);
+        Some(format!(
+            "UPDATE {} SET {}{}{}{}",
+            self.oracle_table_ident(request),
+            set_clause.join(", "),
+            if where_clause.is_empty() {
+                ""
+            } else {
+                " WHERE "
+            },
+            where_clause,
+            limit_clause
+        ))
+    }
+
+    fn oracle_update_set_clause(
+        &self,
+        request: &TableSaveRequest,
+        changes: &[TableCellChange],
+    ) -> Vec<String> {
+        changes
+            .iter()
+            .map(|change| {
+                let column_name = self.oracle_change_column_name(request, change);
+                let ident = self.quote_identifier(&column_name);
+                let value = self.table_change_value_expr(
+                    &change.new_value,
+                    request.columns.get(change.column_index),
+                );
+                format!("{} = {}", ident, value)
+            })
+            .collect()
+    }
+
+    fn oracle_change_column_name(
+        &self,
+        request: &TableSaveRequest,
+        change: &TableCellChange,
+    ) -> String {
+        if !change.column_name.is_empty() {
+            return change.column_name.clone();
+        }
+
+        request
+            .columns
+            .get(change.column_index)
+            .map(|column| column.name.clone())
+            .unwrap_or_default()
+    }
+
+    fn build_oracle_deleted_sql(
+        &self,
+        request: &TableSaveRequest,
+        change: &TableRowChange,
+    ) -> Option<String> {
+        let TableRowChange::Deleted {
+            original_data,
+            rowid,
+        } = change
+        else {
+            return None;
+        };
+
+        if let Some(rid) = rowid {
+            return Some(format!(
+                "DELETE FROM {} WHERE {} = {}",
+                self.oracle_table_ident(request),
+                self.rowid_column_name(),
+                oracle_string_literal(rid)
+            ));
+        }
+
+        let (where_clause, limit_clause) =
+            self.build_where_and_limit_clause(request, original_data);
+        Some(format!(
+            "DELETE FROM {}{}{}{}",
+            self.oracle_table_ident(request),
+            if where_clause.is_empty() {
+                ""
+            } else {
+                " WHERE "
+            },
+            where_clause,
+            limit_clause
+        ))
+    }
+}
+
+fn is_oracle_lob_column(column: Option<&ColumnInfo>) -> bool {
+    column
+        .map(|column| {
+            let data_type = column.data_type.to_ascii_uppercase();
+            data_type.contains("CLOB") || data_type.contains("NCLOB")
+        })
+        .unwrap_or(false)
+}
+
+#[derive(Clone, Copy)]
+enum OracleTemporalKind {
+    Date,
+    Timestamp,
+    TimestampTz,
+}
+
+fn oracle_temporal_value_expr(value: &str, column: Option<&ColumnInfo>) -> Option<String> {
+    let kind = oracle_temporal_kind(column)?;
+    let value = normalize_oracle_temporal_value(value);
+    let has_time = value.contains(':');
+    let has_fraction = value.contains('.');
+    let has_timezone = oracle_temporal_has_timezone(&value);
+
+    match kind {
+        OracleTemporalKind::Date if has_timezone => Some(format!(
+            "CAST({} AS DATE)",
+            oracle_timestamp_tz_expr(&value)
+        )),
+        OracleTemporalKind::Date if has_fraction => {
+            Some(format!("CAST({} AS DATE)", oracle_timestamp_expr(&value)))
+        }
+        OracleTemporalKind::Date if has_time => Some(oracle_date_expr(&value, true)),
+        OracleTemporalKind::Date => Some(oracle_date_expr(&value, false)),
+        OracleTemporalKind::Timestamp if has_timezone => Some(format!(
+            "CAST({} AS TIMESTAMP)",
+            oracle_timestamp_tz_expr(&value)
+        )),
+        OracleTemporalKind::Timestamp => Some(oracle_timestamp_expr(&value)),
+        OracleTemporalKind::TimestampTz if has_timezone => Some(oracle_timestamp_tz_expr(&value)),
+        OracleTemporalKind::TimestampTz => Some(oracle_timestamp_expr(&value)),
+    }
+}
+
+fn oracle_temporal_kind(column: Option<&ColumnInfo>) -> Option<OracleTemporalKind> {
+    let data_type = column?.data_type.to_ascii_uppercase();
+    if data_type.contains("TIMESTAMP WITH TIME ZONE")
+        || data_type.contains("TIMESTAMP WITH LOCAL TIME ZONE")
+    {
+        return Some(OracleTemporalKind::TimestampTz);
+    }
+    if data_type.contains("TIMESTAMP") {
+        return Some(OracleTemporalKind::Timestamp);
+    }
+    if data_type.trim() == "DATE" {
+        return Some(OracleTemporalKind::Date);
+    }
+    None
+}
+
+fn normalize_oracle_temporal_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if let Ok(datetime) = DateTime::parse_from_rfc3339(trimmed) {
+        return format_oracle_offset_datetime(datetime);
+    }
+
+    let normalized = trimmed.replace('T', " ");
+    match normalized.strip_suffix('Z') {
+        Some(prefix) => format!("{} +00:00", prefix.trim_end()),
+        None => normalized,
+    }
+}
+
+fn format_oracle_offset_datetime(value: DateTime<FixedOffset>) -> String {
+    let micros = value.timestamp_subsec_micros();
+    let datetime = if micros == 0 {
+        value.format("%Y-%m-%d %H:%M:%S").to_string()
+    } else {
+        format!("{}.{:06}", value.format("%Y-%m-%d %H:%M:%S"), micros)
+    };
+    format!("{} {}", datetime, value.format("%:z"))
+}
+
+fn oracle_temporal_has_timezone(value: &str) -> bool {
+    let value = value.trim();
+    if value.ends_with('Z') {
+        return true;
+    }
+    if value.len() < 6 {
+        return false;
+    }
+    let Some(suffix) = value.get(value.len().saturating_sub(6)..) else {
+        return false;
+    };
+    let mut chars = suffix.chars();
+    matches!(chars.next(), Some('+') | Some('-'))
+        && chars.nth(2) == Some(':')
+        && suffix[1..3].chars().all(|ch| ch.is_ascii_digit())
+        && suffix[4..6].chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn oracle_date_expr(value: &str, has_time: bool) -> String {
+    let format = if has_time {
+        ORACLE_DATETIME_FORMAT
+    } else {
+        ORACLE_DATE_FORMAT
+    };
+    format!(
+        "TO_DATE({}, {})",
+        oracle_string_literal(value),
+        oracle_string_literal(format)
+    )
+}
+
+fn oracle_timestamp_expr(value: &str) -> String {
+    let format = oracle_timestamp_format(value);
+    format!(
+        "TO_TIMESTAMP({}, {})",
+        oracle_string_literal(value),
+        oracle_string_literal(format)
+    )
+}
+
+fn oracle_timestamp_tz_expr(value: &str) -> String {
+    let format = if value.contains('.') {
+        ORACLE_DATETIME_TZ_FRACTION_FORMAT
+    } else {
+        ORACLE_DATETIME_TZ_FORMAT
+    };
+    format!(
+        "TO_TIMESTAMP_TZ({}, {})",
+        oracle_string_literal(value),
+        oracle_string_literal(format)
+    )
+}
+
+fn oracle_timestamp_format(value: &str) -> &'static str {
+    if value.contains('.') {
+        ORACLE_DATETIME_FRACTION_FORMAT
+    } else if value.contains(':') {
+        ORACLE_DATETIME_FORMAT
+    } else {
+        ORACLE_DATE_FORMAT
+    }
+}
+
+fn escaped_sql_literal_len(value: &str) -> usize {
+    value
+        .chars()
+        .map(|ch| if ch == '\'' { 2 } else { ch.len_utf8() })
+        .sum()
+}
+
+fn oracle_lob_literal_expr(value: &str, column: Option<&ColumnInfo>) -> String {
+    let chunks = split_oracle_literal_chunks(value, ORACLE_SQL_LITERAL_CHUNK_BYTES);
+    let constructor = if column
+        .map(|column| column.data_type.to_ascii_uppercase().contains("NCLOB"))
+        .unwrap_or(false)
+    {
+        "TO_NCLOB"
+    } else {
+        "TO_CLOB"
+    };
+
+    chunks
+        .into_iter()
+        .map(|chunk| format!("{}({})", constructor, oracle_string_literal(&chunk)))
+        .collect::<Vec<_>>()
+        .join(" || ")
+}
+
+fn oracle_chunked_string_literal_expr(value: &str) -> String {
+    split_oracle_literal_chunks(value, ORACLE_SQL_LITERAL_CHUNK_BYTES)
+        .into_iter()
+        .map(|chunk| oracle_string_literal(&chunk))
+        .collect::<Vec<_>>()
+        .join(" || ")
+}
+
+fn oracle_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn split_oracle_literal_chunks(value: &str, max_escaped_bytes: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0;
+
+    for ch in value.chars() {
+        let escaped_len = if ch == '\'' { 2 } else { ch.len_utf8() };
+        if current_len + escaped_len > max_escaped_bytes && !current.is_empty() {
+            chunks.push(current);
+            current = String::new();
+            current_len = 0;
+        }
+        current.push(ch);
+        current_len += escaped_len;
+    }
+
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
 }
 
 fn build_oracle_ui_manifest() -> DatabaseUiManifest {
@@ -521,6 +916,22 @@ impl DatabasePlugin for OraclePlugin {
                 self.quote_identifier(table)
             ),
             None => self.quote_identifier(table),
+        }
+    }
+
+    fn generate_table_changes_sql(&self, request: &TableSaveRequest) -> String {
+        let mut sql_statements = Vec::new();
+
+        for change in &request.changes {
+            if let Some(sql) = self.build_oracle_table_change_sql(request, change) {
+                sql_statements.push(sql);
+            }
+        }
+
+        if sql_statements.is_empty() {
+            t!("Error.no_changes").to_string()
+        } else {
+            sql_statements.join(";\n\n") + ";"
         }
     }
 
@@ -2127,11 +2538,27 @@ mod tests {
     use super::*;
     use crate::plugin::DatabasePlugin;
     use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
-    use crate::types::{ColumnDefinition, IndexDefinition, TableDesign, TableOptions};
+    use crate::types::{
+        ColumnDefinition, ColumnInfo, IndexDefinition, TableCellChange, TableDesign, TableOptions,
+        TableRowChange, TableSaveRequest,
+    };
     use std::collections::HashMap;
 
     fn create_plugin() -> OraclePlugin {
         OraclePlugin::new()
+    }
+
+    fn column_info(name: &str, data_type: &str, is_primary_key: bool) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            data_type: data_type.to_string(),
+            is_nullable: !is_primary_key,
+            is_primary_key,
+            default_value: None,
+            comment: None,
+            charset: None,
+            collation: None,
+        }
     }
 
     // ==================== Basic Plugin Info Tests ====================
@@ -2222,6 +2649,194 @@ mod tests {
             sql,
             "CREATE TABLE \"APP\".\"orders_bak\" AS SELECT * FROM \"APP\".\"orders\";"
         );
+    }
+
+    // ==================== Table Data Change SQL Tests ====================
+
+    #[test]
+    fn table_change_sql_chunks_long_clob_literals() {
+        let plugin = create_plugin();
+        let long_value = "a".repeat(ORACLE_SQL_LITERAL_CHUNK_BYTES + 50);
+        let request = TableSaveRequest {
+            database: String::new(),
+            schema: Some("APP".to_string()),
+            table: "DOCS".to_string(),
+            columns: vec![
+                column_info("ID", "NUMBER", true),
+                column_info("BODY", "CLOB", false),
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Updated {
+                original_data: vec!["1".to_string(), "old".to_string()],
+                changes: vec![TableCellChange {
+                    column_index: 1,
+                    column_name: "BODY".to_string(),
+                    old_value: "old".to_string(),
+                    new_value: long_value,
+                }],
+                rowid: Some("AAABBB".to_string()),
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert!(sql.contains("TO_CLOB('"));
+        assert!(sql.contains(" || TO_CLOB('"));
+        assert!(sql.contains("WHERE ROWID = 'AAABBB'"));
+    }
+
+    #[test]
+    fn table_change_sql_keeps_short_varchar_literal() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: String::new(),
+            schema: Some("APP".to_string()),
+            table: "USERS".to_string(),
+            columns: vec![
+                column_info("ID", "NUMBER", true),
+                column_info("NAME", "VARCHAR2", false),
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Updated {
+                original_data: vec!["1".to_string(), "Bob".to_string()],
+                changes: vec![TableCellChange {
+                    column_index: 1,
+                    column_name: "NAME".to_string(),
+                    old_value: "Bob".to_string(),
+                    new_value: "Alice's".to_string(),
+                }],
+                rowid: Some("AAABBB".to_string()),
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert_eq!(
+            "UPDATE \"APP\".\"USERS\" SET \"NAME\" = 'Alice''s' WHERE ROWID = 'AAABBB';",
+            sql
+        );
+    }
+
+    #[test]
+    fn table_change_sql_chunks_long_varchar_without_lob_constructor() {
+        let plugin = create_plugin();
+        let long_value = "b".repeat(ORACLE_SQL_LITERAL_CHUNK_BYTES + 20);
+        let request = TableSaveRequest {
+            database: String::new(),
+            schema: Some("APP".to_string()),
+            table: "USERS".to_string(),
+            columns: vec![
+                column_info("ID", "NUMBER", true),
+                column_info("NOTE", "VARCHAR2", false),
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Updated {
+                original_data: vec!["1".to_string(), "old".to_string()],
+                changes: vec![TableCellChange {
+                    column_index: 1,
+                    column_name: "NOTE".to_string(),
+                    old_value: "old".to_string(),
+                    new_value: long_value,
+                }],
+                rowid: Some("AAABBB".to_string()),
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert!(sql.contains("\"NOTE\" = '"));
+        assert!(sql.contains("' || '"));
+        assert!(!sql.contains("TO_CLOB("));
+        assert!(!sql.contains("TO_NCLOB("));
+    }
+
+    #[test]
+    fn table_change_sql_formats_oracle_date_literals() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: String::new(),
+            schema: Some("APP".to_string()),
+            table: "EVENTS".to_string(),
+            columns: vec![
+                column_info("ID", "NUMBER", true),
+                column_info("STARTED_AT", "DATE", false),
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Added {
+                data: vec!["1".to_string(), "2026-06-21 14:05:06".to_string()],
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert_eq!(
+            "INSERT INTO \"APP\".\"EVENTS\" (\"ID\", \"STARTED_AT\") VALUES ('1', TO_DATE('2026-06-21 14:05:06', 'YYYY-MM-DD HH24:MI:SS'));",
+            sql
+        );
+    }
+
+    #[test]
+    fn table_change_sql_formats_oracle_timestamp_literals() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: String::new(),
+            schema: Some("APP".to_string()),
+            table: "EVENTS".to_string(),
+            columns: vec![
+                column_info("ID", "NUMBER", true),
+                column_info("CREATED_AT", "TIMESTAMP(6)", false),
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Updated {
+                original_data: vec!["1".to_string(), "2026-06-21 14:05:06".to_string()],
+                changes: vec![TableCellChange {
+                    column_index: 1,
+                    column_name: "CREATED_AT".to_string(),
+                    old_value: "2026-06-21 14:05:06".to_string(),
+                    new_value: "2026-06-21 14:05:06.123456".to_string(),
+                }],
+                rowid: Some("AAABBB".to_string()),
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert_eq!(
+            "UPDATE \"APP\".\"EVENTS\" SET \"CREATED_AT\" = TO_TIMESTAMP('2026-06-21 14:05:06.123456', 'YYYY-MM-DD HH24:MI:SS.FF6') WHERE ROWID = 'AAABBB';",
+            sql
+        );
+    }
+
+    #[test]
+    fn table_change_sql_formats_oracle_timestamp_tz_literals() {
+        let plugin = create_plugin();
+        let request = TableSaveRequest {
+            database: String::new(),
+            schema: Some("APP".to_string()),
+            table: "EVENTS".to_string(),
+            columns: vec![
+                column_info("ID", "NUMBER", true),
+                column_info("UPDATED_AT", "TIMESTAMP WITH TIME ZONE", false),
+            ],
+            index_infos: vec![],
+            changes: vec![TableRowChange::Added {
+                data: vec!["1".to_string(), "2026-06-21 14:05:06 +08:00".to_string()],
+            }],
+        };
+
+        let sql = plugin.generate_table_changes_sql(&request);
+
+        assert_eq!(
+            "INSERT INTO \"APP\".\"EVENTS\" (\"ID\", \"UPDATED_AT\") VALUES ('1', TO_TIMESTAMP_TZ('2026-06-21 14:05:06 +08:00', 'YYYY-MM-DD HH24:MI:SS TZH:TZM'));",
+            sql
+        );
+    }
+
+    #[test]
+    fn oracle_lob_literal_chunks_escape_quotes_once() {
+        let expr = oracle_lob_literal_expr("a'b", None);
+
+        assert_eq!("TO_CLOB('a''b')", expr);
     }
 
     #[test]

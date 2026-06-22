@@ -1,8 +1,8 @@
 use super::DatabaseFormEvent;
 use db::{GlobalDbState, plugin::DatabaseOperationRequest};
 use gpui::{
-    AnyView, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, Styled, Subscription, Window, div,
+    AnyView, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
 };
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -11,6 +11,7 @@ use gpui_component::{
     input::{Input, InputState},
     v_flex,
 };
+use one_core::gpui_tokio::Tokio;
 use one_core::storage::DatabaseType;
 use rust_i18n::t;
 
@@ -95,17 +96,39 @@ impl DatabaseEditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let global_db_state = cx.global::<GlobalDbState>();
-        if let Ok(plugin) = global_db_state.get_plugin(&database_type) {
-            let sql = if is_edit_mode {
-                plugin.build_modify_database_sql(request)
+        let window_id = cx.active_window();
+        let request = request.clone();
+        let sql_preview = self.sql_preview.clone();
+        let db_manager = cx.global::<GlobalDbState>().db_manager.clone();
+
+        self.sql_preview.update(cx, |state, cx| {
+            state.set_value(String::new(), window, cx);
+        });
+
+        let preview_task = Tokio::spawn_result(cx, async move {
+            let plugin = db_manager.get_plugin(&database_type)?;
+            if is_edit_mode {
+                Ok(plugin.build_modify_database_sql(&request))
             } else {
-                plugin.build_create_database_sql(request)
+                plugin.build_create_database_sql_async(&request).await
+            }
+        });
+
+        cx.spawn(async move |_this, cx: &mut AsyncApp| {
+            let sql = preview_task
+                .await
+                .unwrap_or_else(|error| format!("-- Failed to build SQL preview: {error}"));
+
+            let Some(window_id) = window_id else {
+                return;
             };
-            self.sql_preview.update(cx, |state, cx| {
-                state.set_value(sql, window, cx);
+            let _ = cx.update_window(window_id, |_entity, window, cx| {
+                sql_preview.update(cx, |state, cx| {
+                    state.set_value(sql, window, cx);
+                });
             });
-        }
+        })
+        .detach();
     }
 
     pub fn get_sql(&self, cx: &App) -> String {

@@ -11,6 +11,7 @@ mod extension_package_layout;
 mod extension_view_host;
 mod global;
 mod registration;
+pub mod remote_desktop_provider_install;
 mod types;
 
 pub use catalog::ExtensionRuntimeCatalog;

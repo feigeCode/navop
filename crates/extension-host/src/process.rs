@@ -200,6 +200,7 @@ async fn spawn_local_socket(config: SpawnConfig, socket_name: String) -> HostRes
         .map_err(HostError::Io)?;
 
     let mut command = Command::new(&config.program);
+    process_util::configure_tokio_background_child(&mut command);
     command.args(&config.args).env(SOCKET_ENV_VAR, &socket_name);
     if let Some(cwd) = &config.cwd {
         command.current_dir(cwd);

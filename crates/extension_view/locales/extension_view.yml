@@ -9,6 +9,10 @@ Common:
     en: Refresh
     zh-CN: 刷新
     zh-HK: 刷新
+  confirm:
+    en: Confirm
+    zh-CN: 确定
+    zh-HK: 確定
 
 Extension:
   tab_title:
@@ -23,6 +27,18 @@ Extension:
     en: Search extensions
     zh-CN: 搜索扩展
     zh-HK: 搜尋擴展
+  offline_download:
+    en: Offline Package
+    zh-CN: 离线包下载
+    zh-HK: 離線包下載
+  offline_package_title:
+    en: Offline Package Download
+    zh-CN: 离线包下载
+    zh-HK: 離線包下載
+  offline_package_hint:
+    en: Download the extension offline package from GitHub Releases and install it locally.
+    zh-CN: 前往 GitHub Releases 下载扩展离线包,再通过本地安装导入。
+    zh-HK: 前往 GitHub Releases 下載擴展離線包,再通過本機安裝匯入。
   local_install:
     en: Local Install
     zh-CN: 本地安装

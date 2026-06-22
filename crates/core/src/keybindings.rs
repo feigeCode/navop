@@ -14,6 +14,8 @@ pub mod action_id {
     pub const APP_QUIT: &str = "app.quit";
     pub const HOME_QUICK_OPEN: &str = "home.quick_open";
     pub const HOME_NEW_CONNECTION: &str = "home.new_connection";
+    pub const DB_FOCUS_SEARCH: &str = "db.focus_search";
+    pub const DB_OPEN_TABLE_QUERY: &str = "db.open_table_query";
     pub const SQL_RUN_QUERY: &str = "sql.run_query";
     pub const TERMINAL_SEND_TAB: &str = "terminal.send_tab";
     pub const TERMINAL_SEND_SHIFT_TAB: &str = "terminal.send_shift_tab";

@@ -1,6 +1,9 @@
 use std::{fs, sync::Arc};
 
-use crate::extension::{DatabaseDriverExtensionProvider, ExtensionKind, ExtensionRegistry};
+use crate::extension::{
+    DatabaseDriverExtensionProvider, ExtensionKind, ExtensionRegistry,
+    RemoteDesktopProviderExtensionProvider,
+};
 use crate::extension_downloader::{
     detect_package_kind, install_from_staging_generic, stage_local_tarball,
 };
@@ -49,6 +52,29 @@ fn stage_local_tarball_supports_single_top_level_driver_directory() {
     assert!(summary.path.join("driver.json").exists());
     assert!(summary.path.join("duckdb_driver").exists());
     assert!(!summary.path.join("duckdb").exists());
+}
+
+#[test]
+fn stage_local_tarball_then_install_staging_installs_remote_desktop_provider() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let tarball = tmp.path().join("rdp-provider.tar.gz");
+    fs::write(&tarball, remote_desktop_provider_tarball_bytes()).unwrap();
+
+    let mut registry = ExtensionRegistry::new(tmp.path().join("extensions"));
+    registry.register_provider(Arc::new(RemoteDesktopProviderExtensionProvider));
+
+    let staging = stage_local_tarball(&tarball).unwrap();
+    assert_eq!(
+        ExtensionKind::RemoteDesktopProvider,
+        detect_package_kind(&staging).unwrap()
+    );
+    let summary = install_from_staging_generic(&staging, &registry, None).unwrap();
+    let _ = fs::remove_dir_all(staging);
+
+    assert_eq!(ExtensionKind::RemoteDesktopProvider, summary.kind);
+    assert_eq!("rdp", summary.name);
+    assert!(summary.path.join("remote_desktop_provider.json").exists());
+    assert!(summary.path.join("onetcli-rdp-helper").exists());
 }
 
 #[cfg(unix)]
@@ -137,6 +163,37 @@ fn wrapped_database_driver_tarball_bytes() -> Vec<u8> {
             "version": "1.0.0",
             "entry": { "command": "./duckdb_driver" },
             "transport": { "name": "duckdb.sock" }
+        }"#,
+    );
+    let encoder = archive.into_inner().unwrap();
+    encoder.finish().unwrap()
+}
+
+fn remote_desktop_provider_tarball_bytes() -> Vec<u8> {
+    let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    append_bytes(&mut archive, "onetcli-rdp-helper", b"helper");
+    append_bytes(
+        &mut archive,
+        "remote_desktop_provider.json",
+        br#"{
+            "id": "rdp",
+            "name": "RDP",
+            "description": "RDP provider",
+            "version": "1.2.3",
+            "protocol": "rdp",
+            "entry": { "command": "./onetcli-rdp-helper" },
+            "capabilities": {
+                "resize": "remote_resize",
+                "clipboard_text": true,
+                "cursor_shape": true,
+                "audio": false,
+                "file_transfer": false
+            },
+            "ui": {
+                "icon": "Monitor",
+                "default_port": 3389
+            }
         }"#,
     );
     let encoder = archive.into_inner().unwrap();

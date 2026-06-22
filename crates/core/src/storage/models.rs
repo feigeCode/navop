@@ -50,6 +50,9 @@ pub enum ConnectionType {
     MongoDB,
     ChatDB,
     Serial,
+    PortForwarding,
+    Rdp,
+    Vnc,
 }
 
 impl fmt::Display for ConnectionType {
@@ -62,6 +65,9 @@ impl fmt::Display for ConnectionType {
             ConnectionType::MongoDB => "MongoDB",
             ConnectionType::ChatDB => "ChatDB",
             ConnectionType::Serial => "Serial",
+            ConnectionType::PortForwarding => "PortForwarding",
+            ConnectionType::Rdp => "Rdp",
+            ConnectionType::Vnc => "Vnc",
         };
         write!(f, "{}", s)
     }
@@ -77,6 +83,9 @@ impl ConnectionType {
             ConnectionType::MongoDB,
             ConnectionType::ChatDB,
             ConnectionType::Serial,
+            ConnectionType::PortForwarding,
+            ConnectionType::Rdp,
+            ConnectionType::Vnc,
         ]
     }
     pub fn from_str(s: &str) -> Self {
@@ -87,6 +96,9 @@ impl ConnectionType {
             "MongoDB" => ConnectionType::MongoDB,
             "ChatDB" => ConnectionType::ChatDB,
             "Serial" => ConnectionType::Serial,
+            "PortForwarding" => ConnectionType::PortForwarding,
+            "Rdp" => ConnectionType::Rdp,
+            "Vnc" => ConnectionType::Vnc,
             _ => ConnectionType::Database,
         }
     }
@@ -100,6 +112,9 @@ impl ConnectionType {
             ConnectionType::MongoDB => "MongoDB",
             ConnectionType::ChatDB => "ChatDB",
             ConnectionType::Serial => "Serial",
+            ConnectionType::PortForwarding => "Port Forwarding",
+            ConnectionType::Rdp => "RDP",
+            ConnectionType::Vnc => "VNC",
         }
     }
 
@@ -112,6 +127,9 @@ impl ConnectionType {
             ConnectionType::MongoDB => IconName::MongoDB,
             ConnectionType::ChatDB => IconName::AI,
             ConnectionType::Serial => IconName::SerialPort,
+            ConnectionType::PortForwarding => IconName::Network,
+            ConnectionType::Rdp => IconName::Rdp,
+            ConnectionType::Vnc => IconName::Vnc,
         }
     }
 }
@@ -267,6 +285,47 @@ pub struct SshParams {
     /// 代理配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RemoteDesktopProtocol {
+    Rdp,
+    Vnc,
+}
+
+impl RemoteDesktopProtocol {
+    pub fn connection_type(self) -> ConnectionType {
+        match self {
+            Self::Rdp => ConnectionType::Rdp,
+            Self::Vnc => ConnectionType::Vnc,
+        }
+    }
+
+    pub fn default_port(self) -> u16 {
+        match self {
+            Self::Rdp => 3389,
+            Self::Vnc => 5900,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Rdp => "RDP",
+            Self::Vnc => "VNC",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteDesktopParams {
+    pub protocol: RemoteDesktopProtocol,
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 /// 跳板机配置
@@ -491,6 +550,41 @@ impl Default for SerialParams {
             flow_control: SerialFlowControl::None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PortForwardingKind {
+    #[default]
+    Local,
+    Dynamic,
+}
+
+impl PortForwardingKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Local => "Local",
+            Self::Dynamic => "Dynamic SOCKS",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortForwardingParams {
+    pub ssh_connection_id: i64,
+    #[serde(default)]
+    pub kind: PortForwardingKind,
+    #[serde(default = "default_forward_bind_host")]
+    pub bind_host: String,
+    #[serde(default)]
+    pub bind_port: u16,
+    #[serde(default)]
+    pub target_host: String,
+    #[serde(default)]
+    pub target_port: u16,
+}
+
+fn default_forward_bind_host() -> String {
+    "127.0.0.1".to_string()
 }
 
 /// Connection configuration
@@ -829,6 +923,30 @@ impl StoredConnection {
         }
     }
 
+    pub fn new_remote_desktop(
+        name: String,
+        params: RemoteDesktopParams,
+        workspace_id: Option<i64>,
+    ) -> Self {
+        Self {
+            id: None,
+            name,
+            connection_type: params.protocol.connection_type(),
+            params: serde_json::to_string(&params).expect("RemoteDesktopParams 序列化不应失败"),
+            workspace_id,
+            selected_databases: None,
+            remark: None,
+            sync_enabled: true,
+            cloud_id: None,
+            last_synced_at: None,
+            last_used_at: None,
+            created_at: None,
+            updated_at: None,
+            team_id: None,
+            owner_id: None,
+        }
+    }
+
     pub fn new_redis(name: String, params: RedisParams, workspace_id: Option<i64>) -> Self {
         Self {
             id: None,
@@ -873,6 +991,10 @@ impl StoredConnection {
         serde_json::from_str(&self.params)
     }
 
+    pub fn to_remote_desktop_params(&self) -> Result<RemoteDesktopParams, serde_json::Error> {
+        serde_json::from_str(&self.params)
+    }
+
     pub fn to_redis_params(&self) -> Result<RedisParams, serde_json::Error> {
         serde_json::from_str(&self.params)
     }
@@ -901,7 +1023,35 @@ impl StoredConnection {
         }
     }
 
+    pub fn new_port_forwarding(
+        name: String,
+        params: PortForwardingParams,
+        workspace_id: Option<i64>,
+    ) -> Self {
+        Self {
+            id: None,
+            name,
+            connection_type: ConnectionType::PortForwarding,
+            params: serde_json::to_string(&params).expect("PortForwardingParams 序列化不应失败"),
+            workspace_id,
+            selected_databases: None,
+            remark: None,
+            sync_enabled: true,
+            cloud_id: None,
+            last_synced_at: None,
+            last_used_at: None,
+            created_at: None,
+            updated_at: None,
+            team_id: None,
+            owner_id: None,
+        }
+    }
+
     pub fn to_serial_params(&self) -> Result<SerialParams, serde_json::Error> {
+        serde_json::from_str(&self.params)
+    }
+
+    pub fn to_port_forwarding_params(&self) -> Result<PortForwardingParams, serde_json::Error> {
         serde_json::from_str(&self.params)
     }
 
@@ -1316,6 +1466,88 @@ mod serial_tests {
         assert_eq!(ConnectionType::from_str("Serial"), ConnectionType::Serial);
         assert_eq!(format!("{}", ConnectionType::Serial), "Serial");
         assert!(ConnectionType::all().contains(&ConnectionType::Serial));
+    }
+
+    #[test]
+    fn stored_connection_port_forwarding_roundtrip() {
+        let params = PortForwardingParams {
+            ssh_connection_id: 7,
+            kind: PortForwardingKind::Local,
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 15432,
+            target_host: "db.internal".to_string(),
+            target_port: 5432,
+        };
+        let conn =
+            StoredConnection::new_port_forwarding("postgres tunnel".to_string(), params, Some(42));
+        assert_eq!(conn.connection_type, ConnectionType::PortForwarding);
+        assert_eq!(conn.name, "postgres tunnel");
+        assert_eq!(conn.workspace_id, Some(42));
+
+        let rt = conn.to_port_forwarding_params().unwrap();
+        assert_eq!(rt.ssh_connection_id, 7);
+        assert_eq!(rt.kind, PortForwardingKind::Local);
+        assert_eq!(rt.bind_host, "127.0.0.1");
+        assert_eq!(rt.bind_port, 15432);
+        assert_eq!(rt.target_host, "db.internal");
+        assert_eq!(rt.target_port, 5432);
+    }
+
+    #[test]
+    fn connection_type_port_forwarding_methods() {
+        assert_eq!(ConnectionType::PortForwarding.label(), "Port Forwarding");
+        assert_eq!(
+            ConnectionType::from_str("PortForwarding"),
+            ConnectionType::PortForwarding
+        );
+        assert_eq!(
+            format!("{}", ConnectionType::PortForwarding),
+            "PortForwarding"
+        );
+        assert!(ConnectionType::all().contains(&ConnectionType::PortForwarding));
+    }
+
+    #[test]
+    fn connection_type_remote_desktop_methods() {
+        assert_eq!(ConnectionType::Rdp.label(), "RDP");
+        assert_eq!(ConnectionType::Vnc.label(), "VNC");
+        assert_eq!(ConnectionType::from_str("Rdp"), ConnectionType::Rdp);
+        assert_eq!(ConnectionType::from_str("Vnc"), ConnectionType::Vnc);
+        assert_eq!(format!("{}", ConnectionType::Rdp), "Rdp");
+        assert_eq!(format!("{}", ConnectionType::Vnc), "Vnc");
+        assert!(ConnectionType::all().contains(&ConnectionType::Rdp));
+        assert!(ConnectionType::all().contains(&ConnectionType::Vnc));
+    }
+
+    #[test]
+    fn stored_connection_remote_desktop_uses_remote_desktop_params_shape() {
+        let params = RemoteDesktopParams {
+            protocol: RemoteDesktopProtocol::Rdp,
+            host: "10.2.178.12".to_string(),
+            port: 3389,
+            username: Some("administrator".to_string()),
+            password: Some("secret".to_string()),
+            domain: Some("corp".to_string()),
+            read_only: false,
+        };
+
+        let conn = StoredConnection::new_remote_desktop("win-rdp".to_string(), params, Some(42));
+
+        assert_eq!(conn.connection_type, ConnectionType::Rdp);
+        assert_eq!(conn.workspace_id, Some(42));
+        let parsed = conn
+            .to_remote_desktop_params()
+            .expect("RDP params parse as RemoteDesktopParams");
+        assert_eq!(parsed.protocol, RemoteDesktopProtocol::Rdp);
+        assert_eq!(parsed.host, "10.2.178.12");
+        assert_eq!(parsed.port, 3389);
+        assert_eq!(parsed.username.as_deref(), Some("administrator"));
+        assert_eq!(parsed.domain.as_deref(), Some("corp"));
+        let raw_params = serde_json::from_str::<serde_json::Value>(&conn.params)
+            .expect("RDP params parse as JSON");
+        assert!(raw_params.get("width").is_none());
+        assert!(raw_params.get("height").is_none());
+        assert_eq!(RemoteDesktopProtocol::Vnc.default_port(), 5900);
     }
 
     #[test]

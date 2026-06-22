@@ -1,0 +1,11 @@
+[package]
+name = "process-util"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["process"] }
+
+[lints]
+workspace = true

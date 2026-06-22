@@ -38,6 +38,15 @@ impl ExtensionManagerView {
                 h_flex()
                     .gap_2()
                     .child(
+                        Button::new("extension-manager-offline-download")
+                            .small()
+                            .icon(IconName::Globe)
+                            .label(t!("Extension.offline_download").to_string())
+                            .on_click(|_, _, cx| {
+                                crate::offline_package_dialog::show_offline_package_dialog(cx);
+                            }),
+                    )
+                    .child(
                         Button::new("extension-manager-local")
                             .small()
                             .icon(IconName::File)
@@ -323,6 +332,7 @@ fn kind_label(kind: ExtensionKind) -> String {
     match kind {
         ExtensionKind::Language => t!("Extension.kind_language").to_string(),
         ExtensionKind::DatabaseDriver => t!("Extension.kind_database_driver").to_string(),
+        ExtensionKind::RemoteDesktopProvider => "Remote Desktop".to_string(),
         ExtensionKind::Composite => t!("Extension.kind_composite").to_string(),
     }
 }

@@ -6,6 +6,7 @@ use semver::Version;
 pub enum ExtensionKind {
     Language,
     DatabaseDriver,
+    RemoteDesktopProvider,
     Composite,
 }
 

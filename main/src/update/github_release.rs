@@ -8,7 +8,7 @@ use super::UpdateDialogInfo;
 
 const GITHUB_OWNER: &str = "feigeCode";
 const GITHUB_REPO: &str = "onetcli";
-const GITHUB_API_URL: &str = "https://api.github.com/repos/feigeCode/onetcli/releases/latest";
+pub const GITHUB_API_URL: &str = "https://api.github.com/repos/feigeCode/onetcli/releases/latest";
 const GITHUB_USER_AGENT: &str = "onetcli-updater";
 
 const EXPECTED_ARCHIVE_NAME: &str =
@@ -89,18 +89,12 @@ pub(crate) fn github_release_to_dialog_info(
     let asset = select_github_asset(release)
         .ok_or_else(|| format!("未找到当前平台的发布资产: {}", EXPECTED_ARCHIVE_NAME))?;
 
-    let release_page_url = format!(
-        "https://github.com/{}/{}/releases/latest",
-        GITHUB_OWNER, GITHUB_REPO
-    );
-
     Ok(UpdateDialogInfo {
         current_version: current_version.to_string(),
         latest_version: release.tag_name.clone(),
         download_url: Some(asset.browser_download_url.clone()),
         fallback_download_url: None,
         expected_sha256: None,
-        release_page_url: Some(release_page_url),
     })
 }
 
@@ -134,7 +128,7 @@ mod tests {
 
         let requests = client.take_requests();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, http::Method::GET);
+        assert_eq!(requests[0].method, Method::GET);
         assert_eq!(requests[0].uri, GITHUB_API_URL);
         assert_eq!(requests[0].user_agent.as_deref(), Some(GITHUB_USER_AGENT));
     }

@@ -74,8 +74,6 @@ pub(crate) struct UpdateDialogInfo {
     download_url: Option<String>,
     fallback_download_url: Option<String>,
     expected_sha256: Option<String>,
-    /// 发布页面 URL，方便用户手动下载
-    release_page_url: Option<String>,
 }
 
 impl UpdateDialogInfo {
@@ -319,7 +317,6 @@ async fn fetch_custom_dialog_info(
         download_url: select_download_url(&response, config.download_url.clone()),
         fallback_download_url: select_fallback_download_url(&response),
         expected_sha256: select_sha256(&response),
-        release_page_url: response.release_page_url.clone(),
     }))
 }
 
@@ -477,7 +474,6 @@ mod tests {
             download_url: Some("https://onetcli.pdyyds.cn/update.tar.gz".to_string()),
             fallback_download_url: Some("https://github.example.test/update.tar.gz".to_string()),
             expected_sha256: None,
-            release_page_url: None,
         };
 
         assert_eq!(
@@ -497,7 +493,6 @@ mod tests {
             download_url: Some("https://github.example.test/update.tar.gz".to_string()),
             fallback_download_url: Some("https://github.example.test/update.tar.gz".to_string()),
             expected_sha256: None,
-            release_page_url: None,
         };
 
         assert_eq!(

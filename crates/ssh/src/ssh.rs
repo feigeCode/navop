@@ -231,6 +231,13 @@ pub struct LocalPortForwardTunnel {
     client: Arc<Mutex<RusshClient>>,
 }
 
+pub struct LocalPortForwardConfig {
+    pub bind_host: String,
+    pub bind_port: u16,
+    pub target_host: String,
+    pub target_port: u16,
+}
+
 impl LocalPortForwardTunnel {
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
@@ -1124,9 +1131,27 @@ pub async fn start_local_port_forward(
     target_host: impl Into<String>,
     target_port: u16,
 ) -> Result<LocalPortForwardTunnel> {
-    let target_host = target_host.into();
-    let bind_addr = "127.0.0.1:0";
-    let listener = TcpListener::bind(bind_addr)
+    start_local_port_forward_with_config(
+        config,
+        LocalPortForwardConfig {
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 0,
+            target_host: target_host.into(),
+            target_port,
+        },
+    )
+    .await
+}
+
+pub async fn start_local_port_forward_with_config(
+    config: SshConnectConfig,
+    forward_config: LocalPortForwardConfig,
+) -> Result<LocalPortForwardTunnel> {
+    let target_host = forward_config.target_host;
+    let target_port = forward_config.target_port;
+    let bind_addr =
+        build_local_forward_bind_addr(&forward_config.bind_host, forward_config.bind_port);
+    let listener = TcpListener::bind(&bind_addr)
         .await
         .with_context(|| format!("failed to bind local address: {bind_addr}"))?;
     let local_addr = listener.local_addr()?;
@@ -1196,6 +1221,10 @@ pub async fn start_local_port_forward(
         accept_task: Some(accept_task),
         client,
     })
+}
+
+fn build_local_forward_bind_addr(bind_host: &str, bind_port: u16) -> String {
+    format!("{bind_host}:{bind_port}")
 }
 
 #[async_trait]
@@ -1350,6 +1379,19 @@ impl SshClient for RusshClient {
 impl RusshClient {
     pub async fn open_raw_channel(&mut self) -> Result<Channel<client::Msg>> {
         Ok(self.session.channel_open_session().await?)
+    }
+}
+
+#[cfg(test)]
+mod port_forward_tests {
+    use super::build_local_forward_bind_addr;
+
+    #[test]
+    fn local_forward_bind_addr_uses_requested_host_and_port() {
+        assert_eq!(
+            build_local_forward_bind_addr("127.0.0.1", 15432),
+            "127.0.0.1:15432"
+        );
     }
 }
 

@@ -3568,6 +3568,7 @@ dependencies = [
  "async-trait",
  "extension-protocol",
  "interprocess",
+ "process-util",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3602,6 +3603,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "one-core",
+ "remote_desktop",
  "semver",
  "serde",
  "serde_json",
@@ -6547,7 +6549,7 @@ checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 
 [[package]]
 name = "main"
-version = "0.5.0"
+version = "0.6.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6566,7 +6568,11 @@ dependencies = [
  "one-core",
  "one-ui",
  "public_mcp",
+ "port_forwarding",
+ "port_forwarding_view",
  "redis_view",
+ "remote_desktop",
+ "remote_desktop_view",
  "remote_file_editor",
  "reqwest_client",
  "rust-i18n",
@@ -8340,6 +8346,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "port_forwarding"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "one-core",
+ "ssh",
+ "tokio",
+]
+
+[[package]]
+name = "port_forwarding_view"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "one-core",
+ "rust-i18n",
+ "tracing",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8569,6 +8597,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d61789d7719defeb74ea5fe81f2fdfdbd28a803847077cecce2ff14e1472f6f1"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "process-util"
+version = "0.1.0"
+dependencies = [
+ "tokio",
 ]
 
 [[package]]
@@ -9247,6 +9282,39 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "remote_desktop"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "one-core",
+ "process-util",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "remote_desktop_view"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "image",
+ "one-core",
+ "one-ui",
+ "remote_desktop",
+ "smallvec",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "remote_file_editor"

@@ -1402,13 +1402,29 @@ const TERMINAL_SHORTCUTS: &[ShortcutEntry] = &[
     },
 ];
 
-const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[ShortcutEntry {
-    keys_macos: &["cmd-enter", "ctrl-enter"],
-    keys_other: &["cmd-enter", "ctrl-enter"],
-    label_key: "Settings.Shortcuts.sql_run_query",
-    action_id: Some(action_id::SQL_RUN_QUERY),
-    system_hotkey: false,
-}];
+const DATABASE_SHORTCUTS: &[ShortcutEntry] = &[
+    ShortcutEntry {
+        keys_macos: &["cmd-f"],
+        keys_other: &["ctrl-f"],
+        label_key: "Settings.Shortcuts.database_focus_search",
+        action_id: Some(action_id::DB_FOCUS_SEARCH),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-shift-enter"],
+        keys_other: &["ctrl-shift-enter"],
+        label_key: "Settings.Shortcuts.database_open_table_query",
+        action_id: Some(action_id::DB_OPEN_TABLE_QUERY),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["cmd-enter", "ctrl-enter"],
+        keys_other: &["cmd-enter", "ctrl-enter"],
+        label_key: "Settings.Shortcuts.sql_run_query",
+        action_id: Some(action_id::SQL_RUN_QUERY),
+        system_hotkey: false,
+    },
+];
 
 const TABLE_SHORTCUTS: &[ShortcutEntry] = &[
     ShortcutEntry {

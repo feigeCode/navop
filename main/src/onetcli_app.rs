@@ -161,6 +161,7 @@ pub fn init(cx: &mut App) {
     setting_tab::init_settings(cx);
     one_core::init(cx);
     one_ui::init(cx);
+    db_view::search_shortcut::init(cx);
     db_view::sql_editor_view::init(cx);
     db_view::chatdb::agents::init(cx);
     crate::auth::init(cx);
@@ -182,6 +183,7 @@ pub fn init(cx: &mut App) {
     crate::public_mcp_runtime::init(cx);
     redis_view::init(cx);
     mongodb_view::init(cx);
+    remote_desktop_view::init(cx);
     crate::home_tab::init(cx);
     cx.bind_keys(init_keybindings(cx));
     init_action_handlers(cx);
@@ -201,9 +203,11 @@ pub fn init(cx: &mut App) {
 pub fn refresh_keybindings(cx: &mut App) {
     cx.bind_keys(refreshable_keybindings(cx));
     crate::home_tab::refresh_keybindings(cx);
+    db_view::search_shortcut::refresh_keybindings(cx);
     db_view::sql_editor_view::refresh_keybindings(cx);
     terminal_view::refresh_keybindings(cx);
     redis_view::refresh_keybindings(cx);
+    remote_desktop_view::refresh_keybindings(cx);
     one_ui::refresh_keybindings(cx);
     remote_file_editor::refresh_keybindings(cx);
 }

@@ -73,6 +73,7 @@ pub enum IconName {
     Eye,
     EyeOff,
     File,
+    Unarchive,
     Folder,
     FolderClosed,
     FolderOpen,
@@ -202,6 +203,8 @@ pub enum IconName {
     SettingColor,
     SerialPort,
     Monitor,
+    Rdp,
+    Vnc,
     DuckDB,
 }
 
@@ -264,6 +267,7 @@ impl IconNamed for IconName {
             Self::Eye => "icons/eye.svg",
             Self::EyeOff => "icons/eye-off.svg",
             Self::File => "icons/file.svg",
+            Self::Unarchive => "icons/unarchive.svg",
             Self::Folder => "icons/folder.svg",
             Self::FolderClosed => "icons/folder-closed.svg",
             Self::FolderOpen => "icons/folder-open.svg",
@@ -393,6 +397,8 @@ impl IconNamed for IconName {
             Self::SettingColor => "icons/setting_color.svg",
             Self::SerialPort => "icons/serial_port.svg",
             Self::Monitor => "icons/monitor.svg",
+            Self::Rdp => "icons/rdp.svg",
+            Self::Vnc => "icons/vnc.svg",
             Self::DuckDB => "icons/duckdb.svg",
         }
         .into()

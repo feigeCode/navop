@@ -191,8 +191,8 @@ fn build_spawn_config(
     driver: &IpcDriverManifest,
     connection_config: Option<&DbConnectionConfig>,
 ) -> SpawnConfig {
-    let program = PathBuf::from(command_for_current_platform(driver));
     let cwd = command_working_dir(driver);
+    let program = resolve_command_program(command_for_current_platform(driver), &cwd);
     let socket_name = default_socket_name();
 
     let mut config = SpawnConfig::new(program)
@@ -212,6 +212,19 @@ fn build_spawn_config(
         }
     }
     config
+}
+
+fn resolve_command_program(command: &str, cwd: &Path) -> PathBuf {
+    let program = PathBuf::from(command);
+    if program.is_absolute() || !has_explicit_path_component(command) {
+        program
+    } else {
+        cwd.join(program)
+    }
+}
+
+fn has_explicit_path_component(command: &str) -> bool {
+    command.contains('/') || command.contains('\\')
 }
 
 fn command_for_current_platform(driver: &IpcDriverManifest) -> &str {
@@ -451,6 +464,23 @@ mod tests {
         let manifest = dummy_manifest("/usr/bin/true", Some("/opt/driver"));
         let wd = command_working_dir(&manifest);
         assert_eq!(wd, PathBuf::from("/opt/driver"));
+    }
+
+    #[test]
+    fn spawn_config_resolves_relative_path_command_against_manifest_dir() {
+        let manifest = dummy_manifest("./driver.exe", None);
+        let cfg = build_spawn_config(&manifest, None);
+        assert_eq!(
+            cfg.program,
+            PathBuf::from("/tmp/onetcli-test").join("./driver.exe")
+        );
+    }
+
+    #[test]
+    fn spawn_config_keeps_path_lookup_command_unresolved() {
+        let manifest = dummy_manifest("python3", None);
+        let cfg = build_spawn_config(&manifest, None);
+        assert_eq!(cfg.program, PathBuf::from("python3"));
     }
 
     #[test]

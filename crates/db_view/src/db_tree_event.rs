@@ -101,6 +101,43 @@ impl DatabaseEventHandler {
             .cloned()
             .unwrap_or_else(|| fallback.to_string())
     }
+
+    fn build_select_all_sql(table_reference: &str) -> String {
+        format!("select * from {};", table_reference)
+    }
+
+    fn format_query_table_reference(node: &DbNode, global_state: &GlobalDbState) -> Option<String> {
+        let table = match node.node_type {
+            DbNodeType::Table => node.get_table_name()?,
+            DbNodeType::View => node.name.clone(),
+            _ => return None,
+        };
+        let plugin = global_state
+            .db_manager
+            .get_plugin(&node.database_type)
+            .ok()?;
+        let database = node.get_database_name();
+        let schema = node.get_schema_name();
+
+        Some(match database.as_deref() {
+            Some(database) => plugin.format_table_reference(database, schema.as_deref(), &table),
+            None => match schema.as_deref() {
+                Some(schema) => format!(
+                    "{}.{}",
+                    plugin.quote_identifier(schema),
+                    plugin.quote_identifier(&table)
+                ),
+                None => plugin.quote_identifier(&table),
+            },
+        })
+    }
+
+    fn query_title_for_node(node: &DbNode, database: Option<&str>) -> String {
+        match node.node_type {
+            DbNodeType::Table | DbNodeType::View => format!("{} - Query", node.name),
+            _ => format!("{} - Query", database.unwrap_or("New Query")),
+        }
+    }
 }
 
 impl DatabaseEventHandler {
@@ -653,7 +690,9 @@ impl DatabaseEventHandler {
         let database = node.get_database_name();
         let schema = node.get_schema_name();
         let database_type = node.database_type.clone();
-        let title = format!("{} - Query", database.as_deref().unwrap_or("New Query"));
+        let title = Self::query_title_for_node(&node, database.as_deref());
+        let initial_sql = Self::format_query_table_reference(&node, cx.global::<GlobalDbState>())
+            .map(|table_reference| Self::build_select_all_sql(&table_reference));
 
         let tab_id = format!(
             "query-{}-{}",
@@ -668,7 +707,7 @@ impl DatabaseEventHandler {
                 tab_id.clone(),
                 move |window, cx| {
                     let sql_editor = cx.new(|cx| {
-                        SqlEditorTab::new_with_config(
+                        let editor = SqlEditorTab::new_with_config(
                             crate::sql_editor_view::SqlEditorTabConfig {
                                 title: title.clone().into(),
                                 connection_id: connection_id.clone(),
@@ -679,7 +718,11 @@ impl DatabaseEventHandler {
                             },
                             window,
                             cx,
-                        )
+                        );
+                        if let Some(sql) = initial_sql.clone() {
+                            editor.set_sql(sql, window, cx);
+                        }
+                        editor
                     });
                     TabItem::new(tab_id_clone.clone(), conn_id_clone.clone(), sql_editor)
                 },
@@ -3754,6 +3797,74 @@ impl DatabaseEventHandler {
             PopupWindowOptions::new(title).size(1100.0, 780.0),
             move |_window, _cx| compare_view.clone(),
             cx,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DatabaseEventHandler;
+    use db::{DbNode, DbNodeType, GlobalDbState};
+    use one_core::storage::DatabaseType;
+    use std::collections::HashMap;
+
+    #[test]
+    fn build_select_all_sql_uses_table_reference() {
+        assert_eq!(
+            "select * from `app`.`users`;",
+            DatabaseEventHandler::build_select_all_sql("`app`.`users`")
+        );
+    }
+
+    #[test]
+    fn query_title_for_table_uses_table_name() {
+        let node = DbNode::new(
+            "table-1",
+            "users",
+            DbNodeType::Table,
+            "conn-1".to_string(),
+            DatabaseType::MySQL,
+        );
+
+        assert_eq!(
+            "users - Query",
+            DatabaseEventHandler::query_title_for_node(&node, Some("app"))
+        );
+    }
+
+    #[test]
+    fn query_table_reference_can_use_database_prefix() {
+        let mut metadata = HashMap::new();
+        metadata.insert("database".to_string(), "app_db".to_string());
+        metadata.insert("schema".to_string(), "public".to_string());
+        let node = DbNode::new(
+            "table-1",
+            "users",
+            DbNodeType::Table,
+            "conn-1".to_string(),
+            DatabaseType::MySQL,
+        )
+        .with_metadata(metadata);
+
+        assert_eq!(
+            Some("`app_db`.`users`".to_string()),
+            DatabaseEventHandler::format_query_table_reference(&node, &GlobalDbState::default())
+        );
+    }
+
+    #[test]
+    fn query_title_for_database_uses_database_name() {
+        let node = DbNode::new(
+            "database-1",
+            "app",
+            DbNodeType::Database,
+            "conn-1".to_string(),
+            DatabaseType::MySQL,
+        );
+
+        assert_eq!(
+            "app - Query",
+            DatabaseEventHandler::query_title_for_node(&node, Some("app"))
         );
     }
 }

@@ -1,0 +1,16 @@
+[package]
+name = "port_forwarding_view"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+one-core.workspace = true
+rust-i18n.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

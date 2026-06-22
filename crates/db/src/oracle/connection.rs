@@ -231,6 +231,13 @@ impl OracleDbConnection {
         })
     }
 
+    fn commit_sync(conn: &oracle::Connection) -> Result<(), DbError> {
+        conn.commit().map_err(|e| {
+            error!("[Oracle] Commit failed: {}", e);
+            DbError::transaction_with_source("failed to commit", e)
+        })
+    }
+
     fn execute_statement_sync(conn: &oracle::Connection, sql: &str) -> Result<SqlResult, DbError> {
         let start = Instant::now();
         let sql_string = sql.to_string();
@@ -462,6 +469,8 @@ impl DbConnection for OracleDbConnection {
         let mut results = Vec::new();
         let conn_arc = self.conn.clone();
         let stop_on_error = options.stop_on_error;
+        let mut saw_exec = false;
+        let mut saw_error = false;
 
         for (idx, sql) in statements.iter().enumerate() {
             let conn_clone = conn_arc.clone();
@@ -490,6 +499,8 @@ impl DbConnection for OracleDbConnection {
             })??;
 
             let is_error = result.is_error();
+            saw_exec |= matches!(result, SqlResult::Exec(_));
+            saw_error |= is_error;
             if is_error {
                 debug!(
                     "[Oracle] Statement {}/{} returned error",
@@ -503,6 +514,21 @@ impl DbConnection for OracleDbConnection {
                 debug!("[Oracle] Stopping execution due to error (stop_on_error=true)");
                 break;
             }
+        }
+
+        if saw_exec && !saw_error {
+            let conn_clone = conn_arc.clone();
+            tokio::task::spawn_blocking(move || {
+                let guard = conn_clone.blocking_lock();
+                let conn = guard.as_ref().ok_or(DbError::NotConnected)?;
+                Self::commit_sync(conn)
+            })
+            .await
+            .map_err(|e| {
+                error!("[Oracle] Commit task error: {}", e);
+                DbError::Internal(format!("task error: {}", e))
+            })??;
+            debug!("[Oracle] Transaction committed");
         }
 
         debug!(
