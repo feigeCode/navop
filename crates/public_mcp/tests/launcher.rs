@@ -1,15 +1,12 @@
-use public_mcp::discovery::{DiscoveryDocument, PublicMcpMode, read_discovery, write_discovery};
-use public_mcp::launcher::{connect_to_runtime, load_discovery, parse_discovery_path_arg};
+use public_mcp::discovery::{DiscoveryDocument, PublicMcpMode, read_discovery};
+use public_mcp::launcher::{connect_to_runtime, load_discovery};
 use public_mcp::permissions::PermissionMode;
 use public_mcp::registry::PublicMcpRegistry;
 use public_mcp::runtime::PublicMcpRuntime;
 use serde_json::json;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tokio::process::Command;
-use tokio::time::{Duration, timeout};
 
 #[test]
 fn missing_discovery_reports_that_mcp_must_be_enabled() {
@@ -20,36 +17,6 @@ fn missing_discovery_reports_that_mcp_must_be_enabled() {
 
     assert!(error.contains("enable MCP"));
     assert!(error.contains(path.to_string_lossy().as_ref()));
-}
-
-#[test]
-fn helper_args_parse_explicit_discovery_path() {
-    let path = parse_discovery_path_arg(["--discovery", "/tmp/onetcli/public-mcp.json"])
-        .unwrap()
-        .unwrap();
-
-    assert_eq!(
-        std::path::PathBuf::from("/tmp/onetcli/public-mcp.json"),
-        path
-    );
-}
-
-#[test]
-fn helper_args_reject_missing_discovery_path() {
-    let error = parse_discovery_path_arg(["--discovery"])
-        .unwrap_err()
-        .to_string();
-
-    assert!(error.contains("requires a path"));
-}
-
-#[test]
-fn helper_args_reject_unknown_arguments() {
-    let error = parse_discovery_path_arg(["--socket", "/tmp/mcp.sock"])
-        .unwrap_err()
-        .to_string();
-
-    assert!(error.contains("unknown argument"));
 }
 
 #[tokio::test]
@@ -151,87 +118,6 @@ async fn launcher_connects_from_discovery_and_completes_initialize() {
         "onetcli-public-mcp",
         response["result"]["serverInfo"]["name"]
     );
-}
-
-#[tokio::test]
-async fn stdio_helper_binary_bridges_initialize_over_discovery() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("public-mcp.json");
-    let _runtime = PublicMcpRuntime::start_with_discovery_path(
-        PublicMcpRegistry::default(),
-        PublicMcpMode::Temporary,
-        PermissionMode::Allow,
-        path.clone(),
-    )
-    .await
-    .unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_onetcli-public-mcp"))
-        .arg("--discovery")
-        .arg(&path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    let stdout = child.stdout.take().unwrap();
-    let mut reader = BufReader::new(stdout);
-
-    stdin
-        .write_all(
-            br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"stdio-helper-test","version":"0.0.1"}}}"#,
-        )
-        .await
-        .unwrap();
-    stdin.write_all(b"\n").await.unwrap();
-
-    let mut line = String::new();
-    timeout(Duration::from_secs(5), reader.read_line(&mut line))
-        .await
-        .unwrap()
-        .unwrap();
-    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
-
-    assert_eq!(json!(1), response["id"]);
-    assert_eq!(
-        "onetcli-public-mcp",
-        response["result"]["serverInfo"]["name"]
-    );
-
-    let _ = child.kill().await;
-    let _ = child.wait().await;
-}
-
-#[tokio::test]
-async fn stdio_helper_binary_reports_stale_discovery_on_stderr() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("public-mcp.json");
-    let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-        .await
-        .unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
-    write_discovery(&path, &discovery_document(addr, valid_token())).unwrap();
-
-    let output = timeout(
-        Duration::from_secs(5),
-        Command::new(env!("CARGO_BIN_EXE_onetcli-public-mcp"))
-            .arg("--discovery")
-            .arg(&path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(!output.status.success());
-    assert!(stderr.contains("onetcli-public-mcp:"));
-    assert!(stderr.contains("discovery may be stale"));
-    assert!(stderr.contains("Start OnetCli and enable MCP"));
 }
 
 fn discovery_document(bind_addr: SocketAddr, token: String) -> DiscoveryDocument {

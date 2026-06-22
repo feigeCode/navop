@@ -1,59 +1,12 @@
-use crate::discovery::{DiscoveryDocument, public_mcp_discovery_path, read_discovery};
+use crate::discovery::{DiscoveryDocument, read_discovery};
 use anyhow::{Context, Result, bail};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
-use tokio::io::{AsyncWriteExt, copy};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-
-pub async fn run_stdio_bridge(discovery_path: Option<PathBuf>) -> Result<()> {
-    let path = discovery_path.unwrap_or_else(public_mcp_discovery_path);
-    let discovery = load_discovery(&path)?;
-    let stream = connect_to_runtime(&discovery).await?;
-
-    let (mut tcp_read, mut tcp_write) = stream.into_split();
-    let stdin_task = tokio::spawn(async move {
-        let mut stdin = tokio::io::stdin();
-        copy(&mut stdin, &mut tcp_write).await
-    });
-    let stdout_task = tokio::spawn(async move {
-        let mut stdout = tokio::io::stdout();
-        copy(&mut tcp_read, &mut stdout).await
-    });
-
-    tokio::select! {
-        result = stdin_task => { result??; }
-        result = stdout_task => { result??; }
-    }
-
-    Ok(())
-}
-
-pub fn parse_discovery_path_arg<I, S>(args: I) -> Result<Option<PathBuf>>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<String>,
-{
-    let mut args = args.into_iter().map(Into::into);
-    let mut discovery_path = None;
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--discovery" => {
-                let path = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--discovery requires a path"))?;
-                if discovery_path.replace(PathBuf::from(path)).is_some() {
-                    bail!("--discovery was provided more than once");
-                }
-            }
-            "--help" | "-h" => bail!("usage: onetcli-public-mcp [--discovery <path>]"),
-            other => bail!("unknown argument `{other}`"),
-        }
-    }
-    Ok(discovery_path)
-}
 
 pub fn load_discovery(path: &Path) -> Result<DiscoveryDocument> {
     if !path.exists() {
