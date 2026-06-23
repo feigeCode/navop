@@ -335,6 +335,7 @@ mod tests {
             cloud_id: Some("cloud-123".to_string()),
             last_synced_at: Some(100),
             last_used_at: None,
+            sort_order: None,
             created_at: None,
             updated_at: Some(200),
             team_id: None,
