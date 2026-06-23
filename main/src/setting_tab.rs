@@ -1238,6 +1238,13 @@ const WINDOW_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
+        keys_macos: &["ctrl-cmd-t"],
+        keys_other: &["ctrl-alt-t"],
+        label_key: "Settings.Shortcuts.toggle_always_on_top",
+        action_id: Some(action_id::WINDOW_TOGGLE_ALWAYS_ON_TOP),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
         keys_macos: &["shift-escape"],
         keys_other: &["shift-escape"],
         label_key: "Settings.Shortcuts.toggle_zoom",

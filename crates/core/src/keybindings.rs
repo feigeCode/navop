@@ -10,6 +10,7 @@ pub mod action_id {
     pub const WINDOW_TOGGLE_ZOOM: &str = "window.toggle_zoom";
     pub const WINDOW_CLOSE_PANEL: &str = "window.close_panel";
     pub const WINDOW_TOGGLE_FULLSCREEN: &str = "window.toggle_fullscreen";
+    pub const WINDOW_TOGGLE_ALWAYS_ON_TOP: &str = "window.toggle_always_on_top";
     pub const APP_DUPLICATE_TAB: &str = "app.duplicate_tab";
     pub const APP_QUIT: &str = "app.quit";
     pub const HOME_QUICK_OPEN: &str = "home.quick_open";

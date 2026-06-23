@@ -982,6 +982,10 @@ Settings:
       en: Toggle Fullscreen
       zh-CN: 切换全屏
       zh-HK: 切換全螢幕
+    toggle_always_on_top:
+      en: Toggle Always On Top
+      zh-CN: 切换窗口置顶
+      zh-HK: 切換視窗置頂
     toggle_zoom:
       en: Toggle Panel Zoom
       zh-CN: 切换面板缩放
