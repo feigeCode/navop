@@ -5,11 +5,6 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use super::UpdateDialogInfo;
-use super::download::{build_download_path, download_update_file_from_sources, verify_sha256};
-use super::install::start_install_update;
-use super::util::{UpdateInstallAction, format_bytes};
-use crate::update::github_release::GITHUB_API_URL;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, AsyncApp, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render,
@@ -26,6 +21,11 @@ use gpui_component::{
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use rust_i18n::t;
+use crate::update::github_release::{GITHUB_LATEST_RELEASE_URL};
+use super::UpdateDialogInfo;
+use super::download::{build_download_path, download_update_file_from_sources, verify_sha256};
+use super::install::start_install_update;
+use super::util::{UpdateInstallAction, format_bytes};
 
 const DOWNLOAD_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -173,9 +173,7 @@ impl UpdateDialogView {
                 .await
             });
 
-            let download_result = download_task
-                .await
-                .unwrap_or_else(|err| Err(format!("下载任务执行失败: {}", err)));
+            let download_result = download_task.await.unwrap_or_else(|err| Err(format!("下载任务执行失败: {}", err)));
             progress_finished.store(true, Ordering::Relaxed);
 
             match download_result {
@@ -344,7 +342,7 @@ impl Render for UpdateDialogView {
             t!("Update.action_download").to_string()
         };
 
-        let release_page_url = GITHUB_API_URL;
+        let release_page_url =  GITHUB_LATEST_RELEASE_URL;
 
         v_flex()
             .gap_3()
@@ -393,41 +391,37 @@ impl Render for UpdateDialogView {
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(status_message),
-                        )
-                        .child(
-                            v_flex()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(t!("Update.open_release_page").to_string()),
-                                )
-                                .child(
-                                    h_flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().link)
-                                                .child(release_page_url),
-                                        )
-                                        .child(
-                                            Clipboard::new("release-url-copy")
-                                                .value(release_page_url),
-                                        )
-                                        .child(
-                                            Button::new("release-url-open")
-                                                .xsmall()
-                                                .ghost()
-                                                .icon(gpui_component::IconName::ExternalLink)
-                                                .on_click(move |_, _, cx| {
-                                                    cx.open_url(&release_page_url);
-                                                }),
-                                        ),
-                                ),
-                        ),
+                        ).child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("Update.open_release_page").to_string()),
+                            )
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().link)
+                                            .child(release_page_url),
+                                    )
+                                    .child(Clipboard::new("release-url-copy").value(release_page_url))
+                                    .child(
+                                        Button::new("release-url-open")
+                                            .xsmall()
+                                            .ghost()
+                                            .icon(gpui_component::IconName::ExternalLink)
+                                            .on_click(move |_, _, cx| {
+                                                cx.open_url(&release_page_url);
+                                            }),
+                                    ),
+                            ),
+                    )
                 ),
             )
             .child(
