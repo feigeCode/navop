@@ -3,7 +3,7 @@ use gpui::App;
 use one_core::settings::McpToolsetSettings;
 use public_mcp::tools::{
     InternalFunctionToolProvider, PublicMcpToolProvider, PublicMcpToolRegistry,
-    TerminalToolProvider, ToolRuntimeMcpProvider,
+    RemoteOpsToolProvider, ToolRuntimeMcpProvider,
 };
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ pub(super) fn build_tool_registry(
     let mut providers: Vec<Arc<dyn PublicMcpToolProvider>> = Vec::new();
     if toolsets.terminal {
         if let Some(registry) = terminal_view::public_mcp::registry(cx) {
-            providers.push(Arc::new(TerminalToolProvider::new(registry)));
+            providers.push(Arc::new(RemoteOpsToolProvider::new(registry)));
         } else {
             tracing::warn!("Public MCP terminal registry is not initialized");
         }

@@ -32,7 +32,7 @@ use crate::cd_completion::{
     CdCompletionQuery, build_cd_completion_suggestions, parse_cd_completion_query,
 };
 use crate::history_prompt::{HistoryPromptAccept, HistoryPromptMode, HistoryPromptState};
-use crate::public_mcp::{TerminalPublicMcpCommand, TerminalPublicMcpRegistration};
+use crate::public_mcp::TerminalPublicMcpRegistration;
 use crate::settings::{
     GlobalTerminalLocalSettings, TerminalHighlightRule, TerminalSettings, TerminalSettingsEvent,
     current_settings, update_settings,
@@ -1183,22 +1183,11 @@ impl TerminalView {
     }
 
     fn register_public_mcp_session(&mut self, cx: &mut Context<Self>) {
-        let Some((registration, mut command_rx)) = ({
-            let terminal = self.terminal.read(cx);
-            crate::public_mcp::register_terminal(terminal, cx)
-        }) else {
+        let terminal = self.terminal.read(cx);
+        let Some(registration) = crate::public_mcp::register_terminal(terminal, cx) else {
             return;
         };
-
         self.public_mcp_registration = Some(registration);
-        cx.spawn(async move |this, cx| {
-            while let Some(command) = command_rx.recv().await {
-                let _ = this.update(cx, |this, cx| {
-                    this.handle_public_mcp_command(command, cx);
-                });
-            }
-        })
-        .detach();
     }
 
     fn refresh_public_mcp_session(&self, cx: &mut Context<Self>) {
@@ -1211,22 +1200,6 @@ impl TerminalView {
     fn unregister_public_mcp_session(&mut self, cx: &mut Context<Self>) {
         if let Some(registration) = self.public_mcp_registration.take() {
             registration.unregister(cx);
-        }
-    }
-
-    fn handle_public_mcp_command(
-        &mut self,
-        command: TerminalPublicMcpCommand,
-        cx: &mut Context<Self>,
-    ) {
-        match command {
-            TerminalPublicMcpCommand::VisibleText(sender) => {
-                let _ = sender.send(Ok(self.terminal.read(cx).visible_text()));
-            }
-            TerminalPublicMcpCommand::Write(data, sender) => {
-                self.terminal.read(cx).write_external_input(&data);
-                let _ = sender.send(Ok(()));
-            }
         }
     }
 

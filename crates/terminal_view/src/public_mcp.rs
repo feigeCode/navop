@@ -1,16 +1,11 @@
-use anyhow::{Result, anyhow};
 use gpui::{App, Global};
 use public_mcp::registry::{
     ConnectionState as McpConnectionState, PublicMcpRegistry, TerminalConnectionKind as McpKind,
     TerminalSessionHandle, TerminalSessionSnapshot,
 };
-use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 use terminal::terminal::{ConnectionState, Terminal, TerminalConnectionKind};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use uuid::Uuid;
-
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct GlobalPublicMcpRegistry(pub PublicMcpRegistry);
 
@@ -45,22 +40,12 @@ impl TerminalPublicMcpRegistration {
     pub fn unregister(&self, cx: &App) {
         if let Some(registry) = registry(cx) {
             registry.unregister(&self.session_id);
+            registry.unregister_remote_ops(&self.session_id);
         }
     }
 }
 
-pub enum TerminalPublicMcpCommand {
-    VisibleText(mpsc::Sender<Result<String, String>>),
-    Write(Vec<u8>, mpsc::Sender<Result<(), String>>),
-}
-
-pub fn register_terminal(
-    terminal: &Terminal,
-    cx: &App,
-) -> Option<(
-    TerminalPublicMcpRegistration,
-    UnboundedReceiver<TerminalPublicMcpCommand>,
-)> {
+pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublicMcpRegistration> {
     if terminal.connection_kind() != TerminalConnectionKind::Ssh {
         return None;
     }
@@ -71,22 +56,27 @@ pub fn register_terminal(
         session_id.clone(),
         terminal,
     )));
-    let (command_tx, command_rx) = unbounded_channel();
-    let handle = ThreadSafeTerminalHandle {
+    let target_registry = registry(cx)?;
+    target_registry.register(ThreadSafeTerminalHandle {
         state: state.clone(),
-        command_tx,
-    };
-    registry(cx)?.register(handle);
+    });
 
-    Some((
-        TerminalPublicMcpRegistration { session_id, state },
-        command_rx,
-    ))
+    // 注册结构化远程操作桥。remote ops 与 terminal handle 共享同一份 state，一次 refresh 同步两者。
+    if let Some(session_manager) = terminal.ssh_session_manager() {
+        let command_store = target_registry.command_store().clone();
+        let remote_ops = crate::public_mcp_remote_ops::SshRemoteOpsHandle::with_shared_state(
+            session_manager.clone(),
+            state.clone(),
+            command_store,
+        );
+        target_registry.register_remote_ops(remote_ops);
+    }
+
+    Some(TerminalPublicMcpRegistration { session_id, state })
 }
 
 struct ThreadSafeTerminalHandle {
     state: Arc<Mutex<TerminalSessionSnapshot>>,
-    command_tx: UnboundedSender<TerminalPublicMcpCommand>,
 }
 
 impl TerminalSessionHandle for ThreadSafeTerminalHandle {
@@ -96,28 +86,6 @@ impl TerminalSessionHandle for ThreadSafeTerminalHandle {
             .expect("public MCP state lock poisoned")
             .clone()
     }
-
-    fn visible_text(&self) -> Result<String> {
-        let (tx, rx) = mpsc::channel();
-        self.command_tx
-            .send(TerminalPublicMcpCommand::VisibleText(tx))
-            .map_err(|_| anyhow!("terminal MCP command channel closed"))?;
-        recv_response(rx)
-    }
-
-    fn write_external_input(&self, data: &[u8]) -> Result<()> {
-        let (tx, rx) = mpsc::channel();
-        self.command_tx
-            .send(TerminalPublicMcpCommand::Write(data.to_vec(), tx))
-            .map_err(|_| anyhow!("terminal MCP command channel closed"))?;
-        recv_response(rx)
-    }
-}
-
-fn recv_response<T>(rx: mpsc::Receiver<Result<T, String>>) -> Result<T> {
-    rx.recv_timeout(COMMAND_TIMEOUT)
-        .map_err(|_| anyhow!("terminal MCP command timed out"))?
-        .map_err(|message| anyhow!(message))
 }
 
 fn snapshot_for_terminal(session_id: String, terminal: &Terminal) -> TerminalSessionSnapshot {

@@ -6,6 +6,7 @@ pub mod highlight_presets;
 pub mod history_prompt;
 pub mod keys;
 pub mod public_mcp;
+pub mod public_mcp_remote_ops;
 pub mod serial_form_window;
 pub mod settings;
 pub mod sidebar;

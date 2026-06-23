@@ -1,7 +1,7 @@
 mod internal;
 mod redis;
 mod registry;
-mod terminal;
+mod remote_ops;
 mod tool_runtime_adapter;
 
 pub use internal::{
@@ -9,7 +9,7 @@ pub use internal::{
 };
 pub use redis::{RedisConnectionSnapshot, RedisConnectionSnapshotProvider, RedisToolProvider};
 pub use registry::{PublicMcpToolRegistry, PublicMcpToolRegistryError};
-pub use terminal::TerminalToolProvider;
+pub use remote_ops::RemoteOpsToolProvider;
 pub use tool_runtime_adapter::ToolRuntimeMcpProvider;
 
 use crate::approval::{PublicMcpApprovalManager, PublicMcpApprovalOutcome};

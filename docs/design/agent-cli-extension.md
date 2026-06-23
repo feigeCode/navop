@@ -297,15 +297,19 @@ main
 也就是说，`public_mcp` 不应长期拥有唯一的 tool registry。它应该从主包
 `tool_runtime` 读取 tool 列表，并只处理 MCP 协议、discovery 和 transport。
 
-当前 `public_mcp` 中的 terminal session 工具可以迁移成：
+当前 `public_mcp` 暴露的工具可以迁移成：
 
 ```text
-public_mcp.list_sessions      -> terminal.session.list
-public_mcp.terminal_snapshot  -> terminal.session.snapshot
-public_mcp.terminal_write     -> terminal.session.write
+public_mcp.list_sessions        -> terminal.session.list
+public_mcp.remote_exec          -> remote.exec
+public_mcp.remote_command_poll  -> remote.command.poll
+public_mcp.remote_command_output -> remote.command.output
+public_mcp.remote_command_cancel -> remote.command.cancel
+public_mcp.remote_file_write    -> remote.file.write
+public_mcp.session_diagnostics  -> session.diagnostics
 ```
 
-迁移时保留兼容 alias，避免已有 MCP 客户端配置立即失效。
+旧版 `terminal_snapshot`/`terminal_write`（终端粘贴/屏幕读取）已被移除，结构化远程执行工具成为唯一执行通道，不再保留兼容 alias。
 
 ## 主包内置策略
 

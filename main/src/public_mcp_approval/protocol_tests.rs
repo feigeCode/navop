@@ -3,53 +3,104 @@ use public_mcp::approval::PublicMcpApprovalManager;
 use public_mcp::permissions::PermissionMode;
 use public_mcp::protocol::PublicMcpServer;
 use public_mcp::registry::{
-    ConnectionState, PublicMcpRegistry, TerminalConnectionKind, TerminalSessionHandle,
-    TerminalSessionSnapshot,
+    ConnectionState, PublicMcpRegistry, RemoteOpsSessionHandle, TerminalConnectionKind,
+    TerminalSessionHandle, TerminalSessionSnapshot,
+};
+use public_mcp::remote_ops::{
+    RemoteCommandMode, RemoteCommandStatus, RemoteExecRequest, RemoteExecResult,
+    RemoteFileWriteRequest, RemoteFileWriteResult, SessionDiagnosticsRequest,
+    SessionDiagnosticsResult,
 };
 use public_mcp::server::serve_on_stream;
 use public_mcp::tools::PublicMcpToolRegistry;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[derive(Clone)]
-struct FakeTerminal {
-    writes: Arc<Mutex<Vec<Vec<u8>>>>,
+struct FakeRemoteSession {
+    executed_commands: Arc<Mutex<Vec<String>>>,
 }
 
-impl TerminalSessionHandle for FakeTerminal {
+fn fake_snapshot() -> TerminalSessionSnapshot {
+    TerminalSessionSnapshot {
+        session_id: "ssh-1".to_string(),
+        connection_id: Some(42),
+        title: "prod shell".to_string(),
+        host_label: "prod.example".to_string(),
+        cwd: Some("/srv/app".to_string()),
+        rows: 30,
+        cols: 120,
+        connection_kind: TerminalConnectionKind::Ssh,
+        connection_state: ConnectionState::Connected,
+    }
+}
+
+impl TerminalSessionHandle for FakeRemoteSession {
     fn snapshot(&self) -> TerminalSessionSnapshot {
-        TerminalSessionSnapshot {
-            session_id: "ssh-1".to_string(),
+        fake_snapshot()
+    }
+}
+
+impl RemoteOpsSessionHandle for FakeRemoteSession {
+    fn snapshot(&self) -> TerminalSessionSnapshot {
+        fake_snapshot()
+    }
+
+    fn exec(&self, request: RemoteExecRequest) -> anyhow::Result<RemoteExecResult> {
+        self.executed_commands
+            .lock()
+            .unwrap()
+            .push(request.command.clone());
+        Ok(RemoteExecResult::foreground(
+            RemoteCommandStatus::Exited,
+            "/srv/app\n".to_string(),
+            String::new(),
+            Some(0),
+            5,
+            false,
+        ))
+    }
+
+    fn write_file(&self, request: RemoteFileWriteRequest) -> anyhow::Result<RemoteFileWriteResult> {
+        Ok(RemoteFileWriteResult {
+            path: request.path,
+            bytes_written: request.content.len(),
+            sha256: "abc".to_string(),
+        })
+    }
+
+    fn diagnostics(
+        &self,
+        request: SessionDiagnosticsRequest,
+    ) -> anyhow::Result<SessionDiagnosticsResult> {
+        Ok(SessionDiagnosticsResult {
+            session_id: request.session_id,
             connection_id: Some(42),
-            title: "prod shell".to_string(),
             host_label: "prod.example".to_string(),
             cwd: Some("/srv/app".to_string()),
             rows: 30,
             cols: 120,
             connection_kind: TerminalConnectionKind::Ssh,
-            connection_state: ConnectionState::Connected,
-        }
-    }
-
-    fn visible_text(&self) -> anyhow::Result<String> {
-        Ok(String::new())
-    }
-
-    fn write_external_input(&self, data: &[u8]) -> anyhow::Result<()> {
-        self.writes.lock().unwrap().push(data.to_vec());
-        Ok(())
+            state: ConnectionState::Connected,
+            last_error: None,
+            recoverable: true,
+            suggested_action: None,
+        })
     }
 }
 
 #[tokio::test]
-async fn channel_approval_bridges_mcp_terminal_write_until_resolved() {
-    let writes = Arc::new(Mutex::new(Vec::new()));
+async fn channel_approval_bridges_mcp_remote_exec_until_resolved() {
+    let executed_commands = Arc::new(Mutex::new(Vec::new()));
     let registry = PublicMcpRegistry::default();
-    registry.register(FakeTerminal {
-        writes: writes.clone(),
-    });
+    let session = FakeRemoteSession {
+        executed_commands: executed_commands.clone(),
+    };
+    registry.register(session.clone());
+    registry.register_remote_ops(session);
     let (approver, mut receiver) = channel_approver(Duration::from_secs(10));
     let protocol = PublicMcpServer::with_tool_registry_and_approval(
         PublicMcpToolRegistry::terminal(registry),
@@ -65,10 +116,10 @@ async fn channel_approval_bridges_mcp_terminal_write_until_resolved() {
                 "id": 2,
                 "method": "tools/call",
                 "params": {
-                    "name": "public_mcp.terminal_write",
+                    "name": "public_mcp.remote_exec",
                     "arguments": {
                         "session_id": "ssh-1",
-                        "input": "date\n"
+                        "command": "pwd"
                     }
                 }
             }))
@@ -76,13 +127,13 @@ async fn channel_approval_bridges_mcp_terminal_write_until_resolved() {
     });
 
     let envelope = receiver.recv().await.expect("approval should be queued");
-    assert_eq!("public_mcp.terminal_write", envelope.request.tool_name);
-    assert_eq!("Write to terminal session ssh-1", envelope.request.summary);
+    assert_eq!("public_mcp.remote_exec", envelope.request.tool_name);
+    assert_eq!("Execute remote command on ssh-1", envelope.request.summary);
     envelope.approve();
 
     let response = request.await.expect("MCP call should complete");
-    assert_eq!(json!(true), response["result"]["structuredContent"]["ok"]);
-    assert_eq!(vec![b"date\n".to_vec()], *writes.lock().unwrap());
+    assert_eq!(0, response["result"]["structuredContent"]["exit_code"]);
+    assert_eq!(vec!["pwd".to_string()], *executed_commands.lock().unwrap());
 }
 
 struct TestClient {

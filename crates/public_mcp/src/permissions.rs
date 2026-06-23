@@ -14,6 +14,11 @@ pub enum PublicMcpOperationKind {
     ReadTerminal,
     WriteTerminal,
     CallInternalFunction,
+    ReadSessionDiagnostics,
+    ExecuteRemoteCommand,
+    CancelRemoteCommand,
+    WriteRemoteFile,
+    ReadRemoteCommandOutput,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,7 +32,12 @@ pub fn decide_permission(
     mode: PermissionMode,
     operation: PublicMcpOperationKind,
 ) -> ApprovalDecision {
-    if matches!(operation, PublicMcpOperationKind::ReadTerminal) {
+    if matches!(
+        operation,
+        PublicMcpOperationKind::ReadTerminal
+            | PublicMcpOperationKind::ReadSessionDiagnostics
+            | PublicMcpOperationKind::ReadRemoteCommandOutput
+    ) {
         return ApprovalDecision::Allow;
     }
 

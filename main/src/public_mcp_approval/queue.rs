@@ -65,9 +65,9 @@ mod tests {
 
     fn request() -> PublicMcpApprovalRequest {
         PublicMcpApprovalRequest {
-            operation: PublicMcpOperationKind::WriteTerminal,
-            tool_name: "public_mcp.terminal_write".to_string(),
-            summary: "Write to terminal".to_string(),
+            operation: PublicMcpOperationKind::ExecuteRemoteCommand,
+            tool_name: "public_mcp.remote_exec".to_string(),
+            summary: "Execute remote command".to_string(),
             details: json!({ "session_id": "ssh-1" }),
         }
     }

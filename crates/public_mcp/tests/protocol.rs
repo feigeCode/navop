@@ -5,8 +5,12 @@ use public_mcp::approval::{
 use public_mcp::permissions::PermissionMode;
 use public_mcp::protocol::PublicMcpServer;
 use public_mcp::registry::{
-    ConnectionState, PublicMcpRegistry, TerminalConnectionKind, TerminalSessionHandle,
-    TerminalSessionSnapshot,
+    ConnectionState, PublicMcpRegistry, RemoteOpsSessionHandle, TerminalConnectionKind,
+    TerminalSessionHandle, TerminalSessionSnapshot,
+};
+use public_mcp::remote_ops::{
+    RemoteCommandStatus, RemoteExecRequest, RemoteExecResult, RemoteFileWriteRequest,
+    RemoteFileWriteResult, SessionDiagnosticsRequest, SessionDiagnosticsResult,
 };
 use public_mcp::server::serve_on_stream;
 use public_mcp::tools::PublicMcpToolRegistry;
@@ -15,32 +19,75 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[derive(Clone)]
-struct FakeTerminal {
-    writes: Arc<Mutex<Vec<Vec<u8>>>>,
+struct FakeRemoteSession {
+    executed_commands: Arc<Mutex<Vec<String>>>,
 }
 
-impl TerminalSessionHandle for FakeTerminal {
+fn fake_snapshot() -> TerminalSessionSnapshot {
+    TerminalSessionSnapshot {
+        session_id: "ssh-1".to_string(),
+        connection_id: Some(42),
+        title: "prod shell".to_string(),
+        host_label: "prod.example".to_string(),
+        cwd: Some("/srv/app".to_string()),
+        rows: 30,
+        cols: 120,
+        connection_kind: TerminalConnectionKind::Ssh,
+        connection_state: ConnectionState::Connected,
+    }
+}
+
+impl TerminalSessionHandle for FakeRemoteSession {
     fn snapshot(&self) -> TerminalSessionSnapshot {
-        TerminalSessionSnapshot {
-            session_id: "ssh-1".to_string(),
+        fake_snapshot()
+    }
+}
+
+impl RemoteOpsSessionHandle for FakeRemoteSession {
+    fn snapshot(&self) -> TerminalSessionSnapshot {
+        fake_snapshot()
+    }
+
+    fn exec(&self, request: RemoteExecRequest) -> anyhow::Result<RemoteExecResult> {
+        self.executed_commands
+            .lock()
+            .unwrap()
+            .push(request.command.clone());
+        Ok(RemoteExecResult::foreground(
+            RemoteCommandStatus::Exited,
+            "/srv/app\n".to_string(),
+            String::new(),
+            Some(0),
+            5,
+            false,
+        ))
+    }
+
+    fn write_file(&self, request: RemoteFileWriteRequest) -> anyhow::Result<RemoteFileWriteResult> {
+        Ok(RemoteFileWriteResult {
+            path: request.path,
+            bytes_written: request.content.len(),
+            sha256: "abc".to_string(),
+        })
+    }
+
+    fn diagnostics(
+        &self,
+        request: SessionDiagnosticsRequest,
+    ) -> anyhow::Result<SessionDiagnosticsResult> {
+        Ok(SessionDiagnosticsResult {
+            session_id: request.session_id,
             connection_id: Some(42),
-            title: "prod shell".to_string(),
             host_label: "prod.example".to_string(),
             cwd: Some("/srv/app".to_string()),
             rows: 30,
             cols: 120,
             connection_kind: TerminalConnectionKind::Ssh,
-            connection_state: ConnectionState::Connected,
-        }
-    }
-
-    fn visible_text(&self) -> anyhow::Result<String> {
-        Ok("hello from terminal".to_string())
-    }
-
-    fn write_external_input(&self, data: &[u8]) -> anyhow::Result<()> {
-        self.writes.lock().unwrap().push(data.to_vec());
-        Ok(())
+            state: ConnectionState::Connected,
+            last_error: None,
+            recoverable: true,
+            suggested_action: None,
+        })
     }
 }
 
@@ -74,8 +121,8 @@ impl PublicMcpApprover for FixedApprover {
 #[tokio::test]
 async fn tools_call_list_sessions_returns_connected_sessions() {
     let registry = PublicMcpRegistry::default();
-    registry.register(FakeTerminal {
-        writes: Arc::new(Mutex::new(Vec::new())),
+    registry.register(FakeRemoteSession {
+        executed_commands: Arc::new(Mutex::new(Vec::new())),
     });
     let mut client = TestClient::connect(registry, PermissionMode::Allow).await;
 
@@ -99,12 +146,14 @@ async fn tools_call_list_sessions_returns_connected_sessions() {
 }
 
 #[tokio::test]
-async fn terminal_write_rejects_when_permission_mode_denies_writes() {
-    let writes = Arc::new(Mutex::new(Vec::new()));
+async fn remote_exec_rejects_when_permission_mode_denies() {
+    let executed_commands = Arc::new(Mutex::new(Vec::new()));
     let registry = PublicMcpRegistry::default();
-    registry.register(FakeTerminal {
-        writes: writes.clone(),
-    });
+    let session = FakeRemoteSession {
+        executed_commands: executed_commands.clone(),
+    };
+    registry.register(session.clone());
+    registry.register_remote_ops(session);
     let mut client = TestClient::connect(registry, PermissionMode::Deny).await;
 
     let response = client
@@ -113,10 +162,10 @@ async fn terminal_write_rejects_when_permission_mode_denies_writes() {
             "id": 3,
             "method": "tools/call",
             "params": {
-                "name": "public_mcp.terminal_write",
+                "name": "public_mcp.remote_exec",
                 "arguments": {
                     "session_id": "ssh-1",
-                    "input": "date\n"
+                    "command": "pwd"
                 }
             }
         }))
@@ -127,16 +176,74 @@ async fn terminal_write_rejects_when_permission_mode_denies_writes() {
         response["result"]["structuredContent"]["code"]
     );
     assert_eq!(json!(true), response["result"]["isError"]);
-    assert!(writes.lock().unwrap().is_empty());
+    assert!(executed_commands.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn terminal_write_asks_and_writes_when_approved() {
-    let writes = Arc::new(Mutex::new(Vec::new()));
+async fn remote_exec_uses_updated_permission_mode() {
+    let executed_commands = Arc::new(Mutex::new(Vec::new()));
     let registry = PublicMcpRegistry::default();
-    registry.register(FakeTerminal {
-        writes: writes.clone(),
-    });
+    let session = FakeRemoteSession {
+        executed_commands: executed_commands.clone(),
+    };
+    registry.register(session.clone());
+    registry.register_remote_ops(session);
+    let permission = public_mcp::protocol::SharedPermissionMode::new(PermissionMode::Deny);
+    let protocol = PublicMcpServer::with_shared_permission(
+        PublicMcpToolRegistry::terminal(registry),
+        permission.clone(),
+    );
+    let mut client = TestClient::connect_protocol(protocol).await;
+
+    let denied = client
+        .request(json!({
+            "jsonrpc": "2.0",
+            "id": 30,
+            "method": "tools/call",
+            "params": {
+                "name": "public_mcp.remote_exec",
+                "arguments": {
+                    "session_id": "ssh-1",
+                    "command": "pwd"
+                }
+            }
+        }))
+        .await;
+
+    assert_eq!(
+        "permission_denied",
+        denied["result"]["structuredContent"]["code"]
+    );
+    permission.set(PermissionMode::Allow);
+
+    let allowed = client
+        .request(json!({
+            "jsonrpc": "2.0",
+            "id": 31,
+            "method": "tools/call",
+            "params": {
+                "name": "public_mcp.remote_exec",
+                "arguments": {
+                    "session_id": "ssh-1",
+                    "command": "pwd"
+                }
+            }
+        }))
+        .await;
+
+    assert_eq!(0, allowed["result"]["structuredContent"]["exit_code"]);
+    assert_eq!(vec!["pwd".to_string()], *executed_commands.lock().unwrap());
+}
+
+#[tokio::test]
+async fn remote_exec_asks_and_runs_when_approved() {
+    let executed_commands = Arc::new(Mutex::new(Vec::new()));
+    let registry = PublicMcpRegistry::default();
+    let session = FakeRemoteSession {
+        executed_commands: executed_commands.clone(),
+    };
+    registry.register(session.clone());
+    registry.register_remote_ops(session);
     let approver = Arc::new(FixedApprover::new(PublicMcpApprovalOutcome::Approved));
     let mut client = TestClient::connect_with_approval(
         registry,
@@ -151,29 +258,31 @@ async fn terminal_write_asks_and_writes_when_approved() {
             "id": 4,
             "method": "tools/call",
             "params": {
-                "name": "public_mcp.terminal_write",
+                "name": "public_mcp.remote_exec",
                 "arguments": {
                     "session_id": "ssh-1",
-                    "input": "date\n"
+                    "command": "pwd"
                 }
             }
         }))
         .await;
 
-    assert_eq!(json!(true), response["result"]["structuredContent"]["ok"]);
-    assert_eq!(vec![b"date\n".to_vec()], *writes.lock().unwrap());
+    assert_eq!(0, response["result"]["structuredContent"]["exit_code"]);
+    assert_eq!(vec!["pwd".to_string()], *executed_commands.lock().unwrap());
     let requests = approver.requests();
     assert_eq!(1, requests.len());
-    assert_eq!("public_mcp.terminal_write", requests[0].tool_name);
+    assert_eq!("public_mcp.remote_exec", requests[0].tool_name);
 }
 
 #[tokio::test]
-async fn terminal_write_asks_and_does_not_write_when_denied() {
-    let writes = Arc::new(Mutex::new(Vec::new()));
+async fn remote_exec_asks_and_does_not_run_when_denied() {
+    let executed_commands = Arc::new(Mutex::new(Vec::new()));
     let registry = PublicMcpRegistry::default();
-    registry.register(FakeTerminal {
-        writes: writes.clone(),
-    });
+    let session = FakeRemoteSession {
+        executed_commands: executed_commands.clone(),
+    };
+    registry.register(session.clone());
+    registry.register_remote_ops(session);
     let approver = Arc::new(FixedApprover::new(PublicMcpApprovalOutcome::Denied {
         reason: Some("operator denied".to_string()),
     }));
@@ -190,10 +299,10 @@ async fn terminal_write_asks_and_does_not_write_when_denied() {
             "id": 5,
             "method": "tools/call",
             "params": {
-                "name": "public_mcp.terminal_write",
+                "name": "public_mcp.remote_exec",
                 "arguments": {
                     "session_id": "ssh-1",
-                    "input": "date\n"
+                    "command": "pwd"
                 }
             }
         }))
@@ -208,7 +317,7 @@ async fn terminal_write_asks_and_does_not_write_when_denied() {
         response["result"]["structuredContent"]["message"]
     );
     assert_eq!(json!(true), response["result"]["isError"]);
-    assert!(writes.lock().unwrap().is_empty());
+    assert!(executed_commands.lock().unwrap().is_empty());
     assert_eq!(1, approver.requests().len());
 }
 
