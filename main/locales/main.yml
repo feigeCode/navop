@@ -97,6 +97,14 @@ Home:
     en: Import
     zh-CN: 导入
     zh-HK: 導入
+  card_view:
+    en: Card View
+    zh-CN: 卡片视图
+    zh-HK: 卡片視圖
+  list_view:
+    en: List View
+    zh-CN: 列表视图
+    zh-HK: 列表視圖
   refresh:
     en: Refresh
     zh-CN: 刷新

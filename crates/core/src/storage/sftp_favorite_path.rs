@@ -297,6 +297,7 @@ mod tests {
             cloud_id: None,
             last_synced_at: None,
             last_used_at: None,
+            sort_order: None,
             created_at: None,
             updated_at: None,
             team_id: None,
