@@ -32,23 +32,27 @@ pub(crate) fn mcp_helper_install_item() -> SettingItem {
     SettingItem::new(
         t!("Settings.General.Mcp.install_helper"),
         SettingField::render(|_, _, cx| {
-            v_flex()
-                .gap_1()
-                .child(
+            let installing = helper_install_in_progress();
+            let installed = !installing && helper_is_installed();
+            let status_text = helper_install_status();
+            let mut container = v_flex().gap_1();
+            if !installed {
+                container = container.child(
                     h_flex().child(
                         Button::new(mcp_helper_install_item_id())
                             .primary()
                             .label(t!("Settings.General.Mcp.install_helper_button"))
-                            .disabled(helper_install_in_progress())
+                            .disabled(installing)
                             .on_click(|_, window, cx| install_mcp_helper(window, cx)),
                     ),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(helper_install_status()),
-                )
+                );
+            }
+            container.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(status_text),
+            )
         }),
     )
     .description(t!("Settings.General.Mcp.install_helper_desc").to_string())
@@ -117,6 +121,13 @@ fn helper_install_status_for_resolved_install(install: &ClientConfigInstall) -> 
         }
         Ok(Some(_)) => t!("Settings.General.Mcp.helper_status_missing", path = path).to_string(),
         Err(error) => error.to_string(),
+    }
+}
+
+fn helper_is_installed() -> bool {
+    match ClientConfigInstall::from_current_app() {
+        Ok(install) => matches!(helper_unavailable_health(&install.launcher_path), Ok(None)),
+        Err(_) => false,
     }
 }
 

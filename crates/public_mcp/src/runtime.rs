@@ -3,7 +3,7 @@ use crate::discovery::{
     DiscoveryDocument, PublicMcpMode, public_mcp_discovery_path, remove_discovery, write_discovery,
 };
 use crate::permissions::PermissionMode;
-use crate::protocol::PublicMcpServer;
+use crate::protocol::{PublicMcpServer, SharedPermissionMode};
 use crate::registry::PublicMcpRegistry;
 use crate::server::LoopbackMcpServer;
 use crate::tools::PublicMcpToolRegistry;
@@ -34,6 +34,7 @@ pub enum PublicMcpState {
 pub struct PublicMcpRuntime {
     server: LoopbackMcpServer,
     discovery_path: PathBuf,
+    permission_mode: SharedPermissionMode,
 }
 
 impl PublicMcpRuntime {
@@ -86,9 +87,10 @@ impl PublicMcpRuntime {
     ) -> Result<Self> {
         let _ = remove_discovery(&discovery_path);
         let token = generate_token();
-        let protocol = PublicMcpServer::with_tool_registry_and_approval(
+        let shared_permission = SharedPermissionMode::new(permission_mode);
+        let protocol = PublicMcpServer::with_shared_permission_and_approval(
             tool_registry,
-            permission_mode,
+            shared_permission.clone(),
             approval_manager,
         );
         let server = LoopbackMcpServer::bind(protocol, token.clone()).await?;
@@ -97,6 +99,7 @@ impl PublicMcpRuntime {
         Ok(Self {
             server,
             discovery_path,
+            permission_mode: shared_permission,
         })
     }
 
@@ -110,6 +113,10 @@ impl PublicMcpRuntime {
 
     pub fn client_count(&self) -> usize {
         self.server.client_count()
+    }
+
+    pub fn set_permission_mode(&self, permission_mode: PermissionMode) {
+        self.permission_mode.set(permission_mode);
     }
 }
 

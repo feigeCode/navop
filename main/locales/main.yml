@@ -1010,6 +1010,18 @@ Settings:
         en: "Failed to install MCP client config: %{error}"
         zh-CN: "MCP 客户端配置安装失败：%{error}"
         zh-HK: "MCP 客戶端配置安裝失敗：%{error}"
+      uninstall_client_config:
+        en: Uninstall
+        zh-CN: 卸载
+        zh-HK: 卸載
+      uninstall_client_config_success:
+        en: "MCP client config uninstalled: %{path}"
+        zh-CN: "MCP 客户端配置已卸载：%{path}"
+        zh-HK: "MCP 客戶端配置已卸載：%{path}"
+      uninstall_client_config_failed:
+        en: "Failed to uninstall MCP client config: %{error}"
+        zh-CN: "MCP 客户端配置卸载失败：%{error}"
+        zh-HK: "MCP 客戶端配置卸載失敗：%{error}"
       client_config_status_up_to_date:
         en: Up to date
         zh-CN: 已是最新

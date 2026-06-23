@@ -6,7 +6,11 @@ use image::{ImageBuffer, Rgba};
 /// The remote desktop backend produces normal RGBA, so swap the red and blue
 /// channels before handing the buffer to GPUI, otherwise blue Windows chrome
 /// renders as yellow/orange.
-pub fn rgba_to_render_image(width: u16, height: u16, mut rgba: Vec<u8>) -> anyhow::Result<RenderImage> {
+pub fn rgba_to_render_image(
+    width: u16,
+    height: u16,
+    mut rgba: Vec<u8>,
+) -> anyhow::Result<RenderImage> {
     for pixel in rgba.chunks_exact_mut(4) {
         pixel.swap(0, 2);
     }

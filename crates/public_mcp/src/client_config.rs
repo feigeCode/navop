@@ -181,6 +181,33 @@ pub fn helper_unavailable_health(path: &Path) -> Result<Option<ClientConfigHealt
     Ok(None)
 }
 
+/// 移除 Codex 配置中的托管 block；若文件仅剩托管配置则删除文件。
+pub fn uninstall_codex_config(path: &Path) -> Result<()> {
+    let existing = read_optional_text(path)?;
+    let cleaned = remove_codex_managed_block(&existing).trim().to_string();
+    if cleaned.is_empty() {
+        let _ = fs::remove_file(path);
+        return Ok(());
+    }
+    write_user_only_file(path, cleaned.into_bytes())
+}
+
+/// 从 Claude Desktop 配置中移除 onetcli MCP server 条目；若文件仅剩该条目且无其他内容则删除文件。
+pub fn uninstall_claude_desktop_config(path: &Path) -> Result<()> {
+    let mut root = read_optional_json_object(path)?;
+    if let Some(Value::Object(servers)) = root.get_mut("mcpServers") {
+        servers.remove(SERVER_NAME);
+        if servers.is_empty() {
+            root.remove("mcpServers");
+        }
+    }
+    if root.is_empty() {
+        let _ = fs::remove_file(path);
+        return Ok(());
+    }
+    write_user_only_file(path, serde_json::to_vec_pretty(&Value::Object(root))?)
+}
+
 #[cfg(unix)]
 fn helper_is_executable(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;

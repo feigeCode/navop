@@ -11535,6 +11535,7 @@ dependencies = [
  "serde_json",
  "serialport",
  "sftp",
+ "sha2 0.10.9",
  "ssh",
  "terminal",
  "tokio",

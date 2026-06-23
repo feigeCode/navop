@@ -14,7 +14,8 @@ use gpui_component::{
 use public_mcp::client_config::{
     ClientConfigHealth, ClientConfigInstall, claude_desktop_config_path, codex_config_path,
     helper_unavailable_health, inspect_claude_desktop_config, inspect_codex_config,
-    install_claude_desktop_config, install_codex_config,
+    install_claude_desktop_config, install_codex_config, uninstall_claude_desktop_config,
+    uninstall_codex_config,
 };
 use rust_i18n::t;
 use std::path::PathBuf;
@@ -63,17 +64,23 @@ fn mcp_client_config_item(target: McpClientConfigTarget) -> SettingItem {
     SettingItem::new(
         t!(target.title_key()),
         SettingField::render(move |_, _, cx| {
-            let model = client_config_item_view_model(inspect_client_config_for_target(target));
+            let inspected = inspect_client_config_for_target(target);
+            let health = inspected
+                .as_ref()
+                .map(|(_, h)| *h)
+                .unwrap_or(ClientConfigHealth::NotInstalled);
+            let model = client_config_item_view_model(&inspected);
+            let action_label = client_config_action_label(health);
             v_flex()
                 .gap_1()
                 .child(
                     h_flex().child(
                         Button::new(target.button_id())
                             .primary()
-                            .label(t!("Settings.General.Mcp.install_client_config"))
-                            .disabled(!model.install_enabled)
+                            .label(action_label)
+                            .disabled(!model.action_enabled)
                             .on_click(move |_, window, cx| {
-                                install_client_config(target, window, cx)
+                                execute_client_config_action(target, health, window, cx)
                             }),
                     ),
                 )
@@ -90,21 +97,33 @@ fn mcp_client_config_item(target: McpClientConfigTarget) -> SettingItem {
 
 struct McpClientConfigItemViewModel {
     status: String,
-    install_enabled: bool,
+    action_enabled: bool,
 }
 
 fn client_config_item_view_model(
-    inspected: Result<(PathBuf, ClientConfigHealth)>,
+    inspected: &Result<(PathBuf, ClientConfigHealth)>,
 ) -> McpClientConfigItemViewModel {
     match inspected {
         Ok((_, health)) => McpClientConfigItemViewModel {
-            status: t!(client_config_health_label_key(health)).to_string(),
-            install_enabled: client_config_install_enabled(health),
+            status: t!(client_config_health_label_key(*health)).to_string(),
+            action_enabled: client_config_action_enabled(*health),
         },
         Err(error) => McpClientConfigItemViewModel {
             status: error.to_string(),
-            install_enabled: false,
+            action_enabled: false,
         },
+    }
+}
+
+fn execute_client_config_action(
+    target: McpClientConfigTarget,
+    health: ClientConfigHealth,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    match health {
+        ClientConfigHealth::UpToDate => uninstall_client_config(target, window, cx),
+        _ => install_client_config(target, window, cx),
     }
 }
 
@@ -162,6 +181,50 @@ fn install_client_config_for_target(target: McpClientConfigTarget) -> Result<Pat
     Ok(config_path)
 }
 
+fn uninstall_client_config(target: McpClientConfigTarget, window: &mut Window, cx: &mut App) {
+    match uninstall_client_config_for_target(target) {
+        Ok(path) => window.push_notification(
+            Notification::success(
+                t!(
+                    "Settings.General.Mcp.uninstall_client_config_success",
+                    path = path.display().to_string()
+                )
+                .to_string(),
+            )
+            .autohide(true),
+            cx,
+        ),
+        Err(error) => window.push_notification(
+            Notification::error(
+                t!(
+                    "Settings.General.Mcp.uninstall_client_config_failed",
+                    error = error.to_string()
+                )
+                .to_string(),
+            )
+            .autohide(true),
+            cx,
+        ),
+    }
+}
+
+fn uninstall_client_config_for_target(target: McpClientConfigTarget) -> Result<PathBuf> {
+    match target {
+        McpClientConfigTarget::Codex => {
+            let path = codex_config_path()
+                .ok_or_else(|| anyhow::anyhow!("Codex config path is unavailable"))?;
+            uninstall_codex_config(&path)?;
+            Ok(path)
+        }
+        McpClientConfigTarget::Claude => {
+            let path = claude_desktop_config_path()
+                .ok_or_else(|| anyhow::anyhow!("Claude config path is unavailable"))?;
+            uninstall_claude_desktop_config(&path)?;
+            Ok(path)
+        }
+    }
+}
+
 fn inspect_client_config_for_target(
     target: McpClientConfigTarget,
 ) -> Result<(PathBuf, ClientConfigHealth)> {
@@ -199,11 +262,20 @@ fn client_config_health_label_key(health: ClientConfigHealth) -> &'static str {
     }
 }
 
-fn client_config_install_enabled(health: ClientConfigHealth) -> bool {
+fn client_config_action_enabled(health: ClientConfigHealth) -> bool {
     !matches!(
         health,
         ClientConfigHealth::MissingHelper | ClientConfigHealth::UnusableHelper
     )
+}
+
+fn client_config_action_label(health: ClientConfigHealth) -> String {
+    match health {
+        ClientConfigHealth::UpToDate => {
+            t!("Settings.General.Mcp.uninstall_client_config").to_string()
+        }
+        _ => t!("Settings.General.Mcp.install_client_config").to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -247,19 +319,39 @@ mod tests {
     }
 
     #[test]
-    fn client_config_install_button_is_disabled_when_helper_is_unavailable() {
-        assert!(!client_config_install_enabled(
+    fn client_config_action_button_is_disabled_when_helper_is_unavailable() {
+        assert!(!client_config_action_enabled(
             ClientConfigHealth::MissingHelper
         ));
-        assert!(!client_config_install_enabled(
+        assert!(!client_config_action_enabled(
             ClientConfigHealth::UnusableHelper
         ));
-        assert!(client_config_install_enabled(
+    }
+
+    #[test]
+    fn client_config_action_button_is_enabled_for_all_config_health_states() {
+        assert!(client_config_action_enabled(
             ClientConfigHealth::NotInstalled
         ));
-        assert!(client_config_install_enabled(
+        assert!(client_config_action_enabled(
             ClientConfigHealth::NeedsRepair
         ));
-        assert!(client_config_install_enabled(ClientConfigHealth::UpToDate));
+        assert!(client_config_action_enabled(ClientConfigHealth::UpToDate));
+    }
+
+    #[test]
+    fn client_config_button_shows_uninstall_when_up_to_date_and_install_otherwise() {
+        assert_eq!(
+            t!("Settings.General.Mcp.uninstall_client_config").to_string(),
+            client_config_action_label(ClientConfigHealth::UpToDate)
+        );
+        assert_eq!(
+            t!("Settings.General.Mcp.install_client_config").to_string(),
+            client_config_action_label(ClientConfigHealth::NotInstalled)
+        );
+        assert_eq!(
+            t!("Settings.General.Mcp.install_client_config").to_string(),
+            client_config_action_label(ClientConfigHealth::NeedsRepair)
+        );
     }
 }

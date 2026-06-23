@@ -35,6 +35,10 @@ impl PublicMcpStartConfig {
             toolsets: settings.mcp.toolsets.clone(),
         }
     }
+
+    pub fn requires_runtime_restart(&self, next: &Self) -> bool {
+        self.enabled != next.enabled || self.mode != next.mode || self.toolsets != next.toolsets
+    }
 }
 
 fn configured_enabled(settings: &AppSettings, session_enabled: bool) -> bool {
@@ -196,6 +200,31 @@ mod tests {
         assert!(!disabled.enabled);
         assert!(enabled.enabled);
         assert_eq!(PublicMcpMode::Temporary, enabled.mode);
+    }
+
+    #[test]
+    fn permission_mode_change_does_not_require_runtime_restart() {
+        let mut current = PublicMcpStartConfig::from_settings_and_env(
+            &settings(),
+            PublicMcpEnvOverride::default(),
+        );
+        let mut next = current.clone();
+        current.permission_mode = PermissionMode::Deny;
+        next.permission_mode = PermissionMode::Allow;
+
+        assert!(!current.requires_runtime_restart(&next));
+    }
+
+    #[test]
+    fn toolset_change_requires_runtime_restart() {
+        let current = PublicMcpStartConfig::from_settings_and_env(
+            &settings(),
+            PublicMcpEnvOverride::default(),
+        );
+        let mut next = current.clone();
+        next.toolsets.terminal = !next.toolsets.terminal;
+
+        assert!(current.requires_runtime_restart(&next));
     }
 
     #[test]

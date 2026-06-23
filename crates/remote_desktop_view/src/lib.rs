@@ -5,8 +5,8 @@ pub mod keyboard;
 mod modifiers;
 pub mod pixels;
 pub mod pointer;
+pub mod remote_desktop_form;
 mod shortcuts;
 pub mod view;
-pub mod remote_desktop_form;
 
-pub use view::{init, refresh_keybindings, RemoteDesktopView, RemoteDesktopViewConfig};
+pub use view::{RemoteDesktopView, RemoteDesktopViewConfig, init, refresh_keybindings};

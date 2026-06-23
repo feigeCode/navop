@@ -90,16 +90,29 @@ fn reconcile_runtime(cx: &mut App) {
         stop_runtime(cx);
         return;
     }
-    if active_config_matches(cx, &config) {
+    if update_active_runtime_without_restart(cx, &config) {
         return;
     }
     start_runtime(cx, config);
 }
 
-fn active_config_matches(cx: &App, config: &PublicMcpStartConfig) -> bool {
-    cx.try_global::<GlobalPublicMcpRuntime>()
-        .and_then(|state| state.active_config.as_ref())
-        == Some(config)
+fn update_active_runtime_without_restart(cx: &mut App, config: &PublicMcpStartConfig) -> bool {
+    let Some(state) = cx.try_global::<GlobalPublicMcpRuntime>() else {
+        return false;
+    };
+    let Some(active_config) = state.active_config.as_ref() else {
+        return false;
+    };
+    if active_config.requires_runtime_restart(config) || state.runtime.is_none() {
+        return false;
+    }
+
+    let state = cx.global_mut::<GlobalPublicMcpRuntime>();
+    if let Some(runtime) = state.runtime.as_ref() {
+        runtime.set_permission_mode(config.permission_mode);
+    }
+    state.active_config = Some(config.clone());
+    true
 }
 
 fn start_runtime(cx: &mut App, config: PublicMcpStartConfig) {
