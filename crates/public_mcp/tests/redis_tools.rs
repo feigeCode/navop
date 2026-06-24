@@ -1,14 +1,15 @@
 use public_mcp::permissions::PermissionMode;
 use public_mcp::tools::{
     PublicMcpToolContext, PublicMcpToolRegistry, RedisConnectionSnapshot,
-    RedisConnectionSnapshotProvider, RedisToolProvider,
+    RedisConnectionSnapshotProvider, RedisToolProvider, ToolRuntimeMcpProvider,
 };
 use serde_json::json;
 use std::sync::Arc;
+use tool_runtime::ToolRegistry;
 
 #[tokio::test]
 async fn redis_provider_lists_runtime_connections() {
-    let registry = PublicMcpToolRegistry::new(vec![Arc::new(RedisToolProvider::new(Arc::new(
+    let runtime_registry = ToolRegistry::new(vec![Arc::new(RedisToolProvider::new(Arc::new(
         FakeRedisSnapshots {
             connections: vec![
                 RedisConnectionSnapshot {
@@ -20,6 +21,9 @@ async fn redis_provider_lists_runtime_connections() {
             ],
         },
     )))]);
+    let registry = PublicMcpToolRegistry::new(vec![Arc::new(ToolRuntimeMcpProvider::new(
+        runtime_registry,
+    ))]);
 
     let result = registry
         .call_tool(

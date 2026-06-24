@@ -10,9 +10,10 @@ use public_mcp::remote_ops::{
     RemoteFileWriteRequest, RemoteFileWriteResult, SessionDiagnosticsRequest,
     SessionDiagnosticsResult,
 };
-use public_mcp::tools::{PublicMcpToolProvider, PublicMcpToolRegistry, RemoteOpsToolProvider};
+use public_mcp::tools::{PublicMcpToolRegistry, remote_ops_tool_registry};
 use serde_json::json;
 use std::collections::BTreeMap;
+use tool_runtime::ToolAdapter;
 
 #[derive(Clone)]
 struct FakeRemoteSession {
@@ -118,8 +119,6 @@ fn remote_ops_tools_are_registered() {
     assert!(names.contains(&"public_mcp.remote_command_poll".to_string()));
     assert!(names.contains(&"public_mcp.remote_command_output".to_string()));
     assert!(names.contains(&"public_mcp.remote_command_cancel".to_string()));
-    // 现有 terminal 工具仍存在
-    assert!(names.contains(&"public_mcp.terminal_write".to_string()));
 }
 
 #[test]
@@ -205,13 +204,13 @@ fn session_diagnostics_via_registry_works_for_connected_session() {
 #[test]
 fn provider_session_diagnostics_serializes_result() {
     let registry = registry_with_session();
-    let provider = RemoteOpsToolProvider::new(registry);
+    let runtime_registry = remote_ops_tool_registry(registry);
     let value = serde_json::to_value(
-        provider
-            .tools()
+        runtime_registry
+            .list(ToolAdapter::Mcp)
             .iter()
-            .find(|t| t.name == "public_mcp.session_diagnostics")
-            .map(|t| t.name.clone())
+            .find(|t| t.id == "public_mcp.session_diagnostics")
+            .map(|t| t.id.clone())
             .unwrap_or_default(),
     )
     .unwrap();

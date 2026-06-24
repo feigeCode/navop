@@ -1,28 +1,28 @@
-use super::{PublicMcpToolContext, PublicMcpToolFuture, PublicMcpToolProvider};
-use crate::approval::PublicMcpApprovalOutcome;
-use crate::permissions::{ApprovalDecision, PublicMcpOperationKind, decide_permission};
 use crate::registry::PublicMcpRegistry;
 use crate::remote_ops::{
-    DEFAULT_FOREGROUND_TIMEOUT_MS, DEFAULT_OUTPUT_LIMIT_BYTES, RemoteCommandCancelRequest,
-    RemoteCommandMode, RemoteCommandOutputRequest, RemoteCommandPollRequest, RemoteCommandSignal,
-    RemoteExecRequest, RemoteFileWriteRequest, SessionDiagnosticsRequest,
+    RemoteCommandCancelRequest, RemoteCommandMode, RemoteCommandOutputRequest,
+    RemoteCommandPollRequest, RemoteCommandSignal, RemoteExecRequest, RemoteFileWriteRequest,
+    SessionDiagnosticsRequest,
 };
 use rmcp::{
     ErrorData as McpError,
-    model::{CallToolResult, JsonObject, Tool, ToolAnnotations},
+    model::{CallToolResult, JsonObject},
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use tool_runtime::{
+    ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext, ToolDescriptor, ToolError,
+    ToolHandler, ToolMode, ToolRegistry, ToolResult,
+};
 
-/// 结构化远程操作工具提供者。基于 `PublicMcpRegistry` 暴露的非交互 SSH 执行能力。
 #[derive(Clone)]
-pub struct RemoteOpsToolProvider {
+struct RemoteOpsRuntime {
     registry: PublicMcpRegistry,
 }
 
-impl RemoteOpsToolProvider {
-    pub fn new(registry: PublicMcpRegistry) -> Self {
+impl RemoteOpsRuntime {
+    fn new(registry: PublicMcpRegistry) -> Self {
         Self { registry }
     }
 
@@ -74,23 +74,6 @@ impl RemoteOpsToolProvider {
         ))
     }
 
-    async fn remote_command_cancel(
-        &self,
-        arguments: Option<JsonObject>,
-        context: PublicMcpToolContext,
-    ) -> Result<CallToolResult, McpError> {
-        match decide_permission(
-            context.permission_mode,
-            PublicMcpOperationKind::CancelRemoteCommand,
-        ) {
-            ApprovalDecision::Allow => self.run_cancel(arguments.as_ref()),
-            ApprovalDecision::Ask => self.ask_then_cancel(arguments, context).await,
-            ApprovalDecision::Deny => Ok(permission_denied_result(
-                "remote command cancel denied by permission mode",
-            )),
-        }
-    }
-
     fn run_cancel(&self, arguments: Option<&JsonObject>) -> Result<CallToolResult, McpError> {
         let request = parse_cancel_args(arguments)?;
         let result = self
@@ -102,58 +85,6 @@ impl RemoteOpsToolProvider {
         ))
     }
 
-    async fn ask_then_cancel(
-        &self,
-        arguments: Option<JsonObject>,
-        context: PublicMcpToolContext,
-    ) -> Result<CallToolResult, McpError> {
-        let request = parse_cancel_args(arguments.as_ref())?;
-        let command_preview = self
-            .registry
-            .command_store()
-            .command_text(&request.command_id)
-            .map(|text| text.chars().take(160).collect::<String>())
-            .unwrap_or_default();
-        let outcome = context
-            .request_approval(
-                PublicMcpOperationKind::CancelRemoteCommand,
-                "public_mcp.remote_command_cancel",
-                format!("Cancel remote command {}", request.command_id),
-                json!({
-                    "command_id": request.command_id,
-                    "command_preview": command_preview,
-                    "signal": request.signal,
-                }),
-            )
-            .await;
-
-        match outcome {
-            PublicMcpApprovalOutcome::Approved => self.run_cancel(arguments.as_ref()),
-            PublicMcpApprovalOutcome::Denied { reason } => {
-                Ok(permission_denied_result(reason.unwrap_or_else(|| {
-                    "remote command cancel denied by approval".to_string()
-                })))
-            }
-        }
-    }
-
-    async fn remote_exec(
-        &self,
-        arguments: Option<JsonObject>,
-        context: PublicMcpToolContext,
-    ) -> Result<CallToolResult, McpError> {
-        match decide_permission(
-            context.permission_mode,
-            PublicMcpOperationKind::ExecuteRemoteCommand,
-        ) {
-            ApprovalDecision::Allow => self.run_remote_exec(arguments.as_ref()),
-            ApprovalDecision::Ask => self.ask_then_exec(arguments, context).await,
-            ApprovalDecision::Deny => Ok(permission_denied_result(
-                "remote exec denied by permission mode",
-            )),
-        }
-    }
-
     fn run_remote_exec(&self, arguments: Option<&JsonObject>) -> Result<CallToolResult, McpError> {
         let (session_id, request) = parse_exec_args(arguments)?;
         let result = self
@@ -163,58 +94,6 @@ impl RemoteOpsToolProvider {
         Ok(CallToolResult::structured(
             serde_json::to_value(result).map_err(internal_error)?,
         ))
-    }
-
-    async fn ask_then_exec(
-        &self,
-        arguments: Option<JsonObject>,
-        context: PublicMcpToolContext,
-    ) -> Result<CallToolResult, McpError> {
-        let (session_id, request) = parse_exec_args(arguments.as_ref())?;
-        let command_preview = request.command.chars().take(160).collect::<String>();
-        let risk = classify_command_risk(&request.command);
-        let outcome = context
-            .request_approval(
-                PublicMcpOperationKind::ExecuteRemoteCommand,
-                "public_mcp.remote_exec",
-                format!("Execute remote command on {session_id}"),
-                json!({
-                    "session_id": session_id,
-                    "command_preview": command_preview,
-                    "cwd": request.cwd,
-                    "env_keys": request.env.keys().collect::<Vec<_>>(),
-                    "mode": request.mode,
-                    "timeout_ms": request.timeout_ms.unwrap_or(DEFAULT_FOREGROUND_TIMEOUT_MS),
-                    "risk_classification": risk,
-                }),
-            )
-            .await;
-
-        match outcome {
-            PublicMcpApprovalOutcome::Approved => self.run_remote_exec(arguments.as_ref()),
-            PublicMcpApprovalOutcome::Denied { reason } => {
-                Ok(permission_denied_result(reason.unwrap_or_else(|| {
-                    "remote exec denied by approval".to_string()
-                })))
-            }
-        }
-    }
-
-    async fn remote_file_write(
-        &self,
-        arguments: Option<JsonObject>,
-        context: PublicMcpToolContext,
-    ) -> Result<CallToolResult, McpError> {
-        match decide_permission(
-            context.permission_mode,
-            PublicMcpOperationKind::WriteRemoteFile,
-        ) {
-            ApprovalDecision::Allow => self.run_remote_file_write(arguments.as_ref()),
-            ApprovalDecision::Ask => self.ask_then_write_file(arguments, context).await,
-            ApprovalDecision::Deny => Ok(permission_denied_result(
-                "remote file write denied by permission mode",
-            )),
-        }
     }
 
     fn run_remote_file_write(
@@ -230,153 +109,246 @@ impl RemoteOpsToolProvider {
             serde_json::to_value(result).map_err(internal_error)?,
         ))
     }
+}
 
-    async fn ask_then_write_file(
-        &self,
-        arguments: Option<JsonObject>,
-        context: PublicMcpToolContext,
-    ) -> Result<CallToolResult, McpError> {
-        let (session_id, request) = parse_file_write_args(arguments.as_ref())?;
-        let risk = classify_path_risk(&request.path);
-        let outcome = context
-            .request_approval(
-                PublicMcpOperationKind::WriteRemoteFile,
-                "public_mcp.remote_file_write",
-                format!("Write remote file on {session_id}"),
-                json!({
-                    "session_id": session_id,
-                    "path": request.path,
-                    "bytes": request.content.len(),
-                    "overwrite": request.overwrite,
-                    "mode": request.mode,
-                    "risk_classification": risk,
-                }),
-            )
-            .await;
+pub fn remote_ops_tool_registry(registry: PublicMcpRegistry) -> ToolRegistry {
+    let provider = RemoteOpsRuntime::new(registry);
+    ToolRegistry::new(
+        remote_ops_specs()
+            .into_iter()
+            .map(|spec| {
+                Arc::new(RemoteOpsRuntimeTool {
+                    provider: provider.clone(),
+                    spec,
+                }) as Arc<dyn ToolHandler>
+            })
+            .collect(),
+    )
+}
 
-        match outcome {
-            PublicMcpApprovalOutcome::Approved => self.run_remote_file_write(arguments.as_ref()),
-            PublicMcpApprovalOutcome::Denied { reason } => {
-                Ok(permission_denied_result(reason.unwrap_or_else(|| {
-                    "remote file write denied by approval".to_string()
-                })))
-            }
+#[derive(Clone)]
+struct RemoteOpsRuntimeTool {
+    provider: RemoteOpsRuntime,
+    spec: RemoteOpsToolSpec,
+}
+
+impl ToolHandler for RemoteOpsRuntimeTool {
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            id: self.spec.id.to_string(),
+            title: self.spec.title.to_string(),
+            description: self.spec.description.to_string(),
+            input_schema: self.spec.input_schema(),
+            output_schema: json!({ "type": "object" }),
+            permissions: Vec::new(),
+            mode: ToolMode::Deterministic,
+            adapters: vec![ToolAdapter::Mcp, ToolAdapter::FunctionCalling],
+            annotations: self.spec.annotations(),
         }
+    }
+
+    fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
+        let tool = self.clone();
+        Box::pin(async move {
+            tool.call_sync(input)
+                .map_err(mcp_error_to_tool_error)
+                .and_then(call_tool_result_to_runtime_result)
+        })
     }
 }
 
-impl PublicMcpToolProvider for RemoteOpsToolProvider {
-    fn tools(&self) -> Vec<Tool> {
-        remote_ops_tools()
-    }
-
-    fn call_tool(
-        &self,
-        name: &str,
-        arguments: Option<JsonObject>,
-        context: PublicMcpToolContext,
-    ) -> Option<PublicMcpToolFuture> {
-        match name {
-            "public_mcp.list_sessions" => {
-                let result = self.list_sessions();
-                Some(Box::pin(async move { result }))
-            }
-            "public_mcp.session_diagnostics" => {
-                let result = self.session_diagnostics(arguments);
-                Some(Box::pin(async move { result }))
-            }
-            "public_mcp.remote_command_poll" => {
-                let result = self.remote_command_poll(arguments);
-                Some(Box::pin(async move { result }))
-            }
+impl RemoteOpsRuntimeTool {
+    fn call_sync(&self, input: Value) -> Result<CallToolResult, McpError> {
+        let arguments = value_to_arguments(input)?;
+        match self.spec.id {
+            "public_mcp.list_sessions" => self.provider.list_sessions(),
+            "public_mcp.session_diagnostics" => self.provider.session_diagnostics(Some(arguments)),
+            "public_mcp.remote_command_poll" => self.provider.remote_command_poll(Some(arguments)),
             "public_mcp.remote_command_output" => {
-                let result = self.remote_command_output(arguments);
-                Some(Box::pin(async move { result }))
+                self.provider.remote_command_output(Some(arguments))
             }
-            "public_mcp.remote_command_cancel" => {
-                let provider = self.clone();
-                Some(Box::pin(async move {
-                    provider.remote_command_cancel(arguments, context).await
-                }))
-            }
-            "public_mcp.remote_exec" => {
-                let provider = self.clone();
-                Some(Box::pin(async move {
-                    provider.remote_exec(arguments, context).await
-                }))
-            }
-            "public_mcp.remote_file_write" => {
-                let provider = self.clone();
-                Some(Box::pin(async move {
-                    provider.remote_file_write(arguments, context).await
-                }))
-            }
-            _ => None,
+            "public_mcp.remote_command_cancel" => self.provider.run_cancel(Some(&arguments)),
+            "public_mcp.remote_exec" => self.provider.run_remote_exec(Some(&arguments)),
+            "public_mcp.remote_file_write" => self.provider.run_remote_file_write(Some(&arguments)),
+            _ => Err(McpError::invalid_params(
+                format!("unknown remote ops tool: {}", self.spec.id),
+                None,
+            )),
         }
     }
 }
 
-fn remote_ops_tools() -> Vec<Tool> {
+#[derive(Clone, Copy)]
+struct RemoteOpsToolSpec {
+    id: &'static str,
+    title: &'static str,
+    description: &'static str,
+    schema: fn() -> Value,
+    read_only: bool,
+    open_world: bool,
+}
+
+impl RemoteOpsToolSpec {
+    fn input_schema(self) -> Value {
+        (self.schema)()
+    }
+
+    fn annotations(self) -> RuntimeToolAnnotations {
+        if self.read_only {
+            RuntimeToolAnnotations::read_only(self.title)
+        } else {
+            RuntimeToolAnnotations {
+                title: self.title.to_string(),
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: self.open_world,
+            }
+        }
+    }
+}
+
+fn remote_ops_specs() -> Vec<RemoteOpsToolSpec> {
     vec![
-        Tool::new(
-            "public_mcp.list_sessions",
-            "List currently connected SSH terminal sessions exposed by OnetCli.",
-            object_schema([]),
-        )
-        .with_annotations(read_only_annotations("List terminal sessions")),
-        Tool::new(
-            "public_mcp.session_diagnostics",
-            "Report structured diagnostics for a Public MCP terminal session, including connection state and recovery hints.",
-            object_schema([("session_id", string_schema())]),
-        )
-        .with_annotations(read_only_annotations("Session diagnostics")),
-        Tool::new(
-            "public_mcp.remote_command_poll",
-            "Poll the status of a background remote command, including running state, exit code and output byte counters.",
-            object_schema([("command_id", string_schema())]),
-        )
-        .with_annotations(read_only_annotations("Poll remote command")),
-        Tool::new(
-            "public_mcp.remote_command_output",
-            "Read stdout and stderr of a background remote command by byte offset.",
-            output_schema(),
-        )
-        .with_annotations(read_only_annotations("Read remote command output")),
-        Tool::new(
-            "public_mcp.remote_command_cancel",
-            "Request cancellation of a background remote command.",
-            cancel_schema(),
-        )
-        .with_annotations(destructive_annotations("Cancel remote command")),
-        Tool::new(
-            "public_mcp.remote_exec",
-            "Run a non-interactive command on an exposed connected SSH session and return stdout, stderr, exit code, duration and timeout state.",
-            exec_schema(),
-        )
-        .with_annotations(destructive_annotations("Execute remote command")),
-        Tool::new(
-            "public_mcp.remote_file_write",
-            "Write a file to a remote path through an exposed connected SSH session and return bytes written plus SHA-256.",
-            file_write_schema(),
-        )
-        .with_annotations(destructive_annotations("Write remote file")),
+        list_sessions_spec(),
+        session_diagnostics_spec(),
+        command_poll_spec(),
+        command_output_spec(),
+        command_cancel_spec(),
+        remote_exec_spec(),
+        remote_file_write_spec(),
     ]
 }
 
-fn read_only_annotations(title: &str) -> ToolAnnotations {
-    ToolAnnotations::with_title(title)
-        .read_only(true)
-        .destructive(false)
-        .idempotent(true)
-        .open_world(false)
+fn list_sessions_spec() -> RemoteOpsToolSpec {
+    RemoteOpsToolSpec {
+        id: "public_mcp.list_sessions",
+        title: "List terminal sessions",
+        description: "List currently connected SSH terminal sessions exposed by OnetCli.",
+        schema: empty_schema_value,
+        read_only: true,
+        open_world: false,
+    }
 }
 
-fn destructive_annotations(title: &str) -> ToolAnnotations {
-    ToolAnnotations::with_title(title)
-        .read_only(false)
-        .destructive(true)
-        .idempotent(false)
-        .open_world(true)
+fn session_diagnostics_spec() -> RemoteOpsToolSpec {
+    RemoteOpsToolSpec {
+        id: "public_mcp.session_diagnostics",
+        title: "Session diagnostics",
+        description: "Report structured diagnostics for a Public MCP terminal session, including connection state and recovery hints.",
+        schema: diagnostics_schema_value,
+        read_only: true,
+        open_world: false,
+    }
+}
+
+fn command_poll_spec() -> RemoteOpsToolSpec {
+    RemoteOpsToolSpec {
+        id: "public_mcp.remote_command_poll",
+        title: "Poll remote command",
+        description: "Poll the status of a background remote command, including running state, exit code and output byte counters.",
+        schema: poll_schema_value,
+        read_only: true,
+        open_world: false,
+    }
+}
+
+fn command_output_spec() -> RemoteOpsToolSpec {
+    RemoteOpsToolSpec {
+        id: "public_mcp.remote_command_output",
+        title: "Read remote command output",
+        description: "Read stdout and stderr of a background remote command by byte offset.",
+        schema: output_schema_value,
+        read_only: true,
+        open_world: false,
+    }
+}
+
+fn command_cancel_spec() -> RemoteOpsToolSpec {
+    RemoteOpsToolSpec {
+        id: "public_mcp.remote_command_cancel",
+        title: "Cancel remote command",
+        description: "Request cancellation of a background remote command.",
+        schema: cancel_schema_value,
+        read_only: false,
+        open_world: false,
+    }
+}
+
+fn remote_exec_spec() -> RemoteOpsToolSpec {
+    RemoteOpsToolSpec {
+        id: "public_mcp.remote_exec",
+        title: "Execute remote command",
+        description: "Run a non-interactive command on an exposed connected SSH session and return stdout, stderr, exit code, duration and timeout state.",
+        schema: exec_schema_value,
+        read_only: false,
+        open_world: true,
+    }
+}
+
+fn remote_file_write_spec() -> RemoteOpsToolSpec {
+    RemoteOpsToolSpec {
+        id: "public_mcp.remote_file_write",
+        title: "Write remote file",
+        description: "Write a file to a remote path through an exposed connected SSH session and return bytes written plus SHA-256.",
+        schema: file_write_schema_value,
+        read_only: false,
+        open_world: true,
+    }
+}
+
+fn value_to_arguments(value: Value) -> Result<JsonObject, McpError> {
+    match value {
+        Value::Object(object) => Ok(object),
+        _ => Err(McpError::invalid_params(
+            "remote ops tool input must be an object",
+            None,
+        )),
+    }
+}
+
+fn call_tool_result_to_runtime_result(result: CallToolResult) -> Result<ToolResult, ToolError> {
+    Ok(ToolResult::structured(
+        result.structured_content.unwrap_or(Value::Null),
+    ))
+}
+
+fn mcp_error_to_tool_error(error: McpError) -> ToolError {
+    ToolError::Failed {
+        message: error.to_string(),
+    }
+}
+
+fn schema_to_value(schema: Arc<JsonObject>) -> Value {
+    Value::Object(schema.as_ref().clone())
+}
+
+fn empty_schema_value() -> Value {
+    schema_to_value(object_schema([]))
+}
+
+fn diagnostics_schema_value() -> Value {
+    schema_to_value(object_schema([("session_id", string_schema())]))
+}
+
+fn poll_schema_value() -> Value {
+    schema_to_value(object_schema([("command_id", string_schema())]))
+}
+
+fn output_schema_value() -> Value {
+    schema_to_value(output_schema())
+}
+
+fn cancel_schema_value() -> Value {
+    schema_to_value(cancel_schema())
+}
+
+fn exec_schema_value() -> Value {
+    schema_to_value(exec_schema())
+}
+
+fn file_write_schema_value() -> Value {
+    schema_to_value(file_write_schema())
 }
 
 fn exec_schema() -> Arc<JsonObject> {
@@ -642,58 +614,6 @@ fn optional_string_map(
         })
 }
 
-fn permission_denied_result(message: impl Into<String>) -> CallToolResult {
-    CallToolResult::structured_error(json!({
-        "code": "permission_denied",
-        "message": message.into()
-    }))
-}
-
 fn internal_error(error: impl std::fmt::Display) -> McpError {
     McpError::internal_error(std::borrow::Cow::Owned(error.to_string()), None)
 }
-
-/// 保守的高风险命令判定，仅用于审批/审计提示，不是安全沙箱。
-fn classify_command_risk(command: &str) -> &'static str {
-    let lowered = command.to_ascii_lowercase();
-    const HIGH_RISK_TOKENS: &[&str] = &[
-        "rm ",
-        "mkfs",
-        " dd ",
-        "systemctl stop",
-        "systemctl restart",
-        "docker system prune",
-        "docker rm",
-        "mv /var/lib",
-        "chmod -r",
-        "chown -r",
-    ];
-    if HIGH_RISK_TOKENS.iter().any(|token| lowered.contains(token)) {
-        "high"
-    } else {
-        "normal"
-    }
-}
-
-/// 远程文件路径风险分级，用于审批提示。
-fn classify_path_risk(path: &str) -> &'static str {
-    const HIGH_RISK_PREFIXES: &[&str] =
-        &["/etc/", "/var/lib/", "/usr/", "/bin/", "/sbin/", "/root/"];
-    const MEDIUM_RISK_PREFIXES: &[&str] = &["/data/", "/var/tmp/"];
-    if HIGH_RISK_PREFIXES
-        .iter()
-        .any(|prefix| path.starts_with(prefix))
-    {
-        "high"
-    } else if MEDIUM_RISK_PREFIXES
-        .iter()
-        .any(|prefix| path.starts_with(prefix))
-    {
-        "medium"
-    } else {
-        "low"
-    }
-}
-
-#[allow(dead_code)]
-const UNUSED_OUTPUT_LIMIT: usize = DEFAULT_OUTPUT_LIMIT_BYTES;

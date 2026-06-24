@@ -1063,9 +1063,9 @@ Settings:
         zh-CN: 数据库工具
         zh-HK: 資料庫工具
       toolset_database_desc:
-        en: Expose database inspection and query tools through MCP
-        zh-CN: 通过 MCP 暴露数据库查看和查询工具
-        zh-HK: 通過 MCP 暴露資料庫查看和查詢工具
+        en: Expose database connection creation, inspection, and query tools through MCP
+        zh-CN: 通过 MCP 暴露数据库连接创建、查看和查询工具
+        zh-HK: 通過 MCP 暴露資料庫連線建立、查看和查詢工具
       toolset_redis:
         en: Redis Tools
         zh-CN: Redis 工具

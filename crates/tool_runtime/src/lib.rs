@@ -109,6 +109,10 @@ pub enum ToolError {
 pub trait ToolHandler: Send + Sync + 'static {
     fn descriptor(&self) -> ToolDescriptor;
 
+    fn call_annotations(&self, _input: &Value) -> ToolAnnotations {
+        self.descriptor().annotations
+    }
+
     fn call(&self, input: Value, context: ToolContext) -> ToolFuture;
 }
 
@@ -174,6 +178,22 @@ impl ToolRegistry {
 
     pub fn get(&self, id: &str, adapter: ToolAdapter) -> Option<ToolDescriptor> {
         self.list(adapter).into_iter().find(|tool| tool.id == id)
+    }
+
+    pub fn call_annotations(
+        &self,
+        id: &str,
+        adapter: ToolAdapter,
+        input: &Value,
+    ) -> Option<ToolAnnotations> {
+        for handler in self.handlers.iter() {
+            let descriptor = handler.descriptor();
+            if descriptor.id != id || !descriptor.supports_adapter(adapter) {
+                continue;
+            }
+            return Some(handler.call_annotations(input));
+        }
+        None
     }
 
     pub async fn call(

@@ -1,9 +1,9 @@
-use super::{internal_functions, redis, tool_runtime_tools};
+use super::{connections, internal_functions, redis, tool_runtime_tools};
 use gpui::App;
 use one_core::settings::McpToolsetSettings;
 use public_mcp::tools::{
-    InternalFunctionToolProvider, PublicMcpToolProvider, PublicMcpToolRegistry,
-    RemoteOpsToolProvider, ToolRuntimeMcpProvider,
+    PublicMcpToolProvider, PublicMcpToolRegistry, ToolRuntimeMcpProvider,
+    internal_function_tool_registry, remote_ops_tool_registry,
 };
 use std::sync::Arc;
 
@@ -14,7 +14,9 @@ pub(super) fn build_tool_registry(
     let mut providers: Vec<Arc<dyn PublicMcpToolProvider>> = Vec::new();
     if toolsets.terminal {
         if let Some(registry) = terminal_view::public_mcp::registry(cx) {
-            providers.push(Arc::new(RemoteOpsToolProvider::new(registry)));
+            providers.push(Arc::new(ToolRuntimeMcpProvider::new(
+                remote_ops_tool_registry(registry),
+            )));
         } else {
             tracing::warn!("Public MCP terminal registry is not initialized");
         }
@@ -23,12 +25,30 @@ pub(super) fn build_tool_registry(
         providers.push(Arc::new(ToolRuntimeMcpProvider::new(
             tool_runtime_tools::registry(),
         )));
-        providers.push(Arc::new(InternalFunctionToolProvider::new(
-            internal_functions::definitions(cx),
+        providers.push(Arc::new(ToolRuntimeMcpProvider::new(
+            internal_function_tool_registry(internal_functions::definitions(cx)),
         )));
     }
+    if toolsets.database {
+        if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
+            if let Some(repo) = storage
+                .storage
+                .get::<one_core::storage::ConnectionRepository>()
+            {
+                providers.push(Arc::new(ToolRuntimeMcpProvider::new(
+                    connections::connection_tool_registry(repo),
+                )));
+            } else {
+                tracing::warn!("Public MCP connection tools enabled without ConnectionRepository");
+            }
+        } else {
+            tracing::warn!("Public MCP connection tools enabled before storage is initialized");
+        }
+    }
     if toolsets.redis {
-        providers.push(Arc::new(redis::redis_tool_provider(cx)));
+        providers.push(Arc::new(ToolRuntimeMcpProvider::new(
+            tool_runtime::ToolRegistry::new(vec![Arc::new(redis::redis_tool_provider(cx))]),
+        )));
     }
     if providers.is_empty() {
         tracing::warn!("Public MCP runtime enabled without any tool providers");
@@ -114,8 +134,7 @@ mod tests {
                     "description": "Read the public MCP runtime status.",
                     "read_only": true,
                     "input_schema": {
-                        "type": "object",
-                        "properties": {}
+                        "type": "object"
                     }
                 }]
             })),

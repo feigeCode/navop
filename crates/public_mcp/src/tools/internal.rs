@@ -1,12 +1,10 @@
-use super::{PublicMcpToolContext, PublicMcpToolFuture, PublicMcpToolProvider};
-use crate::approval::PublicMcpApprovalOutcome;
-use crate::permissions::{ApprovalDecision, PublicMcpOperationKind, decide_permission};
-use rmcp::{
-    ErrorData as McpError,
-    model::{CallToolResult, JsonObject, Tool, ToolAnnotations},
-};
+use rmcp::{ErrorData as McpError, model::JsonObject};
 use serde_json::{Value, json};
 use std::{future::Future, pin::Pin, sync::Arc};
+use tool_runtime::{
+    ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode,
+    ToolRegistry, ToolResult,
+};
 
 pub type InternalFunctionFuture =
     Pin<Box<dyn Future<Output = Result<Value, McpError>> + Send + 'static>>;
@@ -74,218 +72,167 @@ impl InternalFunctionDefinition {
 }
 
 #[derive(Clone)]
-pub struct InternalFunctionToolProvider {
+struct InternalFunctionStore {
     functions: Arc<Vec<InternalFunctionDefinition>>,
 }
 
-impl InternalFunctionToolProvider {
-    pub fn new(functions: Vec<InternalFunctionDefinition>) -> Self {
-        Self {
-            functions: Arc::new(functions),
+pub fn internal_function_tool_registry(functions: Vec<InternalFunctionDefinition>) -> ToolRegistry {
+    let store = InternalFunctionStore {
+        functions: Arc::new(functions),
+    };
+    ToolRegistry::new(vec![
+        Arc::new(InternalFunctionListTool {
+            store: store.clone(),
+        }),
+        Arc::new(InternalFunctionCallTool { store }),
+    ])
+}
+
+#[derive(Clone)]
+struct InternalFunctionListTool {
+    store: InternalFunctionStore,
+}
+
+impl ToolHandler for InternalFunctionListTool {
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            id: "public_mcp.internal_functions.list".to_string(),
+            title: "List internal functions".to_string(),
+            description: "List internal OnetCli functions exposed through public MCP.".to_string(),
+            input_schema: empty_object_value_schema(),
+            output_schema: json!({ "type": "object" }),
+            permissions: Vec::new(),
+            mode: ToolMode::Deterministic,
+            adapters: vec![ToolAdapter::Mcp, ToolAdapter::FunctionCalling],
+            annotations: ToolAnnotations::read_only("List internal functions"),
         }
     }
 
-    fn list_functions(&self) -> Result<CallToolResult, McpError> {
-        Ok(CallToolResult::structured(json!({
-            "functions": self
-                .functions
-                .iter()
-                .map(InternalFunctionDefinition::catalog_entry)
-                .collect::<Vec<_>>()
-        })))
+    fn call(&self, _input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
+        let store = self.store.clone();
+        Box::pin(async move {
+            Ok(ToolResult::structured(json!({
+                "functions": store
+                    .functions
+                    .iter()
+                    .map(InternalFunctionDefinition::catalog_entry)
+                    .collect::<Vec<_>>()
+            })))
+        })
+    }
+}
+
+#[derive(Clone)]
+struct InternalFunctionCallTool {
+    store: InternalFunctionStore,
+}
+
+impl ToolHandler for InternalFunctionCallTool {
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            id: "public_mcp.internal_functions.call".to_string(),
+            title: "Call internal function".to_string(),
+            description: "Call a registered internal OnetCli function.".to_string(),
+            input_schema: object_value_schema([
+                ("name", string_schema()),
+                ("arguments", json!({ "type": "object" })),
+            ]),
+            output_schema: json!({ "type": "object" }),
+            permissions: Vec::new(),
+            mode: ToolMode::Deterministic,
+            adapters: vec![ToolAdapter::Mcp, ToolAdapter::FunctionCalling],
+            annotations: ToolAnnotations::mutating("Call internal function"),
+        }
     }
 
-    async fn call_function(
-        &self,
-        arguments: Option<JsonObject>,
-        context: PublicMcpToolContext,
-    ) -> Result<CallToolResult, McpError> {
-        let (function, function_args) = self.resolve_call(arguments.as_ref())?;
-        if function.read_only {
-            return call_resolved_function(function, function_args).await;
-        }
-
-        match decide_permission(
-            context.permission_mode,
-            PublicMcpOperationKind::CallInternalFunction,
-        ) {
-            ApprovalDecision::Allow => call_resolved_function(function, function_args).await,
-            ApprovalDecision::Ask => self.ask_then_call(function, function_args, context).await,
-            ApprovalDecision::Deny => Ok(permission_denied_result(
-                "internal function call denied by permission mode",
-            )),
-        }
-    }
-
-    async fn ask_then_call(
-        &self,
-        function: InternalFunctionDefinition,
-        arguments: JsonObject,
-        context: PublicMcpToolContext,
-    ) -> Result<CallToolResult, McpError> {
-        let outcome = context
-            .request_approval(
-                PublicMcpOperationKind::CallInternalFunction,
-                "public_mcp.internal_functions.call",
-                format!("Call internal function {}", function.name),
-                json!({
-                    "function": function.name,
-                    "arguments": arguments,
-                }),
-            )
-            .await;
-
-        match outcome {
-            PublicMcpApprovalOutcome::Approved => call_resolved_function(function, arguments).await,
-            PublicMcpApprovalOutcome::Denied { reason } => {
-                Ok(permission_denied_result(reason.unwrap_or_else(|| {
-                    "internal function call denied by approval".to_string()
-                })))
+    fn call_annotations(&self, input: &Value) -> ToolAnnotations {
+        match self.resolve_function(input) {
+            Ok(function) if function.read_only => {
+                ToolAnnotations::read_only("Call internal function")
             }
+            _ => ToolAnnotations::mutating("Call internal function"),
         }
     }
 
-    fn resolve_call(
-        &self,
-        arguments: Option<&JsonObject>,
-    ) -> Result<(InternalFunctionDefinition, JsonObject), McpError> {
-        let name = required_string(arguments, "name")?;
-        let function = self
+    fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
+        let tool = self.clone();
+        Box::pin(async move {
+            let function = tool.resolve_function(&input)?;
+            let arguments = optional_object_value(&input, "arguments")?;
+            let result = function.call(arguments).await.map_err(mcp_error_to_tool)?;
+            Ok(ToolResult::structured(json!({ "result": result })))
+        })
+    }
+}
+
+impl InternalFunctionCallTool {
+    fn resolve_function(&self, input: &Value) -> Result<InternalFunctionDefinition, ToolError> {
+        let name = required_string_value(input, "name")?;
+        self.store
             .functions
             .iter()
             .find(|function| function.name == name)
             .cloned()
-            .ok_or_else(|| {
-                McpError::invalid_params(format!("unknown internal function: {name}"), None)
-            })?;
-        Ok((function, optional_object(arguments, "arguments")?))
+            .ok_or_else(|| ToolError::Failed {
+                message: format!("unknown internal function: {name}"),
+            })
     }
 }
 
-impl PublicMcpToolProvider for InternalFunctionToolProvider {
-    fn tools(&self) -> Vec<Tool> {
-        internal_function_tools()
-    }
-
-    fn call_tool(
-        &self,
-        name: &str,
-        arguments: Option<JsonObject>,
-        context: PublicMcpToolContext,
-    ) -> Option<PublicMcpToolFuture> {
-        match name {
-            "public_mcp.internal_functions.list" => {
-                let result = self.list_functions();
-                Some(Box::pin(async move { result }))
-            }
-            "public_mcp.internal_functions.call" => {
-                let provider = self.clone();
-                Some(Box::pin(async move {
-                    provider.call_function(arguments, context).await
-                }))
-            }
-            _ => None,
-        }
-    }
-}
-
-async fn call_resolved_function(
-    function: InternalFunctionDefinition,
-    arguments: JsonObject,
-) -> Result<CallToolResult, McpError> {
-    Ok(CallToolResult::structured(json!({
-        "result": function.call(arguments).await?
-    })))
-}
-
-fn internal_function_tools() -> Vec<Tool> {
-    vec![
-        Tool::new(
-            "public_mcp.internal_functions.list",
-            "List internal OnetCli functions exposed through public MCP.",
-            object_schema([]),
-        )
-        .with_annotations(read_only_annotations("List internal functions")),
-        Tool::new(
-            "public_mcp.internal_functions.call",
-            "Call a registered internal OnetCli function.",
-            object_schema([
-                ("name", string_schema()),
-                ("arguments", json!({ "type": "object" })),
-            ]),
-        )
-        .with_annotations(
-            ToolAnnotations::with_title("Call internal function")
-                .read_only(false)
-                .destructive(true)
-                .idempotent(false)
-                .open_world(false),
-        ),
-    ]
-}
-
-fn read_only_annotations(title: &str) -> ToolAnnotations {
-    ToolAnnotations::with_title(title)
-        .read_only(true)
-        .destructive(false)
-        .idempotent(true)
-        .open_world(false)
-}
-
-fn object_schema(properties: impl IntoIterator<Item = (&'static str, Value)>) -> Arc<JsonObject> {
-    let required = properties
+fn object_value_schema(properties: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
+    let properties = properties
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
         .collect::<JsonObject>();
-    let required_names = required
-        .keys()
-        .cloned()
-        .map(Value::String)
-        .collect::<Vec<_>>();
+    let required = properties.keys().cloned().map(Value::String).collect();
     let mut schema = JsonObject::new();
     schema.insert("type".to_string(), Value::String("object".to_string()));
-    schema.insert("properties".to_string(), Value::Object(required));
-    if !required_names.is_empty() {
-        schema.insert("required".to_string(), Value::Array(required_names));
-    }
-    Arc::new(schema)
+    schema.insert("properties".to_string(), Value::Object(properties));
+    schema.insert("required".to_string(), Value::Array(required));
+    Value::Object(schema)
 }
 
 fn empty_object_schema() -> Arc<JsonObject> {
-    object_schema([])
+    let mut schema = JsonObject::new();
+    schema.insert("type".to_string(), Value::String("object".to_string()));
+    Arc::new(schema)
+}
+
+fn empty_object_value_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {}
+    })
 }
 
 fn string_schema() -> Value {
     json!({ "type": "string" })
 }
 
-fn required_string<'a>(
-    arguments: Option<&'a JsonObject>,
-    field: &'static str,
-) -> Result<&'a str, McpError> {
-    arguments
-        .and_then(|args| args.get(field))
+fn required_string_value(input: &Value, field: &'static str) -> Result<String, ToolError> {
+    input
+        .get(field)
         .and_then(Value::as_str)
-        .ok_or_else(|| McpError::invalid_params(format!("missing string argument: {field}"), None))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| ToolError::Failed {
+            message: format!("missing string argument: {field}"),
+        })
 }
 
-fn optional_object(
-    arguments: Option<&JsonObject>,
-    field: &'static str,
-) -> Result<JsonObject, McpError> {
-    match arguments.and_then(|args| args.get(field)) {
+fn optional_object_value(input: &Value, field: &'static str) -> Result<JsonObject, ToolError> {
+    match input.get(field) {
         Some(Value::Object(object)) => Ok(object.clone()),
-        Some(_) => Err(McpError::invalid_params(
-            format!("argument must be an object: {field}"),
-            None,
-        )),
+        Some(_) => Err(ToolError::Failed {
+            message: format!("argument must be an object: {field}"),
+        }),
         None => Ok(JsonObject::new()),
     }
 }
 
-fn permission_denied_result(message: impl Into<String>) -> CallToolResult {
-    CallToolResult::structured_error(json!({
-        "code": "permission_denied",
-        "message": message.into()
-    }))
+fn mcp_error_to_tool(error: McpError) -> ToolError {
+    ToolError::Failed {
+        message: error.to_string(),
+    }
 }

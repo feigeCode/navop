@@ -5,11 +5,11 @@ mod remote_ops;
 mod tool_runtime_adapter;
 
 pub use internal::{
-    InternalFunctionDefinition, InternalFunctionFuture, InternalFunctionToolProvider,
+    InternalFunctionDefinition, InternalFunctionFuture, internal_function_tool_registry,
 };
 pub use redis::{RedisConnectionSnapshot, RedisConnectionSnapshotProvider, RedisToolProvider};
 pub use registry::{PublicMcpToolRegistry, PublicMcpToolRegistryError};
-pub use remote_ops::RemoteOpsToolProvider;
+pub use remote_ops::remote_ops_tool_registry;
 pub use tool_runtime_adapter::ToolRuntimeMcpProvider;
 
 use crate::approval::{PublicMcpApprovalManager, PublicMcpApprovalOutcome};

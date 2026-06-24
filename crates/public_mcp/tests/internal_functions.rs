@@ -4,8 +4,8 @@ use public_mcp::approval::{
 };
 use public_mcp::permissions::{PermissionMode, PublicMcpOperationKind};
 use public_mcp::tools::{
-    InternalFunctionDefinition, InternalFunctionToolProvider, PublicMcpToolContext,
-    PublicMcpToolRegistry,
+    InternalFunctionDefinition, PublicMcpToolContext, PublicMcpToolRegistry,
+    ToolRuntimeMcpProvider, internal_function_tool_registry,
 };
 use rmcp::model::JsonObject;
 use serde_json::{Value, json};
@@ -71,7 +71,7 @@ async fn writable_internal_function_calls_follow_permission_mode() {
     assert_eq!(
         Some(json!({
             "code": "permission_denied",
-            "message": "internal function call denied by permission mode"
+            "message": "tool runtime call denied by permission mode"
         })),
         denied.structured_content
     );
@@ -96,14 +96,14 @@ async fn writable_internal_function_calls_follow_permission_mode() {
     let requests = approver.requests();
     assert_eq!(1, requests.len());
     assert_eq!(
-        PublicMcpOperationKind::CallInternalFunction,
+        PublicMcpOperationKind::CallToolRuntimeTool,
         requests[0].operation
     );
     assert_eq!("public_mcp.internal_functions.call", requests[0].tool_name);
 }
 
-fn provider(functions: Vec<InternalFunctionDefinition>) -> InternalFunctionToolProvider {
-    InternalFunctionToolProvider::new(functions)
+fn provider(functions: Vec<InternalFunctionDefinition>) -> ToolRuntimeMcpProvider {
+    ToolRuntimeMcpProvider::new(internal_function_tool_registry(functions))
 }
 
 fn echo_function() -> InternalFunctionDefinition {

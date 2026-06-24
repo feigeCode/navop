@@ -104,7 +104,7 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::anyhow;
-    use gpui::http_client::{HttpClient, http};
+    use gpui::http_client::HttpClient;
 
     use super::*;
     use crate::update::test_support::FakeHttpClient;

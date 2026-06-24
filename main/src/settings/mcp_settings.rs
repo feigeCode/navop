@@ -96,39 +96,45 @@ fn mcp_permission_mode_options() -> Vec<(SharedString, SharedString)> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum McpToolset {
     Terminal,
+    Database,
 }
 
 impl McpToolset {
-    const VISIBLE: [Self; 1] = [Self::Terminal];
+    const VISIBLE: [Self; 2] = [Self::Terminal, Self::Database];
 
     #[cfg(test)]
     fn id(self) -> &'static str {
         match self {
             Self::Terminal => "terminal",
+            Self::Database => "database",
         }
     }
 
     fn title_key(self) -> &'static str {
         match self {
             Self::Terminal => "Settings.General.Mcp.toolset_terminal",
+            Self::Database => "Settings.General.Mcp.toolset_database",
         }
     }
 
     fn description_key(self) -> &'static str {
         match self {
             Self::Terminal => "Settings.General.Mcp.toolset_terminal_desc",
+            Self::Database => "Settings.General.Mcp.toolset_database_desc",
         }
     }
 
     fn get(self, settings: &McpToolsetSettings) -> bool {
         match self {
             Self::Terminal => settings.terminal,
+            Self::Database => settings.database,
         }
     }
 
     fn set(self, settings: &mut McpToolsetSettings, enabled: bool) {
         match self {
             Self::Terminal => settings.terminal = enabled,
+            Self::Database => settings.database = enabled,
         }
     }
 }
@@ -195,7 +201,7 @@ mod tests {
     fn mcp_toolset_items_only_expose_production_ready_toolsets() {
         let ids = mcp_toolset_item_ids();
 
-        assert_eq!(vec!["terminal"], ids);
+        assert_eq!(vec!["terminal", "database"], ids);
     }
 
     #[test]

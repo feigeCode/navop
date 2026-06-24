@@ -1,4 +1,6 @@
-use super::{PublicMcpToolContext, PublicMcpToolProvider, RemoteOpsToolProvider};
+use super::{
+    PublicMcpToolContext, PublicMcpToolProvider, ToolRuntimeMcpProvider, remote_ops_tool_registry,
+};
 use crate::registry::PublicMcpRegistry;
 use rmcp::{
     ErrorData as McpError,
@@ -54,7 +56,9 @@ impl PublicMcpToolRegistry {
     }
 
     pub fn terminal(registry: PublicMcpRegistry) -> Self {
-        Self::new(vec![Arc::new(RemoteOpsToolProvider::new(registry))])
+        Self::new(vec![Arc::new(ToolRuntimeMcpProvider::new(
+            remote_ops_tool_registry(registry),
+        ))])
     }
 
     pub fn tools(&self) -> Vec<Tool> {

@@ -1,10 +1,8 @@
-use super::{PublicMcpToolContext, PublicMcpToolFuture, PublicMcpToolProvider};
-use rmcp::{
-    ErrorData as McpError,
-    model::{CallToolResult, JsonObject, Tool, ToolAnnotations},
-};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::sync::Arc;
+use tool_runtime::{
+    ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolHandler, ToolMode, ToolResult,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RedisConnectionSnapshot {
@@ -29,67 +27,40 @@ impl RedisToolProvider {
         Self::new(Arc::new(EmptyRedisSnapshots))
     }
 
-    fn list_connections(&self) -> Result<CallToolResult, McpError> {
+    fn list_connections(&self) -> ToolResult {
         let mut connections = self.snapshots.list_connections();
         connections.sort_by(|left, right| left.connection_id.cmp(&right.connection_id));
-        Ok(CallToolResult::structured(json!({
+        ToolResult::structured(json!({
             "connections": connections
                 .into_iter()
                 .map(|connection| json!({ "connection_id": connection.connection_id }))
                 .collect::<Vec<_>>()
-        })))
+        }))
     }
 }
 
-impl PublicMcpToolProvider for RedisToolProvider {
-    fn tools(&self) -> Vec<Tool> {
-        redis_tools()
-    }
-
-    fn call_tool(
-        &self,
-        name: &str,
-        _arguments: Option<JsonObject>,
-        _context: PublicMcpToolContext,
-    ) -> Option<PublicMcpToolFuture> {
-        match name {
-            "public_mcp.redis.list_connections" => {
-                let result = self.list_connections();
-                Some(Box::pin(async move { result }))
-            }
-            _ => None,
+impl ToolHandler for RedisToolProvider {
+    fn descriptor(&self) -> ToolDescriptor {
+        ToolDescriptor {
+            id: "public_mcp.redis.list_connections".to_string(),
+            title: "List Redis connections".to_string(),
+            description: "List active Redis connections exposed by OnetCli.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {}
+            }),
+            output_schema: json!({ "type": "object" }),
+            permissions: Vec::new(),
+            mode: ToolMode::Deterministic,
+            adapters: vec![ToolAdapter::Mcp, ToolAdapter::FunctionCalling],
+            annotations: ToolAnnotations::read_only("List Redis connections"),
         }
     }
-}
 
-fn redis_tools() -> Vec<Tool> {
-    vec![
-        Tool::new(
-            "public_mcp.redis.list_connections",
-            "List active Redis connections exposed by OnetCli.",
-            object_schema([]),
-        )
-        .with_annotations(read_only_annotations("List Redis connections")),
-    ]
-}
-
-fn read_only_annotations(title: &str) -> ToolAnnotations {
-    ToolAnnotations::with_title(title)
-        .read_only(true)
-        .destructive(false)
-        .idempotent(true)
-        .open_world(false)
-}
-
-fn object_schema(properties: impl IntoIterator<Item = (&'static str, Value)>) -> Arc<JsonObject> {
-    let required = properties
-        .into_iter()
-        .map(|(key, value)| (key.to_string(), value))
-        .collect::<JsonObject>();
-    let mut schema = JsonObject::new();
-    schema.insert("type".to_string(), Value::String("object".to_string()));
-    schema.insert("properties".to_string(), Value::Object(required));
-    Arc::new(schema)
+    fn call(&self, _input: serde_json::Value, _context: ToolContext) -> tool_runtime::ToolFuture {
+        let result = self.list_connections();
+        Box::pin(async move { Ok(result) })
+    }
 }
 
 struct EmptyRedisSnapshots;

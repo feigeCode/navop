@@ -7,14 +7,12 @@ use public_mcp::registry::{
     TerminalSessionHandle, TerminalSessionSnapshot,
 };
 use public_mcp::remote_ops::{
-    RemoteCommandMode, RemoteCommandStatus, RemoteExecRequest, RemoteExecResult,
-    RemoteFileWriteRequest, RemoteFileWriteResult, SessionDiagnosticsRequest,
-    SessionDiagnosticsResult,
+    RemoteCommandStatus, RemoteExecRequest, RemoteExecResult, RemoteFileWriteRequest,
+    RemoteFileWriteResult, SessionDiagnosticsRequest, SessionDiagnosticsResult,
 };
 use public_mcp::server::serve_on_stream;
 use public_mcp::tools::PublicMcpToolRegistry;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

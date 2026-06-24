@@ -19,6 +19,7 @@ pub enum PublicMcpOperationKind {
     CancelRemoteCommand,
     WriteRemoteFile,
     ReadRemoteCommandOutput,
+    CallToolRuntimeTool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
