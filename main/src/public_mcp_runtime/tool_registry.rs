@@ -1,4 +1,4 @@
-use super::{connections, internal_functions, redis, tool_runtime_tools};
+use super::{internal_functions, redis};
 use gpui::App;
 use one_core::settings::McpToolsetSettings;
 use public_mcp::tools::{
@@ -23,7 +23,7 @@ pub(super) fn build_tool_registry(
     }
     if toolsets.internal_functions {
         providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-            tool_runtime_tools::registry(),
+            onetcli_runtime::builtin_tool_registry_with_version(env!("CARGO_PKG_VERSION")),
         )));
         providers.push(Arc::new(ToolRuntimeMcpProvider::new(
             internal_function_tool_registry(internal_functions::definitions(cx)),
@@ -36,7 +36,7 @@ pub(super) fn build_tool_registry(
                 .get::<one_core::storage::ConnectionRepository>()
             {
                 providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-                    connections::connection_tool_registry(repo),
+                    onetcli_runtime::connections::connection_tool_registry(repo),
                 )));
             } else {
                 tracing::warn!("Public MCP connection tools enabled without ConnectionRepository");

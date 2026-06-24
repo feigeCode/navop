@@ -26,7 +26,9 @@ members = [
     "crates/extension-component",
     "crates/extension-wasm",
     "crates/tool_runtime",
+    "crates/onetcli_runtime",
     "crates/er_flow",
+    "crates/onetcli_cli",
     "crates/public_mcp",
     "crates/terminal",
     "crates/terminal_view",
@@ -65,6 +67,7 @@ reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662
 ], package = "zed-reqwest", version = "0.12.15-zed" }
 
 anyhow = "1.0.102"
+clap = { version = "4.5", features = ["derive"] }
 log = "0.4"
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 notify = "7.0.0"
@@ -103,6 +106,8 @@ remote_desktop_view = { path = "crates/remote_desktop_view" }
 sftp_view = { path = "crates/sftp_view" }
 one-core = { path = "crates/core" }
 mongodb_view = {path = "crates/mongodb_view"}
+onetcli_cli = { path = "crates/onetcli_cli" }
+onetcli_runtime = { path = "crates/onetcli_runtime" }
 remote_file_editor = { path = "crates/remote_file_editor" }
 er_flow = { path = "crates/er_flow" }
 ipc = { path = "crates/ipc" }

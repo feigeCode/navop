@@ -18,10 +18,93 @@ fn connection_registry_lists_creation_tools() {
         .map(|tool| tool.id)
         .collect::<Vec<_>>();
 
-    assert!(tool_ids.contains(&"public_mcp.connections.list_kinds".to_string()));
-    assert!(tool_ids.contains(&"public_mcp.connections.get_schema".to_string()));
-    assert!(tool_ids.contains(&"public_mcp.connections.validate".to_string()));
-    assert!(tool_ids.contains(&"public_mcp.connections.create".to_string()));
+    assert!(tool_ids.contains(&"onetcli.connections.list_kinds".to_string()));
+    assert!(tool_ids.contains(&"onetcli.connections.get_schema".to_string()));
+    assert!(tool_ids.contains(&"onetcli.connections.validate".to_string()));
+    assert!(tool_ids.contains(&"onetcli.connections.create".to_string()));
+}
+
+#[test]
+fn connection_registry_exposes_creation_tools_to_cli() {
+    let registry = connection_tool_registry(repo());
+    let tool_ids = registry
+        .list(ToolAdapter::Cli)
+        .into_iter()
+        .map(|tool| tool.id)
+        .collect::<Vec<_>>();
+
+    assert!(tool_ids.contains(&"onetcli.connections.list".to_string()));
+    assert!(tool_ids.contains(&"onetcli.connections.show".to_string()));
+    assert!(tool_ids.contains(&"onetcli.connections.list_kinds".to_string()));
+    assert!(tool_ids.contains(&"onetcli.connections.create".to_string()));
+}
+
+#[test]
+fn list_saved_connections_returns_redacted_summaries() {
+    let repo = repo();
+    let registry = connection_tool_registry(repo);
+    create_connection(
+        &registry,
+        json!({
+            "kind": "database",
+            "database_type": "MySQL",
+            "values": {
+                "name": "prod mysql",
+                "host": "10.0.1.20",
+                "username": "app",
+                "password": "secret"
+            }
+        }),
+    );
+
+    let result = futures::executor::block_on(registry.call(
+        "onetcli.connections.list",
+        json!({}),
+        ToolContext::for_adapter(ToolAdapter::Cli),
+    ))
+    .expect("list saved connections should run");
+
+    assert_eq!(
+        "prod mysql",
+        result.structured_content["connections"][0]["name"]
+    );
+    assert_eq!(
+        "<redacted>",
+        result.structured_content["connections"][0]["summary"]["password"]
+    );
+}
+
+#[test]
+fn show_saved_connection_supports_id_and_name() {
+    let repo = repo();
+    let registry = connection_tool_registry(repo);
+    let id = create_connection(
+        &registry,
+        json!({
+            "kind": "ssh_sftp",
+            "values": {
+                "name": "prod ssh",
+                "host": "10.0.1.30",
+                "username": "deploy"
+            }
+        }),
+    );
+
+    let by_id = futures::executor::block_on(registry.call(
+        "onetcli.connections.show",
+        json!({ "connection": id.to_string() }),
+        ToolContext::for_adapter(ToolAdapter::Cli),
+    ))
+    .expect("show by id should run");
+    let by_name = futures::executor::block_on(registry.call(
+        "onetcli.connections.show",
+        json!({ "connection": "prod ssh" }),
+        ToolContext::for_adapter(ToolAdapter::Cli),
+    ))
+    .expect("show by name should run");
+
+    assert_eq!(id, by_id.structured_content["connection"]["id"]);
+    assert_eq!(by_id.structured_content, by_name.structured_content);
 }
 
 #[test]
@@ -29,7 +112,7 @@ fn list_kinds_includes_all_creatable_connection_types() {
     let registry = connection_tool_registry(repo());
 
     let result = futures::executor::block_on(registry.call(
-        "public_mcp.connections.list_kinds",
+        "onetcli.connections.list_kinds",
         json!({}),
         ToolContext::for_adapter(ToolAdapter::Mcp),
     ))
@@ -51,7 +134,7 @@ fn get_schema_supports_all_creatable_connection_types() {
 
     for kind in creatable_kinds() {
         let result = futures::executor::block_on(registry.call(
-            "public_mcp.connections.get_schema",
+            "onetcli.connections.get_schema",
             json!({ "kind": kind }),
             ToolContext::for_adapter(ToolAdapter::Mcp),
         ))
@@ -73,7 +156,7 @@ fn create_database_connection_persists_mysql_config() {
     let registry = connection_tool_registry(repo.clone());
 
     let result = futures::executor::block_on(registry.call(
-        "public_mcp.connections.create",
+        "onetcli.connections.create",
         json!({
             "kind": "database",
             "database_type": "MySQL",
@@ -120,7 +203,7 @@ fn validate_reports_missing_required_fields_without_writing() {
     let registry = connection_tool_registry(repo.clone());
 
     let result = futures::executor::block_on(registry.call(
-        "public_mcp.connections.validate",
+        "onetcli.connections.validate",
         json!({
             "kind": "database",
             "database_type": "MySQL",
@@ -147,7 +230,7 @@ fn validate_rejects_invalid_numeric_fields_without_writing() {
     let registry = connection_tool_registry(repo.clone());
 
     let result = futures::executor::block_on(registry.call(
-        "public_mcp.connections.create",
+        "onetcli.connections.create",
         json!({
             "kind": "database",
             "database_type": "MySQL",
@@ -179,7 +262,7 @@ pub(super) fn create_connection(
     input: serde_json::Value,
 ) -> i64 {
     let result = futures::executor::block_on(registry.call(
-        "public_mcp.connections.create",
+        "onetcli.connections.create",
         input,
         ToolContext::for_adapter(ToolAdapter::Mcp),
     ))

@@ -1,15 +1,24 @@
 mod config;
-mod connections;
 mod internal_functions;
 mod redis;
 mod session;
 mod status;
 mod tool_registry;
-mod tool_runtime_tools;
 
 pub use config::{PublicMcpEnvOverride, PublicMcpStartConfig};
 pub use session::{mcp_server_enabled, set_mcp_server_enabled, set_mcp_server_mode};
 pub use status::PublicMcpRuntimeStatus;
+
+pub(crate) fn cli_tool_registry() -> anyhow::Result<tool_runtime::ToolRegistry> {
+    let storage = one_core::storage::StorageManager::new()?;
+    let repo = std::sync::Arc::new(one_core::storage::ConnectionRepository::new(
+        storage.connection(),
+    ));
+    Ok(onetcli_runtime::tool_registry_with_version(
+        repo,
+        env!("CARGO_PKG_VERSION"),
+    )?)
+}
 
 use gpui::{App, AsyncApp, Global, Subscription};
 use one_core::gpui_tokio::Tokio;

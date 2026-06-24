@@ -168,6 +168,14 @@ impl ToolRegistry {
         })
     }
 
+    pub fn merge(registries: Vec<Self>) -> Result<Self, ToolRegistryError> {
+        let handlers = registries
+            .into_iter()
+            .flat_map(|registry| registry.handlers.iter().cloned().collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        Self::try_new(handlers)
+    }
+
     pub fn list(&self, adapter: ToolAdapter) -> Vec<ToolDescriptor> {
         self.handlers
             .iter()

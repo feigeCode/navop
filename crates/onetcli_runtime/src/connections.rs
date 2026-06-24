@@ -18,6 +18,8 @@ use tool_runtime::{
 
 #[derive(Clone, Copy)]
 enum ConnectionTool {
+    List,
+    Show,
     ListKinds,
     GetSchema,
     Validate,
@@ -30,8 +32,16 @@ struct ConnectionToolHandler {
     tool: ConnectionTool,
 }
 
-pub(super) fn connection_tool_registry(repo: Arc<ConnectionRepository>) -> ToolRegistry {
+pub fn connection_tool_registry(repo: Arc<ConnectionRepository>) -> ToolRegistry {
     ToolRegistry::new(vec![
+        Arc::new(ConnectionToolHandler::new(
+            repo.clone(),
+            ConnectionTool::List,
+        )),
+        Arc::new(ConnectionToolHandler::new(
+            repo.clone(),
+            ConnectionTool::Show,
+        )),
         Arc::new(ConnectionToolHandler::new(
             repo.clone(),
             ConnectionTool::ListKinds,
@@ -55,11 +65,38 @@ impl ConnectionToolHandler {
 
     fn call_tool(&self, input: Value) -> Result<ToolResult, ToolError> {
         match self.tool {
+            ConnectionTool::List => self.list_saved(),
+            ConnectionTool::Show => self.show(input),
             ConnectionTool::ListKinds => Ok(ToolResult::structured(schema::list_kinds())),
             ConnectionTool::GetSchema => Ok(ToolResult::structured(schema::schema_for(input)?)),
             ConnectionTool::Validate => Ok(ToolResult::structured(validation::validate(input))),
             ConnectionTool::Create => self.create(input),
         }
+    }
+
+    fn list_saved(&self) -> Result<ToolResult, ToolError> {
+        let connections = self
+            .repo
+            .list()
+            .map_err(input::tool_error)?
+            .iter()
+            .map(build::connection_summary)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ToolResult::structured(
+            json!({ "connections": connections }),
+        ))
+    }
+
+    fn show(&self, input: Value) -> Result<ToolResult, ToolError> {
+        let connection = input::required_str(&input, "connection")?;
+        let Some(connection) = self.find_connection(connection)? else {
+            return Err(ToolError::Failed {
+                message: format!("unknown connection: {connection}"),
+            });
+        };
+        Ok(ToolResult::structured(json!({
+            "connection": build::connection_summary(&connection)?
+        })))
     }
 
     fn create(&self, input: Value) -> Result<ToolResult, ToolError> {
@@ -76,31 +113,58 @@ impl ConnectionToolHandler {
             "connection": build::connection_summary(&connection)?
         })))
     }
+
+    fn find_connection(
+        &self,
+        connection: &str,
+    ) -> Result<Option<one_core::storage::StoredConnection>, ToolError> {
+        if let Ok(id) = connection.parse::<i64>() {
+            return self.repo.get(id).map_err(input::tool_error);
+        }
+        Ok(self
+            .repo
+            .list()
+            .map_err(input::tool_error)?
+            .into_iter()
+            .find(|stored| stored.name == connection))
+    }
 }
 
 impl ToolHandler for ConnectionToolHandler {
     fn descriptor(&self) -> ToolDescriptor {
         let (id, title, description, read_only) = match self.tool {
+            ConnectionTool::List => (
+                "onetcli.connections.list",
+                "List saved connections",
+                "List saved OnetCli connections with redacted metadata.",
+                true,
+            ),
+            ConnectionTool::Show => (
+                "onetcli.connections.show",
+                "Show saved connection",
+                "Show one saved OnetCli connection by id or exact name.",
+                true,
+            ),
             ConnectionTool::ListKinds => (
-                "public_mcp.connections.list_kinds",
+                "onetcli.connections.list_kinds",
                 "List connection kinds",
                 "List connection kinds that can be created through OnetCli.",
                 true,
             ),
             ConnectionTool::GetSchema => (
-                "public_mcp.connections.get_schema",
+                "onetcli.connections.get_schema",
                 "Get connection schema",
                 "Return field schema and defaults for a connection kind.",
                 true,
             ),
             ConnectionTool::Validate => (
-                "public_mcp.connections.validate",
+                "onetcli.connections.validate",
                 "Validate connection",
                 "Validate a connection creation request without writing it.",
                 true,
             ),
             ConnectionTool::Create => (
-                "public_mcp.connections.create",
+                "onetcli.connections.create",
                 "Create connection",
                 "Create a saved OnetCli connection from structured fields.",
                 false,
@@ -114,7 +178,11 @@ impl ToolHandler for ConnectionToolHandler {
             output_schema: json!({ "type": "object" }),
             permissions: Vec::new(),
             mode: ToolMode::Deterministic,
-            adapters: vec![ToolAdapter::Mcp, ToolAdapter::FunctionCalling],
+            adapters: vec![
+                ToolAdapter::Mcp,
+                ToolAdapter::FunctionCalling,
+                ToolAdapter::Cli,
+            ],
             annotations: annotations(title, read_only),
         }
     }

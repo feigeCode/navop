@@ -1,5 +1,3 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod auth;
@@ -91,6 +89,11 @@ impl AssetSource for AppAssets {
 fn main() {
     if update::handle_update_command() {
         return;
+    }
+    if let Some(exit_code) =
+        onetcli_runtime::cli_host::handle_command(|| crate::public_mcp_runtime::cli_tool_registry())
+    {
+        std::process::exit(exit_code);
     }
 
     let app = Application::new()

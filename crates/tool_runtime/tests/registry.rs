@@ -31,6 +31,27 @@ fn registry_lists_tools_for_requested_adapter_only() {
 }
 
 #[test]
+fn registry_merges_multiple_registries() {
+    let first = ToolRegistry::new(vec![Arc::new(EchoHandler::new("example.first"))]);
+    let second = ToolRegistry::new(vec![Arc::new(EchoHandler::new("example.second"))]);
+
+    let registry = ToolRegistry::merge(vec![first, second]).expect("registries should merge");
+    let ids = tool_ids(registry.list(ToolAdapter::Mcp));
+
+    assert_eq!(vec!["example.first", "example.second"], ids);
+}
+
+#[test]
+fn registry_merge_rejects_duplicate_tool_ids() {
+    let first = ToolRegistry::new(vec![Arc::new(EchoHandler::new("example.same"))]);
+    let second = ToolRegistry::new(vec![Arc::new(EchoHandler::new("example.same"))]);
+
+    let error = ToolRegistry::merge(vec![first, second]).expect_err("duplicates should fail");
+
+    assert_eq!(vec!["example.same"], error.duplicate_tool_ids());
+}
+
+#[test]
 fn registry_dispatches_calls_to_matching_handler() {
     let registry = ToolRegistry::new(vec![Arc::new(EchoHandler::new("example.echo"))]);
 
