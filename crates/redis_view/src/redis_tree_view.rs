@@ -74,6 +74,49 @@ struct FlatEntry {
     depth: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LocalSearchVisibility {
+    include_node: bool,
+    traverse_children: bool,
+    descendants_inherit_match: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LocalSearchInput {
+    filter_active: bool,
+    ancestor_matches: bool,
+    node_matches: bool,
+    has_matching_descendant: bool,
+    is_load_more: bool,
+    is_expanded: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EntryTraversal {
+    depth: usize,
+    ancestor_matches: bool,
+}
+
+fn local_search_visibility(input: LocalSearchInput) -> LocalSearchVisibility {
+    let include_node = !input.filter_active
+        || input.ancestor_matches
+        || input.node_matches
+        || input.is_load_more
+        || input.has_matching_descendant;
+
+    LocalSearchVisibility {
+        include_node,
+        traverse_children: include_node
+            && if input.filter_active {
+                !input.is_load_more
+            } else {
+                input.is_expanded
+            },
+        descendants_inherit_match: input.filter_active
+            && (input.ancestor_matches || input.node_matches),
+    }
+}
+
 fn apply_redis_selection_state(
     selected_node: &mut Option<String>,
     context_menu_node_id: &mut Option<String>,
@@ -1523,7 +1566,14 @@ impl RedisTreeView {
             .collect();
 
         for root_id in root_nodes {
-            self.add_node_entries(&root_id, 0, &mut match_cache);
+            self.add_node_entries(
+                &root_id,
+                EntryTraversal {
+                    depth: 0,
+                    ancestor_matches: false,
+                },
+                &mut match_cache,
+            );
         }
     }
 
@@ -1531,7 +1581,7 @@ impl RedisTreeView {
     fn add_node_entries(
         &mut self,
         node_id: &str,
-        depth: usize,
+        traversal: EntryTraversal,
         match_cache: &mut HashMap<String, bool>,
     ) {
         let filter_keyword = self.local_filter_keyword();
@@ -1552,23 +1602,39 @@ impl RedisTreeView {
             None => return,
         };
 
-        // 搜索过滤
-        if filter_keyword.is_some() {
-            if !matches && !is_load_more && !self.node_has_matching_descendant(node_id, match_cache)
-            {
-                return;
-            }
+        let has_matching_descendant = filter_keyword.is_some()
+            && !traversal.ancestor_matches
+            && !matches
+            && !is_load_more
+            && self.node_has_matching_descendant(node_id, match_cache);
+        let visibility = local_search_visibility(LocalSearchInput {
+            filter_active: filter_keyword.is_some(),
+            ancestor_matches: traversal.ancestor_matches,
+            node_matches: matches,
+            has_matching_descendant,
+            is_load_more,
+            is_expanded: self.expanded_nodes.contains(node_id),
+        });
+        if !visibility.include_node {
+            return;
         }
 
         self.flat_entries.push(FlatEntry {
             node_id: node_id.to_string(),
-            depth,
+            depth: traversal.depth,
         });
 
-        // 如果节点展开，添加子节点
-        if self.expanded_nodes.contains(node_id) {
+        // 非搜索态按展开状态遍历；搜索态自动遍历匹配路径。
+        if visibility.traverse_children {
             for child_id in child_ids {
-                self.add_node_entries(&child_id, depth + 1, match_cache);
+                self.add_node_entries(
+                    &child_id,
+                    EntryTraversal {
+                        depth: traversal.depth + 1,
+                        ancestor_matches: visibility.descendants_inherit_match,
+                    },
+                    match_cache,
+                );
             }
         }
     }
@@ -2557,6 +2623,43 @@ mod tests {
         assert_eq!(
             5,
             RedisTreeView::normalize_database_for_mode(RedisConnectionMode::Standalone, 5)
+        );
+    }
+
+    #[test]
+    fn local_search_matching_namespace_traverses_loaded_children() {
+        let visibility = local_search_visibility(LocalSearchInput {
+            filter_active: true,
+            ancestor_matches: false,
+            node_matches: true,
+            has_matching_descendant: false,
+            is_load_more: false,
+            is_expanded: false,
+        });
+
+        assert!(visibility.include_node);
+        assert!(
+            visibility.traverse_children,
+            "matched namespace should reveal its loaded children during search"
+        );
+        assert!(visibility.descendants_inherit_match);
+    }
+
+    #[test]
+    fn local_search_child_under_matching_namespace_stays_visible() {
+        let visibility = local_search_visibility(LocalSearchInput {
+            filter_active: true,
+            ancestor_matches: true,
+            node_matches: false,
+            has_matching_descendant: false,
+            is_load_more: false,
+            is_expanded: false,
+        });
+
+        assert!(visibility.include_node);
+        assert!(
+            visibility.traverse_children,
+            "children under a matched namespace should remain visible"
         );
     }
 }
