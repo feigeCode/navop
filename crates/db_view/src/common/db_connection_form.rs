@@ -1949,6 +1949,13 @@ impl DbConnectionForm {
         });
     }
 
+    pub fn clear_test_result(&mut self, cx: &mut Context<Self>) {
+        self.test_result.update(cx, |test_result, cx| {
+            *test_result = None;
+            cx.notify();
+        });
+    }
+
     pub fn save_connection(&mut self, cx: &mut Context<Self>) {
         let (stored, is_update) = match self.build_stored_connection(cx) {
             Ok(data) => data,
