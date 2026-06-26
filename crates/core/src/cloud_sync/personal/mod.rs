@@ -8,9 +8,12 @@ mod models;
 mod planner;
 mod state;
 mod store;
+mod worker;
 
 #[cfg(test)]
 pub(crate) mod test_support;
+#[cfg(test)]
+mod worker_tests;
 
 pub use directory_store::*;
 pub use file_format::*;
@@ -18,3 +21,4 @@ pub use models::*;
 pub use planner::*;
 pub use state::*;
 pub use store::*;
+pub use worker::*;

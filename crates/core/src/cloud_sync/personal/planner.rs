@@ -54,7 +54,7 @@ impl PersonalSyncPlan {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct PersonalSyncPlanner;
 
 impl PersonalSyncPlanner {
