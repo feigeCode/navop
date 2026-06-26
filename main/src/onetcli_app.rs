@@ -183,6 +183,7 @@ pub fn init(cx: &mut App) {
     redis_view::init(cx);
     crate::public_mcp_approval::init(cx);
     crate::public_mcp_runtime::init(cx);
+    crate::personal_sync_runtime::init(cx);
     mongodb_view::init(cx);
     remote_desktop_view::init(cx);
     crate::home_tab::init(cx);

@@ -621,6 +621,8 @@ pub(crate) fn personal_sync_status_label(health: &SyncStoreHealth) -> String {
 }
 
 fn render_personal_sync_actions(_window: &mut Window, cx: &mut App) -> gpui::AnyElement {
+    let status = crate::personal_sync_runtime::runtime_status(cx);
+    let enabled = crate::personal_sync_runtime::actions_enabled(cx);
     h_flex()
         .w_full()
         .justify_between()
@@ -639,7 +641,7 @@ fn render_personal_sync_actions(_window: &mut Window, cx: &mut App) -> gpui::Any
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child(personal_sync_status_label(&SyncStoreHealth::NotConfigured)),
+                        .child(personal_sync_status_label(&status.health())),
                 ),
         )
         .child(
@@ -649,13 +651,19 @@ fn render_personal_sync_actions(_window: &mut Window, cx: &mut App) -> gpui::Any
                     Button::new("personal-sync-test")
                         .icon(IconName::Check)
                         .label(t!("Settings.Sync.test_connection").to_string())
-                        .disabled(true),
+                        .disabled(!enabled)
+                        .on_click(|_, _, cx| {
+                            crate::personal_sync_runtime::test_connection(cx);
+                        }),
                 )
                 .child(
                     Button::new("personal-sync-now")
                         .icon(IconName::Refresh)
                         .label(t!("Settings.Sync.sync_now").to_string())
-                        .disabled(true),
+                        .disabled(!enabled)
+                        .on_click(|_, _, cx| {
+                            crate::personal_sync_runtime::sync_now(cx);
+                        }),
                 ),
         )
         .into_any_element()
