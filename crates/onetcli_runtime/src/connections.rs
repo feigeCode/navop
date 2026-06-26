@@ -9,12 +9,12 @@ mod schema;
 mod validation;
 
 use one_core::storage::traits::Repository;
-use one_core::storage::{ConnectionRepository, WorkspaceRepository};
+use one_core::storage::{ConnectionRepository, StoredConnection, WorkspaceRepository};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode,
-    ToolRegistry, ToolResult,
+    ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolFuture, ToolHandler,
+    ToolMode, ToolRegistry, ToolResult,
 };
 
 #[derive(Clone, Copy)]
@@ -31,12 +31,18 @@ enum ConnectionTool {
     MoveWorkspace,
     SetSyncEnabled,
     Test,
+    OpenSession,
+}
+
+pub trait ConnectionSessionOpener: Send + Sync + 'static {
+    fn open_session(&self, connection: StoredConnection) -> ToolFuture;
 }
 
 #[derive(Clone)]
 struct ConnectionToolHandler {
     repo: Arc<ConnectionRepository>,
     workspaces: Option<Arc<WorkspaceRepository>>,
+    session_opener: Option<Arc<dyn ConnectionSessionOpener>>,
     tool: ConnectionTool,
 }
 
@@ -48,67 +54,75 @@ pub fn connection_tool_registry_with_workspaces(
     repo: Arc<ConnectionRepository>,
     workspaces: Option<Arc<WorkspaceRepository>>,
 ) -> ToolRegistry {
+    connection_tool_registry_with_workspaces_and_session_opener(repo, workspaces, None)
+}
+
+pub fn connection_tool_registry_with_workspaces_and_session_opener(
+    repo: Arc<ConnectionRepository>,
+    workspaces: Option<Arc<WorkspaceRepository>>,
+    session_opener: Option<Arc<dyn ConnectionSessionOpener>>,
+) -> ToolRegistry {
     ToolRegistry::new(vec![
-        Arc::new(ConnectionToolHandler::new(
-            repo.clone(),
-            workspaces.clone(),
-            ConnectionTool::List,
-        )),
-        Arc::new(ConnectionToolHandler::new(
-            repo.clone(),
-            workspaces.clone(),
-            ConnectionTool::Show,
-        )),
-        Arc::new(ConnectionToolHandler::new(
-            repo.clone(),
-            workspaces.clone(),
-            ConnectionTool::ListKinds,
-        )),
-        Arc::new(ConnectionToolHandler::new(
-            repo.clone(),
-            workspaces.clone(),
-            ConnectionTool::GetSchema,
-        )),
-        Arc::new(ConnectionToolHandler::new(
-            repo.clone(),
-            workspaces.clone(),
-            ConnectionTool::Validate,
-        )),
-        Arc::new(ConnectionToolHandler::new(
-            repo.clone(),
-            workspaces.clone(),
-            ConnectionTool::Create,
-        )),
-        Arc::new(ConnectionToolHandler::new(
-            repo.clone(),
-            workspaces.clone(),
-            ConnectionTool::Find,
-        )),
-        Arc::new(ConnectionToolHandler::new(
-            repo.clone(),
-            workspaces.clone(),
-            ConnectionTool::Update,
-        )),
-        Arc::new(ConnectionToolHandler::new(
-            repo.clone(),
-            workspaces.clone(),
-            ConnectionTool::Delete,
-        )),
-        Arc::new(ConnectionToolHandler::new(
-            repo.clone(),
-            workspaces.clone(),
-            ConnectionTool::MoveWorkspace,
-        )),
-        Arc::new(ConnectionToolHandler::new(
-            repo.clone(),
-            workspaces.clone(),
-            ConnectionTool::SetSyncEnabled,
-        )),
-        Arc::new(ConnectionToolHandler::new(
-            repo,
-            workspaces,
-            ConnectionTool::Test,
-        )),
+        Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::List)
+                .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Show)
+                .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::ListKinds)
+                .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::GetSchema)
+                .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Validate)
+                .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Create)
+                .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Find)
+                .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Update)
+                .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Delete)
+                .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(
+                repo.clone(),
+                workspaces.clone(),
+                ConnectionTool::MoveWorkspace,
+            )
+            .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(
+                repo.clone(),
+                workspaces.clone(),
+                ConnectionTool::SetSyncEnabled,
+            )
+            .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Test)
+                .with_session_opener(session_opener.clone()),
+        ),
+        Arc::new(
+            ConnectionToolHandler::new(repo, workspaces, ConnectionTool::OpenSession)
+                .with_session_opener(session_opener),
+        ),
     ])
 }
 
@@ -121,11 +135,20 @@ impl ConnectionToolHandler {
         Self {
             repo,
             workspaces,
+            session_opener: None,
             tool,
         }
     }
 
-    async fn call_tool(&self, input: Value) -> Result<ToolResult, ToolError> {
+    fn with_session_opener(
+        mut self,
+        session_opener: Option<Arc<dyn ConnectionSessionOpener>>,
+    ) -> Self {
+        self.session_opener = session_opener;
+        self
+    }
+
+    async fn call_tool(&self, input: Value, context: ToolContext) -> Result<ToolResult, ToolError> {
         match self.tool {
             ConnectionTool::List => {
                 management::list_saved(&self.repo, self.workspaces.as_ref(), input)
@@ -151,6 +174,7 @@ impl ConnectionToolHandler {
             ConnectionTool::Test => {
                 management::test_connection(&self.repo, self.workspaces.as_ref(), input).await
             }
+            ConnectionTool::OpenSession => self.open_session(input, context).await,
         }
     }
 
@@ -166,6 +190,36 @@ impl ConnectionToolHandler {
         Ok(ToolResult::structured(json!({
             "ok": true,
             "connection": management::summarize(&connection, self.workspaces.as_ref(), true)?
+        })))
+    }
+
+    async fn open_session(
+        &self,
+        input: Value,
+        context: ToolContext,
+    ) -> Result<ToolResult, ToolError> {
+        let reference = input::required_str(&input, "connection")?;
+        let connection = management::find_unique_connection(&self.repo, &reference)?;
+        let summary = management::summarize(&connection, self.workspaces.as_ref(), true)?;
+        let adapter = adapter_name(context.adapter);
+
+        let Some(opener) = self.session_opener.clone() else {
+            return Ok(ToolResult::structured(json!({
+                "ok": true,
+                "opened": false,
+                "adapter": adapter,
+                "connection": summary,
+                "message": "No UI session opener is available in this runtime; the connection was resolved only."
+            })));
+        };
+
+        let opened = opener.open_session(connection).await?;
+        Ok(ToolResult::structured(json!({
+            "ok": true,
+            "opened": true,
+            "adapter": adapter,
+            "connection": summary,
+            "session": opened.structured_content
         })))
     }
 }
@@ -245,6 +299,12 @@ impl ToolHandler for ConnectionToolHandler {
                 "Test whether a saved database connection can actually connect and ping. This is different from connections.validate, which only validates request shape before saving. Non-database connection kinds return a structured unsupported_kind result.",
                 false,
             ),
+            ConnectionTool::OpenSession => (
+                "connections.open_session",
+                "Open connection session",
+                "Open a saved OnetCli connection in the running app UI by numeric id or exact name. Use this when active session lists are empty and automation needs OnetCli to open a connection first. In CLI-only runtimes this resolves the connection and reports opened=false because no UI opener is available.",
+                false,
+            ),
         };
         ToolDescriptor {
             id: id.to_string(),
@@ -263,9 +323,9 @@ impl ToolHandler for ConnectionToolHandler {
         }
     }
 
-    fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
+    fn call(&self, input: Value, context: ToolContext) -> tool_runtime::ToolFuture {
         let handler = self.clone();
-        Box::pin(async move { handler.call_tool(input).await })
+        Box::pin(async move { handler.call_tool(input, context).await })
     }
 }
 
@@ -295,11 +355,20 @@ fn input_schema(tool: ConnectionTool) -> Value {
         ConnectionTool::Delete => id_schema(),
         ConnectionTool::MoveWorkspace => move_workspace_schema(),
         ConnectionTool::SetSyncEnabled => sync_schema(),
-        ConnectionTool::Test => json!({
+        ConnectionTool::Test | ConnectionTool::OpenSession => json!({
             "type": "object",
             "properties": { "connection": connection_ref_schema() },
             "required": ["connection"]
         }),
+    }
+}
+
+fn adapter_name(adapter: ToolAdapter) -> &'static str {
+    match adapter {
+        ToolAdapter::Cli => "cli",
+        ToolAdapter::FunctionCalling => "function_calling",
+        ToolAdapter::Mcp => "mcp",
+        ToolAdapter::Gui => "gui",
     }
 }
 

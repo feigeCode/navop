@@ -8,7 +8,7 @@ use public_mcp::tools::{
 use std::sync::Arc;
 
 pub(super) fn build_tool_registry(
-    cx: &App,
+    cx: &mut App,
     toolsets: &McpToolsetSettings,
 ) -> anyhow::Result<PublicMcpToolRegistry> {
     let mut providers: Vec<Arc<dyn PublicMcpToolProvider>> = Vec::new();
@@ -38,10 +38,12 @@ pub(super) fn build_tool_registry(
                 let workspace_repo = storage
                     .storage
                     .get::<one_core::storage::WorkspaceRepository>();
+                let session_opener = super::connection_sessions::connection_session_opener(cx);
                 providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-                    onetcli_runtime::connections::connection_tool_registry_with_workspaces(
+                    onetcli_runtime::connections::connection_tool_registry_with_workspaces_and_session_opener(
                         repo,
                         workspace_repo.clone(),
+                        Some(session_opener),
                     ),
                 )));
                 if let Some(workspace_repo) = workspace_repo {
@@ -74,6 +76,22 @@ pub(super) fn build_tool_registry(
             }
         } else {
             tracing::warn!("Public MCP SFTP tools enabled before storage is initialized");
+        }
+    }
+    if toolsets.database {
+        if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
+            if let Some(repo) = storage
+                .storage
+                .get::<one_core::storage::ConnectionRepository>()
+            {
+                providers.push(Arc::new(ToolRuntimeMcpProvider::new(
+                    onetcli_runtime::database_tools::database_tool_registry(repo),
+                )));
+            } else {
+                tracing::warn!("Public MCP database tools enabled without ConnectionRepository");
+            }
+        } else {
+            tracing::warn!("Public MCP database tools enabled before storage is initialized");
         }
     }
     if toolsets.redis {
@@ -173,6 +191,11 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "connections.update"));
         assert!(tools.iter().any(|tool| tool.name == "connections.delete"));
         assert!(tools.iter().any(|tool| tool.name == "connections.test"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "connections.open_session")
+        );
         assert!(tools.iter().any(|tool| tool.name == "workspaces.list"));
         assert!(tools.iter().any(|tool| tool.name == "workspaces.show"));
         assert!(
@@ -204,6 +227,27 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "sftp.stat"));
         assert!(tools.iter().any(|tool| tool.name == "sftp.upload"));
         assert!(tools.iter().any(|tool| tool.name == "sftp.download"));
+    }
+
+    #[gpui::test]
+    fn build_tool_registry_includes_database_tools(cx: &mut TestAppContext) {
+        let toolsets = McpToolsetSettings {
+            terminal: false,
+            connections: false,
+            database: true,
+            ..Default::default()
+        };
+
+        let tools = cx.update(|cx| {
+            register_connection_repository(cx);
+            build_tool_registry(cx, &toolsets)
+                .expect("database registry should build")
+                .tools()
+        });
+
+        assert!(tools.iter().any(|tool| tool.name == "db.schema"));
+        assert!(tools.iter().any(|tool| tool.name == "db.query"));
+        assert!(tools.iter().any(|tool| tool.name == "db.exec"));
     }
 
     #[gpui::test]

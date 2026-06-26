@@ -1,4 +1,5 @@
 mod config;
+mod connection_sessions;
 mod internal_functions;
 mod redis;
 mod session;

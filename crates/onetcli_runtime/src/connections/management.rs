@@ -213,7 +213,7 @@ fn page_response(
     }))
 }
 
-fn find_unique_connection(
+pub(super) fn find_unique_connection(
     repo: &ConnectionRepository,
     reference: &str,
 ) -> Result<StoredConnection, ToolError> {

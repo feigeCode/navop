@@ -67,6 +67,55 @@ fn connection_registry_exposes_creation_tools_to_cli() {
     assert!(tool_ids.contains(&"connections.show".to_string()));
     assert!(tool_ids.contains(&"connections.list_kinds".to_string()));
     assert!(tool_ids.contains(&"connections.create".to_string()));
+    assert!(tool_ids.contains(&"connections.open_session".to_string()));
+}
+
+#[test]
+fn open_session_is_exposed_to_mcp_function_calling_and_cli() {
+    let registry = connection_tool_registry(repo());
+
+    for adapter in [
+        ToolAdapter::Mcp,
+        ToolAdapter::FunctionCalling,
+        ToolAdapter::Cli,
+    ] {
+        let tool = registry
+            .get("connections.open_session", adapter)
+            .expect("open_session tool should be exposed");
+
+        assert_eq!(json!(["connection"]), tool.input_schema["required"]);
+        assert!(!tool.annotations.read_only);
+    }
+}
+
+#[test]
+fn open_session_without_ui_opener_resolves_connection_for_cli() {
+    let repo = repo();
+    let registry = connection_tool_registry(repo);
+    let id = create_connection(
+        &registry,
+        json!({
+            "kind": "database",
+            "database_type": "MySQL",
+            "values": {
+                "name": "prod mysql",
+                "host": "10.0.1.20",
+                "username": "app"
+            }
+        }),
+    );
+
+    let result = futures::executor::block_on(registry.call(
+        "connections.open_session",
+        json!({ "connection": id.to_string() }),
+        ToolContext::for_adapter(ToolAdapter::Cli),
+    ))
+    .expect("open session should resolve saved connection");
+
+    assert_eq!(json!(true), result.structured_content["ok"]);
+    assert_eq!(json!(false), result.structured_content["opened"]);
+    assert_eq!(json!("cli"), result.structured_content["adapter"]);
+    assert_eq!(id, result.structured_content["connection"]["id"]);
 }
 
 #[test]

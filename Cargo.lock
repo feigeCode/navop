@@ -7794,6 +7794,7 @@ dependencies = [
  "one-core",
  "onetcli_cli",
  "redis",
+ "rusqlite",
  "serde_json",
  "sftp",
  "ssh",

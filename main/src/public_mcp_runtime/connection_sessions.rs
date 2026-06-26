@@ -1,0 +1,90 @@
+use crate::onetcli_app::GlobalHomePage;
+use gpui::{App, AsyncApp};
+use gpui_component::WindowExt;
+use one_core::storage::StoredConnection;
+use serde_json::{Value, json};
+use std::sync::Arc;
+use tokio::sync::{mpsc, oneshot};
+use tool_runtime::{ToolError, ToolFuture, ToolResult};
+
+struct OpenConnectionRequest {
+    connection: StoredConnection,
+    reply: oneshot::Sender<Result<Value, String>>,
+}
+
+#[derive(Clone)]
+struct GpuiConnectionSessionOpener {
+    requests: mpsc::UnboundedSender<OpenConnectionRequest>,
+}
+
+pub(super) fn connection_session_opener(
+    cx: &mut App,
+) -> Arc<dyn onetcli_runtime::connections::ConnectionSessionOpener> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<OpenConnectionRequest>();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        while let Some(request) = rx.recv().await {
+            let result = cx
+                .update(|cx| open_connection_on_active_window(request.connection, cx))
+                .map_err(|error| error.to_string());
+            let _ = request.reply.send(result);
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .detach();
+    Arc::new(GpuiConnectionSessionOpener { requests: tx })
+}
+
+impl onetcli_runtime::connections::ConnectionSessionOpener for GpuiConnectionSessionOpener {
+    fn open_session(&self, connection: StoredConnection) -> ToolFuture {
+        let requests = self.requests.clone();
+        Box::pin(async move {
+            let (reply, response) = oneshot::channel();
+            requests
+                .send(OpenConnectionRequest { connection, reply })
+                .map_err(|_| ToolError::Failed {
+                    message: "connection session opener is no longer available".to_string(),
+                })?;
+            let opened = response.await.map_err(|_| ToolError::Failed {
+                message: "connection session opener dropped before replying".to_string(),
+            })?;
+            Ok(ToolResult::structured(
+                opened.map_err(|message| ToolError::Failed { message })?,
+            ))
+        })
+    }
+}
+
+fn open_connection_on_active_window(
+    connection: StoredConnection,
+    cx: &mut App,
+) -> Result<Value, String> {
+    let active_window = cx
+        .active_window()
+        .ok_or_else(|| "no active OnetCli window is available".to_string())?;
+    let home_page = cx
+        .try_global::<GlobalHomePage>()
+        .ok_or_else(|| "home page is not initialized".to_string())?
+        .home_page
+        .clone();
+    let connection_id = connection.id;
+    let connection_name = connection.name.clone();
+    let connection_type = connection.connection_type.label().to_string();
+
+    active_window
+        .update(cx, |_, window, cx| {
+            if window.has_active_dialog(cx) {
+                window.close_all_dialogs(cx);
+            }
+            home_page.update(cx, |home, cx| {
+                home.open_connection_from_quick(&connection, window, cx);
+            });
+        })
+        .map_err(|error| error.to_string())?;
+
+    Ok(json!({
+        "target": "active_window",
+        "connection_id": connection_id,
+        "connection_name": connection_name,
+        "connection_type": connection_type
+    }))
+}
