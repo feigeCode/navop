@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 pub const APP_ID: &str = "onetcli";
 pub const PERSONAL_PROFILE_ID: &str = "personal";
@@ -45,4 +46,70 @@ pub enum SyncStoreError {
     GitMergeConflict,
     Io(String),
     Parse(String),
+}
+
+impl fmt::Display for SyncStoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotConfigured => write!(f, "personal sync is not configured"),
+            Self::DirectoryUnavailable(message) => write!(f, "directory unavailable: {message}"),
+            Self::SchemaUnsupported { found } => {
+                write!(f, "unsupported personal sync schema: {found}")
+            }
+            Self::Conflict(message) => write!(f, "personal sync conflict: {message}"),
+            Self::LockTimeout => write!(f, "personal sync lock timed out"),
+            Self::GitAuthRequired => write!(f, "git authentication required"),
+            Self::GitMergeConflict => write!(f, "git merge conflict"),
+            Self::Io(message) => write!(f, "personal sync io error: {message}"),
+            Self::Parse(message) => write!(f, "personal sync parse error: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for SyncStoreError {}
+
+impl From<std::io::Error> for SyncStoreError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error.to_string())
+    }
+}
+
+impl From<serde_json::Error> for SyncStoreError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Parse(error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncStoreHealth {
+    Ready,
+    NotConfigured,
+    DirectoryUnavailable,
+    SchemaUnsupported,
+    GitAuthRequired,
+    GitMergeConflict,
+    PausedAfterRepeatedFailures,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncStoreStatus {
+    pub health: SyncStoreHealth,
+    pub message: Option<String>,
+}
+
+impl SyncStoreStatus {
+    pub fn ready() -> Self {
+        Self {
+            health: SyncStoreHealth::Ready,
+            message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncDeviceId(pub String);
+
+#[derive(Debug)]
+pub struct SyncStoreLock {
+    pub owner: SyncDeviceId,
 }

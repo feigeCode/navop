@@ -30,3 +30,6 @@ ed25519-dalek = "2.2.0"
 parking_lot.workspace = true
 util.workspace = true
 rust-i18n.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
