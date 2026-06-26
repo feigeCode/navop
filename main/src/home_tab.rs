@@ -1,13 +1,14 @@
 use std::collections::HashSet;
+use std::ops::Range;
 use std::sync::Arc;
 
 use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, ElementId, Entity, EventEmitter, FocusHandle,
-    Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, actions,
-    div, px,
+    Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding, ListSizingBehavior,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
 };
 use gpui_component::button::ButtonVariant;
 use gpui_component::{
@@ -154,27 +155,74 @@ impl ConnectionLayout {
 #[derive(Clone)]
 struct DragConnection {
     source_index: usize,
+    source_id: Option<i64>,
+    name: String,
+    info: String,
+    connection_type: ConnectionType,
 }
 
 impl Render for DragConnection {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        h_flex()
             .id("drag-connection")
             .cursor_grabbing()
-            .py_1()
+            .w(px(300.0))
+            .h(px(58.0))
             .px_3()
-            .min_w(px(120.0))
             .overflow_hidden()
-            .whitespace_nowrap()
-            .text_ellipsis()
             .border_1()
             .border_color(cx.theme().border)
-            .rounded(px(6.0))
-            .text_color(cx.theme().foreground)
-            .bg(cx.theme().background)
-            .opacity(0.85)
+            .rounded(px(8.0))
+            .bg(cx.theme().popover)
+            .opacity(0.95)
             .shadow_md()
-            .text_sm()
+            .items_center()
+            .gap_3()
+            .child(Self::preview_icon(self.connection_type, cx))
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().foreground)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(self.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(self.info.clone()),
+                    ),
+            )
+    }
+}
+
+impl DragConnection {
+    fn preview_icon(connection_type: ConnectionType, cx: &mut Context<Self>) -> AnyElement {
+        let icon = match connection_type {
+            ConnectionType::Database => IconName::Database.color(),
+            ConnectionType::SshSftp => IconName::TerminalColor.color(),
+            ConnectionType::Redis => IconName::Redis.color(),
+            ConnectionType::MongoDB => IconName::MongoDB.color(),
+            ConnectionType::Serial => IconName::SerialPort.color(),
+            ConnectionType::PortForwarding => IconName::PortForwardingColor.color(),
+            ConnectionType::Rdp => IconName::Rdp.color(),
+            ConnectionType::Vnc => IconName::Vnc.color(),
+            _ => IconName::Server.color(),
+        };
+        icon.with_size(px(22.0))
+            .text_color(cx.theme().foreground)
+            .flex_shrink_0()
+            .into_any_element()
     }
 }
 
@@ -189,6 +237,7 @@ pub struct HomePage {
     search_query: Entity<String>,
     pub(crate) editing_connection_id: Option<i64>,
     selected_connection_id: Option<i64>,
+    connection_scroll_handle: UniformListScrollHandle,
     pub(crate) filtered_workspace_ids: HashSet<i64>,
     pub(crate) workspace_filter_open: bool,
     workspace_filter_list: Option<Entity<ListState<WorkspaceFilterDelegate>>>,
@@ -348,6 +397,7 @@ impl HomePage {
             search_query,
             editing_connection_id: None,
             selected_connection_id: None,
+            connection_scroll_handle: UniformListScrollHandle::new(),
             filtered_workspace_ids: HashSet::new(),
             workspace_filter_open: false,
             workspace_filter_list: None,
@@ -541,6 +591,30 @@ impl HomePage {
         })
         .detach();
         cx.notify();
+    }
+
+    fn reorder_connection_by_id(
+        &mut self,
+        source_id: Option<i64>,
+        target_id: Option<i64>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source_id) = source_id else { return };
+        let Some(target_id) = target_id else { return };
+        if source_id == target_id {
+            return;
+        }
+        let from = self
+            .connections
+            .iter()
+            .position(|c| c.id == Some(source_id));
+        let to = self
+            .connections
+            .iter()
+            .position(|c| c.id == Some(target_id));
+        if let (Some(from), Some(to)) = (from, to) {
+            self.reorder_connections(from, to, cx);
+        }
     }
 
     fn refresh_local_home_data(&mut self, cx: &mut Context<Self>) {
@@ -2765,7 +2839,7 @@ impl HomePage {
         selected_id: Option<i64>,
         layout: ConnectionLayout,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         let workspaces_with_connections: Vec<_> = self
             .workspaces
             .iter()
@@ -2799,6 +2873,16 @@ impl HomePage {
             .filter(|conn| self.match_connection_type(conn))
             .cloned()
             .collect();
+        let has_workspaces = self.workspaces.iter().any(|ws| ws.id.is_some());
+
+        if layout == ConnectionLayout::List && !has_workspaces {
+            return div()
+                .id("home-content")
+                .size_full()
+                .p_6()
+                .child(self.render_connection_uniform_list(unassigned_connections, selected_id, cx))
+                .into_any_element();
+        }
 
         div()
             .id("home-content")
@@ -2824,7 +2908,6 @@ impl HomePage {
 
                 // 如果用户没有设置工作区，直接显示连接列表；否则显示未分配工作区
                 if !unassigned_connections.is_empty() {
-                    let has_workspaces = self.workspaces.iter().any(|ws| ws.id.is_some());
                     if has_workspaces {
                         container = container.child(self.render_unassigned_section(
                             unassigned_connections,
@@ -2845,6 +2928,7 @@ impl HomePage {
 
                 container
             })
+            .into_any_element()
     }
 
     fn render_workspace_section(
@@ -2898,15 +2982,14 @@ impl HomePage {
 
                 for (idx, conn) in connections.iter().enumerate() {
                     container = match layout {
-                        ConnectionLayout::List => {
-                            container.child(self.render_connection_list_item(conn.clone(), selected_id, idx, cx))
-                        }
-                        ConnectionLayout::Card => container.child(
-                            div()
-                                .w(px(320.0))
-                                .flex_shrink_0()
-                                .child(self.render_connection_card(conn.clone(), selected_id, idx, cx)),
+                        ConnectionLayout::List => container.child(
+                            self.render_connection_list_item(conn.clone(), selected_id, idx, cx),
                         ),
+                        ConnectionLayout::Card => {
+                            container.child(div().w(px(320.0)).flex_shrink_0().child(
+                                self.render_connection_card(conn.clone(), selected_id, idx, cx),
+                            ))
+                        }
                     };
                 }
 
@@ -2920,26 +3003,44 @@ impl HomePage {
         selected_id: Option<i64>,
         layout: ConnectionLayout,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let mut container = match layout {
-            ConnectionLayout::List => v_flex().w_full().gap_1(),
-            ConnectionLayout::Card => div().flex().flex_wrap().w_full().gap_3(),
-        };
-
-        for (idx, conn) in connections.into_iter().enumerate() {
-            container = match layout {
-                ConnectionLayout::List => {
-                    container.child(self.render_connection_list_item(conn, selected_id, idx, cx))
-                }
-                ConnectionLayout::Card => container.child(
-                    div()
-                        .w(px(320.0))
-                        .flex_shrink_0()
-                        .child(self.render_connection_card(conn, selected_id, idx, cx)),
-                ),
-            };
+    ) -> AnyElement {
+        if layout == ConnectionLayout::List {
+            return self.render_connection_uniform_list(connections, selected_id, cx);
         }
-        container
+
+        let mut container = div().flex().flex_wrap().w_full().gap_3();
+        for (idx, conn) in connections.into_iter().enumerate() {
+            container = container.child(
+                div()
+                    .w(px(320.0))
+                    .flex_shrink_0()
+                    .child(self.render_connection_card(conn, selected_id, idx, cx)),
+            );
+        }
+        container.into_any_element()
+    }
+
+    fn render_connection_uniform_list(
+        &self,
+        connections: Vec<StoredConnection>,
+        selected_id: Option<i64>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let item_count = connections.len();
+        uniform_list("home-connection-list", item_count, {
+            cx.processor(move |this: &mut Self, range: Range<usize>, _window, cx| {
+                range
+                    .filter_map(|idx| {
+                        let conn = connections.get(idx).cloned()?;
+                        Some(this.render_connection_list_item(conn, selected_id, idx, cx))
+                    })
+                    .collect()
+            })
+        })
+        .size_full()
+        .track_scroll(&self.connection_scroll_handle)
+        .with_sizing_behavior(ListSizingBehavior::Auto)
+        .into_any_element()
     }
 
     fn render_unassigned_section(
@@ -2985,9 +3086,8 @@ impl HomePage {
 
                 for (idx, conn) in connections.into_iter().enumerate() {
                     container = match layout {
-                        ConnectionLayout::List => {
-                            container.child(self.render_connection_list_item(conn, selected_id, idx, cx))
-                        }
+                        ConnectionLayout::List => container
+                            .child(self.render_connection_list_item(conn, selected_id, idx, cx)),
                         ConnectionLayout::Card => container.child(
                             div()
                                 .w(px(320.0))
@@ -3006,7 +3106,7 @@ impl HomePage {
         selected_id: Option<i64>,
         index: usize,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         let conn_id = conn.id;
         let clone_conn = conn.clone();
         let sftp_hover_conn = conn.clone();
@@ -3023,6 +3123,8 @@ impl HomePage {
         let can_edit = can_edit_connection(&conn, cx);
 
         let accent = cx.theme().accent;
+        let drag_connection = self.drag_connection(&conn, index);
+        let drop_target_id = conn.id;
 
         h_flex()
             .id(SharedString::from(format!(
@@ -3054,26 +3156,21 @@ impl HomePage {
                 this.selected_connection_id = conn_id;
                 cx.notify();
             }))
-            .on_drag(
-                DragConnection { source_index: index },
-                |drag, _, window, cx| {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    cx.new(|_| drag.clone())
-                },
-            )
-            .drag_over::<DragConnection>(move |el, _, _, _cx| {
-                el.border_t_2().border_color(accent)
+            .on_drag(drag_connection, |drag, _, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
+                cx.new(|_| drag.clone())
             })
-            .on_drop(cx.listener(
-                move |this, drag: &DragConnection, _window, cx| {
-                    let from = drag.source_index;
-                    let to = index;
-                    if from != to {
-                        this.reorder_connections(from, to, cx);
+            .drag_over::<DragConnection>(move |el, _, _, _cx| el.border_t_2().border_color(accent))
+            .on_drop(
+                cx.listener(move |this, drag: &DragConnection, _window, cx| {
+                    if drag.source_id.is_some() && drop_target_id.is_some() {
+                        this.reorder_connection_by_id(drag.source_id, drop_target_id, cx);
+                    } else if drag.source_index != index {
+                        this.reorder_connections(drag.source_index, index, cx);
                     }
-                },
-            ))
+                }),
+            )
             // 激活指示灯
             .when(is_active, |this| {
                 // list_item version
@@ -3087,60 +3184,58 @@ impl HomePage {
                 )
             })
             // 类型图标
-            .child(
-                match conn.connection_type {
-                    ConnectionType::Database => {
-                        let icon = conn
-                            .to_db_connection()
-                            .map(|c| {
-                                external_driver_icon_for_config(&c, px(24.0))
-                                    .unwrap_or_else(|| c.database_type.as_icon())
-                            })
-                            .unwrap_or_else(|_| IconName::Database.color());
-                        icon.with_size(px(24.0)).flex_shrink_0()
-                    }
-                    ConnectionType::SshSftp => IconName::TerminalColor
-                        .color()
-                        .with_size(px(24.0))
-                        .text_color(gpui::rgb(0x8b5cf6))
-                        .flex_shrink_0(),
-                    ConnectionType::Redis => IconName::Redis
-                        .color()
-                        .with_size(px(24.0))
-                        .text_color(gpui::white())
-                        .flex_shrink_0(),
-                    ConnectionType::MongoDB => IconName::MongoDB
-                        .color()
-                        .with_size(px(24.0))
-                        .text_color(gpui::white())
-                        .flex_shrink_0(),
-                    ConnectionType::Serial => IconName::SerialPort
-                        .color()
-                        .with_size(px(24.0))
-                        .text_color(gpui::white())
-                        .flex_shrink_0(),
-                    ConnectionType::PortForwarding => IconName::PortForwardingColor
-                        .color()
-                        .with_size(px(24.0))
-                        .text_color(gpui::white())
-                        .flex_shrink_0(),
-                    ConnectionType::Rdp => IconName::Rdp
-                        .color()
-                        .with_size(px(24.0))
-                        .text_color(gpui::white())
-                        .flex_shrink_0(),
-                    ConnectionType::Vnc => IconName::Vnc
-                        .color()
-                        .with_size(px(24.0))
-                        .text_color(gpui::white())
-                        .flex_shrink_0(),
-                    _ => IconName::Server
-                        .color()
-                        .with_size(px(24.0))
-                        .text_color(gpui::white())
-                        .flex_shrink_0(),
-                },
-            )
+            .child(match conn.connection_type {
+                ConnectionType::Database => {
+                    let icon = conn
+                        .to_db_connection()
+                        .map(|c| {
+                            external_driver_icon_for_config(&c, px(24.0))
+                                .unwrap_or_else(|| c.database_type.as_icon())
+                        })
+                        .unwrap_or_else(|_| IconName::Database.color());
+                    icon.with_size(px(24.0)).flex_shrink_0()
+                }
+                ConnectionType::SshSftp => IconName::TerminalColor
+                    .color()
+                    .with_size(px(24.0))
+                    .text_color(gpui::rgb(0x8b5cf6))
+                    .flex_shrink_0(),
+                ConnectionType::Redis => IconName::Redis
+                    .color()
+                    .with_size(px(24.0))
+                    .text_color(gpui::white())
+                    .flex_shrink_0(),
+                ConnectionType::MongoDB => IconName::MongoDB
+                    .color()
+                    .with_size(px(24.0))
+                    .text_color(gpui::white())
+                    .flex_shrink_0(),
+                ConnectionType::Serial => IconName::SerialPort
+                    .color()
+                    .with_size(px(24.0))
+                    .text_color(gpui::white())
+                    .flex_shrink_0(),
+                ConnectionType::PortForwarding => IconName::PortForwardingColor
+                    .color()
+                    .with_size(px(24.0))
+                    .text_color(gpui::white())
+                    .flex_shrink_0(),
+                ConnectionType::Rdp => IconName::Rdp
+                    .color()
+                    .with_size(px(24.0))
+                    .text_color(gpui::white())
+                    .flex_shrink_0(),
+                ConnectionType::Vnc => IconName::Vnc
+                    .color()
+                    .with_size(px(24.0))
+                    .text_color(gpui::white())
+                    .flex_shrink_0(),
+                _ => IconName::Server
+                    .color()
+                    .with_size(px(24.0))
+                    .text_color(gpui::white())
+                    .flex_shrink_0(),
+            })
             // 连接名称
             .child(
                 div()
@@ -3307,6 +3402,7 @@ impl HomePage {
                         })
                     })
             })
+            .into_any_element()
     }
 
     fn connection_info_text(&self, conn: &StoredConnection) -> String {
@@ -3314,14 +3410,20 @@ impl HomePage {
             ConnectionType::Database => conn
                 .to_db_connection()
                 .map(|params| {
-                    if matches!(params.database_type, DatabaseType::SQLite | DatabaseType::DuckDB) {
+                    if matches!(
+                        params.database_type,
+                        DatabaseType::SQLite | DatabaseType::DuckDB
+                    ) {
                         params.host.clone()
                     } else {
                         let database = params
                             .database
                             .map(|db| format!("/{}", db))
                             .unwrap_or_default();
-                        format!("{}@{}:{}{}", params.username, params.host, params.port, database)
+                        format!(
+                            "{}@{}:{}{}",
+                            params.username, params.host, params.port, database
+                        )
                     }
                 })
                 .unwrap_or_default(),
@@ -3359,17 +3461,19 @@ impl HomePage {
                     };
                     format!(
                         "{} ({}, {}{}{})",
-                        params.port_name, params.baud_rate, params.data_bits, parity_char, params.stop_bits
+                        params.port_name,
+                        params.baud_rate,
+                        params.data_bits,
+                        parity_char,
+                        params.stop_bits
                     )
                 })
                 .unwrap_or_default(),
             ConnectionType::Rdp | ConnectionType::Vnc => conn
                 .to_remote_desktop_params()
-                .map(|params| {
-                    match params.username.as_deref() {
-                        Some(username) => format!("{}@{}:{}", username, params.host, params.port),
-                        None => format!("{}:{}", params.host, params.port),
-                    }
+                .map(|params| match params.username.as_deref() {
+                    Some(username) => format!("{}@{}:{}", username, params.host, params.port),
+                    None => format!("{}:{}", params.host, params.port),
                 })
                 .unwrap_or_default(),
             ConnectionType::PortForwarding => conn
@@ -3385,6 +3489,16 @@ impl HomePage {
                 })
                 .unwrap_or_default(),
             _ => String::new(),
+        }
+    }
+
+    fn drag_connection(&self, conn: &StoredConnection, index: usize) -> DragConnection {
+        DragConnection {
+            source_index: index,
+            source_id: conn.id,
+            name: conn.name.clone(),
+            info: self.connection_info_text(conn),
+            connection_type: conn.connection_type,
         }
     }
 
@@ -3413,6 +3527,8 @@ impl HomePage {
         let can_edit = can_edit_connection(&conn, cx);
         let has_team = conn.team_id.is_some();
         let accent = cx.theme().accent;
+        let drag_connection = self.drag_connection(&conn, index);
+        let drop_target_id = conn.id;
 
         let card = v_flex()
             .justify_center()
@@ -3451,27 +3567,23 @@ impl HomePage {
                 this.selected_connection_id = conn_id;
                 cx.notify();
             }))
-            .on_drag(
-                DragConnection { source_index: index },
-                |drag, _, window, cx| {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    cx.new(|_| drag.clone())
-                },
-            )
-            .drag_over::<DragConnection>(move |el, _, _, _cx| {
-                el.border_l_2().border_color(accent)
+            .on_drag(drag_connection, |drag, _, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
+                cx.new(|_| drag.clone())
             })
-            .on_drop(cx.listener(
-                move |this, drag: &DragConnection, _window, cx| {
-                    let from = drag.source_index;
-                    let to = index;
-                    if from != to {
-                        this.reorder_connections(from, to, cx);
+            .drag_over::<DragConnection>(move |el, _, _, _cx| el.border_l_2().border_color(accent))
+            .on_drop(
+                cx.listener(move |this, drag: &DragConnection, _window, cx| {
+                    if drag.source_id.is_some() && drop_target_id.is_some() {
+                        this.reorder_connection_by_id(drag.source_id, drop_target_id, cx);
+                    } else if drag.source_index != index {
+                        this.reorder_connections(drag.source_index, index, cx);
                     }
-                },
-            ))
-            .when(is_active, |this| { // card version
+                }),
+            )
+            .when(is_active, |this| {
+                // card version
                 this.child(
                     div()
                         .absolute()

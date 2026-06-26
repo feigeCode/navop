@@ -6,7 +6,6 @@ use gpui::{
 use gpui_component::WindowExt;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
@@ -123,10 +122,59 @@ fn set_window_always_on_top(window: &Window, always_on_top: bool) -> anyhow::Res
         .map_err(|err| anyhow::anyhow!("获取窗口句柄失败: {err:?}"))?
         .as_raw();
     match handle {
+        #[cfg(target_os = "macos")]
+        RawWindowHandle::AppKit(handle) => {
+            set_macos_always_on_top(handle.ns_view.as_ptr(), always_on_top)
+        }
         #[cfg(target_os = "windows")]
-        RawWindowHandle::Win32(handle) => set_windows_always_on_top(handle.hwnd.get(), always_on_top),
+        RawWindowHandle::Win32(handle) => {
+            set_windows_always_on_top(handle.hwnd.get(), always_on_top)
+        }
         _ => Err(anyhow::anyhow!("当前平台暂不支持窗口置顶")),
     }
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_always_on_top(
+    ns_view: *mut std::ffi::c_void,
+    always_on_top: bool,
+) -> anyhow::Result<()> {
+    if ns_view.is_null() {
+        return Err(anyhow::anyhow!("获取 NSView 失败"));
+    }
+
+    type Id = *mut std::ffi::c_void;
+    type Sel = *mut std::ffi::c_void;
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        #[link_name = "sel_registerName"]
+        fn sel_register_name(name: *const std::ffi::c_char) -> Sel;
+        #[link_name = "objc_msgSend"]
+        fn objc_msg_send(receiver: Id, selector: Sel, ...) -> Id;
+    }
+
+    const NS_NORMAL_WINDOW_LEVEL: isize = 0;
+    const NS_FLOATING_WINDOW_LEVEL: isize = 3;
+    let level = if always_on_top {
+        NS_FLOATING_WINDOW_LEVEL
+    } else {
+        NS_NORMAL_WINDOW_LEVEL
+    };
+    let window_selector = std::ffi::CString::new("window")?;
+    let set_level_selector = std::ffi::CString::new("setLevel:")?;
+    unsafe {
+        let ns_window = objc_msg_send(ns_view.cast(), sel_register_name(window_selector.as_ptr()));
+        if ns_window.is_null() {
+            return Err(anyhow::anyhow!("获取 NSWindow 失败"));
+        }
+        objc_msg_send(
+            ns_window,
+            sel_register_name(set_level_selector.as_ptr()),
+            level,
+        );
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -490,8 +538,8 @@ impl OnetCliApp {
             #[cfg(not(target_os = "macos"))]
             {
                 // 窗口置顶按钮注入：点击时切换置顶并刷新按钮视觉状态
-                let on_toggle: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> =
-                    Arc::new(|_window: &mut Window, cx: &mut App| {
+                let on_toggle: std::sync::Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> =
+                    std::sync::Arc::new(|_window: &mut Window, cx: &mut App| {
                         toggle_always_on_top(cx);
                         if let Some(tab_container) = cx
                             .try_global::<GlobalTabContainer>()
@@ -500,8 +548,8 @@ impl OnetCliApp {
                             tab_container.update(cx, |_, cx| cx.notify());
                         }
                     });
-                let is_active: Arc<dyn Fn() -> bool + Send + Sync> =
-                    Arc::new(|| ALWAYS_ON_TOP.load(Ordering::Relaxed));
+                let is_active: std::sync::Arc<dyn Fn() -> bool + Send + Sync> =
+                    std::sync::Arc::new(|| ALWAYS_ON_TOP.load(Ordering::Relaxed));
                 container = container
                     .with_window_controls(true)
                     .with_always_on_top_control(on_toggle, is_active);
