@@ -5,6 +5,7 @@ mod directory_store;
 mod directory_store_tests;
 mod file_format;
 mod models;
+mod planner;
 mod state;
 mod store;
 
@@ -14,5 +15,6 @@ pub(crate) mod test_support;
 pub use directory_store::*;
 pub use file_format::*;
 pub use models::*;
+pub use planner::*;
 pub use state::*;
 pub use store::*;
