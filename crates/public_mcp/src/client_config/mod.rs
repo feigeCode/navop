@@ -1,7 +1,9 @@
+mod file_io;
+
 use anyhow::{Context, Result, bail};
-use serde_json::{Map, Value, json};
+use file_io::{read_optional_json_object, read_optional_text, write_user_only_file};
+use serde_json::{Value, json};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const SERVER_NAME: &str = "onetcli";
@@ -80,6 +82,10 @@ pub fn claude_desktop_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("Claude").join("claude_desktop_config.json"))
 }
 
+pub fn claude_code_config_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".claude.json"))
+}
+
 pub fn install_codex_config(path: &Path, install: &ClientConfigInstall) -> Result<()> {
     let existing = read_optional_text(path)?;
     let without_managed_block = remove_codex_managed_block(&existing);
@@ -92,6 +98,14 @@ pub fn install_codex_config(path: &Path, install: &ClientConfigInstall) -> Resul
 }
 
 pub fn install_claude_desktop_config(path: &Path, install: &ClientConfigInstall) -> Result<()> {
+    install_json_mcp_servers_config(path, install)
+}
+
+pub fn install_claude_code_config(path: &Path, install: &ClientConfigInstall) -> Result<()> {
+    install_json_mcp_servers_config(path, install)
+}
+
+fn install_json_mcp_servers_config(path: &Path, install: &ClientConfigInstall) -> Result<()> {
     let mut root = read_optional_json_object(path)?;
     let server = expected_claude_server_config(install);
 
@@ -106,6 +120,15 @@ pub fn install_claude_desktop_config(path: &Path, install: &ClientConfigInstall)
     }
 
     write_user_only_file(path, serde_json::to_vec_pretty(&Value::Object(root))?)
+}
+
+pub fn agent_mcp_config_json(install: &ClientConfigInstall) -> Result<String> {
+    let root = json!({
+        "mcpServers": {
+            SERVER_NAME: expected_claude_server_config(install)
+        }
+    });
+    Ok(serde_json::to_string_pretty(&root)?)
 }
 
 pub fn inspect_codex_config(
@@ -127,6 +150,20 @@ pub fn inspect_codex_config(
 }
 
 pub fn inspect_claude_desktop_config(
+    path: &Path,
+    install: &ClientConfigInstall,
+) -> Result<ClientConfigHealth> {
+    inspect_json_mcp_servers_config(path, install)
+}
+
+pub fn inspect_claude_code_config(
+    path: &Path,
+    install: &ClientConfigInstall,
+) -> Result<ClientConfigHealth> {
+    inspect_json_mcp_servers_config(path, install)
+}
+
+fn inspect_json_mcp_servers_config(
     path: &Path,
     install: &ClientConfigInstall,
 ) -> Result<ClientConfigHealth> {
@@ -194,6 +231,14 @@ pub fn uninstall_codex_config(path: &Path) -> Result<()> {
 
 /// 从 Claude Desktop 配置中移除 onetcli MCP server 条目；若文件仅剩该条目且无其他内容则删除文件。
 pub fn uninstall_claude_desktop_config(path: &Path) -> Result<()> {
+    uninstall_json_mcp_servers_config(path)
+}
+
+pub fn uninstall_claude_code_config(path: &Path) -> Result<()> {
+    uninstall_json_mcp_servers_config(path)
+}
+
+fn uninstall_json_mcp_servers_config(path: &Path) -> Result<()> {
     let mut root = read_optional_json_object(path)?;
     if let Some(Value::Object(servers)) = root.get_mut("mcpServers") {
         servers.remove(SERVER_NAME);
@@ -206,6 +251,14 @@ pub fn uninstall_claude_desktop_config(path: &Path) -> Result<()> {
         return Ok(());
     }
     write_user_only_file(path, serde_json::to_vec_pretty(&Value::Object(root))?)
+}
+
+fn toml_string(path: &Path) -> String {
+    serde_json::to_string(&path_string(path)).expect("path string should serialize")
+}
+
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().to_string()
 }
 
 #[cfg(unix)]
@@ -239,59 +292,4 @@ fn remove_codex_managed_block(text: &str) -> String {
         output.push('\n');
     }
     output
-}
-
-fn read_optional_text(path: &Path) -> Result<String> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
-    }
-}
-
-fn read_optional_json_object(path: &Path) -> Result<Map<String, Value>> {
-    let text = read_optional_text(path)?;
-    if text.trim().is_empty() {
-        return Ok(Map::new());
-    }
-    match serde_json::from_str::<Value>(&text)? {
-        Value::Object(object) => Ok(object),
-        _ => bail!("Claude config root must be a JSON object"),
-    }
-}
-
-fn toml_string(path: &Path) -> String {
-    serde_json::to_string(&path_string(path)).expect("path string should serialize")
-}
-
-fn path_string(path: &Path) -> String {
-    path.to_string_lossy().to_string()
-}
-
-fn write_user_only_file(path: &Path, bytes: Vec<u8>) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let tmp_path = path.with_extension("tmp");
-    let mut options = fs::OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-
-    let mut file = options.open(&tmp_path)?;
-    file.write_all(&bytes)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600))?;
-    }
-
-    fs::rename(tmp_path, path)?;
-    Ok(())
 }

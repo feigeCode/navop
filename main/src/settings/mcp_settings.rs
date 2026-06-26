@@ -96,16 +96,25 @@ fn mcp_permission_mode_options() -> Vec<(SharedString, SharedString)> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum McpToolset {
     Terminal,
+    Connections,
+    Sftp,
     Database,
 }
 
 impl McpToolset {
-    const VISIBLE: [Self; 2] = [Self::Terminal, Self::Database];
+    const VISIBLE: [Self; 4] = [
+        Self::Terminal,
+        Self::Connections,
+        Self::Sftp,
+        Self::Database,
+    ];
 
     #[cfg(test)]
     fn id(self) -> &'static str {
         match self {
             Self::Terminal => "terminal",
+            Self::Connections => "connections",
+            Self::Sftp => "sftp",
             Self::Database => "database",
         }
     }
@@ -113,6 +122,8 @@ impl McpToolset {
     fn title_key(self) -> &'static str {
         match self {
             Self::Terminal => "Settings.General.Mcp.toolset_terminal",
+            Self::Connections => "Settings.General.Mcp.toolset_connections",
+            Self::Sftp => "Settings.General.Mcp.toolset_sftp",
             Self::Database => "Settings.General.Mcp.toolset_database",
         }
     }
@@ -120,6 +131,8 @@ impl McpToolset {
     fn description_key(self) -> &'static str {
         match self {
             Self::Terminal => "Settings.General.Mcp.toolset_terminal_desc",
+            Self::Connections => "Settings.General.Mcp.toolset_connections_desc",
+            Self::Sftp => "Settings.General.Mcp.toolset_sftp_desc",
             Self::Database => "Settings.General.Mcp.toolset_database_desc",
         }
     }
@@ -127,6 +140,8 @@ impl McpToolset {
     fn get(self, settings: &McpToolsetSettings) -> bool {
         match self {
             Self::Terminal => settings.terminal,
+            Self::Connections => settings.connections,
+            Self::Sftp => settings.sftp,
             Self::Database => settings.database,
         }
     }
@@ -134,6 +149,8 @@ impl McpToolset {
     fn set(self, settings: &mut McpToolsetSettings, enabled: bool) {
         match self {
             Self::Terminal => settings.terminal = enabled,
+            Self::Connections => settings.connections = enabled,
+            Self::Sftp => settings.sftp = enabled,
             Self::Database => settings.database = enabled,
         }
     }
@@ -201,18 +218,19 @@ mod tests {
     fn mcp_toolset_items_only_expose_production_ready_toolsets() {
         let ids = mcp_toolset_item_ids();
 
-        assert_eq!(vec!["terminal", "database"], ids);
+        assert_eq!(vec!["terminal", "connections", "sftp", "database"], ids);
     }
 
     #[test]
-    fn mcp_client_config_items_include_codex_and_claude_installers() {
+    fn mcp_client_config_items_include_codex_claude_code_and_copy_button() {
         let ids = crate::settings::mcp_client_config::mcp_client_config_item_ids();
 
         assert_eq!(
             vec![
                 "mcp-install-helper",
                 "mcp-install-codex-config",
-                "mcp-install-claude-config"
+                "mcp-install-claude-code-config",
+                "mcp-copy-agent-config"
             ],
             ids
         );

@@ -1,4 +1,5 @@
 pub mod llm_providers_view;
+mod mcp_agent_config_copy;
 pub mod mcp_client_config;
 mod mcp_helper_install;
 mod mcp_helper_progress;

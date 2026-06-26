@@ -6696,6 +6696,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "winresource",
+ "zed-font-kit",
  "zip 2.4.2",
 ]
 
@@ -7785,12 +7786,16 @@ name = "onetcli_runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "db",
  "futures",
  "one-core",
  "onetcli_cli",
  "serde_json",
+ "sftp",
+ "ssh",
  "tempfile",
+ "tokio",
  "tool_runtime",
 ]
 

@@ -782,6 +782,10 @@ Settings:
         en: "Imported %{count} font file(s)"
         zh-CN: "已导入 %{count} 个字体文件"
         zh-HK: "已匯入 %{count} 個字型檔"
+      custom_fonts_import_success_with_monospace:
+        en: "Imported %{count} font file(s). %{monospace_count} monospace font family name(s) are available for terminal."
+        zh-CN: "已导入 %{count} 个字体文件，其中 %{monospace_count} 个等宽字体名称可用于终端。"
+        zh-HK: "已匯入 %{count} 個字型檔，其中 %{monospace_count} 個等寬字型名稱可用於終端。"
       custom_fonts_import_empty:
         en: No supported font files were imported
         zh-CN: 未导入支持的字体文件
@@ -1062,6 +1066,34 @@ Settings:
         en: Write or update the OnetCli MCP server entry in Claude Desktop config
         zh-CN: 在 Claude Desktop 配置中写入或更新 OnetCli MCP Server
         zh-HK: 在 Claude Desktop 配置中寫入或更新 OnetCli MCP Server
+      install_claude_code_config:
+        en: Install Claude Code MCP Config
+        zh-CN: 安装 Claude Code MCP 配置
+        zh-HK: 安裝 Claude Code MCP 配置
+      install_claude_code_config_desc:
+        en: Write or update the OnetCli MCP server entry in ~/.claude.json
+        zh-CN: 在 ~/.claude.json 中写入或更新 OnetCli MCP Server
+        zh-HK: 在 ~/.claude.json 中寫入或更新 OnetCli MCP Server
+      copy_agent_config:
+        en: Copy MCP Config
+        zh-CN: 复制 MCP 配置
+        zh-HK: 複製 MCP 配置
+      copy_agent_config_desc:
+        en: Copy a generic mcpServers JSON block for other agents
+        zh-CN: 复制通用 mcpServers JSON 配置，供其他 agent 使用
+        zh-HK: 複製通用 mcpServers JSON 配置，供其他 agent 使用
+      copy_agent_config_button:
+        en: Copy Config
+        zh-CN: 复制配置
+        zh-HK: 複製配置
+      copy_agent_config_success:
+        en: MCP config copied
+        zh-CN: MCP 配置已复制
+        zh-HK: MCP 配置已複製
+      copy_agent_config_failed:
+        en: "Failed to copy MCP config: %{error}"
+        zh-CN: "MCP 配置复制失败：%{error}"
+        zh-HK: "MCP 配置複製失敗：%{error}"
       install_client_config_success:
         en: "MCP client config installed: %{path}"
         zh-CN: "MCP 客户端配置已安装：%{path}"
@@ -1110,6 +1142,14 @@ Settings:
         en: Expose active terminal sessions through MCP
         zh-CN: 通过 MCP 暴露当前终端会话
         zh-HK: 通過 MCP 暴露當前終端會話
+      toolset_connections:
+        en: Connection Tools
+        zh-CN: 连接工具
+        zh-HK: 連線工具
+      toolset_connections_desc:
+        en: Expose saved connection inspection and creation tools through MCP
+        zh-CN: 通过 MCP 暴露已保存连接的查看和创建工具
+        zh-HK: 通過 MCP 暴露已儲存連線的查看和建立工具
       toolset_sftp:
         en: SFTP Tools
         zh-CN: SFTP 工具

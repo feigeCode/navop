@@ -380,6 +380,8 @@ impl TerminalTheme {
                 "Monaco",
                 "SF Mono",
                 "Courier New",
+                "Noto Sans Mono CJK SC",
+                "Source Han Mono SC",
                 // 跨平台字体（需要安装）
                 "Fira Code",
                 "JetBrains Mono",
@@ -395,6 +397,8 @@ impl TerminalTheme {
                 "Cascadia Code",
                 "Courier New",
                 "Lucida Console",
+                "Noto Sans Mono CJK SC",
+                "Source Han Mono SC",
                 // 跨平台字体（需要安装）
                 "Fira Code",
                 "JetBrains Mono",
@@ -409,6 +413,8 @@ impl TerminalTheme {
                 "Ubuntu Mono",
                 "Liberation Mono",
                 "Courier New",
+                "Noto Sans Mono CJK SC",
+                "Source Han Mono SC",
                 // 跨平台字体（需要安装）
                 "Fira Code",
                 "JetBrains Mono",

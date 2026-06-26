@@ -1,3 +1,6 @@
+use crate::settings::mcp_agent_config_copy::mcp_agent_config_copy_item;
+#[cfg(test)]
+use crate::settings::mcp_agent_config_copy::mcp_agent_config_copy_item_id;
 use crate::settings::mcp_helper_install::mcp_helper_install_item;
 #[cfg(test)]
 use crate::settings::mcp_helper_install::mcp_helper_install_item_id;
@@ -12,9 +15,9 @@ use gpui_component::{
     v_flex,
 };
 use public_mcp::client_config::{
-    ClientConfigHealth, ClientConfigInstall, claude_desktop_config_path, codex_config_path,
-    helper_unavailable_health, inspect_claude_desktop_config, inspect_codex_config,
-    install_claude_desktop_config, install_codex_config, uninstall_claude_desktop_config,
+    ClientConfigHealth, ClientConfigInstall, claude_code_config_path, codex_config_path,
+    helper_unavailable_health, inspect_claude_code_config, inspect_codex_config,
+    install_claude_code_config, install_codex_config, uninstall_claude_code_config,
     uninstall_codex_config,
 };
 use rust_i18n::t;
@@ -24,38 +27,42 @@ pub fn mcp_client_config_items() -> Vec<SettingItem> {
     vec![mcp_helper_install_item()]
         .into_iter()
         .chain(
-            [McpClientConfigTarget::Codex, McpClientConfigTarget::Claude]
-                .into_iter()
-                .map(mcp_client_config_item),
+            [
+                McpClientConfigTarget::Codex,
+                McpClientConfigTarget::ClaudeCode,
+            ]
+            .into_iter()
+            .map(mcp_client_config_item),
         )
+        .chain(std::iter::once(mcp_agent_config_copy_item()))
         .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum McpClientConfigTarget {
     Codex,
-    Claude,
+    ClaudeCode,
 }
 
 impl McpClientConfigTarget {
     fn title_key(self) -> &'static str {
         match self {
             Self::Codex => "Settings.General.Mcp.install_codex_config",
-            Self::Claude => "Settings.General.Mcp.install_claude_config",
+            Self::ClaudeCode => "Settings.General.Mcp.install_claude_code_config",
         }
     }
 
     fn description_key(self) -> &'static str {
         match self {
             Self::Codex => "Settings.General.Mcp.install_codex_config_desc",
-            Self::Claude => "Settings.General.Mcp.install_claude_config_desc",
+            Self::ClaudeCode => "Settings.General.Mcp.install_claude_code_config_desc",
         }
     }
 
     fn button_id(self) -> &'static str {
         match self {
             Self::Codex => "mcp-install-codex-config",
-            Self::Claude => "mcp-install-claude-config",
+            Self::ClaudeCode => "mcp-install-claude-code-config",
         }
     }
 }
@@ -171,10 +178,10 @@ fn install_client_config_for_target(target: McpClientConfigTarget) -> Result<Pat
             install_codex_config(&path, &install)?;
             path
         }
-        McpClientConfigTarget::Claude => {
-            let path = claude_desktop_config_path()
-                .ok_or_else(|| anyhow::anyhow!("Claude config path is unavailable"))?;
-            install_claude_desktop_config(&path, &install)?;
+        McpClientConfigTarget::ClaudeCode => {
+            let path = claude_code_config_path()
+                .ok_or_else(|| anyhow::anyhow!("Claude Code config path is unavailable"))?;
+            install_claude_code_config(&path, &install)?;
             path
         }
     };
@@ -216,10 +223,10 @@ fn uninstall_client_config_for_target(target: McpClientConfigTarget) -> Result<P
             uninstall_codex_config(&path)?;
             Ok(path)
         }
-        McpClientConfigTarget::Claude => {
-            let path = claude_desktop_config_path()
-                .ok_or_else(|| anyhow::anyhow!("Claude config path is unavailable"))?;
-            uninstall_claude_desktop_config(&path)?;
+        McpClientConfigTarget::ClaudeCode => {
+            let path = claude_code_config_path()
+                .ok_or_else(|| anyhow::anyhow!("Claude Code config path is unavailable"))?;
+            uninstall_claude_code_config(&path)?;
             Ok(path)
         }
     }
@@ -236,10 +243,10 @@ fn inspect_client_config_for_target(
             let health = inspect_codex_config(&path, &install)?;
             (path, health)
         }
-        McpClientConfigTarget::Claude => {
-            let path = claude_desktop_config_path()
-                .ok_or_else(|| anyhow::anyhow!("Claude config path is unavailable"))?;
-            let health = inspect_claude_desktop_config(&path, &install)?;
+        McpClientConfigTarget::ClaudeCode => {
+            let path = claude_code_config_path()
+                .ok_or_else(|| anyhow::anyhow!("Claude Code config path is unavailable"))?;
+            let health = inspect_claude_code_config(&path, &install)?;
             (path, health)
         }
     };
@@ -282,76 +289,17 @@ fn client_config_action_label(health: ClientConfigHealth) -> String {
 pub(crate) fn mcp_client_config_item_ids() -> Vec<&'static str> {
     std::iter::once(mcp_helper_install_item_id())
         .chain(
-            [McpClientConfigTarget::Codex, McpClientConfigTarget::Claude]
-                .iter()
-                .map(|target| target.button_id()),
+            [
+                McpClientConfigTarget::Codex,
+                McpClientConfigTarget::ClaudeCode,
+            ]
+            .iter()
+            .map(|target| target.button_id()),
         )
+        .chain(std::iter::once(mcp_agent_config_copy_item_id()))
         .collect()
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use public_mcp::client_config::ClientConfigHealth;
-
-    #[test]
-    fn client_config_health_labels_match_config_states() {
-        assert_eq!(
-            "Settings.General.Mcp.client_config_status_up_to_date",
-            client_config_health_label_key(ClientConfigHealth::UpToDate)
-        );
-        assert_eq!(
-            "Settings.General.Mcp.client_config_status_not_installed",
-            client_config_health_label_key(ClientConfigHealth::NotInstalled)
-        );
-        assert_eq!(
-            "Settings.General.Mcp.client_config_status_needs_repair",
-            client_config_health_label_key(ClientConfigHealth::NeedsRepair)
-        );
-        assert_eq!(
-            "Settings.General.Mcp.client_config_status_missing_helper",
-            client_config_health_label_key(ClientConfigHealth::MissingHelper)
-        );
-        assert_eq!(
-            "Settings.General.Mcp.client_config_status_unusable_helper",
-            client_config_health_label_key(ClientConfigHealth::UnusableHelper)
-        );
-    }
-
-    #[test]
-    fn client_config_action_button_is_disabled_when_helper_is_unavailable() {
-        assert!(!client_config_action_enabled(
-            ClientConfigHealth::MissingHelper
-        ));
-        assert!(!client_config_action_enabled(
-            ClientConfigHealth::UnusableHelper
-        ));
-    }
-
-    #[test]
-    fn client_config_action_button_is_enabled_for_all_config_health_states() {
-        assert!(client_config_action_enabled(
-            ClientConfigHealth::NotInstalled
-        ));
-        assert!(client_config_action_enabled(
-            ClientConfigHealth::NeedsRepair
-        ));
-        assert!(client_config_action_enabled(ClientConfigHealth::UpToDate));
-    }
-
-    #[test]
-    fn client_config_button_shows_uninstall_when_up_to_date_and_install_otherwise() {
-        assert_eq!(
-            t!("Settings.General.Mcp.uninstall_client_config").to_string(),
-            client_config_action_label(ClientConfigHealth::UpToDate)
-        );
-        assert_eq!(
-            t!("Settings.General.Mcp.install_client_config").to_string(),
-            client_config_action_label(ClientConfigHealth::NotInstalled)
-        );
-        assert_eq!(
-            t!("Settings.General.Mcp.install_client_config").to_string(),
-            client_config_action_label(ClientConfigHealth::NeedsRepair)
-        );
-    }
-}
+#[path = "mcp_client_config_tests.rs"]
+mod tests;

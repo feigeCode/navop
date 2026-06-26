@@ -4,7 +4,7 @@ use crate::utils::auto_save_config::AutoSaveConfig;
 use gpui::http_client::Url;
 use gpui::{App, Global};
 use gpui_component::{Theme, ThemeMode};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -259,6 +259,8 @@ impl McpPermissionMode {
 pub struct McpToolsetSettings {
     #[serde(default = "default_true")]
     pub terminal: bool,
+    #[serde(default = "default_true")]
+    pub connections: bool,
     #[serde(default)]
     pub sftp: bool,
     #[serde(default)]
@@ -273,6 +275,7 @@ impl Default for McpToolsetSettings {
     fn default() -> Self {
         Self {
             terminal: true,
+            connections: true,
             sftp: false,
             database: false,
             redis: false,
@@ -304,6 +307,40 @@ impl Default for McpSettings {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomFont {
+    pub path: String,
+    #[serde(default)]
+    pub families: Vec<String>,
+    #[serde(default)]
+    pub monospace_families: Vec<String>,
+}
+
+fn deserialize_custom_fonts<'de, D>(deserializer: D) -> Result<Vec<CustomFont>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum CustomFontEntry {
+        Path(String),
+        Font(CustomFont),
+    }
+
+    let entries = Vec::<CustomFontEntry>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| match entry {
+            CustomFontEntry::Path(path) => CustomFont {
+                path,
+                families: Vec::new(),
+                monospace_families: Vec::new(),
+            },
+            CustomFontEntry::Font(font) => font,
+        })
+        .collect())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default)]
@@ -322,8 +359,12 @@ pub struct AppSettings {
     pub table_preview_font_family: String,
     #[serde(default = "default_monospace_font_family")]
     pub terminal_font_family: String,
-    #[serde(default)]
-    pub custom_font_paths: Vec<String>,
+    #[serde(
+        default,
+        alias = "custom_font_paths",
+        deserialize_with = "deserialize_custom_fonts"
+    )]
+    pub custom_fonts: Vec<CustomFont>,
     #[serde(default = "default_terminal_font_size")]
     pub terminal_font_size: f64,
     #[serde(default = "default_true")]
@@ -440,7 +481,7 @@ impl Default for AppSettings {
             sql_editor_font_family: default_monospace_font_family(),
             table_preview_font_family: default_monospace_font_family(),
             terminal_font_family: default_monospace_font_family(),
-            custom_font_paths: Vec::new(),
+            custom_fonts: Vec::new(),
             terminal_font_size: default_terminal_font_size(),
             terminal_auto_copy: default_true(),
             terminal_enable_autocomplete: default_true(),
@@ -596,7 +637,9 @@ impl AppSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, LargeTextCellEditorOpenMode, McpPermissionMode, McpServerMode};
+    use super::{
+        AppSettings, CustomFont, LargeTextCellEditorOpenMode, McpPermissionMode, McpServerMode,
+    };
 
     #[test]
     fn large_text_editor_open_mode_defaults_to_sidebar_preview() {
@@ -622,6 +665,7 @@ mod tests {
         assert_eq!(settings.mcp.server_mode, McpServerMode::Temporary);
         assert_eq!(settings.mcp.permission_mode, McpPermissionMode::Deny);
         assert!(settings.mcp.toolsets.terminal);
+        assert!(settings.mcp.toolsets.connections);
         assert!(!settings.mcp.toolsets.database);
         assert!(!settings.mcp.toolsets.redis);
         assert!(!settings.mcp.toolsets.sftp);
@@ -657,6 +701,7 @@ mod tests {
         assert!(!settings.mcp.server_enabled);
         assert_eq!(settings.mcp.permission_mode, McpPermissionMode::Deny);
         assert!(settings.mcp.toolsets.terminal);
+        assert!(settings.mcp.toolsets.connections);
     }
 
     #[test]
@@ -683,20 +728,45 @@ mod tests {
             settings.sql_editor_font_family,
             settings.terminal_font_family
         );
-        assert!(settings.custom_font_paths.is_empty());
+        assert!(settings.custom_fonts.is_empty());
     }
 
     #[test]
-    fn app_settings_round_trip_preserves_custom_font_paths() {
+    fn app_settings_round_trip_preserves_custom_fonts() {
         let mut settings = AppSettings::default();
-        settings.custom_font_paths = vec!["/tmp/NotoSansCJK-Regular.ttc".to_string()];
+        settings.custom_fonts = vec![CustomFont {
+            path: "/tmp/NotoSansCJK-Regular.ttc".to_string(),
+            families: vec!["Noto Sans Mono CJK SC".to_string()],
+            monospace_families: vec!["Noto Sans Mono CJK SC".to_string()],
+        }];
 
         let json = serde_json::to_string(&settings).expect("应序列化 AppSettings");
         let restored: AppSettings = serde_json::from_str(&json).expect("应反序列化 AppSettings");
 
         assert_eq!(
-            vec!["/tmp/NotoSansCJK-Regular.ttc".to_string()],
-            restored.custom_font_paths
+            vec![CustomFont {
+                path: "/tmp/NotoSansCJK-Regular.ttc".to_string(),
+                families: vec!["Noto Sans Mono CJK SC".to_string()],
+                monospace_families: vec!["Noto Sans Mono CJK SC".to_string()],
+            }],
+            restored.custom_fonts
+        );
+    }
+
+    #[test]
+    fn app_settings_reads_legacy_custom_font_paths() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "custom_font_paths": ["/tmp/NotoSansCJK-Regular.ttc"]
+        }))
+        .expect("旧版自定义字体路径应能读取");
+
+        assert_eq!(
+            vec![CustomFont {
+                path: "/tmp/NotoSansCJK-Regular.ttc".to_string(),
+                families: Vec::new(),
+                monospace_families: Vec::new(),
+            }],
+            settings.custom_fonts
         );
     }
 
@@ -706,6 +776,7 @@ mod tests {
         settings.mcp.server_enabled = true;
         settings.mcp.server_mode = McpServerMode::Persistent;
         settings.mcp.permission_mode = McpPermissionMode::Ask;
+        settings.mcp.toolsets.connections = false;
         settings.mcp.toolsets.database = true;
         settings.mcp.toolsets.redis = true;
 
@@ -716,6 +787,7 @@ mod tests {
         assert_eq!(loaded.mcp.server_mode, McpServerMode::Persistent);
         assert_eq!(loaded.mcp.permission_mode, McpPermissionMode::Ask);
         assert!(loaded.mcp.toolsets.terminal);
+        assert!(!loaded.mcp.toolsets.connections);
         assert!(loaded.mcp.toolsets.database);
         assert!(loaded.mcp.toolsets.redis);
     }
