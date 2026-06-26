@@ -77,8 +77,8 @@ impl ConnectionType {
     pub fn all() -> Vec<ConnectionType> {
         vec![
             ConnectionType::All,
-            ConnectionType::Database,
             ConnectionType::SshSftp,
+            ConnectionType::Database,
             ConnectionType::Redis,
             ConnectionType::MongoDB,
             ConnectionType::ChatDB,
@@ -923,6 +923,9 @@ pub struct StoredConnection {
     /// 最近使用时间戳，仅用于本地列表排序，不参与云同步。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_used_at: Option<i64>,
+    /// 手动排序位序，仅用于本地列表排序，不参与云同步。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1015,6 +1018,7 @@ impl StoredConnection {
             cloud_id: None,
             last_synced_at: None,
             last_used_at: None,
+            sort_order: None,
             created_at: None,
             updated_at: None,
             team_id: None,
@@ -1035,6 +1039,7 @@ impl StoredConnection {
             cloud_id: None,
             last_synced_at: None,
             last_used_at: None,
+            sort_order: None,
             created_at: None,
             updated_at: None,
             team_id: None,
@@ -1059,6 +1064,7 @@ impl StoredConnection {
             cloud_id: None,
             last_synced_at: None,
             last_used_at: None,
+            sort_order: None,
             created_at: None,
             updated_at: None,
             team_id: None,
@@ -1079,6 +1085,7 @@ impl StoredConnection {
             cloud_id: None,
             last_synced_at: None,
             last_used_at: None,
+            sort_order: None,
             created_at: None,
             updated_at: None,
             team_id: None,
@@ -1099,6 +1106,7 @@ impl StoredConnection {
             cloud_id: None,
             last_synced_at: None,
             last_used_at: None,
+            sort_order: None,
             created_at: None,
             updated_at: None,
             team_id: None,
@@ -1135,6 +1143,7 @@ impl StoredConnection {
             cloud_id: None,
             last_synced_at: None,
             last_used_at: None,
+            sort_order: None,
             created_at: None,
             updated_at: None,
             team_id: None,
@@ -1159,6 +1168,7 @@ impl StoredConnection {
             cloud_id: None,
             last_synced_at: None,
             last_used_at: None,
+            sort_order: None,
             created_at: None,
             updated_at: None,
             team_id: None,

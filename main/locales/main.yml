@@ -116,6 +116,14 @@ Home:
     en: Import
     zh-CN: 导入
     zh-HK: 導入
+  card_view:
+    en: Card View
+    zh-CN: 卡片视图
+    zh-HK: 卡片視圖
+  list_view:
+    en: List View
+    zh-CN: 列表视图
+    zh-HK: 列表視圖
   refresh:
     en: Refresh
     zh-CN: 刷新
@@ -1363,6 +1371,10 @@ Settings:
       en: Toggle Fullscreen
       zh-CN: 切换全屏
       zh-HK: 切換全螢幕
+    toggle_always_on_top:
+      en: Toggle Always On Top
+      zh-CN: 切换窗口置顶
+      zh-HK: 切換視窗置頂
     toggle_zoom:
       en: Toggle Panel Zoom
       zh-CN: 切换面板缩放

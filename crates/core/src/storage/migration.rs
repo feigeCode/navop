@@ -22,6 +22,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260618000001",
         include_str!("../../migrations/20260618000001_connection_last_used.sql"),
     ),
+    (
+        "20260623000001",
+        include_str!("../../migrations/20260623000001_connection_sort_order.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

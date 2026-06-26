@@ -1130,6 +1130,7 @@ mod tests {
             cloud_id: Some("cloud-1".to_string()),
             last_synced_at: Some(updated_at - 10),
             last_used_at: None,
+            sort_order: None,
             created_at: Some(updated_at - 20),
             updated_at: Some(updated_at),
             team_id: None,

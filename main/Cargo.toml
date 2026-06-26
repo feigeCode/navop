@@ -50,10 +50,12 @@ global-hotkey.workspace = true
 sha2 = { workspace = true }
 flate2 = "1"
 tar = "0.4"
+raw-window-handle = { workspace = true }
 font-kit = { git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", package = "zed-font-kit", version = "0.14.1-zed" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winresource = "0.1"

@@ -131,9 +131,57 @@ fn home_default_shortcut(macos: &'static str, other: &'static str) -> &'static s
 
 // HomePage Entity - 管理 home 页面的所有状态
 
+/// 连接列表布局模式
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionLayout {
+    /// 卡片网格视图
+    Card,
+    /// 长条列表视图
+    List,
+}
+
+impl ConnectionLayout {
+    fn toggle(self) -> Self {
+        match self {
+            ConnectionLayout::Card => ConnectionLayout::List,
+            ConnectionLayout::List => ConnectionLayout::Card,
+        }
+    }
+}
+
+/// 拖拽排序的荷载，在渲染连接列表时由 on_drag 创建，
+/// 拖入另一个连接条目时由 on_drop handler 读取。
+#[derive(Clone)]
+struct DragConnection {
+    source_index: usize,
+}
+
+impl Render for DragConnection {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("drag-connection")
+            .cursor_grabbing()
+            .py_1()
+            .px_3()
+            .min_w(px(120.0))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded(px(6.0))
+            .text_color(cx.theme().foreground)
+            .bg(cx.theme().background)
+            .opacity(0.85)
+            .shadow_md()
+            .text_sm()
+    }
+}
+
 pub struct HomePage {
     focus_handle: FocusHandle,
     selected_filter: ConnectionType,
+    connection_layout: ConnectionLayout,
     pub(crate) workspaces: Vec<Workspace>,
     pub(crate) connections: Vec<StoredConnection>,
     pub(crate) tab_container: Entity<TabContainer>,
@@ -292,6 +340,7 @@ impl HomePage {
         let mut page = Self {
             focus_handle: cx.focus_handle(),
             selected_filter: ConnectionType::All,
+            connection_layout: ConnectionLayout::Card,
             workspaces: Vec::new(),
             connections: Vec::new(),
             tab_container,
@@ -467,6 +516,31 @@ impl HomePage {
             }
         })
         .detach();
+    }
+
+    /// 拖拽排序：将 `from` 位置的连接移动到 `to` 位置，并异步持久化 sort_order。
+    fn reorder_connections(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from >= self.connections.len() || to >= self.connections.len() || from == to {
+            return;
+        }
+        let conn = self.connections.remove(from);
+        self.connections.insert(to, conn);
+
+        let orders: Vec<(i64, i32)> = self
+            .connections
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.id.map(|id| (id, i as i32)))
+            .collect();
+
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        cx.spawn(async move |_, _| {
+            if let Some(repo) = storage.get::<ConnectionRepository>() {
+                let _ = repo.update_sort_orders(&orders);
+            }
+        })
+        .detach();
+        cx.notify();
     }
 
     fn refresh_local_home_data(&mut self, cx: &mut Context<Self>) {
@@ -2212,6 +2286,27 @@ impl HomePage {
                             .w(px(240.0))
                             .bg(cx.theme().muted),
                     )
+                    // 布局切换按钮
+                    .child({
+                        let is_card = self.connection_layout == ConnectionLayout::Card;
+                        let tooltip = if is_card {
+                            t!("Home.list_view").to_string()
+                        } else {
+                            t!("Home.card_view").to_string()
+                        };
+                        Button::new("layout-toggle")
+                            .icon(if is_card {
+                                IconName::LayoutDashboard
+                            } else {
+                                IconName::Menu
+                            })
+                            .ghost()
+                            .tooltip(tooltip)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.connection_layout = this.connection_layout.toggle();
+                                cx.notify();
+                            }))
+                    })
                     // 刷新按钮
                     .child(
                         Button::new("refresh-button")
@@ -2659,7 +2754,8 @@ impl HomePage {
     fn render_content_area(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let search_query = self.search_query.read(cx).to_lowercase();
         let selected_id = self.selected_connection_id;
-        self.render_workspace_view(&search_query, selected_id, cx)
+        let layout = self.connection_layout;
+        self.render_workspace_view(&search_query, selected_id, layout, cx)
             .into_any_element()
     }
 
@@ -2667,6 +2763,7 @@ impl HomePage {
         &self,
         search_query: &str,
         selected_id: Option<i64>,
+        layout: ConnectionLayout,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let workspaces_with_connections: Vec<_> = self
@@ -2720,6 +2817,7 @@ impl HomePage {
                         workspace,
                         connections,
                         selected_id,
+                        layout,
                         cx,
                     ));
                 }
@@ -2731,6 +2829,7 @@ impl HomePage {
                         container = container.child(self.render_unassigned_section(
                             unassigned_connections,
                             selected_id,
+                            layout,
                             cx,
                         ));
                     } else {
@@ -2738,6 +2837,7 @@ impl HomePage {
                         container = container.child(self.render_connections_grid(
                             unassigned_connections,
                             selected_id,
+                            layout,
                             cx,
                         ));
                     }
@@ -2752,6 +2852,7 @@ impl HomePage {
         workspace: Workspace,
         connections: Vec<StoredConnection>,
         selected_id: Option<i64>,
+        layout: ConnectionLayout,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let workspace_id = workspace.id;
@@ -2790,16 +2891,23 @@ impl HomePage {
                     .child(div().flex_1()),
             )
             .when(!connections.is_empty(), |this| {
-                // 使用 flex 布局实现响应式卡片网格
-                let mut container = div().flex().flex_wrap().w_full().gap_3();
+                let mut container = match layout {
+                    ConnectionLayout::List => v_flex().w_full().gap_1(),
+                    ConnectionLayout::Card => div().flex().flex_wrap().w_full().gap_3(),
+                };
 
-                for conn in connections {
-                    container = container.child(
-                        div()
-                            .w(px(320.0)) // 固定宽度，不增长
-                            .flex_shrink_0() // 不收缩
-                            .child(self.render_connection_card(conn, selected_id, cx)),
-                    );
+                for (idx, conn) in connections.iter().enumerate() {
+                    container = match layout {
+                        ConnectionLayout::List => {
+                            container.child(self.render_connection_list_item(conn.clone(), selected_id, idx, cx))
+                        }
+                        ConnectionLayout::Card => container.child(
+                            div()
+                                .w(px(320.0))
+                                .flex_shrink_0()
+                                .child(self.render_connection_card(conn.clone(), selected_id, idx, cx)),
+                        ),
+                    };
                 }
 
                 this.child(container)
@@ -2810,17 +2918,26 @@ impl HomePage {
         &self,
         connections: Vec<StoredConnection>,
         selected_id: Option<i64>,
+        layout: ConnectionLayout,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let mut container = div().flex().flex_wrap().w_full().gap_3();
+        let mut container = match layout {
+            ConnectionLayout::List => v_flex().w_full().gap_1(),
+            ConnectionLayout::Card => div().flex().flex_wrap().w_full().gap_3(),
+        };
 
-        for conn in connections {
-            container = container.child(
-                div()
-                    .w(px(320.0))
-                    .flex_shrink_0()
-                    .child(self.render_connection_card(conn, selected_id, cx)),
-            );
+        for (idx, conn) in connections.into_iter().enumerate() {
+            container = match layout {
+                ConnectionLayout::List => {
+                    container.child(self.render_connection_list_item(conn, selected_id, idx, cx))
+                }
+                ConnectionLayout::Card => container.child(
+                    div()
+                        .w(px(320.0))
+                        .flex_shrink_0()
+                        .child(self.render_connection_card(conn, selected_id, idx, cx)),
+                ),
+            };
         }
         container
     }
@@ -2829,6 +2946,7 @@ impl HomePage {
         &self,
         connections: Vec<StoredConnection>,
         selected_id: Option<i64>,
+        layout: ConnectionLayout,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         v_flex()
@@ -2860,25 +2978,421 @@ impl HomePage {
                     ),
             )
             .child({
-                // 使用 flex 布局实现响应式卡片网格
-                let mut container = div().flex().flex_wrap().w_full().gap_3();
+                let mut container = match layout {
+                    ConnectionLayout::List => v_flex().w_full().gap_1(),
+                    ConnectionLayout::Card => div().flex().flex_wrap().w_full().gap_3(),
+                };
 
-                for conn in connections {
-                    container = container.child(
-                        div()
-                            .w(px(320.0)) // 固定宽度，不增长
-                            .flex_shrink_0() // 不收缩
-                            .child(self.render_connection_card(conn, selected_id, cx)),
-                    );
+                for (idx, conn) in connections.into_iter().enumerate() {
+                    container = match layout {
+                        ConnectionLayout::List => {
+                            container.child(self.render_connection_list_item(conn, selected_id, idx, cx))
+                        }
+                        ConnectionLayout::Card => container.child(
+                            div()
+                                .w(px(320.0))
+                                .flex_shrink_0()
+                                .child(self.render_connection_card(conn, selected_id, idx, cx)),
+                        ),
+                    };
                 }
                 container
             })
+    }
+
+    fn render_connection_list_item(
+        &self,
+        conn: StoredConnection,
+        selected_id: Option<i64>,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let conn_id = conn.id;
+        let clone_conn = conn.clone();
+        let sftp_hover_conn = conn.clone();
+        let edit_conn = conn.clone();
+        let edit_conn_type = conn.connection_type;
+        let edit_conn_name = conn.name.clone();
+        let duplicate_conn = conn.clone();
+        let delete_conn_id = conn.id;
+        let delete_conn_name = conn.name.clone();
+        let is_selected = selected_id == conn.id;
+        let is_active = conn
+            .id
+            .map_or(false, |id| cx.global::<ActiveConnections>().is_active(id));
+        let can_edit = can_edit_connection(&conn, cx);
+
+        let accent = cx.theme().accent;
+
+        h_flex()
+            .id(SharedString::from(format!(
+                "conn-list-item-{}",
+                conn.id.unwrap_or(0)
+            )))
+            .w_full()
+            .h(px(48.0))
+            .rounded(px(6.0))
+            .bg(cx.theme().background)
+            .px_3()
+            .border_1()
+            .items_center()
+            .gap_3()
+            .relative()
+            .group("")
+            .when(is_selected, |this| {
+                this.border_color(cx.theme().list_active_border)
+                    .border_l_3()
+            })
+            .when(!is_selected, |this| this.border_color(cx.theme().border))
+            .cursor_pointer()
+            .hover(|style| style.bg(cx.theme().muted))
+            .on_double_click(cx.listener(move |this, _, w, cx| {
+                this.open_connection_from_quick(&clone_conn, w, cx);
+                cx.notify()
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.selected_connection_id = conn_id;
+                cx.notify();
+            }))
+            .on_drag(
+                DragConnection { source_index: index },
+                |drag, _, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                },
+            )
+            .drag_over::<DragConnection>(move |el, _, _, _cx| {
+                el.border_t_2().border_color(accent)
+            })
+            .on_drop(cx.listener(
+                move |this, drag: &DragConnection, _window, cx| {
+                    let from = drag.source_index;
+                    let to = index;
+                    if from != to {
+                        this.reorder_connections(from, to, cx);
+                    }
+                },
+            ))
+            // 激活指示灯
+            .when(is_active, |this| {
+                // list_item version
+                this.child(
+                    div()
+                        .flex_shrink_0()
+                        .w(px(8.0))
+                        .h(px(8.0))
+                        .rounded_full()
+                        .bg(cx.theme().success),
+                )
+            })
+            // 类型图标
+            .child(
+                match conn.connection_type {
+                    ConnectionType::Database => {
+                        let icon = conn
+                            .to_db_connection()
+                            .map(|c| {
+                                external_driver_icon_for_config(&c, px(24.0))
+                                    .unwrap_or_else(|| c.database_type.as_icon())
+                            })
+                            .unwrap_or_else(|_| IconName::Database.color());
+                        icon.with_size(px(24.0)).flex_shrink_0()
+                    }
+                    ConnectionType::SshSftp => IconName::TerminalColor
+                        .color()
+                        .with_size(px(24.0))
+                        .text_color(gpui::rgb(0x8b5cf6))
+                        .flex_shrink_0(),
+                    ConnectionType::Redis => IconName::Redis
+                        .color()
+                        .with_size(px(24.0))
+                        .text_color(gpui::white())
+                        .flex_shrink_0(),
+                    ConnectionType::MongoDB => IconName::MongoDB
+                        .color()
+                        .with_size(px(24.0))
+                        .text_color(gpui::white())
+                        .flex_shrink_0(),
+                    ConnectionType::Serial => IconName::SerialPort
+                        .color()
+                        .with_size(px(24.0))
+                        .text_color(gpui::white())
+                        .flex_shrink_0(),
+                    ConnectionType::PortForwarding => IconName::PortForwardingColor
+                        .color()
+                        .with_size(px(24.0))
+                        .text_color(gpui::white())
+                        .flex_shrink_0(),
+                    ConnectionType::Rdp => IconName::Rdp
+                        .color()
+                        .with_size(px(24.0))
+                        .text_color(gpui::white())
+                        .flex_shrink_0(),
+                    ConnectionType::Vnc => IconName::Vnc
+                        .color()
+                        .with_size(px(24.0))
+                        .text_color(gpui::white())
+                        .flex_shrink_0(),
+                    _ => IconName::Server
+                        .color()
+                        .with_size(px(24.0))
+                        .text_color(gpui::white())
+                        .flex_shrink_0(),
+                },
+            )
+            // 连接名称
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(cx.theme().foreground)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .flex_shrink()
+                    .min_w_0()
+                    .child(conn.name.clone()),
+            )
+            // 连接信息
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .flex_shrink()
+                    .w(px(240.0))
+                    .child(self.connection_info_text(&conn)),
+            )
+            // 右侧弹性空间
+            .child(div().flex_1())
+            // hover 时显示的操作按钮
+            .child({
+                h_flex()
+                    .gap_1()
+                    .flex_shrink_0()
+                    .group_hover("", |style| style.opacity(1.0))
+                    .opacity(0.0)
+                    .when(conn.connection_type == ConnectionType::SshSftp, |this| {
+                        this.child({
+                            let sftp_conn = sftp_hover_conn.clone();
+                            Button::new(SharedString::from(format!(
+                                "sftp-list-conn-{}",
+                                conn.id.unwrap_or(0)
+                            )))
+                            .icon(IconName::Folder1.color())
+                            .with_size(Size::Small)
+                            .primary()
+                            .tooltip(t!("Home.open_sftp"))
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_sftp_view(sftp_conn.clone(), window, cx);
+                                },
+                            ))
+                        })
+                    })
+                    .when(can_edit, |this| {
+                        this.child({
+                            let dup_conn = duplicate_conn.clone();
+                            Button::new(SharedString::from(format!(
+                                "duplicate-list-conn-{}",
+                                conn.id.unwrap_or(0)
+                            )))
+                            .icon(IconName::Copy)
+                            .with_size(Size::Small)
+                            .primary()
+                            .tooltip(t!("Home.duplicate_connection"))
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.duplicate_connection(dup_conn.clone(), window, cx);
+                                },
+                            ))
+                        })
+                        .child({
+                            let edit_id = edit_conn.id;
+                            let edit_name = edit_conn_name.clone();
+                            let edit_type = edit_conn_type;
+                            let edit_data = edit_conn.clone();
+                            Button::new(SharedString::from(format!(
+                                "edit-list-conn-{}",
+                                conn.id.unwrap_or(0)
+                            )))
+                            .icon(IconName::Edit)
+                            .with_size(Size::Small)
+                            .primary()
+                            .tooltip(t!("Home.edit_connection"))
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    if let Some(conn_id) = edit_id {
+                                        let conn_name = edit_name.clone();
+                                        match edit_type {
+                                            ConnectionType::SshSftp => {
+                                                this.editing_connection_id = Some(conn_id);
+                                                this.show_ssh_form(window, cx);
+                                            }
+                                            ConnectionType::Database => {
+                                                let db_type = edit_data
+                                                    .to_db_connection()
+                                                    .ok()
+                                                    .map(|p| p.database_type);
+                                                this.confirm_edit_connection(
+                                                    conn_id, conn_name, db_type, window, cx,
+                                                );
+                                            }
+                                            ConnectionType::Redis => {
+                                                this.editing_connection_id = Some(conn_id);
+                                                this.show_redis_form(window, cx);
+                                            }
+                                            ConnectionType::MongoDB => {
+                                                this.editing_connection_id = Some(conn_id);
+                                                this.show_mongodb_form(window, cx);
+                                            }
+                                            ConnectionType::Serial => {
+                                                this.editing_connection_id = Some(conn_id);
+                                                this.show_serial_form(window, cx);
+                                            }
+                                            ConnectionType::PortForwarding => {
+                                                this.editing_connection_id = Some(conn_id);
+                                                this.show_port_forwarding_form(window, cx);
+                                            }
+                                            ConnectionType::Rdp => {
+                                                this.editing_connection_id = Some(conn_id);
+                                                this.show_remote_desktop_form(
+                                                    StoredRemoteDesktopProtocol::Rdp,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                            ConnectionType::Vnc => {
+                                                this.editing_connection_id = Some(conn_id);
+                                                this.show_remote_desktop_form(
+                                                    StoredRemoteDesktopProtocol::Vnc,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                },
+                            ))
+                        })
+                        .child({
+                            let del_id = delete_conn_id;
+                            let del_name = delete_conn_name.clone();
+                            Button::new(SharedString::from(format!(
+                                "delete-list-conn-{}",
+                                conn.id.unwrap_or(0)
+                            )))
+                            .icon(IconName::Remove)
+                            .with_size(Size::Small)
+                            .danger()
+                            .tooltip(t!("Home.delete_connection"))
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    if let Some(conn_id) = del_id {
+                                        let conn_name = del_name.clone();
+                                        this.confirm_delete_connection(
+                                            conn_id, conn_name, window, cx,
+                                        );
+                                    }
+                                },
+                            ))
+                        })
+                    })
+            })
+    }
+
+    fn connection_info_text(&self, conn: &StoredConnection) -> String {
+        match conn.connection_type {
+            ConnectionType::Database => conn
+                .to_db_connection()
+                .map(|params| {
+                    if matches!(params.database_type, DatabaseType::SQLite | DatabaseType::DuckDB) {
+                        params.host.clone()
+                    } else {
+                        let database = params
+                            .database
+                            .map(|db| format!("/{}", db))
+                            .unwrap_or_default();
+                        format!("{}@{}:{}{}", params.username, params.host, params.port, database)
+                    }
+                })
+                .unwrap_or_default(),
+            ConnectionType::SshSftp => conn
+                .to_ssh_params()
+                .map(|params| format!("{}@{}:{}", params.username, params.host, params.port))
+                .unwrap_or_default(),
+            ConnectionType::Redis => conn
+                .to_redis_params()
+                .map(|params| format!("{}:{}/{}", params.host, params.port, params.db_index))
+                .unwrap_or_default(),
+            ConnectionType::MongoDB => conn
+                .to_mongodb_params()
+                .map(|params| {
+                    if !params.host.is_empty() {
+                        if let Some(port) = params.port {
+                            format!("{}:{}", params.host, port)
+                        } else {
+                            params.host
+                        }
+                    } else if !params.connection_string.is_empty() {
+                        params.connection_string
+                    } else {
+                        "MongoDB".to_string()
+                    }
+                })
+                .unwrap_or_default(),
+            ConnectionType::Serial => conn
+                .to_serial_params()
+                .map(|params| {
+                    let parity_char = match params.parity {
+                        one_core::storage::models::SerialParity::None => 'N',
+                        one_core::storage::models::SerialParity::Odd => 'O',
+                        one_core::storage::models::SerialParity::Even => 'E',
+                    };
+                    format!(
+                        "{} ({}, {}{}{})",
+                        params.port_name, params.baud_rate, params.data_bits, parity_char, params.stop_bits
+                    )
+                })
+                .unwrap_or_default(),
+            ConnectionType::Rdp | ConnectionType::Vnc => conn
+                .to_remote_desktop_params()
+                .map(|params| {
+                    match params.username.as_deref() {
+                        Some(username) => format!("{}@{}:{}", username, params.host, params.port),
+                        None => format!("{}:{}", params.host, params.port),
+                    }
+                })
+                .unwrap_or_default(),
+            ConnectionType::PortForwarding => conn
+                .to_port_forwarding_params()
+                .map(|params| match params.kind {
+                    one_core::storage::PortForwardingKind::Local => format!(
+                        "{}:{} -> {}:{}",
+                        params.bind_host, params.bind_port, params.target_host, params.target_port
+                    ),
+                    one_core::storage::PortForwardingKind::Dynamic => {
+                        format!("SOCKS {}:{}", params.bind_host, params.bind_port)
+                    }
+                })
+                .unwrap_or_default(),
+            _ => String::new(),
+        }
     }
 
     fn render_connection_card(
         &self,
         conn: StoredConnection,
         selected_id: Option<i64>,
+        index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let conn_id = conn.id;
@@ -2898,6 +3412,7 @@ impl HomePage {
 
         let can_edit = can_edit_connection(&conn, cx);
         let has_team = conn.team_id.is_some();
+        let accent = cx.theme().accent;
 
         let card = v_flex()
             .justify_center()
@@ -2936,7 +3451,27 @@ impl HomePage {
                 this.selected_connection_id = conn_id;
                 cx.notify();
             }))
-            .when(is_active, |this| {
+            .on_drag(
+                DragConnection { source_index: index },
+                |drag, _, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                    cx.new(|_| drag.clone())
+                },
+            )
+            .drag_over::<DragConnection>(move |el, _, _, _cx| {
+                el.border_l_2().border_color(accent)
+            })
+            .on_drop(cx.listener(
+                move |this, drag: &DragConnection, _window, cx| {
+                    let from = drag.source_index;
+                    let to = index;
+                    if from != to {
+                        this.reorder_connections(from, to, cx);
+                    }
+                },
+            ))
+            .when(is_active, |this| { // card version
                 this.child(
                     div()
                         .absolute()
