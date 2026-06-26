@@ -224,10 +224,10 @@ fn connection_alias_registry() -> ToolRegistry {
 
     ToolRegistry::new(vec![
         Arc::new(AliasTool {
-            id: "onetcli.connections.list",
+            id: "connections.list",
         }),
         Arc::new(AliasTool {
-            id: "onetcli.connections.show",
+            id: "connections.show",
         }),
     ])
 }

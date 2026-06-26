@@ -17,7 +17,7 @@ async fn internal_function_provider_lists_registered_functions() {
 
     let result = registry
         .call_tool(
-            "public_mcp.internal_functions.list",
+            "internal_functions.list",
             None,
             context(PermissionMode::Deny, Default::default()),
         )
@@ -43,7 +43,7 @@ async fn read_only_internal_function_calls_are_allowed_in_deny_mode() {
 
     let result = registry
         .call_tool(
-            "public_mcp.internal_functions.call",
+            "internal_functions.call",
             Some(call_args("internal.echo", json!({ "input": "hello" }))),
             context(PermissionMode::Deny, Default::default()),
         )
@@ -62,7 +62,7 @@ async fn writable_internal_function_calls_follow_permission_mode() {
 
     let denied = registry
         .call_tool(
-            "public_mcp.internal_functions.call",
+            "internal_functions.call",
             Some(call_args("internal.write_note", json!({ "note": "ship" }))),
             context(PermissionMode::Deny, Default::default()),
         )
@@ -79,7 +79,7 @@ async fn writable_internal_function_calls_follow_permission_mode() {
     let approver = Arc::new(RecordingApprover::approved());
     let approved = registry
         .call_tool(
-            "public_mcp.internal_functions.call",
+            "internal_functions.call",
             Some(call_args("internal.write_note", json!({ "note": "ship" }))),
             context(
                 PermissionMode::Ask,
@@ -99,7 +99,7 @@ async fn writable_internal_function_calls_follow_permission_mode() {
         PublicMcpOperationKind::CallToolRuntimeTool,
         requests[0].operation
     );
-    assert_eq!("public_mcp.internal_functions.call", requests[0].tool_name);
+    assert_eq!("internal_functions.call", requests[0].tool_name);
 }
 
 fn provider(functions: Vec<InternalFunctionDefinition>) -> ToolRuntimeMcpProvider {

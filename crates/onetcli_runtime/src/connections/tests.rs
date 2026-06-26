@@ -10,20 +10,48 @@ use std::sync::Arc;
 use tool_runtime::{ToolAdapter, ToolContext};
 
 mod create_extended;
+mod management;
 
 #[test]
 fn connection_registry_lists_creation_tools() {
     let registry = connection_tool_registry(repo());
-    let tool_ids = registry
+    let tools = registry.list(ToolAdapter::Mcp);
+    let tool_ids = tools.iter().map(|tool| tool.id.clone()).collect::<Vec<_>>();
+    let create = tools
+        .iter()
+        .find(|tool| tool.id == "connections.create")
+        .expect("create tool should be registered");
+
+    assert_eq!(json!(["kind", "values"]), create.input_schema["required"]);
+    assert!(
+        create
+            .description
+            .contains("Call connections.get_schema first")
+    );
+
+    assert!(tool_ids.contains(&"connections.list_kinds".to_string()));
+    assert!(tool_ids.contains(&"connections.get_schema".to_string()));
+    assert!(tool_ids.contains(&"connections.validate".to_string()));
+    assert!(tool_ids.contains(&"connections.create".to_string()));
+    assert!(!tool_ids.iter().any(|id| id.starts_with("onetcli.")));
+}
+
+#[test]
+fn connection_show_descriptor_identifies_connection_reference() {
+    let registry = connection_tool_registry(repo());
+    let tool = registry
         .list(ToolAdapter::Mcp)
         .into_iter()
-        .map(|tool| tool.id)
-        .collect::<Vec<_>>();
+        .find(|tool| tool.id == "connections.show")
+        .expect("show tool should be registered");
 
-    assert!(tool_ids.contains(&"onetcli.connections.list_kinds".to_string()));
-    assert!(tool_ids.contains(&"onetcli.connections.get_schema".to_string()));
-    assert!(tool_ids.contains(&"onetcli.connections.validate".to_string()));
-    assert!(tool_ids.contains(&"onetcli.connections.create".to_string()));
+    assert_eq!(json!(["connection"]), tool.input_schema["required"]);
+    assert!(
+        tool.input_schema["properties"]["connection"]["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("numeric id")
+    );
 }
 
 #[test]
@@ -35,10 +63,10 @@ fn connection_registry_exposes_creation_tools_to_cli() {
         .map(|tool| tool.id)
         .collect::<Vec<_>>();
 
-    assert!(tool_ids.contains(&"onetcli.connections.list".to_string()));
-    assert!(tool_ids.contains(&"onetcli.connections.show".to_string()));
-    assert!(tool_ids.contains(&"onetcli.connections.list_kinds".to_string()));
-    assert!(tool_ids.contains(&"onetcli.connections.create".to_string()));
+    assert!(tool_ids.contains(&"connections.list".to_string()));
+    assert!(tool_ids.contains(&"connections.show".to_string()));
+    assert!(tool_ids.contains(&"connections.list_kinds".to_string()));
+    assert!(tool_ids.contains(&"connections.create".to_string()));
 }
 
 #[test]
@@ -60,8 +88,8 @@ fn list_saved_connections_returns_redacted_summaries() {
     );
 
     let result = futures::executor::block_on(registry.call(
-        "onetcli.connections.list",
-        json!({}),
+        "connections.list",
+        json!({ "include_summary": true }),
         ToolContext::for_adapter(ToolAdapter::Cli),
     ))
     .expect("list saved connections should run");
@@ -93,13 +121,13 @@ fn show_saved_connection_supports_id_and_name() {
     );
 
     let by_id = futures::executor::block_on(registry.call(
-        "onetcli.connections.show",
+        "connections.show",
         json!({ "connection": id.to_string() }),
         ToolContext::for_adapter(ToolAdapter::Cli),
     ))
     .expect("show by id should run");
     let by_name = futures::executor::block_on(registry.call(
-        "onetcli.connections.show",
+        "connections.show",
         json!({ "connection": "prod ssh" }),
         ToolContext::for_adapter(ToolAdapter::Cli),
     ))
@@ -114,7 +142,7 @@ fn list_kinds_includes_all_creatable_connection_types() {
     let registry = connection_tool_registry(repo());
 
     let result = futures::executor::block_on(registry.call(
-        "onetcli.connections.list_kinds",
+        "connections.list_kinds",
         json!({}),
         ToolContext::for_adapter(ToolAdapter::Mcp),
     ))
@@ -152,7 +180,7 @@ fn get_schema_supports_all_creatable_connection_types() {
 
     for kind in creatable_kinds() {
         let result = futures::executor::block_on(registry.call(
-            "onetcli.connections.get_schema",
+            "connections.get_schema",
             json!({ "kind": kind }),
             ToolContext::for_adapter(ToolAdapter::Mcp),
         ))
@@ -173,7 +201,7 @@ fn database_schema_uses_database_specific_connection_form() {
     let registry = connection_tool_registry(repo());
 
     let result = futures::executor::block_on(registry.call(
-        "onetcli.connections.get_schema",
+        "connections.get_schema",
         json!({ "kind": "database", "database_type": "PostgreSQL" }),
         ToolContext::for_adapter(ToolAdapter::Mcp),
     ))
@@ -373,7 +401,7 @@ fn create_database_connection_persists_mysql_config() {
     let registry = connection_tool_registry(repo.clone());
 
     let result = futures::executor::block_on(registry.call(
-        "onetcli.connections.create",
+        "connections.create",
         json!({
             "kind": "database",
             "database_type": "MySQL",
@@ -420,7 +448,7 @@ fn validate_reports_missing_required_fields_without_writing() {
     let registry = connection_tool_registry(repo.clone());
 
     let result = futures::executor::block_on(registry.call(
-        "onetcli.connections.validate",
+        "connections.validate",
         json!({
             "kind": "database",
             "database_type": "MySQL",
@@ -447,7 +475,7 @@ fn validate_rejects_invalid_numeric_fields_without_writing() {
     let registry = connection_tool_registry(repo.clone());
 
     let result = futures::executor::block_on(registry.call(
-        "onetcli.connections.create",
+        "connections.create",
         json!({
             "kind": "database",
             "database_type": "MySQL",
@@ -479,7 +507,7 @@ pub(super) fn create_connection(
     input: serde_json::Value,
 ) -> i64 {
     let result = futures::executor::block_on(registry.call(
-        "onetcli.connections.create",
+        "connections.create",
         input,
         ToolContext::for_adapter(ToolAdapter::Mcp),
     ))

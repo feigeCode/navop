@@ -1,5 +1,7 @@
 pub mod cli_host;
 pub mod connections;
+pub mod sftp_tools;
+pub mod workspaces;
 
 pub fn builtin_tool_registry() -> tool_runtime::ToolRegistry {
     builtin_tool_registry_with_version(env!("CARGO_PKG_VERSION"))
@@ -35,7 +37,7 @@ impl tool_runtime::ToolHandler for AppInfoTool {
         tool_runtime::ToolDescriptor {
             id: "onetcli.app_info".to_string(),
             title: "App Info".to_string(),
-            description: "Read OnetCli app metadata.".to_string(),
+            description: "Read metadata for the running OnetCli application, including app name and version. Use this for version checks, diagnostics, or compatibility reporting; it does not inspect remote hosts or saved connections.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}

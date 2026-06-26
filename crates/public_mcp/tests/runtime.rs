@@ -223,7 +223,7 @@ impl TestClient {
             "id": id,
             "method": "tools/call",
             "params": {
-                "name": "public_mcp.remote_exec",
+                "name": "ssh.remote_exec",
                 "arguments": {
                     "session_id": "ssh-1",
                     "command": command

@@ -29,20 +29,51 @@ pub(super) fn build_tool_registry(
             internal_function_tool_registry(internal_functions::definitions(cx)),
         )));
     }
-    if toolsets.database {
+    if toolsets.connections {
+        if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
+            if let Some(repo) = storage
+                .storage
+                .get::<one_core::storage::ConnectionRepository>()
+            {
+                let workspace_repo = storage
+                    .storage
+                    .get::<one_core::storage::WorkspaceRepository>();
+                providers.push(Arc::new(ToolRuntimeMcpProvider::new(
+                    onetcli_runtime::connections::connection_tool_registry_with_workspaces(
+                        repo,
+                        workspace_repo.clone(),
+                    ),
+                )));
+                if let Some(workspace_repo) = workspace_repo {
+                    providers.push(Arc::new(ToolRuntimeMcpProvider::new(
+                        onetcli_runtime::workspaces::workspace_tool_registry(workspace_repo),
+                    )));
+                } else {
+                    tracing::warn!(
+                        "Public MCP connection tools enabled without WorkspaceRepository"
+                    );
+                }
+            } else {
+                tracing::warn!("Public MCP connection tools enabled without ConnectionRepository");
+            }
+        } else {
+            tracing::warn!("Public MCP connection tools enabled before storage is initialized");
+        }
+    }
+    if toolsets.sftp {
         if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
             if let Some(repo) = storage
                 .storage
                 .get::<one_core::storage::ConnectionRepository>()
             {
                 providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-                    onetcli_runtime::connections::connection_tool_registry(repo),
+                    onetcli_runtime::sftp_tools::sftp_tool_registry(repo),
                 )));
             } else {
-                tracing::warn!("Public MCP connection tools enabled without ConnectionRepository");
+                tracing::warn!("Public MCP SFTP tools enabled without ConnectionRepository");
             }
         } else {
-            tracing::warn!("Public MCP connection tools enabled before storage is initialized");
+            tracing::warn!("Public MCP SFTP tools enabled before storage is initialized");
         }
     }
     if toolsets.redis {
@@ -62,6 +93,11 @@ mod tests {
     use crate::public_mcp_runtime::register_internal_function;
     use gpui::TestAppContext;
     use one_core::settings::McpToolsetSettings;
+    use one_core::storage::connection::SqliteConnection;
+    use one_core::storage::migration::run_migrations;
+    use one_core::storage::{
+        ConnectionRepository, GlobalStorageState, StorageManager, WorkspaceRepository,
+    };
     use public_mcp::permissions::PermissionMode;
     use public_mcp::tools::{InternalFunctionDefinition, PublicMcpToolContext};
     use serde_json::json;
@@ -79,12 +115,12 @@ mod tests {
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "public_mcp.internal_functions.list")
+                .any(|tool| tool.name == "internal_functions.list")
         );
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "public_mcp.internal_functions.call")
+                .any(|tool| tool.name == "internal_functions.call")
         );
     }
 
@@ -92,6 +128,7 @@ mod tests {
     fn build_tool_registry_includes_redis_tools(cx: &mut TestAppContext) {
         let toolsets = McpToolsetSettings {
             terminal: false,
+            connections: false,
             redis: true,
             ..Default::default()
         };
@@ -105,8 +142,60 @@ mod tests {
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "public_mcp.redis.list_connections")
+                .any(|tool| tool.name == "redis.list_connections")
         );
+    }
+
+    #[gpui::test]
+    fn build_tool_registry_includes_connection_tools(cx: &mut TestAppContext) {
+        let toolsets = McpToolsetSettings {
+            terminal: false,
+            connections: true,
+            ..Default::default()
+        };
+
+        let tools = cx.update(|cx| {
+            register_connection_repository(cx);
+            build_tool_registry(cx, &toolsets)
+                .expect("connection registry should build")
+                .tools()
+        });
+
+        assert!(tools.iter().any(|tool| tool.name == "connections.list"));
+        assert!(tools.iter().any(|tool| tool.name == "connections.show"));
+        assert!(tools.iter().any(|tool| tool.name == "connections.validate"));
+        assert!(tools.iter().any(|tool| tool.name == "connections.find"));
+        assert!(tools.iter().any(|tool| tool.name == "connections.update"));
+        assert!(tools.iter().any(|tool| tool.name == "connections.delete"));
+        assert!(tools.iter().any(|tool| tool.name == "connections.test"));
+        assert!(tools.iter().any(|tool| tool.name == "workspaces.list"));
+        assert!(tools.iter().any(|tool| tool.name == "workspaces.show"));
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.name.starts_with("onetcli.connections."))
+        );
+    }
+
+    #[gpui::test]
+    fn build_tool_registry_includes_sftp_tools(cx: &mut TestAppContext) {
+        let toolsets = McpToolsetSettings {
+            terminal: false,
+            connections: false,
+            sftp: true,
+            ..Default::default()
+        };
+
+        let tools = cx.update(|cx| {
+            register_connection_repository(cx);
+            build_tool_registry(cx, &toolsets)
+                .expect("sftp registry should build")
+                .tools()
+        });
+
+        assert!(tools.iter().any(|tool| tool.name == "sftp.list"));
+        assert!(tools.iter().any(|tool| tool.name == "sftp.read"));
+        assert!(tools.iter().any(|tool| tool.name == "sftp.write"));
     }
 
     #[gpui::test]
@@ -118,7 +207,7 @@ mod tests {
         });
 
         let result = futures::executor::block_on(registry.call_tool(
-            "public_mcp.internal_functions.list",
+            "internal_functions.list",
             None,
             PublicMcpToolContext {
                 permission_mode: PermissionMode::Deny,
@@ -174,6 +263,7 @@ mod tests {
     fn internal_function_toolsets() -> McpToolsetSettings {
         McpToolsetSettings {
             terminal: false,
+            connections: false,
             internal_functions: true,
             ..Default::default()
         }
@@ -185,5 +275,23 @@ mod tests {
             "Read the public MCP runtime status.",
             |_| async { Ok(json!({ "state": "disabled" })) },
         )
+    }
+
+    fn register_connection_repository(cx: &mut gpui::App) {
+        let storage = StorageManager::new_with_connection(test_connection());
+        storage.register(ConnectionRepository::new(storage.connection()));
+        storage.register(WorkspaceRepository::new(storage.connection()));
+        cx.set_global(GlobalStorageState { storage });
+    }
+
+    fn test_connection() -> SqliteConnection {
+        let conn = SqliteConnection::open_with_pool_size(":memory:", 1)
+            .expect("sqlite connection should open");
+        conn.with_connection(|db| {
+            run_migrations(db)?;
+            Ok(())
+        })
+        .expect("migrations should run");
+        conn
     }
 }

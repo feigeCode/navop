@@ -132,7 +132,7 @@ async fn tools_call_list_sessions_returns_connected_sessions() {
             "id": 2,
             "method": "tools/call",
             "params": {
-                "name": "public_mcp.list_sessions",
+                "name": "ssh.list_sessions",
                 "arguments": {}
             }
         }))
@@ -142,6 +142,63 @@ async fn tools_call_list_sessions_returns_connected_sessions() {
     assert_eq!(
         "ssh-1",
         response["result"]["structuredContent"]["sessions"][0]["session_id"]
+    );
+}
+
+#[tokio::test]
+async fn tools_call_rejects_legacy_public_mcp_tool_names() {
+    let registry = PublicMcpRegistry::default();
+    let mut client = TestClient::connect(registry, PermissionMode::Allow).await;
+
+    let response = client
+        .request(json!({
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "tools/call",
+            "params": {
+                "name": "public_mcp.list_sessions",
+                "arguments": {}
+            }
+        }))
+        .await;
+
+    assert_eq!(json!(20), response["id"]);
+    assert_eq!(-32602, response["error"]["code"]);
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("unknown public MCP tool")
+    );
+}
+
+#[tokio::test]
+async fn tools_call_rejects_untyped_remote_tool_names() {
+    let registry = PublicMcpRegistry::default();
+    let mut client = TestClient::connect(registry, PermissionMode::Allow).await;
+
+    let response = client
+        .request(json!({
+            "jsonrpc": "2.0",
+            "id": 21,
+            "method": "tools/call",
+            "params": {
+                "name": "remote_exec",
+                "arguments": {
+                    "session_id": "ssh-1",
+                    "command": "pwd"
+                }
+            }
+        }))
+        .await;
+
+    assert_eq!(json!(21), response["id"]);
+    assert_eq!(-32602, response["error"]["code"]);
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("unknown public MCP tool")
     );
 }
 
@@ -162,7 +219,7 @@ async fn remote_exec_rejects_when_permission_mode_denies() {
             "id": 3,
             "method": "tools/call",
             "params": {
-                "name": "public_mcp.remote_exec",
+                "name": "ssh.remote_exec",
                 "arguments": {
                     "session_id": "ssh-1",
                     "command": "pwd"
@@ -201,7 +258,7 @@ async fn remote_exec_uses_updated_permission_mode() {
             "id": 30,
             "method": "tools/call",
             "params": {
-                "name": "public_mcp.remote_exec",
+                "name": "ssh.remote_exec",
                 "arguments": {
                     "session_id": "ssh-1",
                     "command": "pwd"
@@ -222,7 +279,7 @@ async fn remote_exec_uses_updated_permission_mode() {
             "id": 31,
             "method": "tools/call",
             "params": {
-                "name": "public_mcp.remote_exec",
+                "name": "ssh.remote_exec",
                 "arguments": {
                     "session_id": "ssh-1",
                     "command": "pwd"
@@ -258,7 +315,7 @@ async fn remote_exec_asks_and_runs_when_approved() {
             "id": 4,
             "method": "tools/call",
             "params": {
-                "name": "public_mcp.remote_exec",
+                "name": "ssh.remote_exec",
                 "arguments": {
                     "session_id": "ssh-1",
                     "command": "pwd"
@@ -271,7 +328,7 @@ async fn remote_exec_asks_and_runs_when_approved() {
     assert_eq!(vec!["pwd".to_string()], *executed_commands.lock().unwrap());
     let requests = approver.requests();
     assert_eq!(1, requests.len());
-    assert_eq!("public_mcp.remote_exec", requests[0].tool_name);
+    assert_eq!("ssh.remote_exec", requests[0].tool_name);
 }
 
 #[tokio::test]
@@ -299,7 +356,7 @@ async fn remote_exec_asks_and_does_not_run_when_denied() {
             "id": 5,
             "method": "tools/call",
             "params": {
-                "name": "public_mcp.remote_exec",
+                "name": "ssh.remote_exec",
                 "arguments": {
                     "session_id": "ssh-1",
                     "command": "pwd"

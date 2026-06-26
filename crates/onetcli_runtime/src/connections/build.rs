@@ -7,7 +7,8 @@ use one_core::storage::{
     ConnectionType, DatabaseType, DbConnectionConfig, MongoDBParams, RedisMode, RedisParams,
     SshAuthMethod, SshParams, StoredConnection,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use tool_runtime::ToolError;
 
 pub(super) fn build_connection(input: &Value) -> Result<StoredConnection, ToolError> {
@@ -47,7 +48,7 @@ fn build_database(input: &Value) -> Result<StoredConnection, ToolError> {
         service_name: optional_value_str(values, "service_name").map(str::to_string),
         sid: optional_value_str(values, "sid").map(str::to_string),
         workspace_id: optional_i64(input, "workspace_id"),
-        extra_params: Default::default(),
+        extra_params: database_extra_params(values),
     };
     Ok(with_common_fields(
         StoredConnection::new_database(name, config, optional_i64(input, "workspace_id")),
@@ -150,18 +151,33 @@ fn with_common_fields(mut connection: StoredConnection, input: &Value) -> Stored
     connection
 }
 
-pub(super) fn connection_summary(connection: &StoredConnection) -> Result<Value, ToolError> {
+pub(super) fn connection_summary_with_options(
+    connection: &StoredConnection,
+    workspace_name: Option<&str>,
+    include_summary: bool,
+) -> Result<Value, ToolError> {
     let params: Value = serde_json::from_str(&connection.params).map_err(tool_error)?;
-    Ok(json!({
-        "id": connection.id,
-        "name": connection.name,
-        "kind": mcp_kind(connection.connection_type),
-        "workspace_id": connection.workspace_id,
-        "summary": redacted_values(&params)
-    }))
+    let mut summary = Map::from_iter([
+        ("id".to_string(), json!(connection.id)),
+        ("name".to_string(), json!(connection.name)),
+        (
+            "kind".to_string(),
+            json!(mcp_kind(connection.connection_type)),
+        ),
+        ("workspace_id".to_string(), json!(connection.workspace_id)),
+        ("workspace_name".to_string(), json!(workspace_name)),
+        ("remark".to_string(), json!(connection.remark)),
+        ("sync_enabled".to_string(), json!(connection.sync_enabled)),
+        ("team_id".to_string(), json!(connection.team_id)),
+    ]);
+    if include_summary {
+        summary.insert("summary".to_string(), redacted_values(&params));
+        add_database_summary(&mut summary, &params);
+    }
+    Ok(Value::Object(summary))
 }
 
-fn mcp_kind(connection_type: ConnectionType) -> &'static str {
+pub(super) fn mcp_kind(connection_type: ConnectionType) -> &'static str {
     match connection_type {
         ConnectionType::Database => "database",
         ConnectionType::SshSftp => "ssh_sftp",
@@ -173,6 +189,70 @@ fn mcp_kind(connection_type: ConnectionType) -> &'static str {
         ConnectionType::Vnc => "vnc",
         _ => "unsupported",
     }
+}
+
+pub(super) fn database_extra_params(values: &Value) -> HashMap<String, String> {
+    values
+        .as_object()
+        .into_iter()
+        .flat_map(|object| object.iter())
+        .filter(|(key, _)| !database_core_field(key))
+        .map(|(key, value)| (key.clone(), extra_param_string(value)))
+        .collect()
+}
+
+pub(super) fn database_core_field(key: &str) -> bool {
+    matches!(
+        key,
+        "name" | "host" | "port" | "username" | "password" | "database" | "service_name" | "sid"
+    )
+}
+
+pub(super) fn extra_param_string(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::Null => String::new(),
+        value => value.to_string(),
+    }
+}
+
+fn add_database_summary(summary: &mut Map<String, Value>, params: &Value) {
+    let Ok(config) = serde_json::from_value::<DbConnectionConfig>(params.clone()) else {
+        return;
+    };
+    summary.insert(
+        "database_type".to_string(),
+        json!(config.database_type.storage_key()),
+    );
+    summary.insert(
+        "stored_extra_params".to_string(),
+        redacted_values(&json!(config.extra_params)),
+    );
+    summary.insert(
+        "effective_values".to_string(),
+        redacted_values(&database_effective_values(&config)),
+    );
+}
+
+fn database_effective_values(config: &DbConnectionConfig) -> Value {
+    let mut values = Map::new();
+    for (key, value) in &config.extra_params {
+        values.insert(key.clone(), json!(value));
+    }
+    values
+        .entry("connect_timeout".to_string())
+        .or_insert_with(|| json!("30"));
+    if config.database_type == DatabaseType::MSSQL {
+        values
+            .entry("encrypt".to_string())
+            .or_insert_with(|| json!("off"));
+        values
+            .entry("trust_cert".to_string())
+            .or_insert_with(|| json!("false"));
+    }
+    Value::Object(values)
 }
 
 pub(super) fn redacted_values(value: &Value) -> Value {

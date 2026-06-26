@@ -4,11 +4,12 @@ mod tests;
 mod build;
 mod extended_build;
 mod input;
+mod management;
 mod schema;
 mod validation;
 
-use one_core::storage::ConnectionRepository;
 use one_core::storage::traits::Repository;
+use one_core::storage::{ConnectionRepository, WorkspaceRepository};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
@@ -24,79 +25,133 @@ enum ConnectionTool {
     GetSchema,
     Validate,
     Create,
+    Find,
+    Update,
+    Delete,
+    MoveWorkspace,
+    SetSyncEnabled,
+    Test,
 }
 
 #[derive(Clone)]
 struct ConnectionToolHandler {
     repo: Arc<ConnectionRepository>,
+    workspaces: Option<Arc<WorkspaceRepository>>,
     tool: ConnectionTool,
 }
 
 pub fn connection_tool_registry(repo: Arc<ConnectionRepository>) -> ToolRegistry {
+    connection_tool_registry_with_workspaces(repo, None)
+}
+
+pub fn connection_tool_registry_with_workspaces(
+    repo: Arc<ConnectionRepository>,
+    workspaces: Option<Arc<WorkspaceRepository>>,
+) -> ToolRegistry {
     ToolRegistry::new(vec![
         Arc::new(ConnectionToolHandler::new(
             repo.clone(),
+            workspaces.clone(),
             ConnectionTool::List,
         )),
         Arc::new(ConnectionToolHandler::new(
             repo.clone(),
+            workspaces.clone(),
             ConnectionTool::Show,
         )),
         Arc::new(ConnectionToolHandler::new(
             repo.clone(),
+            workspaces.clone(),
             ConnectionTool::ListKinds,
         )),
         Arc::new(ConnectionToolHandler::new(
             repo.clone(),
+            workspaces.clone(),
             ConnectionTool::GetSchema,
         )),
         Arc::new(ConnectionToolHandler::new(
             repo.clone(),
+            workspaces.clone(),
             ConnectionTool::Validate,
         )),
-        Arc::new(ConnectionToolHandler::new(repo, ConnectionTool::Create)),
+        Arc::new(ConnectionToolHandler::new(
+            repo.clone(),
+            workspaces.clone(),
+            ConnectionTool::Create,
+        )),
+        Arc::new(ConnectionToolHandler::new(
+            repo.clone(),
+            workspaces.clone(),
+            ConnectionTool::Find,
+        )),
+        Arc::new(ConnectionToolHandler::new(
+            repo.clone(),
+            workspaces.clone(),
+            ConnectionTool::Update,
+        )),
+        Arc::new(ConnectionToolHandler::new(
+            repo.clone(),
+            workspaces.clone(),
+            ConnectionTool::Delete,
+        )),
+        Arc::new(ConnectionToolHandler::new(
+            repo.clone(),
+            workspaces.clone(),
+            ConnectionTool::MoveWorkspace,
+        )),
+        Arc::new(ConnectionToolHandler::new(
+            repo.clone(),
+            workspaces.clone(),
+            ConnectionTool::SetSyncEnabled,
+        )),
+        Arc::new(ConnectionToolHandler::new(
+            repo,
+            workspaces,
+            ConnectionTool::Test,
+        )),
     ])
 }
 
 impl ConnectionToolHandler {
-    fn new(repo: Arc<ConnectionRepository>, tool: ConnectionTool) -> Self {
-        Self { repo, tool }
+    fn new(
+        repo: Arc<ConnectionRepository>,
+        workspaces: Option<Arc<WorkspaceRepository>>,
+        tool: ConnectionTool,
+    ) -> Self {
+        Self {
+            repo,
+            workspaces,
+            tool,
+        }
     }
 
-    fn call_tool(&self, input: Value) -> Result<ToolResult, ToolError> {
+    async fn call_tool(&self, input: Value) -> Result<ToolResult, ToolError> {
         match self.tool {
-            ConnectionTool::List => self.list_saved(),
-            ConnectionTool::Show => self.show(input),
+            ConnectionTool::List => {
+                management::list_saved(&self.repo, self.workspaces.as_ref(), input)
+            }
+            ConnectionTool::Show => management::show(&self.repo, self.workspaces.as_ref(), input),
             ConnectionTool::ListKinds => Ok(ToolResult::structured(schema::list_kinds())),
             ConnectionTool::GetSchema => Ok(ToolResult::structured(schema::schema_for(input)?)),
             ConnectionTool::Validate => Ok(ToolResult::structured(validation::validate(input))),
             ConnectionTool::Create => self.create(input),
+            ConnectionTool::Find => management::find(&self.repo, self.workspaces.as_ref(), input),
+            ConnectionTool::Update => {
+                management::update(&self.repo, self.workspaces.as_ref(), input)
+            }
+            ConnectionTool::Delete => {
+                management::delete(&self.repo, self.workspaces.as_ref(), input)
+            }
+            ConnectionTool::MoveWorkspace => {
+                management::move_workspace(&self.repo, self.workspaces.as_ref(), input)
+            }
+            ConnectionTool::SetSyncEnabled => {
+                management::set_sync_enabled(&self.repo, self.workspaces.as_ref(), input)
+            }
+            ConnectionTool::Test => {
+                management::test_connection(&self.repo, self.workspaces.as_ref(), input).await
+            }
         }
-    }
-
-    fn list_saved(&self) -> Result<ToolResult, ToolError> {
-        let connections = self
-            .repo
-            .list()
-            .map_err(input::tool_error)?
-            .iter()
-            .map(build::connection_summary)
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(ToolResult::structured(
-            json!({ "connections": connections }),
-        ))
-    }
-
-    fn show(&self, input: Value) -> Result<ToolResult, ToolError> {
-        let connection = input::required_str(&input, "connection")?;
-        let Some(connection) = self.find_connection(connection)? else {
-            return Err(ToolError::Failed {
-                message: format!("unknown connection: {connection}"),
-            });
-        };
-        Ok(ToolResult::structured(json!({
-            "connection": build::connection_summary(&connection)?
-        })))
     }
 
     fn create(&self, input: Value) -> Result<ToolResult, ToolError> {
@@ -110,23 +165,8 @@ impl ConnectionToolHandler {
             .map_err(input::tool_error)?;
         Ok(ToolResult::structured(json!({
             "ok": true,
-            "connection": build::connection_summary(&connection)?
+            "connection": management::summarize(&connection, self.workspaces.as_ref(), true)?
         })))
-    }
-
-    fn find_connection(
-        &self,
-        connection: &str,
-    ) -> Result<Option<one_core::storage::StoredConnection>, ToolError> {
-        if let Ok(id) = connection.parse::<i64>() {
-            return self.repo.get(id).map_err(input::tool_error);
-        }
-        Ok(self
-            .repo
-            .list()
-            .map_err(input::tool_error)?
-            .into_iter()
-            .find(|stored| stored.name == connection))
     }
 }
 
@@ -134,39 +174,75 @@ impl ToolHandler for ConnectionToolHandler {
     fn descriptor(&self) -> ToolDescriptor {
         let (id, title, description, read_only) = match self.tool {
             ConnectionTool::List => (
-                "onetcli.connections.list",
+                "connections.list",
                 "List saved connections",
-                "List saved OnetCli connections with redacted metadata.",
+                "List saved OnetCli connection profiles with filters and pagination. Supports kind, database_type, workspace_id, name_contains, host, limit, cursor, and include_summary. By default it returns compact metadata without connection params; set include_summary=true when redacted fields are needed.",
                 true,
             ),
             ConnectionTool::Show => (
-                "onetcli.connections.show",
+                "connections.show",
                 "Show saved connection",
-                "Show one saved OnetCli connection by id or exact name.",
+                "Show one saved OnetCli connection profile by numeric id or exact name. If the name is duplicated, the call fails and asks for an id; use connections.find to list candidates. Returned details redact secrets.",
                 true,
             ),
             ConnectionTool::ListKinds => (
-                "onetcli.connections.list_kinds",
+                "connections.list_kinds",
                 "List connection kinds",
-                "List connection kinds that can be created through OnetCli.",
+                "List connection kinds that can be created through OnetCli, including kind ids such as ssh_sftp, database, redis, mongodb, serial, port_forwarding, rdp, and vnc. Use before connections.get_schema when you do not know the exact kind string.",
                 true,
             ),
             ConnectionTool::GetSchema => (
-                "onetcli.connections.get_schema",
+                "connections.get_schema",
                 "Get connection schema",
-                "Return field schema and defaults for a connection kind.",
+                "Return the required fields, optional fields, defaults, and enum values for creating a specific connection kind. Use this before connections.validate or connections.create so arguments match the selected kind.",
                 true,
             ),
             ConnectionTool::Validate => (
-                "onetcli.connections.validate",
+                "connections.validate",
                 "Validate connection",
-                "Validate a connection creation request without writing it.",
+                "Validate a proposed connection creation request without saving it. Use the same arguments as connections.create, including kind and values, to check missing fields and type errors before mutating saved connections.",
                 true,
             ),
             ConnectionTool::Create => (
-                "onetcli.connections.create",
+                "connections.create",
                 "Create connection",
-                "Create a saved OnetCli connection from structured fields.",
+                "Create and save a new OnetCli connection profile from structured fields. Call connections.get_schema first for the selected kind, and call connections.validate first when unsure. Use top-level remark, not values.remark. Password-like values are redacted in responses but may still appear in MCP tool-call arguments/logs depending on the client.",
+                false,
+            ),
+            ConnectionTool::Find => (
+                "connections.find",
+                "Find saved connections",
+                "Find saved connections using filters such as exact name, name_contains, kind, database_type, workspace_id, and host. Returns an array and never chooses among duplicate names; automation should prefer ids from this result.",
+                true,
+            ),
+            ConnectionTool::Update => (
+                "connections.update",
+                "Update saved connection",
+                "Patch a saved connection by numeric id. Supports top-level fields name, remark, workspace_id, sync_enabled, database_type for database profiles, and values for connection params. Password-like values may be logged by the MCP client before OnetCli redacts responses.",
+                false,
+            ),
+            ConnectionTool::Delete => (
+                "connections.delete",
+                "Delete saved connection",
+                "Delete a saved connection by numeric id. Use connections.find or connections.show first if the id is not known.",
+                false,
+            ),
+            ConnectionTool::MoveWorkspace => (
+                "connections.move_workspace",
+                "Move connection workspace",
+                "Move a saved connection to another workspace by id, or set workspace_id=null to remove the workspace association.",
+                false,
+            ),
+            ConnectionTool::SetSyncEnabled => (
+                "connections.set_sync_enabled",
+                "Set connection sync",
+                "Enable or disable cloud sync for a saved connection by numeric id.",
+                false,
+            ),
+            ConnectionTool::Test => (
+                "connections.test",
+                "Test saved connection",
+                "Test whether a saved database connection can actually connect and ping. This is different from connections.validate, which only validates request shape before saving. Non-database connection kinds return a structured unsupported_kind result.",
                 false,
             ),
         };
@@ -174,7 +250,7 @@ impl ToolHandler for ConnectionToolHandler {
             id: id.to_string(),
             title: title.to_string(),
             description: description.to_string(),
-            input_schema: json!({ "type": "object" }),
+            input_schema: input_schema(self.tool),
             output_schema: json!({ "type": "object" }),
             permissions: Vec::new(),
             mode: ToolMode::Deterministic,
@@ -189,7 +265,7 @@ impl ToolHandler for ConnectionToolHandler {
 
     fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
         let handler = self.clone();
-        Box::pin(async move { handler.call_tool(input) })
+        Box::pin(async move { handler.call_tool(input).await })
     }
 }
 
@@ -199,4 +275,164 @@ fn annotations(title: &str, read_only: bool) -> ToolAnnotations {
     } else {
         ToolAnnotations::mutating(title)
     }
+}
+
+fn input_schema(tool: ConnectionTool) -> Value {
+    match tool {
+        ConnectionTool::List | ConnectionTool::Find => list_schema(),
+        ConnectionTool::ListKinds => json!({
+            "type": "object",
+            "properties": {}
+        }),
+        ConnectionTool::Show => json!({
+            "type": "object",
+            "properties": { "connection": connection_ref_schema() },
+            "required": ["connection"]
+        }),
+        ConnectionTool::GetSchema => kind_schema(true),
+        ConnectionTool::Validate | ConnectionTool::Create => create_schema(),
+        ConnectionTool::Update => update_schema(),
+        ConnectionTool::Delete => id_schema(),
+        ConnectionTool::MoveWorkspace => move_workspace_schema(),
+        ConnectionTool::SetSyncEnabled => sync_schema(),
+        ConnectionTool::Test => json!({
+            "type": "object",
+            "properties": { "connection": connection_ref_schema() },
+            "required": ["connection"]
+        }),
+    }
+}
+
+fn list_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "kind": kind_value_schema(),
+            "database_type": database_type_schema(),
+            "workspace_id": { "type": ["integer", "null"] },
+            "name": { "type": "string", "description": "Exact saved connection name." },
+            "name_contains": { "type": "string" },
+            "host": { "type": "string" },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+            "cursor": { "type": "integer", "minimum": 0 },
+            "include_summary": { "type": "boolean" }
+        }
+    })
+}
+
+fn kind_schema(include_database_type: bool) -> Value {
+    let mut properties = serde_json::Map::new();
+    properties.insert("kind".to_string(), kind_value_schema());
+    if include_database_type {
+        properties.insert("database_type".to_string(), database_type_schema());
+    }
+    json!({
+        "type": "object",
+        "properties": properties,
+        "required": ["kind"]
+    })
+}
+
+fn create_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "kind": kind_value_schema(),
+            "database_type": database_type_schema(),
+            "values": {
+                "type": "object",
+                "description": "Connection fields for the selected kind. Get exact fields from connections.get_schema."
+            },
+            "workspace_id": {
+                "type": ["integer", "null"],
+                "description": "Optional workspace id to associate with the connection."
+            },
+            "remark": {
+                "type": ["string", "null"],
+                "description": "Optional human-readable note for the saved connection. Pass remark here at the top level; values.remark is not used."
+            },
+            "sync_enabled": {
+                "type": "boolean",
+                "description": "Whether this saved connection should participate in sync."
+            },
+            "team_id": {
+                "type": ["string", "null"],
+                "description": "Optional team id for team-scoped connections."
+            }
+        },
+        "required": ["kind", "values"]
+    })
+}
+
+fn update_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "integer" },
+            "patch": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "remark": { "type": ["string", "null"] },
+                    "workspace_id": { "type": ["integer", "null"] },
+                    "sync_enabled": { "type": "boolean" },
+                    "database_type": database_type_schema(),
+                    "values": { "type": "object" }
+                }
+            }
+        },
+        "required": ["id", "patch"]
+    })
+}
+
+fn id_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "id": { "type": "integer" } },
+        "required": ["id"]
+    })
+}
+
+fn move_workspace_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "integer" },
+            "workspace_id": { "type": ["integer", "null"] }
+        },
+        "required": ["id", "workspace_id"]
+    })
+}
+
+fn sync_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "integer" },
+            "enabled": { "type": "boolean" }
+        },
+        "required": ["id", "enabled"]
+    })
+}
+
+fn connection_ref_schema() -> Value {
+    json!({
+        "type": "string",
+        "description": "Saved connection numeric id as a string, or the exact saved connection name."
+    })
+}
+
+fn kind_value_schema() -> Value {
+    json!({
+        "type": "string",
+        "description": "Connection kind id. Use connections.list_kinds for supported values.",
+        "enum": ["database", "ssh_sftp", "redis", "mongodb", "serial", "port_forwarding", "rdp", "vnc"]
+    })
+}
+
+fn database_type_schema() -> Value {
+    json!({
+        "type": ["string", "null"],
+        "description": "Database engine when kind is database, for example MySQL, PostgreSQL, SQLite, DuckDB, MSSQL, Oracle, or ClickHouse."
+    })
 }

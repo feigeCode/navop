@@ -46,6 +46,13 @@ impl StorageManager {
         Ok(manager)
     }
 
+    pub fn new_with_connection(conn: SqliteConnection) -> Self {
+        Self {
+            conn,
+            repositories: Arc::new(DashMap::new()),
+        }
+    }
+
     pub fn connection(&self) -> SqliteConnection {
         self.conn.clone()
     }

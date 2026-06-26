@@ -114,7 +114,7 @@ async fn channel_approval_bridges_mcp_remote_exec_until_resolved() {
                 "id": 2,
                 "method": "tools/call",
                 "params": {
-                    "name": "public_mcp.remote_exec",
+                    "name": "ssh.remote_exec",
                     "arguments": {
                         "session_id": "ssh-1",
                         "command": "pwd"
@@ -125,8 +125,8 @@ async fn channel_approval_bridges_mcp_remote_exec_until_resolved() {
     });
 
     let envelope = receiver.recv().await.expect("approval should be queued");
-    assert_eq!("public_mcp.remote_exec", envelope.request.tool_name);
-    assert_eq!("Execute remote command on ssh-1", envelope.request.summary);
+    assert_eq!("ssh.remote_exec", envelope.request.tool_name);
+    assert_eq!("Call Execute remote command", envelope.request.summary);
     envelope.approve();
 
     let response = request.await.expect("MCP call should complete");

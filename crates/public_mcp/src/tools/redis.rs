@@ -42,9 +42,9 @@ impl RedisToolProvider {
 impl ToolHandler for RedisToolProvider {
     fn descriptor(&self) -> ToolDescriptor {
         ToolDescriptor {
-            id: "public_mcp.redis.list_connections".to_string(),
+            id: "redis.list_connections".to_string(),
             title: "List Redis connections".to_string(),
-            description: "List active Redis connections exposed by OnetCli.".to_string(),
+            description: "List currently active Redis connections exposed by the running OnetCli app. Use this to discover runtime Redis connection ids before calling Redis-specific tools. This does not list saved profiles; use connections.list for saved Redis connection profiles.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {}

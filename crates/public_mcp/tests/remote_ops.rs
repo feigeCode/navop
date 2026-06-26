@@ -113,12 +113,14 @@ fn remote_ops_tools_are_registered() {
         .map(|t| t.name.to_string())
         .collect();
 
-    assert!(names.contains(&"public_mcp.remote_exec".to_string()));
-    assert!(names.contains(&"public_mcp.remote_file_write".to_string()));
-    assert!(names.contains(&"public_mcp.session_diagnostics".to_string()));
-    assert!(names.contains(&"public_mcp.remote_command_poll".to_string()));
-    assert!(names.contains(&"public_mcp.remote_command_output".to_string()));
-    assert!(names.contains(&"public_mcp.remote_command_cancel".to_string()));
+    assert!(names.contains(&"ssh.remote_exec".to_string()));
+    assert!(names.contains(&"ssh.session_diagnostics".to_string()));
+    assert!(names.contains(&"ssh.remote_command_poll".to_string()));
+    assert!(names.contains(&"ssh.remote_command_output".to_string()));
+    assert!(names.contains(&"ssh.remote_command_cancel".to_string()));
+    assert!(!names.contains(&"ssh.remote_file_write".to_string()));
+    assert!(!names.iter().any(|name| name.starts_with("public_mcp.")));
+    assert!(!names.iter().any(|name| name == "remote_exec"));
 }
 
 #[test]
@@ -209,12 +211,12 @@ fn provider_session_diagnostics_serializes_result() {
         runtime_registry
             .list(ToolAdapter::Mcp)
             .iter()
-            .find(|t| t.id == "public_mcp.session_diagnostics")
+            .find(|t| t.id == "ssh.session_diagnostics")
             .map(|t| t.id.clone())
             .unwrap_or_default(),
     )
     .unwrap();
-    assert_eq!(json!("public_mcp.session_diagnostics"), value);
+    assert_eq!(json!("ssh.session_diagnostics"), value);
 }
 
 #[test]

@@ -96,9 +96,9 @@ struct InternalFunctionListTool {
 impl ToolHandler for InternalFunctionListTool {
     fn descriptor(&self) -> ToolDescriptor {
         ToolDescriptor {
-            id: "public_mcp.internal_functions.list".to_string(),
+            id: "internal_functions.list".to_string(),
             title: "List internal functions".to_string(),
-            description: "List internal OnetCli functions exposed through public MCP.".to_string(),
+            description: "List named internal OnetCli functions available through MCP, including each function description, read-only flag, and input schema. Use this before internal_functions.call when you need app-level capabilities such as onetcli.app_info.".to_string(),
             input_schema: empty_object_value_schema(),
             output_schema: json!({ "type": "object" }),
             permissions: Vec::new(),
@@ -130,9 +130,9 @@ struct InternalFunctionCallTool {
 impl ToolHandler for InternalFunctionCallTool {
     fn descriptor(&self) -> ToolDescriptor {
         ToolDescriptor {
-            id: "public_mcp.internal_functions.call".to_string(),
+            id: "internal_functions.call".to_string(),
             title: "Call internal function".to_string(),
-            description: "Call a registered internal OnetCli function.".to_string(),
+            description: "Call one named internal OnetCli function with JSON arguments. Use internal_functions.list first to discover valid function names and schemas. Do not use this for SSH, SFTP, Redis, or saved connection operations; those have dedicated tool namespaces.".to_string(),
             input_schema: object_value_schema([
                 ("name", string_schema()),
                 ("arguments", json!({ "type": "object" })),

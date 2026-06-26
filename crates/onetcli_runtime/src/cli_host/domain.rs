@@ -8,15 +8,11 @@ pub fn run_connection_command(
     registry: ToolRegistry,
 ) -> anyhow::Result<String> {
     match command {
-        onetcli_cli::ConnectionCommand::List { format } => run_function_tool(
-            "onetcli.connections.list",
-            json!({}),
-            false,
-            registry,
-            format,
-        ),
+        onetcli_cli::ConnectionCommand::List { format } => {
+            run_function_tool("connections.list", json!({}), false, registry, format)
+        }
         onetcli_cli::ConnectionCommand::Show { connection, format } => call_tool(
-            "onetcli.connections.show",
+            "connections.show",
             Some(json!({ "connection": connection }).to_string()),
             false,
             registry,

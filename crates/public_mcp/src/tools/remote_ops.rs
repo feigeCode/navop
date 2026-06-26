@@ -1,8 +1,7 @@
 use crate::registry::PublicMcpRegistry;
 use crate::remote_ops::{
     RemoteCommandCancelRequest, RemoteCommandMode, RemoteCommandOutputRequest,
-    RemoteCommandPollRequest, RemoteCommandSignal, RemoteExecRequest, RemoteFileWriteRequest,
-    SessionDiagnosticsRequest,
+    RemoteCommandPollRequest, RemoteCommandSignal, RemoteExecRequest, SessionDiagnosticsRequest,
 };
 use rmcp::{
     ErrorData as McpError,
@@ -95,20 +94,6 @@ impl RemoteOpsRuntime {
             serde_json::to_value(result).map_err(internal_error)?,
         ))
     }
-
-    fn run_remote_file_write(
-        &self,
-        arguments: Option<&JsonObject>,
-    ) -> Result<CallToolResult, McpError> {
-        let (session_id, request) = parse_file_write_args(arguments)?;
-        let result = self
-            .registry
-            .remote_file_write(&session_id, request)
-            .map_err(internal_error)?;
-        Ok(CallToolResult::structured(
-            serde_json::to_value(result).map_err(internal_error)?,
-        ))
-    }
 }
 
 pub fn remote_ops_tool_registry(registry: PublicMcpRegistry) -> ToolRegistry {
@@ -161,15 +146,12 @@ impl RemoteOpsRuntimeTool {
     fn call_sync(&self, input: Value) -> Result<CallToolResult, McpError> {
         let arguments = value_to_arguments(input)?;
         match self.spec.id {
-            "public_mcp.list_sessions" => self.provider.list_sessions(),
-            "public_mcp.session_diagnostics" => self.provider.session_diagnostics(Some(arguments)),
-            "public_mcp.remote_command_poll" => self.provider.remote_command_poll(Some(arguments)),
-            "public_mcp.remote_command_output" => {
-                self.provider.remote_command_output(Some(arguments))
-            }
-            "public_mcp.remote_command_cancel" => self.provider.run_cancel(Some(&arguments)),
-            "public_mcp.remote_exec" => self.provider.run_remote_exec(Some(&arguments)),
-            "public_mcp.remote_file_write" => self.provider.run_remote_file_write(Some(&arguments)),
+            "ssh.list_sessions" => self.provider.list_sessions(),
+            "ssh.session_diagnostics" => self.provider.session_diagnostics(Some(arguments)),
+            "ssh.remote_command_poll" => self.provider.remote_command_poll(Some(arguments)),
+            "ssh.remote_command_output" => self.provider.remote_command_output(Some(arguments)),
+            "ssh.remote_command_cancel" => self.provider.run_cancel(Some(&arguments)),
+            "ssh.remote_exec" => self.provider.run_remote_exec(Some(&arguments)),
             _ => Err(McpError::invalid_params(
                 format!("unknown remote ops tool: {}", self.spec.id),
                 None,
@@ -216,15 +198,14 @@ fn remote_ops_specs() -> Vec<RemoteOpsToolSpec> {
         command_output_spec(),
         command_cancel_spec(),
         remote_exec_spec(),
-        remote_file_write_spec(),
     ]
 }
 
 fn list_sessions_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
-        id: "public_mcp.list_sessions",
+        id: "ssh.list_sessions",
         title: "List terminal sessions",
-        description: "List currently connected SSH terminal sessions exposed by OnetCli.",
+        description: "List active SSH terminal sessions that OnetCli can expose to MCP. Use this first to find the session_id for ssh.remote_exec, ssh.session_diagnostics, or background command tools. This does not list saved connection profiles; use connections.list for saved profiles.",
         schema: empty_schema_value,
         read_only: true,
         open_world: false,
@@ -233,9 +214,9 @@ fn list_sessions_spec() -> RemoteOpsToolSpec {
 
 fn session_diagnostics_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
-        id: "public_mcp.session_diagnostics",
+        id: "ssh.session_diagnostics",
         title: "Session diagnostics",
-        description: "Report structured diagnostics for a Public MCP terminal session, including connection state and recovery hints.",
+        description: "Inspect one active SSH terminal session by session_id and return connection state, host label, current working directory, terminal size, and recovery hints. Use when a session cannot run commands or needs troubleshooting.",
         schema: diagnostics_schema_value,
         read_only: true,
         open_world: false,
@@ -244,9 +225,9 @@ fn session_diagnostics_spec() -> RemoteOpsToolSpec {
 
 fn command_poll_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
-        id: "public_mcp.remote_command_poll",
+        id: "ssh.remote_command_poll",
         title: "Poll remote command",
-        description: "Poll the status of a background remote command, including running state, exit code and output byte counters.",
+        description: "Check the status of a background SSH command previously started by ssh.remote_exec with mode=\"background\". Returns running/exited/failed state, exit code when available, elapsed duration, and stdout/stderr byte counts.",
         schema: poll_schema_value,
         read_only: true,
         open_world: false,
@@ -255,9 +236,9 @@ fn command_poll_spec() -> RemoteOpsToolSpec {
 
 fn command_output_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
-        id: "public_mcp.remote_command_output",
+        id: "ssh.remote_command_output",
         title: "Read remote command output",
-        description: "Read stdout and stderr of a background remote command by byte offset.",
+        description: "Read buffered stdout and stderr from a background SSH command by command_id. Use stdout_offset and stderr_offset from the previous response to page through output without rereading old bytes.",
         schema: output_schema_value,
         read_only: true,
         open_world: false,
@@ -266,9 +247,9 @@ fn command_output_spec() -> RemoteOpsToolSpec {
 
 fn command_cancel_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
-        id: "public_mcp.remote_command_cancel",
+        id: "ssh.remote_command_cancel",
         title: "Cancel remote command",
-        description: "Request cancellation of a background remote command.",
+        description: "Request cancellation of a background SSH command by command_id. Use signal=\"sigint\" for graceful interrupt or signal=\"sigterm\" for termination. This only applies to commands started in background mode.",
         schema: cancel_schema_value,
         read_only: false,
         open_world: false,
@@ -277,21 +258,10 @@ fn command_cancel_spec() -> RemoteOpsToolSpec {
 
 fn remote_exec_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
-        id: "public_mcp.remote_exec",
+        id: "ssh.remote_exec",
         title: "Execute remote command",
-        description: "Run a non-interactive command on an exposed connected SSH session and return stdout, stderr, exit code, duration and timeout state.",
+        description: "Run a non-interactive shell command on an active SSH session by session_id. Use for remote command execution, diagnostics, package checks, and shell automation. It returns structured stdout, stderr, exit_code, duration_ms, and timeout state. For remote file read/write, use sftp.read or sftp.write instead of shell commands.",
         schema: exec_schema_value,
-        read_only: false,
-        open_world: true,
-    }
-}
-
-fn remote_file_write_spec() -> RemoteOpsToolSpec {
-    RemoteOpsToolSpec {
-        id: "public_mcp.remote_file_write",
-        title: "Write remote file",
-        description: "Write a file to a remote path through an exposed connected SSH session and return bytes written plus SHA-256.",
-        schema: file_write_schema_value,
         read_only: false,
         open_world: true,
     }
@@ -347,10 +317,6 @@ fn exec_schema_value() -> Value {
     schema_to_value(exec_schema())
 }
 
-fn file_write_schema_value() -> Value {
-    schema_to_value(file_write_schema())
-}
-
 fn exec_schema() -> Arc<JsonObject> {
     let mut props = JsonObject::new();
     props.insert("session_id".to_string(), string_schema());
@@ -376,27 +342,6 @@ fn exec_schema() -> Arc<JsonObject> {
         Value::Array(vec![
             Value::String("session_id".to_string()),
             Value::String("command".to_string()),
-        ]),
-    );
-    Arc::new(schema)
-}
-
-fn file_write_schema() -> Arc<JsonObject> {
-    let mut props = JsonObject::new();
-    props.insert("session_id".to_string(), string_schema());
-    props.insert("path".to_string(), string_schema());
-    props.insert("content".to_string(), string_schema());
-    props.insert("mode".to_string(), json!({ "type": ["integer", "null"] }));
-    props.insert("overwrite".to_string(), json!({ "type": "boolean" }));
-    let mut schema = JsonObject::new();
-    schema.insert("type".to_string(), Value::String("object".to_string()));
-    schema.insert("properties".to_string(), Value::Object(props));
-    schema.insert(
-        "required".to_string(),
-        Value::Array(vec![
-            Value::String("session_id".to_string()),
-            Value::String("path".to_string()),
-            Value::String("content".to_string()),
         ]),
     );
     Arc::new(schema)
@@ -498,27 +443,6 @@ fn parse_mode(value: &str) -> Result<RemoteCommandMode, McpError> {
     }
 }
 
-fn parse_file_write_args(
-    arguments: Option<&JsonObject>,
-) -> Result<(String, RemoteFileWriteRequest), McpError> {
-    let session_id = required_string(arguments, "session_id")?.to_string();
-    let path = required_string(arguments, "path")?.to_string();
-    let content = required_string(arguments, "content")?.to_string();
-    let mode = optional_u64(arguments, "mode").map(|value| value as u32);
-    let overwrite = optional_bool(arguments, "overwrite").unwrap_or(false);
-
-    Ok((
-        session_id,
-        RemoteFileWriteRequest {
-            session_id: String::new(),
-            path,
-            content,
-            mode,
-            overwrite,
-        },
-    ))
-}
-
 fn parse_diagnostics_args(
     arguments: Option<JsonObject>,
 ) -> Result<SessionDiagnosticsRequest, McpError> {
@@ -592,12 +516,6 @@ fn optional_u64(arguments: Option<&JsonObject>, field: &str) -> Option<u64> {
     arguments
         .and_then(|args| args.get(field))
         .and_then(Value::as_u64)
-}
-
-fn optional_bool(arguments: Option<&JsonObject>, field: &str) -> Option<bool> {
-    arguments
-        .and_then(|args| args.get(field))
-        .and_then(Value::as_bool)
 }
 
 fn optional_string_map(

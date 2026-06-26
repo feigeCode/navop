@@ -27,7 +27,7 @@ async fn redis_provider_lists_runtime_connections() {
 
     let result = registry
         .call_tool(
-            "public_mcp.redis.list_connections",
+            "redis.list_connections",
             None,
             PublicMcpToolContext {
                 permission_mode: PermissionMode::Deny,
