@@ -63,7 +63,7 @@ tempfile = "3"
 
 [features]
 default = ["wasm-components"]
-builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb"]
+builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "onetcli_runtime/builtin-duckdb"]
 compare = ["db/compare", "db_view/compare"]
 github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]

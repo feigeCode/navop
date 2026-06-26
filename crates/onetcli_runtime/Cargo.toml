@@ -6,11 +6,16 @@ edition.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+db = { workspace = true }
 futures = { workspace = true }
 one-core = { workspace = true }
 onetcli_cli = { workspace = true }
 serde_json = { workspace = true }
 tool_runtime = { workspace = true }
+
+[features]
+default = []
+builtin-duckdb = ["db/builtin-duckdb"]
 
 [dev-dependencies]
 tempfile = "3"

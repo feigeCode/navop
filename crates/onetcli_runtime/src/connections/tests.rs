@@ -1,9 +1,11 @@
 use super::connection_tool_registry;
+use db::ipc::{IpcDriverEntry, IpcDriverManifest, IpcDriverRegistry, IpcDriverTransport};
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
 use one_core::storage::traits::Repository;
 use one_core::storage::{ConnectionRepository, DatabaseType};
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tool_runtime::{ToolAdapter, ToolContext};
 
@@ -129,6 +131,22 @@ fn list_kinds_includes_all_creatable_connection_types() {
 }
 
 #[test]
+fn list_kinds_includes_ipc_database_types_from_registry() {
+    let registry = IpcDriverRegistry::from_drivers(vec![driver_manifest("demo", "Demo")]);
+
+    let output = super::schema::list_kinds_with_registry(&registry);
+    let database_types = output["kinds"][0]["database_types"]
+        .as_array()
+        .expect("database types should be an array")
+        .iter()
+        .filter_map(|value| value.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(database_types.contains(&"MySQL"));
+    assert!(database_types.contains(&"External:demo"));
+}
+
+#[test]
 fn get_schema_supports_all_creatable_connection_types() {
     let registry = connection_tool_registry(repo());
 
@@ -148,6 +166,205 @@ fn get_schema_supports_all_creatable_connection_types() {
                 .is_some_and(|fields| !fields.is_empty())
         );
     }
+}
+
+#[test]
+fn database_schema_uses_database_specific_connection_form() {
+    let registry = connection_tool_registry(repo());
+
+    let result = futures::executor::block_on(registry.call(
+        "onetcli.connections.get_schema",
+        json!({ "kind": "database", "database_type": "PostgreSQL" }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect("schema tool should run");
+
+    let fields = result.structured_content["fields"]
+        .as_array()
+        .expect("fields should be an array");
+    let field_names = fields
+        .iter()
+        .filter_map(|field| field["name"].as_str())
+        .collect::<Vec<_>>();
+
+    assert!(field_names.contains(&"connect_timeout"));
+    assert!(field_names.contains(&"ssl_mode"));
+    assert_eq!(json!(5432), field_by_name(fields, "port")["default"]);
+    assert_eq!(
+        json!(["disable", "prefer", "require"]),
+        field_by_name(fields, "ssl_mode")["enum"]
+    );
+}
+
+#[test]
+fn ipc_database_schema_uses_driver_connection_form() {
+    let mut driver = driver_manifest("demo", "Demo");
+    driver.ui.form = Some(
+        serde_json::from_value(json!({
+            "schema_version": 1,
+            "forms": [{
+                "kind": "Connection",
+                "title_i18n_key": "connection.title",
+                "submit_i18n_key": "save",
+                "tabs": [{
+                    "id": "general",
+                    "label_i18n_key": "general",
+                    "fields": [{
+                        "id": "workspace",
+                        "label_i18n_key": "workspace",
+                        "field_type": "Select",
+                        "required": false,
+                        "default_value": "main",
+                        "placeholder_i18n_key": null,
+                        "help_i18n_key": null,
+                        "options": [
+                            { "value": "main", "label_i18n_key": "Main" },
+                            { "value": "analytics", "label_i18n_key": "Analytics" }
+                        ],
+                        "options_source": null,
+                        "visible_when": [],
+                        "default_when": [],
+                        "disabled_when_editing": false,
+                        "rows": null,
+                        "min": null,
+                        "max": null
+                    }]
+                }]
+            }]
+        }))
+        .expect("driver form should parse"),
+    );
+    let registry = IpcDriverRegistry::from_drivers(vec![driver]);
+
+    let result = super::schema::schema_for_with_registry(
+        json!({ "kind": "database", "database_type": "External:demo" }),
+        &registry,
+    )
+    .expect("schema should build");
+    let fields = result["fields"]
+        .as_array()
+        .expect("fields should be an array");
+
+    assert_eq!("workspace", field_by_name(fields, "workspace")["name"]);
+    assert_eq!(json!("main"), field_by_name(fields, "workspace")["default"]);
+    assert_eq!(
+        json!(["main", "analytics"]),
+        field_by_name(fields, "workspace")["enum"]
+    );
+}
+
+#[cfg(not(feature = "builtin-duckdb"))]
+#[test]
+fn duckdb_database_schema_uses_ipc_driver_connection_form_when_builtin_disabled() {
+    let mut driver = driver_manifest("duckdb", "DuckDB IPC");
+    driver.ui.form = Some(
+        serde_json::from_value(json!({
+            "schema_version": 1,
+            "forms": [{
+                "kind": "Connection",
+                "title_i18n_key": "connection.title",
+                "submit_i18n_key": "save",
+                "tabs": [{
+                    "id": "general",
+                    "label_i18n_key": "general",
+                    "fields": [{
+                        "id": "path",
+                        "label_i18n_key": "path",
+                        "field_type": "FilePath",
+                        "required": true,
+                        "default_value": "/tmp/app.duckdb",
+                        "placeholder_i18n_key": null,
+                        "help_i18n_key": null,
+                        "options": [],
+                        "options_source": null,
+                        "visible_when": [],
+                        "default_when": [],
+                        "disabled_when_editing": false,
+                        "rows": null,
+                        "min": null,
+                        "max": null
+                    }]
+                }]
+            }]
+        }))
+        .expect("driver form should parse"),
+    );
+    let registry = IpcDriverRegistry::from_drivers(vec![driver]);
+
+    let result = super::schema::schema_for_with_registry(
+        json!({ "kind": "database", "database_type": "DuckDB" }),
+        &registry,
+    )
+    .expect("schema should build");
+    let fields = result["fields"]
+        .as_array()
+        .expect("fields should be an array");
+
+    assert_eq!(
+        json!("/tmp/app.duckdb"),
+        field_by_name(fields, "path")["default"]
+    );
+}
+
+#[test]
+fn ipc_database_schema_fills_empty_general_tab_from_default_form() {
+    let mut driver = driver_manifest("demo", "Demo Driver");
+    driver.ui.default_port = Some(7654);
+    driver.ui.form = Some(
+        serde_json::from_value(json!({
+            "schema_version": 1,
+            "forms": [{
+                "kind": "Connection",
+                "title_i18n_key": "connection.title",
+                "submit_i18n_key": "save",
+                "tabs": [{
+                    "id": "general",
+                    "label_i18n_key": "general",
+                    "fields": []
+                }]
+            }]
+        }))
+        .expect("driver form should parse"),
+    );
+    let registry = IpcDriverRegistry::from_drivers(vec![driver]);
+
+    let result = super::schema::schema_for_with_registry(
+        json!({ "kind": "database", "database_type": "External:demo" }),
+        &registry,
+    )
+    .expect("schema should build");
+    let fields = result["fields"]
+        .as_array()
+        .expect("fields should be an array");
+
+    assert_eq!(
+        json!("Demo Driver"),
+        field_by_name(fields, "name")["default"]
+    );
+    assert_eq!(json!(7654), field_by_name(fields, "port")["default"]);
+}
+
+#[test]
+fn ipc_database_schema_uses_default_form_when_driver_has_no_form() {
+    let mut driver = driver_manifest("demo", "Demo Driver");
+    driver.ui.default_port = Some(7654);
+    let registry = IpcDriverRegistry::from_drivers(vec![driver]);
+
+    let result = super::schema::schema_for_with_registry(
+        json!({ "kind": "database", "database_type": "External:demo" }),
+        &registry,
+    )
+    .expect("schema should build");
+    let fields = result["fields"]
+        .as_array()
+        .expect("fields should be an array");
+
+    assert_eq!(
+        json!("Demo Driver"),
+        field_by_name(fields, "name")["default"]
+    );
+    assert_eq!(json!(7654), field_by_name(fields, "port")["default"]);
+    assert_eq!(json!(true), field_by_name(fields, "password")["secret"]);
 }
 
 #[test]
@@ -285,6 +502,37 @@ fn creatable_kinds() -> Vec<&'static str> {
         "rdp",
         "vnc",
     ]
+}
+
+fn field_by_name<'a>(fields: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
+    fields
+        .iter()
+        .find(|field| field["name"] == name)
+        .expect("field should exist")
+}
+
+fn driver_manifest(id: &str, name: &str) -> IpcDriverManifest {
+    IpcDriverManifest {
+        id: id.to_string(),
+        name: name.to_string(),
+        category: None,
+        description: String::new(),
+        version: String::new(),
+        entry: IpcDriverEntry {
+            command: "./driver".to_string(),
+            commands: Default::default(),
+            args: Vec::new(),
+            working_dir: None,
+            env_from_config: Default::default(),
+        },
+        transport: IpcDriverTransport::local_socket(format!("{id}.sock")),
+        dialect: Default::default(),
+        capabilities: None,
+        connection: Default::default(),
+        methods: Vec::new(),
+        ui: Default::default(),
+        manifest_dir: PathBuf::from("."),
+    }
 }
 
 pub(super) fn repo() -> Arc<ConnectionRepository> {

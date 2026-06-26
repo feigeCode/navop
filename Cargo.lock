@@ -7785,6 +7785,7 @@ name = "onetcli_runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "db",
  "futures",
  "one-core",
  "onetcli_cli",
