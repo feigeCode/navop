@@ -78,7 +78,7 @@ pub(super) fn build_tool_registry(
     }
     if toolsets.redis {
         providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-            tool_runtime::ToolRegistry::new(vec![Arc::new(redis::redis_tool_provider(cx))]),
+            tool_runtime::ToolRegistry::new(redis::redis_tool_handlers(cx)),
         )));
     }
     if providers.is_empty() {
@@ -143,6 +143,11 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "redis.list_connections")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "redis.execute_command")
         );
     }
 

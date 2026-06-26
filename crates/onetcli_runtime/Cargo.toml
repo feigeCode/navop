@@ -11,6 +11,7 @@ db = { workspace = true }
 futures = { workspace = true }
 one-core = { workspace = true }
 onetcli_cli = { workspace = true }
+redis_client = { workspace = true }
 serde_json = { workspace = true }
 sftp = { workspace = true }
 ssh = { workspace = true }

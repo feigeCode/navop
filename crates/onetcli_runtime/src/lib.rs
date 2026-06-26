@@ -1,5 +1,6 @@
 pub mod cli_host;
 pub mod connections;
+pub mod redis_tools;
 pub mod sftp_tools;
 pub mod workspaces;
 
@@ -23,7 +24,8 @@ pub fn tool_registry_with_version(
 ) -> Result<tool_runtime::ToolRegistry, tool_runtime::ToolRegistryError> {
     tool_runtime::ToolRegistry::merge(vec![
         builtin_tool_registry_with_version(version),
-        connections::connection_tool_registry(repo),
+        connections::connection_tool_registry(repo.clone()),
+        redis_tools::redis_tool_registry(repo),
     ])
 }
 

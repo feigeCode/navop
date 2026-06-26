@@ -98,14 +98,16 @@ enum McpToolset {
     Terminal,
     Connections,
     Sftp,
+    Redis,
     Database,
 }
 
 impl McpToolset {
-    const VISIBLE: [Self; 4] = [
+    const VISIBLE: [Self; 5] = [
         Self::Terminal,
         Self::Connections,
         Self::Sftp,
+        Self::Redis,
         Self::Database,
     ];
 
@@ -115,6 +117,7 @@ impl McpToolset {
             Self::Terminal => "terminal",
             Self::Connections => "connections",
             Self::Sftp => "sftp",
+            Self::Redis => "redis",
             Self::Database => "database",
         }
     }
@@ -124,6 +127,7 @@ impl McpToolset {
             Self::Terminal => "Settings.General.Mcp.toolset_terminal",
             Self::Connections => "Settings.General.Mcp.toolset_connections",
             Self::Sftp => "Settings.General.Mcp.toolset_sftp",
+            Self::Redis => "Settings.General.Mcp.toolset_redis",
             Self::Database => "Settings.General.Mcp.toolset_database",
         }
     }
@@ -133,6 +137,7 @@ impl McpToolset {
             Self::Terminal => "Settings.General.Mcp.toolset_terminal_desc",
             Self::Connections => "Settings.General.Mcp.toolset_connections_desc",
             Self::Sftp => "Settings.General.Mcp.toolset_sftp_desc",
+            Self::Redis => "Settings.General.Mcp.toolset_redis_desc",
             Self::Database => "Settings.General.Mcp.toolset_database_desc",
         }
     }
@@ -142,6 +147,7 @@ impl McpToolset {
             Self::Terminal => settings.terminal,
             Self::Connections => settings.connections,
             Self::Sftp => settings.sftp,
+            Self::Redis => settings.redis,
             Self::Database => settings.database,
         }
     }
@@ -151,6 +157,7 @@ impl McpToolset {
             Self::Terminal => settings.terminal = enabled,
             Self::Connections => settings.connections = enabled,
             Self::Sftp => settings.sftp = enabled,
+            Self::Redis => settings.redis = enabled,
             Self::Database => settings.database = enabled,
         }
     }
@@ -218,7 +225,10 @@ mod tests {
     fn mcp_toolset_items_only_expose_production_ready_toolsets() {
         let ids = mcp_toolset_item_ids();
 
-        assert_eq!(vec!["terminal", "connections", "sftp", "database"], ids);
+        assert_eq!(
+            vec!["terminal", "connections", "sftp", "redis", "database"],
+            ids
+        );
     }
 
     #[test]

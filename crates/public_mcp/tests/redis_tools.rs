@@ -1,7 +1,8 @@
 use public_mcp::permissions::PermissionMode;
 use public_mcp::tools::{
-    PublicMcpToolContext, PublicMcpToolRegistry, RedisConnectionSnapshot,
-    RedisConnectionSnapshotProvider, RedisToolProvider, ToolRuntimeMcpProvider,
+    PublicMcpToolContext, PublicMcpToolRegistry, RedisCommandExecution,
+    RedisCommandExecutionProvider, RedisConnectionSnapshot, RedisConnectionSnapshotProvider,
+    RedisToolProvider, ToolRuntimeMcpProvider,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -9,8 +10,8 @@ use tool_runtime::ToolRegistry;
 
 #[tokio::test]
 async fn redis_provider_lists_runtime_connections() {
-    let runtime_registry = ToolRegistry::new(vec![Arc::new(RedisToolProvider::new(Arc::new(
-        FakeRedisSnapshots {
+    let runtime_registry =
+        ToolRegistry::new(RedisToolProvider::handlers(Arc::new(FakeRedisSnapshots {
             connections: vec![
                 RedisConnectionSnapshot {
                     connection_id: "redis-b".to_string(),
@@ -19,8 +20,7 @@ async fn redis_provider_lists_runtime_connections() {
                     connection_id: "redis-a".to_string(),
                 },
             ],
-        },
-    )))]);
+        })));
     let registry = PublicMcpToolRegistry::new(vec![Arc::new(ToolRuntimeMcpProvider::new(
         runtime_registry,
     ))]);
@@ -48,6 +48,74 @@ async fn redis_provider_lists_runtime_connections() {
     );
 }
 
+#[tokio::test]
+async fn redis_provider_executes_runtime_command() {
+    let runtime_registry =
+        ToolRegistry::new(RedisToolProvider::handlers(Arc::new(FakeRedisRuntime {
+            connections: vec![RedisConnectionSnapshot {
+                connection_id: "redis-a".to_string(),
+            }],
+            execution: RedisCommandExecution {
+                connection_id: "redis-a".to_string(),
+                db: Some(2),
+                command: "PING".to_string(),
+                result: json!({
+                    "type": "status",
+                    "value": "PONG"
+                }),
+                display: "OK: PONG".to_string(),
+            },
+        })));
+    let registry = PublicMcpToolRegistry::new(vec![Arc::new(ToolRuntimeMcpProvider::new(
+        runtime_registry,
+    ))]);
+
+    let result = registry
+        .call_tool(
+            "redis.execute_command",
+            Some(serde_json::Map::from_iter([
+                ("connection_id".to_string(), json!("redis-a")),
+                ("db".to_string(), json!(2)),
+                ("command".to_string(), json!("PING")),
+            ])),
+            PublicMcpToolContext {
+                permission_mode: PermissionMode::Allow,
+                approver: Default::default(),
+            },
+        )
+        .await
+        .expect("redis execute command tool should run");
+
+    assert_eq!(
+        Some(json!({
+            "connection_id": "redis-a",
+            "db": 2,
+            "command": "PING",
+            "result": {
+                "type": "status",
+                "value": "PONG"
+            },
+            "display": "OK: PONG"
+        })),
+        result.structured_content
+    );
+}
+
+#[test]
+fn redis_execute_command_is_registered_as_mutating() {
+    let registry = ToolRegistry::new(RedisToolProvider::empty());
+    let tool = registry
+        .get("redis.execute_command", tool_runtime::ToolAdapter::Mcp)
+        .expect("execute command tool should be registered");
+
+    assert_eq!(
+        json!(["connection_id", "command"]),
+        tool.input_schema["required"]
+    );
+    assert!(!tool.annotations.read_only);
+    assert!(tool.annotations.destructive);
+}
+
 #[derive(Clone)]
 struct FakeRedisSnapshots {
     connections: Vec<RedisConnectionSnapshot>,
@@ -56,5 +124,45 @@ struct FakeRedisSnapshots {
 impl RedisConnectionSnapshotProvider for FakeRedisSnapshots {
     fn list_connections(&self) -> Vec<RedisConnectionSnapshot> {
         self.connections.clone()
+    }
+}
+
+impl RedisCommandExecutionProvider for FakeRedisSnapshots {
+    fn execute_command(
+        &self,
+        connection_id: &str,
+        _db: Option<u8>,
+        _command: &str,
+    ) -> tool_runtime::ToolFuture {
+        let connection_id = connection_id.to_string();
+        Box::pin(async move {
+            Err(tool_runtime::ToolError::Failed {
+                message: format!("unknown Redis connection: {connection_id}"),
+            })
+        })
+    }
+}
+
+#[derive(Clone)]
+struct FakeRedisRuntime {
+    connections: Vec<RedisConnectionSnapshot>,
+    execution: RedisCommandExecution,
+}
+
+impl RedisConnectionSnapshotProvider for FakeRedisRuntime {
+    fn list_connections(&self) -> Vec<RedisConnectionSnapshot> {
+        self.connections.clone()
+    }
+}
+
+impl RedisCommandExecutionProvider for FakeRedisRuntime {
+    fn execute_command(
+        &self,
+        _connection_id: &str,
+        _db: Option<u8>,
+        _command: &str,
+    ) -> tool_runtime::ToolFuture {
+        let execution = self.execution.clone();
+        Box::pin(async move { Ok(tool_runtime::ToolResult::structured(execution.into_json())) })
     }
 }
