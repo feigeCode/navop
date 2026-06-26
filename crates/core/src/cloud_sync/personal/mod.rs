@@ -5,6 +5,7 @@ mod directory_store;
 mod directory_store_tests;
 mod file_format;
 mod git_store;
+mod local_source;
 mod models;
 mod planner;
 mod runtime;
@@ -15,6 +16,8 @@ mod worker;
 #[cfg(test)]
 mod git_store_tests;
 #[cfg(test)]
+mod local_source_tests;
+#[cfg(test)]
 mod runtime_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -24,6 +27,7 @@ mod worker_tests;
 pub use directory_store::*;
 pub use file_format::*;
 pub use git_store::*;
+pub use local_source::*;
 pub use models::*;
 pub use planner::*;
 pub use runtime::*;
