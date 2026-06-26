@@ -1,5 +1,6 @@
 //! Redis 核心类型定义
 
+use one_core::storage::RedisSshTunnelConfig;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -313,6 +314,9 @@ pub struct RedisConnectionConfig {
     /// 连接模式
     #[serde(default)]
     pub mode: RedisConnectionMode,
+    /// SSH 隧道配置
+    #[serde(default)]
+    pub ssh_tunnel: Option<RedisSshTunnelConfig>,
 }
 
 fn default_timeout() -> u64 {
@@ -332,6 +336,7 @@ impl Default for RedisConnectionConfig {
             use_tls: false,
             timeout: 10,
             mode: RedisConnectionMode::Standalone,
+            ssh_tunnel: None,
         }
     }
 }

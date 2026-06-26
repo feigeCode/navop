@@ -61,6 +61,7 @@ mod tests {
             connect_timeout: None,
             sentinel: None,
             cluster: None,
+            ssh_tunnel: None,
         };
         let mut connection = StoredConnection::new_redis(name.to_string(), params, workspace_id);
         connection.id = Some(id);

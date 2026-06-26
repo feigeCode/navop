@@ -6,13 +6,78 @@ use async_trait::async_trait;
 use redis_client::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis_client::{AsyncCommands, Client, RedisResult};
 use rust_i18n::t;
+use ssh::{LocalPortForwardTunnel, SshAuth, SshConnectConfig, start_local_port_forward};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio::time::timeout;
 
 const MAX_COLLECTION_ELEMENTS: i64 = 1000;
 const DEFAULT_CONNECTION_TIMEOUT_SECONDS: u64 = 10;
+const DEFAULT_SSH_TIMEOUT_SECONDS: u64 = 30;
+
+struct ResolvedRedisConnectionTarget {
+    host: String,
+    port: u16,
+    tunnel: Option<LocalPortForwardTunnel>,
+}
+
+fn normalize_direct_host(host: &str) -> String {
+    if host.eq_ignore_ascii_case("localhost") {
+        return "127.0.0.1".to_string();
+    }
+
+    host.to_string()
+}
+
+fn required_ssh_value(value: &str, key: &str) -> Result<String, RedisError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(RedisError::connection(format!(
+            "ssh tunnel enabled but `{key}` is missing"
+        )));
+    }
+
+    Ok(value.to_string())
+}
+
+fn build_ssh_auth(
+    tunnel_config: &one_core::storage::RedisSshTunnelConfig,
+) -> Result<SshAuth, RedisError> {
+    match tunnel_config.auth_type.trim().to_ascii_lowercase().as_str() {
+        "agent" => Ok(SshAuth::Agent),
+        "auto_publickey" | "auto_public_key" => Ok(SshAuth::AutoPublicKey),
+        "private_key" => {
+            let key_path = tunnel_config
+                .private_key_path
+                .as_deref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    RedisError::connection(
+                        "ssh tunnel enabled but `ssh_private_key_path` is missing",
+                    )
+                })?;
+            Ok(SshAuth::PrivateKey {
+                key_path: key_path.to_string(),
+                passphrase: tunnel_config.private_key_passphrase.clone(),
+                certificate_path: None,
+            })
+        }
+        _ => {
+            let password = tunnel_config
+                .password
+                .as_deref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    RedisError::connection("ssh tunnel enabled but `ssh_password` is missing")
+                })?;
+            Ok(SshAuth::Password(password.to_string()))
+        }
+    }
+}
 
 /// Redis 连接 trait
 #[async_trait]
@@ -276,6 +341,8 @@ pub struct RedisConnectionImpl {
     config: RedisConnectionConfig,
     client: Option<Client>,
     db_connections: Arc<RwLock<HashMap<u8, ConnectionManager>>>,
+    tunnel: Option<LocalPortForwardTunnel>,
+    resolved_endpoint: Option<(String, u16)>,
 }
 
 impl RedisConnectionImpl {
@@ -284,6 +351,15 @@ impl RedisConnectionImpl {
             config,
             client: None,
             db_connections: Arc::new(RwLock::new(HashMap::new())),
+            tunnel: None,
+            resolved_endpoint: None,
+        }
+    }
+
+    fn current_endpoint(&self) -> (&str, u16) {
+        match self.resolved_endpoint.as_ref() {
+            Some((host, port)) => (host.as_str(), *port),
+            None => (self.config.host.as_str(), self.config.port),
         }
     }
 
@@ -305,7 +381,8 @@ impl RedisConnectionImpl {
             return Ok(conn.clone());
         }
 
-        let (_, conn) = Self::open_connection_for_db(&self.config, db).await?;
+        let (host, port) = self.current_endpoint();
+        let (_, conn) = Self::open_connection_for_endpoint(&self.config, db, host, port).await?;
         guard.insert(db, conn.clone());
         Ok(conn)
     }
@@ -315,24 +392,33 @@ impl RedisConnectionImpl {
             return Err(RedisError::NotConnected);
         }
 
-        let (_, conn) = Self::open_connection_for_db(&self.config, db).await?;
+        let (host, port) = self.current_endpoint();
+        let (_, conn) = Self::open_connection_for_endpoint(&self.config, db, host, port).await?;
         self.db_connections.write().await.insert(db, conn.clone());
         Ok(conn)
     }
 
-    async fn open_connection_for_db(
+    async fn open_connection_for_endpoint(
         config: &RedisConnectionConfig,
         db: u8,
+        host: &str,
+        port: u16,
     ) -> Result<(Client, ConnectionManager), RedisError> {
-        let db_config = Self::connection_config_for_db(config, db)?;
-        let client = Client::open(db_config.to_url().as_str()).map_err(|e| {
+        let db_config = Self::connection_config_for_endpoint(config, db, host, port)?;
+        Self::open_connection_for_config(&db_config).await
+    }
+
+    async fn open_connection_for_config(
+        config: &RedisConnectionConfig,
+    ) -> Result<(Client, ConnectionManager), RedisError> {
+        let client = Client::open(config.to_url().as_str()).map_err(|e| {
             RedisError::connection_with_source(
                 t!("RedisConnection.create_client_failed").to_string(),
                 e,
             )
         })?;
 
-        let manager_config = Self::connection_manager_config(&db_config);
+        let manager_config = Self::connection_manager_config(config);
         let conn = ConnectionManager::new_with_config(client.clone(), manager_config)
             .await
             .map_err(|e| {
@@ -363,9 +449,19 @@ impl RedisConnectionImpl {
             .set_max_delay(1_000)
     }
 
+    #[cfg(test)]
     fn connection_config_for_db(
         config: &RedisConnectionConfig,
         db: u8,
+    ) -> Result<RedisConnectionConfig, RedisError> {
+        Self::connection_config_for_endpoint(config, db, &config.host, config.port)
+    }
+
+    fn connection_config_for_endpoint(
+        config: &RedisConnectionConfig,
+        db: u8,
+        host: &str,
+        port: u16,
     ) -> Result<RedisConnectionConfig, RedisError> {
         if config.mode == RedisConnectionMode::Cluster && db != 0 {
             return Err(RedisError::NotSupported(
@@ -375,7 +471,73 @@ impl RedisConnectionImpl {
 
         let mut db_config = config.clone();
         db_config.db_index = db;
+        db_config.host = host.to_string();
+        db_config.port = port;
         Ok(db_config)
+    }
+
+    async fn resolve_connection_target(
+        config: &RedisConnectionConfig,
+    ) -> Result<ResolvedRedisConnectionTarget, RedisError> {
+        let Some(tunnel_config) = config.ssh_tunnel.as_ref().filter(|tunnel| tunnel.enabled) else {
+            return Ok(ResolvedRedisConnectionTarget {
+                host: normalize_direct_host(&config.host),
+                port: config.port,
+                tunnel: None,
+            });
+        };
+
+        let ssh_host = required_ssh_value(&tunnel_config.host, "ssh_host")?;
+        let ssh_username = required_ssh_value(&tunnel_config.username, "ssh_username")?;
+        let auth = build_ssh_auth(tunnel_config)?;
+        let target_host = tunnel_config
+            .target_host
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| config.host.clone());
+        let target_port = tunnel_config.target_port.unwrap_or(config.port);
+        let timeout_secs = tunnel_config.timeout.unwrap_or(DEFAULT_SSH_TIMEOUT_SECONDS);
+
+        let ssh_config = SshConnectConfig {
+            host: ssh_host,
+            port: tunnel_config.port,
+            username: ssh_username,
+            auth,
+            timeout: Some(Duration::from_secs(timeout_secs)),
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: None,
+        };
+
+        let tunnel_result = timeout(
+            Duration::from_secs(timeout_secs),
+            start_local_port_forward(ssh_config, target_host, target_port),
+        )
+        .await;
+
+        let tunnel = match tunnel_result {
+            Ok(Ok(tunnel)) => tunnel,
+            Ok(Err(error)) => {
+                return Err(RedisError::connection(format!(
+                    "failed to establish ssh tunnel: {error}"
+                )));
+            }
+            Err(_) => {
+                return Err(RedisError::connection(format!(
+                    "ssh tunnel connection timed out after {timeout_secs}s"
+                )));
+            }
+        };
+
+        let local_addr = tunnel.local_addr();
+        Ok(ResolvedRedisConnectionTarget {
+            host: local_addr.ip().to_string(),
+            port: local_addr.port(),
+            tunnel: Some(tunnel),
+        })
     }
 
     fn parse_info(info: &str) -> HashMap<String, String> {
@@ -748,9 +910,17 @@ impl RedisConnection for RedisConnectionImpl {
     }
 
     async fn connect(&mut self) -> Result<(), RedisError> {
-        let (client, conn) =
-            Self::open_connection_for_db(&self.config, self.config.db_index).await?;
+        let target = Self::resolve_connection_target(&self.config).await?;
+        let (client, conn) = Self::open_connection_for_endpoint(
+            &self.config,
+            self.config.db_index,
+            &target.host,
+            target.port,
+        )
+        .await?;
         self.client = Some(client);
+        self.resolved_endpoint = Some((target.host, target.port));
+        self.tunnel = target.tunnel;
         let mut connections = self.db_connections.write().await;
         connections.clear();
         connections.insert(self.config.db_index, conn);
@@ -760,6 +930,8 @@ impl RedisConnection for RedisConnectionImpl {
     async fn disconnect(&mut self) -> Result<(), RedisError> {
         self.db_connections.write().await.clear();
         self.client = None;
+        self.resolved_endpoint = None;
+        self.tunnel = None;
         Ok(())
     }
 
@@ -1534,7 +1706,10 @@ impl RedisConnection for RedisConnectionImpl {
         if self.client.is_none() {
             return Err(RedisError::NotConnected);
         }
-        redis_pubsub::start_pubsub_listener(self.config.clone())
+        let (host, port) = self.current_endpoint();
+        let config =
+            Self::connection_config_for_endpoint(&self.config, self.config.db_index, host, port)?;
+        redis_pubsub::start_pubsub_listener(config)
             .await
             .map_err(|e| RedisError::command(e.to_string()))
     }
@@ -1561,6 +1736,7 @@ pub(crate) mod tests {
             use_tls: false,
             timeout: 10,
             mode,
+            ssh_tunnel: None,
         }
     }
 
@@ -1572,6 +1748,20 @@ pub(crate) mod tests {
 
         assert_eq!(7, db_config.db_index);
         assert_eq!("redis://127.0.0.1:6379/7", db_config.to_url());
+    }
+
+    #[test]
+    fn connection_config_for_endpoint_preserves_db_and_uses_resolved_tunnel_target() {
+        let base = config(RedisConnectionMode::Standalone, 0);
+
+        let db_config =
+            RedisConnectionImpl::connection_config_for_endpoint(&base, 7, "127.0.0.1", 49152)
+                .unwrap();
+
+        assert_eq!(7, db_config.db_index);
+        assert_eq!("127.0.0.1", db_config.host);
+        assert_eq!(49152, db_config.port);
+        assert_eq!("redis://127.0.0.1:49152/7", db_config.to_url());
     }
 
     #[test]

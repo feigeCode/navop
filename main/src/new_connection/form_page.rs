@@ -242,11 +242,18 @@ fn build_redis_form(
                 .find(|c| c.id == Some(id) && c.connection_type == ConnectionType::Redis)
                 .cloned()
         });
+        let ssh_connections = home
+            .connections
+            .iter()
+            .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
+            .cloned()
+            .collect();
         home.editing_connection_id = None;
         Some(RedisFormWindowConfig {
             editing_connection,
             workspaces: home.workspaces.clone(),
             teams: get_cached_team_options(cx),
+            ssh_connections,
         })
     }) else {
         return NewConnectionFormResult::Blocked;

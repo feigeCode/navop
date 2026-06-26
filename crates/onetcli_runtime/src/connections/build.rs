@@ -97,6 +97,7 @@ fn build_redis(input: &Value) -> Result<StoredConnection, ToolError> {
         connect_timeout: optional_u64(values, "connect_timeout"),
         sentinel: None,
         cluster: None,
+        ssh_tunnel: None,
     };
     Ok(with_common_fields(
         StoredConnection::new_redis(

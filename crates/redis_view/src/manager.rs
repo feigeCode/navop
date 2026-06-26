@@ -129,6 +129,7 @@ impl RedisManager {
             use_tls: params.use_tls,
             timeout: params.connect_timeout.unwrap_or(10),
             mode,
+            ssh_tunnel: params.ssh_tunnel,
         })
     }
 }

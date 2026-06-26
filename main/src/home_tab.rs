@@ -1595,6 +1595,12 @@ impl HomePage {
             editing_connection: editing_conn,
             workspaces: self.workspaces.clone(),
             teams: get_cached_team_options(cx),
+            ssh_connections: self
+                .connections
+                .iter()
+                .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
+                .cloned()
+                .collect(),
         };
 
         self.editing_connection_id = None;
