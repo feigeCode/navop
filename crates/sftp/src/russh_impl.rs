@@ -1,5 +1,5 @@
 use crate::{
-    FileEntry, ProgressCallback, SftpClient, TransferCancelled, TransferProgress,
+    FileEntry, PathMetadata, ProgressCallback, SftpClient, TransferCancelled, TransferProgress,
     validate_read_size,
 };
 use anyhow::{Result, anyhow};
@@ -764,6 +764,28 @@ impl SftpClient for RusshSftpClient {
         });
 
         Ok(entries)
+    }
+
+    async fn stat(&mut self, path: &str) -> Result<Option<PathMetadata>> {
+        let metadata = match self.sftp.metadata(path).await {
+            Ok(metadata) => metadata,
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
+                return Ok(None);
+            }
+            Err(error) => return Err(anyhow!("Failed to get remote metadata {}: {}", path, error)),
+        };
+
+        let modified = metadata
+            .mtime
+            .and_then(|mtime| UNIX_EPOCH.checked_add(Duration::from_secs(mtime as u64)))
+            .unwrap_or_else(SystemTime::now);
+
+        Ok(Some(PathMetadata {
+            size: metadata.size.unwrap_or(0),
+            modified,
+            is_dir: metadata.is_dir(),
+            permissions: metadata.permissions.unwrap_or(0),
+        }))
     }
 
     async fn download_with_progress(

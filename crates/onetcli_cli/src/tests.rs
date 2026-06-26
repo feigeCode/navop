@@ -190,6 +190,63 @@ fn parses_sftp_read_command() {
 }
 
 #[test]
+fn parses_sftp_transfer_commands() {
+    let stat = parse_from(["onetcli", "sftp", "stat", "prod-web", "/opt/app"]).unwrap();
+    assert_eq!(
+        Some(OnetCliCommand::Sftp(SftpCommand::Stat {
+            connection: "prod-web".to_string(),
+            path: "/opt/app".to_string(),
+            format: OutputFormat::Json,
+        })),
+        stat
+    );
+
+    let upload = parse_from([
+        "onetcli",
+        "sftp",
+        "upload",
+        "prod-web",
+        "./dist",
+        "/opt/app",
+        "--on-exists",
+        "overwrite",
+    ])
+    .unwrap();
+    assert_eq!(
+        Some(OnetCliCommand::Sftp(SftpCommand::Upload {
+            connection: "prod-web".to_string(),
+            local_path: "./dist".to_string(),
+            remote_path: "/opt/app".to_string(),
+            on_exists: "overwrite".to_string(),
+            format: OutputFormat::Json,
+        })),
+        upload
+    );
+
+    let download = parse_from([
+        "onetcli",
+        "sftp",
+        "download",
+        "prod-web",
+        "/var/log/app.log",
+        "./app.log",
+        "--on-exists",
+        "skip",
+    ])
+    .unwrap();
+    assert_eq!(
+        Some(OnetCliCommand::Sftp(SftpCommand::Download {
+            connection: "prod-web".to_string(),
+            remote_path: "/var/log/app.log".to_string(),
+            local_path: "./app.log".to_string(),
+            on_exists: "skip".to_string(),
+            format: OutputFormat::Json,
+        })),
+        download
+    );
+}
+
+#[test]
 fn keeps_positional_tool_call_input_for_compatibility() {
     let parsed = parse_from([
         "onetcli",

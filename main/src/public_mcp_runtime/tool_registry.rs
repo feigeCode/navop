@@ -196,6 +196,9 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "sftp.list"));
         assert!(tools.iter().any(|tool| tool.name == "sftp.read"));
         assert!(tools.iter().any(|tool| tool.name == "sftp.write"));
+        assert!(tools.iter().any(|tool| tool.name == "sftp.stat"));
+        assert!(tools.iter().any(|tool| tool.name == "sftp.upload"));
+        assert!(tools.iter().any(|tool| tool.name == "sftp.download"));
     }
 
     #[gpui::test]

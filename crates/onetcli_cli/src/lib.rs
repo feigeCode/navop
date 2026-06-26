@@ -196,6 +196,46 @@ pub enum SftpCommand {
         #[arg(long, default_value = "json")]
         format: OutputFormat,
     },
+    /// Check whether a remote path exists.
+    Stat {
+        /// Saved connection id or exact name.
+        connection: String,
+        /// Remote path.
+        path: String,
+        /// Output format.
+        #[arg(long, default_value = "json")]
+        format: OutputFormat,
+    },
+    /// Upload a local file or directory.
+    Upload {
+        /// Saved connection id or exact name.
+        connection: String,
+        /// Local file or directory path.
+        local_path: String,
+        /// Remote destination path.
+        remote_path: String,
+        /// Existing target policy: fail, overwrite, or skip.
+        #[arg(long, default_value = "fail")]
+        on_exists: String,
+        /// Output format.
+        #[arg(long, default_value = "json")]
+        format: OutputFormat,
+    },
+    /// Download a remote file or directory.
+    Download {
+        /// Saved connection id or exact name.
+        connection: String,
+        /// Remote file or directory path.
+        remote_path: String,
+        /// Local destination path.
+        local_path: String,
+        /// Existing target policy: fail, overwrite, or skip.
+        #[arg(long, default_value = "fail")]
+        on_exists: String,
+        /// Output format.
+        #[arg(long, default_value = "json")]
+        format: OutputFormat,
+    },
 }
 
 #[derive(Debug, Parser)]

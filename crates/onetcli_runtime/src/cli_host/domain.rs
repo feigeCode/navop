@@ -143,6 +143,53 @@ pub fn run_sftp_command(
             registry,
             format,
         ),
+        onetcli_cli::SftpCommand::Stat {
+            connection,
+            path,
+            format,
+        } => run_function_tool(
+            "sftp.stat",
+            json!({ "connection": connection, "path": path }),
+            false,
+            registry,
+            format,
+        ),
+        onetcli_cli::SftpCommand::Upload {
+            connection,
+            local_path,
+            remote_path,
+            on_exists,
+            format,
+        } => run_function_tool(
+            "sftp.upload",
+            json!({
+                "connection": connection,
+                "local_path": local_path,
+                "remote_path": remote_path,
+                "on_exists": on_exists
+            }),
+            true,
+            registry,
+            format,
+        ),
+        onetcli_cli::SftpCommand::Download {
+            connection,
+            remote_path,
+            local_path,
+            on_exists,
+            format,
+        } => run_function_tool(
+            "sftp.download",
+            json!({
+                "connection": connection,
+                "remote_path": remote_path,
+                "local_path": local_path,
+                "on_exists": on_exists
+            }),
+            true,
+            registry,
+            format,
+        ),
     }
 }
 
@@ -215,6 +262,27 @@ mod tests {
         assert_eq!(json!(65536), result["input"]["max_bytes"]);
     }
 
+    #[test]
+    fn sftp_transfer_aliases_call_function_tools() {
+        let output = run_sftp_command(
+            onetcli_cli::SftpCommand::Upload {
+                connection: "prod-web".to_string(),
+                local_path: "./dist".to_string(),
+                remote_path: "/opt/app".to_string(),
+                on_exists: "overwrite".to_string(),
+                format: onetcli_cli::OutputFormat::Json,
+            },
+            domain_alias_registry(),
+        )
+        .unwrap();
+        let result: Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!("sftp.upload", result["tool"]);
+        assert_eq!("./dist", result["input"]["local_path"]);
+        assert_eq!("/opt/app", result["input"]["remote_path"]);
+        assert_eq!("overwrite", result["input"]["on_exists"]);
+    }
+
     fn domain_alias_registry() -> ToolRegistry {
         use std::sync::Arc;
 
@@ -253,6 +321,7 @@ mod tests {
             Arc::new(DomainTool { id: "db.query" }),
             Arc::new(DomainTool { id: "ssh.exec" }),
             Arc::new(DomainTool { id: "sftp.read" }),
+            Arc::new(DomainTool { id: "sftp.upload" }),
         ])
     }
 }

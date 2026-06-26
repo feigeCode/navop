@@ -22,6 +22,14 @@ pub struct FileEntry {
 }
 
 #[derive(Debug, Clone)]
+pub struct PathMetadata {
+    pub size: u64,
+    pub modified: SystemTime,
+    pub is_dir: bool,
+    pub permissions: u32,
+}
+
+#[derive(Debug, Clone)]
 pub struct TransferItem {
     pub local_path: String,
     pub remote_path: String,
@@ -70,6 +78,8 @@ pub trait SftpClient: Send + Sync {
         Self: Sized;
 
     async fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>>;
+
+    async fn stat(&mut self, path: &str) -> Result<Option<PathMetadata>>;
 
     async fn download_with_progress(
         &mut self,

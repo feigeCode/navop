@@ -10,7 +10,9 @@ use one_core::storage::{
 use serde_json::{Value, json};
 use sftp::{RusshSftpClient, SftpClient};
 use ssh::{JumpServerConnectConfig, ProxyConnectConfig, ProxyType, SshAuth, SshConnectConfig};
+use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, UNIX_EPOCH};
 use tool_runtime::{
     ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode,
@@ -24,6 +26,16 @@ enum SftpTool {
     List,
     Read,
     Write,
+    Stat,
+    Upload,
+    Download,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OverwritePolicy {
+    Fail,
+    Overwrite,
+    Skip,
 }
 
 #[derive(Clone)]
@@ -36,7 +48,10 @@ pub fn sftp_tool_registry(repo: Arc<ConnectionRepository>) -> ToolRegistry {
     ToolRegistry::new(vec![
         Arc::new(SftpToolHandler::new(repo.clone(), SftpTool::List)),
         Arc::new(SftpToolHandler::new(repo.clone(), SftpTool::Read)),
-        Arc::new(SftpToolHandler::new(repo, SftpTool::Write)),
+        Arc::new(SftpToolHandler::new(repo.clone(), SftpTool::Write)),
+        Arc::new(SftpToolHandler::new(repo.clone(), SftpTool::Stat)),
+        Arc::new(SftpToolHandler::new(repo.clone(), SftpTool::Upload)),
+        Arc::new(SftpToolHandler::new(repo, SftpTool::Download)),
     ])
 }
 
@@ -73,14 +88,56 @@ impl SftpToolHandler {
             }
             SftpTool::Write => {
                 let content = required_base64(&input, "content_base64")?;
+                let remote_stat = client.stat(&path).await.map_err(tool_error)?;
+                if prepare_remote_target(
+                    &mut client,
+                    &path,
+                    parse_overwrite_policy(&input)?,
+                    remote_stat,
+                )
+                .await?
+                {
+                    return Ok(ToolResult::structured(json!({
+                        "path": path,
+                        "bytes_written": 0,
+                        "skipped": true
+                    })));
+                }
                 client
                     .write_file(&path, &content)
                     .await
                     .map_err(tool_error)?;
                 Ok(ToolResult::structured(json!({
                     "path": path,
-                    "bytes_written": content.len()
+                    "bytes_written": content.len(),
+                    "skipped": false
                 })))
+            }
+            SftpTool::Stat => {
+                let stat = client.stat(&path).await.map_err(tool_error)?;
+                Ok(ToolResult::structured(stat_json(path, stat)))
+            }
+            SftpTool::Upload => {
+                let local_path = required_str(&input, "local_path")?;
+                let remote_path = required_str(&input, "remote_path")?;
+                upload_path(
+                    &mut client,
+                    local_path,
+                    remote_path,
+                    parse_overwrite_policy(&input)?,
+                )
+                .await
+            }
+            SftpTool::Download => {
+                let remote_path = required_str(&input, "remote_path")?;
+                let local_path = required_str(&input, "local_path")?;
+                download_path(
+                    &mut client,
+                    remote_path,
+                    local_path,
+                    parse_overwrite_policy(&input)?,
+                )
+                .await
             }
         }
     }
@@ -130,7 +187,22 @@ impl ToolHandler for SftpToolHandler {
             SftpTool::Write => (
                 "sftp.write",
                 "Write SFTP file",
-                "Write bytes to a remote file through a saved SSH/SFTP connection using content_base64. Use this for remote file creation or replacement instead of ssh.remote_exec shell redirection. The connection argument accepts a saved connection id or exact saved connection name.",
+                "Write bytes to a remote file through a saved SSH/SFTP connection using content_base64. Use this for remote file creation or replacement instead of ssh.remote_exec shell redirection. The connection argument accepts a saved connection id or exact saved connection name. on_exists defaults to fail; pass overwrite or skip explicitly.",
+            ),
+            SftpTool::Stat => (
+                "sftp.stat",
+                "Check SFTP path",
+                "Check whether a remote SFTP path exists and return its type, size, modified time, and permissions when available.",
+            ),
+            SftpTool::Upload => (
+                "sftp.upload",
+                "Upload local path over SFTP",
+                "Upload a local file or folder to a remote SFTP path. Checks the target first; on_exists defaults to fail so callers must explicitly choose overwrite or skip before replacing an existing target.",
+            ),
+            SftpTool::Download => (
+                "sftp.download",
+                "Download remote path over SFTP",
+                "Download a remote SFTP file or folder to a local path. Checks the local target first; on_exists defaults to fail so callers must explicitly choose overwrite or skip before replacing an existing target.",
             ),
         };
         ToolDescriptor {
@@ -226,6 +298,184 @@ fn file_entry_json(entry: sftp::FileEntry) -> Value {
     })
 }
 
+fn path_metadata_json(metadata: sftp::PathMetadata) -> Value {
+    let modified_unix_secs = metadata
+        .modified
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    json!({
+        "size": metadata.size,
+        "modified_unix_secs": modified_unix_secs,
+        "is_dir": metadata.is_dir,
+        "permissions": metadata.permissions
+    })
+}
+
+fn stat_json(path: String, metadata: Option<sftp::PathMetadata>) -> Value {
+    match metadata {
+        Some(metadata) => json!({
+            "path": path,
+            "exists": true,
+            "metadata": path_metadata_json(metadata)
+        }),
+        None => json!({
+            "path": path,
+            "exists": false
+        }),
+    }
+}
+
+async fn upload_path(
+    client: &mut RusshSftpClient,
+    local_path: &str,
+    remote_path: &str,
+    policy: OverwritePolicy,
+) -> Result<ToolResult, ToolError> {
+    let metadata = std::fs::metadata(local_path).map_err(tool_error)?;
+    let remote_stat = client.stat(remote_path).await.map_err(tool_error)?;
+    if prepare_remote_target(client, remote_path, policy, remote_stat).await? {
+        return Ok(skipped_result("upload", local_path, remote_path));
+    }
+
+    let progress = Box::new(|_| {});
+    let cancelled = Arc::new(AtomicBool::new(false));
+    if metadata.is_dir() {
+        client
+            .upload_dir_with_progress(local_path, remote_path, cancelled, progress)
+            .await
+            .map_err(tool_error)?;
+    } else {
+        client
+            .upload_with_progress(local_path, remote_path, cancelled, progress)
+            .await
+            .map_err(tool_error)?;
+    }
+
+    Ok(ToolResult::structured(json!({
+        "operation": "upload",
+        "local_path": local_path,
+        "remote_path": remote_path,
+        "kind": path_kind(metadata.is_dir()),
+        "bytes": metadata.len(),
+        "skipped": false
+    })))
+}
+
+async fn download_path(
+    client: &mut RusshSftpClient,
+    remote_path: &str,
+    local_path: &str,
+    policy: OverwritePolicy,
+) -> Result<ToolResult, ToolError> {
+    let remote_stat = client
+        .stat(remote_path)
+        .await
+        .map_err(tool_error)?
+        .ok_or_else(|| remote_not_found(remote_path))?;
+    if prepare_local_target(local_path, policy)? {
+        return Ok(skipped_result("download", local_path, remote_path));
+    }
+
+    ensure_local_parent(local_path)?;
+    let progress = Box::new(|_| {});
+    let cancelled = Arc::new(AtomicBool::new(false));
+    if remote_stat.is_dir {
+        client
+            .download_dir_with_progress(remote_path, local_path, cancelled, progress)
+            .await
+            .map_err(tool_error)?;
+    } else {
+        client
+            .download_with_progress(remote_path, local_path, cancelled, progress)
+            .await
+            .map_err(tool_error)?;
+    }
+
+    Ok(ToolResult::structured(json!({
+        "operation": "download",
+        "remote_path": remote_path,
+        "local_path": local_path,
+        "kind": path_kind(remote_stat.is_dir),
+        "bytes": remote_stat.size,
+        "skipped": false
+    })))
+}
+
+async fn prepare_remote_target(
+    client: &mut RusshSftpClient,
+    path: &str,
+    policy: OverwritePolicy,
+    stat: Option<sftp::PathMetadata>,
+) -> Result<bool, ToolError> {
+    let Some(stat) = stat else {
+        return Ok(false);
+    };
+    match policy {
+        OverwritePolicy::Fail => Err(target_exists(path)),
+        OverwritePolicy::Skip => Ok(true),
+        OverwritePolicy::Overwrite => {
+            let progress = Box::new(|_| {});
+            let cancelled = Arc::new(AtomicBool::new(false));
+            if stat.is_dir {
+                client
+                    .delete_recursive(path, cancelled, progress)
+                    .await
+                    .map_err(tool_error)?;
+            } else {
+                client.delete(path, false).await.map_err(tool_error)?;
+            }
+            Ok(false)
+        }
+    }
+}
+
+pub(crate) fn prepare_local_target(path: &str, policy: OverwritePolicy) -> Result<bool, ToolError> {
+    let target = Path::new(path);
+    if !target.exists() {
+        return Ok(false);
+    }
+    match policy {
+        OverwritePolicy::Fail => Err(target_exists(path)),
+        OverwritePolicy::Skip => Ok(true),
+        OverwritePolicy::Overwrite => {
+            remove_local_target(target)?;
+            Ok(false)
+        }
+    }
+}
+
+fn remove_local_target(path: &Path) -> Result<(), ToolError> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path).map_err(tool_error)
+    } else {
+        std::fs::remove_file(path).map_err(tool_error)
+    }
+}
+
+fn skipped_result(operation: &str, local_path: &str, remote_path: &str) -> ToolResult {
+    ToolResult::structured(json!({
+        "operation": operation,
+        "local_path": local_path,
+        "remote_path": remote_path,
+        "skipped": true
+    }))
+}
+
+fn ensure_local_parent(path: &str) -> Result<(), ToolError> {
+    if let Some(parent) = Path::new(path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(tool_error)?;
+    }
+    Ok(())
+}
+
+fn path_kind(is_dir: bool) -> &'static str {
+    if is_dir { "directory" } else { "file" }
+}
+
 fn required_str<'a>(input: &'a Value, field: &'static str) -> Result<&'a str, ToolError> {
     optional_str(input, field).ok_or_else(|| ToolError::Failed {
         message: format!("missing string argument: {field}"),
@@ -247,6 +497,17 @@ fn optional_usize(input: &Value, field: &'static str) -> Option<usize> {
         .and_then(|value| usize::try_from(value).ok())
 }
 
+pub(crate) fn parse_overwrite_policy(input: &Value) -> Result<OverwritePolicy, ToolError> {
+    match optional_str(input, "on_exists").unwrap_or("fail") {
+        "fail" => Ok(OverwritePolicy::Fail),
+        "overwrite" => Ok(OverwritePolicy::Overwrite),
+        "skip" => Ok(OverwritePolicy::Skip),
+        value => Err(ToolError::Failed {
+            message: format!("invalid on_exists: {value}; expected fail, overwrite, or skip"),
+        }),
+    }
+}
+
 fn required_base64(input: &Value, field: &'static str) -> Result<Vec<u8>, ToolError> {
     let encoded = required_str(input, field)?;
     general_purpose::STANDARD
@@ -256,8 +517,8 @@ fn required_base64(input: &Value, field: &'static str) -> Result<Vec<u8>, ToolEr
 
 fn annotations(title: &str, tool: SftpTool) -> ToolAnnotations {
     match tool {
-        SftpTool::List | SftpTool::Read => ToolAnnotations::read_only(title),
-        SftpTool::Write => ToolAnnotations::mutating(title),
+        SftpTool::List | SftpTool::Read | SftpTool::Stat => ToolAnnotations::read_only(title),
+        SftpTool::Write | SftpTool::Upload | SftpTool::Download => ToolAnnotations::mutating(title),
     }
 }
 
@@ -291,9 +552,38 @@ fn input_schema(tool: SftpTool) -> Value {
                 "content_base64": {
                     "type": "string",
                     "description": "Base64-encoded file bytes to write to the remote path."
-                }
+                },
+                "on_exists": overwrite_policy_schema("What to do when the remote path already exists. Defaults to fail.")
             },
             "required": ["connection", "content_base64"]
+        }),
+        SftpTool::Stat => json!({
+            "type": "object",
+            "properties": {
+                "connection": connection_schema(),
+                "path": path_schema("Remote file or directory path to check.")
+            },
+            "required": ["connection", "path"]
+        }),
+        SftpTool::Upload => json!({
+            "type": "object",
+            "properties": {
+                "connection": connection_schema(),
+                "local_path": path_schema("Local file or directory path to upload."),
+                "remote_path": path_schema("Remote destination file or directory path."),
+                "on_exists": overwrite_policy_schema("What to do when the remote destination path already exists. Defaults to fail.")
+            },
+            "required": ["connection", "local_path", "remote_path"]
+        }),
+        SftpTool::Download => json!({
+            "type": "object",
+            "properties": {
+                "connection": connection_schema(),
+                "remote_path": path_schema("Remote file or directory path to download."),
+                "local_path": path_schema("Local destination file or directory path."),
+                "on_exists": overwrite_policy_schema("What to do when the local destination path already exists. Defaults to fail.")
+            },
+            "required": ["connection", "remote_path", "local_path"]
         }),
     }
 }
@@ -312,9 +602,29 @@ fn path_schema(description: &'static str) -> Value {
     })
 }
 
+fn overwrite_policy_schema(description: &'static str) -> Value {
+    json!({
+        "type": "string",
+        "enum": ["fail", "overwrite", "skip"],
+        "description": description
+    })
+}
+
 fn unknown_connection(connection: &str) -> ToolError {
     ToolError::Failed {
         message: format!("unknown connection: {connection}"),
+    }
+}
+
+fn remote_not_found(path: &str) -> ToolError {
+    ToolError::Failed {
+        message: format!("remote path does not exist: {path}"),
+    }
+}
+
+fn target_exists(path: &str) -> ToolError {
+    ToolError::Failed {
+        message: format!("target already exists: {path}; set on_exists to overwrite or skip"),
     }
 }
 
