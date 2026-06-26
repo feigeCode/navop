@@ -11,7 +11,7 @@ pub mod runtime;
 
 pub mod backends;
 
-pub use backend::{RemoteDesktopBackend, create_backend};
+pub use backend::{RemoteDesktopBackend, RemoteDesktopProviderVersionError, create_backend};
 pub use capabilities::{RemoteDesktopCapabilities, ResizeSupport};
 pub use config::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopSize};
 pub use input::{RemoteDesktopInput, RemoteKey, RemoteMouseButton, RemoteNamedKey};

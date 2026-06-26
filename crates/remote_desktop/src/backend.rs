@@ -4,6 +4,9 @@ use crate::{
     RemoteDesktopProviderRegistry, RemoteDesktopRuntime, RemoteDesktopSize,
 };
 
+const MIN_RDP_PROVIDER_VERSION: &str = "0.1.3";
+const MIN_VNC_PROVIDER_VERSION: &str = "0.1.1";
+
 pub trait RemoteDesktopBackend: Send + 'static {
     fn name(&self) -> &'static str {
         "remote-desktop-backend"
@@ -15,13 +18,22 @@ pub trait RemoteDesktopBackend: Send + 'static {
     ) -> anyhow::Result<RemoteDesktopRuntime>;
 }
 
+#[derive(Clone, Debug, thiserror::Error)]
+#[error("remote desktop provider version is not supported")]
+pub struct RemoteDesktopProviderVersionError {
+    pub protocol: RemoteDesktopProtocol,
+    pub installed: String,
+    pub required: String,
+    pub invalid: bool,
+}
+
 pub fn create_backend(options: RemoteDesktopConnectionOptions) -> Box<dyn RemoteDesktopBackend> {
     let registry = RemoteDesktopProviderRegistry::load_default();
     match create_backend_with_registry(options.clone(), &registry) {
         Ok(backend) => backend,
         Err(error) => Box::new(MissingProviderBackend {
             protocol: options.protocol,
-            reason: error.to_string(),
+            error,
         }),
     }
 }
@@ -36,8 +48,50 @@ pub fn create_backend_with_registry(
             options.protocol.label()
         )
     })?;
+    validate_provider_requirement(&provider)?;
     let helper = provider_helper_process(&provider);
     Ok(Box::new(RdpBackend::new_with_helper(options, helper)))
+}
+
+fn validate_provider_requirement(provider: &RemoteDesktopProviderManifest) -> anyhow::Result<()> {
+    let Some(required) = provider_min_version(provider.protocol) else {
+        return Ok(());
+    };
+    let version = semver::Version::parse(provider.version.trim()).map_err(|_| {
+        RemoteDesktopProviderVersionError {
+            protocol: provider.protocol,
+            installed: display_provider_version(&provider.version).to_string(),
+            required: required.to_string(),
+            invalid: true,
+        }
+    })?;
+    let required = semver::Version::parse(required)?;
+    if version < required {
+        return Err(RemoteDesktopProviderVersionError {
+            protocol: provider.protocol,
+            installed: version.to_string(),
+            required: required.to_string(),
+            invalid: false,
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn provider_min_version(protocol: RemoteDesktopProtocol) -> Option<&'static str> {
+    match protocol {
+        RemoteDesktopProtocol::Rdp => Some(MIN_RDP_PROVIDER_VERSION),
+        RemoteDesktopProtocol::Vnc => Some(MIN_VNC_PROVIDER_VERSION),
+    }
+}
+
+fn display_provider_version(version: &str) -> &str {
+    let version = version.trim();
+    if version.is_empty() {
+        "<empty>"
+    } else {
+        version
+    }
 }
 
 fn provider_helper_process(provider: &RemoteDesktopProviderManifest) -> HelperProcessConfig {
@@ -58,7 +112,7 @@ fn provider_helper_process(provider: &RemoteDesktopProviderManifest) -> HelperPr
 
 struct MissingProviderBackend {
     protocol: RemoteDesktopProtocol,
-    reason: String,
+    error: anyhow::Error,
 }
 
 impl RemoteDesktopBackend for MissingProviderBackend {
@@ -70,7 +124,9 @@ impl RemoteDesktopBackend for MissingProviderBackend {
         self: Box<Self>,
         _initial_size: RemoteDesktopSize,
     ) -> anyhow::Result<RemoteDesktopRuntime> {
-        anyhow::bail!("{}: {}", self.protocol.label(), self.reason)
+        Err(self
+            .error
+            .context(format!("{} remote desktop provider", self.protocol.label())))
     }
 }
 
@@ -82,6 +138,7 @@ mod tests {
 
     use crate::{
         RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopProviderRegistry,
+        backend::RemoteDesktopProviderVersionError,
     };
 
     #[test]
@@ -117,6 +174,66 @@ mod tests {
         assert_eq!("remote-desktop-helper", backend.name());
     }
 
+    #[test]
+    fn create_backend_with_registry_rejects_outdated_rdp_provider() {
+        let temp = TempDir::new().unwrap();
+        write_provider(
+            temp.path(),
+            "rdp",
+            "RDP",
+            "rdp",
+            "0.1.2",
+            "./onetcli-rdp-helper",
+        );
+        let registry = RemoteDesktopProviderRegistry::load_from_dir(temp.path()).unwrap();
+
+        let error = match super::create_backend_with_registry(
+            options(RemoteDesktopProtocol::Rdp),
+            &registry,
+        ) {
+            Ok(_) => panic!("outdated RDP provider should be rejected"),
+            Err(error) => error,
+        };
+
+        let version_error = error
+            .downcast_ref::<RemoteDesktopProviderVersionError>()
+            .expect("version error");
+        assert_eq!(RemoteDesktopProtocol::Rdp, version_error.protocol);
+        assert_eq!("0.1.2", version_error.installed);
+        assert_eq!("0.1.3", version_error.required);
+        assert!(!version_error.invalid);
+    }
+
+    #[test]
+    fn create_backend_with_registry_rejects_outdated_vnc_provider() {
+        let temp = TempDir::new().unwrap();
+        write_provider(
+            temp.path(),
+            "vnc",
+            "VNC",
+            "vnc",
+            "0.1.0",
+            "./onetcli-vnc-helper",
+        );
+        let registry = RemoteDesktopProviderRegistry::load_from_dir(temp.path()).unwrap();
+
+        let error = match super::create_backend_with_registry(
+            options(RemoteDesktopProtocol::Vnc),
+            &registry,
+        ) {
+            Ok(_) => panic!("outdated VNC provider should be rejected"),
+            Err(error) => error,
+        };
+
+        let version_error = error
+            .downcast_ref::<RemoteDesktopProviderVersionError>()
+            .expect("version error");
+        assert_eq!(RemoteDesktopProtocol::Vnc, version_error.protocol);
+        assert_eq!("0.1.0", version_error.installed);
+        assert_eq!("0.1.1", version_error.required);
+        assert!(!version_error.invalid);
+    }
+
     fn options(protocol: RemoteDesktopProtocol) -> RemoteDesktopConnectionOptions {
         RemoteDesktopConnectionOptions {
             protocol,
@@ -128,13 +245,44 @@ mod tests {
         }
     }
 
+    fn write_provider(
+        root: &std::path::Path,
+        dir: &str,
+        name: &str,
+        protocol: &str,
+        version: &str,
+        command: &str,
+    ) {
+        let provider_dir = root.join(dir);
+        fs::create_dir_all(&provider_dir).unwrap();
+        fs::write(
+            provider_dir.join("remote_desktop_provider.json"),
+            provider_json_with_version(id_for_dir(dir), name, protocol, version, command),
+        )
+        .unwrap();
+    }
+
+    fn id_for_dir(dir: &str) -> &str {
+        dir.strip_prefix("aaa-").unwrap_or(dir)
+    }
+
     fn provider_json(id: &str, name: &str, protocol: &str, command: &str) -> String {
+        provider_json_with_version(id, name, protocol, "1.2.3", command)
+    }
+
+    fn provider_json_with_version(
+        id: &str,
+        name: &str,
+        protocol: &str,
+        version: &str,
+        command: &str,
+    ) -> String {
         format!(
             r#"{{
                 "id": "{id}",
                 "name": "{name}",
                 "description": "{name} provider",
-                "version": "1.2.3",
+                "version": "{version}",
                 "protocol": "{protocol}",
                 "entry": {{ "command": "{command}" }},
                 "capabilities": {{

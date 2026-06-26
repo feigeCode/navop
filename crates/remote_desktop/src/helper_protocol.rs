@@ -201,6 +201,16 @@ pub enum HelperEvent {
         height: u16,
         rgba_base64: String,
     },
+    FrameBytes {
+        width: u16,
+        height: u16,
+        rgba_len: usize,
+    },
+    FrameBgraBytes {
+        width: u16,
+        height: u16,
+        bgra_len: usize,
+    },
     CursorDefault,
     CursorHidden,
     CursorPosition {
@@ -231,6 +241,9 @@ impl HelperEvent {
         match self {
             Self::Frame { rgba_base64, .. } => {
                 Ok(base64::engine::general_purpose::STANDARD.decode(rgba_base64.as_bytes())?)
+            }
+            Self::FrameBytes { .. } | Self::FrameBgraBytes { .. } => {
+                anyhow::bail!("binary frame payload is not in JSON event")
             }
             _ => anyhow::bail!("helper event is not a frame"),
         }

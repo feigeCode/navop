@@ -23,6 +23,16 @@ pub fn rgba_to_render_image(
     )))
 }
 
+pub fn bgra_to_render_image(width: u16, height: u16, bgra: Vec<u8>) -> anyhow::Result<RenderImage> {
+    let image = ImageBuffer::<Rgba<u8>, _>::from_vec(width as u32, height as u32, bgra)
+        .ok_or_else(|| anyhow::anyhow!("invalid BGRA frame buffer length"))?;
+
+    Ok(RenderImage::new(smallvec::SmallVec::from_elem(
+        image::Frame::new(image),
+        1,
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,5 +58,12 @@ mod tests {
         let image = rgba_to_render_image(1, 1, vec![255, 0, 0, 255]).unwrap();
 
         assert_eq!(image.as_bytes(0).unwrap(), &[0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn keeps_bgra_buffer_without_channel_swap() {
+        let image = bgra_to_render_image(1, 1, vec![0x33, 0x22, 0x11, 0xff]).unwrap();
+
+        assert_eq!(image.as_bytes(0).unwrap(), &[0x33, 0x22, 0x11, 0xff]);
     }
 }

@@ -7,14 +7,15 @@ use gpui_component::{ActiveTheme, Icon, IconName};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_desktop::{
     RemoteDesktopConnectionOptions, RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol,
-    RemoteDesktopRuntime, RemoteDesktopSize, RemoteKey, RemoteMouseButton, RemoteNamedKey,
-    create_backend,
+    RemoteDesktopProviderVersionError, RemoteDesktopRuntime, RemoteDesktopSize, RemoteKey,
+    RemoteMouseButton, RemoteNamedKey, create_backend,
 };
+use rust_i18n::t;
 
 use crate::ime_guard::RemoteDesktopImeGuard;
 use crate::keyboard::keystroke_to_remote_key_for_protocol;
 use crate::modifiers::modifier_inputs;
-use crate::pixels::rgba_to_render_image;
+use crate::pixels::{bgra_to_render_image, rgba_to_render_image};
 use crate::pointer::{LocalBounds, scale_filled_window_pointer_position};
 use crate::shortcuts::{
     ClipboardShortcut, clipboard_shortcut_inputs, is_clipboard_platform_shortcut,
@@ -152,6 +153,17 @@ impl RemoteDesktopView {
                         Err(error) => self.status = SharedString::from(error.to_string()),
                     }
                 }
+                RemoteDesktopOutput::FrameBgra {
+                    width,
+                    height,
+                    bgra,
+                } => {
+                    self.remote_size = Some((width, height));
+                    match bgra_to_render_image(width, height, bgra) {
+                        Ok(image) => self.frame = Some(Arc::new(image)),
+                        Err(error) => self.status = SharedString::from(error.to_string()),
+                    }
+                }
                 RemoteDesktopOutput::Status(message) => self.status = SharedString::from(message),
                 RemoteDesktopOutput::ConnectionFailure(message)
                 | RemoteDesktopOutput::Terminated(message) => {
@@ -203,9 +215,10 @@ impl RemoteDesktopView {
         self.send_input(RemoteDesktopInput::Reconnect);
     }
 
-    fn update_content_bounds(&mut self, bounds: Bounds<Pixels>) {
+    fn update_content_bounds(&mut self, bounds: Bounds<Pixels>, display_scale_factor: f32) {
         self.content_bounds = Some(bounds);
-        let Some(size) = resize_dimensions_from_bounds(bounds) else {
+        let Some(size) = resize_dimensions_from_bounds_with_scale(bounds, display_scale_factor)
+        else {
             return;
         };
         self.start_runtime(size);
@@ -449,14 +462,23 @@ fn bounds_to_local(bounds: Bounds<Pixels>) -> LocalBounds {
     }
 }
 
-fn resize_dimensions_from_bounds(bounds: Bounds<Pixels>) -> Option<(u16, u16)> {
-    let mut width = pixels_to_f32(bounds.size.width)
+fn resize_dimensions_from_bounds_with_scale(
+    bounds: Bounds<Pixels>,
+    display_scale_factor: f32,
+) -> Option<(u16, u16)> {
+    let display_scale_factor = if display_scale_factor.is_finite() && display_scale_factor > 0.0 {
+        display_scale_factor
+    } else {
+        1.0
+    };
+
+    let mut width = (pixels_to_f32(bounds.size.width) * display_scale_factor)
         .round()
         .clamp(RDP_DISPLAY_MIN_SIZE, RDP_DISPLAY_MAX_SIZE) as u16;
     if width % 2 != 0 {
         width = width.saturating_sub(1);
     }
-    let height = pixels_to_f32(bounds.size.height)
+    let height = (pixels_to_f32(bounds.size.height) * display_scale_factor)
         .round()
         .clamp(RDP_DISPLAY_MIN_SIZE, RDP_DISPLAY_MAX_SIZE) as u16;
     Some((width, height))
@@ -473,11 +495,31 @@ fn is_meaningful_resize_delta(previous: Option<(u16, u16)>, next: (u16, u16)) ->
 fn failed_runtime(error: anyhow::Error) -> RemoteDesktopRuntime {
     let (input_tx, _input_rx) = tokio::sync::mpsc::unbounded_channel();
     let (output_tx, output_rx) = std::sync::mpsc::channel();
-    let _ = output_tx.send(RemoteDesktopOutput::ConnectionFailure(error.to_string()));
+    let _ = output_tx.send(RemoteDesktopOutput::ConnectionFailure(
+        remote_desktop_error_message(&error),
+    ));
     RemoteDesktopRuntime {
         input_tx,
         output_rx,
     }
+}
+
+fn remote_desktop_error_message(error: &anyhow::Error) -> String {
+    if let Some(error) = error.downcast_ref::<RemoteDesktopProviderVersionError>() {
+        let key = if error.invalid {
+            "RemoteDesktop.provider_version_invalid"
+        } else {
+            "RemoteDesktop.provider_version_too_old"
+        };
+        return t!(
+            key,
+            protocol = error.protocol.label(),
+            installed = error.installed.as_str(),
+            required = error.required.as_str()
+        )
+        .to_string();
+    }
+    error.to_string()
 }
 
 impl Focusable for RemoteDesktopView {
@@ -630,10 +672,10 @@ impl Render for RemoteDesktopView {
         div()
             .size_full()
             .relative()
-            .on_children_prepainted(move |bounds, _, cx| {
+            .on_children_prepainted(move |bounds, window, cx| {
                 if let Some(bounds) = bounds.first().copied() {
                     view.update(cx, |view, _| {
-                        view.update_content_bounds(bounds);
+                        view.update_content_bounds(bounds, window.scale_factor());
                     });
                 }
             })
@@ -687,6 +729,7 @@ pub fn refresh_keybindings(_cx: &mut App) {}
 #[cfg(test)]
 mod tests {
     use gpui::{Bounds, point, px, size};
+    use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopProviderVersionError};
 
     #[test]
     fn resize_dimensions_from_bounds_adjust_to_display_control_limits() {
@@ -694,14 +737,24 @@ mod tests {
 
         assert_eq!(
             Some((1280, 721)),
-            super::resize_dimensions_from_bounds(bounds)
+            super::resize_dimensions_from_bounds_with_scale(bounds, 1.0)
         );
 
         let oversized = Bounds::new(point(px(0.0), px(0.0)), size(px(90000.0), px(0.0)));
 
         assert_eq!(
             Some((8192, 200)),
-            super::resize_dimensions_from_bounds(oversized)
+            super::resize_dimensions_from_bounds_with_scale(oversized, 1.0)
+        );
+    }
+
+    #[test]
+    fn resize_dimensions_from_bounds_applies_display_scale_factor() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)));
+
+        assert_eq!(
+            Some((3840, 2160)),
+            super::resize_dimensions_from_bounds_with_scale(bounds, 2.0)
         );
     }
 
@@ -727,6 +780,24 @@ mod tests {
         assert_eq!(
             "prod-rdp(2)",
             super::remote_desktop_tab_title("prod-rdp", Some(2))
+        );
+    }
+
+    #[test]
+    fn provider_version_error_message_is_localized_after_context() {
+        let error = anyhow::Error::new(RemoteDesktopProviderVersionError {
+            protocol: RemoteDesktopProtocol::Vnc,
+            installed: "0.1.0".to_string(),
+            required: "0.1.1".to_string(),
+            invalid: false,
+        })
+        .context("VNC remote desktop provider");
+
+        let message = super::remote_desktop_error_message(&error);
+
+        assert_eq!(
+            "VNC provider version 0.1.0 is too old. Please update the provider to 0.1.1 or newer.",
+            message
         );
     }
 }

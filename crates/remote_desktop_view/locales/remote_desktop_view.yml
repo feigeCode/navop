@@ -6,6 +6,16 @@ Home:
     zh-CN: 与云端同步数据
     zh-HK: 與雲端同步數據
 
+RemoteDesktop:
+  provider_version_too_old:
+    en: "%{protocol} provider version %{installed} is too old. Please update the provider to %{required} or newer."
+    zh-CN: "%{protocol} 扩展版本 %{installed} 过低，请更新到 %{required} 或更高版本。"
+    zh-HK: "%{protocol} 擴展版本 %{installed} 過低，請更新到 %{required} 或更高版本。"
+  provider_version_invalid:
+    en: "%{protocol} provider version %{installed} is invalid. Please update the provider to %{required} or newer."
+    zh-CN: "%{protocol} 扩展版本 %{installed} 无效，请更新到 %{required} 或更高版本。"
+    zh-HK: "%{protocol} 擴展版本 %{installed} 無效，請更新到 %{required} 或更高版本。"
+
 
 # 团队同步
 TeamSync:

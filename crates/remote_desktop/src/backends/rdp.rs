@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -504,9 +504,13 @@ fn spawn_output_reader(
     let _ = std::thread::Builder::new()
         .name("remote-desktop-rdp-output".to_string())
         .spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                match line {
-                    Ok(line) => forward_helper_line(&line, &output_tx, &signal_tx),
+            let mut reader = BufReader::new(stdout);
+            loop {
+                match read_helper_output(&mut reader) {
+                    Ok(Some(output)) => {
+                        forward_helper_output(output, &output_tx, &signal_tx);
+                    }
+                    Ok(None) => break,
                     Err(error) => {
                         send_failure(
                             &output_tx,
@@ -520,29 +524,106 @@ fn spawn_output_reader(
         });
 }
 
-fn forward_helper_line(
-    line: &str,
+struct HelperOutput {
+    output: RemoteDesktopOutput,
+    connected: bool,
+    disconnect_message: Option<String>,
+}
+
+fn read_helper_output(reader: &mut impl BufRead) -> anyhow::Result<Option<HelperOutput>> {
+    let mut line = Vec::new();
+    let header_bytes = reader.read_until(b'\n', &mut line)?;
+    if header_bytes == 0 {
+        return Ok(None);
+    }
+    let event = decode_event_line(std::str::from_utf8(&line)?)?;
+    let connected = matches!(event, HelperEvent::Connected { .. });
+    let disconnect_message = helper_disconnect_message(&event);
+    match event {
+        HelperEvent::FrameBytes {
+            width,
+            height,
+            rgba_len,
+        } => read_binary_frame_output(reader, width, height, rgba_len).map(Some),
+        HelperEvent::FrameBgraBytes {
+            width,
+            height,
+            bgra_len,
+        } => read_binary_bgra_frame_output(reader, width, height, bgra_len).map(Some),
+        event => Ok(Some(HelperOutput {
+            output: helper_event_to_output(event)?,
+            connected,
+            disconnect_message,
+        })),
+    }
+}
+
+fn read_binary_frame_output<R>(
+    reader: &mut R,
+    width: u16,
+    height: u16,
+    rgba_len: usize,
+) -> anyhow::Result<HelperOutput>
+where
+    R: Read + ?Sized,
+{
+    let expected_len = usize::from(width) * usize::from(height) * 4;
+    if rgba_len != expected_len {
+        anyhow::bail!(
+            "invalid binary frame payload length: expected {expected_len}, got {rgba_len}"
+        );
+    }
+    let mut rgba = vec![0; rgba_len];
+    reader.read_exact(&mut rgba)?;
+    Ok(HelperOutput {
+        output: RemoteDesktopOutput::Frame {
+            width,
+            height,
+            rgba,
+        },
+        connected: false,
+        disconnect_message: None,
+    })
+}
+
+fn read_binary_bgra_frame_output<R>(
+    reader: &mut R,
+    width: u16,
+    height: u16,
+    bgra_len: usize,
+) -> anyhow::Result<HelperOutput>
+where
+    R: Read + ?Sized,
+{
+    let expected_len = usize::from(width) * usize::from(height) * 4;
+    if bgra_len != expected_len {
+        anyhow::bail!("invalid BGRA frame payload length: expected {expected_len}, got {bgra_len}");
+    }
+    let mut bgra = vec![0; bgra_len];
+    reader.read_exact(&mut bgra)?;
+    Ok(HelperOutput {
+        output: RemoteDesktopOutput::FrameBgra {
+            width,
+            height,
+            bgra,
+        },
+        connected: false,
+        disconnect_message: None,
+    })
+}
+
+fn forward_helper_output(
+    helper_output: HelperOutput,
     output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
     signal_tx: &std::sync::mpsc::Sender<BackendSignal>,
 ) {
-    match decode_event_line(line) {
-        Ok(event) => {
-            if matches!(event, HelperEvent::Connected { .. }) {
-                let _ = signal_tx.send(BackendSignal::Connected);
-            }
-            if let Some(message) = helper_disconnect_message(&event) {
-                let _ = signal_tx.send(BackendSignal::Disconnected(message));
-            }
-            let Ok(output) = helper_event_to_output(event) else {
-                return;
-            };
-            let _ = output_tx.send(output);
-        }
-        Err(error) => send_failure(
-            output_tx,
-            &format!("invalid remote desktop helper event: {error}"),
-        ),
+    if helper_output.connected {
+        let _ = signal_tx.send(BackendSignal::Connected);
     }
+    if let Some(message) = helper_output.disconnect_message {
+        let _ = signal_tx.send(BackendSignal::Disconnected(message));
+    }
+    let _ = output_tx.send(helper_output.output);
 }
 
 fn write_request(
@@ -574,6 +655,9 @@ fn helper_event_to_output(event: HelperEvent) -> anyhow::Result<RemoteDesktopOut
             height,
             rgba: event.into_rgba()?,
         },
+        HelperEvent::FrameBytes { .. } | HelperEvent::FrameBgraBytes { .. } => {
+            anyhow::bail!("binary frame payload is missing")
+        }
         HelperEvent::CursorDefault => RemoteDesktopOutput::CursorDefault,
         HelperEvent::CursorHidden => RemoteDesktopOutput::CursorHidden,
         HelperEvent::CursorPosition { x, y } => RemoteDesktopOutput::CursorPosition { x, y },
@@ -670,6 +754,74 @@ mod tests {
                 width: 1,
                 height: 1
             })
+        );
+    }
+
+    #[test]
+    fn reads_binary_frame_event_from_helper_stream() {
+        let mut input = std::io::Cursor::new(
+            b"{\"type\":\"FrameBytes\",\"width\":2,\"height\":1,\"rgba_len\":8}\n\
+              \x01\x02\x03\xff\x04\x05\x06\xff"
+                .to_vec(),
+        );
+
+        let output = read_helper_output(&mut input)
+            .expect("helper output reads")
+            .expect("helper output exists")
+            .output;
+
+        assert_eq!(
+            RemoteDesktopOutput::Frame {
+                width: 2,
+                height: 1,
+                rgba: vec![1, 2, 3, 255, 4, 5, 6, 255],
+            },
+            output
+        );
+    }
+
+    #[test]
+    fn reads_bgra_frame_event_from_helper_stream() {
+        let mut input = std::io::Cursor::new(
+            b"{\"type\":\"FrameBgraBytes\",\"width\":2,\"height\":1,\"bgra_len\":8}\n\
+              \x03\x02\x01\xff\x06\x05\x04\xff"
+                .to_vec(),
+        );
+
+        let output = read_helper_output(&mut input)
+            .expect("helper output reads")
+            .expect("helper output exists")
+            .output;
+
+        assert_eq!(
+            RemoteDesktopOutput::FrameBgra {
+                width: 2,
+                height: 1,
+                bgra: vec![3, 2, 1, 255, 6, 5, 4, 255],
+            },
+            output
+        );
+    }
+
+    #[test]
+    fn reads_legacy_base64_frame_event_from_helper_stream() {
+        let mut input = std::io::Cursor::new(
+            b"{\"type\":\"Frame\",\"width\":2,\"height\":1,\"rgba_base64\":\"AQID/wQFBv8=\"}\n"
+                .to_vec(),
+        );
+
+        let output = read_helper_output(&mut input)
+            .expect("helper output reads")
+            .expect("helper output exists")
+            .output;
+
+        assert_eq!(
+            RemoteDesktopOutput::Frame {
+                width: 2,
+                height: 1,
+                rgba: vec![1, 2, 3, 255, 4, 5, 6, 255],
+            },
+            output
         );
     }
 

@@ -12,6 +12,11 @@ pub enum RemoteDesktopOutput {
         height: u16,
         rgba: Vec<u8>,
     },
+    FrameBgra {
+        width: u16,
+        height: u16,
+        bgra: Vec<u8>,
+    },
     CursorDefault,
     CursorHidden,
     CursorPosition {
