@@ -1248,7 +1248,10 @@ impl TerminalView {
                 self.set_font_size(*size, cx);
             }
             TerminalSidebarEvent::FontFamilyChanged(family) => {
-                self.set_font_family(family.clone(), cx);
+                let family = family.clone();
+                let _ = update_settings(cx, move |settings| {
+                    settings.font_family = family;
+                });
             }
             TerminalSidebarEvent::ThemeChanged(theme) => {
                 let theme_name = theme.name.to_string();
@@ -2119,6 +2122,7 @@ impl TerminalView {
     pub fn apply_terminal_settings(
         &mut self,
         font_size: f32,
+        font_family: String,
         auto_copy: bool,
         autocomplete_enabled: bool,
         middle_click_paste: bool,
@@ -2133,6 +2137,10 @@ impl TerminalView {
         if (current - clamped).abs() >= f32::EPSILON {
             self.font_size = px(clamped);
             self.line_height = self.font_size * self.line_height_scale;
+        }
+        let font_family = SharedString::from(font_family);
+        if self.font_family != font_family {
+            self.font_family = font_family.clone();
         }
 
         self.auto_copy_on_select = auto_copy;
@@ -2153,6 +2161,7 @@ impl TerminalView {
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.update_current_theme(&theme, window, cx);
             sidebar.set_font_size(clamped, window, cx);
+            sidebar.set_font_family(font_family, window, cx);
             sidebar.set_auto_copy(auto_copy, cx);
             sidebar.set_middle_click_paste(middle_click_paste, cx);
             sidebar.set_vim_scroll_to_arrow_keys(vim_scroll_to_arrow_keys, cx);
@@ -2170,6 +2179,7 @@ impl TerminalView {
     ) {
         self.apply_terminal_settings(
             settings.font_size,
+            settings.font_family.clone(),
             settings.auto_copy,
             settings.enable_autocomplete,
             settings.middle_click_paste,

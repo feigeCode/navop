@@ -34,6 +34,8 @@ impl TerminalHighlightRule {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TerminalSettings {
     pub font_size: f32,
+    #[serde(default = "default_terminal_font_family")]
+    pub font_family: String,
     pub auto_copy: bool,
     pub enable_autocomplete: bool,
     pub middle_click_paste: bool,
@@ -56,6 +58,10 @@ fn default_vim_scroll_to_arrow_keys() -> bool {
     true
 }
 
+fn default_terminal_font_family() -> String {
+    AppSettings::default().terminal_font_family
+}
+
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self::from_parts(&AppSettings::default(), &TerminalLocalSettings::default())
@@ -66,6 +72,7 @@ impl TerminalSettings {
     fn from_parts(app_settings: &AppSettings, local_settings: &TerminalLocalSettings) -> Self {
         Self {
             font_size: app_settings.terminal_font_size as f32,
+            font_family: app_settings.terminal_font_family.clone(),
             auto_copy: app_settings.terminal_auto_copy,
             enable_autocomplete: app_settings.terminal_enable_autocomplete,
             middle_click_paste: app_settings.terminal_middle_click_paste,
@@ -265,6 +272,7 @@ fn update_app_settings<T>(
 
     AppSettings::update_and_save(cx, |settings| {
         settings.terminal_font_size = next.font_size as f64;
+        settings.terminal_font_family = next.font_family.clone();
         settings.terminal_auto_copy = next.auto_copy;
         settings.terminal_enable_autocomplete = next.enable_autocomplete;
         settings.terminal_middle_click_paste = next.middle_click_paste;
@@ -278,6 +286,7 @@ fn update_app_settings<T>(
 
 fn terminal_app_fields_equal(left: &TerminalSettings, right: &TerminalSettings) -> bool {
     left.font_size == right.font_size
+        && left.font_family == right.font_family
         && left.auto_copy == right.auto_copy
         && left.enable_autocomplete == right.enable_autocomplete
         && left.middle_click_paste == right.middle_click_paste
@@ -294,6 +303,7 @@ mod tests {
         TerminalHighlightRule, TerminalLocalSettings, TerminalSettings, TerminalSettingsStore,
         load_settings_from_path, resolve_initial_settings, save_settings_to_path,
     };
+    use one_core::settings::AppSettings;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -363,6 +373,19 @@ mod tests {
                 .iter()
                 .any(|rule| rule.id == "preset:ip_addresses:ipv4")
         );
+    }
+
+    #[test]
+    fn terminal_settings_reads_font_family_from_app_settings() {
+        let app_settings = AppSettings {
+            terminal_font_family: "JetBrains Mono".to_string(),
+            ..AppSettings::default()
+        };
+
+        let settings =
+            TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
+
+        assert_eq!("JetBrains Mono", settings.font_family);
     }
 
     #[test]

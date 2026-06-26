@@ -421,6 +421,17 @@ impl TerminalSidebar {
         });
     }
 
+    pub fn set_font_family(
+        &mut self,
+        font_family: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_font_family(font_family, window, cx);
+        });
+    }
+
     pub fn set_auto_copy(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_auto_copy(enabled, cx);

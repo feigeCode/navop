@@ -270,6 +270,19 @@ impl SettingsPanel {
         cx.notify();
     }
 
+    pub fn set_font_family(
+        &mut self,
+        font_family: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.font_family = font_family.clone();
+        self.font_select_state.update(cx, |state, cx| {
+            state.set_selected_value(&font_family, window, cx);
+        });
+        cx.notify();
+    }
+
     pub fn set_auto_copy(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.auto_copy = enabled;
         cx.notify();
