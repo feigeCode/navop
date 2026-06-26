@@ -7,12 +7,15 @@ mod file_format;
 mod git_store;
 mod models;
 mod planner;
+mod runtime;
 mod state;
 mod store;
 mod worker;
 
 #[cfg(test)]
 mod git_store_tests;
+#[cfg(test)]
+mod runtime_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 #[cfg(test)]
@@ -23,6 +26,7 @@ pub use file_format::*;
 pub use git_store::*;
 pub use models::*;
 pub use planner::*;
+pub use runtime::*;
 pub use state::*;
 pub use store::*;
 pub use worker::*;
