@@ -13,6 +13,7 @@ use tracing::{debug, error, info};
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
     ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
+    apply_query_max_rows,
 };
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
@@ -275,7 +276,11 @@ impl OracleDbConnection {
                                 .collect();
 
                             let mut data_rows = Vec::new();
-                            for row_result in rows {
+                            let mut rows = rows;
+                            loop {
+                                let Some(row_result) = rows.next() else {
+                                    break;
+                                };
                                 match row_result {
                                     Ok(row) => {
                                         let row_data: Vec<Option<String>> = (0..columns.len())
@@ -474,11 +479,18 @@ impl DbConnection for OracleDbConnection {
 
         for (idx, sql) in statements.iter().enumerate() {
             let conn_clone = conn_arc.clone();
-            let sql_clone = sql.clone();
-            let sql_preview = if sql.len() > 200 {
-                format!("{}...", truncate_str(&sql, 200))
+            let sql_to_execute = apply_query_max_rows(
+                plugin.name(),
+                sql,
+                options.max_rows,
+                plugin.is_query_statement(sql),
+            )
+            .into_owned();
+            let sql_clone = sql_to_execute.clone();
+            let sql_preview = if sql_to_execute.len() > 200 {
+                format!("{}...", truncate_str(&sql_to_execute, 200))
             } else {
-                sql.clone()
+                sql_to_execute
             };
             debug!(
                 "[Oracle] Executing statement {}/{}",
@@ -676,7 +688,14 @@ impl DbConnection for OracleDbConnection {
                 debug!("[Oracle] Streaming statement {}", current);
 
                 let conn_arc = self.conn.clone();
-                let sql_clone = sql.clone();
+                let sql_to_execute = apply_query_max_rows(
+                    plugin.name(),
+                    &sql,
+                    options.max_rows,
+                    plugin.is_query_statement(&sql),
+                )
+                .into_owned();
+                let sql_clone = sql_to_execute.clone();
 
                 let result = match tokio::task::spawn_blocking(move || {
                     let guard = conn_arc.blocking_lock();
@@ -736,7 +755,14 @@ impl DbConnection for OracleDbConnection {
                 debug!("[Oracle] Streaming statement {}/{}", current, total);
 
                 let conn_arc = self.conn.clone();
-                let sql_clone = sql.clone();
+                let sql_to_execute = apply_query_max_rows(
+                    plugin.name(),
+                    &sql,
+                    options.max_rows,
+                    plugin.is_query_statement(&sql),
+                )
+                .into_owned();
+                let sql_clone = sql_to_execute.clone();
 
                 let result = match tokio::task::spawn_blocking(move || {
                     let guard = conn_arc.blocking_lock();

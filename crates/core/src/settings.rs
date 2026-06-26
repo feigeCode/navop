@@ -316,6 +316,14 @@ pub struct AppSettings {
     pub font_family: String,
     #[serde(default = "default_font_size")]
     pub font_size: f64,
+    #[serde(default = "default_monospace_font_family")]
+    pub sql_editor_font_family: String,
+    #[serde(default = "default_monospace_font_family")]
+    pub table_preview_font_family: String,
+    #[serde(default = "default_monospace_font_family")]
+    pub terminal_font_family: String,
+    #[serde(default)]
+    pub custom_font_paths: Vec<String>,
     #[serde(default = "default_terminal_font_size")]
     pub terminal_font_size: f64,
     #[serde(default = "default_true")]
@@ -359,12 +367,16 @@ pub struct AppSettings {
     /// 表格行高（像素），默认44
     #[serde(default = "default_table_row_height")]
     pub table_row_height: u32,
+    /// SQL 查询默认最大返回行数，0 表示不限制
+    #[serde(default = "default_sql_query_max_rows")]
+    pub sql_query_max_rows: u32,
     #[serde(default)]
     pub custom_keybindings: HashMap<String, Vec<String>>,
 }
 
 pub(crate) const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
-pub(crate) const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-space";
+pub(crate) const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
+pub const DEFAULT_SQL_QUERY_MAX_ROWS: u32 = 1000;
 
 fn default_font_family() -> String {
     "Arial".to_string()
@@ -372,6 +384,17 @@ fn default_font_family() -> String {
 
 fn default_font_size() -> f64 {
     14.0
+}
+
+fn default_monospace_font_family() -> String {
+    if cfg!(target_os = "macos") {
+        "Menlo"
+    } else if cfg!(target_os = "windows") {
+        "Consolas"
+    } else {
+        "DejaVu Sans Mono"
+    }
+    .to_string()
 }
 
 fn default_terminal_font_size() -> f64 {
@@ -402,6 +425,10 @@ fn default_table_row_height() -> u32 {
     44
 }
 
+fn default_sql_query_max_rows() -> u32 {
+    DEFAULT_SQL_QUERY_MAX_ROWS
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -410,6 +437,10 @@ impl Default for AppSettings {
             auto_switch_theme: false,
             font_family: default_font_family(),
             font_size: default_font_size(),
+            sql_editor_font_family: default_monospace_font_family(),
+            table_preview_font_family: default_monospace_font_family(),
+            terminal_font_family: default_monospace_font_family(),
+            custom_font_paths: Vec::new(),
             terminal_font_size: default_terminal_font_size(),
             terminal_auto_copy: default_true(),
             terminal_enable_autocomplete: default_true(),
@@ -430,6 +461,7 @@ impl Default for AppSettings {
             system_hotkey_macos: default_system_hotkey_macos(),
             system_hotkey_other: default_system_hotkey_other(),
             table_row_height: default_table_row_height(),
+            sql_query_max_rows: default_sql_query_max_rows(),
             custom_keybindings: HashMap::new(),
         }
     }
@@ -596,6 +628,24 @@ mod tests {
     }
 
     #[test]
+    fn app_settings_default_sets_sql_query_max_rows() {
+        let settings = AppSettings::default();
+
+        assert_eq!(1000, settings.sql_query_max_rows);
+    }
+
+    #[test]
+    fn app_settings_deserializes_sql_query_max_rows_from_legacy_json() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark"
+        }))
+        .expect("旧版 settings.json 应能读取");
+
+        assert_eq!(1000, settings.sql_query_max_rows);
+    }
+
+    #[test]
     fn app_settings_deserializes_mcp_defaults_from_legacy_json() {
         let settings: AppSettings = serde_json::from_value(serde_json::json!({
             "locale": "en",
@@ -607,6 +657,47 @@ mod tests {
         assert!(!settings.mcp.server_enabled);
         assert_eq!(settings.mcp.permission_mode, McpPermissionMode::Deny);
         assert!(settings.mcp.toolsets.terminal);
+    }
+
+    #[test]
+    fn app_settings_default_system_hotkey_other_avoids_input_method_shortcut() {
+        let settings = AppSettings::default();
+
+        assert_eq!("ctrl-alt-m", settings.system_hotkey_other);
+    }
+
+    #[test]
+    fn app_settings_deserializes_font_defaults_from_legacy_json() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark"
+        }))
+        .expect("旧版 settings.json 应能读取");
+
+        assert!(!settings.sql_editor_font_family.is_empty());
+        assert_eq!(
+            settings.sql_editor_font_family,
+            settings.table_preview_font_family
+        );
+        assert_eq!(
+            settings.sql_editor_font_family,
+            settings.terminal_font_family
+        );
+        assert!(settings.custom_font_paths.is_empty());
+    }
+
+    #[test]
+    fn app_settings_round_trip_preserves_custom_font_paths() {
+        let mut settings = AppSettings::default();
+        settings.custom_font_paths = vec!["/tmp/NotoSansCJK-Regular.ttc".to_string()];
+
+        let json = serde_json::to_string(&settings).expect("应序列化 AppSettings");
+        let restored: AppSettings = serde_json::from_str(&json).expect("应反序列化 AppSettings");
+
+        assert_eq!(
+            vec!["/tmp/NotoSansCJK-Regular.ttc".to_string()],
+            restored.custom_font_paths
+        );
     }
 
     #[test]

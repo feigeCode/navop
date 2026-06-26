@@ -1051,6 +1051,10 @@ Query:
     en: Run Selected
     zh-CN: 运行选中
     zh-HK: 執行選取
+  run_current_line:
+    en: Run Current Line
+    zh-CN: 运行当前行
+    zh-HK: 執行目前行
   please_select_sql_to_run:
     en: Please select SQL to run
     zh-CN: 请先选中要运行的 SQL

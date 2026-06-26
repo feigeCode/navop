@@ -20,6 +20,7 @@ use tracing::{debug, error, info, warn};
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
     ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
+    apply_query_max_rows,
 };
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::resolve_connection_target;
@@ -700,10 +701,17 @@ impl DbConnection for PostgresDbConnection {
                     continue;
                 }
 
-                let sql_preview = if sql.len() > 200 {
-                    format!("{}...", truncate_str(&sql, 200))
+                let sql_to_execute = apply_query_max_rows(
+                    plugin.name(),
+                    sql,
+                    options.max_rows,
+                    plugin.is_query_statement(sql),
+                );
+                let sql_to_execute = sql_to_execute.as_ref();
+                let sql_preview = if sql_to_execute.len() > 200 {
+                    format!("{}...", truncate_str(sql_to_execute, 200))
                 } else {
-                    sql.to_string()
+                    sql_to_execute.to_string()
                 };
                 debug!(
                     "[PostgreSQL] TX executing statement {}/{}, {}",
@@ -713,7 +721,7 @@ impl DbConnection for PostgresDbConnection {
                 );
                 let start = Instant::now();
 
-                let result = match tx.prepare(sql).await {
+                let result = match tx.prepare(sql_to_execute).await {
                     Ok(stmt) => {
                         if stmt.columns().is_empty() {
                             match tx.execute(&stmt, &[]).await {
@@ -724,7 +732,7 @@ impl DbConnection for PostgresDbConnection {
                                         rows_affected, elapsed_ms
                                     );
                                     Self::build_exec_result(
-                                        sql.to_string(),
+                                        sql_to_execute.to_string(),
                                         rows_affected,
                                         elapsed_ms,
                                     )
@@ -735,7 +743,7 @@ impl DbConnection for PostgresDbConnection {
                                         e, sql_preview
                                     );
                                     SqlResult::Error(SqlErrorInfo {
-                                        sql: sql.to_string(),
+                                        sql: sql_to_execute.to_string(),
                                         message: e.to_string(),
                                     })
                                 }
@@ -752,7 +760,7 @@ impl DbConnection for PostgresDbConnection {
                                     Self::build_query_result(
                                         &stmt,
                                         rows,
-                                        sql.to_string(),
+                                        sql_to_execute.to_string(),
                                         elapsed_ms,
                                     )
                                 }
@@ -762,7 +770,7 @@ impl DbConnection for PostgresDbConnection {
                                         e, sql_preview
                                     );
                                     SqlResult::Error(SqlErrorInfo {
-                                        sql: sql.to_string(),
+                                        sql: sql_to_execute.to_string(),
                                         message: e.to_string(),
                                     })
                                 }
@@ -775,7 +783,7 @@ impl DbConnection for PostgresDbConnection {
                             e, sql_preview
                         );
                         SqlResult::Error(SqlErrorInfo {
-                            sql: sql.to_string(),
+                            sql: sql_to_execute.to_string(),
                             message: e.to_string(),
                         })
                     }
@@ -866,8 +874,20 @@ impl DbConnection for PostgresDbConnection {
                     statements.len()
                 );
                 let start = Instant::now();
+                let sql_to_execute = apply_query_max_rows(
+                    plugin.name(),
+                    sql,
+                    options.max_rows,
+                    plugin.is_query_statement(sql),
+                );
+                let sql_to_execute = sql_to_execute.as_ref();
+                let sql_preview = if sql_to_execute.len() > 200 {
+                    format!("{}...", truncate_str(sql_to_execute, 200))
+                } else {
+                    sql_to_execute.to_string()
+                };
 
-                let result = match client.prepare(sql).await {
+                let result = match client.prepare(sql_to_execute).await {
                     Ok(stmt) => {
                         if stmt.columns().is_empty() {
                             match client.execute(&stmt, &[]).await {
@@ -878,7 +898,7 @@ impl DbConnection for PostgresDbConnection {
                                         rows_affected, elapsed_ms
                                     );
                                     Self::build_exec_result(
-                                        sql.to_string(),
+                                        sql_to_execute.to_string(),
                                         rows_affected,
                                         elapsed_ms,
                                     )
@@ -889,7 +909,7 @@ impl DbConnection for PostgresDbConnection {
                                         e, sql_preview
                                     );
                                     results.push(SqlResult::Error(SqlErrorInfo {
-                                        sql: sql.to_string(),
+                                        sql: sql_to_execute.to_string(),
                                         message: e.to_string(),
                                     }));
 
@@ -914,7 +934,7 @@ impl DbConnection for PostgresDbConnection {
                                     Self::build_query_result(
                                         &stmt,
                                         rows,
-                                        sql.to_string(),
+                                        sql_to_execute.to_string(),
                                         elapsed_ms,
                                     )
                                 }
@@ -924,7 +944,7 @@ impl DbConnection for PostgresDbConnection {
                                         e, sql_preview
                                     );
                                     results.push(SqlResult::Error(SqlErrorInfo {
-                                        sql: sql.to_string(),
+                                        sql: sql_to_execute.to_string(),
                                         message: e.to_string(),
                                     }));
 
@@ -942,7 +962,7 @@ impl DbConnection for PostgresDbConnection {
                     Err(e) => {
                         error!("[PostgreSQL] Prepare failed: {}, SQL: {}", e, sql_preview);
                         results.push(SqlResult::Error(SqlErrorInfo {
-                            sql: sql.to_string(),
+                            sql: sql_to_execute.to_string(),
                             message: e.to_string(),
                         }));
 
@@ -1138,22 +1158,29 @@ impl DbConnection for PostgresDbConnection {
                     };
 
                     current += 1;
-                    let sql_preview = if sql.len() > 200 {
-                        format!("{}...", truncate_str(&sql, 200))
+                    let sql_to_execute = apply_query_max_rows(
+                        plugin.name(),
+                        &sql,
+                        options.max_rows,
+                        plugin.is_query_statement(&sql),
+                    );
+                    let sql_to_execute = sql_to_execute.as_ref();
+                    let sql_preview = if sql_to_execute.len() > 200 {
+                        format!("{}...", truncate_str(sql_to_execute, 200))
                     } else {
-                        sql.clone()
+                        sql_to_execute.to_string()
                     };
                     debug!("[PostgreSQL] Streaming TX statement {}", current);
                     let start = Instant::now();
 
-                    let result = match tx.prepare(&sql).await {
+                    let result = match tx.prepare(sql_to_execute).await {
                         Ok(stmt) => {
                             if stmt.columns().is_empty() {
                                 match tx.execute(&stmt, &[]).await {
                                     Ok(rows_affected) => {
                                         let elapsed_ms = start.elapsed().as_millis();
                                         Self::build_exec_result(
-                                            sql.clone(),
+                                            sql_to_execute.to_string(),
                                             rows_affected,
                                             elapsed_ms,
                                         )
@@ -1164,7 +1191,7 @@ impl DbConnection for PostgresDbConnection {
                                             e, sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
-                                            sql: sql.clone(),
+                                            sql: sql_to_execute.to_string(),
                                             message: e.to_string(),
                                         })
                                     }
@@ -1176,7 +1203,7 @@ impl DbConnection for PostgresDbConnection {
                                         Self::build_query_result(
                                             &stmt,
                                             rows,
-                                            sql.clone(),
+                                            sql_to_execute.to_string(),
                                             elapsed_ms,
                                         )
                                     }
@@ -1186,7 +1213,7 @@ impl DbConnection for PostgresDbConnection {
                                             e, sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
-                                            sql: sql.clone(),
+                                            sql: sql_to_execute.to_string(),
                                             message: e.to_string(),
                                         })
                                     }
@@ -1199,7 +1226,7 @@ impl DbConnection for PostgresDbConnection {
                                 e, sql_preview
                             );
                             SqlResult::Error(SqlErrorInfo {
-                                sql: sql.clone(),
+                                sql: sql_to_execute.to_string(),
                                 message: e.to_string(),
                             })
                         }
@@ -1252,22 +1279,29 @@ impl DbConnection for PostgresDbConnection {
                     };
 
                     current += 1;
-                    let sql_preview = if sql.len() > 200 {
-                        format!("{}...", truncate_str(&sql, 200))
+                    let sql_to_execute = apply_query_max_rows(
+                        plugin.name(),
+                        &sql,
+                        options.max_rows,
+                        plugin.is_query_statement(&sql),
+                    );
+                    let sql_to_execute = sql_to_execute.as_ref();
+                    let sql_preview = if sql_to_execute.len() > 200 {
+                        format!("{}...", truncate_str(sql_to_execute, 200))
                     } else {
-                        sql.clone()
+                        sql_to_execute.to_string()
                     };
                     debug!("[PostgreSQL] Streaming statement {}", current);
                     let start = Instant::now();
 
-                    let result = match client.prepare(&sql).await {
+                    let result = match client.prepare(sql_to_execute).await {
                         Ok(stmt) => {
                             if stmt.columns().is_empty() {
                                 match client.execute(&stmt, &[]).await {
                                     Ok(rows_affected) => {
                                         let elapsed_ms = start.elapsed().as_millis();
                                         Self::build_exec_result(
-                                            sql.clone(),
+                                            sql_to_execute.to_string(),
                                             rows_affected,
                                             elapsed_ms,
                                         )
@@ -1278,7 +1312,7 @@ impl DbConnection for PostgresDbConnection {
                                             e, sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
-                                            sql: sql.clone(),
+                                            sql: sql_to_execute.to_string(),
                                             message: e.to_string(),
                                         })
                                     }
@@ -1290,7 +1324,7 @@ impl DbConnection for PostgresDbConnection {
                                         Self::build_query_result(
                                             &stmt,
                                             rows,
-                                            sql.clone(),
+                                            sql_to_execute.to_string(),
                                             elapsed_ms,
                                         )
                                     }
@@ -1300,7 +1334,7 @@ impl DbConnection for PostgresDbConnection {
                                             e, sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
-                                            sql: sql.clone(),
+                                            sql: sql_to_execute.to_string(),
                                             message: e.to_string(),
                                         })
                                     }
@@ -1313,7 +1347,7 @@ impl DbConnection for PostgresDbConnection {
                                 e, sql_preview
                             );
                             SqlResult::Error(SqlErrorInfo {
-                                sql: sql.clone(),
+                                sql: sql_to_execute.to_string(),
                                 message: e.to_string(),
                             })
                         }
@@ -1353,22 +1387,29 @@ impl DbConnection for PostgresDbConnection {
 
                 for (index, sql) in statements.into_iter().enumerate() {
                     let current = index + 1;
-                    let sql_preview = if sql.len() > 200 {
-                        format!("{}...", truncate_str(&sql, 200))
+                    let sql_to_execute = apply_query_max_rows(
+                        plugin.name(),
+                        &sql,
+                        options.max_rows,
+                        plugin.is_query_statement(&sql),
+                    );
+                    let sql_to_execute = sql_to_execute.as_ref();
+                    let sql_preview = if sql_to_execute.len() > 200 {
+                        format!("{}...", truncate_str(sql_to_execute, 200))
                     } else {
-                        sql.clone()
+                        sql_to_execute.to_string()
                     };
                     debug!("[PostgreSQL] Streaming TX statement {}/{}", current, total);
                     let start = Instant::now();
 
-                    let result = match tx.prepare(&sql).await {
+                    let result = match tx.prepare(sql_to_execute).await {
                         Ok(stmt) => {
                             if stmt.columns().is_empty() {
                                 match tx.execute(&stmt, &[]).await {
                                     Ok(rows_affected) => {
                                         let elapsed_ms = start.elapsed().as_millis();
                                         Self::build_exec_result(
-                                            sql.clone(),
+                                            sql_to_execute.to_string(),
                                             rows_affected,
                                             elapsed_ms,
                                         )
@@ -1379,7 +1420,7 @@ impl DbConnection for PostgresDbConnection {
                                             e, sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
-                                            sql: sql.clone(),
+                                            sql: sql_to_execute.to_string(),
                                             message: e.to_string(),
                                         })
                                     }
@@ -1391,7 +1432,7 @@ impl DbConnection for PostgresDbConnection {
                                         Self::build_query_result(
                                             &stmt,
                                             rows,
-                                            sql.clone(),
+                                            sql_to_execute.to_string(),
                                             elapsed_ms,
                                         )
                                     }
@@ -1401,7 +1442,7 @@ impl DbConnection for PostgresDbConnection {
                                             e, sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
-                                            sql: sql.clone(),
+                                            sql: sql_to_execute.to_string(),
                                             message: e.to_string(),
                                         })
                                     }
@@ -1414,7 +1455,7 @@ impl DbConnection for PostgresDbConnection {
                                 e, sql_preview
                             );
                             SqlResult::Error(SqlErrorInfo {
-                                sql: sql.clone(),
+                                sql: sql_to_execute.to_string(),
                                 message: e.to_string(),
                             })
                         }
@@ -1443,22 +1484,29 @@ impl DbConnection for PostgresDbConnection {
             } else {
                 for (index, sql) in statements.into_iter().enumerate() {
                     let current = index + 1;
-                    let sql_preview = if sql.len() > 200 {
-                        format!("{}...", truncate_str(&sql, 200))
+                    let sql_to_execute = apply_query_max_rows(
+                        plugin.name(),
+                        &sql,
+                        options.max_rows,
+                        plugin.is_query_statement(&sql),
+                    );
+                    let sql_to_execute = sql_to_execute.as_ref();
+                    let sql_preview = if sql_to_execute.len() > 200 {
+                        format!("{}...", truncate_str(sql_to_execute, 200))
                     } else {
-                        sql.clone()
+                        sql_to_execute.to_string()
                     };
                     debug!("[PostgreSQL] Streaming statement {}/{}", current, total);
                     let start = Instant::now();
 
-                    let result = match client.prepare(&sql).await {
+                    let result = match client.prepare(sql_to_execute).await {
                         Ok(stmt) => {
                             if stmt.columns().is_empty() {
                                 match client.execute(&stmt, &[]).await {
                                     Ok(rows_affected) => {
                                         let elapsed_ms = start.elapsed().as_millis();
                                         Self::build_exec_result(
-                                            sql.clone(),
+                                            sql_to_execute.to_string(),
                                             rows_affected,
                                             elapsed_ms,
                                         )
@@ -1469,7 +1517,7 @@ impl DbConnection for PostgresDbConnection {
                                             e, sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
-                                            sql: sql.clone(),
+                                            sql: sql_to_execute.to_string(),
                                             message: e.to_string(),
                                         })
                                     }
@@ -1481,7 +1529,7 @@ impl DbConnection for PostgresDbConnection {
                                         Self::build_query_result(
                                             &stmt,
                                             rows,
-                                            sql.clone(),
+                                            sql_to_execute.to_string(),
                                             elapsed_ms,
                                         )
                                     }
@@ -1491,7 +1539,7 @@ impl DbConnection for PostgresDbConnection {
                                             e, sql_preview
                                         );
                                         SqlResult::Error(SqlErrorInfo {
-                                            sql: sql.clone(),
+                                            sql: sql_to_execute.to_string(),
                                             message: e.to_string(),
                                         })
                                     }
@@ -1504,7 +1552,7 @@ impl DbConnection for PostgresDbConnection {
                                 e, sql_preview
                             );
                             SqlResult::Error(SqlErrorInfo {
-                                sql: sql.clone(),
+                                sql: sql_to_execute.to_string(),
                                 message: e.to_string(),
                             })
                         }

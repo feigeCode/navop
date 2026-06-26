@@ -13,6 +13,7 @@ use tracing::{debug, error, info};
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
     ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
+    apply_query_max_rows,
 };
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::{resolve_connection_target, resolve_tunnel_destination};
@@ -287,11 +288,14 @@ impl MysqlDbConnection {
             .collect();
 
         let mut all_rows = Vec::new();
-        while let Some(row) = query_result
-            .next()
-            .await
-            .map_err(|e| DbError::query_with_source("failed to fetch row", e))?
-        {
+        loop {
+            let Some(row) = query_result
+                .next()
+                .await
+                .map_err(|e| DbError::query_with_source("failed to fetch row", e))?
+            else {
+                break;
+            };
             let row_data: Vec<Option<String>> = (0..row.len())
                 .map(|i| Self::extract_value(&row[i]))
                 .collect();
@@ -481,10 +485,17 @@ impl DbConnection for MysqlDbConnection {
                     continue;
                 }
 
-                let sql_preview = if sql.len() > 200 {
-                    format!("{}...", truncate_str(&sql, 200))
+                let sql_to_execute = apply_query_max_rows(
+                    plugin.name(),
+                    sql,
+                    options.max_rows,
+                    plugin.is_query_statement(sql),
+                );
+                let sql_to_execute = sql_to_execute.as_ref();
+                let sql_preview = if sql_to_execute.len() > 200 {
+                    format!("{}...", truncate_str(sql_to_execute, 200))
                 } else {
-                    sql.to_string()
+                    sql_to_execute.to_string()
                 };
                 debug!(
                     "[MySQL] TX executing statement {}/{}: {}",
@@ -494,11 +505,15 @@ impl DbConnection for MysqlDbConnection {
                 );
                 let start = Instant::now();
 
-                let result = match tx.query_iter(sql).await {
+                let result = match tx.query_iter(sql_to_execute).await {
                     Ok(query_result) => {
                         let elapsed_ms = start.elapsed().as_millis();
-                        match Self::process_query_result(query_result, sql.to_string(), elapsed_ms)
-                            .await
+                        match Self::process_query_result(
+                            query_result,
+                            sql_to_execute.to_string(),
+                            elapsed_ms,
+                        )
+                        .await
                         {
                             Ok(result) => result,
                             Err(e) => {
@@ -507,7 +522,7 @@ impl DbConnection for MysqlDbConnection {
                                     e, sql_preview
                                 );
                                 SqlResult::Error(SqlErrorInfo {
-                                    sql: sql.to_string(),
+                                    sql: sql_to_execute.to_string(),
                                     message: e.to_string(),
                                 })
                             }
@@ -519,7 +534,7 @@ impl DbConnection for MysqlDbConnection {
                             e, sql_preview
                         );
                         SqlResult::Error(SqlErrorInfo {
-                            sql: sql.to_string(),
+                            sql: sql_to_execute.to_string(),
                             message: e.to_string(),
                         })
                     }
@@ -566,7 +581,13 @@ impl DbConnection for MysqlDbConnection {
                     idx + 1,
                     statements.len()
                 );
-                let result = Self::execute_single(conn, sql).await?;
+                let sql_to_execute = apply_query_max_rows(
+                    plugin.name(),
+                    sql,
+                    options.max_rows,
+                    plugin.is_query_statement(sql),
+                );
+                let result = Self::execute_single(conn, sql_to_execute.as_ref()).await?;
 
                 let is_error = result.is_error();
                 if is_error {
@@ -688,19 +709,30 @@ impl DbConnection for MysqlDbConnection {
                     };
 
                     current += 1;
-                    let sql_preview = if sql.len() > 200 {
-                        format!("{}...", truncate_str(&sql, 200))
+                    let sql_to_execute = apply_query_max_rows(
+                        plugin.name(),
+                        &sql,
+                        options.max_rows,
+                        plugin.is_query_statement(&sql),
+                    );
+                    let sql_to_execute = sql_to_execute.as_ref();
+                    let sql_preview = if sql_to_execute.len() > 200 {
+                        format!("{}...", truncate_str(sql_to_execute, 200))
                     } else {
-                        sql.clone()
+                        sql_to_execute.to_string()
                     };
                     debug!("[MySQL] Streaming TX statement {}", current);
                     let start = Instant::now();
 
-                    let result = match tx.query_iter(&sql).await {
+                    let result = match tx.query_iter(sql_to_execute).await {
                         Ok(query_result) => {
                             let elapsed_ms = start.elapsed().as_millis();
-                            match Self::process_query_result(query_result, sql.clone(), elapsed_ms)
-                                .await
+                            match Self::process_query_result(
+                                query_result,
+                                sql_to_execute.to_string(),
+                                elapsed_ms,
+                            )
+                            .await
                             {
                                 Ok(result) => result,
                                 Err(e) => {
@@ -709,7 +741,7 @@ impl DbConnection for MysqlDbConnection {
                                         e, sql_preview
                                     );
                                     SqlResult::Error(SqlErrorInfo {
-                                        sql: sql.clone(),
+                                        sql: sql_to_execute.to_string(),
                                         message: e.to_string(),
                                     })
                                 }
@@ -721,7 +753,7 @@ impl DbConnection for MysqlDbConnection {
                                 e, sql_preview
                             );
                             SqlResult::Error(SqlErrorInfo {
-                                sql: sql.clone(),
+                                sql: sql_to_execute.to_string(),
                                 message: e.to_string(),
                             })
                         }
@@ -776,7 +808,13 @@ impl DbConnection for MysqlDbConnection {
                     current += 1;
                     debug!("[MySQL] Streaming statement {}", current);
 
-                    let result = match Self::execute_single(conn, &sql).await {
+                    let sql_to_execute = apply_query_max_rows(
+                        plugin.name(),
+                        &sql,
+                        options.max_rows,
+                        plugin.is_query_statement(&sql),
+                    );
+                    let result = match Self::execute_single(conn, sql_to_execute.as_ref()).await {
                         Ok(r) => r,
                         Err(e) => {
                             let sql_preview = if sql.len() > 200 {
@@ -836,19 +874,30 @@ impl DbConnection for MysqlDbConnection {
 
                 for (index, sql) in statements.into_iter().enumerate() {
                     let current = index + 1;
-                    let sql_preview = if sql.len() > 200 {
-                        format!("{}...", truncate_str(&sql, 200))
+                    let sql_to_execute = apply_query_max_rows(
+                        plugin.name(),
+                        &sql,
+                        options.max_rows,
+                        plugin.is_query_statement(&sql),
+                    );
+                    let sql_to_execute = sql_to_execute.as_ref();
+                    let sql_preview = if sql_to_execute.len() > 200 {
+                        format!("{}...", truncate_str(sql_to_execute, 200))
                     } else {
-                        sql.clone()
+                        sql_to_execute.to_string()
                     };
                     debug!("[MySQL] Streaming TX statement {}/{}", current, total);
                     let start = Instant::now();
 
-                    let result = match tx.query_iter(&sql).await {
+                    let result = match tx.query_iter(sql_to_execute).await {
                         Ok(query_result) => {
                             let elapsed_ms = start.elapsed().as_millis();
-                            match Self::process_query_result(query_result, sql.clone(), elapsed_ms)
-                                .await
+                            match Self::process_query_result(
+                                query_result,
+                                sql_to_execute.to_string(),
+                                elapsed_ms,
+                            )
+                            .await
                             {
                                 Ok(result) => result,
                                 Err(e) => {
@@ -857,7 +906,7 @@ impl DbConnection for MysqlDbConnection {
                                         e, sql_preview
                                     );
                                     SqlResult::Error(SqlErrorInfo {
-                                        sql: sql.clone(),
+                                        sql: sql_to_execute.to_string(),
                                         message: e.to_string(),
                                     })
                                 }
@@ -869,7 +918,7 @@ impl DbConnection for MysqlDbConnection {
                                 e, sql_preview
                             );
                             SqlResult::Error(SqlErrorInfo {
-                                sql: sql.clone(),
+                                sql: sql_to_execute.to_string(),
                                 message: e.to_string(),
                             })
                         }
@@ -900,7 +949,13 @@ impl DbConnection for MysqlDbConnection {
                     let current = index + 1;
                     debug!("[MySQL] Streaming statement {}/{}", current, total);
 
-                    let result = match Self::execute_single(conn, &sql).await {
+                    let sql_to_execute = apply_query_max_rows(
+                        plugin.name(),
+                        &sql,
+                        options.max_rows,
+                        plugin.is_query_statement(&sql),
+                    );
+                    let result = match Self::execute_single(conn, sql_to_execute.as_ref()).await {
                         Ok(r) => r,
                         Err(e) => {
                             let sql_preview = if sql.len() > 200 {

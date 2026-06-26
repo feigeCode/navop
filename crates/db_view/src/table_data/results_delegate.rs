@@ -16,6 +16,7 @@ use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use gpui_component::time_picker::{TimePickerEvent, TimePickerState};
 use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme, WindowExt, h_flex};
+use one_core::settings::AppSettings;
 use one_core::storage::DatabaseType;
 use one_ui::edit_table::{
     CellEditor, Column, ColumnSort, EditTableDelegate, EditTableEvent, EditTableState,
@@ -852,7 +853,7 @@ impl EditTableDelegate for EditorTableDelegate {
         &mut self,
         col_ix: usize,
         _window: &mut Window,
-        _: &mut Context<EditTableState<Self>>,
+        cx: &mut Context<EditTableState<Self>>,
     ) -> impl IntoElement {
         let col_name = self
             .columns
@@ -877,6 +878,7 @@ impl EditTableDelegate for EditorTableDelegate {
 
         h_flex()
             .id(SharedString::from(format!("col-{}", col_ix)))
+            .font_family(AppSettings::global(cx).table_preview_font_family.clone())
             .size_full()
             .items_center()
             .justify_between()
@@ -1353,12 +1355,17 @@ impl EditTableDelegate for EditorTableDelegate {
             .cloned()
             .unwrap_or(None);
 
+        let font_family =
+            SharedString::from(AppSettings::global(cx).table_preview_font_family.clone());
+
         match value {
             None => div()
+                .font_family(font_family.clone())
                 .text_color(cx.theme().muted_foreground.opacity(0.5))
                 .italic()
                 .child("NULL"),
             Some(s) => div()
+                .font_family(font_family)
                 .w_full()
                 .overflow_hidden()
                 .whitespace_nowrap()

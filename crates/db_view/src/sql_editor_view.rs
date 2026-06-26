@@ -1,11 +1,11 @@
 use crate::sql_editor::SqlEditor;
 use crate::sql_result_tab::SqlResultTabContainer;
-use db::{DbManager, GlobalDbState, format_sql};
+use db::{DbManager, GlobalDbState, StreamingSqlParser, format_sql};
 use gpui::prelude::*;
 use gpui::{
     App, AppContext, AsyncApp, Axis, Bounds, ClickEvent, Context, Element, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, KeyBinding, MouseMoveEvent, MouseUpEvent, ParentElement,
-    Pixels, Point, Render, SharedString, Styled, Task, WeakEntity, Window, div, px,
+    FocusHandle, Focusable, IntoElement, KeyBinding, MouseMoveEvent, MouseUpEvent, NoAction,
+    ParentElement, Pixels, Point, Render, SharedString, Styled, Task, WeakEntity, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{InputContextMenuItem, InputEvent};
@@ -31,9 +31,11 @@ use tracing::log::error;
 const PANEL_MIN_SIZE: Pixels = px(100.0);
 const RESULT_PANEL_DEFAULT_SIZE: Pixels = px(400.0);
 const SQL_EDITOR_CONTEXT: &str = "SqlEditor";
-const RUN_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-enter", "ctrl-enter"];
+const SQL_EDITOR_INPUT_CONTEXT: &str = "SqlEditor > Input";
+const RUN_CURRENT_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-enter", "ctrl-enter"];
+const RUN_ALL_QUERY_KEY_BINDINGS: [&str; 2] = ["cmd-shift-enter", "ctrl-shift-enter"];
 
-gpui::actions!(sql_editor_view, [RunQuery]);
+gpui::actions!(sql_editor_view, [RunCurrentQuery, RunAllQuery]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys(init_keybindings(cx));
@@ -44,28 +46,155 @@ pub fn refresh_keybindings(cx: &mut App) {
 }
 
 fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
-    shortcuts_for(cx, action_id::SQL_RUN_QUERY, &RUN_QUERY_KEY_BINDINGS)
+    let current_shortcuts = shortcuts_for(
+        cx,
+        action_id::SQL_RUN_QUERY,
+        &RUN_CURRENT_QUERY_KEY_BINDINGS,
+    );
+    let mut keybindings = current_shortcuts
+        .iter()
+        .map(|key| KeyBinding::new(key, RunCurrentQuery, Some(SQL_EDITOR_CONTEXT)))
+        .collect::<Vec<_>>();
+    keybindings.push(secondary_enter_binding(&current_shortcuts));
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::SQL_RUN_ALL_QUERY,
+            &RUN_ALL_QUERY_KEY_BINDINGS,
+        )
         .into_iter()
-        .map(|key| KeyBinding::new(&key, RunQuery, Some(SQL_EDITOR_CONTEXT)))
-        .collect()
+        .map(|key| KeyBinding::new(&key, RunAllQuery, Some(SQL_EDITOR_CONTEXT))),
+    );
+    keybindings
 }
 
 fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
-    rebind_keybindings(
+    let current_shortcuts = shortcuts_for(
         cx,
         action_id::SQL_RUN_QUERY,
-        &RUN_QUERY_KEY_BINDINGS,
+        &RUN_CURRENT_QUERY_KEY_BINDINGS,
+    );
+    let mut keybindings = rebind_keybindings(
+        cx,
+        action_id::SQL_RUN_QUERY,
+        &RUN_CURRENT_QUERY_KEY_BINDINGS,
         Some(SQL_EDITOR_CONTEXT),
-        RunQuery,
-    )
+        RunCurrentQuery,
+    );
+    keybindings.push(secondary_enter_binding(&current_shortcuts));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::SQL_RUN_ALL_QUERY,
+        &RUN_ALL_QUERY_KEY_BINDINGS,
+        Some(SQL_EDITOR_CONTEXT),
+        RunAllQuery,
+    ));
+    keybindings
 }
 
-fn sql_text_for_run(editor_text: &str, selected_text: &str) -> String {
+fn secondary_enter_binding(current_shortcuts: &[String]) -> KeyBinding {
+    if should_bind_secondary_enter(current_shortcuts) {
+        KeyBinding::new(
+            "secondary-enter",
+            RunCurrentQuery,
+            Some(SQL_EDITOR_INPUT_CONTEXT),
+        )
+    } else {
+        KeyBinding::new("secondary-enter", NoAction, Some(SQL_EDITOR_INPUT_CONTEXT))
+    }
+}
+
+fn should_bind_secondary_enter(shortcuts: &[String]) -> bool {
+    shortcuts
+        .iter()
+        .any(|shortcut| matches!(shortcut.as_str(), "cmd-enter" | "ctrl-enter"))
+}
+
+fn sql_text_for_run_current(
+    editor_text: &str,
+    selected_text: &str,
+    cursor_offset: usize,
+    database_type: DatabaseType,
+) -> String {
     if selected_text.trim().is_empty() {
-        editor_text.to_string()
+        current_sql_statement(editor_text, cursor_offset, database_type).unwrap_or_default()
     } else {
         selected_text.to_string()
     }
+}
+
+fn sql_text_for_run_all(editor_text: &str, _selected_text: &str) -> String {
+    editor_text.to_string()
+}
+
+fn sql_text_for_run_current_line(editor_text: &str, cursor_offset: usize) -> String {
+    let cursor_offset = clamp_to_char_boundary(editor_text, cursor_offset);
+    let line_start = editor_text[..cursor_offset]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let line_end = editor_text[cursor_offset..]
+        .find('\n')
+        .map(|index| cursor_offset + index)
+        .unwrap_or(editor_text.len());
+    editor_text[line_start..line_end].trim().to_string()
+}
+
+fn current_sql_statement(
+    editor_text: &str,
+    cursor_offset: usize,
+    database_type: DatabaseType,
+) -> Option<String> {
+    let cursor_offset = clamp_to_char_boundary(editor_text, cursor_offset);
+    let (prefix, suffix) = editor_text.split_at(cursor_offset);
+    if cursor_starts_next_statement(prefix, suffix) {
+        if let Some(statement) = parse_sql_statements(suffix, database_type.clone())
+            .into_iter()
+            .next()
+        {
+            return Some(statement);
+        }
+    }
+    parse_sql_statements(prefix, database_type.clone())
+        .into_iter()
+        .last()
+        .or_else(|| {
+            parse_sql_statements(editor_text, database_type)
+                .into_iter()
+                .next()
+        })
+}
+
+fn parse_sql_statements(sql: &str, database_type: DatabaseType) -> Vec<String> {
+    if sql.trim().is_empty() {
+        return Vec::new();
+    }
+    let Ok(parser) = StreamingSqlParser::from_script(sql.to_string(), database_type) else {
+        return vec![sql.trim().to_string()];
+    };
+    parser
+        .filter_map(Result::ok)
+        .map(|statement| statement.trim().to_string())
+        .filter(|statement| !statement.is_empty())
+        .collect()
+}
+
+fn cursor_starts_next_statement(prefix: &str, suffix: &str) -> bool {
+    if !suffix.chars().next().is_some_and(|ch| !ch.is_whitespace()) {
+        return false;
+    }
+    matches!(
+        prefix.chars().rev().find(|ch| !ch.is_whitespace()),
+        None | Some(';')
+    )
+}
+
+fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
 }
 
 fn should_render_schema_select(supports_schema: bool, uses_schema_as_database: bool) -> bool {
@@ -237,6 +366,15 @@ impl SqlEditorTab {
                         move |_, window, cx| {
                             let _ = view.update(cx, |this, cx| {
                                 this.handle_run_selected_query(window, cx);
+                            });
+                        }
+                    })
+                    .icon(IconName::ArrowRight),
+                    InputContextMenuItem::on_click(t!("Query.run_current_line").to_string(), {
+                        let view = view.clone();
+                        move |_, window, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                this.handle_run_current_line_query(window, cx);
                             });
                         }
                     })
@@ -772,18 +910,41 @@ impl SqlEditorTab {
 
     fn handle_run_query(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let selected_text = self.editor.read(cx).get_selected_text(cx);
-        let sql = sql_text_for_run(&self.get_sql_text(cx), &selected_text);
+        let cursor_offset = self.editor.read(cx).cursor_offset(cx);
+        let sql = sql_text_for_run_current(
+            &self.get_sql_text(cx),
+            &selected_text,
+            cursor_offset,
+            self.database_type.clone(),
+        );
         self.execute_sql_text(sql, window, cx);
     }
 
-    fn handle_run_query_action(
+    fn handle_run_current_query_action(
         &mut self,
-        _: &RunQuery,
+        _: &RunCurrentQuery,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let selected_text = self.editor.read(cx).get_selected_text(cx);
-        let sql = sql_text_for_run(&self.get_sql_text(cx), &selected_text);
+        let cursor_offset = self.editor.read(cx).cursor_offset(cx);
+        let sql = sql_text_for_run_current(
+            &self.get_sql_text(cx),
+            &selected_text,
+            cursor_offset,
+            self.database_type.clone(),
+        );
+        self.execute_sql_text(sql, window, cx);
+    }
+
+    fn handle_run_all_query_action(
+        &mut self,
+        _: &RunAllQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected_text = self.editor.read(cx).get_selected_text(cx);
+        let sql = sql_text_for_run_all(&self.get_sql_text(cx), &selected_text);
         self.execute_sql_text(sql, window, cx);
     }
 
@@ -794,6 +955,16 @@ impl SqlEditorTab {
             return;
         }
         self.execute_sql_text(selected_text, window, cx);
+    }
+
+    fn handle_run_current_line_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let cursor_offset = self.editor.read(cx).cursor_offset(cx);
+        let sql = sql_text_for_run_current_line(&self.get_sql_text(cx), cursor_offset);
+        if sql.trim().is_empty() {
+            window.push_notification(t!("Query.query_content_empty").to_string(), cx);
+            return;
+        }
+        self.execute_sql_text(sql, window, cx);
     }
 
     fn handle_format_query(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -1139,7 +1310,8 @@ impl Render for SqlEditorTab {
 
         let mut div = v_flex()
             .size_full()
-            .on_action(cx.listener(Self::handle_run_query_action));
+            .on_action(cx.listener(Self::handle_run_current_query_action))
+            .on_action(cx.listener(Self::handle_run_all_query_action));
         if has_results && results_visible {
             div = div
                 .child(self.render_has_results(window, cx))
@@ -1304,37 +1476,130 @@ impl Element for ResizeEventHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        RUN_QUERY_KEY_BINDINGS, initial_database_select_value, should_render_schema_select,
-        sql_text_for_run,
+        RUN_ALL_QUERY_KEY_BINDINGS, RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery,
+        SQL_EDITOR_CONTEXT, initial_database_select_value, should_render_schema_select,
+        sql_text_for_run_all, sql_text_for_run_current, sql_text_for_run_current_line,
     };
     use db::DbManager;
+    use gpui::{KeyBinding, KeyContext, Keymap, Keystroke};
+    use gpui_component::input;
     use one_core::storage::DatabaseType;
+
+    const WIRE_PREFIX: &str = "/*onetcli-ipc-wire*/ ";
 
     fn build_explain_sql(database_type: DatabaseType, sql: &str) -> Option<String> {
         let plugin = DbManager::default()
             .get_plugin(&database_type)
             .expect("plugin should exist");
-        plugin.build_explain_sql(sql)
+        normalize_explain_sql(plugin.build_explain_sql(sql))
+    }
+
+    fn normalize_explain_sql(sql: Option<String>) -> Option<String> {
+        let sql = sql?;
+        let Some(request) = sql.strip_prefix(WIRE_PREFIX) else {
+            return Some(sql);
+        };
+        serde_json::from_str::<serde_json::Value>(request)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("params")
+                    .and_then(|params| params.get("fallback_sql"))
+                    .and_then(|fallback| fallback.as_str())
+                    .map(str::to_string)
+            })
+            .or(Some(sql))
     }
 
     #[test]
     fn run_query_text_prefers_selected_sql_when_present() {
-        let actual = sql_text_for_run("select * from users;", "select id from users;");
+        let actual = sql_text_for_run_current(
+            "select * from users;",
+            "select id from users;",
+            0,
+            DatabaseType::MySQL,
+        );
 
         assert_eq!("select id from users;", actual);
     }
 
     #[test]
-    fn run_query_text_uses_editor_sql_when_selection_is_blank() {
-        let actual = sql_text_for_run("select * from users;", "   ");
+    fn run_query_text_uses_current_statement_when_selection_is_blank() {
+        let sql = "select * from users;\nselect * from orders;\nselect * from products;";
+        let cursor_offset = sql.find("orders").expect("statement exists") + "orders".len();
+        let actual = sql_text_for_run_current(sql, "   ", cursor_offset, DatabaseType::MySQL);
 
-        assert_eq!("select * from users;", actual);
+        assert_eq!("select * from orders", actual);
     }
 
     #[test]
-    fn run_query_key_bindings_include_platform_shortcuts() {
-        assert!(RUN_QUERY_KEY_BINDINGS.contains(&"cmd-enter"));
-        assert!(RUN_QUERY_KEY_BINDINGS.contains(&"ctrl-enter"));
+    fn run_query_text_ignores_semicolon_inside_string() {
+        let sql = "select 1;\nselect ';not delimiter' as value;\nselect 3;";
+        let cursor_offset = sql.find("value").expect("statement exists") + "value".len();
+        let actual = sql_text_for_run_current(sql, "", cursor_offset, DatabaseType::MySQL);
+
+        assert_eq!("select ';not delimiter' as value", actual);
+    }
+
+    #[test]
+    fn run_all_query_text_uses_editor_sql_even_with_selection() {
+        let sql = "select * from users;\nselect * from orders;";
+        let actual = sql_text_for_run_all(sql, "select * from users;");
+
+        assert_eq!(sql, actual);
+    }
+
+    #[test]
+    fn run_current_line_text_uses_cursor_line() {
+        let sql = "select 1;\n  select * from 用户表;  \nselect 3;";
+        let cursor_offset = sql.find("用户表").expect("line exists") + "用户".len();
+        let actual = sql_text_for_run_current_line(sql, cursor_offset);
+
+        assert_eq!("select * from 用户表;", actual);
+    }
+
+    #[test]
+    fn run_current_line_text_handles_last_line() {
+        let sql = "select 1;\nselect 2";
+        let actual = sql_text_for_run_current_line(sql, sql.len());
+
+        assert_eq!("select 2", actual);
+    }
+
+    #[test]
+    fn run_query_key_bindings_separate_current_and_all_modes() {
+        assert!(RUN_CURRENT_QUERY_KEY_BINDINGS.contains(&"cmd-enter"));
+        assert!(RUN_CURRENT_QUERY_KEY_BINDINGS.contains(&"ctrl-enter"));
+        assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"cmd-shift-enter"));
+        assert!(RUN_ALL_QUERY_KEY_BINDINGS.contains(&"ctrl-shift-enter"));
+    }
+
+    #[test]
+    fn secondary_enter_binding_wins_inside_sql_input_context() {
+        let keymap = Keymap::new(vec![
+            KeyBinding::new(
+                "secondary-enter",
+                input::Enter { secondary: true },
+                Some("Input"),
+            ),
+            KeyBinding::new(
+                "secondary-enter",
+                RunCurrentQuery,
+                Some("SqlEditor > Input"),
+            ),
+        ]);
+        let contexts = vec![
+            KeyContext::parse(SQL_EDITOR_CONTEXT).expect("valid context"),
+            KeyContext::parse("Input").expect("valid context"),
+        ];
+        let keystroke = Keystroke::parse("secondary-enter").expect("valid keystroke");
+        let (bindings, _) = keymap.bindings_for_input(&[keystroke], &contexts);
+
+        assert!(
+            bindings
+                .first()
+                .is_some_and(|binding| binding.action().partial_eq(&RunCurrentQuery))
+        );
     }
 
     #[test]

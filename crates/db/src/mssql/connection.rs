@@ -13,6 +13,7 @@ use tracing::{debug, error, info};
 use crate::connection::{DbConnection, DbError, StreamingProgress};
 use crate::executor::{
     ExecOptions, ExecResult, QueryColumnMeta, QueryResult, SqlErrorInfo, SqlResult, SqlSource,
+    apply_query_max_rows,
 };
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
@@ -387,7 +388,13 @@ impl DbConnection for MssqlDbConnection {
                     idx + 1,
                     statements.len()
                 );
-                let result = Self::execute_single(client, sql).await?;
+                let sql_to_execute = apply_query_max_rows(
+                    plugin.name(),
+                    sql,
+                    options.max_rows,
+                    plugin.is_query_statement(sql),
+                );
+                let result = Self::execute_single(client, sql_to_execute.as_ref()).await?;
 
                 let is_error = result.is_error();
                 if is_error {
@@ -526,7 +533,13 @@ impl DbConnection for MssqlDbConnection {
                 current += 1;
                 debug!("[MSSQL] Streaming statement {}", current);
 
-                let result = match Self::execute_single(client, &sql).await {
+                let sql_to_execute = apply_query_max_rows(
+                    plugin.name(),
+                    &sql,
+                    options.max_rows,
+                    plugin.is_query_statement(&sql),
+                );
+                let result = match Self::execute_single(client, sql_to_execute.as_ref()).await {
                     Ok(r) => r,
                     Err(e) => {
                         error!("[MSSQL] Streaming statement {} failed: {}", current, e);
@@ -601,7 +614,13 @@ impl DbConnection for MssqlDbConnection {
                     let current = index + 1;
                     debug!("[MSSQL] Streaming statement {}/{}", current, total);
 
-                    let result = match Self::execute_single(client, &sql).await {
+                    let sql_to_execute = apply_query_max_rows(
+                        plugin.name(),
+                        &sql,
+                        options.max_rows,
+                        plugin.is_query_statement(&sql),
+                    );
+                    let result = match Self::execute_single(client, sql_to_execute.as_ref()).await {
                         Ok(r) => r,
                         Err(e) => {
                             error!(

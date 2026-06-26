@@ -110,7 +110,6 @@ onetcli_cli = { path = "crates/onetcli_cli" }
 onetcli_runtime = { path = "crates/onetcli_runtime" }
 remote_file_editor = { path = "crates/remote_file_editor" }
 er_flow = { path = "crates/er_flow" }
-ipc = { path = "crates/ipc" }
 extension-protocol = { path = "crates/extension-protocol" }
 extension-host = { path = "crates/extension-host" }
 extension-driver = { path = "crates/extension-driver" }

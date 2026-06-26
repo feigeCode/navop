@@ -19,6 +19,7 @@ use lsp_types::{
     InlineCompletionContext, InlineCompletionItem, InlineCompletionResponse, InsertReplaceEdit,
     InsertTextFormat, Range as LspRange,
 };
+use one_core::settings::AppSettings;
 use rust_i18n::t;
 use sum_tree::Bias;
 
@@ -1510,10 +1511,17 @@ impl SqlEditor {
     pub fn get_selected_text(&self, cx: &App) -> String {
         self.editor.read(cx).selected_text_string()
     }
+
+    /// Get the current cursor byte offset.
+    pub fn cursor_offset(&self, cx: &App) -> usize {
+        self.editor.read(cx).cursor()
+    }
 }
 
 impl Render for SqlEditor {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        Input::new(&self.editor).size_full()
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        Input::new(&self.editor)
+            .font_family(AppSettings::global(cx).sql_editor_font_family.clone())
+            .size_full()
     }
 }

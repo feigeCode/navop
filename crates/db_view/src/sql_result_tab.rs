@@ -28,6 +28,7 @@ use tracing::log::error;
 use crate::table_data::cell_preview_host::CellPreviewHost;
 use crate::table_data::data_grid::{DataGrid, DataGridConfig, DataGridUsage};
 use one_core::ai_chat::ask_ai::AskAiButton;
+use one_core::settings::AppSettings;
 // 3. 当前 crate 导入（按模块分组）
 use db::{GlobalDbState, SqlResult, SqlSource};
 use gpui_component::checkbox::Checkbox;
@@ -298,17 +299,20 @@ impl SqlResultTabContainer {
         .detach();
 
         cx.spawn(async move |cx: &mut AsyncApp| {
-            let (global_state, database_type) = cx.update(|cx| {
+            let (global_state, database_type, max_rows) = cx.update(|cx| {
                 let global_state = cx.global::<GlobalDbState>();
                 let config = global_state.get_config(&connection_id);
                 let database_type = config
                     .map(|c| c.database_type)
                     .unwrap_or(one_core::storage::DatabaseType::MySQL);
-                (global_state.clone(), database_type)
+                let sql_query_max_rows = AppSettings::current(cx).sql_query_max_rows;
+                let max_rows = (sql_query_max_rows > 0).then_some(sql_query_max_rows as usize);
+                (global_state.clone(), database_type, max_rows)
             });
 
             let exec_opts = db::ExecOptions {
                 stop_on_error: false,
+                max_rows,
                 ..Default::default()
             };
             let mut rx = match global_state.execute_streaming(
