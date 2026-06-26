@@ -45,15 +45,18 @@ publish = false
 edition = "2024"
 
 [workspace.dependencies]
-gpui-component = { path = "crates/ui", version = "0.5.1" }
+gpui-component = { path = "crates/ui", version = "0.5.2" }
 gpui-component-macros = { path = "crates/macros", version = "0.5.1" }
 gpui-component-assets = { path = "crates/assets", version = "0.5.1" }
 story = { path = "crates/story" }
 
 gpui = { git = "https://github.com/zed-industries/zed" ,rev = "8b5328ca"}
 gpui_tokio = { git = "https://github.com/zed-industries/zed", rev = "8b5328ca" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui_macros = { git = "https://github.com/zed-industries/zed" }
 util = { git = "https://github.com/zed-industries/zed", rev = "8b5328ca" }
-gpui-macros = "0.2.2"
+
+
 sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
 # reqwest = { version = "0.12.15-zed", package = "zed-reqwest" }
 reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662463bda39148ba154100dd44d3fba5873a4", default-features = false, features = [
@@ -76,7 +79,7 @@ ropey = { version = "=2.0.0-beta.1", features = [
     "metric_lines_lf",
     "metric_utf16",
 ] }
-rust-i18n = "3"
+rust-i18n = "4"
 schemars = "1"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1"
@@ -184,73 +187,13 @@ url = "2.5.4"
 percent-encoding = "2.3.1"
 global-hotkey = "0.7.0"
 ferrum-flow = { git = "https://github.com/tu6ge/ferrum-flow.git", branch = "master" }
+errno = { version = "0.3.14", default-features = false }
 
 [patch.crates-io]
 gpui = { git = "https://github.com/zed-industries/zed", rev = "8b5328ca" }
 
 
-[workspace.dependencies.windows]
-features = ["Wdk", "Wdk_System", "Wdk_System_SystemServices"]
-version = "0.61.0"
 
-[workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
-
-[workspace.lints.clippy]
-almost_complete_range = "allow"
-arc_with_non_send_sync = "allow"
-borrowed_box = "allow"
-dbg_macro = "deny"
-let_underscore_future = "allow"
-manual_is_multiple_of = "allow"
-map_entry = "allow"
-module_inception = "allow"
-non_canonical_partial_ord_impl = "allow"
-reversed_empty_ranges = "allow"
-single_range_in_vec_init = "allow"
-style = { level = "allow", priority = -1 }
-todo = "deny"
-type_complexity = "allow"
-
-
-[profile.dev]
-#codegen-units = 16
-#debug = "limited"
-#split-debuginfo = "unpacked"
-
-
-
-# 优化级别：0=无优化（默认，调试最佳），1=轻度优化，2=中度，3=高度
-opt-level = 0
-# 是否启用调试符号：true=启用（默认），false=禁用，"full"=完整符号（推荐）
-debug = true
-# 是否启用 debuginfo 行表（保证调试器能对应源码行）
-debug-assertions = true
-# 是否启用溢出检查（Debug 模式默认开启，Release 关闭）
-overflow-checks = true
-# 是否增量编译（加速二次构建，默认开启）
-incremental = true
-# panic 处理方式："unwind"=展开栈（默认），"abort"=直接终止程序
-panic = "unwind"
-
-[profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-strip = true
-
-[profile.dev.package]
-resvg = { opt-level = 3 }
-rustybuzz = { opt-level = 3 }
-taffy = { opt-level = 3 }
-ttf-parser = { opt-level = 3 }
-smol = { opt-level = 3 }
-gpui = { opt-level = 3 }
-gpui-macros = { opt-level = 3 }
-tree-sitter = { opt-level = 3 }
-sum_tree = { opt-level = 3 }
-ropey = { opt-level = 3 }
-lsp-types = { opt-level = 3 }
-reqwest_client = { opt-level = 3 }
-markdown = { opt-level = 3 }
-xml5ever = { opt-level = 3 }
+# Use stacker's psm version which may have better WASM support
+psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
+tree-sitter-navi = { git = "https://github.com/navi-language/tree-sitter-navi" }

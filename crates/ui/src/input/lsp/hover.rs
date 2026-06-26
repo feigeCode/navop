@@ -1,10 +1,9 @@
-use std::time::Duration;
-
+use instant::Duration;
 use anyhow::Result;
 use gpui::{App, Context, Task, Window};
 use ropey::Rope;
 
-use crate::input::{InputState, RopeExt, popovers::HoverPopover};
+use crate::input::{popovers::HoverPopover, InputState, RopeExt};
 
 /// Hover provider
 ///

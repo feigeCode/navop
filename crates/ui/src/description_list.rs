@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, App, Axis, DefiniteLength, IntoElement, ParentElement, RenderOnce, SharedString,
-    Styled, Window, div, prelude::FluentBuilder as _, px,
+    Styled, Window, div, prelude::FluentBuilder as _, px, relative,
 };
 
 use crate::{ActiveTheme as _, AxisExt, Sizable, Size, h_flex, text::Text, v_flex};
@@ -23,7 +23,7 @@ pub enum DescriptionItem {
         value: DescriptionText,
         span: usize,
     },
-    Divider,
+    Separator,
 }
 
 /// Text for the label or value in the [`DescriptionList`].
@@ -205,9 +205,9 @@ impl DescriptionList {
         self
     }
 
-    /// Add a divider to the list.
-    pub fn divider(mut self) -> Self {
-        self.items.push(DescriptionItem::Divider);
+    /// Add a separator to the list.
+    pub fn separator(mut self) -> Self {
+        self.items.push(DescriptionItem::Separator);
         self
     }
 
@@ -298,7 +298,7 @@ impl RenderOnce for DescriptionList {
                             let is_first_col = item_ix == 0;
 
                             match item {
-                                DescriptionItem::Item { label, value, .. } => {
+                                DescriptionItem::Item { label, value, span } => {
                                     let el = if self.layout.is_vertical() {
                                         v_flex()
                                     } else {
@@ -306,6 +306,7 @@ impl RenderOnce for DescriptionList {
                                     };
 
                                     el.flex_1()
+                                        .flex_basis(relative((span as f32) / (self.columns as f32)))
                                         .overflow_x_hidden()
                                         .child(
                                             div()

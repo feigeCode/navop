@@ -1,15 +1,15 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, Empty, Entity, IntoElement, Pixels, Point, Render,
-    Styled, Window, prelude::FluentBuilder as _, px,
+    prelude::FluentBuilder as _, px, App, AppContext as _, Bounds, Context, Empty, Entity,
+    IntoElement, Pixels, Point, Render, Styled, Window,
 };
 
 use crate::{
     highlighter::DiagnosticEntry,
     input::{
+        popovers::{render_markdown, Popover},
         InputState,
-        popovers::{Popover, render_markdown},
     },
 };
 

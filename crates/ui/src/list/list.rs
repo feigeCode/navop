@@ -1,5 +1,5 @@
 use std::ops::Range;
-use std::time::Duration;
+use instant::Duration;
 
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use crate::input::InputState;
@@ -22,7 +22,6 @@ use gpui::{
     Length, MouseButton, ParentElement, Render, Styled, Task, Window, div, prelude::FluentBuilder,
 };
 use rust_i18n::t;
-use smol::Timer;
 
 pub(crate) fn init(cx: &mut App) {
     let context: Option<&str> = Some("List");
@@ -212,6 +211,14 @@ where
         self.mouse_right_clicked_index
     }
 
+    /// Set the query text of the search input, this will trigger a search.
+    pub fn set_query(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let query = query.to_string();
+        self.query_input.update(cx, |input, cx| {
+            input.set_value(query, window, cx);
+        });
+    }
+
     /// Set a specific list item for measurement.
     pub fn set_item_to_measure_index(
         &mut self,
@@ -288,19 +295,12 @@ where
                     });
 
                     // Always wait 100ms to avoid flicker
-                    Timer::after(Duration::from_millis(100)).await;
+                    window.background_executor().timer(Duration::from_millis(100)).await;
                     _ = this.update_in(window, |this, window, cx| {
                         this.set_searching(false, window, cx);
                     });
                 });
             }
-            InputEvent::PressEnter { secondary } => self.on_action_confirm(
-                &Confirm {
-                    secondary: *secondary,
-                },
-                window,
-                cx,
-            ),
             _ => {}
         }
     }

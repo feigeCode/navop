@@ -1,9 +1,9 @@
 use gpui::{
-    AnyElement, App, Hsla, IntoElement, ParentElement, RenderOnce, StyleRefinement, Styled, Window,
-    div, prelude::FluentBuilder, px, relative,
+    div, prelude::FluentBuilder, px, relative, AnyElement, App, Hsla, IntoElement, ParentElement,
+    RenderOnce, StyleRefinement, Styled, Window,
 };
 
-use crate::{ActiveTheme, Icon, Sizable, Size, StyledExt, h_flex, white};
+use crate::{h_flex, white, ActiveTheme, Icon, Sizable, Size, StyledExt};
 
 #[derive(Default, Clone)]
 enum BadgeVariant {

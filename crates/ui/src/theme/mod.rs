@@ -24,7 +24,8 @@ pub use theme_color::*;
 pub fn init(cx: &mut App) {
     registry::init(cx);
 
-    Theme::sync_system_appearance(None, cx);
+    // Ensure theme is loaded directly on startup for WASM compatibility
+    Theme::change(ThemeMode::Light, None, cx);
     Theme::sync_scrollbar_appearance(cx);
 }
 
@@ -71,6 +72,7 @@ pub struct Theme {
     /// Show the scrollbar mode, default: Scrolling
     pub scrollbar_show: ScrollbarShow,
     /// The notification setting.
+    #[serde(skip)]
     pub notification: NotificationSettings,
     /// Tile grid size, default is 4px.
     pub tile_grid_size: Pixels,
@@ -179,10 +181,13 @@ impl Theme {
     }
 
     /// Get the input background color.
+    ///
+    /// For dark, use a transparent color mixed with the input border: `cx.theme().input`,
+    /// otherwise use the `cx.theme().background` color.
     #[inline]
     pub fn input_background(&self) -> Hsla {
         if self.is_dark() {
-            self.input.mix(self.transparent, 0.1)
+            self.input.mix_oklab(self.transparent, 0.3)
         } else {
             self.background
         }

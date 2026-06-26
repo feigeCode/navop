@@ -163,18 +163,21 @@ impl Settings {
             .w(relative(1.))
             .border_0()
             .refine_style(&self.sidebar_style)
+            .collapsible(false)
             .collapsed(false)
             .header(
-                Input::new(&search_input)
+                div()
                     .w_full()
                     .refine_style(&self.header_style)
-                    .prefix(IconName::Search),
+                    .child(Input::new(&search_input).prefix(IconName::Search)),
             )
             .child(
                 SidebarMenu::new().children(pages.iter().enumerate().map(|(page_ix, page)| {
                     let is_page_active =
                         selected_index.page_ix == page_ix && selected_index.group_ix.is_none();
                     SidebarMenuItem::new(page.title.clone())
+                        .click_to_open(true)
+                        .when_some(page.icon.clone(), |this, icon| this.icon(icon))
                         .default_open(page.default_open)
                         .active(is_page_active)
                         .on_click({

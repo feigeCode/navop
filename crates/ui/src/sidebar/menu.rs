@@ -97,6 +97,7 @@ pub struct SidebarMenuItem {
     default_open: bool,
     click_to_open: bool,
     collapsed: bool,
+    click_to_toggle: bool,
     children: Vec<Self>,
     suffix: Option<Rc<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>>,
     disabled: bool,
@@ -114,6 +115,7 @@ impl SidebarMenuItem {
             collapsed: false,
             default_open: false,
             click_to_open: false,
+            click_to_toggle: false,
             children: Vec::new(),
             suffix: None,
             disabled: false,
@@ -163,6 +165,16 @@ impl SidebarMenuItem {
     /// If `false` we only handle open/close via the caret button.
     pub fn click_to_open(mut self, click_to_open: bool) -> Self {
         self.click_to_open = click_to_open;
+        self
+    }
+
+    /// Set whether clicking the menu item toggles the submenu.
+    ///
+    /// If click_to_open is `true`, this has no effect.
+    ///
+    /// Default is `false`.
+    pub fn click_to_toggle(mut self, click_to_toggle: bool) -> Self {
+        self.click_to_toggle = click_to_toggle;
         self
     }
 
@@ -224,16 +236,23 @@ impl SidebarItem for SidebarMenuItem {
         cx: &mut App,
     ) -> impl IntoElement {
         let click_to_open = self.click_to_open;
+        let click_to_toggle = self.click_to_toggle;
         let default_open = self.default_open;
         let id = id.into();
-        let open_state = window.use_keyed_state(id.clone(), cx, |_, _| default_open);
+        let is_submenu = self.is_submenu();
+        let open_state = if is_submenu {
+            Some(window.use_keyed_state(id.clone(), cx, |_, _| default_open))
+        } else {
+            None
+        };
         let handler = self.handler.clone();
         let is_collapsed = self.collapsed;
         let is_active = self.active;
         let is_hoverable = !is_active && !self.disabled;
         let is_disabled = self.disabled;
-        let is_submenu = self.is_submenu();
-        let is_open = is_submenu && !is_collapsed && *open_state.read(cx);
+        let is_open = open_state
+            .as_ref()
+            .map_or(false, |s| !is_collapsed && *s.read(cx));
 
         div()
             .id(id.clone())
@@ -275,19 +294,16 @@ impl SidebarItem for SidebarMenuItem {
                                     .justify_between()
                                     .overflow_x_hidden()
                                     .child(
-                                        h_flex().flex_1().overflow_x_hidden().child(
-                                            div()
-                                                .flex_1()
-                                                .whitespace_nowrap()
-                                                .overflow_x_hidden()
-                                                .child(self.label.clone()),
-                                        ),
+                                        h_flex()
+                                            .flex_1()
+                                            .overflow_x_hidden()
+                                            .child(self.label.clone()),
                                     )
                                     .when_some(self.suffix.clone(), |this, suffix| {
                                         this.child(suffix(window, cx).into_any_element())
                                     }),
                             )
-                            .when(is_submenu, |this| {
+                            .when_some(open_state.clone(), |this, open_state| {
                                 this.child(
                                     Button::new("caret")
                                         .xsmall()
@@ -300,7 +316,6 @@ impl SidebarItem for SidebarMenuItem {
                                                 }),
                                         )
                                         .on_click({
-                                            let open_state = open_state.clone();
                                             move |_, _, cx| {
                                                 // Avoid trigger item click, just expand/collapse submenu
                                                 cx.stop_propagation();
@@ -321,12 +336,20 @@ impl SidebarItem for SidebarMenuItem {
                             let open_state = open_state.clone();
                             move |ev, window, cx| {
                                 if click_to_open {
-                                    open_state.update(cx, |is_open, cx| {
-                                        *is_open = true;
-                                        cx.notify();
-                                    });
+                                    if let Some(ref s) = open_state {
+                                        s.update(cx, |is_open: &mut bool, cx| {
+                                            *is_open = true;
+                                            cx.notify();
+                                        });
+                                    }
+                                } else if click_to_toggle {
+                                    if let Some(ref s) = open_state {
+                                        s.update(cx, |is_open: &mut bool, cx| {
+                                            *is_open = !*is_open;
+                                            cx.notify();
+                                        });
+                                    }
                                 }
-
                                 handler(ev, window, cx)
                             }
                         })

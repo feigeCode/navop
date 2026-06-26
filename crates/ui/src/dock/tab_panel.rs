@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext, Context, Corner, DismissEvent, Div, DragMoveEvent, Empty, Entity,
+    Anchor, App, AppContext, Context, DismissEvent, Div, DragMoveEvent, Empty, Entity,
     EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, ParentElement,
     Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement, StyleRefinement,
     Styled, WeakEntity, Window, div, prelude::FluentBuilder, px, relative, rems,
@@ -78,6 +78,7 @@ pub struct TabPanel {
     pub(crate) closable: bool,
 
     tab_bar_scroll_handle: ScrollHandle,
+    pending_scroll_to_ix: Option<usize>,
     zoomed: bool,
     collapsed: bool,
     /// When drag move, will get the placement of the panel to be split
@@ -172,6 +173,7 @@ impl TabPanel {
             panels: Vec::new(),
             active_ix: 0,
             tab_bar_scroll_handle: ScrollHandle::new(),
+            pending_scroll_to_ix: None,
             will_split_placement: None,
             zoomed: false,
             collapsed: false,
@@ -217,7 +219,7 @@ impl TabPanel {
         let last_active_ix = self.active_ix;
 
         self.active_ix = ix;
-        self.tab_bar_scroll_handle.scroll_to_item(ix);
+        self.pending_scroll_to_ix = Some(ix);
         self.focus_active_panel(window, cx);
 
         // Sync the active state to all panels
@@ -514,7 +516,7 @@ impl TabPanel {
                             })
                         }
                     })
-                    .anchor(Corner::TopRight),
+                    .anchor(Anchor::TopRight),
             )
     }
 
@@ -689,6 +691,18 @@ impl TabPanel {
                         .children(right_dock_button),
                 )
                 .into_any_element();
+        }
+
+        if let Some(panel_ix) = self.pending_scroll_to_ix.take() {
+            if let Some(visible_ix) = self
+                .panels
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.visible(cx))
+                .position(|(ix, _)| ix == panel_ix)
+            {
+                self.tab_bar_scroll_handle.scroll_to_item(visible_ix);
+            }
         }
 
         let tabs_count = self.panels.len();

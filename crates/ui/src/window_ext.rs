@@ -1,7 +1,11 @@
 use crate::{
-    Placement, Root, dialog::Dialog, input::InputState, notification::Notification, sheet::Sheet,
+    Placement, Root,
+    dialog::{AlertDialog, Dialog},
+    input::InputState,
+    notification::Notification,
+    sheet::Sheet,
 };
-use gpui::{App, Entity, Window};
+use gpui::{App, ElementId, Entity, Window};
 use std::rc::Rc;
 
 /// Extension trait for [`Window`] to add dialog, sheet .. functionality.
@@ -27,6 +31,27 @@ pub trait WindowExt: Sized {
     where
         F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static;
 
+    /// Opens an AlertDialog.
+    ///
+    /// This is a convenience method for opening an alert dialog with opinionated defaults.
+    /// The footer buttons are center-aligned and include an icon based on the variant.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use gpui_component::{AlertDialog, alert::AlertVariant};
+    ///
+    /// window.open_alert_dialog(cx, |alert, _, _| {
+    ///     alert.warning()
+    ///         .title("Unsaved Changes")
+    ///         .description("You have unsaved changes. Are you sure you want to leave?")
+    ///         .show_cancel(true)
+    /// });
+    /// ```
+    fn open_alert_dialog<F>(&mut self, cx: &mut App, build: F)
+    where
+        F: Fn(AlertDialog, &mut Window, &mut App) -> AlertDialog + 'static;
+
     /// Return true, if there is an active Dialog.
     fn has_active_dialog(&mut self, cx: &mut App) -> bool;
 
@@ -39,8 +64,12 @@ pub trait WindowExt: Sized {
     /// Pushes a notification to the notification list.
     fn push_notification(&mut self, note: impl Into<Notification>, cx: &mut App);
 
-    /// Removes the notification with the given id.
+    /// Removes all notifications whose id matches `T`, including ones registered with
+    /// either `Notification::id` or `Notification::id1` (any key).
     fn remove_notification<T: Sized + 'static>(&mut self, cx: &mut App);
+
+    /// Removes a single notification matching the given type `T` and `key` (paired with `Notification::id1`).
+    fn remove_notification1<T: Sized + 'static>(&mut self, key: impl Into<ElementId>, cx: &mut App);
 
     /// Clears all notifications.
     fn clear_notifications(&mut self, cx: &mut App);
@@ -96,6 +125,16 @@ impl WindowExt for Window {
     }
 
     #[inline]
+    fn open_alert_dialog<F>(&mut self, cx: &mut App, build: F)
+    where
+        F: Fn(AlertDialog, &mut Window, &mut App) -> AlertDialog + 'static,
+    {
+        self.open_dialog(cx, move |_, window, cx| {
+            build(AlertDialog::new(cx), window, cx).into_dialog(window, cx)
+        })
+    }
+
+    #[inline]
     fn has_active_dialog(&mut self, cx: &mut App) -> bool {
         Root::read(self, cx).active_dialogs.len() > 0
     }
@@ -126,6 +165,18 @@ impl WindowExt for Window {
     fn remove_notification<T: Sized + 'static>(&mut self, cx: &mut App) {
         Root::update(self, cx, |root, window, cx| {
             root.remove_notification::<T>(window, cx);
+        })
+    }
+
+    #[inline]
+    fn remove_notification1<T: Sized + 'static>(
+        &mut self,
+        key: impl Into<ElementId>,
+        cx: &mut App,
+    ) {
+        let key = key.into();
+        Root::update(self, cx, |root, window, cx| {
+            root.remove_notification1::<T>(key, window, cx);
         })
     }
 

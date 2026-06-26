@@ -21,6 +21,14 @@ pub struct ThemeColor {
     pub background: Hsla,
     /// Default border color
     pub border: Hsla,
+    /// Button primary background color, fallback to `primary`.
+    pub button_primary: Hsla,
+    /// Button primary active background color, fallback to `primary_active`.
+    pub button_primary_active: Hsla,
+    /// Button primary text color, fallback to `primary_foreground`.
+    pub button_primary_foreground: Hsla,
+    /// Button primary hover background color, fallback to `primary_hover`.
+    pub button_primary_hover: Hsla,
     /// Background color for GroupBox.
     pub group_box: Hsla,
     /// Text color for GroupBox.
@@ -37,6 +45,10 @@ pub struct ThemeColor {
     pub chart_4: Hsla,
     /// Chart 5 color.
     pub chart_5: Hsla,
+    /// Bullish color for candlestick charts (upward price movement).
+    pub chart_bullish: Hsla,
+    /// Bearish color for candlestick charts (downward price movement).
+    pub chart_bearish: Hsla,
     /// Danger background color.
     pub danger: Hsla,
     /// Danger active background color.
@@ -147,10 +159,6 @@ pub struct ThemeColor {
     pub success_hover: Hsla,
     /// Success active background color.
     pub success_active: Hsla,
-    /// Bullish color for candlestick charts (upward price movement).
-    pub bullish: Hsla,
-    /// Bearish color for candlestick charts (downward price movement).
-    pub bearish: Hsla,
     /// Switch background color.
     pub switch: Hsla,
     /// Switch thumb background color.
@@ -179,6 +187,10 @@ pub struct ThemeColor {
     pub table_head: Hsla,
     /// Table head text color.
     pub table_head_foreground: Hsla,
+    /// Table footer background color.
+    pub table_foot: Hsla,
+    /// Table footer text color.
+    pub table_foot_foreground: Hsla,
     /// Table item hover background color.
     pub table_hover: Hsla,
     /// Table row border color.

@@ -1,6 +1,9 @@
+use gpui::Corners;
+use gpui::InteractiveElement;
+use gpui::ParentElement;
+use gpui::{App, Axis, Edges, ElementId, IntoElement, Window};
 use gpui::{
-    App, Axis, Corners, Edges, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    RenderOnce, StatefulInteractiveElement as _, StyleRefinement, Styled, div,
     prelude::FluentBuilder as _,
 };
 use std::{cell::Cell, rc::Rc};
@@ -207,7 +210,12 @@ impl RenderOnce for ButtonGroup {
                         } else {
                             // Middle
                             child
-                                .border_corners(Corners::all(false))
+                                .border_corners(Corners {
+                                    top_left: false,
+                                    top_right: false,
+                                    bottom_left: false,
+                                    bottom_right: false,
+                                })
                                 .border_edges(Edges {
                                     left: vertical,
                                     top: !vertical,

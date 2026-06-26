@@ -1,12 +1,12 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, ParentElement, RenderOnce,
-    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
-    prelude::FluentBuilder as _,
+    div, prelude::FluentBuilder as _, App, ClickEvent, ElementId, InteractiveElement as _,
+    IntoElement, ParentElement, RenderOnce, SharedString, StatefulInteractiveElement,
+    StyleRefinement, Styled, Window,
 };
 
-use crate::{ActiveTheme, Icon, IconName, StyledExt, h_flex};
+use crate::{h_flex, ActiveTheme, Icon, IconName, StyledExt};
 
 /// A breadcrumb navigation element.
 #[derive(IntoElement)]

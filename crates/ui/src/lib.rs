@@ -1,12 +1,12 @@
 use gpui::{App, SharedString};
 use std::ops::Deref;
 
-mod anchored;
+mod async_util;
 mod element_ext;
 mod event;
 mod focus_trap;
 mod geometry;
-mod global_state;
+pub mod global_state;
 mod icon;
 mod index_path;
 #[cfg(any(feature = "inspector", debug_assertions))]
@@ -35,7 +35,6 @@ pub mod collapsible;
 pub mod color_picker;
 pub mod description_list;
 pub mod dialog;
-pub mod divider;
 pub mod dock;
 pub mod form;
 pub mod group_box;
@@ -58,6 +57,7 @@ pub mod rating;
 pub mod resizable;
 pub mod scroll;
 pub mod select;
+pub mod separator;
 pub mod setting;
 pub mod sheet;
 pub mod sidebar;
@@ -75,20 +75,21 @@ pub mod tooltip;
 pub mod tree;
 
 pub use crate::Disableable;
-pub(crate) use anchored::*;
-pub use element_ext::ElementExt;
+pub use element_ext::*;
 pub use event::InteractiveElementExt;
 pub use focus_trap::FocusTrapElement;
 pub use geometry::*;
+pub use global_state::GlobalState;
+pub use gpui_component_macros::icon_named;
 pub use icon::*;
 pub use index_path::IndexPath;
-pub use input::{BlinkCursor, Rope, RopeExt, RopeLines};
+pub use input::{Rope, RopeExt, RopeLines};
 #[cfg(any(feature = "inspector", debug_assertions))]
 pub use inspector::*;
 pub use root::Root;
 pub use styled::*;
 pub use theme::*;
-pub use time::{calendar, date_picker, datetime_picker, time_picker};
+pub use time::{calendar, date_picker};
 pub use title_bar::*;
 pub use virtual_list::{VirtualList, VirtualListScrollHandle, h_virtual_list, v_virtual_list};
 pub use window_border::{WindowBorder, window_border, window_paddings};
@@ -108,8 +109,6 @@ pub fn init(cx: &mut App) {
     focus_trap::init(cx);
     color_picker::init(cx);
     date_picker::init(cx);
-    datetime_picker::init(cx);
-    time_picker::init(cx);
     dock::init(cx);
     sheet::init(cx);
     select::init(cx);
@@ -121,6 +120,7 @@ pub fn init(cx: &mut App) {
     table::init(cx);
     text::init(cx);
     tree::init(cx);
+    tooltip::init(cx);
 }
 
 #[inline]

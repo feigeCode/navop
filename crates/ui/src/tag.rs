@@ -1,8 +1,8 @@
-use crate::{ColorName, Sizable, Size, StyledExt, theme::ActiveTheme as _};
+use crate::{theme::ActiveTheme as _, ColorName, Sizable, Size, StyledExt};
 use gpui::{
-    AbsoluteLength, AnyElement, App, Hsla, InteractiveElement as _, IntoElement, ParentElement,
-    RenderOnce, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _, relative, rems,
-    transparent_white,
+    div, prelude::FluentBuilder as _, relative, rems, transparent_white, AbsoluteLength,
+    AnyElement, App, Hsla, InteractiveElement as _, IntoElement, ParentElement, RenderOnce,
+    StyleRefinement, Styled, Window,
 };
 
 /// The variant of the Tag.

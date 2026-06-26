@@ -89,6 +89,18 @@ pub struct ThemeConfigColors {
     /// Default border color
     #[serde(rename = "border")]
     pub border: Option<SharedString>,
+    /// Button primary background color, fallback to `primary`.
+    #[serde(rename = "button.primary.background")]
+    pub button_primary: Option<SharedString>,
+    /// Button primary active background color, fallback to `primary_active`.
+    #[serde(rename = "button.primary.active.background")]
+    pub button_primary_active: Option<SharedString>,
+    /// Button primary text color, fallback to `primary_foreground`.
+    #[serde(rename = "button.primary.foreground")]
+    pub button_primary_foreground: Option<SharedString>,
+    /// Button primary hover background color, fallback to `primary_hover`.
+    #[serde(rename = "button.primary.hover.background")]
+    pub button_primary_hover: Option<SharedString>,
     /// Background color for GroupBox.
     #[serde(rename = "group_box.background")]
     pub group_box: Option<SharedString>,
@@ -116,6 +128,12 @@ pub struct ThemeConfigColors {
     /// Chart 5 color.
     #[serde(rename = "chart.5")]
     pub chart_5: Option<SharedString>,
+    /// Bullish color for candlestick charts (upward price movement).
+    #[serde(rename = "chart_bullish")]
+    pub chart_bullish: Option<SharedString>,
+    /// Bearish color for candlestick charts (downward price movement).
+    #[serde(rename = "chart_bearish")]
+    pub chart_bearish: Option<SharedString>,
     /// Danger background color.
     #[serde(rename = "danger.background")]
     pub danger: Option<SharedString>,
@@ -281,12 +299,6 @@ pub struct ThemeConfigColors {
     /// Success active background color.
     #[serde(rename = "success.active.background")]
     pub success_active: Option<SharedString>,
-    /// Bullish color for candlestick charts (upward price movement).
-    #[serde(rename = "bullish.background")]
-    pub bullish: Option<SharedString>,
-    /// Bearish color for candlestick charts (downward price movement).
-    #[serde(rename = "bearish.background")]
-    pub bearish: Option<SharedString>,
     /// Switch background color.
     #[serde(rename = "switch.background")]
     pub switch: Option<SharedString>,
@@ -323,12 +335,18 @@ pub struct ThemeConfigColors {
     /// Stripe background color for even TableRow.
     #[serde(rename = "table.even.background")]
     pub table_even: Option<SharedString>,
-    /// Table head background color.
+    /// Table header background color.
     #[serde(rename = "table.head.background")]
     pub table_head: Option<SharedString>,
-    /// Table head text color.
+    /// Table header text color.
     #[serde(rename = "table.head.foreground")]
     pub table_head_foreground: Option<SharedString>,
+    /// Table footer background color.
+    #[serde(rename = "table.foot.background")]
+    pub table_foot: Option<SharedString>,
+    /// Table footer text color.
+    #[serde(rename = "table.foot.foreground")]
+    pub table_foot_foreground: Option<SharedString>,
     /// Table item hover background color.
     #[serde(rename = "table.hover.background")]
     pub table_hover: Option<SharedString>,
@@ -488,6 +506,13 @@ impl ThemeColor {
             primary_active,
             fallback = self.primary.darken(active_darken)
         );
+        apply_color!(button_primary, fallback = self.primary);
+        apply_color!(
+            button_primary_foreground,
+            fallback = self.primary_foreground
+        );
+        apply_color!(button_primary_hover, fallback = self.primary_hover);
+        apply_color!(button_primary_active, fallback = self.primary_active);
         apply_color!(secondary);
         apply_color!(secondary_foreground, fallback = self.foreground);
         apply_color!(
@@ -508,8 +533,6 @@ impl ThemeColor {
             success_active,
             fallback = self.success.darken(active_darken)
         );
-        apply_color!(bullish, fallback = self.green);
-        apply_color!(bearish, fallback = self.red);
         apply_color!(info, fallback = self.cyan);
         apply_color!(info_foreground, fallback = self.primary_foreground);
         apply_color!(
@@ -549,6 +572,8 @@ impl ThemeColor {
         apply_color!(chart_3, fallback = self.blue);
         apply_color!(chart_4, fallback = self.blue.darken(0.2));
         apply_color!(chart_5, fallback = self.blue.darken(0.4));
+        apply_color!(chart_bullish, fallback = self.green);
+        apply_color!(chart_bearish, fallback = self.red);
         apply_color!(danger, fallback = self.red);
         apply_color!(danger_active, fallback = self.danger.darken(active_darken));
         apply_color!(danger_foreground, fallback = self.primary_foreground);
@@ -620,6 +645,8 @@ impl ThemeColor {
         apply_color!(table_even, fallback = self.list_even);
         apply_color!(table_head, fallback = self.list_head);
         apply_color!(table_head_foreground, fallback = self.muted_foreground);
+        apply_color!(table_foot, fallback = self.list_head);
+        apply_color!(table_foot_foreground, fallback = self.muted_foreground);
         apply_color!(table_hover, fallback = self.list_hover);
         apply_color!(table_row_border, fallback = self.border);
         apply_color!(title_bar, fallback = self.background);
@@ -654,49 +681,35 @@ impl Theme {
             self.highlight_theme = highlight_theme.clone();
         }
 
-        let default_theme = if config.mode.is_dark() {
-            Self::from(ThemeColor::dark().as_ref())
+        let default_colors = if config.mode.is_dark() {
+            ThemeColor::dark()
         } else {
-            Self::from(ThemeColor::light().as_ref())
+            ThemeColor::light()
         };
 
         if let Some(font_size) = config.font_size {
             self.font_size = px(font_size);
-        } else {
-            self.font_size = default_theme.font_size;
         }
         if let Some(font_family) = &config.font_family {
             self.font_family = font_family.clone();
-        } else {
-            self.font_family = default_theme.font_family.clone();
         }
         if let Some(mono_font_family) = &config.mono_font_family {
             self.mono_font_family = mono_font_family.clone();
-        } else {
-            self.mono_font_family = default_theme.mono_font_family.clone();
         }
         if let Some(mono_font_size) = config.mono_font_size {
             self.mono_font_size = px(mono_font_size);
-        } else {
-            self.mono_font_size = default_theme.mono_font_size;
         }
         if let Some(radius) = config.radius {
             self.radius = px(radius as f32);
-        } else {
-            self.radius = default_theme.radius;
         }
         if let Some(radius_lg) = config.radius_lg {
             self.radius_lg = px(radius_lg as f32);
-        } else {
-            self.radius_lg = default_theme.radius_lg;
         }
         if let Some(shadow) = config.shadow {
             self.shadow = shadow;
-        } else {
-            self.shadow = default_theme.shadow;
         }
 
-        self.colors.apply_config(&config, &default_theme.colors);
+        self.colors.apply_config(&config, &default_colors);
         self.mode = config.mode;
     }
 }
