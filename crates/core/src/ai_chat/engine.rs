@@ -166,6 +166,13 @@ impl<E: MessageExtension + Default> ChatEngine<E> {
         }
     }
 
+    /// 更新流式消息思考内容
+    pub fn update_streaming_reasoning(&mut self, msg_id: &str, content: String) {
+        if let Some(msg) = self.messages.iter_mut().find(|m| m.id == msg_id) {
+            msg.reasoning_content = content;
+        }
+    }
+
     /// 完成流式消息
     pub fn finalize_streaming(&mut self, msg_id: &str, content: String) {
         if let Some(msg) = self.messages.iter_mut().find(|m| m.id == msg_id) {
@@ -180,6 +187,7 @@ impl<E: MessageExtension + Default> ChatEngine<E> {
         if let Some(msg) = self.messages.iter_mut().find(|m| m.id == msg_id) {
             msg.is_streaming = false;
             msg.content = error;
+            msg.reasoning_content.clear();
         }
     }
 

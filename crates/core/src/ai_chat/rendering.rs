@@ -4,14 +4,18 @@
 //! SQL 面板可以在此基础上覆盖特定渲染（如 SQL 代码块）。
 
 use crate::ai_chat::panel::CodeBlockActionRegistry;
+use crate::ai_chat::reasoning;
 use crate::ai_chat::types::{ChatMessageUIGeneric, ChatRole, MessageExtension, MessageVariant};
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, div,
+    AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Window,
+    div,
 };
 use gpui_component::button::Button;
 use gpui_component::clipboard::Clipboard;
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, button::ButtonVariants, h_flex, text::TextView,
+    v_flex,
 };
 use rust_i18n::t;
 
@@ -104,16 +108,42 @@ impl ChatMessageRenderer {
             .into_any_element()
     }
 
+    /// 渲染可折叠的思考内容
+    pub fn render_reasoning_block<E: MessageExtension>(
+        msg: &ChatMessageUIGeneric<E>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        reasoning::render_reasoning_block(msg, window, cx)
+    }
+
     /// 渲染助手文本消息（带代码块操作按钮）
     pub fn render_assistant_text<E: MessageExtension>(
         msg: &ChatMessageUIGeneric<E>,
         code_block_actions: &CodeBlockActionRegistry,
-        cx: &App,
+        window: &mut Window,
+        cx: &mut App,
     ) -> AnyElement {
-        if msg.is_streaming && msg.content.is_empty() {
+        if msg.is_streaming && msg.content.is_empty() && msg.reasoning_content.is_empty() {
             return Self::render_thinking(cx);
         }
 
+        v_flex()
+            .w_full()
+            .gap_2()
+            .when(!msg.reasoning_content.is_empty(), |this| {
+                this.child(Self::render_reasoning_block(msg, window, cx))
+            })
+            .when(!msg.content.is_empty(), |this| {
+                this.child(Self::render_assistant_content(msg, code_block_actions))
+            })
+            .into_any_element()
+    }
+
+    fn render_assistant_content<E: MessageExtension>(
+        msg: &ChatMessageUIGeneric<E>,
+        code_block_actions: &CodeBlockActionRegistry,
+    ) -> AnyElement {
         let view_id = SharedString::from(format!("ai-msg-{}", msg.id));
 
         if code_block_actions.is_empty() {
@@ -179,7 +209,8 @@ impl ChatMessageRenderer {
     pub fn render_message<E: MessageExtension>(
         msg: &ChatMessageUIGeneric<E>,
         code_block_actions: &CodeBlockActionRegistry,
-        cx: &App,
+        window: &mut Window,
+        cx: &mut App,
     ) -> AnyElement {
         match msg.role {
             ChatRole::User => Self::render_user_message(msg, cx),
@@ -187,7 +218,9 @@ impl ChatMessageRenderer {
                 MessageVariant::Status { title, is_done } => {
                     Self::render_status_message(&msg.id, title, *is_done, cx)
                 }
-                MessageVariant::Text => Self::render_assistant_text(msg, code_block_actions, cx),
+                MessageVariant::Text => {
+                    Self::render_assistant_text(msg, code_block_actions, window, cx)
+                }
                 MessageVariant::SqlResult => {
                     // SqlResult 需要特殊渲染，默认只显示占位符
                     div()

@@ -101,6 +101,18 @@ AiChat:
     en: "Thinking..."
     zh-CN: "思考中..."
     zh-HK: "思考中..."
+  reasoning_title:
+    en: "Thought process"
+    zh-CN: "思考过程"
+    zh-HK: "思考過程"
+  reasoning_expand:
+    en: "Show thought process"
+    zh-CN: "展开思考过程"
+    zh-HK: "展開思考過程"
+  reasoning_collapse:
+    en: "Hide thought process"
+    zh-CN: "折叠思考过程"
+    zh-HK: "摺疊思考過程"
   sql_result:
     en: "SQL result"
     zh-CN: "SQL 结果"

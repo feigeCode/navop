@@ -90,12 +90,16 @@ pub struct ChatMessageUIGeneric<E: MessageExtension = NoExtension> {
     pub role: ChatRole,
     /// 消息内容
     pub content: String,
+    /// 模型思考/推理内容
+    pub reasoning_content: String,
     /// 消息变体
     pub variant: MessageVariant,
     /// 是否正在流式输出
     pub is_streaming: bool,
     /// 是否展开（用于可折叠的消息）
     pub is_expanded: bool,
+    /// 思考内容是否展开
+    pub is_reasoning_expanded: bool,
     /// 内容缓存（用于避免重复解析）
     cached_content_hash: Option<u64>,
     /// 扩展数据
@@ -112,9 +116,11 @@ impl<E: MessageExtension + Default> ChatMessageUIGeneric<E> {
             id: Uuid::new_v4().to_string(),
             role: ChatRole::User,
             content: content.into(),
+            reasoning_content: String::new(),
             variant: MessageVariant::Text,
             is_streaming: false,
             is_expanded: true,
+            is_reasoning_expanded: false,
             cached_content_hash: None,
             extension: E::default(),
         }
@@ -126,9 +132,11 @@ impl<E: MessageExtension + Default> ChatMessageUIGeneric<E> {
             id: Uuid::new_v4().to_string(),
             role: ChatRole::Assistant,
             content: content.into(),
+            reasoning_content: String::new(),
             variant: MessageVariant::Text,
             is_streaming: false,
             is_expanded: true,
+            is_reasoning_expanded: false,
             cached_content_hash: None,
             extension: E::default(),
         }
@@ -140,9 +148,11 @@ impl<E: MessageExtension + Default> ChatMessageUIGeneric<E> {
             id: Uuid::new_v4().to_string(),
             role: ChatRole::System,
             content: content.into(),
+            reasoning_content: String::new(),
             variant: MessageVariant::Text,
             is_streaming: false,
             is_expanded: true,
+            is_reasoning_expanded: false,
             cached_content_hash: None,
             extension: E::default(),
         }
@@ -154,12 +164,14 @@ impl<E: MessageExtension + Default> ChatMessageUIGeneric<E> {
             id: Uuid::new_v4().to_string(),
             role: ChatRole::Assistant,
             content: String::new(),
+            reasoning_content: String::new(),
             variant: MessageVariant::Status {
                 title: title.into(),
                 is_done,
             },
             is_streaming: !is_done,
             is_expanded: !is_done,
+            is_reasoning_expanded: false,
             cached_content_hash: None,
             extension: E::default(),
         }
@@ -171,9 +183,11 @@ impl<E: MessageExtension + Default> ChatMessageUIGeneric<E> {
             id: Uuid::new_v4().to_string(),
             role: ChatRole::Assistant,
             content: String::new(),
+            reasoning_content: String::new(),
             variant: MessageVariant::Text,
             is_streaming: true,
             is_expanded: true,
+            is_reasoning_expanded: true,
             cached_content_hash: None,
             extension: E::default(),
         }
@@ -185,9 +199,11 @@ impl<E: MessageExtension + Default> ChatMessageUIGeneric<E> {
             id: id.into(),
             role,
             content: content.into(),
+            reasoning_content: String::new(),
             variant: MessageVariant::Text,
             is_streaming: false,
             is_expanded: true,
+            is_reasoning_expanded: false,
             cached_content_hash: None,
             extension: E::default(),
         }
@@ -219,9 +235,11 @@ impl<E: MessageExtension + Default> ChatMessageUIGeneric<E> {
             id: Uuid::new_v4().to_string(),
             role,
             content,
+            reasoning_content: String::new(),
             variant: MessageVariant::Text,
             is_streaming: false,
             is_expanded: true,
+            is_reasoning_expanded: false,
             cached_content_hash: None,
             extension: E::default(),
         }
@@ -251,6 +269,12 @@ impl<E: MessageExtension> ChatMessageUIGeneric<E> {
     pub fn with_content(mut self, content: impl Into<String>) -> Self {
         self.content = content.into();
         self.cached_content_hash = None;
+        self
+    }
+
+    /// 设置思考内容
+    pub fn with_reasoning_content(mut self, content: impl Into<String>) -> Self {
+        self.reasoning_content = content.into();
         self
     }
 

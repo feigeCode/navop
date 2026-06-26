@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use one_core::agent::types::{Agent, AgentContext, AgentDescriptor, AgentEvent, AgentResult};
-use one_core::llm::{ChatRequest, Message, Role};
+use one_core::llm::{ChatRequest, Message, Role, extract_stream_text_parts};
 
 use crate::chatdb::agents::query_workflow::{
     QueryContext, TABLE_COUNT_THRESHOLD, TableBrief, TableSelectionSource,
@@ -309,6 +309,7 @@ impl SqlWorkflowAgent {
 
         let mut full_content = workflow_summary.to_string();
         let mut pending_delta = String::new();
+        let mut pending_reasoning = String::new();
         let mut last_emit = Instant::now();
         let throttle = Duration::from_millis(50);
 
@@ -321,15 +322,22 @@ impl SqlWorkflowAgent {
                 chunk = stream.next() => {
                     match chunk {
                         Some(Ok(response)) => {
-                            if let Some(content) = response.get_content() {
+                            let parts = extract_stream_text_parts(&response);
+                            if let Some(reasoning) = parts.reasoning {
+                                pending_reasoning.push_str(reasoning);
+                            }
+                            if let Some(content) = parts.content {
                                 full_content.push_str(content);
                                 pending_delta.push_str(content);
+                            }
 
-                                if last_emit.elapsed() >= throttle {
-                                    let delta = std::mem::take(&mut pending_delta);
-                                    let _ = tx.send(AgentEvent::TextDelta(delta)).await;
-                                    last_emit = Instant::now();
-                                }
+                            if last_emit.elapsed() >= throttle {
+                                Self::send_pending_deltas(
+                                    tx,
+                                    &mut pending_delta,
+                                    &mut pending_reasoning,
+                                ).await;
+                                last_emit = Instant::now();
                             }
 
                             let is_done = response.choices.iter().any(|c| {
@@ -340,9 +348,11 @@ impl SqlWorkflowAgent {
                             });
 
                             if is_done {
-                                if !pending_delta.is_empty() {
-                                    let _ = tx.send(AgentEvent::TextDelta(pending_delta)).await;
-                                }
+                                Self::send_pending_deltas(
+                                    tx,
+                                    &mut pending_delta,
+                                    &mut pending_reasoning,
+                                ).await;
                                 let _ = tx
                                     .send(AgentEvent::Completed(AgentResult {
                                         content: full_content,
@@ -357,9 +367,11 @@ impl SqlWorkflowAgent {
                             return Err(t!("SqlWorkflow.stream_error", error = e).to_string());
                         }
                         None => {
-                            if !pending_delta.is_empty() {
-                                let _ = tx.send(AgentEvent::TextDelta(pending_delta)).await;
-                            }
+                            Self::send_pending_deltas(
+                                tx,
+                                &mut pending_delta,
+                                &mut pending_reasoning,
+                            ).await;
                             let _ = tx
                                 .send(AgentEvent::Completed(AgentResult {
                                     content: full_content,
@@ -372,6 +384,25 @@ impl SqlWorkflowAgent {
                     }
                 }
             }
+        }
+    }
+
+    async fn send_pending_deltas(
+        tx: &mpsc::Sender<AgentEvent>,
+        pending_delta: &mut String,
+        pending_reasoning: &mut String,
+    ) {
+        if !pending_reasoning.is_empty() {
+            let _ = tx
+                .send(AgentEvent::ReasoningDelta(std::mem::take(
+                    pending_reasoning,
+                )))
+                .await;
+        }
+        if !pending_delta.is_empty() {
+            let _ = tx
+                .send(AgentEvent::TextDelta(std::mem::take(pending_delta)))
+                .await;
         }
     }
 }

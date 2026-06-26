@@ -56,6 +56,7 @@ pub mod components;
 pub mod engine;
 mod panel;
 pub mod rendering;
+mod reasoning;
 pub mod services;
 pub mod stream;
 mod types;
