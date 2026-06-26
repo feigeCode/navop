@@ -23,6 +23,7 @@ mod connection_sync;
 pub mod engine;
 mod generic_sync;
 mod models;
+pub mod personal;
 pub mod queue;
 mod service;
 pub mod state_manager;
