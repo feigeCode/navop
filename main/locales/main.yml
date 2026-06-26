@@ -734,6 +734,58 @@ Settings:
         en: Select the application font family
         zh-CN: 选择应用的字体系列
         zh-HK: 選擇應用的字型系列
+      sql_editor_font_family:
+        en: SQL Editor Font
+        zh-CN: SQL 编辑器字体
+        zh-HK: SQL 編輯器字型
+      sql_editor_font_family_desc:
+        en: Select the monospace font used by the SQL editor
+        zh-CN: 选择 SQL 编辑器使用的等宽字体
+        zh-HK: 選擇 SQL 編輯器使用的等寬字型
+      table_preview_font_family:
+        en: Table Preview Font
+        zh-CN: 表预览字体
+        zh-HK: 表預覽字型
+      table_preview_font_family_desc:
+        en: Select the monospace font used by table previews
+        zh-CN: 选择表预览使用的等宽字体
+        zh-HK: 選擇表預覽使用的等寬字型
+      terminal_font_family:
+        en: Terminal Font
+        zh-CN: 终端字体
+        zh-HK: 終端字型
+      terminal_font_family_desc:
+        en: Select the monospace font used by terminals
+        zh-CN: 选择终端使用的等宽字体
+        zh-HK: 選擇終端使用的等寬字型
+      custom_fonts:
+        en: Custom Fonts
+        zh-CN: 自定义字体
+        zh-HK: 自訂字型
+      custom_fonts_desc:
+        en: Import local .ttf, .otf, .ttc, or .otc font files for the application text renderer. Select the font family above after importing.
+        zh-CN: 导入本地 .ttf、.otf、.ttc 或 .otc 字体文件供应用文本渲染使用。导入后在上方选择对应字体系列。
+        zh-HK: 匯入本機 .ttf、.otf、.ttc 或 .otc 字型檔供應用程式文字渲染使用。匯入後在上方選擇對應字型系列。
+      import_custom_fonts:
+        en: Import Fonts
+        zh-CN: 导入字体
+        zh-HK: 匯入字型
+      select_font_files:
+        en: Select font files
+        zh-CN: 选择字体文件
+        zh-HK: 選擇字型檔
+      unsupported_font_file:
+        en: Unsupported font file
+        zh-CN: 不支持的字体文件
+        zh-HK: 不支援的字型檔
+      custom_fonts_import_success:
+        en: "Imported %{count} font file(s)"
+        zh-CN: "已导入 %{count} 个字体文件"
+        zh-HK: "已匯入 %{count} 個字型檔"
+      custom_fonts_import_empty:
+        en: No supported font files were imported
+        zh-CN: 未导入支持的字体文件
+        zh-HK: 未匯入支援的字型檔
       font_size:
         en: Font Size
         zh-CN: 字体大小
@@ -836,6 +888,14 @@ Settings:
         en: Set the interval for automatic saving (1-60 seconds)
         zh-CN: 设置自动保存的时间间隔（1-60秒）
         zh-HK: 設置自動保存的時間間隔（1-60秒）
+      sql_query_max_rows:
+        en: SQL Query Max Rows
+        zh-CN: SQL 查询最大行数
+        zh-HK: SQL 查詢最大行數
+      sql_query_max_rows_desc:
+        en: Default maximum rows returned by SQL editor queries. Set 0 for unlimited.
+        zh-CN: SQL 编辑器查询默认返回的最大行数，设为 0 表示不限制。
+        zh-HK: SQL 編輯器查詢預設返回的最大行數，設為 0 表示不限制。
       table_row_height:
         en: Table Row Height (px)
         zh-CN: 表格行高（像素）
@@ -1360,9 +1420,13 @@ Settings:
       zh-CN: 查询选中表
       zh-HK: 查詢選中表
     sql_run_query:
-      en: Run Query
-      zh-CN: 执行查询
-      zh-HK: 執行查詢
+      en: Run Current Query
+      zh-CN: 执行当前查询
+      zh-HK: 執行當前查詢
+    sql_run_all_query:
+      en: Run All Queries
+      zh-CN: 执行全部查询
+      zh-HK: 執行全部查詢
     table_move_selection:
       en: Move Selection
       zh-CN: 移动选区
