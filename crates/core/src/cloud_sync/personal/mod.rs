@@ -5,6 +5,7 @@ mod directory_store;
 mod directory_store_tests;
 mod file_format;
 mod models;
+mod state;
 mod store;
 
 #[cfg(test)]
@@ -13,4 +14,5 @@ pub(crate) mod test_support;
 pub use directory_store::*;
 pub use file_format::*;
 pub use models::*;
+pub use state::*;
 pub use store::*;

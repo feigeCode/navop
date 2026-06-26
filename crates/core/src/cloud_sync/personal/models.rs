@@ -113,3 +113,29 @@ pub struct SyncDeviceId(pub String);
 pub struct SyncStoreLock {
     pub owner: SyncDeviceId,
 }
+
+impl SyncStoreHealth {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::NotConfigured => "not_configured",
+            Self::DirectoryUnavailable => "directory_unavailable",
+            Self::SchemaUnsupported => "schema_unsupported",
+            Self::GitAuthRequired => "git_auth_required",
+            Self::GitMergeConflict => "git_merge_conflict",
+            Self::PausedAfterRepeatedFailures => "paused_after_repeated_failures",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "ready" => Self::Ready,
+            "directory_unavailable" => Self::DirectoryUnavailable,
+            "schema_unsupported" => Self::SchemaUnsupported,
+            "git_auth_required" => Self::GitAuthRequired,
+            "git_merge_conflict" => Self::GitMergeConflict,
+            "paused_after_repeated_failures" => Self::PausedAfterRepeatedFailures,
+            _ => Self::NotConfigured,
+        }
+    }
+}
