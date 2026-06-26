@@ -9292,6 +9292,7 @@ dependencies = [
  "rust-i18n",
  "serde",
  "serde_json",
+ "ssh",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
