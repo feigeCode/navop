@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
+agent-client-protocol.workspace = true
+agent_runtime.workspace = true
 async-trait.workspace = true
 futures.workspace = true
 serde.workspace = true
@@ -30,3 +32,6 @@ ed25519-dalek = "2.2.0"
 parking_lot.workspace = true
 util.workspace = true
 rust-i18n.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::Stream;
 use llm_connector::builder::LlmClientBuilder;
-use llm_connector::types::{ChatRequest, Message, Role, StreamingResponse};
+use llm_connector::types::{ChatRequest, ChatResponse, Message, Role, StreamingResponse};
 use llm_connector::{GenericProvider, HttpClient, LlmClient, OpenAIProtocol};
 
 use super::types::{ProviderConfig, ProviderType};
@@ -32,6 +32,13 @@ pub use llm_connector::types::{
 pub trait LlmProvider: Send + Sync {
     async fn chat(&self, request: &ChatRequest) -> Result<String>;
     async fn chat_stream(&self, request: &ChatRequest) -> Result<ChatStream>;
+    async fn chat_completion(&self, request: &ChatRequest) -> Result<ChatResponse> {
+        let content = self.chat(request).await?;
+        Ok(ChatResponse {
+            content,
+            ..Default::default()
+        })
+    }
 
     async fn models(&self) -> Result<Vec<String>>;
     fn provider_name(&self) -> &str;
@@ -251,6 +258,10 @@ impl LlmProvider for LlmConnector {
         Ok(response.content)
     }
 
+    async fn chat_completion(&self, request: &ChatRequest) -> Result<ChatResponse> {
+        Ok(self.client.chat(request).await?)
+    }
+
     async fn chat_stream(&self, request: &ChatRequest) -> Result<ChatStream> {
         let stream = self.client.chat_stream(request).await?;
         Ok(Box::pin(futures::stream::StreamExt::map(
@@ -288,6 +299,46 @@ pub fn system_message(content: impl Into<String>) -> Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use llm_connector::types::ChatResponse;
+
+    struct TextOnlyProvider;
+
+    #[async_trait]
+    impl LlmProvider for TextOnlyProvider {
+        async fn chat(&self, _request: &ChatRequest) -> Result<String> {
+            Ok("plain answer".to_string())
+        }
+
+        async fn chat_stream(&self, _request: &ChatRequest) -> Result<ChatStream> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        async fn models(&self) -> Result<Vec<String>> {
+            Ok(vec!["text-only".to_string()])
+        }
+
+        fn provider_name(&self) -> &str {
+            "text-only"
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_default_chat_completion_wraps_text_response() {
+        let provider = TextOnlyProvider;
+        let request = ChatRequest {
+            model: "text-only".to_string(),
+            messages: vec![Message::text(Role::User, "hello")],
+            ..Default::default()
+        };
+
+        let response: ChatResponse = provider
+            .chat_completion(&request)
+            .await
+            .expect("default chat_completion should call chat");
+
+        assert_eq!("plain answer", response.content);
+        assert!(!response.has_tool_calls());
+    }
 
     #[test]
     fn provider_base_url_prefers_configured_value() {

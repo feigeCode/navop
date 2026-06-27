@@ -308,6 +308,78 @@ impl Default for McpSettings {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiChatSettings {
+    #[serde(default)]
+    pub acp_agents: Vec<AcpAgentSettings>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcpAgentSettings {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub transport: AcpAgentTransportSettings,
+}
+
+impl Default for AcpAgentSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            id: "settings-default".to_string(),
+            name: "ACP Agent".to_string(),
+            transport: AcpAgentTransportSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AcpAgentTransportSettings {
+    Stdio {
+        #[serde(default)]
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: Vec<(String, String)>,
+    },
+    Http {
+        #[serde(default)]
+        url: String,
+    },
+}
+
+impl Default for AcpAgentTransportSettings {
+    fn default() -> Self {
+        Self::Http { url: String::new() }
+    }
+}
+
+impl AcpAgentTransportSettings {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Stdio { .. } => "stdio",
+            Self::Http { .. } => "http",
+        }
+    }
+
+    pub fn default_for_kind(kind: &str) -> Self {
+        match kind {
+            "stdio" => Self::Stdio {
+                command: String::new(),
+                args: Vec::new(),
+                env: Vec::new(),
+            },
+            _ => Self::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomFont {
     pub path: String,
     #[serde(default)]
@@ -391,6 +463,8 @@ pub struct AppSettings {
     pub global_proxy: GlobalProxySettings,
     #[serde(default)]
     pub mcp: McpSettings,
+    #[serde(default)]
+    pub ai_chat: AiChatSettings,
     #[serde(default)]
     pub database_open_mode: DatabaseOpenMode,
     #[serde(default)]
@@ -495,6 +569,7 @@ impl Default for AppSettings {
             auto_update: true,
             global_proxy: GlobalProxySettings::default(),
             mcp: McpSettings::default(),
+            ai_chat: AiChatSettings::default(),
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             enable_sql_auto_save: true,
@@ -638,7 +713,8 @@ impl AppSettings {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppSettings, CustomFont, LargeTextCellEditorOpenMode, McpPermissionMode, McpServerMode,
+        AcpAgentSettings, AcpAgentTransportSettings, AppSettings, CustomFont,
+        LargeTextCellEditorOpenMode, McpPermissionMode, McpServerMode,
     };
 
     #[test]
@@ -702,6 +778,44 @@ mod tests {
         assert_eq!(settings.mcp.permission_mode, McpPermissionMode::Deny);
         assert!(settings.mcp.toolsets.terminal);
         assert!(settings.mcp.toolsets.connections);
+    }
+
+    #[test]
+    fn app_settings_default_keeps_ai_chat_acp_agents_empty() {
+        let settings = AppSettings::default();
+
+        assert!(settings.ai_chat.acp_agents.is_empty());
+    }
+
+    #[test]
+    fn app_settings_deserializes_ai_chat_defaults_from_legacy_json() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark"
+        }))
+        .expect("旧版 settings.json 应能读取");
+
+        assert!(settings.ai_chat.acp_agents.is_empty());
+    }
+
+    #[test]
+    fn app_settings_round_trip_preserves_ai_chat_acp_agents() {
+        let mut settings = AppSettings::default();
+        settings.ai_chat.acp_agents = vec![AcpAgentSettings {
+            enabled: true,
+            id: "codex".to_string(),
+            name: "Codex".to_string(),
+            transport: AcpAgentTransportSettings::Stdio {
+                command: "codex".to_string(),
+                args: vec!["acp".to_string()],
+                env: vec![("OPENAI_API_KEY".to_string(), "sk".to_string())],
+            },
+        }];
+
+        let json = serde_json::to_string(&settings).expect("应序列化 AppSettings");
+        let restored: AppSettings = serde_json::from_str(&json).expect("应反序列化 AppSettings");
+
+        assert_eq!(settings.ai_chat, restored.ai_chat);
     }
 
     #[test]

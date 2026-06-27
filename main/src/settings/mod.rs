@@ -1,3 +1,7 @@
+mod ai_chat_agent_json;
+pub mod ai_chat_settings;
+#[cfg(test)]
+mod ai_chat_settings_tests;
 pub mod llm_providers_view;
 mod mcp_agent_config_copy;
 pub mod mcp_client_config;

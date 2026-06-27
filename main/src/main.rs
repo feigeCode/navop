@@ -2,6 +2,8 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 mod auth;
 
+mod ai_chat_acp;
+mod ai_chat_acp_approval;
 mod app_init;
 mod external_driver_display;
 mod home;

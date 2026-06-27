@@ -33,6 +33,23 @@ pub enum ChatRole {
     System,
 }
 
+/// AI 聊天运行模式。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AiChatMode {
+    /// 普通问答模式，保留现有聊天行为。
+    #[default]
+    Ask,
+    /// 计划模式，使用 agent runtime 维护计划并按需调用工具。
+    Plan,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AiChatPlanBackend {
+    #[default]
+    LocalRuntime,
+    AcpAgent,
+}
+
 // ============================================================================
 // 消息变体
 // ============================================================================
@@ -389,5 +406,19 @@ impl ModelSelectItem {
     /// 创建新的模型选择项
     pub fn new(id: impl Into<String>) -> Self {
         Self { id: id.into() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AiChatMode, AiChatPlanBackend};
+
+    #[test]
+    fn ai_chat_defaults_to_ask_and_local_plan_backend() {
+        assert_eq!(AiChatMode::Ask, AiChatMode::default());
+        assert_eq!(
+            AiChatPlanBackend::LocalRuntime,
+            AiChatPlanBackend::default()
+        );
     }
 }
