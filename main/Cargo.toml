@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 gpui = { workspace = true }
 gpui_platform = { workspace = true }
-gpui-component = { workspace = true }
+gpui-component = { workspace = true, features = ["tree-sitter-bash", "tree-sitter-sql"] }
 gpui-component-assets = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }

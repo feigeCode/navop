@@ -27,7 +27,7 @@ const CONTEXT: &'static str = "SearchPanel";
 actions!(input, [Tab]);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SearchOpenMode {
+pub(super) enum SearchOpenMode {
     Search,
     Replace,
 }
