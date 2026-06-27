@@ -4,7 +4,7 @@ use db::GlobalDbState;
 use db::plugin::SqlCompletionInfo;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Context, Corner, Entity, EventEmitter, FocusHandle,
+    Anchor, AnyElement, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement, Render, Styled, Subscription, Window, div, px,
 };
 use gpui_component::button::ButtonVariants;
@@ -674,7 +674,7 @@ impl AIInput {
                     .when(self.mode == InputMode::Agent, |this| {
                         this.child(
                             Popover::new("model-settings-popover")
-                                .anchor(Corner::BottomLeft)
+                                .anchor(Anchor::BottomLeft)
                                 .trigger(
                                     Button::new("model-settings-btn")
                                         .icon(IconName::Settings)

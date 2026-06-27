@@ -11,7 +11,7 @@ use crate::llm::{
 };
 use crate::storage::{GlobalStorageState, traits::Repository};
 use gpui::{
-    App, AppContext, AsyncApp, Context, Corner, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
+    Anchor, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::FluentBuilder, px,
 };
@@ -713,9 +713,9 @@ impl AiChatPanel {
             dialog
                 .title(t!("AiChat.rename_session_title").to_string())
                 .w(px(360.0))
-                .confirm()
                 .button_props(
                     DialogButtonProps::default()
+                        .show_cancel(true)
                         .ok_text(t!("Common.save").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
@@ -1087,7 +1087,7 @@ impl AiChatPanel {
                     )
                     .child(
                         Popover::new("history-popover")
-                            .anchor(Corner::TopRight)
+                            .anchor(Anchor::TopRight)
                             .p_0()
                             .open(self.history_popover_open)
                             .on_open_change(cx.listener(|this, open, window, cx| {
@@ -1209,7 +1209,7 @@ impl AiChatPanel {
                             .child({
                                 let settings_panel = self.settings_panel.clone();
                                 Popover::new("model-settings-popover")
-                                    .anchor(Corner::BottomLeft)
+                                    .anchor(Anchor::BottomLeft)
                                     .trigger(
                                         Button::new("model-settings-btn")
                                             .icon(IconName::Settings)

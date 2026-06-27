@@ -1,7 +1,11 @@
+/// The character used to mask password input fields.
+pub(super) const MASK_CHAR: char = '•';
+
 mod blink_cursor;
 mod change;
 mod clear_button;
 mod cursor;
+mod display_map;
 mod element;
 mod indent;
 mod input;
@@ -16,19 +20,20 @@ mod rope_ext;
 mod search;
 mod selection;
 mod state;
-mod text_wrapper;
 
 pub use blink_cursor::BlinkCursor;
 pub(crate) use clear_button::*;
 pub use cursor::*;
+#[cfg(target_family = "wasm")]
+pub use display_map::folding::Tree;
+pub use display_map::{BufferPoint, DisplayMap, DisplayPoint, FoldRange};
 pub use indent::TabSize;
 pub use input::*;
 pub use lsp::*;
+pub use lsp_types::Position;
 pub use mask_pattern::MaskPattern;
 pub use number_input::{NumberInput, NumberInputEvent, StepAction, StepperNumberInput};
 pub use otp_input::*;
-pub use state::*;
-
-pub use lsp_types::Position;
-pub use rope_ext::*;
+pub use rope_ext::{InputEdit, Point, RopeExt, RopeLines};
 pub use ropey::Rope;
+pub use state::*;

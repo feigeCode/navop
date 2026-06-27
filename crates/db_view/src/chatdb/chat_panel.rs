@@ -21,7 +21,7 @@ use crate::chatdb::db_connection_selector::DbSelectorContext;
 use db::{GlobalDbState, is_query_statement_fallback};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Context, Corner, Entity, EventEmitter, FocusHandle,
+    Anchor, AnyElement, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div, px,
 };
@@ -1576,7 +1576,7 @@ impl ChatPanel {
                     )
                     .child(
                         Popover::new("chat-sidebar-history-popover")
-                            .anchor(Corner::TopRight)
+                            .anchor(Anchor::TopRight)
                             .p_0()
                             .open(self.history_popover_open)
                             .on_open_change(cx.listener(|this, open, window, cx| {
@@ -1845,7 +1845,7 @@ impl ChatPanel {
                             move |code_block, options, default_element, _window, cx| {
                                 if let Some(chart_block) = parse_chart_json_block(
                                     &code_block.code(),
-                                    code_block.lang().as_deref().map(|v| &**v),
+                                    code_block.lang().as_deref(),
                                 ) {
                                     let content = panel_for_collapse.read(cx);
                                     return content.render_chart_block_container(
@@ -1907,8 +1907,8 @@ impl ChatPanel {
                     return default_element;
                 }
                 BarChart::new(points)
-                    .x(|d| d.x.clone())
-                    .y(|d| d.y)
+                    .band(|d| d.x.clone())
+                    .value(|d| d.y)
                     .into_any_element()
             }
             ChartType::Pie => {

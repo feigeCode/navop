@@ -124,16 +124,16 @@ impl TextElement {
 
         let tab_size = state.mode.tab_size();
         let line_height = last_layout.line_height;
-        let visible_range = last_layout.visible_range.clone();
         let mut builder = PathBuilder::stroke(px(1.));
         let mut offset_y = last_layout.visible_top;
         let mut last_indents = vec![];
-        for ix in visible_range {
-            let line = state.text.slice_line(ix);
-            let Some(line_layout) = last_layout.line(ix) else {
-                continue;
-            };
 
+        for (&buffer_line, line_layout) in last_layout
+            .visible_buffer_lines
+            .iter()
+            .zip(last_layout.lines.iter())
+        {
+            let line = state.text.slice_line(buffer_line);
             let mut current_indents = vec![];
             if line.len() > 0 {
                 let indent_count = tab_size.indent_count(&line);

@@ -8,7 +8,6 @@ use db::sql_editor::sql_tokenizer::SqlTokenizer;
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, Render, Styled as _, Subscription, Task, Window,
 };
-use gpui_component::highlighter::Language;
 use gpui_component::input::{
     CodeActionProvider, CompletionProvider, HoverProvider, Input, InputContextMenuItem, InputEvent,
     InputState, TabSize,
@@ -1367,7 +1366,7 @@ impl SqlEditor {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let editor = cx.new(|cx| {
             let mut editor = InputState::new(window, cx)
-                .code_editor(Language::Sql)
+                .code_editor("sql")
                 .line_number(true)
                 .searchable(true)
                 .indent_guides(true)

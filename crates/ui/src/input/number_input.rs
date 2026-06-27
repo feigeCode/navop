@@ -1,14 +1,13 @@
 use gpui::{
     AnyElement, App, Context, Corners, Edges, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, KeyBinding, ParentElement, RenderOnce, SharedString,
-    StyleRefinement, Styled, Window, actions, div, prelude::FluentBuilder as _, px,
+    StyleRefinement, Styled, TextAlign, Window, actions, div, prelude::FluentBuilder as _, px,
 };
 
 use super::{Input, InputState};
-use crate::button::ButtonVariants;
+use crate::button::{Button, ButtonVariants};
 use crate::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt as _, button::Button,
-    h_flex, v_flex,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, StyledExt as _, h_flex, v_flex,
 };
 
 actions!(number_input, [Increment, Decrement]);
@@ -96,21 +95,11 @@ impl Disableable for NumberInput {
 }
 
 impl InputState {
-    pub(crate) fn on_action_increment(
-        &mut self,
-        _: &Increment,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_action_increment(&mut self, _: &Increment, window: &mut Window, cx: &mut Context<Self>) {
         self.on_number_input_step(StepAction::Increment, window, cx);
     }
 
-    pub(crate) fn on_action_decrement(
-        &mut self,
-        _: &Decrement,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_action_decrement(&mut self, _: &Decrement, window: &mut Window, cx: &mut Context<Self>) {
         self.on_number_input_step(StepAction::Decrement, window, cx);
     }
 
@@ -198,6 +187,7 @@ impl RenderOnce for NumberInput {
                     .disabled(self.disabled)
                     .gap_0()
                     .rounded_none()
+                    .text_align(TextAlign::Center)
                     .when_some(self.prefix, |this, prefix| this.prefix(prefix))
                     .when_some(self.suffix, |this, suffix| this.suffix(suffix)),
             )

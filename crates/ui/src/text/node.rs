@@ -5,10 +5,10 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, Axis, DefiniteLength, Div, ElementId, FontStyle, FontWeight, Half,
-    HighlightStyle, InteractiveElement as _, IntoElement, ObjectFit, ParentElement, ScrollHandle,
-    SharedString, SharedUri, StatefulInteractiveElement, Styled, StyledImage as _, Window, div,
-    img, prelude::FluentBuilder as _, px, relative, rems,
+    AnyElement, App, DefiniteLength, Div, ElementId, FontStyle, FontWeight, Half, HighlightStyle,
+    InteractiveElement as _, IntoElement, Length, ObjectFit, ParentElement, SharedString,
+    SharedUri, StatefulInteractiveElement, Styled, StyledImage as _, Window, div, img,
+    prelude::FluentBuilder as _, px, relative, rems,
 };
 use markdown::mdast;
 use ropey::Rope;
@@ -16,7 +16,6 @@ use ropey::Rope;
 use crate::{
     ActiveTheme as _, Icon, IconName, StyledExt, h_flex,
     highlighter::{HighlightTheme, SyntaxHighlighter},
-    scroll::{ScrollableMask, Scrollbar},
     text::{
         CodeBlockActionsFn,
         document::NodeRenderOptions,
@@ -65,7 +64,7 @@ pub(crate) enum BlockNode {
         html: bool,
         span: Option<Span>,
     },
-    Divider {
+    HorizontalRule {
         span: Option<Span>,
     },
     /// Use for to_markdown get raw definition
@@ -107,7 +106,7 @@ impl BlockNode {
             BlockNode::CodeBlock(code_block) => code_block.span,
             BlockNode::Table(table) => table.span,
             BlockNode::Break { span, .. } => *span,
-            BlockNode::Divider { span, .. } => *span,
+            BlockNode::HorizontalRule { span, .. } => *span,
             BlockNode::Definition { span, .. } => *span,
             BlockNode::Unknown { .. } => None,
         }
@@ -190,7 +189,7 @@ impl BlockNode {
             }
             BlockNode::Definition { .. }
             | BlockNode::Break { .. }
-            | BlockNode::Divider { .. }
+            | BlockNode::HorizontalRule { .. }
             | BlockNode::Unknown { .. } => {}
         }
 
@@ -240,6 +239,16 @@ impl TextMark {
     pub fn link(mut self, link: impl Into<LinkMark>) -> Self {
         self.link = Some(link.into());
         self
+    }
+
+    pub fn merge(&mut self, other: TextMark) {
+        self.bold |= other.bold;
+        self.italic |= other.italic;
+        self.strikethrough |= other.strikethrough;
+        self.code |= other.code;
+        if let Some(link) = other.link {
+            self.link = Some(link);
+        }
     }
 }
 
@@ -547,7 +556,6 @@ impl CodeBlock {
         cx: &mut App,
     ) -> AnyElement {
         let style = &node_cx.style;
-        let has_actions = node_cx.code_block_actions.is_some();
 
         div()
             .when(!options.is_last, |this| this.pb(style.paragraph_gap))
@@ -555,8 +563,6 @@ impl CodeBlock {
                 div()
                     .id(("codeblock", options.ix))
                     .p_3()
-                    // 当有按钮时，给顶部添加额外的边距避免遮挡内容
-                    .when(has_actions, |this| this.pt_8())
                     .rounded(cx.theme().radius)
                     .bg(cx.theme().muted)
                     .font_family(cx.theme().mono_font_family.clone())
@@ -907,7 +913,7 @@ impl BlockNode {
                     "\n".to_string()
                 }
             }
-            BlockNode::Divider { .. } => "---".to_string(),
+            BlockNode::HorizontalRule { .. } => "---".to_string(),
             BlockNode::Definition {
                 identifier,
                 url,
@@ -944,6 +950,8 @@ impl BlockNode {
                 ..
             } => v_flex()
                 .id(("li", options.ix))
+                .w_full()
+                .min_w_0()
                 .when(*spread, |this| this.child(div()))
                 .children({
                     let mut items: Vec<Div> = Vec::with_capacity(children.len());
@@ -966,19 +974,29 @@ impl BlockNode {
                                     cx,
                                 );
 
-                                // merge content into last item.
+                                // Continuation paragraph — stack vertically below
+                                // the previous row, indented to align with the text
+                                // column (past bullet/number prefix).
                                 if last_not_list {
-                                    if let Some(item_item) = items.last_mut() {
-                                        item_item.extend(vec![
-                                            div().overflow_hidden().child(text).into_any_element(),
-                                        ]);
+                                    if let Some(preceding_row) = items.pop() {
+                                        items.push(
+                                            v_flex().child(preceding_row).child(
+                                                div()
+                                                    .w_full()
+                                                    .pl(rems(0.75))
+                                                    .overflow_hidden()
+                                                    .child(text),
+                                            ),
+                                        );
                                         continue;
                                     }
                                 }
 
                                 items.push(
                                     h_flex()
+                                        .w_full()
                                         .flex_1()
+                                        .min_w_0()
                                         .relative()
                                         .items_start()
                                         .content_start()
@@ -1012,7 +1030,9 @@ impl BlockNode {
                                                     }),
                                             )
                                         })
-                                        .child(div().overflow_hidden().child(text)),
+                                        .child(
+                                            div().flex_1().min_w_0().overflow_hidden().child(text),
+                                        ),
                                 );
                             }
                             BlockNode::List { .. } => {
@@ -1046,6 +1066,7 @@ impl BlockNode {
         cx: &mut App,
     ) -> impl IntoElement {
         const DEFAULT_LENGTH: usize = 5;
+        const MAX_LENGTH: usize = 150;
         let col_lens = match item {
             BlockNode::Table(table) => {
                 let mut col_lens = vec![];
@@ -1067,139 +1088,74 @@ impl BlockNode {
         };
 
         match item {
-            BlockNode::Table(table) => {
-                // 计算每列的像素宽度（每个字符约 8px，加上 padding）
-                const CHAR_WIDTH: f32 = 8.0;
-                const CELL_PADDING: f32 = 16.0; // px_2 = 8px * 2
-                let col_widths: Vec<f32> = col_lens
-                    .iter()
-                    .map(|&len| (len as f32) * CHAR_WIDTH + CELL_PADDING)
-                    .collect();
-                let total_width: f32 = col_widths.iter().sum();
+            BlockNode::Table(table) => div()
+                .pb(rems(1.))
+                .w_full()
+                .child(
+                    div()
+                        .id(("table", options.ix))
+                        .w_full()
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .rounded(cx.theme().radius)
+                        .children({
+                            let mut rows = Vec::with_capacity(table.children.len());
+                            for (row_ix, row) in table.children.iter().enumerate() {
+                                rows.push(
+                                    div()
+                                        .id("row")
+                                        .w_full()
+                                        .when(row_ix < table.children.len() - 1, |this| {
+                                            this.border_b_1()
+                                        })
+                                        .border_color(cx.theme().border)
+                                        .flex()
+                                        .flex_row()
+                                        .children({
+                                            let mut cells = Vec::with_capacity(row.children.len());
+                                            for (ix, cell) in row.children.iter().enumerate() {
+                                                let align = table.column_align(ix);
+                                                let is_last_col = ix == row.children.len() - 1;
+                                                let len = col_lens
+                                                    .get(ix)
+                                                    .copied()
+                                                    .unwrap_or(MAX_LENGTH)
+                                                    .min(MAX_LENGTH);
 
-                // 创建滚动句柄
-                let table_id: ElementId = ("table-scroll", options.ix).into();
-                let scroll_handle = window
-                    .use_keyed_state(table_id.clone(), cx, |_, _| ScrollHandle::default())
-                    .read(cx)
-                    .clone();
-
-                v_flex()
-                    .pb(rems(1.))
-                    .w_full()
-                    .child(
-                        div()
-                            .relative()
-                            .w_full()
-                            .child(
-                                div()
-                                    .id(("table", options.ix))
-                                    .w_full()
-                                    .overflow_hidden()
-                                    .track_scroll(&scroll_handle)
-                                    .child(
-                                        div()
-                                            .w(px(total_width))
-                                            .border_1()
-                                            .border_color(cx.theme().border)
-                                            .rounded_t(cx.theme().radius)
-                                            .children({
-                                                let mut rows =
-                                                    Vec::with_capacity(table.children.len());
-                                                for (row_ix, row) in
-                                                    table.children.iter().enumerate()
-                                                {
-                                                    let col_widths = col_widths.clone();
-                                                    rows.push(
-                                                        div()
-                                                            .id("row")
-                                                            .w(px(total_width))
-                                                            .when(
-                                                                row_ix < table.children.len() - 1,
-                                                                |this| this.border_b_1(),
-                                                            )
-                                                            .border_color(cx.theme().border)
-                                                            .flex()
-                                                            .flex_row()
-                                                            .children({
-                                                                let mut cells = Vec::with_capacity(
-                                                                    row.children.len(),
-                                                                );
-                                                                for (ix, cell) in
-                                                                    row.children.iter().enumerate()
-                                                                {
-                                                                    let align =
-                                                                        table.column_align(ix);
-                                                                    let is_last_col =
-                                                                        ix == row.children.len() - 1;
-                                                                    let width = col_widths
-                                                                        .get(ix)
-                                                                        .copied()
-                                                                        .unwrap_or(100.0);
-
-                                                                    cells.push(
-                                                                        div()
-                                                                            .id("cell")
-                                                                            .flex()
-                                                                            .flex_shrink_0()
-                                                                            .when(
-                                                                                align
-                                                                                    == ColumnumnAlign::Center,
-                                                                                |this| this.justify_center(),
-                                                                            )
-                                                                            .when(
-                                                                                align
-                                                                                    == ColumnumnAlign::Right,
-                                                                                |this| this.justify_end(),
-                                                                            )
-                                                                            .w(px(width))
-                                                                            .px_2()
-                                                                            .py_1()
-                                                                            .when(
-                                                                                !is_last_col,
-                                                                                |this| {
-                                                                                    this.border_r_1()
-                                                                                        .border_color(
-                                                                                            cx.theme()
-                                                                                                .border,
-                                                                                        )
-                                                                                },
-                                                                            )
-                                                                            .truncate()
-                                                                            .child(
-                                                                                cell.children.render(
-                                                                                    node_cx,
-                                                                                    window,
-                                                                                    cx,
-                                                                                ),
-                                                                            ),
-                                                                    )
-                                                                }
-                                                                cells
-                                                            }),
-                                                    )
-                                                }
-                                                rows
-                                            }),
-                                    ),
-                            )
-                            .child(ScrollableMask::new(Axis::Horizontal, &scroll_handle)),
-                    )
-                    // 横向滚动条放在表格下方
-                    .child(
-                        div()
-                            .id(table_id.clone())
-                            .w_full()
-                            .h(px(12.))
-                            .border_1()
-                            .border_t_0()
-                            .border_color(cx.theme().border)
-                            .rounded_b(cx.theme().radius)
-                            .overflow_hidden()
-                            .child(Scrollbar::horizontal(&scroll_handle).id(table_id)),
-                    )
-                    .into_any_element()
-            }
+                                                cells.push(
+                                                    div()
+                                                        .id(("cell", ix))
+                                                        .overflow_hidden()
+                                                        .when(
+                                                            align == ColumnumnAlign::Center,
+                                                            |this| this.text_center(),
+                                                        )
+                                                        .when(
+                                                            align == ColumnumnAlign::Right,
+                                                            |this| this.text_right(),
+                                                        )
+                                                        .min_w_16()
+                                                        .w(Length::Definite(relative(len as f32)))
+                                                        .px_2()
+                                                        .py_1()
+                                                        .when(!is_last_col, |this| {
+                                                            this.border_r_1()
+                                                                .border_color(cx.theme().border)
+                                                        })
+                                                        .child(
+                                                            cell.children
+                                                                .render(node_cx, window, cx),
+                                                        ),
+                                                )
+                                            }
+                                            cells
+                                        }),
+                                )
+                            }
+                            rows
+                        }),
+                )
+                .into_any_element(),
             _ => div().into_any_element(),
         }
     }
@@ -1324,9 +1280,9 @@ impl BlockNode {
             BlockNode::Table { .. } => {
                 Self::render_table(self, &options, node_cx, window, cx).into_any_element()
             }
-            BlockNode::Divider { .. } => div()
+            BlockNode::HorizontalRule { .. } => div()
                 .pb(mb)
-                .child(div().id("divider").bg(cx.theme().border).h(px(2.)))
+                .child(div().id("horizontal-rule").bg(cx.theme().border).h(px(2.)))
                 .into_any_element(),
             BlockNode::Break { .. } => div().id("break").into_any_element(),
             BlockNode::Unknown { .. } | BlockNode::Definition { .. } => div().into_any_element(),

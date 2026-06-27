@@ -19,7 +19,7 @@ use gpui_component::{
     input::Input,
     spinner::Spinner,
     switch::Switch,
-    table::Table,
+    table::DataTable,
     tag::Tag,
     v_flex,
 };
@@ -389,7 +389,7 @@ fn loaded_body(view: &RedisToolView, cx: &mut Context<RedisToolView>) -> AnyElem
                 .w_full()
                 .flex_1()
                 .min_h_0()
-                .child(Table::new(table_state).stripe(true)),
+                .child(DataTable::new(table_state).stripe(true)),
         )
         .into_any_element()
 }
@@ -489,7 +489,7 @@ fn render_pubsub_channels(view: &RedisToolView, cx: &mut Context<RedisToolView>)
                 .w_full()
                 .flex_1()
                 .min_h_0()
-                .child(Table::new(table_state).stripe(true)),
+                .child(DataTable::new(table_state).stripe(true)),
         )
         .into_any_element()
 }

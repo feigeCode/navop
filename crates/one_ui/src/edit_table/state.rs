@@ -287,7 +287,7 @@ where
 
         let base_handle = &self.vertical_scroll_handle.0.borrow().base_handle;
         let offset_y = base_handle.offset().y;
-        let max_offset_y = -base_handle.max_offset().height;
+        let max_offset_y = -base_handle.max_offset().y;
         if max_offset_y.is_zero() {
             return;
         }

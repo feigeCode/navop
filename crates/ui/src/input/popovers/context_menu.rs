@@ -1,18 +1,19 @@
 use gpui::{
-    App, AppContext as _, Context, Corner, DismissEvent, Entity, IntoElement, MouseDownEvent,
+    Anchor, App, AppContext as _, Context, DismissEvent, Entity, IntoElement, MouseDownEvent,
     ParentElement as _, Pixels, Point, Render, Styled, Subscription, Window, anchored, deferred,
-    div, px,
+    div, prelude::FluentBuilder as _, px,
 };
 use rust_i18n::t;
 
 use crate::{
     ActiveTheme as _,
+    global_state::GlobalState,
     input::{self, InputContextMenuItem, InputState, popovers::ContextMenu},
     menu::{PopupMenu, PopupMenuItem},
 };
 
 /// Context menu for mouse right clicks.
-pub(crate) struct MouseContextMenu {
+pub(crate) struct InputContextMenu {
     editor: Entity<InputState>,
     menu: Entity<PopupMenu>,
     mouse_position: Point<Pixels>,
@@ -102,12 +103,18 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Check if we are already in a deferred context (e.g., inside a Popover)
+        // If so, don't show the context menu to prevent double-deferred panic
+        if GlobalState::global(cx).is_in_deferred_context() {
+            return;
+        }
+
         // Show Mouse context menu
         if !self.selected_range.contains(offset) {
             self.move_to(offset, None, cx);
         }
 
-        self.context_menu = Some(ContextMenu::MouseContext(self.mouse_context_menu.clone()));
+        self.context_menu_content = Some(ContextMenu::RightClick(self.context_menu.clone()));
 
         let is_code_editor = self.mode.is_code_editor();
         if is_code_editor {
@@ -115,37 +122,52 @@ impl InputState {
         }
 
         let is_enable = !self.disabled;
+        let has_goto_definition = is_enable && self.lsp.definition_provider.is_some();
+        let has_code_action = is_enable && !self.lsp.code_action_providers.is_empty();
         let is_selected = !self.selected_range.is_empty();
         let has_paste = is_enable && cx.read_from_clipboard().is_some();
         let extra_menu_items = self.mouse_context_menu_items.clone();
 
         let action_context = self.focus_handle.clone();
-        self.mouse_context_menu.update(cx, |this, cx| {
+        self.context_menu.update(cx, |this, cx| {
             this.mouse_position = event.position;
             this.menu.update(cx, |menu, cx| {
-                let mut new_menu = PopupMenu::new(cx);
-
-                if !extra_menu_items.is_empty() {
-                    new_menu = new_menu.separator();
-                    new_menu = Self::append_extra_mouse_context_menu_items(
-                        new_menu,
-                        &extra_menu_items,
-                        window,
-                        cx,
-                    );
-                    new_menu = new_menu.separator();
-                }
-
-                new_menu = new_menu
-                    .menu_with_enable(
-                        t!("Input.Cut"),
-                        Box::new(input::Cut),
-                        is_enable && is_selected,
-                    )
-                    .menu_with_enable(t!("Input.Copy"), Box::new(input::Copy), is_selected)
-                    .menu_with_enable(t!("Input.Paste"), Box::new(input::Paste), has_paste)
-                    .separator()
-                    .menu(t!("Input.Select All"), Box::new(input::SelectAll));
+                let new_menu = if let Some(builder) = &self.context_menu_builder {
+                    builder(PopupMenu::new(cx), window, cx)
+                } else {
+                    PopupMenu::new(cx)
+                        .when(is_code_editor, |m| {
+                            m.menu_with_enable(
+                                t!("Input.Go to Definition"),
+                                Box::new(input::GoToDefinition),
+                                has_goto_definition,
+                            )
+                            .menu_with_enable(
+                                t!("Input.Show Code Actions"),
+                                Box::new(input::ToggleCodeActions),
+                                has_code_action,
+                            )
+                            .separator()
+                        })
+                        .when(!extra_menu_items.is_empty(), |m| {
+                            let m = Self::append_extra_mouse_context_menu_items(
+                                m,
+                                &extra_menu_items,
+                                window,
+                                cx,
+                            );
+                            m.separator()
+                        })
+                        .menu_with_enable(
+                            t!("Input.Cut"),
+                            Box::new(input::Cut),
+                            is_enable && is_selected,
+                        )
+                        .menu_with_enable(t!("Input.Copy"), Box::new(input::Copy), is_selected)
+                        .menu_with_enable(t!("Input.Paste"), Box::new(input::Paste), has_paste)
+                        .separator()
+                        .menu(t!("Input.Select All"), Box::new(input::SelectAll))
+                };
 
                 menu.menu_items = new_menu.menu_items;
                 menu.action_context = Some(action_context);
@@ -159,7 +181,7 @@ impl InputState {
     }
 }
 
-impl MouseContextMenu {
+impl InputContextMenu {
     pub(crate) fn new(
         editor: Entity<InputState>,
         window: &mut Window,
@@ -198,7 +220,7 @@ impl MouseContextMenu {
     }
 }
 
-impl Render for MouseContextMenu {
+impl Render for InputContextMenu {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.open {
             return div().into_any_element();
@@ -207,7 +229,7 @@ impl Render for MouseContextMenu {
         deferred(
             anchored()
                 .snap_to_window_with_margin(px(8.))
-                .anchor(Corner::TopLeft)
+                .anchor(Anchor::TopLeft)
                 .position(self.mouse_position)
                 .child(
                     div()

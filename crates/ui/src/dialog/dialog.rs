@@ -14,6 +14,7 @@ use crate::{
     animation::cubic_bezier,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{DialogContent, DialogTitle},
+    h_flex,
     scroll::ScrollableElement as _,
     v_flex,
 };
@@ -167,6 +168,32 @@ impl DialogButtonProps {
 }
 
 type ContentBuilderFn = Rc<dyn Fn(DialogContent, &mut Window, &mut App) -> DialogContent + 'static>;
+pub type DialogFooterButtonFn = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+type DialogFooterBuilderFn = Rc<
+    dyn Fn(DialogFooterButtonFn, DialogFooterButtonFn, &mut Window, &mut App) -> Vec<AnyElement>,
+>;
+
+#[derive(IntoElement)]
+struct DialogFooterBuilder {
+    button_props: DialogButtonProps,
+    builder: DialogFooterBuilderFn,
+}
+
+impl RenderOnce for DialogFooterBuilder {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let ok_props = self.button_props.clone();
+        let ok: DialogFooterButtonFn = Rc::new(move |window, cx| ok_props.render_ok(window, cx));
+
+        let cancel_props = self.button_props;
+        let cancel: DialogFooterButtonFn =
+            Rc::new(move |window, cx| cancel_props.render_cancel(window, cx));
+
+        h_flex()
+            .justify_end()
+            .gap_2()
+            .children((self.builder)(ok, cancel, window, cx))
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct DialogProps {
@@ -209,6 +236,7 @@ pub struct Dialog {
     pub(crate) props: DialogProps,
 
     button_props: DialogButtonProps,
+    default_footer: bool,
 
     /// This will be change when open the dialog, the focus handle is create when open the dialog.
     pub(crate) focus_handle: FocusHandle,
@@ -238,6 +266,7 @@ impl Dialog {
             children: Vec::new(),
             layer_ix: 0,
             button_props: DialogButtonProps::default(),
+            default_footer: false,
         }
     }
 
@@ -272,17 +301,50 @@ impl Dialog {
         self
     }
 
-    /// Sets the footer of the dialog, the footer will render at the bottom of the dialog, usually for action buttons.
+    /// Sets the footer element of the dialog.
     ///
-    /// When you set the footer, the `button_props` will be ignored, you need to render the action buttons by yourself.
-    pub fn footer(mut self, footer: impl IntoElement) -> Self {
+    /// When you set the footer, the `button_props` will be ignored.
+    pub fn footer_element(mut self, footer: impl IntoElement) -> Self {
         self.footer = Some(footer.into_any_element());
+        self.default_footer = false;
+        self
+    }
+
+    /// Sets a custom footer builder with OK and Cancel button factories.
+    pub fn footer<F>(mut self, footer: F) -> Self
+    where
+        F: Fn(DialogFooterButtonFn, DialogFooterButtonFn, &mut Window, &mut App) -> Vec<AnyElement>
+            + 'static,
+    {
+        self.footer = Some(
+            DialogFooterBuilder {
+                button_props: self.button_props.clone(),
+                builder: Rc::new(footer),
+            }
+            .into_any_element(),
+        );
+        self.default_footer = false;
         self
     }
 
     /// Set the button props of the dialog.
     pub fn button_props(mut self, button_props: DialogButtonProps) -> Self {
         self.button_props = button_props;
+        self.default_footer = true;
+        self
+    }
+
+    /// Set to use confirm dialog, with OK and Cancel buttons.
+    pub fn confirm(mut self) -> Self {
+        self.button_props.show_cancel = true;
+        self.default_footer = true;
+        self
+    }
+
+    /// Set to use alert dialog, with OK button only.
+    pub fn alert(mut self) -> Self {
+        self.button_props.show_cancel = false;
+        self.default_footer = true;
         self
     }
 
@@ -305,6 +367,7 @@ impl Dialog {
         on_ok: impl Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static,
     ) -> Self {
         self.button_props = self.button_props.on_ok(on_ok);
+        self.default_footer = true;
         self
     }
 
@@ -316,6 +379,7 @@ impl Dialog {
         on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static,
     ) -> Self {
         self.button_props = self.button_props.on_cancel(on_cancel);
+        self.default_footer = true;
         self
     }
 
@@ -385,6 +449,19 @@ impl Dialog {
             root.defer_close_dialog(window, cx);
         });
     }
+
+    fn render_default_footer(&self, window: &mut Window, cx: &mut App) -> AnyElement {
+        h_flex()
+            .justify_end()
+            .gap_2()
+            .children(
+                self.button_props
+                    .show_cancel
+                    .then(|| self.button_props.render_cancel(window, cx)),
+            )
+            .child(self.button_props.render_ok(window, cx))
+            .into_any_element()
+    }
 }
 
 impl ParentElement for Dialog {
@@ -445,6 +522,10 @@ impl RenderOnce for Dialog {
         let on_close = self.button_props.on_close.clone();
         let on_ok = self.button_props.on_ok.clone();
         let on_cancel = self.button_props.on_cancel.clone();
+        let footer = self.footer.take().or_else(|| {
+            self.default_footer
+                .then(|| self.render_default_footer(window, cx))
+        });
 
         let window_paddings = crate::window_border::window_paddings(window);
         let view_size = window.viewport_size()
@@ -615,7 +696,7 @@ impl RenderOnce for Dialog {
                                         )
                                     }),
                             )
-                            .when_some(self.footer, |this, footer| {
+                            .when_some(footer, |this, footer| {
                                 this.child(div().pl(paddings.left).pr(paddings.right).child(footer))
                             })
                             .children(self.props.close_button.then(|| {

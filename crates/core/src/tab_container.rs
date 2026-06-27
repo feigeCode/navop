@@ -1,6 +1,6 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyView, App, AppContext as _, Context, Corner, Decorations, Entity, EntityId, EventEmitter,
+    Anchor, AnyView, App, AppContext as _, Context, Decorations, Entity, EntityId, EventEmitter,
     FocusHandle, Focusable, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
     RenderOnce, SharedString, Styled, Task, Window, WindowControlArea, div, px,
 };
@@ -1903,7 +1903,7 @@ impl TabContainer {
             )
             .child(
                 Popover::new("tab-list-popover")
-                    .anchor(Corner::TopRight)
+                    .anchor(Anchor::TopRight)
                     .p_0()
                     .open(self.list_popover_open)
                     .on_open_change(cx.listener(move |this, open, window, cx| {

@@ -1,31 +1,25 @@
-use std::{
-    pin::Pin,
-    sync::{Arc, Mutex},
-    task::Poll,
-    time::Duration,
-};
+use futures::Stream as _;
+use std::{pin::Pin, task::Poll};
 
 use gpui::{
     App, AppContext as _, Bounds, ClipboardItem, Context, FocusHandle, IntoElement, KeyBinding,
-    ListState, ParentElement as _, Pixels, Point, Render, SharedString, Size, Styled as _, Task,
-    Window, canvas, prelude::FluentBuilder as _, px,
+    ListState, ParentElement as _, Pixels, Point, Render, SharedString, Styled as _, Task, Window,
+    prelude::FluentBuilder as _, px,
 };
-use smol::{Timer, stream::StreamExt as _};
 
 use crate::{
-    ActiveTheme,
+    ActiveTheme, ElementExt,
+    async_util::{Receiver, Sender, unbounded},
     highlighter::HighlightTheme,
     input::{self, Copy},
     text::{
-        CodeBlockActionsFn, CodeBlockRenderer, TextViewStyle,
+        CodeBlockActionsFn, TextViewStyle,
         document::ParsedDocument,
         format,
-        node::{self, NodeContext},
+        node::{self, CodeBlockRenderer, NodeContext},
     },
     v_flex,
 };
-
-const UPDATE_DELAY: Duration = Duration::from_millis(50);
 
 const CONTEXT: &'static str = "TextView";
 pub(crate) fn init(cx: &mut App) {
@@ -57,17 +51,17 @@ pub struct TextViewState {
     pub(super) selectable: bool,
     pub(super) scrollable: bool,
     pub(super) text_view_style: TextViewStyle,
-    pub(super) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
-    pub(super) code_block_renderer: Option<Arc<CodeBlockRenderer>>,
+    pub(super) code_block_actions: Option<std::sync::Arc<CodeBlockActionsFn>>,
+    pub(super) code_block_renderer: Option<std::sync::Arc<CodeBlockRenderer>>,
 
     pub(super) is_selecting: bool,
     /// The local (in TextView) position of the selection.
     selection_positions: (Option<Point<Pixels>>, Option<Point<Pixels>>),
 
-    pub(super) parsed_content: Arc<Mutex<ParsedContent>>,
+    pub(super) parsed_content: ParsedContent,
     text: SharedString,
     parsed_error: Option<SharedString>,
-    tx: smol::channel::Sender<UpdateOptions>,
+    tx: Sender<UpdateOptions>,
     _parse_task: Task<()>,
     _receive_task: Task<()>,
 }
@@ -87,14 +81,20 @@ impl TextViewState {
     fn new(format: TextViewFormat, text: &str, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
 
-        let (tx, rx) = smol::channel::unbounded::<UpdateOptions>();
-        let (tx_result, rx_result) = smol::channel::unbounded::<Result<(), SharedString>>();
+        let (tx, rx) = unbounded::<UpdateOptions>();
+        let (tx_result, rx_result) = unbounded::<Result<ParsedContent, SharedString>>();
         let _receive_task = cx.spawn({
             async move |weak_self, cx| {
                 while let Ok(parsed_result) = rx_result.recv().await {
                     _ = weak_self.update(cx, |state, cx| {
-                        if let Err(err) = &parsed_result {
-                            state.parsed_error = Some(err.clone());
+                        match parsed_result {
+                            Ok(content) => {
+                                state.parsed_content = content;
+                                state.parsed_error = None;
+                            }
+                            Err(err) => {
+                                state.parsed_error = Some(err);
+                            }
                         }
                         state.clear_selection();
                         cx.notify();
@@ -129,7 +129,7 @@ impl TextViewState {
 
     /// Get the text content.
     pub(crate) fn source(&self) -> SharedString {
-        self.parsed_content.lock().unwrap().document.source.clone()
+        self.parsed_content.document.source.clone()
     }
 
     /// Set whether the text is selectable, default false.
@@ -177,22 +177,17 @@ impl TextViewState {
 
     /// Return the selected text.
     pub fn selected_text(&self) -> String {
-        self.parsed_content.lock().unwrap().document.selected_text()
+        self.parsed_content.document.selected_text()
     }
 
     fn increment_update(&mut self, text: &str, append: bool, cx: &mut Context<Self>) {
-        let code_block_actions = self.code_block_actions.clone();
-        let code_block_renderer = self.code_block_renderer.clone();
         let update_options = UpdateOptions {
             append,
             content: self.parsed_content.clone(),
             pending_text: text.to_string(),
             highlight_theme: cx.theme().highlight_theme.clone(),
-            code_block_actions: code_block_actions.clone(),
-            code_block_renderer: code_block_renderer.clone(),
         };
 
-        // Parse at first time by blocking.
         _ = self.tx.try_send(update_options);
     }
 
@@ -210,13 +205,24 @@ impl TextViewState {
     }
 
     pub(super) fn start_selection(&mut self, pos: Point<Pixels>) {
-        let pos = pos - self.bounds.origin;
+        // Store content coordinates (not affected by scrolling)
+        let scroll_offset = if self.scrollable {
+            self.list_state.scroll_px_offset_for_scrollbar()
+        } else {
+            Point::default()
+        };
+        let pos = pos - self.bounds.origin - scroll_offset;
         self.selection_positions = (Some(pos), Some(pos));
         self.is_selecting = true;
     }
 
     pub(super) fn update_selection(&mut self, pos: Point<Pixels>) {
-        let pos = pos - self.bounds.origin;
+        let scroll_offset = if self.scrollable {
+            self.list_state.scroll_px_offset_for_scrollbar()
+        } else {
+            Point::default()
+        };
+        let pos = pos - self.bounds.origin - scroll_offset;
         if let (Some(start), Some(_)) = self.selection_positions {
             self.selection_positions = (Some(start), Some(pos))
         }
@@ -234,12 +240,19 @@ impl TextViewState {
         }
     }
 
-    /// Return the bounds of the selection in window coordinates.
-    pub(crate) fn selection_bounds(&self) -> Bounds<Pixels> {
-        selection_bounds(
+    /// Return the selection start/end in window coordinates.
+    pub(crate) fn selection_points(&self) -> Option<(Point<Pixels>, Point<Pixels>)> {
+        let scroll_offset = if self.scrollable {
+            self.list_state.scroll_px_offset_for_scrollbar()
+        } else {
+            Point::default()
+        };
+
+        selection_points(
             self.selection_positions.0,
             self.selection_positions.1,
             self.bounds,
+            scroll_offset,
         )
     }
 
@@ -260,14 +273,12 @@ impl TextViewState {
 impl Render for TextViewState {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = cx.entity();
-        let (document, mut node_cx) = {
-            let content = self.parsed_content.lock().unwrap();
-            (content.document.clone(), content.node_cx.clone())
-        };
+        let document = self.parsed_content.document.clone();
+        let mut node_cx = self.parsed_content.node_cx.clone();
 
-        // Update code_block_actions with current value (may have been set after initial parse)
         node_cx.code_block_actions = self.code_block_actions.clone();
         node_cx.code_block_renderer = self.code_block_renderer.clone();
+        node_cx.style = self.text_view_style.clone();
 
         v_flex()
             .size_full()
@@ -289,18 +300,15 @@ impl Render for TextViewState {
                         .child(err.to_string()),
                 ),
             })
-            .child(canvas(
-                move |bounds, _, cx| {
-                    state.update(cx, |state, _| {
-                        state.update_bounds(bounds);
-                    })
-                },
-                |_, _, _, _| {},
-            ))
+            .on_prepaint(move |bounds, _, cx| {
+                state.update(cx, |state, _| {
+                    state.update_bounds(bounds);
+                })
+            })
     }
 }
 
-#[derive(PartialEq, Default)]
+#[derive(Clone, PartialEq, Default)]
 pub(crate) struct ParsedContent {
     pub(crate) document: ParsedDocument,
     pub(crate) node_cx: node::NodeContext,
@@ -310,17 +318,15 @@ struct UpdateFuture {
     format: TextViewFormat,
     options: UpdateOptions,
     pending_text: String,
-    timer: Timer,
-    rx: Pin<Box<smol::channel::Receiver<UpdateOptions>>>,
-    tx_result: smol::channel::Sender<Result<(), SharedString>>,
-    delay: Duration,
+    rx: Pin<Box<Receiver<UpdateOptions>>>,
+    tx_result: Sender<Result<ParsedContent, SharedString>>,
 }
 
 impl UpdateFuture {
     fn new(
         format: TextViewFormat,
-        rx: smol::channel::Receiver<UpdateOptions>,
-        tx_result: smol::channel::Sender<Result<(), SharedString>>,
+        rx: Receiver<UpdateOptions>,
+        tx_result: Sender<Result<ParsedContent, SharedString>>,
         cx: &App,
     ) -> Self {
         Self {
@@ -331,13 +337,9 @@ impl UpdateFuture {
                 pending_text: String::new(),
                 content: Default::default(),
                 highlight_theme: cx.theme().highlight_theme.clone(),
-                code_block_actions: None,
-                code_block_renderer: None,
             },
-            timer: Timer::never(),
             rx: Box::pin(rx),
             tx_result,
-            delay: UPDATE_DELAY,
         }
     }
 }
@@ -347,26 +349,17 @@ impl Future for UpdateFuture {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         loop {
-            match self.rx.poll_next(cx) {
+            match self.rx.as_mut().poll_next(cx) {
                 Poll::Ready(Some(options)) => {
-                    let delay = self.delay;
                     if options.append {
                         self.pending_text.push_str(options.pending_text.as_str());
                     } else {
                         self.pending_text = options.pending_text.clone();
                     }
                     self.options = options;
-                    self.timer.set_after(delay);
-                    continue;
-                }
-                Poll::Ready(None) => return Poll::Ready(()),
-                Poll::Pending => {}
-            }
 
-            match self.timer.poll_next(cx) {
-                Poll::Ready(Some(_)) => {
+                    // Process immediately without debounce
                     let pending_text = std::mem::take(&mut self.pending_text);
-
                     let res = parse_content(
                         self.format,
                         &UpdateOptions {
@@ -377,7 +370,8 @@ impl Future for UpdateFuture {
                     _ = self.tx_result.try_send(res);
                     continue;
                 }
-                Poll::Ready(None) | Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => return Poll::Ready(()),
+                Poll::Pending => return Poll::Pending,
             }
         }
     }
@@ -385,22 +379,21 @@ impl Future for UpdateFuture {
 
 #[derive(Clone)]
 struct UpdateOptions {
-    content: Arc<Mutex<ParsedContent>>,
+    content: ParsedContent,
     pending_text: String,
     append: bool,
-    highlight_theme: Arc<HighlightTheme>,
-    code_block_actions: Option<Arc<CodeBlockActionsFn>>,
-    code_block_renderer: Option<Arc<CodeBlockRenderer>>,
+    highlight_theme: std::sync::Arc<HighlightTheme>,
 }
 
-fn parse_content(format: TextViewFormat, options: &UpdateOptions) -> Result<(), SharedString> {
+fn parse_content(
+    format: TextViewFormat,
+    options: &UpdateOptions,
+) -> Result<ParsedContent, SharedString> {
     let mut node_cx = NodeContext {
-        code_block_actions: options.code_block_actions.clone(),
-        code_block_renderer: options.code_block_renderer.clone(),
         ..NodeContext::default()
     };
 
-    let mut content = options.content.lock().unwrap();
+    let mut content = options.content.clone();
     let mut source = String::new();
     if options.append
         && let Some(last_block) = content.document.blocks.pop()
@@ -414,7 +407,7 @@ fn parse_content(format: TextViewFormat, options: &UpdateOptions) -> Result<(), 
         source = options.pending_text.to_string();
     }
 
-    let new_content = match format {
+    let new_document = match format {
         TextViewFormat::Markdown => {
             format::markdown::parse(&source, &mut node_cx, &options.highlight_theme)
         }
@@ -424,56 +417,58 @@ fn parse_content(format: TextViewFormat, options: &UpdateOptions) -> Result<(), 
     if options.append {
         content.document.source =
             format!("{}{}", content.document.source, options.pending_text).into();
-        content.document.blocks.extend(new_content.blocks);
+        content.document.blocks.extend(new_document.blocks);
     } else {
-        content.document = new_content;
+        content.document = new_document;
     }
 
-    Ok(())
+    Ok(content)
 }
 
-fn selection_bounds(
+fn selection_points(
     start: Option<Point<Pixels>>,
     end: Option<Point<Pixels>>,
     bounds: Bounds<Pixels>,
-) -> Bounds<Pixels> {
+    scroll_offset: Point<Pixels>,
+) -> Option<(Point<Pixels>, Point<Pixels>)> {
     if let (Some(start), Some(end)) = (start, end) {
-        let start = start + bounds.origin;
-        let end = end + bounds.origin;
-
-        let origin = Point {
-            x: start.x.min(end.x),
-            y: start.y.min(end.y),
-        };
-        let size = Size {
-            width: (start.x - end.x).abs(),
-            height: (start.y - end.y).abs(),
-        };
-
-        return Bounds { origin, size };
+        // Convert content coordinates to window coordinates
+        let start = start + scroll_offset + bounds.origin;
+        let end = end + scroll_offset + bounds.origin;
+        return Some((start, end));
     }
 
-    Bounds::default()
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{Bounds, point, px, size};
+    use gpui::point;
 
     #[test]
-    fn test_text_view_state_selection_bounds() {
+    fn test_text_view_state_selection_points() {
         assert_eq!(
-            selection_bounds(None, None, Default::default()),
-            Bounds::default()
+            selection_points(None, None, Default::default(), Point::default()),
+            None
         );
         assert_eq!(
-            selection_bounds(None, Some(point(px(10.), px(20.))), Default::default()),
-            Bounds::default()
+            selection_points(
+                None,
+                Some(point(px(10.), px(20.))),
+                Default::default(),
+                Point::default()
+            ),
+            None
         );
         assert_eq!(
-            selection_bounds(Some(point(px(10.), px(20.))), None, Default::default()),
-            Bounds::default()
+            selection_points(
+                Some(point(px(10.), px(20.))),
+                None,
+                Default::default(),
+                Point::default()
+            ),
+            None
         );
 
         // 10,10 start
@@ -482,63 +477,58 @@ mod tests {
         //   |------|
         //         50,50
         assert_eq!(
-            selection_bounds(
+            selection_points(
                 Some(point(px(10.), px(10.))),
                 Some(point(px(50.), px(50.))),
-                Default::default()
+                Default::default(),
+                Point::default()
             ),
-            Bounds {
-                origin: point(px(10.), px(10.)),
-                size: size(px(40.), px(40.))
-            }
+            Some((point(px(10.), px(10.)), point(px(50.), px(50.))))
         );
+
         // 10,10
         //   |------|
         //   |      |
         //   |------|
         //         50,50 start
         assert_eq!(
-            selection_bounds(
+            selection_points(
                 Some(point(px(50.), px(50.))),
                 Some(point(px(10.), px(10.))),
-                Default::default()
+                Default::default(),
+                Point::default()
             ),
-            Bounds {
-                origin: point(px(10.), px(10.)),
-                size: size(px(40.), px(40.))
-            }
+            Some((point(px(50.), px(50.)), point(px(10.), px(10.))))
         );
+
         //        50,10 start
         //   |------|
         //   |      |
         //   |------|
         // 10,50
         assert_eq!(
-            selection_bounds(
+            selection_points(
                 Some(point(px(50.), px(10.))),
                 Some(point(px(10.), px(50.))),
-                Default::default()
+                Default::default(),
+                Point::default()
             ),
-            Bounds {
-                origin: point(px(10.), px(10.)),
-                size: size(px(40.), px(40.))
-            }
+            Some((point(px(50.), px(10.)), point(px(10.), px(50.))))
         );
+
         //        50,10
         //   |------|
         //   |      |
         //   |------|
         // 10,50 start
         assert_eq!(
-            selection_bounds(
+            selection_points(
                 Some(point(px(10.), px(50.))),
                 Some(point(px(50.), px(10.))),
-                Default::default()
+                Default::default(),
+                Point::default()
             ),
-            Bounds {
-                origin: point(px(10.), px(10.)),
-                size: size(px(40.), px(40.))
-            }
+            Some((point(px(10.), px(50.)), point(px(50.), px(10.))))
         );
     }
 }

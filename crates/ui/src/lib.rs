@@ -83,13 +83,13 @@ pub use global_state::GlobalState;
 pub use gpui_component_macros::icon_named;
 pub use icon::*;
 pub use index_path::IndexPath;
-pub use input::{Rope, RopeExt, RopeLines};
+pub use input::{BlinkCursor, Rope, RopeExt, RopeLines};
 #[cfg(any(feature = "inspector", debug_assertions))]
 pub use inspector::*;
 pub use root::Root;
 pub use styled::*;
 pub use theme::*;
-pub use time::{calendar, date_picker};
+pub use time::{calendar, date_picker, datetime_picker, time_picker};
 pub use title_bar::*;
 pub use virtual_list::{VirtualList, VirtualListScrollHandle, h_virtual_list, v_virtual_list};
 pub use window_border::{WindowBorder, window_border, window_paddings};
@@ -109,6 +109,8 @@ pub fn init(cx: &mut App) {
     focus_trap::init(cx);
     color_picker::init(cx);
     date_picker::init(cx);
+    datetime_picker::init(cx);
+    time_picker::init(cx);
     dock::init(cx);
     sheet::init(cx);
     select::init(cx);

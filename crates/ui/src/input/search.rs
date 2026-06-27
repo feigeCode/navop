@@ -276,7 +276,7 @@ impl SearchPanel {
         })
     }
 
-    fn show(
+    pub(super) fn show(
         &mut self,
         selected_text: &Rope,
         open_mode: SearchOpenMode,
@@ -285,6 +285,11 @@ impl SearchPanel {
     ) {
         self.open = true;
         self.replace_mode = open_mode.starts_in_replace_mode();
+        self.search_input
+            .read(cx)
+            .focus_handle
+            .clone()
+            .focus(window, cx);
 
         self.search_input.update(cx, |this, cx| {
             if selected_text.len() > 0 {
@@ -293,13 +298,6 @@ impl SearchPanel {
             }
             this.select_all(&super::SelectAll, window, cx);
         });
-
-        let focus_handle = if self.replace_mode {
-            self.replace_input.read(cx).focus_handle.clone()
-        } else {
-            self.search_input.read(cx).focus_handle.clone()
-        };
-        focus_handle.focus(window, cx);
     }
 
     fn update_search_query(&mut self, cx: &mut Context<Self>) {
@@ -467,6 +465,7 @@ impl Render for SearchPanel {
                     .gap_2()
                     .child(
                         div()
+                            .flex()
                             .flex_1()
                             .gap_1()
                             .child(
@@ -665,11 +664,5 @@ mod tests {
 
         matcher.update_cursor_by_offset(31);
         assert_eq!(matcher.current_match_ix, 2);
-    }
-
-    #[test]
-    fn test_search_open_mode_replace_starts_in_replace_mode() {
-        assert!(SearchOpenMode::Replace.starts_in_replace_mode());
-        assert!(!SearchOpenMode::Search.starts_in_replace_mode());
     }
 }

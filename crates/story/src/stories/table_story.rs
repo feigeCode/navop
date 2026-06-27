@@ -20,7 +20,7 @@ use gpui_component::{
     label::Label,
     menu::{DropdownMenu, PopupMenu},
     spinner::Spinner,
-    table::{Column, ColumnFixed, ColumnSort, Table, TableDelegate, TableEvent, TableState},
+    table::{Column, ColumnFixed, ColumnSort, DataTable, TableDelegate, TableEvent, TableState},
     v_flex,
 };
 use serde::{Deserialize, Serialize};
@@ -1199,7 +1199,7 @@ impl Render for TableStory {
                 ),
             )
             .child(
-                Table::new(&self.table)
+                DataTable::new(&self.table)
                     .with_size(self.size)
                     .stripe(self.stripe),
             )

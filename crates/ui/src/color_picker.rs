@@ -244,6 +244,16 @@ impl ColorPickerState {
         self.update_value(Some(value.into()), false, window, cx)
     }
 
+    /// Set current optional color value.
+    pub fn set_optional_value(
+        &mut self,
+        value: Option<Hsla>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_value(value, false, window, cx)
+    }
+
     /// Get current color value.
     pub fn value(&self) -> Option<Hsla> {
         self.value

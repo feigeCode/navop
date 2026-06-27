@@ -160,8 +160,7 @@ impl ModelSettingsPanel {
             &temperature_slider,
             window,
             |this, _, event, _window, cx| {
-                let SliderEvent::Change(value) = event;
-                if let gpui_component::slider::SliderValue::Single(v) = value {
+                if let SliderEvent::Change(gpui_component::slider::SliderValue::Single(v)) = event {
                     this.settings.temperature = *v;
                     this.emit_change(cx);
                 }

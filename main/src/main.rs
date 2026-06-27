@@ -96,7 +96,7 @@ fn main() {
         std::process::exit(exit_code);
     }
 
-    let app = Application::new()
+    let app = gpui_platform::application()
         .with_assets(AppAssets::new())
         .with_quit_mode(QuitMode::LastWindowClosed);
 

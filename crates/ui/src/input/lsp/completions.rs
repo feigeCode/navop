@@ -162,7 +162,7 @@ impl InputState {
 
         let start = range.start;
         let new_offset = self.cursor();
-        let existing_menu = match self.context_menu.as_ref() {
+        let existing_menu = match self.context_menu_content.as_ref() {
             Some(ContextMenu::Completion(menu)) => Some(menu),
             _ => None,
         };
@@ -197,7 +197,7 @@ impl InputState {
             Some(menu) => menu.clone(),
             None => {
                 let menu = CompletionMenu::new(cx.entity(), window, cx);
-                self.context_menu = Some(ContextMenu::Completion(menu.clone()));
+                self.context_menu_content = Some(ContextMenu::Completion(menu.clone()));
                 menu
             }
         };
@@ -279,10 +279,11 @@ impl InputState {
         let offset = self.cursor();
         let text = self.text.clone();
         let debounce = provider.inline_completion_debounce();
+        let background_executor = cx.background_executor().clone();
 
         self.inline_completion.task = cx.spawn_in(window, async move |editor, cx| {
             // Debounce: wait before fetching to avoid unnecessary requests while typing
-            smol::Timer::after(debounce).await;
+            background_executor.timer(debounce).await;
 
             // Now fetch the inline completion after the debounce period
             let task = editor.update_in(cx, |editor, window, cx| {

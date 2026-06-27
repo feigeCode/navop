@@ -143,7 +143,7 @@ impl AlertDialog {
     ///
     /// If not set, a default footer with OK and optional Cancel button will be used.
     pub fn footer(mut self, footer: impl IntoElement) -> Self {
-        self.base = self.base.footer(footer);
+        self.base = self.base.footer_element(footer);
         self
     }
 
@@ -300,7 +300,7 @@ impl AlertDialog {
             .children(self.children)
             .when(!has_footer, |this| {
                 // Default footer for AlertDialog if user doesn't provide one, with OK and optional Cancel button
-                this.footer(
+                this.footer_element(
                     DialogFooter::new()
                         .when(button_props.show_cancel, |this| {
                             this.child(button_props.render_cancel(window, cx))

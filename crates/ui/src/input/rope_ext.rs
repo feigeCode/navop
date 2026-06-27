@@ -2,7 +2,36 @@ use std::ops::Range;
 
 use ropey::{LineType, Rope, RopeSlice};
 use sum_tree::Bias;
-use tree_sitter::Point;
+
+#[cfg(not(target_family = "wasm"))]
+pub use tree_sitter::{InputEdit, Point};
+
+#[cfg(target_family = "wasm")]
+/// Stub type for tree-sitter Point on WASM (tree-sitter not available).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Point {
+    pub row: usize,
+    pub column: usize,
+}
+
+#[cfg(target_family = "wasm")]
+impl Point {
+    pub fn new(row: usize, column: usize) -> Self {
+        Self { row, column }
+    }
+}
+
+#[cfg(target_family = "wasm")]
+/// Stub type for tree-sitter InputEdit on WASM (tree-sitter not available).
+#[derive(Debug, Clone, Copy)]
+pub struct InputEdit {
+    pub start_byte: usize,
+    pub old_end_byte: usize,
+    pub new_end_byte: usize,
+    pub start_position: Point,
+    pub old_end_position: Point,
+    pub new_end_position: Point,
+}
 
 use crate::input::Position;
 

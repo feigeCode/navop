@@ -1,6 +1,6 @@
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, AsyncApp, ClickEvent, Context, Corner, Entity, EventEmitter, FocusHandle,
+    Anchor, AnyElement, App, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, Subscription,
     Window, actions, div, px,
 };
@@ -2630,7 +2630,7 @@ impl DataGrid {
                         Button::new("page-size-selector")
                             .with_size(Size::Small)
                             .label(label)
-                            .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+                            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
                                 menu.menu("500", Box::new(Page500))
                                     .menu("1000", Box::new(Page1000))
                                     .menu("2000", Box::new(Page2000))

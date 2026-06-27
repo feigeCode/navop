@@ -4,7 +4,7 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, Context, Corner, Entity, Hsla, InteractiveElement, IntoElement,
+    Anchor, AnyElement, App, AppContext, Context, Entity, Hsla, InteractiveElement, IntoElement,
     ParentElement, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
@@ -673,7 +673,7 @@ impl ProviderSelectState {
         let model_search_input = self.model_search_input.clone();
 
         Popover::new("provider-model-selector")
-            .anchor(Corner::TopRight)
+            .anchor(Anchor::TopRight)
             .p_0()
             .trigger(
                 Button::new("provider-model-selector-trigger")

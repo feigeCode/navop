@@ -155,9 +155,10 @@ impl DatePickerState {
         self.update_date(date.into(), false, window, cx);
     }
 
-    /// Set the picker to open state
-    pub fn set_open(&mut self, open: bool, _cx: &mut Context<Self>) {
+    /// Set the picker to open state.
+    pub fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
         self.open = open;
+        cx.notify();
     }
 
     pub fn is_open(&self) -> bool {
@@ -168,6 +169,16 @@ impl DatePickerState {
     pub fn disabled_matcher(mut self, disabled: impl Into<Matcher>) -> Self {
         self.disabled_matcher = Some(Rc::new(disabled.into()));
         self
+    }
+
+    /// Set the year range for the internal calendar.
+    ///
+    /// Default is 50 years before and after the current year.
+    /// `range` uses a half-open interval `(start, end)` where `end` is exclusive.
+    pub fn set_year_range(&mut self, range: (i32, i32), cx: &mut Context<Self>) {
+        self.calendar.update(cx, |state, cx| {
+            state.set_year_range(range, cx);
+        });
     }
 
     fn update_date(&mut self, date: Date, emit: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -198,7 +209,6 @@ impl DatePickerState {
 
         self.focus_back_if_need(window, cx);
         self.open = false;
-        // 关闭时发出 Change 事件，让表格结束编辑模式
         cx.emit(DatePickerEvent::Change(self.date));
         cx.notify();
     }
@@ -232,7 +242,8 @@ impl DatePickerState {
         }
     }
 
-    fn clean(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn clean(&mut self, _: &gpui::ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
         match self.date {
             Date::Single(_) => {
                 self.update_date(Date::Single(None), true, window, cx);
@@ -243,15 +254,8 @@ impl DatePickerState {
         }
     }
 
-    fn toggle_calendar(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn toggle_calendar(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.open = !self.open;
-        cx.notify();
-    }
-
-    fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open = false;
-        cx.emit(DatePickerEvent::Change(self.date));
-        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -384,6 +388,7 @@ impl RenderOnce for DatePicker {
             .date
             .format(&state.date_format)
             .unwrap_or(placeholder.clone());
+
         let (bg, fg) = input_style(self.disabled, cx);
 
         div()
@@ -410,12 +415,12 @@ impl RenderOnce for DatePicker {
                     .when(self.appearance, |this| {
                         this.bg(bg)
                             .text_color(fg)
+                            .when(self.disabled, |this| this.opacity(0.5))
                             .border_1()
                             .border_color(cx.theme().input)
                             .rounded(cx.theme().radius)
                             .when(cx.theme().shadow, |this| this.shadow_xs())
                             .when(is_focused, |this| this.focused_border(cx))
-                            .when(self.disabled, |this| this.opacity(0.5))
                     })
                     .overflow_hidden()
                     .input_text_size(self.size)
@@ -431,7 +436,15 @@ impl RenderOnce for DatePicker {
                             .items_center()
                             .justify_between()
                             .gap_1()
-                            .child(div().w_full().overflow_hidden().child(display_title))
+                            .child(
+                                div()
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .when(!state.date.is_some(), |this| {
+                                        this.text_color(cx.theme().muted_foreground)
+                                    })
+                                    .child(display_title),
+                            )
                             .when(!self.disabled, |this| {
                                 this.when(show_clean, |this| {
                                     this.child(clear_button(cx).on_click(
@@ -469,84 +482,40 @@ impl RenderOnce for DatePicker {
                                     }),
                                 )
                                 .child(
-                                    v_flex()
+                                    h_flex()
                                         .gap_3()
                                         .h_full()
                                         .items_start()
-                                        .child(
-                                            h_flex()
-                                                .gap_3()
-                                                .h_full()
-                                                .items_start()
-                                                .when_some(self.presets.clone(), |this, presets| {
-                                                    this.child(
-                                                        v_flex()
-                                                            .my_1()
-                                                            .gap_2()
-                                                            .justify_end()
-                                                            .children(
-                                                                presets
-                                                                    .into_iter()
-                                                                    .enumerate()
-                                                                    .map(|(i, preset)| {
-                                                                        Button::new(("preset", i))
-                                                                            .small()
-                                                                            .ghost()
-                                                                            .tab_stop(false)
-                                                                            .label(preset.label.clone())
-                                                                            .on_click(window.listener_for(
-                                                                                &self.state,
-                                                                                move |this, _, window, cx| {
-                                                                                    this.select_preset(
-                                                                                        &preset, window, cx,
-                                                                                    );
-                                                                                },
-                                                                            ))
-                                                                    }),
-                                                            ),
-                                                    )
-                                                })
-                                                .child(
-                                                    Calendar::new(&state.calendar)
-                                                        .number_of_months(self.number_of_months)
-                                                        .border_0()
-                                                        .rounded_none()
-                                                        .p_0()
-                                                        .with_size(self.size),
+                                        .when_some(self.presets.clone(), |this, presets| {
+                                            this.child(
+                                                v_flex().my_1().gap_2().justify_end().children(
+                                                    presets.into_iter().enumerate().map(
+                                                        |(i, preset)| {
+                                                            Button::new(("preset", i))
+                                                                .small()
+                                                                .ghost()
+                                                                .tab_stop(false)
+                                                                .label(preset.label.clone())
+                                                                .on_click(window.listener_for(
+                                                                    &self.state,
+                                                                    move |this, _, window, cx| {
+                                                                        this.select_preset(
+                                                                            &preset, window, cx,
+                                                                        );
+                                                                    },
+                                                                ))
+                                                        },
+                                                    ),
                                                 ),
-                                        )
+                                            )
+                                        })
                                         .child(
-                                            h_flex()
-                                                .mt_3()
-                                                .pt_3()
-                                                .border_t_1()
-                                                .border_color(cx.theme().border)
-                                                .justify_end()
-                                                .gap_2()
-                                                .child(
-                                                    Button::new("ok")
-                                                        .small()
-                                                        .primary()
-                                                        .label("OK")
-                                                        .on_click(window.listener_for(
-                                                            &self.state,
-                                                            |this, _, window, cx| {
-                                                                this.confirm(window, cx);
-                                                            },
-                                                        )),
-                                                )
-                                                .child(
-                                                    Button::new("cancel")
-                                                        .small()
-                                                        .ghost()
-                                                        .label("Cancel")
-                                                        .on_click(window.listener_for(
-                                                            &self.state,
-                                                            |this, _, window, cx| {
-                                                                this.on_escape(&Cancel, window, cx);
-                                                            },
-                                                        )),
-                                                ),
+                                            Calendar::new(&state.calendar)
+                                                .number_of_months(self.number_of_months)
+                                                .border_0()
+                                                .rounded_none()
+                                                .p_0()
+                                                .with_size(self.size),
                                         ),
                                 ),
                         ),

@@ -4,6 +4,7 @@ use gpui::{
     Radians, Render, RenderOnce, SharedString, StyleRefinement, Styled, Svg, Transformation,
     Window, div, img, prelude::FluentBuilder as _, svg,
 };
+use gpui_component_macros::icon_named;
 use std::path::PathBuf;
 
 /// Types implementing this trait can automatically be converted to [`Icon`].
@@ -21,6 +22,8 @@ impl<T: IconNamed> From<T> for Icon {
     }
 }
 
+icon_named!(IconName, "../assets/assets/icons");
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum IconColorMode {
     /// Monochrome mode: uses SVG with text_color tinting (default)
@@ -30,383 +33,38 @@ pub enum IconColorMode {
     Color,
 }
 
-/// The name of an icon in the asset bundle.
-#[derive(IntoElement, Clone)]
-pub enum IconName {
-    ALargeSmall,
-    ArrowDown,
-    ArrowLeft,
-    ArrowRight,
-    ArrowUp,
-    Asterisk,
-    Battery,
-    BatteryCharging,
-    BatteryFull,
-    BatteryLow,
-    BatteryMedium,
-    BatteryWarning,
-    Bell,
-    BookOpen,
-    Bot,
-    Building2,
-    Calendar,
-    CaseSensitive,
-    ChartPie,
-    Check,
-    ChevronDown,
-    ChevronLeft,
-    ChevronRight,
-    ChevronsUpDown,
-    ChevronUp,
-    CircleCheck,
-    CircleUser,
-    CircleX,
-    Close,
-    Copy,
-    Paste,
-    Cpu,
-    Dash,
-    Delete,
-    Ellipsis,
-    EllipsisVertical,
-    ExternalLink,
-    Eye,
-    EyeOff,
-    File,
-    Unarchive,
-    Folder,
-    FolderClosed,
-    FolderOpen,
-    Frame,
-    GalleryVerticalEnd,
-    GitHub,
-    Globe,
-    HardDrive,
-    Heart,
-    HeartOff,
-    Inbox,
-    Info,
-    Inspector,
-    LayoutDashboard,
-    Loader,
-    LoaderCircle,
-    LocateActiveTab,
-    Map,
-    Maximize,
-    MemoryStick,
-    Menu,
-    Minimize,
-    Minus,
-    Moon,
-    Network,
-    Palette,
-    PanelBottom,
-    PanelBottomOpen,
-    PanelLeft,
-    PanelLeftClose,
-    PanelLeftOpen,
-    PanelRight,
-    PanelRightClose,
-    PanelRightOpen,
-    Pause,
-    Pin,
-    Play,
-    Plus,
-    Redo,
-    Redo2,
-    Replace,
-    ResizeCorner,
-    Search,
-    Settings,
-    Settings2,
-    SortAscending,
-    SortDescending,
-    SquareTerminal,
-    Star,
-    StarFill,
-    StarOff,
-    Sun,
-    ThumbsDown,
-    ThumbsUp,
-    TriangleAlert,
-    Undo,
-    Undo2,
-    User,
-    WindowClose,
-    WindowMaximize,
-    WindowMinimize,
-    WindowRestore,
-    Database,
-    Table,
-    Column,
-    Key,
-    View,
-    Function,
-    Schema,
-    GoldKey,
-    PrimaryKey,
-    Procedure,
-    Trigger,
-    FolderViews,
-    FolderQueries,
-    FolderFunctions,
-    FolderIndexes,
-    FolderTables,
-    FolderSchema,
-    FolderColumns,
-    FolderTriggers,
-    FolderProcedures,
-    FolderForeignKeys,
-    FolderCheckConstraints,
-    FolderSequences,
-    CheckConstraint,
-    Sequence,
-    Query,
-    Index,
-    Redis,
-    Terminal,
-    TerminalColor,
-    Apps,
-    AppsColor,
-    MongoDB,
-    MySQLColor,
-    MySQLLineColor,
-    SQLiteColor,
-    SQLiteLineColor,
-    PostgreSQLColor,
-    PostgreSQLLineColor,
-    MSSQLColor,
-    MSSQLLineColor,
-    OracleColor,
-    OracleLineColor,
-    ClickHouseColor,
-    ClickHouseLineColor,
-    Workspace,
-    RedisColor,
-    All,
-    Edit,
-    Filter,
-    Refresh,
-    Sync,
-    Upload,
-    NewFolder,
-    EditBorder,
-    Folder1,
-    FolderOpen1,
-    Remove,
-    TableData,
-    TableDesign,
-    TableDesignTool,
-    Server,
-    Export,
-    AI,
-    Home,
-    SettingColor,
-    SerialPort,
-    Monitor,
-    PortForwardingColor,
-    Rdp,
-    Vnc,
-    DuckDB,
-}
-
 impl IconName {
     /// Return the icon as a Entity<Icon>
     pub fn view(self, cx: &mut App) -> Entity<Icon> {
         Icon::build(self).view(cx)
     }
 
-    /// Return the icon in color mode (renders original colors)
+    /// Return the icon in color mode.
     pub fn color(self) -> Icon {
         Icon::build(self).color()
     }
 
+    /// Return the icon in monochrome mode.
     pub fn mono(self) -> Icon {
         Icon::build(self).mono()
     }
 }
 
-impl IconNamed for IconName {
-    fn path(self) -> SharedString {
-        match self {
-            Self::ALargeSmall => "icons/a-large-small.svg",
-            Self::ArrowDown => "icons/arrow-down.svg",
-            Self::ArrowLeft => "icons/arrow-left.svg",
-            Self::ArrowRight => "icons/arrow-right.svg",
-            Self::ArrowUp => "icons/arrow-up.svg",
-            Self::Asterisk => "icons/asterisk.svg",
-            Self::Battery => "icons/battery.svg",
-            Self::BatteryCharging => "icons/battery-charging.svg",
-            Self::BatteryFull => "icons/battery-full.svg",
-            Self::BatteryLow => "icons/battery-low.svg",
-            Self::BatteryMedium => "icons/battery-medium.svg",
-            Self::BatteryWarning => "icons/battery-warning.svg",
-            Self::Bell => "icons/bell.svg",
-            Self::BookOpen => "icons/book-open.svg",
-            Self::Bot => "icons/bot.svg",
-            Self::Building2 => "icons/building-2.svg",
-            Self::Calendar => "icons/calendar.svg",
-            Self::CaseSensitive => "icons/case-sensitive.svg",
-            Self::ChartPie => "icons/chart-pie.svg",
-            Self::Check => "icons/check.svg",
-            Self::ChevronDown => "icons/chevron-down.svg",
-            Self::ChevronLeft => "icons/chevron-left.svg",
-            Self::ChevronRight => "icons/chevron-right.svg",
-            Self::ChevronsUpDown => "icons/chevrons-up-down.svg",
-            Self::ChevronUp => "icons/chevron-up.svg",
-            Self::CircleCheck => "icons/circle-check.svg",
-            Self::CircleUser => "icons/circle-user.svg",
-            Self::CircleX => "icons/circle-x.svg",
-            Self::Close => "icons/close.svg",
-            Self::Copy => "icons/copy.svg",
-            Self::Paste => "icons/paste.svg",
-            Self::Cpu => "icons/cpu.svg",
-            Self::Dash => "icons/dash.svg",
-            Self::Delete => "icons/delete.svg",
-            Self::Ellipsis => "icons/ellipsis.svg",
-            Self::EllipsisVertical => "icons/ellipsis-vertical.svg",
-            Self::ExternalLink => "icons/external-link.svg",
-            Self::Eye => "icons/eye.svg",
-            Self::EyeOff => "icons/eye-off.svg",
-            Self::File => "icons/file.svg",
-            Self::Unarchive => "icons/unarchive.svg",
-            Self::Folder => "icons/folder.svg",
-            Self::FolderClosed => "icons/folder-closed.svg",
-            Self::FolderOpen => "icons/folder-open.svg",
-            Self::Frame => "icons/frame.svg",
-            Self::GalleryVerticalEnd => "icons/gallery-vertical-end.svg",
-            Self::GitHub => "icons/github.svg",
-            Self::Globe => "icons/globe.svg",
-            Self::HardDrive => "icons/hard-drive.svg",
-            Self::Heart => "icons/heart.svg",
-            Self::HeartOff => "icons/heart-off.svg",
-            Self::Inbox => "icons/inbox.svg",
-            Self::Info => "icons/info.svg",
-            Self::Inspector => "icons/inspector.svg",
-            Self::LayoutDashboard => "icons/layout-dashboard.svg",
-            Self::Loader => "icons/loader.svg",
-            Self::LoaderCircle => "icons/loader-circle.svg",
-            Self::LocateActiveTab => "icons/locate-active-tab.svg",
-            Self::Map => "icons/map.svg",
-            Self::Maximize => "icons/maximize.svg",
-            Self::MemoryStick => "icons/memory-stick.svg",
-            Self::Menu => "icons/menu.svg",
-            Self::Minimize => "icons/minimize.svg",
-            Self::Minus => "icons/minus.svg",
-            Self::Moon => "icons/moon.svg",
-            Self::Network => "icons/network.svg",
-            Self::Palette => "icons/palette.svg",
-            Self::PanelBottom => "icons/panel-bottom.svg",
-            Self::PanelBottomOpen => "icons/panel-bottom-open.svg",
-            Self::PanelLeft => "icons/panel-left.svg",
-            Self::PanelLeftClose => "icons/panel-left-close.svg",
-            Self::PanelLeftOpen => "icons/panel-left-open.svg",
-            Self::PanelRight => "icons/panel-right.svg",
-            Self::PanelRightClose => "icons/panel-right-close.svg",
-            Self::PanelRightOpen => "icons/panel-right-open.svg",
-            Self::Pause => "icons/pause.svg",
-            Self::Pin => "icons/pin.svg",
-            Self::Play => "icons/play.svg",
-            Self::Plus => "icons/plus.svg",
-            Self::Redo => "icons/redo.svg",
-            Self::Redo2 => "icons/redo-2.svg",
-            Self::Replace => "icons/replace.svg",
-            Self::ResizeCorner => "icons/resize-corner.svg",
-            Self::Search => "icons/search.svg",
-            Self::Settings => "icons/settings.svg",
-            Self::Settings2 => "icons/settings-2.svg",
-            Self::SortAscending => "icons/sort-ascending.svg",
-            Self::SortDescending => "icons/sort-descending.svg",
-            Self::SquareTerminal => "icons/square-terminal.svg",
-            Self::Star => "icons/star.svg",
-            Self::StarFill => "icons/star-fill.svg",
-            Self::StarOff => "icons/star-off.svg",
-            Self::Sun => "icons/sun.svg",
-            Self::ThumbsDown => "icons/thumbs-down.svg",
-            Self::ThumbsUp => "icons/thumbs-up.svg",
-            Self::TriangleAlert => "icons/triangle-alert.svg",
-            Self::Undo => "icons/undo.svg",
-            Self::Undo2 => "icons/undo-2.svg",
-            Self::User => "icons/user.svg",
-            Self::WindowClose => "icons/window-close.svg",
-            Self::WindowMaximize => "icons/window-maximize.svg",
-            Self::WindowMinimize => "icons/window-minimize.svg",
-            Self::WindowRestore => "icons/window-restore.svg",
-            Self::Database => "icons/db.svg",
-            Self::Schema => "icons/schema.svg",
-            Self::Table => "icons/table.svg",
-            Self::Folder1 => "icons/folder-1.svg",
-            Self::FolderOpen1 => "icons/folder-open-1.svg",
-            Self::View => "icons/view.svg",
-            Self::Function => "icons/function.svg",
-            Self::Column => "icons/column.svg",
-            Self::Key => "icons/key.svg",
-            Self::GoldKey => "icons/gold_key.svg",
-            Self::PrimaryKey => "icons/primary-key.svg",
-            Self::Procedure => "icons/procedure.svg",
-            Self::Trigger => "icons/trigger.svg",
-            Self::FolderViews => "icons/folder-views.svg",
-            Self::FolderQueries => "icons/folder-queries.svg",
-            Self::FolderFunctions => "icons/folder-functions.svg",
-            Self::FolderIndexes => "icons/folder-indexes.svg",
-            Self::FolderTables => "icons/folder-tables.svg",
-            Self::FolderSchema => "icons/folder-schema.svg",
-            Self::FolderColumns => "icons/folder-columns.svg",
-            Self::FolderTriggers => "icons/folder-triggers.svg",
-            Self::FolderProcedures => "icons/folder-procedures.svg",
-            Self::FolderForeignKeys => "icons/folder-foreign-keys.svg",
-            Self::FolderCheckConstraints => "icons/folder-check-constraints.svg",
-            Self::FolderSequences => "icons/folder-sequences.svg",
-            Self::CheckConstraint => "icons/check-constraint.svg",
-            Self::Sequence => "icons/sequence.svg",
-            Self::Query => "icons/query.svg",
-            Self::Index => "icons/index.svg",
-            Self::Redis => "icons/redis.svg",
-            Self::Terminal => "icons/terminal.svg",
-            Self::TerminalColor => "icons/terminal_color.svg",
-            Self::Apps => "icons/apps.svg",
-            Self::AppsColor => "icons/apps_color.svg",
-            Self::MongoDB => "icons/mongodb.svg",
-            Self::MySQLColor => "icons/mysql_color.svg",
-            Self::SQLiteColor => "icons/sqlite_color.svg",
-            Self::PostgreSQLColor => "icons/postgresql_color.svg",
-            Self::PostgreSQLLineColor => "icons/postgresql_line_color.svg",
-            Self::MSSQLColor => "icons/mssql_color.svg",
-            Self::MySQLLineColor => "icons/mysql_line_color.svg",
-            Self::SQLiteLineColor => "icons/sqlite_line_color.svg",
-            Self::OracleColor => "icons/oracle_color.svg",
-            Self::Workspace => "icons/workspace.svg",
-            Self::RedisColor => "icons/redis_color.svg",
-            Self::All => "icons/all.svg",
-            Self::Edit => "icons/edit.svg",
-            Self::Filter => "icons/filter.svg",
-            Self::Refresh => "icons/refresh.svg",
-            Self::Sync => "icons/sync.svg",
-            Self::Upload => "icons/upload.svg",
-            Self::NewFolder => "icons/new_folder.svg",
-            Self::EditBorder => "icons/edit_border.svg",
-            Self::MSSQLLineColor => "icons/mssql_line_color.svg",
-            Self::OracleLineColor => "icons/oracle_line_color.svg",
-            Self::ClickHouseColor => "icons/clickhouse_color.svg",
-            Self::ClickHouseLineColor => "icons/clickhouse_line_color.svg",
-            Self::Remove => "icons/remove.svg",
-            Self::TableData => "icons/table-data.svg",
-            Self::TableDesign => "icons/table-design.svg",
-            Self::TableDesignTool => "icons/table-design-tool.svg",
-            Self::Server => "icons/server.svg",
-            Self::Export => "icons/export.svg",
-            Self::AI => "icons/ai.svg",
-            Self::Home => "icons/home.svg",
-            Self::SettingColor => "icons/setting_color.svg",
-            Self::SerialPort => "icons/serial_port.svg",
-            Self::Monitor => "icons/monitor.svg",
-            Self::PortForwardingColor => "icons/port_forwarding_color.svg",
-            Self::Rdp => "icons/rdp.svg",
-            Self::Vnc => "icons/vnc.svg",
-            Self::DuckDB => "icons/duckdb.svg",
-        }
-        .into()
-    }
+#[allow(non_upper_case_globals)]
+impl IconName {
+    pub const AI: Self = Self::Ai;
+    pub const MongoDB: Self = Self::Mongodb;
+    pub const MySQLColor: Self = Self::MysqlColor;
+    pub const PostgreSQLColor: Self = Self::PostgresqlColor;
+    pub const SQLiteColor: Self = Self::SqliteColor;
+    pub const DuckDB: Self = Self::Duckdb;
+    pub const MSSQLColor: Self = Self::MssqlColor;
+    pub const ClickHouseColor: Self = Self::ClickhouseColor;
+    pub const MySQLLineColor: Self = Self::MysqlLineColor;
+    pub const PostgreSQLLineColor: Self = Self::PostgresqlLineColor;
+    pub const SQLiteLineColor: Self = Self::SqliteLineColor;
+    pub const MSSQLLineColor: Self = Self::MssqlLineColor;
+    pub const ClickHouseLineColor: Self = Self::ClickhouseLineColor;
 }
 
 impl From<IconName> for AnyElement {
@@ -429,8 +87,8 @@ pub struct Icon {
     image_source: Option<ImageSource>,
     text_color: Option<Hsla>,
     size: Option<Size>,
-    rotation: Option<Radians>,
     color_mode: IconColorMode,
+    rotation: Option<Radians>,
 }
 
 impl Default for Icon {
@@ -442,8 +100,8 @@ impl Default for Icon {
             image_source: None,
             text_color: None,
             size: None,
-            rotation: None,
             color_mode: IconColorMode::default(),
+            rotation: None,
         }
     }
 }
@@ -494,7 +152,7 @@ impl Icon {
         cx.new(|_| self)
     }
 
-    pub fn transform(mut self, transformation: Transformation) -> Self {
+    pub fn transform(mut self, transformation: gpui::Transformation) -> Self {
         self.base = self.base.with_transformation(transformation);
         self
     }
@@ -503,29 +161,29 @@ impl Icon {
         Self::default()
     }
 
-    /// Rotate the icon by the given angle
-    pub fn rotate(mut self, radians: impl Into<Radians>) -> Self {
-        self.base = self
-            .base
-            .with_transformation(Transformation::rotate(radians));
-        self
-    }
-
-    /// Set the icon color mode
+    /// Set the icon color mode.
     pub fn color_mode(mut self, mode: IconColorMode) -> Self {
         self.color_mode = mode;
         self
     }
 
-    /// Set the icon to color mode (renders original colors)
+    /// Set the icon to color mode.
     pub fn color(mut self) -> Self {
         self.color_mode = IconColorMode::Color;
         self
     }
 
-    /// Set the icon to mono mode (uses text_color tinting)
+    /// Set the icon to mono mode.
     pub fn mono(mut self) -> Self {
         self.color_mode = IconColorMode::Mono;
+        self
+    }
+
+    /// Rotate the icon by the given angle
+    pub fn rotate(mut self, radians: impl Into<Radians>) -> Self {
+        self.base = self
+            .base
+            .with_transformation(Transformation::rotate(radians));
         self
     }
 }
@@ -555,9 +213,7 @@ impl RenderOnce for Icon {
 
         match self.color_mode {
             IconColorMode::Mono => {
-                // Monochrome mode: use SVG with text_color tinting
                 let text_color = self.text_color.unwrap_or_else(|| window.text_style().color);
-
                 let mut base = self.base;
                 *base.style() = self.style;
 
@@ -575,7 +231,6 @@ impl RenderOnce for Icon {
                     .into_any_element()
             }
             IconColorMode::Color => {
-                // Color mode: use img to render original colors
                 let size = self.size.unwrap_or(Size::Medium);
                 let (w, h) = match size {
                     Size::Size(px) => (px, px),
@@ -614,9 +269,7 @@ impl Render for Icon {
 
         match self.color_mode {
             IconColorMode::Mono => {
-                // Monochrome mode: use SVG with text_color tinting
                 let text_color = self.text_color.unwrap_or_else(|| cx.theme().foreground);
-
                 let mut base = svg().flex_none();
                 *base.style() = self.style.clone();
 
@@ -637,7 +290,6 @@ impl Render for Icon {
                     .into_any_element()
             }
             IconColorMode::Color => {
-                // Color mode: use img to render original colors
                 let size = self.size.unwrap_or(Size::Medium);
                 let (w, h) = match size {
                     Size::Size(px) => (px, px),

@@ -492,10 +492,7 @@ impl SyntaxHighlighter {
         }
 
         fn ranges_cache_key(ranges: &[tree_sitter::Range]) -> Vec<(usize, usize)> {
-            ranges
-                .iter()
-                .map(|r| (r.start_byte, r.end_byte))
-                .collect()
+            ranges.iter().map(|r| (r.start_byte, r.end_byte)).collect()
         }
 
         let root_node = tree.root_node();
@@ -986,7 +983,6 @@ fn collect_query_nodes_inner<'a>(
 
     out.push(node);
 }
-
 
 /// Merge other style (Other on top)
 fn merge_highlight_style(style: &mut HighlightStyle, other: &HighlightStyle) {
