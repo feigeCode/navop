@@ -1597,7 +1597,7 @@ impl DbTreeView {
                             parent_node.children = children.clone();
                             parent_node.children_loaded = true;
                             // 子节点加载完成后，如果该节点是当前选中节点，重新触发选中事件以刷新对象页签
-                            if this.selected_node_id.as_deref() == Some(&clone_node_id) {
+                            if this.selected_node_id.as_ref().is_some_and(|id| id == &clone_node_id) {
                                 cx.emit(DbTreeViewEvent::NodeSelected{node_id: clone_node_id.clone()})
                             }
                         }
@@ -3023,6 +3023,7 @@ mod tests {
             cloud_id: None,
             last_synced_at: None,
             last_used_at: None,
+            sort_order: None,
             created_at: None,
             updated_at: None,
             team_id: None,
@@ -3244,10 +3245,10 @@ mod tests {
             "users",
             &[("database", "analytics"), ("schema", "public")],
         );
-        let mut registry = crate::extension_menu::DbTreeExtensionMenuRegistry::default();
+        let mut registry = DbTreeExtensionMenuRegistry::default();
         registry.add(
             "db.tree.table",
-            crate::extension_menu::DbTreeExtensionMenuItem {
+            DbTreeExtensionMenuItem {
                 extension_id: "com.example.tools".to_string(),
                 command_id: "example.sync_table".to_string(),
                 label: "同步表".to_string(),
@@ -3258,7 +3259,7 @@ mod tests {
         );
         registry.add(
             "db.tree.table",
-            crate::extension_menu::DbTreeExtensionMenuItem {
+            DbTreeExtensionMenuItem {
                 extension_id: "com.example.tools".to_string(),
                 command_id: "example.hidden".to_string(),
                 label: "Hidden".to_string(),
