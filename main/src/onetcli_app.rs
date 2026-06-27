@@ -5,7 +5,9 @@ use gpui::{
 };
 use gpui_component::WindowExt;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use raw_window_handle::HasWindowHandle;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use raw_window_handle::RawWindowHandle;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
@@ -117,18 +119,18 @@ fn toggle_always_on_top(cx: &mut App) {
     });
 }
 
-fn set_window_always_on_top(window: &Window, always_on_top: bool) -> anyhow::Result<()> {
+fn set_window_always_on_top(window: &Window, _always_on_top: bool) -> anyhow::Result<()> {
     let handle = HasWindowHandle::window_handle(window)
         .map_err(|err| anyhow::anyhow!("获取窗口句柄失败: {err:?}"))?
         .as_raw();
     match handle {
         #[cfg(target_os = "macos")]
         RawWindowHandle::AppKit(handle) => {
-            set_macos_always_on_top(handle.ns_view.as_ptr(), always_on_top)
+            set_macos_always_on_top(handle.ns_view.as_ptr(), _always_on_top)
         }
         #[cfg(target_os = "windows")]
         RawWindowHandle::Win32(handle) => {
-            set_windows_always_on_top(handle.hwnd.get(), always_on_top)
+            set_windows_always_on_top(handle.hwnd.get(), _always_on_top)
         }
         _ => Err(anyhow::anyhow!("当前平台暂不支持窗口置顶")),
     }
