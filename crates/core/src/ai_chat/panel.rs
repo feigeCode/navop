@@ -12,8 +12,7 @@ use crate::storage::{GlobalStorageState, traits::Repository};
 use agent_runtime::ToolRegistry;
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
-    prelude::FluentBuilder, px,
+    IntoElement, ParentElement, Render, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, WindowExt as _,

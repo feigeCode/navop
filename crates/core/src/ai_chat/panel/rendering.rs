@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 use gpui::{
-    Context, Corner, Focusable, InteractiveElement, IntoElement, ParentElement,
+    Context, Anchor, Corners, Focusable, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
@@ -62,7 +62,7 @@ impl AiChatPanel {
                     )
                     .child(
                         Popover::new("history-popover")
-                            .anchor(Corner::TopRight)
+                            .anchor(Anchor::TopRight)
                             .p_0()
                             .open(self.history_popover_open)
                             .on_open_change(cx.listener(|this, open, window, cx| {
@@ -222,7 +222,7 @@ impl AiChatPanel {
                             .child({
                                 let settings_panel = self.settings_panel.clone();
                                 Popover::new("model-settings-popover")
-                                    .anchor(Corner::BottomLeft)
+                                    .anchor(Anchor::BottomLeft)
                                     .trigger(
                                         Button::new("model-settings-btn")
                                             .icon(IconName::Settings)
@@ -269,7 +269,7 @@ impl AiChatPanel {
         let open = self.plan_backend_popover_open;
 
         Popover::new("ai-chat-plan-backend-popover")
-            .anchor(Corner::BottomLeft)
+            .anchor(Anchor::BottomLeft)
             .p_0()
             .open(open)
             .on_open_change(cx.listener(|this, open, _window, cx| {
