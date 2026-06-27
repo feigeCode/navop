@@ -6669,7 +6669,6 @@ dependencies = [
  "mongodb_view",
  "one-core",
  "one-ui",
- "onetcli_cli",
  "onetcli_runtime",
  "port_forwarding",
  "port_forwarding_view",
