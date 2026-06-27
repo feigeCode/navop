@@ -56,12 +56,20 @@
   </p>
 </div>
 
-## What's New in v0.6.5
+## What's New in v0.7.0
 
-- Added Port Forwarding connections for SSH local forwarding and dynamic SOCKS tunnels.
-- Port forwarding entries can be created from the New Connection flow, saved, edited, searched, assigned to workspaces/teams, and synced like other connections.
-- Fixed visible `cmd` windows on Windows when launching database IPC plugins, RDP helpers, and VNC helpers.
-- Updated screenshots and documentation for remote desktop and extension marketplace database drivers.
+- **MCP public toolchain** — complete MCP (Model Context Protocol) support: create connections, execute SQL, run Redis and SFTP operations, manage typed tools, approval queues, and helper installation, all available as MCP tools.
+- **Redis SSH tunneling** — Redis connections now support SSH tunnels, plus namespace child key display during search.
+- **SFTP MCP tools** — remote path checking, file upload, and file download exposed as structured MCP tools.
+- **Home page overhaul** — connection list now uses unified rendering with drag-and-drop reordering and layout switching.
+- **Window pin** — keep OnetCli always on top of other windows.
+- **SQL improvements** — max row limit for query results, manifest-based database schemas, custom font import for the SQL editor.
+- **Terminal font family** — configurable font family for terminal sessions.
+- **CLI / automation runtime** — unified CLI and automation tool runtime architecture, enabling structured remote operations.
+- **AI fix** — separated AI reasoning output from chat replies for cleaner message display.
+- **Perf** — optimized remote desktop frame transport.
+- **i18n** — added SSH tunnel localization strings.
+
 
 ## Why OnetCli?
 
