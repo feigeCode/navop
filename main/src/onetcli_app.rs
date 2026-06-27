@@ -265,6 +265,9 @@ pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     setting_tab::init_settings(cx);
     one_core::init(cx);
+    crate::public_mcp_approval::init(cx);
+    crate::ai_chat_acp_approval::init(cx);
+    crate::ai_chat_acp::init(cx);
     one_ui::init(cx);
     db_view::search_shortcut::init(cx);
     db_view::sql_editor_view::init(cx);
@@ -286,7 +289,6 @@ pub fn init(cx: &mut App) {
     }
     terminal_view::init(cx);
     redis_view::init(cx);
-    crate::public_mcp_approval::init(cx);
     crate::public_mcp_runtime::init(cx);
     mongodb_view::init(cx);
     remote_desktop_view::init(cx);

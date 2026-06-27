@@ -19,6 +19,7 @@ members = [
     "crates/db_view",
     "crates/extension-runtime",
     "crates/extension_view",
+    "crates/agent_runtime",
     "crates/extension-protocol",
     "crates/extension-host",
     "crates/extension-driver",
@@ -88,6 +89,8 @@ tracing = "0.1.41"
 
 
 reqwest_client = { path = "crates/reqwest_client" }
+agent_runtime = { path = "crates/agent_runtime" }
+agent-client-protocol = "0.14.0"
 public_mcp = { path = "crates/public_mcp" }
 tool_runtime = { path = "crates/tool_runtime" }
 db = { path = "crates/db" }

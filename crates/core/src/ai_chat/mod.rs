@@ -51,12 +51,15 @@
 //! let button = SendButton::render(&state, || submit(), || cancel());
 //! ```
 
+pub mod acp;
 pub mod ask_ai;
 pub mod components;
 pub mod engine;
 mod panel;
+pub mod plan_tools;
 mod reasoning;
 pub mod rendering;
+pub mod runtime_bridge;
 pub mod services;
 pub mod stream;
 mod types;
@@ -66,8 +69,9 @@ pub use panel::*;
 
 // 导出共享类型
 pub use types::{
-    ChatMessageUI, ChatMessageUIGeneric, ChatRole, MESSAGE_RENDER_LIMIT, MESSAGE_RENDER_STEP,
-    MessageExtension, MessageVariant, ModelSelectItem, NoExtension, ProviderSelectItem,
+    AiChatMode, AiChatPlanBackend, ChatMessageUI, ChatMessageUIGeneric, ChatRole,
+    MESSAGE_RENDER_LIMIT, MESSAGE_RENDER_STEP, MessageExtension, MessageVariant, ModelSelectItem,
+    NoExtension, ProviderSelectItem,
 };
 
 // 导出引擎
@@ -84,3 +88,9 @@ pub use components::{ModelItem, ProviderItem};
 
 // 导出服务层
 pub use services::{SessionError, SessionService, extract_session_name};
+
+pub use acp::config::{AcpAgentConfig, AcpTransport};
+pub use acp::permission::{
+    AcpPermissionOption, AcpPermissionOutcome, AcpPermissionRequest, set_acp_permission_provider,
+};
+pub use acp::provider::{build_acp_agent_configs, set_acp_agent_config_provider};

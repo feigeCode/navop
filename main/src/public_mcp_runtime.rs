@@ -56,6 +56,7 @@ impl Drop for GlobalPublicMcpRuntime {
 pub fn init(cx: &mut App) {
     let discovery_path = public_mcp_discovery_path();
     let _ = remove_discovery(&discovery_path);
+    one_core::ai_chat::plan_tools::set_plan_tool_registry_provider(cx, agent_runtime_tool_registry);
     internal_functions::ensure_registry(cx);
     for definition in internal_functions::builtin_definitions() {
         register_internal_function(cx, definition);
@@ -87,6 +88,22 @@ pub fn runtime_status(cx: &App) -> PublicMcpRuntimeStatus {
 
 pub fn register_internal_function(cx: &mut App, definition: InternalFunctionDefinition) {
     internal_functions::register_internal_function(cx, definition);
+}
+
+pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime::ToolRegistry> {
+    let settings = AppSettings::current(cx);
+    let session_enabled = session::runtime_session_enabled(cx);
+    let config = PublicMcpStartConfig::from_settings_session_and_env(
+        &settings,
+        session_enabled,
+        PublicMcpEnvOverride::from_env(),
+    );
+    let registry = build_tool_registry(cx, &config.toolsets)?;
+    Ok(public_mcp::tools::agent_runtime_tool_registry(
+        registry,
+        config.permission_mode,
+        build_approval_manager(cx),
+    ))
 }
 
 fn reconcile_runtime(cx: &mut App) {

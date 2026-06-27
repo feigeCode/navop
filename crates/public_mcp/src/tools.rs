@@ -1,9 +1,11 @@
+mod agent_runtime_adapter;
 mod internal;
 mod redis;
 mod registry;
 mod remote_ops;
 mod tool_runtime_adapter;
 
+pub use agent_runtime_adapter::agent_runtime_tool_registry;
 pub use internal::{
     InternalFunctionDefinition, InternalFunctionFuture, internal_function_tool_registry,
 };

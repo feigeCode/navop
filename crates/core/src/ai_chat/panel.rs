@@ -1,286 +1,46 @@
 //! AI Chat Panel - 数据库 AI 助手对话面板
 
+use super::acp::config::AcpAgentConfig;
+use super::acp::connection::AcpConnection;
+use super::acp::provider::build_acp_agent_configs;
 use crate::cloud_sync::GlobalCloudUser;
-use crate::gpui_tokio::Tokio;
-use crate::llm::chat_history::ChatMessage;
 use crate::llm::{
-    Message, Role,
     chat_history::{MessageRepository, SessionRepository},
-    manager::GlobalProviderState,
     storage::ProviderRepository,
 };
 use crate::storage::{GlobalStorageState, traits::Repository};
+use agent_runtime::ToolRegistry;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Corner, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, prelude::FluentBuilder, px,
+    App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Render, Styled, Subscription, Window, div,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, IconName, Sizable, Size, WindowExt as _,
-    button::{Button, ButtonVariants},
+    ActiveTheme, WindowExt as _,
     dialog::DialogButtonProps,
-    h_flex,
     input::{Input, InputEvent, InputState},
-    list::{List, ListState},
-    popover::Popover,
+    list::ListState,
     v_flex,
 };
 use rust_i18n::t;
-use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::warn;
 // 使用引擎和渲染器
 use super::engine::ChatEngine;
-use super::rendering::ChatMessageRenderer;
-use super::stream::{ChatStreamProcessor, StreamEvent};
+use super::runtime_bridge::PlanRuntimeController;
+use super::types::{AiChatMode, AiChatPlanBackend};
 // 使用共享组件
 use super::components::{
     ModelSettings, ModelSettingsEvent, ModelSettingsPanel, ProviderItem, ProviderSelectEvent,
     ProviderSelectState, SessionData, SessionListConfig, SessionListDelegate, SessionListHost,
 };
 
-/// AI 聊天面板的自定义颜色配置
-///
-/// 用于在终端等需要自定义主题的场景中覆盖默认颜色
-#[derive(Clone, Debug)]
-pub struct AiChatColors {
-    /// 主背景色
-    pub background: Hsla,
-    /// 主前景色（文字）
-    pub foreground: Hsla,
-    /// 次要背景色（卡片、列表项）
-    pub muted: Hsla,
-    /// 次要前景色（占位符、次要文字）
-    pub muted_foreground: Hsla,
-    /// 边框色
-    pub border: Hsla,
-    /// 强调背景色
-    pub accent: Hsla,
-    /// 强调前景色
-    pub accent_foreground: Hsla,
-}
+mod ask;
+pub mod code_block;
+mod helpers;
+mod plan_backend;
+mod rendering;
 
-// ============================================================================
-// 代码块操作扩展机制
-// ============================================================================
-
-/// 语言匹配器 - 用于匹配代码块的语言类型
-#[derive(Clone)]
-pub enum LanguageMatcher {
-    /// 精确匹配（不区分大小写）
-    Exact(Vec<&'static str>),
-    /// 前缀匹配
-    Prefix(&'static str),
-    /// 自定义匹配函数
-    Custom(Arc<dyn Fn(&str) -> bool + Send + Sync>),
-    /// 匹配所有语言（包括未指定语言的代码块）
-    Any,
-}
-
-impl LanguageMatcher {
-    /// 创建精确匹配器（单个语言）
-    pub fn exact(lang: &'static str) -> Self {
-        Self::Exact(vec![lang])
-    }
-
-    /// 创建精确匹配器（多个语言）
-    pub fn exact_many(langs: Vec<&'static str>) -> Self {
-        Self::Exact(langs)
-    }
-
-    /// 创建 SQL 语言匹配器
-    pub fn sql() -> Self {
-        Self::Exact(vec![
-            "sql",
-            "mysql",
-            "postgresql",
-            "postgres",
-            "sqlite",
-            "mssql",
-            "oracle",
-            "plsql",
-        ])
-    }
-
-    /// 创建 Shell/Bash 语言匹配器
-    pub fn shell() -> Self {
-        Self::Exact(vec![
-            "bash",
-            "sh",
-            "shell",
-            "zsh",
-            "fish",
-            "powershell",
-            "ps1",
-            "cmd",
-            "batch",
-        ])
-    }
-
-    /// 创建 Python 语言匹配器
-    pub fn python() -> Self {
-        Self::Exact(vec!["python", "py", "python3"])
-    }
-
-    /// 创建 Rust 语言匹配器
-    pub fn rust() -> Self {
-        Self::Exact(vec!["rust", "rs"])
-    }
-
-    /// 创建 JavaScript/TypeScript 语言匹配器
-    pub fn javascript() -> Self {
-        Self::Exact(vec!["javascript", "js", "typescript", "ts", "jsx", "tsx"])
-    }
-
-    /// 检查是否匹配给定的语言
-    pub fn matches(&self, lang: Option<&str>) -> bool {
-        match self {
-            LanguageMatcher::Exact(langs) => lang.map_or(false, |l| {
-                let l_lower = l.to_lowercase();
-                langs
-                    .iter()
-                    .any(|&expected| expected.eq_ignore_ascii_case(&l_lower))
-            }),
-            LanguageMatcher::Prefix(prefix) => lang.map_or(false, |l| {
-                l.to_lowercase().starts_with(&prefix.to_lowercase())
-            }),
-            LanguageMatcher::Custom(f) => lang.map_or(false, |l| f(l)),
-            LanguageMatcher::Any => true,
-        }
-    }
-}
-
-/// 代码块操作回调函数类型
-///
-/// 参数：
-/// - `code`: 代码块内容
-/// - `lang`: 代码块语言（可能为空）
-/// - `window`: 窗口引用
-/// - `cx`: 应用上下文
-pub type CodeBlockActionCallback =
-    Arc<dyn Fn(String, Option<String>, &mut Window, &mut App) + Send + Sync>;
-
-/// 代码块操作定义
-///
-/// 用于定义一个可以在代码块上执行的操作，例如：
-/// - SQL 代码发送到编辑器
-/// - Shell 命令复制到终端
-/// - Python 代码直接运行
-#[derive(Clone)]
-pub struct CodeBlockAction {
-    /// 唯一标识符
-    pub id: SharedString,
-    /// 显示图标
-    pub icon: IconName,
-    /// 按钮标签（可选，如果为 None 则只显示图标）
-    pub label: Option<SharedString>,
-    /// 语言匹配器
-    pub matcher: LanguageMatcher,
-    /// 操作回调
-    pub callback: CodeBlockActionCallback,
-}
-
-impl CodeBlockAction {
-    /// 创建新的代码块操作
-    pub fn new(id: impl Into<SharedString>) -> CodeBlockActionBuilder {
-        CodeBlockActionBuilder {
-            id: id.into(),
-            icon: IconName::SquareTerminal,
-            label: None,
-            matcher: LanguageMatcher::Any,
-            callback: None,
-        }
-    }
-}
-
-/// 代码块操作构建器
-pub struct CodeBlockActionBuilder {
-    id: SharedString,
-    icon: IconName,
-    label: Option<SharedString>,
-    matcher: LanguageMatcher,
-    callback: Option<CodeBlockActionCallback>,
-}
-
-impl CodeBlockActionBuilder {
-    /// 设置图标
-    pub fn icon(mut self, icon: IconName) -> Self {
-        self.icon = icon;
-        self
-    }
-
-    /// 设置标签
-    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
-        self.label = Some(label.into());
-        self
-    }
-
-    /// 设置语言匹配器
-    pub fn matcher(mut self, matcher: LanguageMatcher) -> Self {
-        self.matcher = matcher;
-        self
-    }
-
-    /// 设置回调函数
-    pub fn on_click<F>(mut self, f: F) -> Self
-    where
-        F: Fn(String, Option<String>, &mut Window, &mut App) + Send + Sync + 'static,
-    {
-        self.callback = Some(Arc::new(f));
-        self
-    }
-
-    /// 构建代码块操作
-    pub fn build(self) -> Option<CodeBlockAction> {
-        self.callback.map(|callback| CodeBlockAction {
-            id: self.id,
-            icon: self.icon,
-            label: self.label,
-            matcher: self.matcher,
-            callback,
-        })
-    }
-}
-
-/// 代码块操作注册表
-///
-/// 用于管理和查询已注册的代码块操作
-#[derive(Clone, Default)]
-pub struct CodeBlockActionRegistry {
-    actions: Vec<CodeBlockAction>,
-}
-
-impl CodeBlockActionRegistry {
-    /// 创建空的注册表
-    pub fn new() -> Self {
-        Self {
-            actions: Vec::new(),
-        }
-    }
-
-    /// 注册一个代码块操作
-    pub fn register(&mut self, action: CodeBlockAction) {
-        self.actions.push(action);
-    }
-
-    /// 获取匹配指定语言的所有操作
-    pub fn get_actions_for_lang(&self, lang: Option<&str>) -> Vec<&CodeBlockAction> {
-        self.actions
-            .iter()
-            .filter(|action| action.matcher.matches(lang))
-            .collect()
-    }
-
-    /// 检查是否有注册的操作
-    pub fn is_empty(&self) -> bool {
-        self.actions.is_empty()
-    }
-
-    /// 获取所有操作数量
-    pub fn len(&self) -> usize {
-        self.actions.len()
-    }
-}
+pub use code_block::*;
 
 /// AI 聊天面板事件
 #[derive(Clone, Debug)]
@@ -316,6 +76,15 @@ pub struct AiChatPanel {
     is_logged_in: bool,
     /// 场景专属系统提示词，仅在发送消息时前置注入
     system_instruction: Option<String>,
+    /// Plan 模式可调用的工具注册表，由上层注入当前 MCP/function-calling 工具。
+    plan_tool_registry: ToolRegistry,
+    plan_controller: Option<PlanRuntimeController>,
+    plan_runtime_key: Option<String>,
+    plan_backend: AiChatPlanBackend,
+    plan_backend_popover_open: bool,
+    acp_agent_configs: Vec<AcpAgentConfig>,
+    acp_agent_config: Option<AcpAgentConfig>,
+    acp_connection: Option<AcpConnection>,
 }
 
 impl AiChatPanel {
@@ -396,6 +165,14 @@ impl AiChatPanel {
             settings_panel,
             is_logged_in: GlobalCloudUser::is_logged_in(cx),
             system_instruction: None,
+            plan_tool_registry: ToolRegistry::default(),
+            plan_controller: None,
+            plan_runtime_key: None,
+            plan_backend: AiChatPlanBackend::LocalRuntime,
+            plan_backend_popover_open: false,
+            acp_agent_configs: Vec::new(),
+            acp_agent_config: None,
+            acp_connection: None,
         };
 
         // 加载 providers
@@ -469,6 +246,45 @@ impl AiChatPanel {
             let trimmed = instruction.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         });
+        cx.notify();
+    }
+
+    /// 设置 Plan 模式使用的工具注册表。
+    pub fn set_plan_tool_registry(&mut self, registry: ToolRegistry, cx: &mut Context<Self>) {
+        self.plan_tool_registry = registry;
+        self.plan_controller = None;
+        self.plan_runtime_key = None;
+        cx.notify();
+    }
+
+    pub fn set_plan_backend(&mut self, backend: AiChatPlanBackend, cx: &mut Context<Self>) {
+        if self.plan_backend == backend {
+            self.plan_backend_popover_open = false;
+            cx.notify();
+            return;
+        }
+        self.interrupt_plan_backends();
+        self.plan_backend = backend;
+        self.plan_backend_popover_open = false;
+        self.engine.cancel_current_operation();
+        cx.notify();
+    }
+
+    pub fn set_acp_agent_config(&mut self, config: Option<AcpAgentConfig>, cx: &mut Context<Self>) {
+        self.interrupt_plan_backends();
+        self.acp_agent_config = config;
+        self.acp_connection = None;
+        self.plan_backend_popover_open = false;
+        cx.notify();
+    }
+
+    /// 切换 Ask / Plan 模式。
+    pub fn set_mode(&mut self, mode: AiChatMode, cx: &mut Context<Self>) {
+        if self.engine.mode() == mode {
+            return;
+        }
+        self.interrupt_plan_backends();
+        self.engine.set_mode(mode);
         cx.notify();
     }
 
@@ -584,6 +400,7 @@ impl AiChatPanel {
 
     /// 取消当前操作
     pub fn cancel_current_operation(&mut self, cx: &mut Context<Self>) {
+        self.interrupt_plan_backends();
         self.engine.cancel_current_operation();
         cx.notify();
     }
@@ -591,6 +408,48 @@ impl AiChatPanel {
     /// 是否可以取消
     pub fn can_cancel(&self) -> bool {
         self.engine.can_cancel()
+    }
+
+    fn refresh_acp_agent_configs(&mut self, cx: &mut Context<Self>) {
+        let configs = match build_acp_agent_configs(cx) {
+            Ok(configs) => configs,
+            Err(error) => {
+                warn!("Failed to load ACP agent configs: {}", error);
+                return;
+            }
+        };
+        let selected_id = self
+            .acp_agent_config
+            .as_ref()
+            .map(|config| config.id.to_string());
+        if let Some(selected_id) = selected_id {
+            match configs
+                .iter()
+                .find(|config| config.id.as_ref() == selected_id)
+                .cloned()
+            {
+                Some(config) => self.acp_agent_config = Some(config),
+                None => {
+                    self.acp_agent_config = None;
+                    self.acp_connection = None;
+                    if self.plan_backend == AiChatPlanBackend::AcpAgent {
+                        self.plan_backend = AiChatPlanBackend::LocalRuntime;
+                    }
+                }
+            }
+        }
+        self.acp_agent_configs = configs;
+    }
+
+    fn interrupt_plan_backends(&mut self) {
+        if let Some(controller) = self.plan_controller.as_ref()
+            && let Err(error) = controller.interrupt()
+        {
+            warn!("Failed to interrupt plan runtime: {}", error);
+        }
+        if let Some(connection) = self.acp_connection.as_ref() {
+            connection.cancel();
+        }
     }
 
     fn update_session_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -803,444 +662,10 @@ impl AiChatPanel {
     }
 
     fn send_message(&mut self, content: String, cx: &mut Context<Self>) {
-        if content.trim().is_empty() || self.engine.is_loading {
-            return;
+        match self.engine.mode() {
+            AiChatMode::Ask => self.send_ask_message(content, cx),
+            AiChatMode::Plan => self.send_plan_message(content, cx),
         }
-
-        let Some(provider_id_str) = self.engine.provider_id.clone() else {
-            self.engine
-                .push_assistant(t!("AiChat.select_provider_first").to_string());
-            cx.notify();
-            return;
-        };
-
-        let provider_id: i64 = match provider_id_str.parse() {
-            Ok(id) => id,
-            Err(_) => {
-                self.engine
-                    .push_assistant(t!("AiChat.invalid_provider_id").to_string());
-                cx.notify();
-                return;
-            }
-        };
-
-        // 确保会话存在并持久化用户消息
-        if let Some(session_id) = self.ensure_session_id(&provider_id_str, cx) {
-            self.persist_user_message(session_id, &content, cx);
-        }
-
-        let global_provider_state = cx.global::<GlobalProviderState>().clone();
-        let global_state = cx.global::<GlobalStorageState>();
-        let storage_manager = global_state.storage.clone();
-        let session_id = self.engine.session_id;
-        let history_count = self.engine.model_settings.history_count;
-        let max_tokens = self.engine.model_settings.max_tokens;
-        let temperature = self.engine.model_settings.temperature;
-        let system_instruction = self.system_instruction.clone();
-
-        // 获取用户选择的模型
-        let selected_model = self.engine.selected_model.clone().unwrap_or_else(|| {
-            self.engine
-                .provider_configs
-                .iter()
-                .find(|c| c.id == provider_id)
-                .map(|c| c.model.clone())
-                .unwrap_or_default()
-        });
-
-        // 添加用户消息到 UI 并创建助手消息占位符
-        self.engine.push_user_message(content.clone());
-        let assistant_msg_id = self.engine.push_streaming_assistant();
-
-        self.engine.auto_scroll_enabled = true;
-        self.engine.is_loading = true;
-
-        // 创建取消令牌
-        let cancel_token = CancellationToken::new();
-        self.engine.cancel_token = Some(cancel_token.clone());
-
-        self.engine.scroll_to_bottom();
-        cx.notify();
-
-        // 获取 Tokio runtime handle
-        let tokio_handle = Tokio::handle(cx);
-
-        cx.spawn(async move |this, cx: &mut AsyncApp| {
-            // 进入 Tokio runtime 上下文
-            let _guard = tokio_handle.enter();
-
-            if cancel_token.is_cancelled() {
-                return;
-            }
-
-            // 构建聊天历史消息
-            let messages: Vec<Message> = {
-                let mut messages = if let Some(sid) = session_id {
-                    if let Some(message_repo) = storage_manager.get::<MessageRepository>() {
-                        match message_repo.list_by_session(sid) {
-                            Ok(messages) => {
-                                let mut msgs: Vec<Message> = messages
-                                    .iter()
-                                    .map(|msg| {
-                                        let role = match msg.role.as_str() {
-                                            "user" => Role::User,
-                                            "assistant" => Role::Assistant,
-                                            "system" => Role::System,
-                                            _ => Role::User,
-                                        };
-                                        Message::text(role, &msg.content)
-                                    })
-                                    .collect();
-                                // 限制历史条数
-                                if msgs.len() > history_count {
-                                    msgs = msgs.split_off(msgs.len() - history_count);
-                                }
-                                msgs
-                            }
-                            Err(_) => vec![Message::text(Role::User, &content)],
-                        }
-                    } else {
-                        vec![Message::text(Role::User, &content)]
-                    }
-                } else {
-                    vec![Message::text(Role::User, &content)]
-                };
-
-                if let Some(instruction) = system_instruction.as_deref() {
-                    messages.insert(0, Message::text(Role::System, instruction));
-                }
-
-                messages
-            };
-
-            // 直接使用 ChatStreamProcessor 进行流式对话
-            let mut rx = match ChatStreamProcessor::start(
-                provider_id,
-                Some(selected_model),
-                messages,
-                max_tokens as u32,
-                temperature,
-                cancel_token,
-                global_provider_state,
-                storage_manager.clone(),
-            )
-            .await
-            {
-                Ok(rx) => rx,
-                Err(e) => {
-                    if let Some(entity) = this.upgrade() {
-                        let msg_id = assistant_msg_id.clone();
-                        let error_msg = e.to_string();
-                        let _ = cx.update(|cx| {
-                            entity.update(cx, |this, cx| {
-                                this.engine.set_message_error(&msg_id, error_msg);
-                                this.engine.is_loading = false;
-                                this.engine.cancel_token = None;
-                                cx.notify();
-                            });
-                        });
-                    }
-                    return;
-                }
-            };
-
-            // 处理流式事件
-            while let Some(event) = rx.recv().await {
-                match event {
-                    StreamEvent::ContentDelta { full_content, .. } => {
-                        if let Some(entity) = this.upgrade() {
-                            let msg_id = assistant_msg_id.clone();
-                            cx.update(|cx| {
-                                entity.update(cx, |this, cx| {
-                                    this.engine.update_streaming_content(&msg_id, full_content);
-                                    this.engine.scroll_to_bottom();
-                                    cx.notify();
-                                })
-                            });
-                        } else {
-                            return;
-                        }
-                    }
-                    StreamEvent::ReasoningDelta { full_reasoning, .. } => {
-                        if let Some(entity) = this.upgrade() {
-                            let msg_id = assistant_msg_id.clone();
-                            cx.update(|cx| {
-                                entity.update(cx, |this, cx| {
-                                    this.engine
-                                        .update_streaming_reasoning(&msg_id, full_reasoning);
-                                    this.engine.scroll_to_bottom();
-                                    cx.notify();
-                                })
-                            });
-                        } else {
-                            return;
-                        }
-                    }
-                    StreamEvent::Completed { full_content } => {
-                        if let Some(entity) = this.upgrade() {
-                            let msg_id = assistant_msg_id.clone();
-                            let storage_for_save = storage_manager.clone();
-                            cx.update(|cx| {
-                                entity.update(cx, |this, cx| {
-                                    this.engine
-                                        .finalize_streaming(&msg_id, full_content.clone());
-                                    this.engine.is_loading = false;
-                                    this.engine.cancel_token = None;
-                                    this.engine.scroll_to_bottom();
-
-                                    // 持久化助手消息
-                                    if let Some(sid) = session_id {
-                                        let content_to_save = full_content;
-                                        let storage = storage_for_save;
-                                        cx.spawn(async move |_this, _cx: &mut AsyncApp| {
-                                            if let Some(repo) = storage.get::<MessageRepository>() {
-                                                let mut msg = ChatMessage::new(
-                                                    sid,
-                                                    "assistant".to_string(),
-                                                    content_to_save,
-                                                );
-                                                if let Err(e) = repo.insert(&mut msg) {
-                                                    warn!(
-                                                        "Failed to save assistant message: {}",
-                                                        e
-                                                    );
-                                                }
-                                            }
-                                        })
-                                        .detach();
-                                    }
-
-                                    cx.notify();
-                                })
-                            });
-                        }
-                        break;
-                    }
-                    StreamEvent::Error { message } => {
-                        if let Some(entity) = this.upgrade() {
-                            let msg_id = assistant_msg_id.clone();
-                            cx.update(|cx| {
-                                entity.update(cx, |this, cx| {
-                                    this.engine.set_message_error(&msg_id, message);
-                                    this.engine.is_loading = false;
-                                    this.engine.cancel_token = None;
-                                    this.engine.scroll_to_bottom();
-                                    cx.notify();
-                                })
-                            });
-                        }
-                        break;
-                    }
-                    StreamEvent::Cancelled => {
-                        info!("Stream cancelled by user");
-                        if let Some(entity) = this.upgrade() {
-                            let _ = cx.update(|cx| {
-                                entity.update(cx, |this, cx| {
-                                    this.engine.is_loading = false;
-                                    this.engine.cancel_token = None;
-                                    cx.notify();
-                                });
-                            });
-                        }
-                        break;
-                    }
-                }
-            }
-        })
-        .detach();
-    }
-
-    fn render_header(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let border = self.border(cx);
-        let muted = self.muted(cx);
-        let fg = self.foreground(cx);
-        let session_list = self.session_list.clone();
-
-        h_flex()
-            .flex_shrink_0()
-            .w_full()
-            .px_4()
-            .py_2()
-            .border_b_1()
-            .border_color(border)
-            .bg(muted)
-            .items_center()
-            .justify_between()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(fg)
-                    .child(t!("AiChat.title").to_string()),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("new-session")
-                            .icon(IconName::Plus)
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.start_new_session(cx);
-                            })),
-                    )
-                    .child(
-                        Popover::new("history-popover")
-                            .anchor(Corner::TopRight)
-                            .p_0()
-                            .open(self.history_popover_open)
-                            .on_open_change(cx.listener(|this, open, window, cx| {
-                                this.history_popover_open = *open;
-                                if *open {
-                                    this.update_session_list(window, cx);
-                                    this.load_history_sessions(cx);
-                                }
-                                cx.notify();
-                            }))
-                            .when_some(session_list.as_ref(), |popover, list| {
-                                popover.track_focus(&list.focus_handle(cx))
-                            })
-                            .trigger(
-                                Button::new("history")
-                                    .icon(IconName::BookOpen)
-                                    .ghost()
-                                    .small(),
-                            )
-                            .when_some(session_list, |popover, list| {
-                                popover.child(
-                                    List::new(&list)
-                                        .w(px(280.0))
-                                        .max_h(px(350.0))
-                                        .border_1()
-                                        .border_color(border)
-                                        .rounded(cx.theme().radius),
-                                )
-                            }),
-                    )
-                    .child(
-                        Button::new("close-panel")
-                            .icon(IconName::Close)
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(|_this, _event, _window, cx| {
-                                cx.emit(AiChatPanelEvent::Close);
-                            })),
-                    ),
-            )
-    }
-
-    fn render_messages(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let code_block_actions = self.engine.code_block_actions.clone();
-
-        div()
-            .id("chat-messages-list")
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.engine.scroll_handle)
-            .p_4()
-            .pb_8()
-            .child(
-                v_flex()
-                    .w_full()
-                    .gap_4()
-                    .children(self.engine.messages.iter().map(|msg| {
-                        ChatMessageRenderer::render_message(msg, &code_block_actions, window, cx)
-                    })),
-            )
-    }
-
-    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let content = self.ai_input_state.read(cx).value().to_string();
-        if content.trim().is_empty() {
-            return;
-        }
-        self.send_message(content, cx);
-        self.ai_input_state.update(cx, |state, cx| {
-            state.set_value("", window, cx);
-        });
-    }
-
-    fn render_input(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let border = self.border(cx);
-        let bg = self.background(cx);
-        let muted = self.muted(cx);
-
-        v_flex()
-            .flex_shrink_0()
-            .w_full()
-            .px_3()
-            .py_2()
-            .gap_2()
-            .border_t_1()
-            .border_color(border)
-            .bg(bg)
-            // 输入框
-            .child(
-                Input::new(&self.ai_input_state)
-                    .w_full()
-                    .with_size(Size::Large)
-                    .bordered(false)
-                    .appearance(false)
-                    .bg(muted)
-                    .rounded(cx.theme().radius),
-            )
-            // 底部工具栏
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        h_flex()
-                            .flex_1()
-                            .gap_2()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(self.provider_select_state.render(cx)),
-                            )
-                            // 模型设置按钮
-                            .child({
-                                let settings_panel = self.settings_panel.clone();
-                                Popover::new("model-settings-popover")
-                                    .anchor(Corner::BottomLeft)
-                                    .trigger(
-                                        Button::new("model-settings-btn")
-                                            .icon(IconName::Settings)
-                                            .ghost()
-                                            .with_size(Size::Small),
-                                    )
-                                    .content(move |_state, _window, _cx| settings_panel.clone())
-                            }),
-                    )
-                    .child(if self.can_cancel() {
-                        // 加载中显示终止按钮
-                        Button::new("cancel")
-                            .with_size(Size::Small)
-                            .danger()
-                            .icon(IconName::CircleX)
-                            .label(t!("AiChat.cancel").to_string())
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.cancel_current_operation(cx);
-                            }))
-                    } else {
-                        // 正常状态显示发送按钮
-                        Button::new("send")
-                            .with_size(Size::Small)
-                            .primary()
-                            .icon(IconName::ArrowRight)
-                            .label(t!("AiChat.send").to_string())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.submit(window, cx);
-                            }))
-                    }),
-            )
     }
 }
 
@@ -1288,6 +713,7 @@ impl SessionListHost for AiChatPanel {
 
 impl Render for AiChatPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refresh_acp_agent_configs(cx);
         let is_logged_in = GlobalCloudUser::is_logged_in(cx);
         if is_logged_in != self.is_logged_in {
             self.is_logged_in = is_logged_in;

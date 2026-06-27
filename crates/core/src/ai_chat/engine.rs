@@ -1,26 +1,27 @@
-//! ChatEngine - 共享业务逻辑引擎
-//!
-//! 封装 AI 聊天面板的通用业务逻辑，包括：
-//! - 消息管理（添加、更新、流式处理）
-//! - 会话管理（创建、加载、持久化）
-//! - Provider/Model 状态
-//! - 滚动和加载控制
-
 use gpui::ScrollHandle;
 use rust_i18n::t;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
 
+use agent_runtime::RuntimeEvent;
+
 use crate::ai_chat::components::ModelSettings;
 use crate::ai_chat::panel::CodeBlockActionRegistry;
 use crate::ai_chat::services::{SessionService, extract_session_name};
-use crate::ai_chat::types::{ChatMessageUIGeneric, ChatRole, MessageExtension, NoExtension};
+use crate::ai_chat::types::{
+    AiChatMode, ChatMessageUIGeneric, ChatRole, MessageExtension, NoExtension,
+};
 use crate::llm::ProviderConfig;
 use crate::llm::chat_history::ChatSession;
 use crate::llm::storage::ProviderRepository;
 use crate::storage::StorageManager;
 use crate::storage::traits::Repository;
+
+mod runtime_events;
+
+#[cfg(test)]
+mod tests;
 
 /// 共享业务逻辑引擎
 ///
@@ -29,6 +30,12 @@ use crate::storage::traits::Repository;
 pub struct ChatEngine<E: MessageExtension + Default = NoExtension> {
     /// 消息列表
     pub messages: Vec<ChatMessageUIGeneric<E>>,
+    /// 当前聊天模式
+    mode: AiChatMode,
+    /// Plan runtime 当前计划消息 ID
+    plan_message_id: Option<String>,
+    /// Plan runtime 当前助手流式消息 ID
+    runtime_assistant_message_id: Option<String>,
 
     /// 当前会话 ID
     pub session_id: Option<i64>,
@@ -69,6 +76,9 @@ impl<E: MessageExtension + Default> ChatEngine<E> {
     pub fn new(storage_manager: StorageManager) -> Self {
         Self {
             messages: Vec::new(),
+            mode: AiChatMode::Ask,
+            plan_message_id: None,
+            runtime_assistant_message_id: None,
             session_id: None,
             is_new_session: false,
             history_sessions: Vec::new(),
@@ -85,9 +95,19 @@ impl<E: MessageExtension + Default> ChatEngine<E> {
         }
     }
 
-    // ========================================================================
-    // 会话管理
-    // ========================================================================
+    /// 当前聊天模式。
+    pub fn mode(&self) -> AiChatMode {
+        self.mode
+    }
+
+    /// 切换聊天模式。切换时会取消仍在进行的上一轮任务，但保留消息历史。
+    pub fn set_mode(&mut self, mode: AiChatMode) {
+        if self.mode == mode {
+            return;
+        }
+        self.cancel_current_operation();
+        self.mode = mode;
+    }
 
     /// 确保会话存在，如果不存在则创建新会话
     ///
@@ -140,11 +160,9 @@ impl<E: MessageExtension + Default> ChatEngine<E> {
         self.session_id = None;
         self.is_new_session = false;
         self.messages.clear();
+        self.plan_message_id = None;
+        self.runtime_assistant_message_id = None;
     }
-
-    // ========================================================================
-    // 消息管理
-    // ========================================================================
 
     /// 添加用户消息到 messages
     pub fn push_user_message(&mut self, content: impl Into<String>) {
@@ -204,9 +222,10 @@ impl<E: MessageExtension + Default> ChatEngine<E> {
         self.messages.push(ChatMessageUIGeneric::assistant(content));
     }
 
-    // ========================================================================
-    // 取消操作
-    // ========================================================================
+    /// 应用 agent runtime 事件到聊天消息列表。
+    pub fn apply_runtime_event(&mut self, event: RuntimeEvent) {
+        runtime_events::apply_runtime_event(self, event);
+    }
 
     /// 取消当前操作
     pub fn cancel_current_operation(&mut self) {
@@ -233,20 +252,12 @@ impl<E: MessageExtension + Default> ChatEngine<E> {
         self.is_loading && self.cancel_token.is_some()
     }
 
-    // ========================================================================
-    // 滚动控制
-    // ========================================================================
-
     /// 自动滚动到底部
     pub fn scroll_to_bottom(&self) {
         if self.auto_scroll_enabled {
             self.scroll_handle.scroll_to_bottom();
         }
     }
-
-    // ========================================================================
-    // Provider 配置加载
-    // ========================================================================
 
     /// 同步加载 provider 配置列表
     pub fn load_provider_configs_sync(storage: &StorageManager) -> Vec<ProviderConfig> {
@@ -259,10 +270,6 @@ impl<E: MessageExtension + Default> ChatEngine<E> {
             Err(_) => Vec::new(),
         }
     }
-
-    // ========================================================================
-    // 历史会话辅助
-    // ========================================================================
 
     /// 将历史会话消息转换为 ChatMessageUI
     pub fn messages_from_history(
