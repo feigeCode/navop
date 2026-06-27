@@ -1,3 +1,4 @@
+use crate::gpui_tokio::Tokio;
 use agent_runtime::{ResourceContext, RuntimeEvent, RuntimeEventReceiver, SessionId, ToolRegistry};
 use gpui::{AsyncApp, Context};
 use std::sync::Arc;
@@ -207,6 +208,7 @@ impl AiChatPanel {
             return;
         };
         let events = controller.subscribe();
+        let _guard = Tokio::handle(cx).enter();
         match controller.start_turn(content) {
             Ok(_) => {
                 if let Some(session_id) = controller.session_id().cloned() {
@@ -231,8 +233,10 @@ impl AiChatPanel {
         let max_tokens = self.engine.model_settings.max_tokens as u32;
         let temperature = self.engine.model_settings.temperature;
 
+        let tokio_handle = Tokio::handle(cx);
         cx.spawn(
             async move |this: gpui::WeakEntity<Self>, cx: &mut AsyncApp| {
+                let _guard = tokio_handle.enter();
                 let provider = match global_provider_state
                     .manager()
                     .get_provider(&provider_config)

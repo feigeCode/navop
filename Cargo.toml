@@ -1,20 +1,11 @@
 [workspace]
-default-members = ["crates/ui", "crates/story", "crates/assets", "main"]
+default-members = [ "main"]
 members = [
     "crates/macros",
-    "crates/story",
     "crates/ui",
     "crates/assets",
     "crates/webview",
     "crates/reqwest_client",
-    "examples/app_assets",
-    "examples/hello_world",
-    "examples/input",
-    "examples/window_title",
-    "examples/dialog_overlay",
-    "examples/webview",
-    "examples/system_monitor",
-    "examples/focus_trap",
     "crates/db",
     "crates/db_view",
     "crates/extension-runtime",
@@ -49,7 +40,6 @@ edition = "2024"
 gpui-component = { path = "crates/ui", version = "0.5.2" }
 gpui-component-macros = { path = "crates/macros", version = "0.5.1" }
 gpui-component-assets = { path = "crates/assets", version = "0.5.1" }
-story = { path = "crates/story" }
 
 gpui = { git = "https://github.com/zed-industries/zed", rev = "832c17e8192e2e1d472f0751e7cef2af84ded622" }
 gpui_tokio = { git = "https://github.com/zed-industries/zed", rev = "832c17e8192e2e1d472f0751e7cef2af84ded622" }
@@ -199,7 +189,6 @@ gpui = { git = "https://github.com/zed-industries/zed", rev = "832c17e8192e2e1d4
 
 # Use stacker's psm version which may have better WASM support
 psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
-tree-sitter-navi = { git = "https://github.com/navi-language/tree-sitter-navi" }
 
 [workspace.dependencies.windows]
 features = ["Wdk", "Wdk_System", "Wdk_System_SystemServices"]
