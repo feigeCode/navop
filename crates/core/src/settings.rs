@@ -332,6 +332,66 @@ impl Default for AcpAgentSettings {
             id: "settings-default".to_string(),
             name: "ACP Agent".to_string(),
             transport: AcpAgentTransportSettings::default(),
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonalSyncBackendKind {
+    #[default]
+    Folder,
+    Git,
+}
+
+impl PersonalSyncBackendKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Folder => "folder",
+            Self::Git => "git",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "git" => Self::Git,
+            _ => Self::Folder,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonalGitSyncSettings {
+    #[serde(default = "default_true")]
+    pub auto_push: bool,
+}
+
+impl Default for PersonalGitSyncSettings {
+    fn default() -> Self {
+        Self {
+            auto_push: default_true(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonalSyncSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub backend: PersonalSyncBackendKind,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default = "default_true")]
+    pub auto_sync: bool,
+    #[serde(default)]
+    pub git: PersonalGitSyncSettings,
+}
+
+impl Default for PersonalSyncSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: PersonalSyncBackendKind::Folder,
+            path: String::new(),
+            auto_sync: default_true(),
+            git: PersonalGitSyncSettings::default(),
         }
     }
 }
@@ -465,6 +525,7 @@ pub struct AppSettings {
     pub mcp: McpSettings,
     #[serde(default)]
     pub ai_chat: AiChatSettings,
+    pub personal_sync: PersonalSyncSettings,
     #[serde(default)]
     pub database_open_mode: DatabaseOpenMode,
     #[serde(default)]
@@ -570,6 +631,7 @@ impl Default for AppSettings {
             global_proxy: GlobalProxySettings::default(),
             mcp: McpSettings::default(),
             ai_chat: AiChatSettings::default(),
+            personal_sync: PersonalSyncSettings::default(),
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             enable_sql_auto_save: true,
@@ -715,6 +777,8 @@ mod tests {
     use super::{
         AcpAgentSettings, AcpAgentTransportSettings, AppSettings, CustomFont,
         LargeTextCellEditorOpenMode, McpPermissionMode, McpServerMode,
+        AppSettings, LargeTextCellEditorOpenMode, McpPermissionMode, McpServerMode,
+        PersonalSyncBackendKind,
     };
 
     #[test]
@@ -756,6 +820,21 @@ mod tests {
 
     #[test]
     fn app_settings_deserializes_sql_query_max_rows_from_legacy_json() {
+    fn app_settings_default_disables_personal_sync() {
+        let settings = AppSettings::default();
+
+        assert!(!settings.personal_sync.enabled);
+        assert_eq!(
+            PersonalSyncBackendKind::Folder,
+            settings.personal_sync.backend
+        );
+        assert!(settings.personal_sync.path.is_empty());
+        assert!(settings.personal_sync.auto_sync);
+        assert!(settings.personal_sync.git.auto_push);
+    }
+
+    #[test]
+    fn app_settings_deserializes_personal_sync_defaults_from_legacy_json() {
         let settings: AppSettings = serde_json::from_value(serde_json::json!({
             "locale": "en",
             "theme_mode": "dark"
@@ -763,6 +842,22 @@ mod tests {
         .expect("旧版 settings.json 应能读取");
 
         assert_eq!(1000, settings.sql_query_max_rows);
+        assert!(!settings.personal_sync.enabled);
+        assert!(settings.personal_sync.auto_sync);
+    }
+
+    #[test]
+    fn app_settings_round_trip_preserves_personal_sync() {
+        let mut settings = AppSettings::default();
+        settings.personal_sync.enabled = true;
+        settings.personal_sync.backend = PersonalSyncBackendKind::Git;
+        settings.personal_sync.path = "/tmp/repo".to_string();
+        settings.personal_sync.git.auto_push = false;
+
+        let json = serde_json::to_string(&settings).expect("应序列化 AppSettings");
+        let loaded: AppSettings = serde_json::from_str(&json).expect("应反序列化 AppSettings");
+
+        assert_eq!(settings.personal_sync, loaded.personal_sync);
     }
 
     #[test]

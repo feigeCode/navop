@@ -17,6 +17,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 dirs.workspace = true
+notify.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 chrono.workspace = true
@@ -35,3 +36,4 @@ rust-i18n.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3"

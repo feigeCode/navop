@@ -32,6 +32,7 @@ use gpui_component::{
     switch::Switch,
     v_flex,
 };
+use one_core::cloud_sync::personal::SyncStoreHealth;
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::action_id;
 use one_core::llm::manager::GlobalProviderState;
@@ -41,7 +42,7 @@ pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
 
 pub use one_core::settings::{
     AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings,
-    LargeTextCellEditorOpenMode, ProxyType,
+    LargeTextCellEditorOpenMode, PersonalSyncBackendKind, PersonalSyncSettings, ProxyType,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -803,6 +804,9 @@ impl SettingsPanel {
                             render_global_proxy_settings_item(cx)
                         })),
                 ]),
+            SettingPage::new(t!("Settings.Sync.title"))
+                .resettable(true)
+                .group(personal_sync_setting_group(&default_settings.personal_sync)),
             // 快捷键页面
             SettingPage::new(t!("Settings.Shortcuts.title")).group(
                 SettingGroup::new().item(SettingItem::render(move |_options, window, cx| {
@@ -824,6 +828,182 @@ impl SettingsPanel {
             )),
         ]
     }
+}
+
+fn personal_sync_setting_group(defaults: &PersonalSyncSettings) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.Sync.group_title"))
+        .items(vec![
+            personal_sync_enabled_item(defaults.enabled),
+            personal_sync_backend_item(defaults.backend),
+            personal_sync_path_item(defaults.path.clone()),
+            personal_sync_auto_sync_item(defaults.auto_sync),
+            personal_sync_git_auto_push_item(defaults.git.auto_push),
+            SettingItem::render(move |_options, window, cx| {
+                render_personal_sync_actions(window, cx)
+            }),
+        ])
+}
+
+fn personal_sync_enabled_item(default: bool) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.Sync.enabled"),
+        SettingField::switch(
+            |cx: &App| AppSettings::global(cx).personal_sync.enabled,
+            |val: bool, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| settings.personal_sync.enabled = val);
+            },
+        )
+        .default_value(default),
+    )
+    .description(t!("Settings.Sync.enabled_desc").to_string())
+}
+
+fn personal_sync_backend_item(default: PersonalSyncBackendKind) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.Sync.backend"),
+        SettingField::dropdown(
+            personal_sync_backend_options(),
+            |cx: &App| SharedString::from(AppSettings::global(cx).personal_sync.backend.as_str()),
+            |val: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.personal_sync.backend = PersonalSyncBackendKind::from_str(&val);
+                });
+            },
+        )
+        .default_value(SharedString::from(default.as_str())),
+    )
+    .description(t!("Settings.Sync.backend_desc").to_string())
+}
+
+fn personal_sync_path_item(default: String) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.Sync.path"),
+        SettingField::input(
+            |cx: &App| SharedString::from(AppSettings::global(cx).personal_sync.path.clone()),
+            |val: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.personal_sync.path = val.trim().to_string();
+                });
+            },
+        )
+        .default_value(SharedString::from(default)),
+    )
+    .description(t!("Settings.Sync.path_desc").to_string())
+}
+
+fn personal_sync_auto_sync_item(default: bool) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.Sync.auto_sync"),
+        SettingField::switch(
+            |cx: &App| AppSettings::global(cx).personal_sync.auto_sync,
+            |val: bool, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| settings.personal_sync.auto_sync = val);
+            },
+        )
+        .default_value(default),
+    )
+    .description(t!("Settings.Sync.auto_sync_desc").to_string())
+}
+
+fn personal_sync_git_auto_push_item(default: bool) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.Sync.git_auto_push"),
+        SettingField::switch(
+            |cx: &App| AppSettings::global(cx).personal_sync.git.auto_push,
+            |val: bool, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.personal_sync.git.auto_push = val;
+                });
+            },
+        )
+        .default_value(default),
+    )
+    .description(t!("Settings.Sync.git_auto_push_desc").to_string())
+}
+
+pub(crate) fn personal_sync_backend_options() -> Vec<(SharedString, SharedString)> {
+    vec![
+        (
+            SharedString::from("folder"),
+            SharedString::from(t!("Settings.Sync.Backend.folder")),
+        ),
+        (
+            SharedString::from("git"),
+            SharedString::from(t!("Settings.Sync.Backend.git")),
+        ),
+    ]
+}
+
+pub(crate) fn personal_sync_status_label(health: &SyncStoreHealth) -> String {
+    match health {
+        SyncStoreHealth::Ready => t!("Settings.Sync.Status.ready").to_string(),
+        SyncStoreHealth::NotConfigured => t!("Settings.Sync.Status.not_configured").to_string(),
+        SyncStoreHealth::DirectoryUnavailable => {
+            t!("Settings.Sync.Status.directory_unavailable").to_string()
+        }
+        SyncStoreHealth::SchemaUnsupported => {
+            t!("Settings.Sync.Status.schema_unsupported").to_string()
+        }
+        SyncStoreHealth::GitAuthRequired => {
+            t!("Settings.Sync.Status.git_auth_required").to_string()
+        }
+        SyncStoreHealth::GitMergeConflict => {
+            t!("Settings.Sync.Status.git_merge_conflict").to_string()
+        }
+        SyncStoreHealth::PausedAfterRepeatedFailures => {
+            t!("Settings.Sync.Status.paused_after_repeated_failures").to_string()
+        }
+    }
+}
+
+fn render_personal_sync_actions(_window: &mut Window, cx: &mut App) -> gpui::AnyElement {
+    let status = crate::personal_sync_runtime::runtime_status(cx);
+    let enabled = crate::personal_sync_runtime::actions_enabled(cx);
+    h_flex()
+        .w_full()
+        .justify_between()
+        .items_center()
+        .gap_3()
+        .child(
+            v_flex()
+                .gap_1()
+                .flex_1()
+                .child(
+                    div()
+                        .text_sm()
+                        .child(t!("Settings.Sync.status").to_string()),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(personal_sync_status_label(&status.health())),
+                ),
+        )
+        .child(
+            h_flex()
+                .gap_2()
+                .child(
+                    Button::new("personal-sync-test")
+                        .icon(IconName::Check)
+                        .label(t!("Settings.Sync.test_connection").to_string())
+                        .disabled(!enabled)
+                        .on_click(|_, _, cx| {
+                            crate::personal_sync_runtime::test_connection(cx);
+                        }),
+                )
+                .child(
+                    Button::new("personal-sync-now")
+                        .icon(IconName::Refresh)
+                        .label(t!("Settings.Sync.sync_now").to_string())
+                        .disabled(!enabled)
+                        .on_click(|_, _, cx| {
+                            crate::personal_sync_runtime::sync_now(cx);
+                        }),
+                ),
+        )
+        .into_any_element()
 }
 
 impl Focusable for SettingsPanel {
@@ -2278,11 +2458,14 @@ fn render_shortcuts_section(
 #[cfg(test)]
 mod tests {
     use gpui::http_client::HttpClient;
+    use one_core::cloud_sync::personal::SyncStoreHealth;
+    use rust_i18n::t;
 
     use super::{
         AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, ProxyType,
         build_app_http_client, builtin_monospace_font_options, is_supported_font_file,
         merge_font_options_with_custom_fonts, parse_font_families,
+        personal_sync_backend_options, personal_sync_status_label,
     };
     use std::path::Path;
 
@@ -2479,6 +2662,27 @@ mod tests {
         let err = settings.validate().expect_err("缺少主机和端口时应校验失败");
 
         assert!(err.contains("主机"));
+    }
+
+    #[test]
+    fn personal_sync_backend_options_include_folder_and_git() {
+        let options = personal_sync_backend_options();
+
+        assert_eq!(
+            vec![
+                ("folder".into(), t!("Settings.Sync.Backend.folder").into()),
+                ("git".into(), t!("Settings.Sync.Backend.git").into()),
+            ],
+            options
+        );
+    }
+
+    #[test]
+    fn personal_sync_status_label_maps_git_auth_required() {
+        assert_eq!(
+            t!("Settings.Sync.Status.git_auth_required").to_string(),
+            personal_sync_status_label(&SyncStoreHealth::GitAuthRequired)
+        );
     }
 }
 

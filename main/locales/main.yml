@@ -1390,6 +1390,106 @@ Settings:
         zh-CN: 全局代理设置已生效
         zh-HK: 全局代理設置已生效
 
+  Sync:
+    title:
+      en: Sync
+      zh-CN: 同步
+      zh-HK: 同步
+    group_title:
+      en: Personal Sync
+      zh-CN: 个人同步
+      zh-HK: 個人同步
+    enabled:
+      en: Enable Sync
+      zh-CN: 启用同步
+      zh-HK: 啟用同步
+    enabled_desc:
+      en: Sync personal connections and workspaces through a user-managed backend.
+      zh-CN: 通过用户自定义后端同步个人连接和工作区。
+      zh-HK: 透過使用者自訂後端同步個人連線和工作區。
+    backend:
+      en: Backend
+      zh-CN: 后端
+      zh-HK: 後端
+    backend_desc:
+      en: Folder works with local folders, iCloud Drive, OneDrive, and other synced directories; Git adds commit and push support.
+      zh-CN: 文件夹后端可用于本地文件夹、iCloud Drive、OneDrive 以及其他同步目录；Git 后端会增加提交和推送。
+      zh-HK: 資料夾後端可用於本機資料夾、iCloud Drive、OneDrive 以及其他同步目錄；Git 後端會增加提交和推送。
+    path:
+      en: Sync Path
+      zh-CN: 同步路径
+      zh-HK: 同步路徑
+    path_desc:
+      en: Choose the folder or Git repository that stores the .onetcli-sync package.
+      zh-CN: 选择保存 .onetcli-sync 同步包的文件夹或 Git 仓库。
+      zh-HK: 選擇保存 .onetcli-sync 同步包的資料夾或 Git 倉庫。
+    auto_sync:
+      en: Auto Sync
+      zh-CN: 自动同步
+      zh-HK: 自動同步
+    auto_sync_desc:
+      en: Automatically sync when local data or backend files change.
+      zh-CN: 当本地数据或后端文件变化时自动同步。
+      zh-HK: 當本機資料或後端檔案變更時自動同步。
+    git_auto_push:
+      en: Git Auto Push
+      zh-CN: Git 自动推送
+      zh-HK: Git 自動推送
+    git_auto_push_desc:
+      en: Push personal sync commits after Git backend writes.
+      zh-CN: Git 后端写入后自动推送个人同步提交。
+      zh-HK: Git 後端寫入後自動推送個人同步提交。
+    status:
+      en: Status
+      zh-CN: 状态
+      zh-HK: 狀態
+    test_connection:
+      en: Test
+      zh-CN: 测试
+      zh-HK: 測試
+    sync_now:
+      en: Sync Now
+      zh-CN: 立即同步
+      zh-HK: 立即同步
+    Backend:
+      folder:
+        en: Folder
+        zh-CN: 文件夹
+        zh-HK: 資料夾
+      git:
+        en: Git
+        zh-CN: Git
+        zh-HK: Git
+    Status:
+      ready:
+        en: Ready
+        zh-CN: 就绪
+        zh-HK: 就緒
+      not_configured:
+        en: Not configured
+        zh-CN: 未配置
+        zh-HK: 未配置
+      directory_unavailable:
+        en: Directory unavailable
+        zh-CN: 目录不可用
+        zh-HK: 目錄不可用
+      schema_unsupported:
+        en: Sync schema unsupported
+        zh-CN: 同步格式版本不受支持
+        zh-HK: 同步格式版本不受支援
+      git_auth_required:
+        en: Git authentication required
+        zh-CN: 需要 Git 认证
+        zh-HK: 需要 Git 認證
+      git_merge_conflict:
+        en: Git merge conflict
+        zh-CN: Git 合并冲突
+        zh-HK: Git 合併衝突
+      paused_after_repeated_failures:
+        en: Paused after repeated failures
+        zh-CN: 多次失败后已暂停
+        zh-HK: 多次失敗後已暫停
+
   # 快捷键
   Shortcuts:
     title:
