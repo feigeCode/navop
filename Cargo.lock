@@ -189,6 +189,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "ai_chat_view"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "agent_runtime",
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "futures",
+ "gpui",
+ "gpui-component",
+ "image",
+ "llm-connector",
+ "lsp-types",
+ "one-core",
+ "serde",
+ "serde_json",
+ "smol",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zed-sum-tree",
+]
+
+[[package]]
 name = "alacritty_terminal"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2780,6 +2805,7 @@ dependencies = [
 name = "db_view"
 version = "0.1.0"
 dependencies = [
+ "ai_chat_view",
  "anyhow",
  "async-trait",
  "chrono",
@@ -6708,6 +6734,7 @@ name = "main"
 version = "0.7.0"
 dependencies = [
  "agent_runtime",
+ "ai_chat_view",
  "anyhow",
  "base64 0.22.1",
  "db",
@@ -7151,6 +7178,7 @@ dependencies = [
 name = "mongodb_view"
 version = "0.1.0"
 dependencies = [
+ "ai_chat_view",
  "anyhow",
  "async-trait",
  "dashmap 5.5.3",
@@ -9485,6 +9513,7 @@ dependencies = [
 name = "redis_view"
 version = "0.1.0"
 dependencies = [
+ "ai_chat_view",
  "anyhow",
  "async-trait",
  "chrono",
@@ -11885,6 +11914,7 @@ dependencies = [
 name = "terminal_view"
 version = "0.1.0"
 dependencies = [
+ "ai_chat_view",
  "alacritty_terminal",
  "anyhow",
  "async-trait",

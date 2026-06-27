@@ -1,11 +1,15 @@
+mod schema;
+
 use one_core::storage::traits::Repository;
 use one_core::storage::{ConnectionRepository, ConnectionType, DbConnectionConfig};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode,
-    ToolRegistry, ToolResult,
+    ToolAdapter, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode, ToolRegistry,
+    ToolResult,
 };
+
+use schema::descriptor_parts;
 
 #[derive(Clone, Copy)]
 enum DatabaseTool {
@@ -43,7 +47,7 @@ impl DatabaseToolHandler {
 
     async fn schema(&self, input: Value) -> Result<ToolResult, ToolError> {
         let connection = required_str(&input, "connection")?;
-        let config = self.database_config(&connection)?;
+        let config = scoped_database_config(self.database_config(&connection)?, &input)?;
         let plugin = db::DbManager::new()
             .get_plugin(&config.database_type)
             .map_err(tool_error)?;
@@ -59,6 +63,7 @@ impl DatabaseToolHandler {
             "connection": connection,
             "database_type": config.database_type,
             "database": config.database,
+            "schema": optional_str(&input, "schema")?,
             "databases": databases
         })))
     }
@@ -66,7 +71,7 @@ impl DatabaseToolHandler {
     async fn query(&self, input: Value) -> Result<ToolResult, ToolError> {
         let connection = required_str(&input, "connection")?;
         let sql = required_str(&input, "sql")?;
-        let config = self.database_config(&connection)?;
+        let config = scoped_database_config(self.database_config(&connection)?, &input)?;
         let plugin = db::DbManager::new()
             .get_plugin(&config.database_type)
             .map_err(tool_error)?;
@@ -77,9 +82,13 @@ impl DatabaseToolHandler {
                         .to_string(),
             });
         }
+        let database = config.database.clone();
+        let schema = optional_str(&input, "schema")?;
         let results = execute_sql(plugin, config, &sql, db::ExecOptions::default()).await?;
         Ok(ToolResult::structured(json!({
             "connection": connection,
+            "database": database,
+            "schema": schema,
             "sql": sql,
             "results": results
         })))
@@ -88,13 +97,17 @@ impl DatabaseToolHandler {
     async fn exec(&self, input: Value) -> Result<ToolResult, ToolError> {
         let connection = required_str(&input, "connection")?;
         let sql = exec_sql(&input)?;
-        let config = self.database_config(&connection)?;
+        let config = scoped_database_config(self.database_config(&connection)?, &input)?;
         let plugin = db::DbManager::new()
             .get_plugin(&config.database_type)
             .map_err(tool_error)?;
+        let database = config.database.clone();
+        let schema = optional_str(&input, "schema")?;
         let results = execute_sql(plugin, config, &sql, db::ExecOptions::default()).await?;
         Ok(ToolResult::structured(json!({
             "connection": connection,
+            "database": database,
+            "schema": schema,
             "results": results
         })))
     }
@@ -152,40 +165,6 @@ async fn execute_sql(
     result
 }
 
-fn descriptor_parts(
-    tool: DatabaseTool,
-) -> (
-    &'static str,
-    &'static str,
-    &'static str,
-    Value,
-    ToolAnnotations,
-) {
-    match tool {
-        DatabaseTool::Schema => (
-            "db.schema",
-            "Read database schema",
-            "Read schema-level metadata for a saved database connection. The connection argument accepts a saved connection id or exact saved connection name.",
-            connection_schema(),
-            ToolAnnotations::read_only("Read database schema"),
-        ),
-        DatabaseTool::Query => (
-            "db.query",
-            "Run database query",
-            "Run read-only SQL through a saved database connection. Non-query statements are rejected before execution; use db.exec for write-capable SQL.",
-            query_schema(),
-            ToolAnnotations::read_only("Run database query"),
-        ),
-        DatabaseTool::Exec => (
-            "db.exec",
-            "Execute database script",
-            "Execute a SQL script or SQL file through a saved database connection. This may mutate database state and requires --allow-write when called through onetcli tool call.",
-            exec_schema(),
-            ToolAnnotations::mutating("Execute database script"),
-        ),
-    }
-}
-
 fn find_connection(
     repo: &ConnectionRepository,
     connection: &str,
@@ -213,6 +192,16 @@ fn exec_sql(input: &Value) -> Result<String, ToolError> {
     })
 }
 
+fn scoped_database_config(
+    mut config: DbConnectionConfig,
+    input: &Value,
+) -> Result<DbConnectionConfig, ToolError> {
+    if let Some(database) = optional_str(input, "database")?.filter(|value| !value.is_empty()) {
+        config.database = Some(database);
+    }
+    Ok(config)
+}
+
 fn required_str(input: &Value, key: &str) -> Result<String, ToolError> {
     optional_str(input, key)?.ok_or_else(|| ToolError::Failed {
         message: format!("missing required string field `{key}`"),
@@ -227,46 +216,6 @@ fn optional_str(input: &Value, key: &str) -> Result<Option<String>, ToolError> {
             message: format!("field `{key}` must be a string"),
         }),
     }
-}
-
-fn connection_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "connection": connection_property()
-        },
-        "required": ["connection"]
-    })
-}
-
-fn query_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "connection": connection_property(),
-            "sql": { "type": "string", "description": "SQL query text to run." }
-        },
-        "required": ["connection", "sql"]
-    })
-}
-
-fn exec_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "connection": connection_property(),
-            "file": { "type": "string", "description": "SQL file path to execute." },
-            "sql": { "type": "string", "description": "SQL script text to execute." }
-        },
-        "required": ["connection"]
-    })
-}
-
-fn connection_property() -> Value {
-    json!({
-        "type": "string",
-        "description": "Saved database connection id or exact saved connection name."
-    })
 }
 
 fn unknown_connection(connection: &str) -> ToolError {

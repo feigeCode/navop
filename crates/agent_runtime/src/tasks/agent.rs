@@ -15,6 +15,10 @@ use crate::ids::{ToolCallId, TurnId};
 use crate::model::{ModelRequest, ModelResponse, ModelStreamEvent};
 use crate::planner::history_to_messages;
 use crate::runtime::{RuntimeServices, RuntimeTask, Session, TaskContext, TaskKind, TaskOutcome};
+use crate::tasks::agent_prompt::build_system_prompt;
+use crate::tasks::agent_tool_validation::{
+    malformed_tool_call_reason, services_with_update_plan_specs, tool_is_available,
+};
 use crate::tasks::update_plan::{UPDATE_PLAN_TOOL, parse_plan, update_plan_spec};
 use crate::tools::{ObservationData, ToolCall, ToolDispatchContext, ToolName, ToolObservation};
 use async_trait::async_trait;
@@ -22,11 +26,6 @@ use futures::StreamExt;
 use llm_connector::types::{Message, ToolChoice};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-
-const AGENT_SYSTEM: &str = "你是 onetcli 的 AI 运维助手。请根据用户目标自主决定如何行动:\
-简单问题直接、简洁地用简体中文回答;需要查询或操作资源时调用相应工具;\
-面对多步任务时,先调用 `update_plan` 列出步骤并随进展更新状态(每完成一步就更新)。\
-不要为简单问题强行制定计划。完成后直接给出最终回答。";
 
 /// 单轮内模型 / 工具往返的最大迭代次数,防止失控。
 const MAX_ITERATIONS: usize = 16;
@@ -53,6 +52,7 @@ impl RuntimeTask for AgentTask {
         cancellation: CancellationToken,
     ) -> TaskOutcome {
         let goal = ctx.goal();
+        let task_kind = ctx.kind;
         let session = ctx.session.clone();
         let services = ctx.services.clone();
         let turn_id = ctx.turn.turn_id.clone();
@@ -71,10 +71,6 @@ impl RuntimeTask for AgentTask {
                 return TaskOutcome::Cancelled;
             }
 
-            // 构造请求:system + 历史 + (业务工具 + update_plan)。
-            let mut messages = vec![Message::system(AGENT_SYSTEM)];
-            messages.extend(history_to_messages(&session.history_snapshot()));
-
             let mut tools: Vec<_> = services
                 .tools
                 .specs(&resources)
@@ -82,6 +78,12 @@ impl RuntimeTask for AgentTask {
                 .map(|s| s.to_llm_tool())
                 .collect();
             tools.push(update_plan_spec().to_llm_tool());
+            let tool_specs = services_with_update_plan_specs(&services, &resources);
+
+            // 构造请求:system + 历史 + (业务工具 + update_plan)。
+            let mut messages =
+                vec![Message::system(build_system_prompt(task_kind, &tool_specs, &resources))];
+            messages.extend(history_to_messages(&session.history_snapshot()));
 
             let request = ModelRequest::new(messages)
                 .with_tools(tools)
@@ -125,16 +127,32 @@ impl RuntimeTask for AgentTask {
                 let call = match ToolCall::from_llm(llm_call) {
                     Ok(call) => call,
                     Err(err) => {
-                        // 参数非法:回一条失败观测,让模型据此纠正后重试。
+                        // 非 JSON 参数通常意味着模型/Provider 返回了非标准工具格式;
+                        // 直接结束本轮,避免把失败观测喂回模型后反复调用伪工具。
                         let call_id = llm_tool_call_id(llm_call);
                         let tool_name = ToolName::new(llm_call.function.name.clone());
-                        session.record_observation(
-                            &turn_id,
-                            ToolObservation::from_error(call_id, tool_name, &err),
-                        );
-                        continue;
+                        let observation = ToolObservation::from_error(call_id, tool_name, &err);
+                        let reason = malformed_tool_call_reason(llm_call, &err);
+                        session.record_observation(&turn_id, observation);
+                        return TaskOutcome::Failed { reason };
                     }
                 };
+
+                if !tool_is_available(&services, &resources, &call.tool_name) {
+                    let reason = format!(
+                        "模型请求了未注册工具 `{}`。请使用可用工具名,不要调用 `tool` 伪工具。",
+                        call.tool_name
+                    );
+                    session.record_observation(
+                        &turn_id,
+                        ToolObservation::from_error(
+                            call.call_id.clone(),
+                            call.tool_name.clone(),
+                            &crate::error::ToolError::NotFound(call.tool_name.to_string()),
+                        ),
+                    );
+                    return TaskOutcome::Failed { reason };
+                }
 
                 tracing::info!(
                     tool = %call.tool_name,

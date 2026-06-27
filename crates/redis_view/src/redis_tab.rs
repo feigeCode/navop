@@ -83,7 +83,8 @@ impl RedisTabView {
 
         let tab_container = cx.new(|cx| TabContainer::new(window, cx));
         let key_value_view = cx.new(|cx| KeyValueView::new(window, cx));
-        let sidebar = cx.new(|cx| RedisSidebar::new(window, cx));
+        let sidebar =
+            cx.new(|cx| RedisSidebar::new(connections.clone(), active_conn_id, window, cx));
 
         let active_connection = connections
             .iter()

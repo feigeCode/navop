@@ -4,6 +4,7 @@ members = [
     "crates/macros",
     "crates/ui",
     "crates/assets",
+    "crates/ai_chat_view",
     "crates/webview",
     "crates/reqwest_client",
     "crates/db",
@@ -83,6 +84,7 @@ tracing = "0.1.41"
 
 reqwest_client = { path = "crates/reqwest_client" }
 agent_runtime = { path = "crates/agent_runtime" }
+ai_chat_view = { path = "crates/ai_chat_view" }
 agent-client-protocol = "0.14.0"
 public_mcp = { path = "crates/public_mcp" }
 tool_runtime = { path = "crates/tool_runtime" }

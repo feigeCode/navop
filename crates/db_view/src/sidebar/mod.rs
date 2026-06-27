@@ -5,8 +5,10 @@
 
 pub(crate) mod cell_preview_panel;
 
-use crate::chatdb::chat_panel::{ChatPanel, ChatPanelEvent};
-use crate::chatdb::db_connection_selector::DbSelectorContext;
+use ai_chat_view::{
+    AskAiEvent, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent, ResourceId,
+    ResourceScope, build_agent_context_all, get_ask_ai_notifier,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -14,9 +16,8 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
-use one_core::ai_chat::CodeBlockAction;
-use one_core::ai_chat::ask_ai::{AskAiEvent, get_ask_ai_notifier};
 use one_core::layout::TOOLBAR_WIDTH;
+use one_core::storage::StoredConnection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarPanel {
@@ -39,7 +40,9 @@ pub enum DatabaseSidebarEvent {
 
 pub struct DatabaseSidebar {
     active_panel: Option<SidebarPanel>,
-    chat_panel: Entity<ChatPanel>,
+    chat_panel: Entity<DefaultAgentChatPanel>,
+    connections: Vec<StoredConnection>,
+    active_conn_id: Option<i64>,
     focus_handle: FocusHandle,
     is_active: bool,
     _subs: Vec<Subscription>,
@@ -47,21 +50,27 @@ pub struct DatabaseSidebar {
 
 impl DatabaseSidebar {
     pub fn new(
+        connections: Vec<StoredConnection>,
+        active_conn_id: Option<i64>,
         window: &mut Window,
         cx: &mut Context<Self>,
-        selector_context: DbSelectorContext,
     ) -> Self {
+        let active_connection = active_conn_id
+            .and_then(|id| connections.iter().find(|conn| conn.id == Some(id)))
+            .or_else(|| connections.first());
+        let (resources, mentions) = build_agent_context_all(active_connection, &connections);
         let chat_panel =
-            cx.new(|cx| ChatPanel::new_for_sidebar(window, cx, selector_context.clone()));
+            cx.new(|cx| DefaultAgentChatPanel::new_with_context(resources, mentions, window, cx));
 
         let mut subs = Vec::new();
-        subs.push(
-            cx.subscribe(&chat_panel, |this, _, _event: &ChatPanelEvent, cx| {
+        subs.push(cx.subscribe(
+            &chat_panel,
+            |this, _, _event: &DefaultAgentChatPanelEvent, cx| {
                 this.active_panel = None;
                 cx.emit(DatabaseSidebarEvent::PanelChanged);
                 cx.notify();
-            }),
-        );
+            },
+        ));
 
         if let Some(notifier) = get_ask_ai_notifier(cx) {
             subs.push(
@@ -77,6 +86,8 @@ impl DatabaseSidebar {
         Self {
             active_panel: None,
             chat_panel,
+            connections,
+            active_conn_id,
             focus_handle: cx.focus_handle(),
             is_active: false,
             _subs: subs,
@@ -121,7 +132,40 @@ impl DatabaseSidebar {
         cx.notify();
     }
 
-    pub fn register_code_block_action(&self, _action: CodeBlockAction, _cx: &mut Context<Self>) {}
+    pub fn set_database_scope(
+        &mut self,
+        connection_id: &str,
+        database: Option<String>,
+        schema: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let active_id = connection_id.parse::<i64>().ok().or(self.active_conn_id);
+        let active_connection = active_id
+            .and_then(|id| self.connections.iter().find(|conn| conn.id == Some(id)))
+            .or_else(|| self.connections.first());
+        let (mut resources, mentions) =
+            build_agent_context_all(active_connection, &self.connections);
+        let resource_id = ResourceId::new(connection_id.to_string());
+        if let Some(resource) = resources.get_mut(&resource_id) {
+            if let Some(database) = database.filter(|value| !value.is_empty()) {
+                resource.set_scope(ResourceScope::new("database", "Database", database));
+            }
+            if let Some(schema) = schema.filter(|value| !value.is_empty()) {
+                resource.set_scope(ResourceScope::new("schema", "Schema", schema));
+            }
+        }
+        resources.current = Some(resource_id);
+        self.chat_panel.update(cx, |panel, cx| {
+            panel.set_resource_context(resources, mentions, cx);
+        });
+        cx.notify();
+    }
+
+    pub fn register_code_block_action(&self, action: CodeBlockAction, cx: &mut Context<Self>) {
+        self.chat_panel.update(cx, |panel, cx| {
+            panel.register_code_block_action(action, cx);
+        });
+    }
 
     fn render_toolbar_button(
         &self,

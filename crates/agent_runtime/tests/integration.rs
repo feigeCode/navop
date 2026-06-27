@@ -11,8 +11,8 @@ use std::sync::Arc;
 use agent_runtime::model::{MockModelClient, ModelResponse, function_tool_call};
 use agent_runtime::tools::builtin::EchoTool;
 use agent_runtime::{
-    ModelClient, ResourceContext, Runtime, RuntimeEvent, RuntimeServices, StepStatus, TaskKind,
-    TaskOutcome, ToolRegistry, ToolRouter,
+    ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, Runtime,
+    RuntimeEvent, RuntimeServices, StepStatus, TaskKind, TaskOutcome, ToolRegistry, ToolRouter,
 };
 use serde_json::json;
 
@@ -149,4 +149,92 @@ async fn agent_calls_business_tool_then_finishes() {
             .any(|e| matches!(e, RuntimeEvent::PlanUpdated { .. })),
         "未调用 update_plan 不应产生计划"
     );
+}
+
+#[tokio::test]
+async fn malformed_tool_call_arguments_fail_without_retry_loop() {
+    let model = Arc::new(MockModelClient::new([
+        ModelResponse::tool_call(function_tool_call("c_bad", "tool", "db.schema")),
+        ModelResponse::text("不应进入第二轮"),
+    ]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "列出数据库".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    assert!(matches!(outcome, TaskOutcome::Failed { reason } if reason.contains("无效工具调用")));
+    assert_eq!(1, model.request_count(), "无效 tool call 不应继续循环重试");
+    let events = drain_events(&mut rx);
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ObservationAdded { observation, .. }
+                if !observation.success && observation.tool_name.as_str() == "tool"
+        )
+    }));
+}
+
+#[tokio::test]
+async fn system_prompt_lists_available_tools_and_json_rule() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::text("ok")]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    runtime
+        .run_turn_blocking(session.id(), "hi".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    let requests = model.received_requests();
+    let system = requests[0].messages[0].content_as_text();
+    assert!(system.contains("echo"));
+    assert!(system.contains("update_plan"));
+    assert!(system.contains("arguments 必须是合法 JSON object"));
+    assert!(system.contains("不要调用名为 `tool`"));
+}
+
+#[tokio::test]
+async fn system_prompt_includes_current_resource_context() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::text("ok")]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+        )),
+    ));
+    let resources = ResourceContext::new().with_resource(
+        ResourceRef::new("db-1", ResourceKind::Postgres, "prod analytics")
+            .with_scope(ResourceScope::new("database", "Database", "ai_app"))
+            .with_scope(ResourceScope::new("schema", "Schema", "public")),
+    );
+    let session = runtime.create_session(resources);
+
+    runtime
+        .run_turn_blocking(session.id(), "分析当前数据库".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    let requests = model.received_requests();
+    let system = requests[0].messages[0].content_as_text();
+    assert!(system.contains("当前可操作资源"));
+    assert!(system.contains("prod analytics"));
+    assert!(system.contains("类型=postgres"));
+    assert!(system.contains("id=db-1"));
+    assert!(system.contains("[当前]"));
+    assert!(system.contains("database=ai_app"));
+    assert!(system.contains("schema=public"));
 }

@@ -21,6 +21,7 @@ tracing.workspace = true
 futures.workspace = true
 smol.workspace = true
 gpui.workspace = true
+ai_chat_view.workspace = true
 db.workspace = true
 er_flow.workspace = true
 extension-component = { workspace = true }

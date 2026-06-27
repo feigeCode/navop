@@ -4,6 +4,8 @@
 //!   checklist)。当前唯一的任务类型,涵盖简单问答与多步运维。
 
 mod agent;
+mod agent_prompt;
+mod agent_tool_validation;
 mod update_plan;
 
 pub use agent::AgentTask;

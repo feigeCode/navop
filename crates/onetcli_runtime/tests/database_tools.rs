@@ -24,6 +24,11 @@ fn database_tool_registry_exposes_schema_query_and_exec_tools() {
         .find(|tool| tool.id == "db.query")
         .expect("query tool should be registered");
     assert_eq!(json!(["connection", "sql"]), query.input_schema["required"]);
+    assert_eq!(
+        "string",
+        query.input_schema["properties"]["database"]["type"]
+    );
+    assert_eq!("string", query.input_schema["properties"]["schema"]["type"]);
     assert!(query.annotations.read_only);
     assert!(!query.annotations.destructive);
 
@@ -84,6 +89,7 @@ fn database_query_executes_saved_sqlite_connection() {
             "db.query",
             json!({
                 "connection": "local sqlite",
+                "database": "main",
                 "sql": "select name from users order by id"
             }),
             ToolContext::for_adapter(ToolAdapter::Mcp),
@@ -91,6 +97,7 @@ fn database_query_executes_saved_sqlite_connection() {
         .expect("sqlite query should execute");
 
     assert_eq!("local sqlite", result.structured_content["connection"]);
+    assert_eq!("main", result.structured_content["database"]);
     assert_eq!(
         json!(["name"]),
         result.structured_content["results"][0]["columns"]

@@ -20,6 +20,7 @@ pub fn agent_runtime_tool_registry(
     for tool in registry.tools() {
         let adapter = PublicMcpAgentTool {
             name: ToolName::new(tool.name.to_string()),
+            original_name: tool.name.to_string(),
             description: tool
                 .description
                 .map(|desc| desc.to_string())
@@ -38,6 +39,7 @@ pub fn agent_runtime_tool_registry(
 
 struct PublicMcpAgentTool {
     name: ToolName,
+    original_name: String,
     description: String,
     parameters: Value,
     registry: PublicMcpToolRegistry,
@@ -63,7 +65,7 @@ impl AgentTool for PublicMcpAgentTool {
         let arguments = invocation_arguments(invocation.arguments.clone())?;
         let result = self
             .registry
-            .call_tool(self.name.as_str(), Some(arguments), self.context.clone())
+            .call_tool(&self.original_name, Some(arguments), self.context.clone())
             .await
             .map_err(|error| ToolError::Execution(error.to_string()))?;
         Ok(observation_from_result(invocation, result))
@@ -148,7 +150,7 @@ mod tests {
         let specs = agent_registry.specs(&resources);
 
         assert_eq!(1, specs.len());
-        assert_eq!("sample.echo", specs[0].name.as_str());
+        assert_eq!("sample_echo", specs[0].name.as_str());
         assert_eq!("Echo input", specs[0].description);
         assert_eq!("object", specs[0].parameters["type"]);
 
@@ -161,8 +163,9 @@ mod tests {
             .unwrap();
 
         assert!(observation.success);
-        assert_eq!("sample.echo", observation.tool_name.as_str());
+        assert_eq!("sample_echo", observation.tool_name.as_str());
         assert_eq!("hello", observation.summary);
+        assert_eq!(Some("sample.echo".to_string()), provider.last_name());
         assert_eq!(
             Some(json!({ "message": "hello" })),
             provider.last_arguments()
@@ -171,10 +174,18 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingProvider {
+        last_name: Mutex<Option<String>>,
         last_arguments: Mutex<Option<serde_json::Value>>,
     }
 
     impl RecordingProvider {
+        fn last_name(&self) -> Option<String> {
+            self.last_name
+                .lock()
+                .expect("name lock should not be poisoned")
+                .clone()
+        }
+
         fn last_arguments(&self) -> Option<serde_json::Value> {
             self.last_arguments
                 .lock()
@@ -190,11 +201,18 @@ mod tests {
 
         fn call_tool(
             &self,
-            _name: &str,
+            name: &str,
             arguments: Option<JsonObject>,
             _context: PublicMcpToolContext,
         ) -> Option<PublicMcpToolFuture> {
+            if name != "sample.echo" {
+                return None;
+            }
             let value = serde_json::Value::Object(arguments.unwrap_or_default());
+            *self
+                .last_name
+                .lock()
+                .expect("name lock should not be poisoned") = Some(name.to_string());
             *self
                 .last_arguments
                 .lock()

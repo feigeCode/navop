@@ -60,7 +60,8 @@ impl MongoTabView {
         let tree_view = cx.new(|cx| MongoTreeView::new_with_connections(&connections, window, cx));
         let tab_container = cx.new(|cx| TabContainer::new(window, cx));
         let collection_view = cx.new(|cx| CollectionView::new(window, cx));
-        let sidebar = cx.new(|cx| MongoSidebar::new(window, cx));
+        let sidebar =
+            cx.new(|cx| MongoSidebar::new(connections.clone(), active_connection_id, window, cx));
 
         tab_container.update(cx, |container, cx| {
             let view = collection_view.clone();

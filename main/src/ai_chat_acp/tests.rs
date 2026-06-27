@@ -2,7 +2,7 @@ use super::{
     acp_agent_configs_from_settings, normalize_acp_agent_config_ids, parse_json_string_array,
     parse_json_string_object,
 };
-use one_core::ai_chat::{AcpAgentConfig, AcpTransport};
+use ai_chat_view::{AcpAgentConfig, AcpTransport};
 use one_core::settings::{
     AcpAgentSettings, AcpAgentTransportSettings, AiChatSettings, AppSettings,
 };

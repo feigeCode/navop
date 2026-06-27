@@ -1,12 +1,12 @@
 use std::ops::Deref;
 use std::path::PathBuf;
 
-use crate::chatdb::db_connection_selector::{DbSelectorContext, SelectorSourceMode};
 use crate::database_objects_tab::DatabaseObjectsPanel;
 use crate::db_tree_event::DatabaseEventHandler;
-use crate::db_tree_view::DbTreeView;
+use crate::db_tree_view::{DbTreeView, DbTreeViewEvent};
 use crate::sidebar::{DatabaseSidebar, DatabaseSidebarEvent};
 use crate::sql_editor_view::SqlEditorTab;
+use ai_chat_view::{CodeBlockAction, LanguageMatcher};
 use db::{
     GlobalDbState,
     ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path},
@@ -18,7 +18,6 @@ use gpui::{
     div, prelude::FluentBuilder, px,
 };
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, h_flex, v_flex};
-use one_core::ai_chat::{CodeBlockAction, LanguageMatcher};
 use one_core::layout::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
 };
@@ -132,16 +131,8 @@ impl DatabaseTabView {
             )
         });
 
-        let selector_context = DbSelectorContext {
-            source_mode: if workspace.is_some() {
-                SelectorSourceMode::Workspace
-            } else {
-                SelectorSourceMode::SingleConnection
-            },
-            connections: connections.clone(),
-            active_connection_id: active_conn_id,
-        };
-        let sidebar = cx.new(|cx| DatabaseSidebar::new(window, cx, selector_context.clone()));
+        let sidebar =
+            cx.new(|cx| DatabaseSidebar::new(connections.clone(), active_conn_id, window, cx));
 
         // 注册 SQL 代码块操作
         Self::register_sql_code_block_actions(&sidebar, tab_container.clone(), &connections, cx);
@@ -160,6 +151,21 @@ impl DatabaseTabView {
                 },
             ),
         );
+        subscriptions.push(cx.subscribe(&db_tree_view, {
+            let sidebar = sidebar.clone();
+            move |this, tree, event: &DbTreeViewEvent, cx| {
+                if let DbTreeViewEvent::NodeSelected { node_id } = event
+                    && let Some((connection_id, database, schema)) =
+                        tree.read(cx).ai_scope_for_node(node_id)
+                {
+                    sidebar.update(cx, |sidebar, cx| {
+                        sidebar.set_database_scope(&connection_id, database, schema, cx);
+                    });
+                    this.sidebar_panel_size =
+                        this.sidebar_panel_size.max(CHAT_SIDEBAR_DEFAULT_WIDTH);
+                }
+            }
+        }));
 
         let mut global_state = cx.global::<GlobalDbState>().clone();
 

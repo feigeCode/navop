@@ -20,6 +20,10 @@ use crate::{
     TerminalHighlightRule,
     theme::{TerminalColors, TerminalTheme},
 };
+use ai_chat_view::{
+    CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent, LanguageMatcher,
+    build_agent_context_single,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -29,7 +33,6 @@ use gpui::{
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::storage::models::StoredConnection;
-use one_core::{AiChatPanel, AiChatPanelEvent, CodeBlockAction, LanguageMatcher};
 use rust_i18n::t;
 use ssh::SshSessionManager;
 use std::sync::Arc;
@@ -140,7 +143,7 @@ pub struct TerminalSidebar {
     /// 快捷命令面板
     quick_command_panel: Entity<QuickCommandPanel>,
     /// AI 聊天面板
-    ai_chat_panel: Entity<AiChatPanel>,
+    ai_chat_panel: Entity<DefaultAgentChatPanel>,
     /// 文件管理器面板（仅 SSH 终端时创建）
     file_manager_panel: Option<Entity<FileManagerPanel>>,
     /// 服务器监控面板（仅 SSH 终端时创建）
@@ -187,7 +190,14 @@ impl TerminalSidebar {
             )
         });
         let quick_command_panel = cx.new(|cx| QuickCommandPanel::new(connection_id, window, cx));
-        let ai_chat_panel = cx.new(|cx| AiChatPanel::new(window, cx));
+        let ai_chat_panel = cx.new(|cx| {
+            if let Some(connection) = stored_connection.as_ref() {
+                let (resources, mentions) = build_agent_context_single(connection);
+                DefaultAgentChatPanel::new_with_context(resources, mentions, window, cx)
+            } else {
+                DefaultAgentChatPanel::new(window, cx)
+            }
+        });
 
         // 仅 SSH 终端（有 StoredConnection）时创建文件管理器面板
         let file_manager_panel = stored_connection
@@ -298,13 +308,14 @@ impl TerminalSidebar {
         );
 
         // 订阅 AI 聊天面板关闭事件
-        let ai_chat_sub = cx.subscribe(&ai_chat_panel, |this, _, event: &AiChatPanelEvent, cx| {
-            if let AiChatPanelEvent::Close = event {
+        let ai_chat_sub = cx.subscribe(
+            &ai_chat_panel,
+            |this, _, _event: &DefaultAgentChatPanelEvent, cx| {
                 this.active_panel = None;
                 cx.emit(TerminalSidebarEvent::PanelChanged(None));
                 cx.notify();
-            }
-        });
+            },
+        );
 
         let mut subs = vec![set_sub, quick_sub, ai_chat_sub];
 

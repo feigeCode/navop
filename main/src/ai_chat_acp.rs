@@ -1,5 +1,5 @@
+use ai_chat_view::{AcpAgentConfig, set_acp_agent_config_provider};
 use gpui::App;
-use one_core::ai_chat::{AcpAgentConfig, set_acp_agent_config_provider};
 use one_core::settings::{AcpAgentSettings, AcpAgentTransportSettings, AppSettings};
 use serde_json::Value;
 use std::collections::HashSet;

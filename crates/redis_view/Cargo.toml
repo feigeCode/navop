@@ -15,6 +15,7 @@ tracing.workspace = true
 thiserror.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
+ai_chat_view.workspace = true
 one-ui.workspace = true
 one-core.workspace = true
 rust-i18n.workspace = true

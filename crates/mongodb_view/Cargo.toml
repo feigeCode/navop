@@ -11,6 +11,7 @@ dashmap.workspace = true
 futures-util.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
+ai_chat_view.workspace = true
 mongodb.workspace = true
 one-core.workspace = true
 one-ui.workspace = true

@@ -1,5 +1,5 @@
 use super::*;
-use one_core::ai_chat::{AcpPermissionOption, AcpPermissionOutcome, AcpPermissionRequest};
+use ai_chat_view::{AcpPermissionOption, AcpPermissionOutcome, AcpPermissionRequest};
 use serde_json::json;
 use tokio::sync::oneshot;
 

@@ -56,7 +56,7 @@ impl Drop for GlobalPublicMcpRuntime {
 pub fn init(cx: &mut App) {
     let discovery_path = public_mcp_discovery_path();
     let _ = remove_discovery(&discovery_path);
-    one_core::ai_chat::plan_tools::set_plan_tool_registry_provider(cx, agent_runtime_tool_registry);
+    ai_chat_view::set_plan_tool_registry_provider(cx, agent_runtime_tool_registry);
     internal_functions::ensure_registry(cx);
     for definition in internal_functions::builtin_definitions() {
         register_internal_function(cx, definition);

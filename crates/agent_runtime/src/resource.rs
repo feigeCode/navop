@@ -88,6 +88,9 @@ pub struct ResourceRef {
     pub kind: ResourceKind,
     /// 人类可读标签(如 "prod-db (10.0.0.1:3306)"),用于 prompt 与展示。
     pub label: String,
+    /// 资源下的当前细分作用域,如 database/schema/cwd。
+    #[serde(default)]
+    pub scopes: Vec<ResourceScope>,
 }
 
 impl ResourceRef {
@@ -96,6 +99,38 @@ impl ResourceRef {
             id: id.into(),
             kind,
             label: label.into(),
+            scopes: Vec::new(),
+        }
+    }
+
+    pub fn with_scope(mut self, scope: ResourceScope) -> Self {
+        self.set_scope(scope);
+        self
+    }
+
+    pub fn set_scope(&mut self, scope: ResourceScope) {
+        if let Some(existing) = self.scopes.iter_mut().find(|item| item.key == scope.key) {
+            *existing = scope;
+        } else {
+            self.scopes.push(scope);
+        }
+    }
+}
+
+/// 资源下的细分作用域。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceScope {
+    pub key: String,
+    pub label: String,
+    pub value: String,
+}
+
+impl ResourceScope {
+    pub fn new(key: impl Into<String>, label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            label: label.into(),
+            value: value.into(),
         }
     }
 }
@@ -133,6 +168,11 @@ impl ResourceContext {
         self.current.as_ref().and_then(|id| self.get(id))
     }
 
+    /// 按 ID 查找资源并返回可变引用。
+    pub fn get_mut(&mut self, id: &ResourceId) -> Option<&mut ResourceRef> {
+        self.resources.iter_mut().find(|r| &r.id == id)
+    }
+
     /// 是否没有任何资源。
     pub fn is_empty(&self) -> bool {
         self.resources.is_empty()
@@ -154,6 +194,12 @@ impl ResourceContext {
                 "- {} | 类型={} | id={}{}\n",
                 r.label, r.kind, r.id, marker
             ));
+            for scope in &r.scopes {
+                out.push_str(&format!(
+                    "  - {}={} ({})\n",
+                    scope.key, scope.value, scope.label
+                ));
+            }
         }
         out
     }
@@ -181,5 +227,19 @@ mod tests {
             "bastion",
         ));
         assert!(ctx.describe().contains("[当前]"));
+    }
+
+    #[test]
+    fn describe_includes_resource_scopes() {
+        let ctx = ResourceContext::new().with_resource(
+            ResourceRef::new("c1", ResourceKind::Postgres, "prod")
+                .with_scope(ResourceScope::new("database", "Database", "ai_app"))
+                .with_scope(ResourceScope::new("schema", "Schema", "public")),
+        );
+
+        let description = ctx.describe();
+
+        assert!(description.contains("database=ai_app"));
+        assert!(description.contains("schema=public"));
     }
 }

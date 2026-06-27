@@ -15,9 +15,13 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TaskKind {
     /// codex 风格统一 Agent:模型驱动,按需调用业务工具与 `update_plan` checklist。
-    /// 当前唯一的任务类型(涵盖简单问答与多步运维)。
+    /// 默认模式:简单问题直接回答,复杂任务自主规划。
     #[default]
     Agent,
+    /// Ask 模式:优先直接回答,不主动规划或调用工具,除非用户明确要求。
+    Ask,
+    /// Plan 模式:先规划再执行,适合多步骤任务。
+    Plan,
 }
 
 /// 任务运行结果。
@@ -35,6 +39,7 @@ pub enum TaskOutcome {
 
 /// 任务执行所需的上下文。
 pub struct TaskContext {
+    pub kind: TaskKind,
     pub session: Arc<Session>,
     pub services: Arc<RuntimeServices>,
     pub turn: Arc<TurnContext>,

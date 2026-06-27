@@ -1,6 +1,5 @@
 use crate::home_tab::HomePage;
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
-use db_view::chatdb::chat_panel::ChatPanel;
 use db_view::database_tab::DatabaseTabView;
 use gpui::AppContext;
 use gpui::{App, Context, Window};
@@ -543,23 +542,6 @@ impl HomePage {
                     let tab = TabItem::new(tab_id, "home", terminal_view);
                     tc.add_and_activate_tab_with_focus(tab, window, cx);
                 });
-            });
-        });
-    }
-
-    pub(crate) fn add_ai_chat_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tab_container = self.tab_container.clone();
-        window.defer(cx, move |window, cx| {
-            tab_container.update(cx, |tc, cx| {
-                tc.activate_or_add_tab_lazy(
-                    "ai-chat",
-                    |win, cx| {
-                        let ai_chat = cx.new(|x| ChatPanel::new(win, x));
-                        TabItem::new("ai-chat", "home", ai_chat)
-                    },
-                    window,
-                    cx,
-                );
             });
         });
     }

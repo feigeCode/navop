@@ -27,7 +27,7 @@ use tracing::log::error;
 
 use crate::table_data::cell_preview_host::CellPreviewHost;
 use crate::table_data::data_grid::{DataGrid, DataGridConfig, DataGridUsage};
-use one_core::ai_chat::ask_ai::AskAiButton;
+use ai_chat_view::AskAiButton;
 use one_core::settings::AppSettings;
 // 3. 当前 crate 导入（按模块分组）
 use db::{GlobalDbState, SqlResult, SqlSource};

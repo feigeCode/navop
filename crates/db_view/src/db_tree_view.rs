@@ -2393,6 +2393,19 @@ impl DbTreeView {
         }
         None
     }
+
+    /// 返回节点对应的 AI 数据库作用域:连接 ID、数据库名、schema 名。
+    pub fn ai_scope_for_node(
+        &self,
+        node_id: &str,
+    ) -> Option<(String, Option<String>, Option<String>)> {
+        let node = self.db_nodes.get(node_id)?;
+        Some((
+            node.connection_id.clone(),
+            node.get_database_name(),
+            node.get_schema_name(),
+        ))
+    }
 }
 
 impl Render for DbTreeView {

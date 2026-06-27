@@ -1,3 +1,7 @@
+use ai_chat_view::{
+    AskAiEvent, DefaultAgentChatPanel, DefaultAgentChatPanelEvent, build_agent_context_all,
+    get_ask_ai_notifier,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -5,9 +9,8 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
-use one_core::ai_chat::ask_ai::{AskAiEvent, get_ask_ai_notifier};
-use one_core::ai_chat::{AiChatPanel, AiChatPanelEvent};
 use one_core::layout::TOOLBAR_WIDTH;
+use one_core::storage::StoredConnection;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarPanel {
@@ -30,27 +33,36 @@ pub enum RedisSidebarEvent {
 
 pub struct RedisSidebar {
     active_panel: Option<SidebarPanel>,
-    ai_chat_panel: Entity<AiChatPanel>,
+    ai_chat_panel: Entity<DefaultAgentChatPanel>,
     focus_handle: FocusHandle,
     is_active: bool,
     _subs: Vec<Subscription>,
 }
 
 impl RedisSidebar {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let ai_chat_panel = cx.new(|cx| AiChatPanel::new(window, cx));
+    pub fn new(
+        connections: Vec<StoredConnection>,
+        active_conn_id: Option<i64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let active_connection = active_conn_id
+            .and_then(|id| connections.iter().find(|conn| conn.id == Some(id)))
+            .or_else(|| connections.first());
+        let (resources, mentions) = build_agent_context_all(active_connection, &connections);
+        let ai_chat_panel =
+            cx.new(|cx| DefaultAgentChatPanel::new_with_context(resources, mentions, window, cx));
 
         let mut subs = Vec::new();
 
-        subs.push(
-            cx.subscribe(&ai_chat_panel, |this, _, event: &AiChatPanelEvent, cx| {
-                if let AiChatPanelEvent::Close = event {
-                    this.active_panel = None;
-                    cx.emit(RedisSidebarEvent::PanelChanged);
-                    cx.notify();
-                }
-            }),
-        );
+        subs.push(cx.subscribe(
+            &ai_chat_panel,
+            |this, _, _event: &DefaultAgentChatPanelEvent, cx| {
+                this.active_panel = None;
+                cx.emit(RedisSidebarEvent::PanelChanged);
+                cx.notify();
+            },
+        ));
 
         if let Some(notifier) = get_ask_ai_notifier(cx) {
             subs.push(

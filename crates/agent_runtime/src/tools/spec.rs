@@ -11,7 +11,7 @@ pub struct ToolName(String);
 
 impl ToolName {
     pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
+        Self(sanitize_tool_name(&name.into()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -33,14 +33,42 @@ impl fmt::Debug for ToolName {
 
 impl From<&str> for ToolName {
     fn from(value: &str) -> Self {
-        Self(value.to_string())
+        Self::new(value)
     }
 }
 
 impl From<String> for ToolName {
     fn from(value: String) -> Self {
-        Self(value)
+        Self::new(value)
     }
+}
+
+fn sanitize_tool_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len().max(1));
+    let mut last_was_underscore = false;
+    for ch in name.chars() {
+        let valid = ch.is_ascii_alphanumeric() || ch == '_' || ch == '-';
+        let next = if valid { ch } else { '_' };
+        if next == '_' && last_was_underscore {
+            continue;
+        }
+        last_was_underscore = next == '_';
+        out.push(next);
+    }
+    let trimmed = out.trim_matches('_').to_string();
+    let mut normalized = if trimmed.is_empty() {
+        "tool".to_string()
+    } else {
+        trimmed
+    };
+    if !normalized
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+    {
+        normalized = format!("tool_{normalized}");
+    }
+    normalized
 }
 
 /// 工具规格:名称、描述、参数 JSON Schema 以及风险等级。
@@ -82,5 +110,18 @@ impl ToolSpec {
             Some(self.description.clone()),
             self.parameters.clone(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ToolName;
+
+    #[test]
+    fn tool_name_is_openai_function_name_safe() {
+        assert_eq!(ToolName::new("sample.echo").as_str(), "sample_echo");
+        assert_eq!(ToolName::new("执行 SQL").as_str(), "SQL");
+        assert_eq!(ToolName::new("4.query").as_str(), "tool_4_query");
+        assert_eq!(ToolName::new("___").as_str(), "tool");
     }
 }

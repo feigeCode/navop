@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod tests;
 
+use ai_chat_view::{
+    AcpPermissionOption, AcpPermissionOutcome, AcpPermissionRequest, set_acp_permission_provider,
+};
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Global, IntoElement, ParentElement, Styled, div,
     prelude::FluentBuilder, px,
@@ -11,7 +14,6 @@ use gpui_component::{
     scroll::ScrollableElement,
     v_flex,
 };
-use one_core::ai_chat::{AcpPermissionOutcome, AcpPermissionRequest, set_acp_permission_provider};
 use rust_i18n::t;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -226,7 +228,7 @@ fn show_approval_overlay(
 
 fn option_buttons(
     queue: Arc<Mutex<ApprovalQueueState>>,
-    options: Vec<one_core::ai_chat::AcpPermissionOption>,
+    options: Vec<AcpPermissionOption>,
 ) -> Vec<AnyElement> {
     let mut buttons = Vec::new();
     for option in options {

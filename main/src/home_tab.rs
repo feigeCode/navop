@@ -2617,11 +2617,7 @@ impl HomePage {
                                 this.bg(cx.theme().sidebar)
                                     .hover(|style| style.bg(cx.theme().sidebar_accent))
                             })
-                            .on_click(cx.listener(move |this: &mut HomePage, _, window, cx| {
-                                if filter_type_clone == ConnectionType::ChatDB {
-                                    this.add_ai_chat_tab(window, cx);
-                                    return;
-                                }
+                            .on_click(cx.listener(move |this: &mut HomePage, _, _window, cx| {
                                 this.selected_filter = filter_type_clone;
                                 cx.notify();
                             }))

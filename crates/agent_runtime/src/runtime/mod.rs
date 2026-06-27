@@ -101,7 +101,7 @@ impl Runtime {
 
     fn build_task(kind: TaskKind) -> Arc<dyn RuntimeTask> {
         match kind {
-            TaskKind::Agent => Arc::new(AgentTask::new()),
+            TaskKind::Agent | TaskKind::Ask | TaskKind::Plan => Arc::new(AgentTask::new()),
         }
     }
 
@@ -133,6 +133,7 @@ impl Runtime {
 
         let task = Self::build_task(kind);
         let ctx = TaskContext {
+            kind,
             session: session.clone(),
             services: self.services.clone(),
             turn: turn.clone(),
@@ -176,6 +177,7 @@ impl Runtime {
         let cancel_run = cancellation.clone();
         tokio::spawn(async move {
             let ctx = TaskContext {
+                kind,
                 session: session_run.clone(),
                 services,
                 turn: turn_run.clone(),
