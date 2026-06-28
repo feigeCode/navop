@@ -36,7 +36,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::acp::{AcpAgentConfig, AcpConnection};
+use crate::acp::{AcpAgentConfig, AcpConnection, AcpSessionState};
 use crate::agent_cards::PlanCardData;
 use crate::agent_transcript::AgentTranscript;
 use crate::bridge::build_runtime_from_llm_provider;
@@ -249,6 +249,21 @@ impl RuntimeBuildSpec {
     }
 }
 
+#[derive(Default)]
+struct AutoScrollState {
+    pending_bottom_scroll: bool,
+}
+
+impl AutoScrollState {
+    fn request(&mut self) {
+        self.pending_bottom_scroll = true;
+    }
+
+    fn take_pending_for_render(&mut self) -> bool {
+        std::mem::take(&mut self.pending_bottom_scroll)
+    }
+}
+
 /// Runtime 驱动的 Agent 聊天面板。
 pub struct AgentChatView {
     runtime: Arc<Runtime>,
@@ -276,6 +291,7 @@ pub struct AgentChatView {
     /// 正在连接 ACP agent(拉起子进程中)。
     acp_connecting: bool,
     scroll_handle: ScrollHandle,
+    auto_scroll: AutoScrollState,
     task_kind: TaskKind,
     /// 当前工具模式展示文案(本轮执行参数,占位)。
     selected_tool: SharedString,
@@ -359,6 +375,7 @@ impl AgentChatView {
             &acp_agents,
             None,
             false,
+            None,
         );
         let target_options: Vec<ComposerTarget> = resources
             .resources
@@ -407,6 +424,7 @@ impl AgentChatView {
             current_acp_id: None,
             acp_connecting: false,
             scroll_handle: ScrollHandle::new(),
+            auto_scroll: AutoScrollState::default(),
             task_kind,
             selected_tool,
             selected_model,
@@ -504,7 +522,7 @@ impl AgentChatView {
                 return;
             }
             self.transcript.push_user(&text, images.len());
-            self.scroll_handle.scroll_to_bottom();
+            self.request_scroll_to_bottom();
             self.set_running(true, cx);
             if let Some(acp) = &self.acp {
                 acp.prompt(text);
@@ -514,7 +532,7 @@ impl AgentChatView {
         }
         self.apply_mentions_to_resources(&mentions);
         self.transcript.push_user(&text, images.len());
-        self.scroll_handle.scroll_to_bottom();
+        self.request_scroll_to_bottom();
         let input =
             UserInput::new(text).with_images(images.iter().map(|i| i.to_input_image()).collect());
         self.set_running(true, cx);
@@ -597,7 +615,7 @@ impl AgentChatView {
         self.transcript.apply(&event);
         self.sync_composer(cx);
         // 跟随流式输出 / 新卡片自动滚到底。
-        self.scroll_handle.scroll_to_bottom();
+        self.request_scroll_to_bottom();
         if terminal {
             self.set_running(false, cx);
             // 一轮结束:把会话快照落库(仅自研后端;ACP 会话由外部 agent 管理)。
@@ -606,6 +624,11 @@ impl AgentChatView {
             }
         }
         cx.notify();
+    }
+
+    fn request_scroll_to_bottom(&mut self) {
+        self.auto_scroll.request();
+        self.scroll_handle.scroll_to_bottom();
     }
 
     fn set_running(&mut self, running: bool, cx: &mut Context<Self>) {
@@ -626,6 +649,7 @@ impl AgentChatView {
             &self.acp_agents,
             self.current_acp_id.as_ref(),
             self.acp_connecting,
+            self.acp.as_ref().map(|acp| acp.state()),
         );
         self.input.update(cx, |inp, cx| inp.set_context(ctx, cx));
     }
@@ -714,8 +738,38 @@ impl AgentChatView {
         self.history_popover_open = false;
         // ACP 后端:会话由外部 agent 管理,这里仅做视觉重置(清空转录)。
         if self.backend == Backend::Acp {
+            if self.is_running {
+                self.stop(cx);
+            }
+            let Some(mut acp) = self.acp.take() else {
+                self.transcript.clear();
+                self.transcript.push_system("ACP agent 未连接");
+                cx.notify();
+                return;
+            };
             self.transcript.clear();
+            self.transcript.push_system("正在创建 ACP 新会话…");
+            self.request_scroll_to_bottom();
             cx.notify();
+            cx.spawn(async move |this, cx| {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+                let result = acp.create_session(cwd).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.acp = Some(acp);
+                    this.transcript.clear();
+                    match result {
+                        Ok(_) => {}
+                        Err(err) => {
+                            this.transcript
+                                .push_system(format!("创建 ACP 新会话失败:{err}"));
+                        }
+                    }
+                    this.request_scroll_to_bottom();
+                    this.sync_composer(cx);
+                    cx.notify();
+                });
+            })
+            .detach();
             return;
         }
         // 新建前先保存当前会话,避免内容丢失。
@@ -908,7 +962,7 @@ impl AgentChatView {
         self.transcript.load_history(&history, plan.as_ref());
         self._event_task =
             Self::spawn_event_pump(self.runtime.subscribe(), self.session_id.clone(), cx);
-        self.scroll_handle.scroll_to_bottom();
+        self.request_scroll_to_bottom();
         cx.notify();
     }
 
@@ -1469,6 +1523,9 @@ impl EventEmitter<AgentChatViewEvent> for AgentChatView {}
 
 impl Render for AgentChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.auto_scroll.take_pending_for_render() {
+            self.scroll_handle.scroll_to_bottom();
+        }
         let messages = render_messages_with_code_actions(
             &self.transcript.messages,
             &self.scroll_handle,
@@ -1523,12 +1580,105 @@ fn build_composer_context(
     acp_agents: &[AcpAgentConfig],
     current_acp_id: Option<&SharedString>,
     acp_connecting: bool,
+    acp_state: Option<AcpSessionState>,
 ) -> AgentComposerContext {
     let mut context = build_context(resources, task_kind, tool_label, model);
     context.plan_items = composer_plan_items(plan);
     context.agent_options =
         composer_agent_options(backend, acp_agents, current_acp_id, acp_connecting);
+    if backend == Backend::Acp {
+        apply_acp_state_to_context(&mut context, acp_state.as_ref());
+    }
     context
+}
+
+fn apply_acp_state_to_context(
+    context: &mut AgentComposerContext,
+    acp_state: Option<&AcpSessionState>,
+) {
+    context.target = Some(ComposerTarget::new(
+        "acp-session",
+        acp_state
+            .and_then(AcpSessionState::title)
+            .unwrap_or("ACP Session"),
+        "AI",
+        "ACP",
+        "Agent Client Protocol",
+    ));
+    context.scopes = acp_state.map(acp_scopes).unwrap_or_default();
+    context.capabilities = acp_state
+        .map(acp_capabilities)
+        .unwrap_or_else(|| vec![SharedString::from("ACP"), SharedString::from("Connecting")]);
+}
+
+fn acp_scopes(state: &AcpSessionState) -> Vec<ComposerScope> {
+    let mut scopes = Vec::new();
+    if let Some(mode) = acp_mode_label(state) {
+        scopes.push(ComposerScope::new("acp-mode", "模式", mode));
+    }
+    if let Some(updated_at) = state.updated_at() {
+        scopes.push(ComposerScope::new("acp-updated", "更新", updated_at));
+    }
+    if let Some(usage) = state.usage() {
+        scopes.push(ComposerScope::new(
+            "acp-usage",
+            "用量",
+            format!("{}/{} tokens", usage.used, usage.size),
+        ));
+    }
+    scopes
+}
+
+fn acp_capabilities(state: &AcpSessionState) -> Vec<SharedString> {
+    let mut labels = vec![SharedString::from("ACP")];
+    labels.extend(acp_agent_capability_labels(state));
+    if !state.available_commands().is_empty() {
+        labels.push(SharedString::from(format!(
+            "命令:{}",
+            state.available_commands().len()
+        )));
+    }
+    if !state.config_options().is_empty() {
+        labels.push(SharedString::from(format!(
+            "配置:{}",
+            state.config_options().len()
+        )));
+    }
+    labels
+}
+
+fn acp_agent_capability_labels(state: &AcpSessionState) -> Vec<SharedString> {
+    let caps = state.agent_capabilities();
+    let session = &caps.session_capabilities;
+    let mut labels = Vec::new();
+    if caps.load_session {
+        labels.push(SharedString::from("Load Session"));
+    }
+    if session.list.is_some() {
+        labels.push(SharedString::from("List Sessions"));
+    }
+    if session.resume.is_some() {
+        labels.push(SharedString::from("Resume"));
+    }
+    if session.close.is_some() {
+        labels.push(SharedString::from("Close"));
+    }
+    if session.delete.is_some() {
+        labels.push(SharedString::from("Delete"));
+    }
+    labels
+}
+
+fn acp_mode_label(state: &AcpSessionState) -> Option<String> {
+    let current = state.current_mode_id()?;
+    Some(
+        state
+            .available_modes()
+            .iter()
+            .find(|mode| mode.id == *current)
+            .map(|mode| mode.name.clone())
+            .unwrap_or_else(|| current.0.to_string()),
+    )
 }
 
 /// 由资源上下文构建输入框展示用上下文。
@@ -1802,6 +1952,16 @@ mod tests {
     }
 
     #[test]
+    fn auto_scroll_state_consumes_pending_scroll_in_render() {
+        let mut state = AutoScrollState::default();
+
+        assert!(!state.take_pending_for_render());
+        state.request();
+        assert!(state.take_pending_for_render());
+        assert!(!state.take_pending_for_render());
+    }
+
+    #[test]
     fn build_context_without_target_is_empty() {
         let ctx = build_context(
             &ResourceContext::new(),
@@ -1895,6 +2055,7 @@ mod tests {
             &acp_agents,
             None,
             false,
+            None,
         );
         let acp = build_composer_context(
             &ResourceContext::new(),
@@ -1906,12 +2067,68 @@ mod tests {
             &acp_agents,
             Some(&acp_id),
             false,
+            None,
         );
 
         assert_eq!(local.plan_items, acp.plan_items);
         assert_eq!(local.plan_items[0].title.as_ref(), "检查连接");
         assert!(local.agent_options[0].selected);
         assert!(acp.agent_options[1].selected);
+    }
+
+    #[test]
+    fn composer_context_maps_acp_state_to_visible_context() {
+        use agent_client_protocol::schema::{
+            AgentCapabilities, AvailableCommand, AvailableCommandsUpdate, CurrentModeUpdate,
+            SessionInfoUpdate, SessionMode, SessionModeState, SessionUpdate, UsageUpdate,
+        };
+
+        let mut state = AcpSessionState::default();
+        state.set_agent_capabilities(AgentCapabilities::new().load_session(true));
+        state.apply_new_session_response(
+            &agent_client_protocol::schema::NewSessionResponse::new("s1").modes(
+                SessionModeState::new(
+                    "ask",
+                    vec![
+                        SessionMode::new("ask", "Ask"),
+                        SessionMode::new("code", "Code"),
+                    ],
+                ),
+            ),
+        );
+        state.apply_session_update(&SessionUpdate::AvailableCommandsUpdate(
+            AvailableCommandsUpdate::new(vec![AvailableCommand::new("plan", "Create plan")]),
+        ));
+        state.apply_session_update(&SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(
+            "code",
+        )));
+        state.apply_session_update(&SessionUpdate::SessionInfoUpdate(
+            SessionInfoUpdate::new().title("ACP 工作会话"),
+        ));
+        state.apply_session_update(&SessionUpdate::UsageUpdate(UsageUpdate::new(42, 100)));
+
+        let ctx = build_composer_context(
+            &ResourceContext::new(),
+            TaskKind::Ask,
+            &SharedString::from("自动"),
+            None,
+            None,
+            Backend::Acp,
+            &[],
+            None,
+            false,
+            Some(state),
+        );
+
+        assert_eq!(ctx.target.unwrap().label.as_ref(), "ACP 工作会话");
+        assert_eq!(ctx.scopes[0].value.as_ref(), "Code");
+        assert_eq!(ctx.scopes[1].value.as_ref(), "42/100 tokens");
+        assert!(ctx.capabilities.contains(&SharedString::from("ACP")));
+        assert!(
+            ctx.capabilities
+                .contains(&SharedString::from("Load Session"))
+        );
+        assert!(ctx.capabilities.contains(&SharedString::from("命令:1")));
     }
 
     #[gpui::test]

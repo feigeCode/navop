@@ -1,6 +1,6 @@
-use crate::ResourceContext;
 use crate::runtime::TaskKind;
 use crate::tools::ToolSpec;
+use crate::{Plan, ResourceContext};
 
 const AGENT_SYSTEM: &str = "你是 onetcli 的 AI 运维助手。请根据用户目标自主决定如何行动:\
 简单问题直接、简洁地用简体中文回答;需要查询或操作资源时调用相应工具;\
@@ -20,9 +20,13 @@ pub(super) fn build_system_prompt(
     kind: TaskKind,
     tools: &[ToolSpec],
     resources: &ResourceContext,
+    current_plan: Option<&Plan>,
 ) -> String {
     let mut prompt = system_prompt(kind).to_string();
     append_resource_context(&mut prompt, resources);
+    if let Some(plan) = current_plan {
+        append_current_plan(&mut prompt, plan);
+    }
     if !tools.is_empty() {
         let names = tools
             .iter()
@@ -36,6 +40,19 @@ pub(super) fn build_system_prompt(
         );
     }
     prompt
+}
+
+fn append_current_plan(prompt: &mut String, plan: &Plan) {
+    if plan.steps.is_empty() {
+        return;
+    }
+    prompt.push_str("\n\n当前计划(Todo)状态:\n");
+    prompt.push_str(&format!("目标: {}\n", plan.goal));
+    prompt.push_str(&plan.describe());
+    prompt.push_str(
+        "如果用户要求继续、下一步或完成剩余任务,基于此计划推进;\
+如步骤状态发生变化,必须调用 `update_plan` 提交完整最新计划,不要把工具调用写成普通文本。",
+    );
 }
 
 fn append_resource_context(prompt: &mut String, resources: &ResourceContext) {

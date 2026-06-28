@@ -9,20 +9,29 @@
 //! 同型,因此 view 的事件泵与 `AgentTranscript` 完全复用。
 
 use agent_client_protocol::schema::{
-    AuthMethod, AuthMethodId, AuthenticateRequest, CancelNotification, ContentBlock,
-    InitializeRequest, NewSessionRequest, PromptRequest, ProtocolVersion, RequestPermissionRequest,
-    SessionId as AcpSessionId, SessionNotification, TextContent,
+    AuthMethod, AuthMethodId, AuthenticateRequest, CancelNotification, ClientCapabilities,
+    CloseSessionRequest, CloseSessionResponse, ContentBlock, DeleteSessionRequest,
+    DeleteSessionResponse, FileSystemCapabilities, InitializeRequest, ListSessionsRequest,
+    ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, LogoutRequest, LogoutResponse,
+    NewSessionRequest, NewSessionResponse, PromptRequest, ProtocolVersion, ReadTextFileRequest,
+    ReadTextFileResponse, RequestPermissionRequest, ResumeSessionRequest, ResumeSessionResponse,
+    SessionConfigId, SessionConfigValueId, SessionId as AcpSessionId, SessionModeId,
+    SessionNotification, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    SetSessionModeRequest, SetSessionModeResponse, TextContent, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use agent_runtime::{RuntimeEvent, SessionId, TurnId};
 use gpui::AsyncApp;
 use one_core::gpui_tokio::Tokio;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, oneshot, watch};
 
 use crate::acp::config::AcpAgentConfig;
 use crate::acp::permission::{acp_permission_provider, resolve_acp_permission_request};
+use crate::acp::state::AcpSessionState;
 use crate::acp::translate::session_update_to_events;
 
 const AUTHENTICATE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -36,6 +45,7 @@ pub struct AcpConnection {
     session_id: SessionId,
     turn_id_tx: watch::Sender<TurnId>,
     events_tx: broadcast::Sender<RuntimeEvent>,
+    state: Arc<Mutex<AcpSessionState>>,
     join: tokio::task::JoinHandle<()>,
     /// drop 时让 `main_fn` 的 `shutdown_rx` 解析,从而优雅结束连接(关闭子进程)。
     _shutdown: oneshot::Sender<()>,
@@ -57,6 +67,8 @@ impl AcpConnection {
         let (events_tx, _keep) = broadcast::channel(512);
         let session_id = SessionId::from_string(format!("acp:{}", uuid::Uuid::new_v4()));
         let (turn_id_tx, turn_id_rx) = watch::channel(new_acp_turn_id());
+        let state = Arc::new(Mutex::new(AcpSessionState::default()));
+        let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
 
         let (ready_tx, ready_rx) =
             oneshot::channel::<Result<(ConnectionTo<Agent>, AcpSessionId), String>>();
@@ -70,6 +82,10 @@ impl AcpConnection {
         let sid_err = session_id.clone();
         let tid_err_rx = turn_id_rx.clone();
         let permission_provider_for_request = permission_provider.clone();
+        let state_for_notification = state.clone();
+        let state_for_setup = state.clone();
+        let read_root = workspace_root.clone();
+        let write_root = workspace_root.clone();
 
         let join = handle.spawn(async move {
             let turn_id_for_notification = turn_id_rx.clone();
@@ -77,6 +93,9 @@ impl AcpConnection {
                 .builder()
                 .on_receive_notification(
                     async move |notification: SessionNotification, _cx| {
+                        if let Ok(mut state) = state_for_notification.lock() {
+                            state.apply_session_update(&notification.update);
+                        }
                         let tid_notif = turn_id_for_notification.borrow().clone();
                         for event in
                             session_update_to_events(&notification.update, &sid_notif, &tid_notif)
@@ -99,12 +118,33 @@ impl AcpConnection {
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
+                .on_receive_request(
+                    async move |request: ReadTextFileRequest, responder, _connection| {
+                        match handle_read_text_file_request(&request, &read_root) {
+                            Ok(response) => responder.respond(response),
+                            Err(error) => responder.respond_with_error(error),
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: WriteTextFileRequest, responder, _connection| {
+                        match handle_write_text_file_request(&request, &write_root) {
+                            Ok(response) => responder.respond(response),
+                            Err(error) => responder.respond_with_error(error),
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
                 .connect_with(agent, async move |connection: ConnectionTo<Agent>| {
                     let setup = async {
                         let init = connection
-                            .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                            .send_request(build_initialize_request())
                             .block_task()
                             .await?;
+                        if let Ok(mut state) = state_for_setup.lock() {
+                            state.set_agent_capabilities(init.agent_capabilities.clone());
+                        }
                         let advertised: Vec<String> = init
                             .auth_methods
                             .iter()
@@ -125,11 +165,13 @@ impl AcpConnection {
                                 "ACP 未找到可自动使用的环境变量鉴权方式,跳过 authenticate,让 agent 使用自身本地配置"
                             );
                         }
-                        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
                         let resp = connection
-                            .send_request(NewSessionRequest::new(cwd))
+                            .send_request(NewSessionRequest::new(workspace_root))
                             .block_task()
                             .await?;
+                        if let Ok(mut state) = state_for_setup.lock() {
+                            state.apply_new_session_response(&resp);
+                        }
                         tracing::info!(session = %resp.session_id.0, "ACP session created");
                         Ok::<_, agent_client_protocol::Error>(resp.session_id)
                     }
@@ -167,6 +209,7 @@ impl AcpConnection {
                 session_id,
                 turn_id_tx,
                 events_tx,
+                state,
                 join,
                 _shutdown: shutdown_tx,
             }),
@@ -189,6 +232,14 @@ impl AcpConnection {
     /// 合成会话 id(view 用来过滤事件 / 高亮)。
     pub fn session_id(&self) -> SessionId {
         self.session_id.clone()
+    }
+
+    /// 当前 ACP 元数据快照。
+    pub(crate) fn state(&self) -> AcpSessionState {
+        self.state
+            .lock()
+            .map(|state| state.clone())
+            .unwrap_or_default()
     }
 
     /// 发起一轮:发送用户文本,流式更新经 `subscribe()` 推回。
@@ -240,10 +291,207 @@ impl AcpConnection {
             let _ = conn.send_notification(CancelNotification::new(acp_session_id));
         });
     }
+
+    /// 创建新 ACP 会话并切换当前连接的 active session。
+    pub async fn create_session(&mut self, cwd: PathBuf) -> anyhow::Result<NewSessionResponse> {
+        let response = self
+            .conn
+            .send_request(NewSessionRequest::new(cwd))
+            .block_task()
+            .await?;
+        self.acp_session_id = response.session_id.clone();
+        if let Ok(mut state) = self.state.lock() {
+            state.apply_new_session_response(&response);
+        }
+        Ok(response)
+    }
+
+    /// 列出 agent 已知历史会话。
+    pub async fn list_sessions(
+        &self,
+        cwd: Option<PathBuf>,
+        cursor: Option<String>,
+    ) -> anyhow::Result<ListSessionsResponse> {
+        let request = ListSessionsRequest::new().cwd(cwd).cursor(cursor);
+        Ok(self.conn.send_request(request).block_task().await?)
+    }
+
+    /// 加载历史会话,agent 会通过 `session/update` 回放历史。
+    pub async fn load_session(
+        &mut self,
+        acp_session_id: AcpSessionId,
+        cwd: PathBuf,
+    ) -> anyhow::Result<LoadSessionResponse> {
+        let response = self
+            .conn
+            .send_request(LoadSessionRequest::new(acp_session_id.clone(), cwd))
+            .block_task()
+            .await?;
+        self.acp_session_id = acp_session_id;
+        if let Ok(mut state) = self.state.lock() {
+            state.apply_load_session_response(&response);
+        }
+        Ok(response)
+    }
+
+    /// 恢复历史会话但不要求 agent 回放历史消息。
+    pub async fn resume_session(
+        &mut self,
+        acp_session_id: AcpSessionId,
+        cwd: PathBuf,
+    ) -> anyhow::Result<ResumeSessionResponse> {
+        let response = self
+            .conn
+            .send_request(ResumeSessionRequest::new(acp_session_id.clone(), cwd))
+            .block_task()
+            .await?;
+        self.acp_session_id = acp_session_id;
+        if let Ok(mut state) = self.state.lock() {
+            state.apply_resume_session_response(&response);
+        }
+        Ok(response)
+    }
+
+    /// 关闭当前 active session 并让 agent 释放资源。
+    pub async fn close_session(&self) -> anyhow::Result<CloseSessionResponse> {
+        Ok(self
+            .conn
+            .send_request(CloseSessionRequest::new(self.acp_session_id.clone()))
+            .block_task()
+            .await?)
+    }
+
+    /// 从 agent 历史列表删除一个 session。
+    pub async fn delete_session(
+        &self,
+        acp_session_id: AcpSessionId,
+    ) -> anyhow::Result<DeleteSessionResponse> {
+        Ok(self
+            .conn
+            .send_request(DeleteSessionRequest::new(acp_session_id))
+            .block_task()
+            .await?)
+    }
+
+    /// 设置当前会话模式。
+    pub async fn set_mode(&self, mode_id: SessionModeId) -> anyhow::Result<SetSessionModeResponse> {
+        let response = self
+            .conn
+            .send_request(SetSessionModeRequest::new(
+                self.acp_session_id.clone(),
+                mode_id.clone(),
+            ))
+            .block_task()
+            .await?;
+        if let Ok(mut state) = self.state.lock() {
+            state.set_current_mode(mode_id);
+        }
+        Ok(response)
+    }
+
+    /// 设置当前会话配置选项。
+    pub async fn set_config_option(
+        &self,
+        config_id: SessionConfigId,
+        value: SessionConfigValueId,
+    ) -> anyhow::Result<SetSessionConfigOptionResponse> {
+        let response = self
+            .conn
+            .send_request(SetSessionConfigOptionRequest::new(
+                self.acp_session_id.clone(),
+                config_id,
+                value,
+            ))
+            .block_task()
+            .await?;
+        if let Ok(mut state) = self.state.lock() {
+            state.replace_config_options(response.config_options.clone());
+        }
+        Ok(response)
+    }
+
+    /// 退出 agent 鉴权状态。
+    pub async fn logout(&self) -> anyhow::Result<LogoutResponse> {
+        Ok(self
+            .conn
+            .send_request(LogoutRequest::new())
+            .block_task()
+            .await?)
+    }
 }
 
 fn new_acp_turn_id() -> TurnId {
     TurnId::from_string(format!("acp-turn:{}", uuid::Uuid::new_v4()))
+}
+
+fn build_initialize_request() -> InitializeRequest {
+    InitializeRequest::new(ProtocolVersion::V1).client_capabilities(build_client_capabilities())
+}
+
+fn build_client_capabilities() -> ClientCapabilities {
+    ClientCapabilities::new().fs(FileSystemCapabilities::new()
+        .read_text_file(true)
+        .write_text_file(true))
+}
+
+fn handle_read_text_file_request(
+    request: &ReadTextFileRequest,
+    root: &Path,
+) -> Result<ReadTextFileResponse, agent_client_protocol::Error> {
+    validate_workspace_path(&request.path, root)?;
+    let text = std::fs::read_to_string(&request.path)
+        .map_err(|err| agent_client_protocol::Error::internal_error().data(format!("{err}")))?;
+    Ok(ReadTextFileResponse::new(read_text_slice(
+        &text,
+        request.line,
+        request.limit,
+    )))
+}
+
+fn handle_write_text_file_request(
+    request: &WriteTextFileRequest,
+    root: &Path,
+) -> Result<WriteTextFileResponse, agent_client_protocol::Error> {
+    validate_workspace_path(&request.path, root)?;
+    std::fs::write(&request.path, &request.content)
+        .map_err(|err| agent_client_protocol::Error::internal_error().data(format!("{err}")))?;
+    Ok(WriteTextFileResponse::new())
+}
+
+fn validate_workspace_path(path: &Path, root: &Path) -> Result<(), agent_client_protocol::Error> {
+    if workspace_path_allowed(path, root) {
+        Ok(())
+    } else {
+        Err(agent_client_protocol::Error::invalid_params()
+            .data(format!("path is outside ACP workspace: {}", path.display())))
+    }
+}
+
+fn read_text_slice(text: &str, line: Option<u32>, limit: Option<u32>) -> String {
+    let start = line.unwrap_or(1).saturating_sub(1) as usize;
+    let selected = text.lines().skip(start);
+    match limit {
+        Some(limit) => selected.take(limit as usize).collect::<Vec<_>>().join("\n"),
+        None => selected.collect::<Vec<_>>().join("\n"),
+    }
+}
+
+fn workspace_path_allowed(path: &Path, root: &Path) -> bool {
+    path.is_absolute() && normalize_path(path).starts_with(normalize_path(root))
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 async fn authenticate(connection: &ConnectionTo<Agent>, method_id: AuthMethodId) {
@@ -284,4 +532,50 @@ fn auth_env_available(method_id: &AuthMethodId, config: &AcpAgentConfig) -> bool
 
 fn normalize_env_name(name: &str) -> String {
     name.to_ascii_lowercase().replace('_', "-")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use agent_client_protocol::schema::FileSystemCapabilities;
+
+    use super::{build_client_capabilities, read_text_slice, workspace_path_allowed};
+
+    #[test]
+    fn client_capabilities_match_registered_client_handlers() {
+        let capabilities = build_client_capabilities();
+
+        assert_eq!(
+            FileSystemCapabilities::new()
+                .read_text_file(true)
+                .write_text_file(true),
+            capabilities.fs
+        );
+        assert!(!capabilities.terminal);
+    }
+
+    #[test]
+    fn read_text_slice_uses_one_based_line_and_limit() {
+        let text = "one\ntwo\nthree\nfour\n";
+
+        assert_eq!("two\nthree", read_text_slice(text, Some(2), Some(2)));
+        assert_eq!("one\ntwo", read_text_slice(text, None, Some(2)));
+        assert_eq!("three\nfour", read_text_slice(text, Some(3), None));
+    }
+
+    #[test]
+    fn workspace_path_allowed_rejects_paths_outside_root() {
+        let root = Path::new("/workspace/project");
+
+        assert!(workspace_path_allowed(
+            Path::new("/workspace/project/src/main.rs"),
+            root
+        ));
+        assert!(!workspace_path_allowed(
+            Path::new("/workspace/project/../secret"),
+            root
+        ));
+        assert!(!workspace_path_allowed(Path::new("relative/path"), root));
+    }
 }

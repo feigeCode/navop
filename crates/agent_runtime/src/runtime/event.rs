@@ -52,8 +52,20 @@ pub enum RuntimeEvent {
         turn_id: TurnId,
         delta: String,
     },
+    /// 助手思考过程增量。UI 应与最终输出区分展示。
+    ReasoningDelta {
+        session_id: SessionId,
+        turn_id: TurnId,
+        delta: String,
+    },
     /// 助手文本消息(完整 / 最终)。
     AssistantMessage {
+        session_id: SessionId,
+        turn_id: TurnId,
+        text: String,
+    },
+    /// 用户文本消息(用于外部协议恢复/回放用户消息)。
+    UserMessage {
         session_id: SessionId,
         turn_id: TurnId,
         text: String,
@@ -95,7 +107,9 @@ impl RuntimeEvent {
             | RuntimeEvent::ToolCallFinished { session_id, .. }
             | RuntimeEvent::ObservationAdded { session_id, .. }
             | RuntimeEvent::AssistantMessageDelta { session_id, .. }
+            | RuntimeEvent::ReasoningDelta { session_id, .. }
             | RuntimeEvent::AssistantMessage { session_id, .. }
+            | RuntimeEvent::UserMessage { session_id, .. }
             | RuntimeEvent::Status { session_id, .. }
             | RuntimeEvent::NeedUserInput { session_id, .. }
             | RuntimeEvent::TurnCompleted { session_id, .. }

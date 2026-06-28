@@ -10,6 +10,7 @@ mod config;
 mod connection;
 mod permission;
 mod provider;
+mod state;
 mod translate;
 
 pub use config::{AcpAgentConfig, AcpTransport};
@@ -19,3 +20,4 @@ pub use permission::{
     AcpPermissionRequest, set_acp_permission_provider,
 };
 pub use provider::{build_acp_agent_configs, set_acp_agent_config_provider};
+pub(crate) use state::AcpSessionState;

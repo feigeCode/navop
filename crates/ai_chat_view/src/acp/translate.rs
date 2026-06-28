@@ -24,21 +24,17 @@ pub(crate) fn session_update_to_events(
     turn_id: &TurnId,
 ) -> Vec<RuntimeEvent> {
     match update {
+        SessionUpdate::UserMessageChunk(chunk) => {
+            let text = content_block_text(&chunk.content);
+            user_message_events(text, session_id, turn_id)
+        }
         SessionUpdate::AgentMessageChunk(chunk) => {
             let delta = content_block_text(&chunk.content);
             assistant_delta_events(delta, session_id, turn_id)
         }
         SessionUpdate::AgentThoughtChunk(chunk) => {
-            if content_block_text(&chunk.content).is_empty() {
-                Vec::new()
-            } else {
-                vec![RuntimeEvent::Status {
-                    session_id: session_id.clone(),
-                    turn_id: turn_id.clone(),
-                    title: "思考中…".to_string(),
-                    is_done: false,
-                }]
-            }
+            let delta = content_block_text(&chunk.content);
+            reasoning_delta_events(delta, session_id, turn_id)
         }
         SessionUpdate::ToolCall(call) => tool_call_events(call, session_id, turn_id),
         SessionUpdate::ToolCallUpdate(update) => {
@@ -49,6 +45,37 @@ pub(crate) fn session_update_to_events(
             turn_id: turn_id.clone(),
             plan: acp_plan_to_runtime(plan),
         }],
+        SessionUpdate::AvailableCommandsUpdate(update) => {
+            let names = update
+                .available_commands
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            vec![status_done(
+                format!("ACP 可用命令已更新: {names}"),
+                session_id,
+                turn_id,
+            )]
+        }
+        SessionUpdate::CurrentModeUpdate(update) => vec![status_done(
+            format!("ACP 当前模式: {}", update.current_mode_id.0.as_ref()),
+            session_id,
+            turn_id,
+        )],
+        SessionUpdate::ConfigOptionUpdate(update) => vec![status_done(
+            format!("ACP 配置选项已更新({} 项)", update.config_options.len()),
+            session_id,
+            turn_id,
+        )],
+        SessionUpdate::SessionInfoUpdate(update) => {
+            vec![status_done(session_info_title(update), session_id, turn_id)]
+        }
+        SessionUpdate::UsageUpdate(update) => vec![status_done(
+            usage_title(update.used, update.size, update.cost.as_ref()),
+            session_id,
+            turn_id,
+        )],
         _ => {
             tracing::debug!(
                 update = acp_update_kind(update),
@@ -57,6 +84,21 @@ pub(crate) fn session_update_to_events(
             Vec::new()
         }
     }
+}
+
+fn user_message_events(
+    text: String,
+    session_id: &SessionId,
+    turn_id: &TurnId,
+) -> Vec<RuntimeEvent> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    vec![RuntimeEvent::UserMessage {
+        session_id: session_id.clone(),
+        turn_id: turn_id.clone(),
+        text,
+    }]
 }
 
 fn assistant_delta_events(
@@ -72,6 +114,30 @@ fn assistant_delta_events(
             delta,
         })
         .collect()
+}
+
+fn reasoning_delta_events(
+    delta: String,
+    session_id: &SessionId,
+    turn_id: &TurnId,
+) -> Vec<RuntimeEvent> {
+    if delta.is_empty() {
+        return Vec::new();
+    }
+    vec![RuntimeEvent::ReasoningDelta {
+        session_id: session_id.clone(),
+        turn_id: turn_id.clone(),
+        delta,
+    }]
+}
+
+fn status_done(title: String, session_id: &SessionId, turn_id: &TurnId) -> RuntimeEvent {
+    RuntimeEvent::Status {
+        session_id: session_id.clone(),
+        turn_id: turn_id.clone(),
+        title,
+        is_done: true,
+    }
 }
 
 fn chunk_text(text: &str, max_chars: usize) -> Vec<String> {
@@ -209,7 +275,35 @@ fn tool_text(raw_output: Option<&serde_json::Value>, content_json: Option<String
 fn content_block_text(block: &ContentBlock) -> String {
     match block {
         ContentBlock::Text(t) => t.text.clone(),
-        _ => String::new(),
+        _ => serde_json::to_string(block).unwrap_or_else(|_| "[非文本 ACP 内容]".to_string()),
+    }
+}
+
+fn session_info_title(update: &agent_client_protocol::schema::SessionInfoUpdate) -> String {
+    let title = update
+        .title
+        .as_opt_ref()
+        .flatten()
+        .filter(|title| !title.is_empty());
+    let updated_at = update
+        .updated_at
+        .as_opt_ref()
+        .flatten()
+        .filter(|updated_at| !updated_at.is_empty());
+    match (title, updated_at) {
+        (Some(title), Some(updated_at)) => format!("ACP 会话信息已更新: {title} · {updated_at}"),
+        (Some(title), None) => format!("ACP 会话信息已更新: {title}"),
+        (None, Some(updated_at)) => format!("ACP 会话信息已更新: {updated_at}"),
+        (None, None) => "ACP 会话信息已更新".to_string(),
+    }
+}
+
+fn usage_title(used: u64, size: u64, cost: Option<&agent_client_protocol::schema::Cost>) -> String {
+    let usage = format!("ACP 用量: {used}/{size} tokens");
+    if let Some(cost) = cost {
+        format!("{usage} · {:.4} {}", cost.amount, cost.currency)
+    } else {
+        usage
     }
 }
 
@@ -256,8 +350,9 @@ fn map_step_status(status: &PlanEntryStatus) -> StepStatus {
 mod tests {
     use super::*;
     use agent_client_protocol::schema::{
-        ContentChunk, PlanEntry, PlanEntryPriority, TextContent, ToolCall as AcpToolCall,
-        ToolCallUpdate, ToolCallUpdateFields,
+        AvailableCommand, AvailableCommandsUpdate, ConfigOptionUpdate, ContentChunk,
+        CurrentModeUpdate, PlanEntry, PlanEntryPriority, SessionInfoUpdate, TextContent,
+        ToolCall as AcpToolCall, ToolCallUpdate, ToolCallUpdateFields, UsageUpdate,
     };
 
     fn ids() -> (SessionId, TurnId) {
@@ -278,6 +373,21 @@ mod tests {
         assert!(matches!(
             &events[0],
             RuntimeEvent::AssistantMessageDelta { delta, .. } if delta == "你好"
+        ));
+    }
+
+    #[test]
+    fn user_message_chunk_becomes_user_message() {
+        let (sid, tid) = ids();
+        let update = SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new("用户补充"),
+        )));
+        let events = session_update_to_events(&update, &sid, &tid);
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            RuntimeEvent::UserMessage { text, .. } if text == "用户补充"
         ));
     }
 
@@ -305,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_thought_chunk_becomes_status_without_exposing_content() {
+    fn agent_thought_chunk_becomes_reasoning_delta() {
         let (sid, tid) = ids();
         let update = SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::Text(
             TextContent::new("internal reasoning"),
@@ -315,8 +425,32 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
-            RuntimeEvent::Status { title, is_done: false, .. } if title == "思考中…"
+            RuntimeEvent::ReasoningDelta { delta, .. } if delta == "internal reasoning"
         ));
+    }
+
+    #[test]
+    fn acp_metadata_updates_become_status_events() {
+        let (sid, tid) = ids();
+        let updates = vec![
+            SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(vec![
+                AvailableCommand::new("plan", "Create plan"),
+                AvailableCommand::new("review", "Review changes"),
+            ])),
+            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new("plan")),
+            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(Vec::new())),
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title("会话标题")),
+            SessionUpdate::UsageUpdate(UsageUpdate::new(1200, 8000)),
+        ];
+
+        for update in updates {
+            let events = session_update_to_events(&update, &sid, &tid);
+            assert_eq!(events.len(), 1, "update should produce one status event");
+            assert!(matches!(
+                &events[0],
+                RuntimeEvent::Status { title, is_done: true, .. } if title.starts_with("ACP ")
+            ));
+        }
     }
 
     #[test]

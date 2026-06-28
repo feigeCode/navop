@@ -35,6 +35,8 @@ mod stream_tools;
 #[cfg(test)]
 mod tests;
 
+const DEBUG_PREVIEW_CHARS: usize = 1200;
+
 /// 把 [`LlmProvider`] 适配为 agent_runtime 的 [`ModelClient`]。
 ///
 /// 持有一个具体 provider 快照与采样参数(模型名 / 温度 / 最大 token)。切换 provider
@@ -99,6 +101,12 @@ impl LlmModelClient {
 impl ModelClient for LlmModelClient {
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, RuntimeError> {
         let chat_request = self.to_chat_request(request);
+        log_chat_request(
+            self.provider.provider_name(),
+            &self.model,
+            "complete",
+            &chat_request,
+        );
         tracing::debug!(
             model = %self.model,
             messages = chat_request.messages.len(),
@@ -111,6 +119,12 @@ impl ModelClient for LlmModelClient {
             .await
             .map_err(|e| RuntimeError::model(e.to_string()))?;
         let tool_calls = response.tool_calls().to_vec();
+        log_tool_calls(
+            self.provider.provider_name(),
+            &self.model,
+            "complete_response",
+            &tool_calls,
+        );
         tracing::debug!(
             model = %self.model,
             text_len = response.content.len(),
@@ -132,6 +146,12 @@ impl ModelClient for LlmModelClient {
         }
 
         let chat_request = self.to_chat_request(request);
+        log_chat_request(
+            self.provider.provider_name(),
+            &self.model,
+            "complete_stream",
+            &chat_request,
+        );
         tracing::debug!(
             model = %self.model,
             messages = chat_request.messages.len(),
@@ -146,8 +166,12 @@ impl ModelClient for LlmModelClient {
 
         // 状态机:逐段读取底层流,把文本映射为 TextDelta、把分片的工具调用聚合起来;
         // 流尽时补一条 Completed(完整文本 + 聚合后的工具调用)。
+        let provider_name = self.provider.provider_name().to_string();
+        let model = self.model.clone();
         let mapped = stream::unfold(
             StreamState::Streaming {
+                provider_name,
+                model,
                 inner,
                 text: String::new(),
                 tool_calls: Vec::new(),
@@ -155,6 +179,8 @@ impl ModelClient for LlmModelClient {
             |state| async move {
                 match state {
                     StreamState::Streaming {
+                        provider_name,
+                        model,
                         mut inner,
                         mut text,
                         mut tool_calls,
@@ -162,6 +188,18 @@ impl ModelClient for LlmModelClient {
                         loop {
                             match inner.next().await {
                                 Some(Ok(chunk)) => {
+                                    if let Some(calls) = chunk
+                                        .choices
+                                        .first()
+                                        .and_then(|c| c.delta.tool_calls.as_ref())
+                                    {
+                                        log_tool_calls(
+                                            &provider_name,
+                                            &model,
+                                            "complete_stream_chunk",
+                                            calls,
+                                        );
+                                    }
                                     merge_stream_tool_calls(&mut tool_calls, &chunk);
                                     if let Some(t) = extract_stream_text(&chunk)
                                         && !t.is_empty()
@@ -171,6 +209,8 @@ impl ModelClient for LlmModelClient {
                                         return Some((
                                             Ok(event),
                                             StreamState::Streaming {
+                                                provider_name,
+                                                model,
                                                 inner,
                                                 text,
                                                 tool_calls,
@@ -184,6 +224,12 @@ impl ModelClient for LlmModelClient {
                                     return Some((event, StreamState::Done));
                                 }
                                 None => {
+                                    log_tool_calls(
+                                        &provider_name,
+                                        &model,
+                                        "complete_stream_response",
+                                        &tool_calls,
+                                    );
                                     tracing::debug!(
                                         text_len = text.len(),
                                         tool_calls = tool_calls.len(),
@@ -212,10 +258,80 @@ impl ModelClient for LlmModelClient {
     }
 }
 
+fn log_chat_request(provider: &str, model: &str, stage: &str, request: &ChatRequest) {
+    let tool_names = request
+        .tools
+        .as_ref()
+        .map(|tools| {
+            tools
+                .iter()
+                .map(|tool| tool.function.name.as_str())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    tracing::debug!(
+        provider,
+        model,
+        stage,
+        messages = request.messages.len(),
+        tools = ?tool_names,
+        tool_choice = ?request.tool_choice,
+        temperature = ?request.temperature,
+        max_tokens = ?request.max_tokens,
+        "LLM 请求摘要"
+    );
+    tracing::trace!(
+        provider,
+        model,
+        stage,
+        messages = %debug_json(&request.messages),
+        tools = %debug_json(&request.tools),
+        tool_choice = %debug_json(&request.tool_choice),
+        "LLM 请求详情"
+    );
+}
+
+fn log_tool_calls(provider: &str, model: &str, stage: &str, calls: &[ToolCall]) {
+    let calls = calls.iter().map(debug_tool_call).collect::<Vec<_>>();
+    tracing::debug!(
+        provider,
+        model,
+        stage,
+        tool_calls = ?calls,
+        "LLM 工具调用字段"
+    );
+}
+
+fn debug_tool_call(call: &ToolCall) -> String {
+    format!(
+        "id={}, index={:?}, type={}, name={}, args_len={}, args={}",
+        call.id,
+        call.index,
+        call.call_type,
+        call.function.name,
+        call.function.arguments.len(),
+        preview(&call.function.arguments)
+    )
+}
+
+fn debug_json<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|err| format!("<json encode failed: {err}>"))
+}
+
+fn preview(value: &str) -> String {
+    let mut out: String = value.chars().take(DEBUG_PREVIEW_CHARS).collect();
+    if value.chars().count() > DEBUG_PREVIEW_CHARS {
+        out.push_str("...<truncated>");
+    }
+    out
+}
+
 /// `complete_stream` 映射的内部状态。
 enum StreamState {
     /// 仍在转发底层流(携带底层流、已累积文本与已聚合的工具调用)。
     Streaming {
+        provider_name: String,
+        model: String,
         inner: one_core::llm::ChatStream,
         text: String,
         tool_calls: Vec<ToolCall>,

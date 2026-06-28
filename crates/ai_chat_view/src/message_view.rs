@@ -7,7 +7,10 @@
 use crate::card::{CardMessage, CardRegistry};
 use crate::code_block::CodeBlockActionRegistry;
 use crate::message_code_actions::render_code_block_actions;
-use crate::{ChatMessageUI, ChatMessageUIGeneric, ChatRole, MessageExtension, MessageVariant};
+use crate::{
+    ChatMessageUI, ChatMessageUIGeneric, ChatRole, MessageExtension, MessageVariant,
+    render_reasoning_block,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
@@ -88,7 +91,9 @@ fn render_one(
             MessageVariant::Status { title, is_done } => {
                 render_status_message(msg, title, *is_done, cx)
             }
-            MessageVariant::Text => render_assistant_text_with_code_actions(msg, code_actions, cx),
+            MessageVariant::Text => {
+                render_assistant_text_with_code_actions(msg, code_actions, window, cx)
+            }
             MessageVariant::SqlResult => render_sql_result_placeholder(cx),
             MessageVariant::Card { kind } => render_card(msg, kind, window, cx),
         },
@@ -179,17 +184,19 @@ pub fn render_status_message<E: MessageExtension>(
 /// 渲染助手文本消息（markdown）。
 pub fn render_assistant_text<E: MessageExtension>(
     msg: &ChatMessageUIGeneric<E>,
-    cx: &App,
+    window: &mut Window,
+    cx: &mut App,
 ) -> AnyElement {
-    render_assistant_text_with_code_actions(msg, None, cx)
+    render_assistant_text_with_code_actions(msg, None, window, cx)
 }
 
 fn render_assistant_text_with_code_actions<E: MessageExtension>(
     msg: &ChatMessageUIGeneric<E>,
     code_actions: Option<&CodeBlockActionRegistry>,
-    cx: &App,
+    window: &mut Window,
+    cx: &mut App,
 ) -> AnyElement {
-    if msg.is_streaming && msg.content.is_empty() {
+    if msg.is_streaming && msg.content.is_empty() && msg.reasoning_content.is_empty() {
         return render_thinking(cx);
     }
     div()
@@ -199,15 +206,20 @@ fn render_assistant_text_with_code_actions<E: MessageExtension>(
             v_flex()
                 .w_full()
                 .gap_2()
-                .child(
-                    div().w_full().px_1().py_1().child(
-                        TextView::markdown(
-                            SharedString::from(format!("ai-msg-{}", msg.id)),
-                            msg.content.clone(),
-                        )
-                        .selectable(true),
-                    ),
-                )
+                .when(!msg.reasoning_content.is_empty(), |this| {
+                    this.child(render_reasoning_block(msg, window, cx))
+                })
+                .when(!msg.content.is_empty(), |this| {
+                    this.child(
+                        div().w_full().px_1().py_1().child(
+                            TextView::markdown(
+                                SharedString::from(format!("ai-msg-{}", msg.id)),
+                                msg.content.clone(),
+                            )
+                            .selectable(true),
+                        ),
+                    )
+                })
                 .when_some(
                     code_actions.and_then(|r| render_code_block_actions(msg, r, cx)),
                     |this, actions| this.child(actions),

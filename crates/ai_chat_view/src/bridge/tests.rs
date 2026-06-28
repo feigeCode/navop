@@ -211,6 +211,12 @@ fn tool_call(index: usize, id: &str, name: &str, args: &str) -> ToolCall {
     }
 }
 
+fn tool_call_delta(index: usize, args: &str) -> ToolCall {
+    let mut call = tool_call(index, "", "", args);
+    call.call_type.clear();
+    call
+}
+
 fn chunk(calls: Vec<ToolCall>) -> StreamingResponse {
     StreamingResponse {
         choices: vec![StreamingChoice {
@@ -264,6 +270,24 @@ fn growing_snapshots_merge_into_single_call() {
     );
     serde_json::from_str::<serde_json::Value>(&acc[0].function.arguments)
         .expect("最终累积的参数应为合法 JSON(旧逻辑会留下不完整前缀触发 EOF)");
+}
+
+#[test]
+fn partial_argument_deltas_preserve_initial_tool_identity() {
+    let mut acc = Vec::new();
+    merge_stream_tool_calls(
+        &mut acc,
+        &chunk(vec![tool_call(0, "call_00", "connections_test", "")]),
+    );
+    for part in ["{", "\"", "connection", "\"", ": ", "\"", "5", "\"", "}"] {
+        merge_stream_tool_calls(&mut acc, &chunk(vec![tool_call_delta(0, part)]));
+    }
+
+    assert_eq!(acc.len(), 1);
+    assert_eq!(acc[0].id, "call_00");
+    assert_eq!(acc[0].call_type, "function");
+    assert_eq!(acc[0].function.name, "connections_test");
+    assert_eq!(acc[0].function.arguments, "{\"connection\": \"5\"}");
 }
 
 #[test]

@@ -90,16 +90,21 @@ impl AgentTranscript {
     pub fn apply(&mut self, event: &RuntimeEvent) {
         match event {
             RuntimeEvent::TurnStarted { .. } => {
-                // 新一轮:重置流式指针与计划,等 create_plan 的 PlanUpdated 重新填充。
+                // 新一轮只重置本轮临时输出;已有计划需保留到下一次 PlanUpdated。
                 self.streaming_id = None;
                 self.active_status_id = None;
-                self.latest_plan = None;
             }
             RuntimeEvent::AssistantMessageDelta { delta, .. } => {
                 self.append_delta(delta);
             }
+            RuntimeEvent::ReasoningDelta { delta, .. } => {
+                self.append_reasoning_delta(delta);
+            }
             RuntimeEvent::AssistantMessage { text, .. } => {
                 self.finalize_assistant(text);
+            }
+            RuntimeEvent::UserMessage { text, .. } => {
+                self.push_user(text, 0);
             }
             RuntimeEvent::Status { title, is_done, .. } => {
                 self.upsert_status(title, *is_done);
@@ -151,6 +156,20 @@ impl AgentTranscript {
         self.messages.push(msg);
     }
 
+    fn append_reasoning_delta(&mut self, delta: &str) {
+        self.finish_active_status();
+        if let Some(id) = &self.streaming_id {
+            if let Some(msg) = self.messages.iter_mut().find(|m| &m.id == id) {
+                msg.reasoning_content.push_str(delta);
+                return;
+            }
+        }
+        let mut msg = ChatMessageUI::streaming_assistant();
+        msg.reasoning_content.push_str(delta);
+        self.streaming_id = Some(msg.id.clone());
+        self.messages.push(msg);
+    }
+
     fn finalize_assistant(&mut self, text: &str) {
         self.finish_active_status();
         if let Some(id) = self.streaming_id.take() {
@@ -168,7 +187,11 @@ impl AgentTranscript {
             && let Some(index) = self.messages.iter().position(|m| m.id == id)
         {
             let content = self.messages[index].content.clone();
-            let messages = assistant_messages_from_content(&content);
+            let reasoning = self.messages[index].reasoning_content.clone();
+            let mut messages = assistant_messages_from_content(&content);
+            if let Some(first) = messages.first_mut() {
+                first.reasoning_content = reasoning;
+            }
             self.messages.splice(index..=index, messages);
         }
     }
@@ -399,6 +422,30 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_delta_is_preserved_when_streaming_segment_closes() {
+        let mut tr = AgentTranscript::new();
+        tr.apply(&RuntimeEvent::ReasoningDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "先分析".to_string(),
+        });
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "答案".to_string(),
+        });
+        tr.apply(&RuntimeEvent::TurnCompleted {
+            session_id: sid(),
+            turn_id: tid(),
+            answer: None,
+        });
+
+        assert_eq!(1, tr.messages.len());
+        assert_eq!("答案", tr.messages[0].content);
+        assert_eq!("先分析", tr.messages[0].reasoning_content);
+    }
+
+    #[test]
     fn tool_call_then_observation_updates_same_card() {
         let mut tr = AgentTranscript::new();
         let call = ToolCallId::from_string("call_9");
@@ -517,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_started_resets_latest_plan() {
+    fn turn_started_preserves_latest_plan() {
         let mut tr = AgentTranscript::new();
         let plan = Plan::new("目标", PlanSource::Llm).with_steps(vec![PlanStep::new("step", "")]);
         tr.apply(&RuntimeEvent::PlanUpdated {
@@ -530,7 +577,7 @@ mod tests {
             session_id: sid(),
             turn_id: tid(),
         });
-        assert!(tr.latest_plan().is_none());
+        assert!(tr.latest_plan().is_some());
     }
 
     #[test]

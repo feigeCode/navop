@@ -359,6 +359,7 @@ impl AgentInput {
         let view = cx.entity();
         let is_open = self.open_menu == Some(ComposerMenuKind::Plan);
         let plan_items = self.context.plan_items.clone();
+        let trigger_label = plan_trigger_label(&plan_items);
 
         Popover::new("agent-plan-popover")
             .p_0()
@@ -379,7 +380,7 @@ impl AgentInput {
             })
             .trigger(self.render_capability_trigger(
                 "agent-plan-trigger",
-                "计划",
+                trigger_label,
                 IconName::Check,
                 cx,
             ))
@@ -425,10 +426,11 @@ impl AgentInput {
     fn render_capability_trigger(
         &self,
         id: &'static str,
-        label: &'static str,
+        label: impl Into<SharedString>,
         icon: IconName,
         cx: &mut Context<Self>,
     ) -> Button {
+        let label = label.into();
         Button::new(id)
             .debug_selector(move || id.to_string())
             .flex_1()
@@ -957,6 +959,36 @@ fn render_plan_mode_content(
     col.into_any_element()
 }
 
+fn plan_trigger_label(items: &[ComposerPlanItem]) -> SharedString {
+    if items.is_empty() {
+        return SharedString::from("计划");
+    }
+    let total = items.len();
+    let completed = items
+        .iter()
+        .filter(|item| is_completed_plan_status(item.status.as_ref()))
+        .count();
+    let label = if completed == total {
+        "完成"
+    } else if items
+        .iter()
+        .any(|item| is_running_plan_status(item.status.as_ref()))
+    {
+        "进行中"
+    } else {
+        "待执行"
+    };
+    SharedString::from(format!("{completed}/{total} {label}"))
+}
+
+fn is_completed_plan_status(status: &str) -> bool {
+    status == "completed"
+}
+
+fn is_running_plan_status(status: &str) -> bool {
+    matches!(status, "running" | "in_progress")
+}
+
 fn plan_item_row(
     item: ComposerPlanItem,
     muted: gpui::Hsla,
@@ -1402,6 +1434,42 @@ mod tests {
             cx.debug_bounds("agent-settings").is_none(),
             "execution settings no longer belongs in the bottom toolbar"
         );
+    }
+
+    #[test]
+    fn plan_trigger_label_is_default_when_empty() {
+        assert_eq!(plan_trigger_label(&[]).as_ref(), "计划");
+    }
+
+    #[test]
+    fn plan_trigger_label_shows_running_progress() {
+        let items = vec![
+            ComposerPlanItem::new("完成项", "completed"),
+            ComposerPlanItem::new("执行项", "running"),
+            ComposerPlanItem::new("待执行项", "pending"),
+        ];
+
+        assert_eq!(plan_trigger_label(&items).as_ref(), "1/3 进行中");
+    }
+
+    #[test]
+    fn plan_trigger_label_shows_completed_progress() {
+        let items = vec![
+            ComposerPlanItem::new("一", "completed"),
+            ComposerPlanItem::new("二", "completed"),
+        ];
+
+        assert_eq!(plan_trigger_label(&items).as_ref(), "2/2 完成");
+    }
+
+    #[test]
+    fn plan_trigger_label_shows_pending_progress() {
+        let items = vec![
+            ComposerPlanItem::new("一", "pending"),
+            ComposerPlanItem::new("二", "failed"),
+        ];
+
+        assert_eq!(plan_trigger_label(&items).as_ref(), "0/2 待执行");
     }
 
     #[test]

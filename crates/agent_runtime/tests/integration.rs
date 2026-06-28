@@ -112,6 +112,50 @@ async fn agent_uses_update_plan_checklist() {
 }
 
 #[tokio::test]
+async fn current_plan_is_included_in_next_turn_prompt() {
+    let model = Arc::new(MockModelClient::new([
+        ModelResponse::tool_call(function_tool_call(
+            "c_plan",
+            "update_plan",
+            json!({
+                "plan": [
+                    {"step": "写作业", "status": "completed"},
+                    {"step": "做晚饭", "status": "in_progress"},
+                    {"step": "打游戏", "status": "pending"}
+                ]
+            })
+            .to_string(),
+        )),
+        ModelResponse::text("计划已记录。"),
+        ModelResponse::text("继续做晚饭。"),
+    ]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(ToolRegistry::new())),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    runtime
+        .run_turn_blocking(session.id(), "安排今天晚上".into(), TaskKind::Agent)
+        .await
+        .expect("run first turn");
+    runtime
+        .run_turn_blocking(session.id(), "继续".into(), TaskKind::Agent)
+        .await
+        .expect("run follow-up turn");
+
+    let requests = model.received_requests();
+    assert_eq!(3, requests.len());
+    let system = requests[2].messages[0].content_as_text();
+    assert!(system.contains("当前计划(Todo)状态"));
+    assert!(system.contains("目标: 安排今天晚上"));
+    assert!(system.contains("写作业"));
+    assert!(system.contains("做晚饭"));
+    assert!(system.contains("Pending"));
+    assert!(system.contains("不要把工具调用写成普通文本"));
+}
+
+#[tokio::test]
 async fn agent_calls_business_tool_then_finishes() {
     // 模型调用业务工具(echo),拿到观测后给出最终回答;未调 update_plan 故无计划。
     let runtime = build_runtime(

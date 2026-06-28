@@ -80,6 +80,7 @@ impl RuntimeTask for AgentTask {
                 task_kind,
                 &tool_specs,
                 &resources,
+                session.current_plan().as_ref(),
             ))];
             messages.extend(history_to_messages(&session.history_snapshot()));
 
