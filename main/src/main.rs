@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod auth;
@@ -96,9 +98,7 @@ fn main() {
     if update::handle_update_command() {
         return;
     }
-    if let Some(exit_code) =
-        onetcli_runtime::cli_host::handle_command(|| crate::public_mcp_runtime::cli_tool_registry())
-    {
+    if let Some(exit_code) = handle_cli_command() {
         std::process::exit(exit_code);
     }
 
@@ -147,4 +147,14 @@ fn main() {
         })
         .detach();
     });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn handle_cli_command() -> Option<i32> {
+    onetcli_runtime::cli_host::handle_command(|| crate::public_mcp_runtime::cli_tool_registry())
+}
+
+#[cfg(target_os = "windows")]
+fn handle_cli_command() -> Option<i32> {
+    None
 }

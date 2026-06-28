@@ -10,6 +10,10 @@ pub use config::{PublicMcpEnvOverride, PublicMcpStartConfig};
 pub use session::{mcp_server_enabled, set_mcp_server_enabled, set_mcp_server_mode};
 pub use status::PublicMcpRuntimeStatus;
 
+#[cfg_attr(
+    target_os = "windows",
+    expect(dead_code, reason = "Windows 暂时禁用 CLI 入口，后续拆分独立 CLI")
+)]
 pub(crate) fn cli_tool_registry() -> anyhow::Result<tool_runtime::ToolRegistry> {
     let storage = one_core::storage::StorageManager::new()?;
     let repo = std::sync::Arc::new(one_core::storage::ConnectionRepository::new(

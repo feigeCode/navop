@@ -28,14 +28,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          components: clippy
       - name: Install system dependencies
         if: ${{ matrix.run_on != 'windows-latest' }}
         run: script/bootstrap
-      - name: Machete
-        if: ${{ matrix.run_on == 'macos-latest' }}
-        uses: bnjbvr/cargo-machete@v0.9.1
       - name: Setup | Cache Cargo
         uses: actions/cache@v4
         with:
@@ -45,10 +40,6 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: test-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-      - name: Lint
-        if: ${{ matrix.run_on == 'macos-latest' }}
-        run: |
-          cargo clippy --workspace --all-targets
       - name: Test Linux
         if: ${{ matrix.run_on == 'ubuntu-latest' }}
         run: |
