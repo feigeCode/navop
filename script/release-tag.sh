@@ -5,14 +5,19 @@ set -euo pipefail
 # 1) 修改 TAG 变量后执行：script/release-tag.sh
 # 2) 直接传参覆盖 TAG：script/release-tag.sh v0.1.0
 # 3) 若需要覆盖同名 tag：FORCE_RETAG=true script/release-tag.sh v0.1.0
-# 4) 脚本会自动同步 main/Cargo.toml 版本并提交后再推送分支和 tag
+# 4) 脚本会自动同步 main/Cargo.toml 与 Cargo.lock 版本并提交后再推送分支和 tag
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)"
+cd "${REPO_ROOT}"
 
 TAG="${1:-v0.1.0}"
 REMOTE="${REMOTE:-origin}"
 BRANCH="${BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
 FORCE_RETAG="${FORCE_RETAG:-false}"
 ALLOW_DIRTY="${ALLOW_DIRTY:-false}"
-MAIN_MANIFEST="${MAIN_MANIFEST:-../main/Cargo.toml}"
+MAIN_MANIFEST="${MAIN_MANIFEST:-${REPO_ROOT}/main/Cargo.toml}"
+CARGO_LOCK="${CARGO_LOCK:-${REPO_ROOT}/Cargo.lock}"
 RELEASE_VERSION="${TAG#v}"
 
 update_main_version() {
@@ -71,6 +76,18 @@ update_main_version() {
   return 0
 }
 
+sync_main_lock_version() {
+  local new_version="$1"
+
+  if [[ ! -f "${CARGO_LOCK}" ]]; then
+    echo "错误：未找到 Cargo.lock：${CARGO_LOCK}"
+    exit 1
+  fi
+
+  echo "同步 Cargo.lock 中 main 版本到 ${new_version}"
+  cargo update --manifest-path "${REPO_ROOT}/Cargo.toml" -p main --precise "${new_version}"
+}
+
 echo "准备发布：tag=${TAG} branch=${BRANCH} remote=${REMOTE}"
 
 if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
@@ -111,10 +128,15 @@ if [[ "${REMOTE_TAG_EXISTS}" == "true" ]]; then
   fi
 fi
 
-if update_main_version "${MAIN_MANIFEST}" "${RELEASE_VERSION}"; then
+update_main_version "${MAIN_MANIFEST}" "${RELEASE_VERSION}" || true
+sync_main_lock_version "${RELEASE_VERSION}"
+
+if ! git diff --quiet -- "${MAIN_MANIFEST}" "${CARGO_LOCK}"; then
   echo "提交 main 版本变更"
-  git add "${MAIN_MANIFEST}"
+  git add "${MAIN_MANIFEST}" "${CARGO_LOCK}"
   git commit -m "chore(main): bump version to ${RELEASE_VERSION}"
+else
+  echo "main 版本和 Cargo.lock 已是 ${RELEASE_VERSION}，跳过提交。"
 fi
 
 echo "推送分支：${BRANCH}"
