@@ -23,7 +23,7 @@ use gpui::{
     Styled, Subscription, Task, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, WindowExt as _,
+    ActiveTheme, IconName, Selectable, Sizable, WindowExt as _,
     button::{Button, ButtonVariants},
     dialog::DialogButtonProps,
     h_flex,
@@ -31,18 +31,19 @@ use gpui_component::{
     popover::Popover,
     v_flex,
 };
+#[cfg(not(test))]
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::acp::{AcpAgentConfig, AcpConnection};
-use crate::agent_cards::render_plan_list;
+use crate::agent_cards::PlanCardData;
 use crate::agent_transcript::AgentTranscript;
 use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::input::{
-    AgentComposerContext, AgentInput, AgentInputEvent, ComposerMenuOption, ComposerModelOption,
-    ComposerScope, ComposerTarget, MentionItem,
+    AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
+    ComposerModelOption, ComposerPlanItem, ComposerScope, ComposerTarget, MentionItem,
 };
 use crate::message_view::render_messages_with_code_actions;
 use crate::persistence;
@@ -272,8 +273,6 @@ pub struct AgentChatView {
     acp: Option<AcpConnection>,
     /// 当前选中的 ACP agent id(用于头部切换控件高亮)。
     current_acp_id: Option<SharedString>,
-    /// 后端选择 Popover 的开合状态。
-    backend_popover_open: bool,
     /// 正在连接 ACP agent(拉起子进程中)。
     acp_connecting: bool,
     scroll_handle: ScrollHandle,
@@ -286,8 +285,6 @@ pub struct AgentChatView {
     tool_options: Vec<ComposerMenuOption>,
     runtime_factory: Option<AgentRuntimeFactory>,
     is_running: bool,
-    /// Tasks 计划面板 Popover 的开合状态。
-    tasks_open: bool,
     /// 系统提示词（可选，用于自定义 AI 行为）。
     system_instruction: Option<String>,
     /// 代码块操作注册表。
@@ -352,11 +349,16 @@ impl AgentChatView {
         let tool_options = default_tool_options();
         let task_options = default_task_options();
 
-        let init_ctx = build_context(
+        let init_ctx = build_composer_context(
             &resources,
             task_kind,
             &selected_tool,
             selected_model.as_ref(),
+            None,
+            Backend::Local,
+            &acp_agents,
+            None,
+            false,
         );
         let target_options: Vec<ComposerTarget> = resources
             .resources
@@ -403,7 +405,6 @@ impl AgentChatView {
             acp_agents,
             acp: None,
             current_acp_id: None,
-            backend_popover_open: false,
             acp_connecting: false,
             scroll_handle: ScrollHandle::new(),
             task_kind,
@@ -413,7 +414,6 @@ impl AgentChatView {
             tool_options,
             runtime_factory,
             is_running: false,
-            tasks_open: false,
             system_instruction: None,
             code_block_actions: CodeBlockActionRegistry::new(),
             _subscriptions: subscriptions,
@@ -478,6 +478,11 @@ impl AgentChatView {
             }
             AgentInputEvent::SelectToolMode { id } => self.select_tool(&id, cx),
             AgentInputEvent::SelectTaskMode { id } => self.select_task(&id, cx),
+            AgentInputEvent::SelectAgentBackend { id } => {
+                if !self.is_running {
+                    self.select_backend(id, cx);
+                }
+            }
         }
     }
 
@@ -518,25 +523,35 @@ impl AgentChatView {
         let session_id = self.session_id.clone();
         let task_kind = self.task_kind;
         cx.spawn(async move |this, cx| {
-            let task = Tokio::spawn(cx, async move {
-                runtime
-                    .run_turn_blocking(&session_id, input, task_kind)
-                    .await
-            });
-            match task.await {
-                Ok(Ok(_)) => {}
-                Ok(Err(err)) => {
-                    let _ = this.update(cx, |this, cx| {
-                        this.transcript.push_system(format!("运行失败:{err}"));
-                        this.set_running(false, cx);
-                    });
+            #[cfg(test)]
+            let result = runtime
+                .run_turn_blocking(&session_id, input, task_kind)
+                .await;
+
+            #[cfg(not(test))]
+            let result = {
+                let task = Tokio::spawn(cx, async move {
+                    runtime
+                        .run_turn_blocking(&session_id, input, task_kind)
+                        .await
+                });
+                match task.await {
+                    Ok(result) => result,
+                    Err(err) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.transcript.push_system(format!("任务执行失败:{err}"));
+                            this.set_running(false, cx);
+                        });
+                        return;
+                    }
                 }
-                Err(err) => {
-                    let _ = this.update(cx, |this, cx| {
-                        this.transcript.push_system(format!("任务执行失败:{err}"));
-                        this.set_running(false, cx);
-                    });
-                }
+            };
+
+            if let Err(err) = result {
+                let _ = this.update(cx, |this, cx| {
+                    this.transcript.push_system(format!("运行失败:{err}"));
+                    this.set_running(false, cx);
+                });
             }
         })
         .detach();
@@ -580,6 +595,7 @@ impl AgentChatView {
                 | RuntimeEvent::NeedUserInput { .. }
         );
         self.transcript.apply(&event);
+        self.sync_composer(cx);
         // 跟随流式输出 / 新卡片自动滚到底。
         self.scroll_handle.scroll_to_bottom();
         if terminal {
@@ -600,11 +616,16 @@ impl AgentChatView {
 
     /// 重建并把展示上下文推给输入框。
     fn sync_composer(&self, cx: &mut Context<Self>) {
-        let ctx = build_context(
+        let ctx = build_composer_context(
             &self.resources,
             self.task_kind,
             &self.selected_tool,
             self.selected_model.as_ref(),
+            self.transcript.latest_plan(),
+            self.backend,
+            &self.acp_agents,
+            self.current_acp_id.as_ref(),
+            self.acp_connecting,
         );
         self.input.update(cx, |inp, cx| inp.set_context(ctx, cx));
     }
@@ -721,6 +742,7 @@ impl AgentChatView {
                 self.set_running(false, cx);
                 self._event_task =
                     Self::spawn_event_pump(self.runtime.subscribe(), self.session_id.clone(), cx);
+                self.sync_composer(cx);
                 cx.notify();
             }
             // 切到某个 ACP agent(惰性拉起子进程)。
@@ -739,6 +761,7 @@ impl AgentChatView {
                 self.transcript.clear();
                 self.transcript
                     .push_system(format!("正在连接 ACP agent「{}」…", config.name));
+                self.sync_composer(cx);
                 cx.notify();
 
                 cx.spawn(async move |this, cx| {
@@ -753,6 +776,7 @@ impl AgentChatView {
                             this.acp_connecting = false;
                             this.transcript.clear();
                             this._event_task = Self::spawn_event_pump(rx, sid, cx);
+                            this.sync_composer(cx);
                             cx.notify();
                         }
                         Err(err) => {
@@ -761,6 +785,7 @@ impl AgentChatView {
                             this.current_acp_id = None;
                             this.transcript
                                 .push_system(format!("连接 ACP agent 失败:{err}"));
+                            this.sync_composer(cx);
                             cx.notify();
                         }
                     });
@@ -1269,7 +1294,6 @@ impl AgentChatView {
         let border = cx.theme().border;
         let muted = cx.theme().muted;
         let history_open = self.history_popover_open;
-        let switcher = self.render_backend_switcher(cx);
         // 仅在打开时构建列表,避免每帧渲染全部会话行。
         let history_list = history_open.then(|| self.render_history_list(cx));
 
@@ -1293,7 +1317,6 @@ impl AgentChatView {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .children(switcher)
                     .child(
                         Button::new("agent-sidebar-new")
                             .icon(IconName::Plus)
@@ -1422,209 +1445,8 @@ impl AgentChatView {
             .into_any_element()
     }
 
-    /// 后端切换控件:One_Agent(自研,默认)+ 各已配置 ACP agent。
-    /// `acp_agents` 为空时返回 `None`(不显示)。
-    fn render_backend_switcher(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        if self.acp_agents.is_empty() {
-            return None;
-        }
-        let connecting = self.acp_connecting;
-        let current_name = self.current_backend_name();
-        let current_icon = self.current_backend_icon();
-        let agents = self.acp_agents.clone();
-        let selected_acp = self.current_acp_id.clone();
-        let backend = self.backend;
-        let view = cx.entity();
-
-        Some(
-            Popover::new("agent-backend-switcher")
-                .anchor(Anchor::BottomLeft)
-                .p_0()
-                .open(self.backend_popover_open)
-                .on_open_change(cx.listener(|this, open: &bool, _window, cx| {
-                    this.backend_popover_open = *open;
-                    cx.notify();
-                }))
-                .trigger(
-                    Button::new("agent-backend-trigger")
-                        .icon(current_icon)
-                        .label(current_name)
-                        .ghost()
-                        .small()
-                        .dropdown_caret(true)
-                        .disabled(connecting),
-                )
-                .content(move |_state, _window, cx| {
-                    Self::render_backend_menu(
-                        view.clone(),
-                        backend,
-                        selected_acp.clone(),
-                        agents.clone(),
-                        connecting,
-                        cx,
-                    )
-                })
-                .into_any_element(),
-        )
-    }
-
-    fn current_backend_name(&self) -> SharedString {
-        if self.backend == Backend::Local {
-            return SharedString::from("Codex CLI");
-        }
-        self.current_acp_id
-            .as_ref()
-            .and_then(|id| self.acp_agents.iter().find(|agent| &agent.id == id))
-            .map(|agent| agent.name.clone())
-            .unwrap_or_else(|| SharedString::from("Agent"))
-    }
-
-    fn current_backend_icon(&self) -> IconName {
-        if self.backend == Backend::Local {
-            return IconName::AI;
-        }
-        self.current_acp_id
-            .as_ref()
-            .and_then(|id| self.acp_agents.iter().find(|agent| &agent.id == id))
-            .map(|agent| agent_backend_icon(&agent.name))
-            .unwrap_or(IconName::Bot)
-    }
-
-    fn render_backend_menu(
-        view: Entity<Self>,
-        backend: Backend,
-        selected_acp: Option<SharedString>,
-        agents: Vec<AcpAgentConfig>,
-        connecting: bool,
-        cx: &mut Context<gpui_component::popover::PopoverState>,
-    ) -> gpui::AnyElement {
-        let mut menu = v_flex()
-            .w(px(300.0))
-            .p_1()
-            .gap_0p5()
-            .child(Self::render_backend_menu_item(
-                view.clone(),
-                "agent-backend-menu-local",
-                IconName::AI,
-                SharedString::from("Codex CLI"),
-                None,
-                backend == Backend::Local,
-                connecting,
-                cx,
-            ))
-            .child(Self::render_backend_group_label("External Agents", cx));
-
-        for agent in agents {
-            let selected = backend == Backend::Acp && selected_acp.as_ref() == Some(&agent.id);
-            let icon = agent_backend_icon(&agent.name);
-            menu = menu.child(Self::render_backend_menu_item(
-                view.clone(),
-                SharedString::from(format!("agent-backend-menu-{}", agent.id)),
-                icon,
-                agent.name,
-                Some(agent.id),
-                selected,
-                connecting,
-                cx,
-            ));
-        }
-
-        menu.child(Self::render_add_agent_row(cx))
-            .into_any_element()
-    }
-
-    fn render_backend_group_label(
-        label: &'static str,
-        cx: &mut Context<gpui_component::popover::PopoverState>,
-    ) -> gpui::AnyElement {
-        div()
-            .px_2()
-            .mt_1()
-            .pt_2()
-            .pb_1()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .text_xs()
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(cx.theme().muted_foreground)
-            .child(label)
-            .into_any_element()
-    }
-
-    fn render_backend_menu_item(
-        view: Entity<Self>,
-        id: impl Into<gpui::ElementId>,
-        icon: IconName,
-        label: SharedString,
-        agent_id: Option<SharedString>,
-        selected: bool,
-        disabled: bool,
-        cx: &mut Context<gpui_component::popover::PopoverState>,
-    ) -> gpui::AnyElement {
-        let target = agent_id.clone();
-        let item_fg = if selected {
-            cx.theme().accent_foreground
-        } else {
-            cx.theme().foreground
-        };
-        let icon_fg = if selected {
-            cx.theme().accent_foreground
-        } else {
-            cx.theme().muted_foreground
-        };
-        let hover_bg = cx.theme().list_hover;
-        let selected_bg = cx.theme().accent;
-        h_flex()
-            .id(id)
-            .w_full()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_1p5()
-            .rounded_md()
-            .text_color(item_fg)
-            .when(selected, |this| this.bg(selected_bg))
-            .when(disabled, |this| this.opacity(0.5))
-            .when(!disabled, |this| {
-                this.hover(move |this| this.bg(hover_bg))
-                    .on_click(move |_, _, cx| {
-                        view.update(cx, |this, cx| {
-                            this.backend_popover_open = false;
-                            this.select_backend(target.clone(), cx);
-                            cx.notify();
-                        });
-                    })
-            })
-            .child(Icon::new(icon).small().text_color(icon_fg))
-            .child(div().flex_1().min_w_0().truncate().child(label))
-            .when(selected, |this| {
-                this.child(Icon::new(IconName::Check).xsmall().text_color(icon_fg))
-            })
-            .into_any_element()
-    }
-
-    fn render_add_agent_row(
-        cx: &mut Context<gpui_component::popover::PopoverState>,
-    ) -> gpui::AnyElement {
-        h_flex()
-            .w_full()
-            .items_center()
-            .gap_2()
-            .mt_1()
-            .pt_1()
-            .px_2()
-            .py_1p5()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .text_color(cx.theme().muted_foreground)
-            .child(Icon::new(IconName::Plus).small())
-            .child(div().flex_1().child("Add More Agents"))
-            .into_any_element()
-    }
-
     fn render_toolbar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        // 任务模式已下沉到输入框底部工具栏,这里保留精简标题 + 后端切换控件。
-        let switcher = self.render_backend_switcher(cx);
+        // 任务模式与 Agent/ACP 切换都下沉到输入框,这里保留精简标题。
         h_flex()
             .w_full()
             .items_center()
@@ -1639,55 +1461,7 @@ impl AgentChatView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("Agent"),
             )
-            .children(switcher)
             .into_any_element()
-    }
-
-    /// 输入框正上方的 Tasks 行:有计划时显示进度并可展开查看清单。
-    fn render_tasks_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        let plan = self.transcript.latest_plan()?;
-        let row = h_flex().w_full().items_center().gap_2();
-
-        let (done, total) = plan.progress();
-        let data = plan.clone();
-        let label = SharedString::from(format!("Tasks {done}/{total}"));
-        let is_open = self.tasks_open;
-        let view = cx.entity();
-
-        Some(
-            row.child(
-                Popover::new("agent-tasks-popover")
-                    .open(is_open)
-                    .on_open_change({
-                        let view = view.clone();
-                        move |open, _window, cx| {
-                            let open = *open;
-                            view.update(cx, |this, cx| {
-                                this.tasks_open = open;
-                                cx.notify();
-                            });
-                        }
-                    })
-                    .trigger(
-                        Button::new("agent-tasks")
-                            .label(label)
-                            .outline()
-                            .small()
-                            .dropdown_caret(true),
-                    )
-                    .content(move |_state, _window, cx| {
-                        let data = data.clone();
-                        v_flex()
-                            .id("agent-tasks-list")
-                            .min_w(px(320.0))
-                            .max_h(px(420.0))
-                            .overflow_y_scroll()
-                            .p_1()
-                            .child(render_plan_list(&data, cx))
-                    }),
-            )
-            .into_any_element(),
-        )
     }
 }
 
@@ -1702,20 +1476,13 @@ impl Render for AgentChatView {
             window,
             cx,
         );
-        let tasks_bar = self.render_tasks_bar(cx);
         let input_area = div()
             .w_full()
+            .flex_shrink_0()
             .border_t_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
-            .child(
-                v_flex()
-                    .w_full()
-                    .p_3()
-                    .gap_2()
-                    .when_some(tasks_bar, |this, tasks_bar| this.child(tasks_bar))
-                    .child(self.input.clone()),
-            );
+            .child(v_flex().w_full().p_3().gap_2().child(self.input.clone()));
 
         if self.sidebar_mode {
             // 侧边栏视图:紧凑头部(新建对话 / 历史记录) + 消息 + 输入。
@@ -1744,6 +1511,24 @@ impl Render for AgentChatView {
             )
         }
     }
+}
+
+fn build_composer_context(
+    resources: &ResourceContext,
+    task_kind: TaskKind,
+    tool_label: &SharedString,
+    model: Option<&ComposerModelOption>,
+    plan: Option<&PlanCardData>,
+    backend: Backend,
+    acp_agents: &[AcpAgentConfig],
+    current_acp_id: Option<&SharedString>,
+    acp_connecting: bool,
+) -> AgentComposerContext {
+    let mut context = build_context(resources, task_kind, tool_label, model);
+    context.plan_items = composer_plan_items(plan);
+    context.agent_options =
+        composer_agent_options(backend, acp_agents, current_acp_id, acp_connecting);
+    context
 }
 
 /// 由资源上下文构建输入框展示用上下文。
@@ -1775,10 +1560,44 @@ fn build_context(
         target,
         scopes,
         capabilities,
+        plan_items: Vec::new(),
+        agent_options: Vec::new(),
         model: model.map(ComposerModelOption::to_composer_model),
         tool_label: tool_label.clone(),
         task_label: SharedString::from(task_kind_label(task_kind)),
     }
+}
+
+fn composer_plan_items(plan: Option<&PlanCardData>) -> Vec<ComposerPlanItem> {
+    plan.map(|plan| {
+        plan.steps
+            .iter()
+            .map(|step| ComposerPlanItem::new(step.title.clone(), step.status.clone()))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn composer_agent_options(
+    backend: Backend,
+    acp_agents: &[AcpAgentConfig],
+    current_acp_id: Option<&SharedString>,
+    acp_connecting: bool,
+) -> Vec<ComposerAgentOption> {
+    let mut options = vec![ComposerAgentOption::local(
+        "Codex CLI",
+        backend == Backend::Local,
+        acp_connecting,
+    )];
+    options.extend(acp_agents.iter().map(|agent| {
+        ComposerAgentOption::acp(
+            agent.id.clone(),
+            agent.name.clone(),
+            backend == Backend::Acp && current_acp_id == Some(&agent.id),
+            acp_connecting,
+        )
+    }));
+    options
 }
 
 fn target_from_resource(r: &ResourceRef) -> ComposerTarget {
@@ -1804,7 +1623,7 @@ fn kind_icon(kind: &ResourceKind) -> &'static str {
 
 fn task_kind_label(kind: TaskKind) -> &'static str {
     match kind {
-        TaskKind::Agent => "自动",
+        TaskKind::Agent => "Auto Mode",
         TaskKind::Ask => "Ask",
         TaskKind::Plan => "Plan",
     }
@@ -1816,17 +1635,6 @@ fn task_kind_from_id(id: &str) -> Option<TaskKind> {
         "ask" => Some(TaskKind::Ask),
         "plan" => Some(TaskKind::Plan),
         _ => None,
-    }
-}
-
-fn agent_backend_icon(name: &SharedString) -> IconName {
-    let lower = name.to_ascii_lowercase();
-    if lower.contains("codex") {
-        IconName::AI
-    } else if lower.contains("terminal") || lower.contains("opencode") {
-        IconName::SquareTerminal
-    } else {
-        IconName::Bot
     }
 }
 
@@ -1951,11 +1759,12 @@ fn default_tool_options() -> Vec<ComposerMenuOption> {
 }
 
 fn default_task_kind() -> TaskKind {
-    TaskKind::Ask
+    TaskKind::Agent
 }
 
 fn default_task_options() -> Vec<ComposerMenuOption> {
     vec![
+        ComposerMenuOption::new("agent", "Auto Mode").with_hint("按需回答、规划或调用工具"),
         ComposerMenuOption::new("ask", "Ask").with_hint("直接问答"),
         ComposerMenuOption::new("plan", "Plan").with_hint("先规划再执行"),
     ]
@@ -1972,10 +1781,15 @@ fn now_secs() -> i64 {
 mod tests {
     use super::*;
     use agent_runtime::RuntimeServices;
+    use agent_runtime::model::MockModelClient;
+    use agent_runtime::model::function_tool_call;
     use agent_runtime::model::{ModelClient, ModelRequest, ModelResponse, ModelStream};
+    use agent_runtime::tools::builtin::EchoTool;
     use agent_runtime::{ToolRegistry, ToolRouter};
     use async_trait::async_trait;
+    use gpui::{TestAppContext, VisualTestContext};
     use one_core::llm::{ProviderConfig, ProviderType};
+    use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -1998,7 +1812,7 @@ mod tests {
         assert!(ctx.target.is_none());
         assert!(ctx.scopes.is_empty());
         assert!(ctx.capabilities.is_empty());
-        assert_eq!(ctx.task_label.as_ref(), "自动");
+        assert_eq!(ctx.task_label.as_ref(), "Auto Mode");
     }
 
     #[test]
@@ -2027,7 +1841,7 @@ mod tests {
         assert_eq!(ctx.scopes.len(), 2);
         assert_eq!(ctx.scopes[0].value.as_ref(), "ai_app");
         assert_eq!(ctx.scopes[1].value.as_ref(), "public");
-        assert_eq!(ctx.task_label.as_ref(), "自动");
+        assert_eq!(ctx.task_label.as_ref(), "Auto Mode");
         assert_eq!(ctx.tool_label.as_ref(), "只读");
     }
 
@@ -2041,16 +1855,159 @@ mod tests {
     }
 
     #[test]
-    fn composer_defaults_to_ask_plan_modes_only() {
+    fn composer_defaults_to_auto_ask_plan_modes() {
         let options = default_task_options();
 
-        assert_eq!(TaskKind::Ask, default_task_kind());
+        assert_eq!(TaskKind::Agent, default_task_kind());
         assert_eq!(
-            vec!["ask", "plan"],
+            vec!["agent", "ask", "plan"],
             options
                 .iter()
                 .map(|option| option.id.as_ref())
                 .collect::<Vec<_>>()
+        );
+        assert_eq!(options[0].label.as_ref(), "Auto Mode");
+    }
+
+    #[test]
+    fn composer_context_includes_plan_items_for_local_and_acp_backends() {
+        let plan = PlanCardData {
+            goal: "上线检查".to_string(),
+            status: "running".to_string(),
+            steps: vec![crate::agent_cards::PlanStepData {
+                title: "检查连接".to_string(),
+                description: String::new(),
+                status: "running".to_string(),
+                risk: String::new(),
+                tool: None,
+            }],
+        };
+        let acp_id = SharedString::from("codex");
+        let acp_agents = vec![AcpAgentConfig::new(acp_id.clone(), "Codex ACP", "codex")];
+
+        let local = build_composer_context(
+            &ResourceContext::new(),
+            TaskKind::Agent,
+            &SharedString::from("自动"),
+            None,
+            Some(&plan),
+            Backend::Local,
+            &acp_agents,
+            None,
+            false,
+        );
+        let acp = build_composer_context(
+            &ResourceContext::new(),
+            TaskKind::Agent,
+            &SharedString::from("自动"),
+            None,
+            Some(&plan),
+            Backend::Acp,
+            &acp_agents,
+            Some(&acp_id),
+            false,
+        );
+
+        assert_eq!(local.plan_items, acp.plan_items);
+        assert_eq!(local.plan_items[0].title.as_ref(), "检查连接");
+        assert!(local.agent_options[0].selected);
+        assert!(acp.agent_options[1].selected);
+    }
+
+    #[gpui::test]
+    fn gpui_submit_ask_mode_does_not_pass_tools(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let model = Arc::new(MockModelClient::new([ModelResponse::text("直接回答。")]));
+        let runtime = test_runtime_with_model(model.clone());
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update_in(cx, |view, window, cx| {
+            view.select_task("ask", cx);
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "解释一下索引".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+
+        let requests = model.received_requests();
+        assert_eq!(1, requests.len());
+        assert!(
+            requests[0].tools.is_empty(),
+            "Ask 模式完整 GPUI 提交链路不能向模型传 tools"
+        );
+        assert!(
+            requests[0].tool_choice.is_none(),
+            "Ask 模式完整 GPUI 提交链路不能向模型传 tool_choice"
+        );
+        assert!(
+            !requests[0].messages[0]
+                .content_as_text()
+                .contains("update_plan")
+        );
+    }
+
+    #[gpui::test]
+    fn gpui_submit_agent_recovers_from_pseudo_tool_call(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let model = Arc::new(MockModelClient::new([
+            ModelResponse::tool_call(function_tool_call("c_bad", "tool", "db.schema")),
+            ModelResponse::tool_call(function_tool_call(
+                "c_plan",
+                "update_plan",
+                json!({
+                    "plan": [
+                        {"step": "创建计划清单", "status": "completed"},
+                        {"step": "给出总结", "status": "in_progress"}
+                    ]
+                })
+                .to_string(),
+            )),
+            ModelResponse::text("已创建计划清单。"),
+        ]));
+        let runtime = test_runtime_with_model(model.clone());
+        let config = AgentChatViewConfig::new(runtime.clone(), ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let session_id = view.read_with(cx, |view, _| view.session_id.clone());
+        view.update_in(cx, |view, window, cx| {
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "先创建一个包含几个步骤的计划清单。".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 3);
+
+        assert_eq!(3, model.request_count());
+        let session = runtime.session(&session_id).expect("session should exist");
+        let history = session.history_snapshot();
+        assert!(history.items().iter().any(|item| {
+            matches!(
+                item,
+                agent_runtime::HistoryItem::Observation(observation)
+                    if !observation.success && observation.tool_name.as_str() == "tool"
+            )
+        }));
+        assert!(
+            session.current_plan().is_some(),
+            "伪工具调用纠偏后应继续完成 update_plan"
         );
     }
 
@@ -2146,6 +2103,30 @@ mod tests {
         let model = Arc::new(NamedModelClient(model_name.to_string()));
         let tools = Arc::new(ToolRouter::new(ToolRegistry::new()));
         Arc::new(Runtime::new(RuntimeServices::new(model, tools)))
+    }
+
+    fn test_runtime_with_model(model: Arc<MockModelClient>) -> Arc<Runtime> {
+        let tools = Arc::new(ToolRouter::new(
+            ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+        ));
+        Arc::new(Runtime::new(RuntimeServices::new(model, tools)))
+    }
+
+    fn init_test_ui(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+    }
+
+    fn run_gpui_until(cx: &mut VisualTestContext, condition: impl Fn() -> bool) {
+        for _ in 0..20 {
+            if condition() {
+                return;
+            }
+            cx.run_until_parked();
+        }
+        assert!(condition(), "GPUI test condition was not reached");
     }
 
     struct NamedModelClient(String);

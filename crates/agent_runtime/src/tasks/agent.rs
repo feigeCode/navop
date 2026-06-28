@@ -17,18 +17,19 @@ use crate::planner::history_to_messages;
 use crate::runtime::{RuntimeServices, RuntimeTask, Session, TaskContext, TaskKind, TaskOutcome};
 use crate::tasks::agent_prompt::build_system_prompt;
 use crate::tasks::agent_tool_validation::{
-    malformed_tool_call_reason, services_with_update_plan_specs, tool_is_available,
+    available_tool_names, malformed_tool_call_reason, specs_for_task, tool_is_available,
 };
-use crate::tasks::update_plan::{UPDATE_PLAN_TOOL, parse_plan, update_plan_spec};
+use crate::tasks::update_plan::{UPDATE_PLAN_TOOL, parse_plan};
 use crate::tools::{ObservationData, ToolCall, ToolDispatchContext, ToolName, ToolObservation};
 use async_trait::async_trait;
 use futures::StreamExt;
-use llm_connector::types::{Message, ToolChoice};
+use llm_connector::types::{Message, ToolCall as LlmToolCall, ToolChoice};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 /// 单轮内模型 / 工具往返的最大迭代次数,防止失控。
 const MAX_ITERATIONS: usize = 16;
+const DEBUG_PREVIEW_CHARS: usize = 1200;
 
 /// codex 风格的统一 Agent 任务。
 #[derive(Default)]
@@ -66,28 +67,29 @@ impl RuntimeTask for AgentTask {
             resources: resources.clone(),
         };
 
-        for _ in 0..MAX_ITERATIONS {
+        for iteration in 0..MAX_ITERATIONS {
             if cancellation.is_cancelled() {
                 return TaskOutcome::Cancelled;
             }
 
-            let mut tools: Vec<_> = services
-                .tools
-                .specs(&resources)
-                .iter()
-                .map(|s| s.to_llm_tool())
-                .collect();
-            tools.push(update_plan_spec().to_llm_tool());
-            let tool_specs = services_with_update_plan_specs(&services, &resources);
+            let tool_specs = specs_for_task(task_kind, &services, &resources);
+            let tools: Vec<_> = tool_specs.iter().map(|s| s.to_llm_tool()).collect();
 
             // 构造请求:system + 历史 + (业务工具 + update_plan)。
-            let mut messages =
-                vec![Message::system(build_system_prompt(task_kind, &tool_specs, &resources))];
+            let mut messages = vec![Message::system(build_system_prompt(
+                task_kind,
+                &tool_specs,
+                &resources,
+            ))];
             messages.extend(history_to_messages(&session.history_snapshot()));
 
-            let request = ModelRequest::new(messages)
-                .with_tools(tools)
-                .with_tool_choice(ToolChoice::auto());
+            let mut request = ModelRequest::new(messages);
+            if !tools.is_empty() {
+                request = request
+                    .with_tools(tools)
+                    .with_tool_choice(ToolChoice::auto());
+            }
+            log_model_request(iteration, &request);
 
             // 流式采样:边收边推文本增量,聚合出完整响应(文本 + 工具调用)。
             let response = match sample(&services, request, &session, &turn_id, &cancellation).await
@@ -107,6 +109,7 @@ impl RuntimeTask for AgentTask {
                 tool_calls = ?tool_names,
                 "Agent 模型响应"
             );
+            log_model_response(iteration, &response);
 
             // 无工具调用:本次文本即最终回答(增量已流式发出,这里落历史并发完整消息)。
             if response.tool_calls.is_empty() {
@@ -117,6 +120,13 @@ impl RuntimeTask for AgentTask {
                 };
             }
 
+            if task_kind == TaskKind::Ask {
+                return TaskOutcome::Failed {
+                    reason: "Ask 模式不支持工具调用;请切换到 Agent 或 Plan 模式后再使用工具。"
+                        .into(),
+                };
+            }
+
             // 模型在调用工具前可能附带一段说明:落历史并 finalize 当前流式消息。
             if let Some(text) = response.text.as_ref().filter(|t| !t.is_empty()) {
                 session.record_assistant_message(&turn_id, text.clone());
@@ -124,35 +134,28 @@ impl RuntimeTask for AgentTask {
 
             // 逐个执行工具调用,把调用与观测写回历史供下一轮 follow-up。
             for llm_call in &response.tool_calls {
+                log_llm_tool_call("agent_dispatch", llm_call);
+                let call_id = llm_tool_call_id(llm_call);
+                let tool_name = ToolName::new(llm_call.function.name.clone());
+                if !tool_is_available(&tool_specs, &tool_name) {
+                    session.record_observation(
+                        &turn_id,
+                        unavailable_tool_observation(call_id, tool_name, &tool_specs),
+                    );
+                    continue;
+                }
+
                 let call = match ToolCall::from_llm(llm_call) {
                     Ok(call) => call,
                     Err(err) => {
-                        // 非 JSON 参数通常意味着模型/Provider 返回了非标准工具格式;
-                        // 直接结束本轮,避免把失败观测喂回模型后反复调用伪工具。
-                        let call_id = llm_tool_call_id(llm_call);
-                        let tool_name = ToolName::new(llm_call.function.name.clone());
-                        let observation = ToolObservation::from_error(call_id, tool_name, &err);
+                        // 非 JSON 参数通常是模型/Provider 返回了非标准工具格式;
+                        // 写回观测让模型用同一批可用工具和 JSON object 参数纠正。
                         let reason = malformed_tool_call_reason(llm_call, &err);
+                        let observation = ToolObservation::failure(call_id, tool_name, reason);
                         session.record_observation(&turn_id, observation);
-                        return TaskOutcome::Failed { reason };
+                        continue;
                     }
                 };
-
-                if !tool_is_available(&services, &resources, &call.tool_name) {
-                    let reason = format!(
-                        "模型请求了未注册工具 `{}`。请使用可用工具名,不要调用 `tool` 伪工具。",
-                        call.tool_name
-                    );
-                    session.record_observation(
-                        &turn_id,
-                        ToolObservation::from_error(
-                            call.call_id.clone(),
-                            call.tool_name.clone(),
-                            &crate::error::ToolError::NotFound(call.tool_name.to_string()),
-                        ),
-                    );
-                    return TaskOutcome::Failed { reason };
-                }
 
                 tracing::info!(
                     tool = %call.tool_name,
@@ -226,6 +229,82 @@ async fn sample(
     }))
 }
 
+fn log_model_request(iteration: usize, request: &ModelRequest) {
+    let tool_names = request
+        .tools
+        .iter()
+        .map(|tool| tool.function.name.as_str())
+        .collect::<Vec<_>>();
+    tracing::debug!(
+        iteration,
+        messages = request.messages.len(),
+        tools = ?tool_names,
+        tool_choice = ?request.tool_choice,
+        temperature = ?request.temperature,
+        max_tokens = ?request.max_tokens,
+        "Agent 模型输入摘要"
+    );
+    tracing::trace!(
+        iteration,
+        messages = %debug_json(&request.messages),
+        tools = %debug_json(&request.tools),
+        tool_choice = %debug_json(&request.tool_choice),
+        "Agent 模型输入详情"
+    );
+}
+
+fn log_model_response(iteration: usize, response: &ModelResponse) {
+    let tool_calls = response
+        .tool_calls
+        .iter()
+        .map(debug_tool_call)
+        .collect::<Vec<_>>();
+    tracing::debug!(
+        iteration,
+        text_len = response.text.as_deref().map(str::len).unwrap_or(0),
+        text_preview = %preview(response.text.as_deref().unwrap_or_default()),
+        tool_calls = ?tool_calls,
+        "Agent 模型输出详情"
+    );
+}
+
+fn log_llm_tool_call(stage: &str, call: &LlmToolCall) {
+    tracing::debug!(
+        stage,
+        id = %call.id,
+        index = ?call.index,
+        call_type = %call.call_type,
+        function_name = %call.function.name,
+        arguments_len = call.function.arguments.len(),
+        arguments_preview = %preview(&call.function.arguments),
+        "Agent 工具调用原始字段"
+    );
+}
+
+fn debug_tool_call(call: &LlmToolCall) -> String {
+    format!(
+        "id={}, index={:?}, type={}, name={}, args_len={}, args={}",
+        call.id,
+        call.index,
+        call.call_type,
+        call.function.name,
+        call.function.arguments.len(),
+        preview(&call.function.arguments)
+    )
+}
+
+fn debug_json<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|err| format!("<json encode failed: {err}>"))
+}
+
+fn preview(value: &str) -> String {
+    let mut out: String = value.chars().take(DEBUG_PREVIEW_CHARS).collect();
+    if value.chars().count() > DEBUG_PREVIEW_CHARS {
+        out.push_str("…<truncated>");
+    }
+    out
+}
+
 /// 本地处理 `update_plan`:解析参数 → 更新会话计划(发 `PlanUpdated`)→ 回一条确认观测。
 fn handle_update_plan(
     session: &Session,
@@ -252,6 +331,22 @@ fn handle_update_plan(
             &crate::error::ToolError::InvalidArguments("update_plan 参数解析失败".into()),
         ),
     }
+}
+
+fn unavailable_tool_observation(
+    call_id: ToolCallId,
+    tool_name: ToolName,
+    tool_specs: &[crate::tools::ToolSpec],
+) -> ToolObservation {
+    ToolObservation::failure(
+        call_id,
+        tool_name.clone(),
+        format!(
+            "模型请求了未注册工具 `{}`。可用工具: {}。不要调用名为 `tool` 的通用伪工具;请改用可用工具名,且 arguments 必须是合法 JSON object。",
+            tool_name,
+            available_tool_names(tool_specs)
+        ),
+    )
 }
 
 /// 从 `llm-connector` 的工具调用取 call id(空则新生成)。

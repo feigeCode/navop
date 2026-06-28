@@ -8,7 +8,7 @@ mod mention;
 pub use agent_input::{AgentInput, AgentInputEvent};
 pub use attachment::ImageAttachment;
 pub use context::{
-    AgentComposerContext, ComposerMenuOption, ComposerModel, ComposerModelOption, ComposerScope,
-    ComposerTarget,
+    AgentComposerContext, ComposerAgentOption, ComposerMenuOption, ComposerModel,
+    ComposerModelOption, ComposerPlanItem, ComposerScope, ComposerTarget,
 };
 pub use mention::{MentionCompletionProvider, MentionItem};

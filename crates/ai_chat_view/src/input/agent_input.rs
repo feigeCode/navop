@@ -1,10 +1,10 @@
-//! Agent 输入框:顶部目标 Context Bar + 多行输入 + `@` 提及 + 图片附件 + 底部执行参数工具栏。
+//! Agent 输入框:顶部模式入口 + 多行输入 + `@` 提及 + 图片附件 + 底部执行参数工具栏。
 //!
 //! 布局参考 `agent-composer-design.html`:
-//! - **顶部 Context Bar**:主目标 chip + 动态数量的派生上下文(scope)chip;
-//! - **附件条**:图片缩略图(粘贴 / 附加);
+//! - **顶部模式入口**:计划 / 子代理 / 上下文;
+//! - **附件条**:编辑器顶部的附件入口 + 图片缩略图(粘贴 / 附加);
 //! - **编辑器**:基于 [`InputState`] 的多行自增高输入,注入 [`MentionCompletionProvider`] 实现 `@` 提及;
-//! - **底部工具栏**:`+附件` / `@引用` / `工具模式▾` / `任务模式▾` / `模型▾` / `发送`。
+//! - **底部工具栏**:执行设置 / 任务模式▾ / 工具模式▾ / 模型▾ / 发送。
 //!
 //! 设计原则:输入框是"哑组件",只接收 [`AgentComposerContext`] 做展示并在交互时 emit
 //! [`AgentInputEvent`];目标用上层注入的列表渲染内置 popover(选中 emit `SelectTarget`),
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeyDownEvent, ParentElement, PathPromptOptions, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, div, img, px,
+    StatefulInteractiveElement, Styled, Subscription, Window, div, img, prelude::FluentBuilder, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -25,7 +25,8 @@ use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, 
 
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
-    AgentComposerContext, ComposerMenuOption, ComposerModelOption, ComposerScope, ComposerTarget,
+    AgentComposerContext, ComposerAgentOption, ComposerMenuOption, ComposerModelOption,
+    ComposerPlanItem, ComposerScope, ComposerTarget,
 };
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
 
@@ -57,12 +58,16 @@ pub enum AgentInputEvent {
     SelectToolMode { id: SharedString },
     /// 在内置下拉中选择了任务模式。
     SelectTaskMode { id: SharedString },
+    /// 在顶部「子代理」面板中选择内置 Agent 或 ACP Agent。
+    SelectAgentBackend { id: Option<SharedString> },
 }
 
 /// 内置下拉的种类(用于受控开合状态)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ComposerMenuKind {
     Target,
+    Plan,
+    Agent,
     Model,
     Tool,
     Task,
@@ -71,6 +76,9 @@ enum ComposerMenuKind {
 fn menu_event(kind: ComposerMenuKind, id: SharedString) -> AgentInputEvent {
     match kind {
         ComposerMenuKind::Target => AgentInputEvent::SelectTarget { id },
+        ComposerMenuKind::Plan | ComposerMenuKind::Agent => {
+            unreachable!("顶部能力面板使用专用事件")
+        }
         ComposerMenuKind::Model => unreachable!("模型菜单使用结构化事件"),
         ComposerMenuKind::Tool => AgentInputEvent::SelectToolMode { id },
         ComposerMenuKind::Task => AgentInputEvent::SelectTaskMode { id },
@@ -108,6 +116,8 @@ pub struct AgentInput {
     task_options: Vec<ComposerMenuOption>,
     /// 当前展开的下拉(受控开合)。
     open_menu: Option<ComposerMenuKind>,
+    /// 是否折叠顶部计划 / 子代理 / 上下文能力区。
+    top_capabilities_collapsed: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -183,6 +193,7 @@ impl AgentInput {
             tool_options: Vec::new(),
             task_options: Vec::new(),
             open_menu: None,
+            top_capabilities_collapsed: false,
             _subscriptions: vec![enter_sub, paste_sub],
         }
     }
@@ -308,68 +319,144 @@ impl AgentInput {
         .detach();
     }
 
-    /// 「@引用」按钮:聚焦编辑器并在光标处插入 `@` 以触发提及补全。
-    fn insert_mention_trigger(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_input(window, cx);
-        self.input_state
-            .update(cx, |state, cx| state.insert("@", window, cx));
-    }
-
     fn remove_attachment(&mut self, id: &str, cx: &mut Context<Self>) {
         self.attachments.retain(|a| a.id != id);
         cx.notify();
     }
 
     fn render_context_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let mut target_row = h_flex()
-            .w_full()
-            .items_center()
-            .flex_wrap()
-            .gap_2()
-            .px_3()
-            .py_2()
-            .child(self.render_target_chip(cx));
-
-        let scopes = self.context.scopes.clone();
-        for scope in &scopes {
-            target_row = target_row.child(self.render_scope_chip(scope, cx));
-        }
+        let border = cx.theme().border;
 
         v_flex()
             .w_full()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(target_row)
+            .flex_shrink_0()
+            .when(!self.top_capabilities_collapsed, |this| {
+                this.border_b_1()
+                    .border_color(border)
+                    .child(self.render_mode_tabs(cx))
+            })
     }
 
-    fn render_target_chip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_mode_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        v_flex().w_full().px_3().pt_2().pb_1p5().child(
+            h_flex()
+                .w_full()
+                .h(px(38.0))
+                .items_center()
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted)
+                .child(self.render_plan_mode_tab(cx))
+                .child(self.render_mode_separator(cx))
+                .child(self.render_agent_mode_tab(cx))
+                .child(self.render_mode_separator(cx))
+                .child(self.render_context_mode_tab(cx)),
+        )
+    }
+
+    fn render_plan_mode_tab(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let view = cx.entity();
+        let is_open = self.open_menu == Some(ComposerMenuKind::Plan);
+        let plan_items = self.context.plan_items.clone();
+
+        Popover::new("agent-plan-popover")
+            .p_0()
+            .open(is_open)
+            .on_open_change({
+                let view = view.clone();
+                move |open, _window, cx| {
+                    let open = *open;
+                    view.update(cx, |this, cx| {
+                        this.open_menu = if open && !this.is_running {
+                            Some(ComposerMenuKind::Plan)
+                        } else {
+                            None
+                        };
+                        cx.notify();
+                    });
+                }
+            })
+            .trigger(self.render_capability_trigger(
+                "agent-plan-trigger",
+                "计划",
+                IconName::Check,
+                cx,
+            ))
+            .content(move |_state, _window, cx| render_plan_mode_content(plan_items.clone(), cx))
+    }
+
+    fn render_agent_mode_tab(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let view = cx.entity();
+        let is_open = self.open_menu == Some(ComposerMenuKind::Agent);
+        let agents = self.context.agent_options.clone();
+
+        Popover::new("agent-subagent-popover")
+            .p_0()
+            .open(is_open)
+            .on_open_change({
+                let view = view.clone();
+                move |open, _window, cx| {
+                    let open = *open;
+                    view.update(cx, |this, cx| {
+                        this.open_menu = if open && !this.is_running {
+                            Some(ComposerMenuKind::Agent)
+                        } else {
+                            None
+                        };
+                        cx.notify();
+                    });
+                }
+            })
+            .trigger(self.render_capability_trigger(
+                "agent-subagent-trigger",
+                "子代理",
+                IconName::Bot,
+                cx,
+            ))
+            .content({
+                let view = view.clone();
+                move |_state, _window, cx| {
+                    render_agent_mode_content(view.clone(), agents.clone(), cx)
+                }
+            })
+    }
+
+    fn render_capability_trigger(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        icon: IconName,
+        cx: &mut Context<Self>,
+    ) -> Button {
+        Button::new(id)
+            .debug_selector(move || id.to_string())
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .ghost()
+            .small()
+            .disabled(self.is_running)
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .items_center()
+                    .justify_center()
+                    .gap_1()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(Icon::new(icon).xsmall())
+                    .child(div().text_sm().truncate().child(label)),
+            )
+    }
+
+    fn render_context_mode_tab(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let view = cx.entity();
         let is_open = self.open_menu == Some(ComposerMenuKind::Target);
-        let (has_target, value) = match &self.context.target {
-            Some(t) => (true, t.label.clone()),
-            None => (false, SharedString::from("选择目标")),
-        };
         let options = self.target_options.clone();
+        let current = self.context.target.clone();
+        let scopes = self.context.scopes.clone();
 
-        let trigger = {
-            let button = Button::new("agent-target-chip")
-                .small()
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .child(div().text_xs().child(value)),
-                )
-                .dropdown_caret(true)
-                .disabled(self.is_running);
-            if has_target {
-                button.outline()
-            } else {
-                button.ghost()
-            }
-        };
-
-        Popover::new("agent-target-popover")
+        Popover::new("agent-context-mode-popover")
             .p_0()
             .open(is_open)
             .on_open_change({
@@ -386,108 +473,48 @@ impl AgentInput {
                     });
                 }
             })
-            .trigger(trigger)
+            .trigger(self.render_context_mode_trigger(cx))
             .content({
                 let view = view.clone();
                 move |_state, _window, cx| {
-                    let muted = cx.theme().muted_foreground;
-                    let hover_bg = cx.theme().list_hover;
-                    let radius = cx.theme().radius;
-                    let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(280.0));
-                    if options.is_empty() {
-                        col = col.child(
-                            div()
-                                .p_2()
-                                .text_xs()
-                                .text_color(muted)
-                                .child("（无可用目标）"),
-                        );
-                    }
-                    for opt in &options {
-                        let view = view.clone();
-                        let sel = opt.id.clone();
-                        col = col.child(
-                            h_flex()
-                                .id(SharedString::from(format!("target-opt-{}", opt.id)))
-                                .w_full()
-                                .items_center()
-                                .gap(px(8.0))
-                                .px_2()
-                                .py_1()
-                                .rounded(radius)
-                                .cursor_pointer()
-                                .hover(move |s| s.bg(hover_bg))
-                                .child(
-                                    h_flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .size(px(24.0))
-                                        .rounded(radius)
-                                        .bg(hover_bg)
-                                        .text_xs()
-                                        .child(opt.icon.clone()),
-                                )
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .gap(px(1.0))
-                                        .child(div().text_sm().child(opt.label.clone()))
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(muted)
-                                                .child(opt.subtitle.clone()),
-                                        ),
-                                )
-                                .child(div().text_xs().text_color(muted).child(opt.kind.clone()))
-                                .on_click(move |_, _window, cx| {
-                                    let sel = sel.clone();
-                                    view.update(cx, |this, cx| {
-                                        this.open_menu = None;
-                                        cx.emit(menu_event(ComposerMenuKind::Target, sel));
-                                        cx.notify();
-                                    });
-                                }),
-                        );
-                    }
-                    col
+                    render_context_mode_content(
+                        view.clone(),
+                        options.clone(),
+                        current.clone(),
+                        scopes.clone(),
+                        cx,
+                    )
                 }
             })
     }
 
-    fn render_scope_chip(
-        &self,
-        scope: &ComposerScope,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let key = scope.key.clone();
-        let muted = cx.theme().muted_foreground;
-        let fg = cx.theme().foreground;
-        let border = cx.theme().border;
-        let radius = cx.theme().radius;
-        let hover_bg = cx.theme().list_hover;
+    fn render_context_mode_trigger(&self, cx: &mut Context<Self>) -> Button {
+        let fg = if self.context.target.is_some() {
+            cx.theme().foreground
+        } else {
+            cx.theme().muted_foreground
+        };
+        Button::new("agent-context-mode")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .ghost()
+            .small()
+            .disabled(self.is_running)
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .items_center()
+                    .justify_center()
+                    .gap_1()
+                    .text_color(fg)
+                    .child(Icon::new(IconName::File).xsmall())
+                    .child(div().text_sm().truncate().child("上下文")),
+            )
+    }
 
-        h_flex()
-            .id(SharedString::from(format!("agent-scope-{key}")))
-            .items_center()
-            .h(px(28.0))
-            .px(px(9.0))
-            .gap(px(6.0))
-            .rounded(radius)
-            .border_1()
-            .border_color(border)
-            .bg(cx.theme().background)
-            .cursor_pointer()
-            .hover(move |s| s.bg(hover_bg))
-            .child(div().text_xs().text_color(muted).child(scope.label.clone()))
-            .child(div().text_xs().text_color(fg).child(scope.value.clone()))
-            .child(Icon::new(IconName::ChevronDown).xsmall().text_color(muted))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if !this.is_running {
-                    cx.emit(AgentInputEvent::PickScope { key: key.clone() });
-                }
-            }))
+    fn render_mode_separator(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div().h(px(20.0)).w(px(1.0)).bg(cx.theme().border)
     }
 
     fn render_menu(
@@ -582,7 +609,7 @@ impl AgentInput {
 
         let trigger = Button::new("agent-model")
             .small()
-            .label(compact_label(trigger_label.as_ref(), 22))
+            .label(compact_label(trigger_label.as_ref(), 18))
             .outline()
             .dropdown_caret(true)
             .disabled(self.is_running);
@@ -704,10 +731,78 @@ impl AgentInput {
         )
     }
 
+    fn render_editor_top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let muted = cx.theme().muted_foreground;
+        let count = self.attachments.len();
+
+        h_flex()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .px_3()
+            .pt_2()
+            .pb_1()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        Button::new("agent-attach")
+                            .icon(IconName::File)
+                            .ghost()
+                            .small()
+                            .tooltip("附加图片")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.open_file_picker(window, cx)
+                                }),
+                            ),
+                    )
+                    .child(Icon::new(IconName::LoaderCircle).xsmall().text_color(muted))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(format!("{count} 个附件")),
+                    )
+                    .child(div().h(px(18.0)).w(px(1.0)).bg(cx.theme().border)),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(
+                        Button::new("agent-editor-menu")
+                            .icon(if self.top_capabilities_collapsed {
+                                IconName::ChevronUp
+                            } else {
+                                IconName::ChevronDown
+                            })
+                            .ghost()
+                            .small()
+                            .tooltip("折叠能力区")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.top_capabilities_collapsed = !this.top_capabilities_collapsed;
+                                if this.top_capabilities_collapsed {
+                                    this.open_menu = None;
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("agent-editor-undo")
+                            .icon(IconName::Undo)
+                            .ghost()
+                            .small()
+                            .tooltip("撤销"),
+                    ),
+            )
+    }
+
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let running = self.is_running;
         let task_label = if self.context.task_label.is_empty() {
-            SharedString::from("Ask")
+            SharedString::from("Auto Mode")
         } else {
             self.context.task_label.clone()
         };
@@ -721,31 +816,12 @@ impl AgentInput {
             None => SharedString::from("选择模型"),
         };
 
-        h_flex()
-            .w_full()
+        let left_controls = h_flex()
+            .flex_1()
+            .min_w_0()
             .items_center()
+            .flex_wrap()
             .gap_1()
-            .px_3()
-            .pb_2()
-            .pt_1()
-            .child(
-                Button::new("agent-attach")
-                    .icon(IconName::Plus)
-                    .ghost()
-                    .small()
-                    .tooltip("附加图片")
-                    .on_click(cx.listener(|this, _, window, cx| this.open_file_picker(window, cx))),
-            )
-            .child(
-                Button::new("agent-mention")
-                    .label("@")
-                    .ghost()
-                    .small()
-                    .tooltip("引用资源")
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.insert_mention_trigger(window, cx)),
-                    ),
-            )
             .child(self.render_menu(
                 ComposerMenuKind::Task,
                 "agent-task-mode",
@@ -761,30 +837,59 @@ impl AgentInput {
                 self.tool_options.clone(),
                 false,
                 cx,
-            ))
-            .child(div().flex_1().min_w_0())
+            ));
+
+        let run_button = if running {
+            Button::new("agent-stop")
+                .icon(IconName::Close)
+                .danger()
+                .small()
+                .tooltip("停止")
+                .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
+        } else {
+            Button::new("agent-send")
+                .icon(IconName::ArrowUp)
+                .primary()
+                .small()
+                .tooltip("发送")
+                .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))
+        };
+
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .pb_2()
+            .pt_1()
+            .flex_shrink_0()
+            .child(left_controls)
             .child(
-                div()
-                    .max_w(px(220.0))
-                    .min_w(px(120.0))
-                    .overflow_hidden()
-                    .child(self.render_model_menu(model_label, self.model_options.clone(), cx)),
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .flex_shrink_0()
+                    .child(
+                        div()
+                            .w(px(168.0))
+                            .max_w(px(168.0))
+                            .overflow_hidden()
+                            .child(self.render_model_menu(
+                                model_label,
+                                self.model_options.clone(),
+                                cx,
+                            ))
+                            .debug_selector(|| "agent-input-model-control".to_string()),
+                    )
+                    .child(
+                        div()
+                            .w(px(34.0))
+                            .h(px(32.0))
+                            .flex_shrink_0()
+                            .debug_selector(|| "agent-input-send-control".to_string())
+                            .child(run_button),
+                    ),
             )
-            .child(if running {
-                Button::new("agent-stop")
-                    .icon(IconName::Close)
-                    .label("停止")
-                    .danger()
-                    .small()
-                    .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
-            } else {
-                Button::new("agent-send")
-                    .icon(IconName::ArrowUp)
-                    .label("发送")
-                    .primary()
-                    .small()
-                    .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))
-            })
     }
 }
 
@@ -824,6 +929,336 @@ fn is_mention_name_char(ch: char) -> bool {
 
 impl EventEmitter<AgentInputEvent> for AgentInput {}
 
+fn render_plan_mode_content(
+    items: Vec<ComposerPlanItem>,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let border = cx.theme().border;
+    let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(320.0));
+
+    col = col.child(context_group_label("计划 Todo", cx));
+    if items.is_empty() {
+        return col
+            .child(
+                div()
+                    .px_2()
+                    .py_2()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("暂无计划"),
+            )
+            .into_any_element();
+    }
+
+    for item in items {
+        col = col.child(plan_item_row(item, muted, border, cx));
+    }
+    col.into_any_element()
+}
+
+fn plan_item_row(
+    item: ComposerPlanItem,
+    muted: gpui::Hsla,
+    border: gpui::Hsla,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let icon = match item.status.as_ref() {
+        "completed" => IconName::CircleCheck,
+        "running" | "in_progress" => IconName::LoaderCircle,
+        _ => IconName::CircleCheck,
+    };
+    let icon_color = match item.status.as_ref() {
+        "completed" => cx.theme().success,
+        "running" | "in_progress" => cx.theme().warning,
+        _ => muted,
+    };
+
+    h_flex()
+        .w_full()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1()
+        .border_b_1()
+        .border_color(border)
+        .child(Icon::new(icon).xsmall().text_color(icon_color))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .truncate()
+                .child(item.title),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child(plan_status_label(item.status.as_ref())),
+        )
+        .into_any_element()
+}
+
+fn plan_status_label(status: &str) -> &'static str {
+    match status {
+        "completed" => "已完成",
+        "running" | "in_progress" => "进行中",
+        "failed" => "失败",
+        "cancelled" => "已取消",
+        _ => "待执行",
+    }
+}
+
+fn render_agent_mode_content(
+    view: Entity<AgentInput>,
+    agents: Vec<ComposerAgentOption>,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(300.0));
+
+    col = col.child(context_group_label("Agent", cx));
+    if agents.is_empty() {
+        return col
+            .child(
+                div()
+                    .px_2()
+                    .py_2()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("无可用 Agent"),
+            )
+            .into_any_element();
+    }
+
+    for agent in agents {
+        col = col.child(agent_option_row(view.clone(), agent, muted, cx));
+    }
+    col.into_any_element()
+}
+
+fn agent_option_row(
+    view: Entity<AgentInput>,
+    agent: ComposerAgentOption,
+    muted: gpui::Hsla,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let hover_bg = cx.theme().list_hover;
+    let selected_bg = cx.theme().accent;
+    let icon_fg = if agent.selected {
+        cx.theme().accent_foreground
+    } else {
+        muted
+    };
+    let id = agent.element_id();
+    let target = agent.id.clone();
+    let disabled = agent.connecting;
+
+    h_flex()
+        .id(id)
+        .w_full()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1p5()
+        .rounded(cx.theme().radius)
+        .when(agent.selected, |this| this.bg(selected_bg))
+        .when(disabled, |this| this.opacity(0.5))
+        .when(!disabled, |this| {
+            this.cursor_pointer()
+                .hover(move |this| this.bg(hover_bg))
+                .on_click(move |_, _window, cx| {
+                    let target = target.clone();
+                    view.update(cx, |this, cx| {
+                        if this.is_running {
+                            return;
+                        }
+                        this.open_menu = None;
+                        cx.emit(AgentInputEvent::SelectAgentBackend { id: target });
+                        cx.notify();
+                    });
+                })
+        })
+        .child(
+            Icon::new(if agent.id.is_some() {
+                IconName::Bot
+            } else {
+                IconName::AI
+            })
+            .small()
+            .text_color(icon_fg),
+        )
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(1.0))
+                .child(div().text_sm().truncate().child(agent.label))
+                .child(div().text_xs().text_color(muted).child(agent.subtitle)),
+        )
+        .when(agent.selected, |this| {
+            this.child(Icon::new(IconName::Check).xsmall().text_color(icon_fg))
+        })
+        .into_any_element()
+}
+
+fn render_context_mode_content(
+    view: Entity<AgentInput>,
+    options: Vec<ComposerTarget>,
+    current: Option<ComposerTarget>,
+    scopes: Vec<ComposerScope>,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let border = cx.theme().border;
+    let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(300.0));
+
+    if let Some(target) = current {
+        col = col
+            .child(context_group_label("当前上下文", cx))
+            .child(context_summary_row(
+                target.label,
+                target.subtitle,
+                muted,
+                cx,
+            ));
+    }
+    if !scopes.is_empty() {
+        col = col.child(context_group_label("作用域", cx));
+        for scope in scopes {
+            col = col.child(context_scope_row(view.clone(), scope, muted, border, cx));
+        }
+    }
+    col = col.child(context_group_label("选择目标", cx));
+    if options.is_empty() {
+        col = col.child(div().p_2().text_xs().text_color(muted).child("无可用目标"));
+    }
+    for opt in options {
+        col = col.child(context_target_option(view.clone(), opt, muted, cx));
+    }
+
+    col.into_any_element()
+}
+
+fn context_group_label(
+    label: &'static str,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    div()
+        .px_2()
+        .pt_1()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(label)
+        .into_any_element()
+}
+
+fn context_summary_row(
+    label: SharedString,
+    subtitle: SharedString,
+    muted: gpui::Hsla,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    v_flex()
+        .px_2()
+        .py_1()
+        .rounded(cx.theme().radius)
+        .bg(cx.theme().list_hover)
+        .child(div().text_sm().child(label))
+        .child(div().text_xs().text_color(muted).child(subtitle))
+        .into_any_element()
+}
+
+fn context_scope_row(
+    view: Entity<AgentInput>,
+    scope: ComposerScope,
+    muted: gpui::Hsla,
+    border: gpui::Hsla,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let key = scope.key.clone();
+    let hover_bg = cx.theme().list_hover;
+    let radius = cx.theme().radius;
+
+    h_flex()
+        .id(SharedString::from(format!("context-scope-{key}")))
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .px_2()
+        .py_1()
+        .rounded(radius)
+        .border_b_1()
+        .border_color(border)
+        .cursor_pointer()
+        .hover(move |s| s.bg(hover_bg))
+        .child(div().text_xs().text_color(muted).child(scope.label))
+        .child(div().text_xs().child(scope.value))
+        .on_click(move |_, _window, cx| {
+            let key = key.clone();
+            view.update(cx, |this, cx| {
+                if this.is_running {
+                    return;
+                }
+                this.open_menu = None;
+                cx.emit(AgentInputEvent::PickScope { key });
+                cx.notify();
+            });
+        })
+        .into_any_element()
+}
+
+fn context_target_option(
+    view: Entity<AgentInput>,
+    opt: ComposerTarget,
+    muted: gpui::Hsla,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let sel = opt.id.clone();
+    let hover_bg = cx.theme().list_hover;
+    let radius = cx.theme().radius;
+
+    h_flex()
+        .id(SharedString::from(format!("context-target-opt-{}", opt.id)))
+        .w_full()
+        .items_center()
+        .gap(px(8.0))
+        .px_2()
+        .py_1()
+        .rounded(radius)
+        .cursor_pointer()
+        .hover(move |s| s.bg(hover_bg))
+        .child(
+            h_flex()
+                .items_center()
+                .justify_center()
+                .size(px(24.0))
+                .rounded(radius)
+                .bg(hover_bg)
+                .text_xs()
+                .child(opt.icon),
+        )
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(1.0))
+                .child(div().text_sm().child(opt.label))
+                .child(div().text_xs().text_color(muted).child(opt.subtitle)),
+        )
+        .child(div().text_xs().text_color(muted).child(opt.kind))
+        .on_click(move |_, _window, cx| {
+            let sel = sel.clone();
+            view.update(cx, |this, cx| {
+                this.open_menu = None;
+                cx.emit(AgentInputEvent::SelectTarget { id: sel });
+                cx.notify();
+            });
+        })
+        .into_any_element()
+}
+
 impl Focusable for AgentInput {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -834,11 +1269,13 @@ impl Render for AgentInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let context_bar = self.render_context_bar(cx);
         let attachments = self.render_attachments(cx);
+        let editor_top_bar = self.render_editor_top_bar(cx);
         let toolbar = self.render_toolbar(cx);
 
         v_flex()
             .track_focus(&self.focus_handle)
             .w_full()
+            .flex_shrink_0()
             .bg(cx.theme().background)
             .rounded_lg()
             .border_1()
@@ -850,21 +1287,22 @@ impl Render for AgentInput {
                     this.paste_images_from_clipboard(cx);
                 }
             }))
-            // 顶部：上下文目标选择栏
+            // 顶部：计划 / 子代理 / 上下文入口
             .child(context_bar)
             // 附件预览（如果有）
             .children(attachments)
+            .child(editor_top_bar)
             // 中部：多行输入框
             .child(
                 div()
                     .w_full()
                     .px_3()
                     .pt_2()
-                    .max_h(px(240.0))
+                    .max_h(px(220.0))
                     .overflow_hidden()
                     .child(Input::new(&self.input_state).size_full()),
             )
-            // 底部：工具栏（附件、引用、模式、发送按钮）
+            // 底部：执行参数、模型和发送按钮
             .child(toolbar)
     }
 }
@@ -872,6 +1310,99 @@ impl Render for AgentInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::context::ComposerModel;
+    use gpui::{TestAppContext, VisualTestContext};
+
+    struct AgentInputLayoutRoot {
+        input: Entity<AgentInput>,
+    }
+
+    impl AgentInputLayoutRoot {
+        fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            let input = cx.new(|cx| {
+                AgentInput::with_mentions(Vec::new(), "描述目标，输入 @ 引用资源…", window, cx)
+            });
+            input.update(cx, |input, cx| {
+                input.set_context(
+                    AgentComposerContext {
+                        model: Some(ComposerModel::new(
+                            "Very Long Provider Name",
+                            "extremely-long-model-name-with-large-context",
+                        )),
+                        tool_label: SharedString::from("自动"),
+                        task_label: SharedString::from("Auto Mode"),
+                        ..AgentComposerContext::default()
+                    },
+                    cx,
+                );
+                input.set_menu_options(
+                    vec![ComposerModelOption::new(
+                        "long-model",
+                        "provider",
+                        "Very Long Provider Name",
+                        "extremely-long-model-name-with-large-context",
+                    )],
+                    vec![ComposerMenuOption::new("auto", "自动")],
+                    vec![ComposerMenuOption::new("agent", "Auto Mode")],
+                    cx,
+                );
+            });
+            Self { input }
+        }
+    }
+
+    impl Render for AgentInputLayoutRoot {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(360.0)).h(px(220.0)).child(self.input.clone())
+        }
+    }
+
+    #[gpui::test]
+    fn narrow_layout_keeps_model_and_send_controls_visible(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(AgentInputLayoutRoot::new);
+        let cx: &mut VisualTestContext = cx;
+
+        let model = cx
+            .debug_bounds("agent-input-model-control")
+            .expect("model control should be rendered");
+        let send = cx
+            .debug_bounds("agent-input-send-control")
+            .expect("send control should be rendered");
+
+        assert!(model.size.width >= px(150.0));
+        assert!(send.size.width >= px(28.0));
+        assert!(
+            model.origin.x + model.size.width <= send.origin.x,
+            "model and send controls must not overlap: model={model:?}, send={send:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn top_capability_triggers_replace_bottom_settings(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(AgentInputLayoutRoot::new);
+        let cx: &mut VisualTestContext = cx;
+
+        assert!(
+            cx.debug_bounds("agent-plan-trigger").is_some(),
+            "plan should be a top capability trigger, not a task-mode switch"
+        );
+        assert!(
+            cx.debug_bounds("agent-subagent-trigger").is_some(),
+            "subagent should be a top capability trigger for local/ACP agents"
+        );
+        assert!(
+            cx.debug_bounds("agent-settings").is_none(),
+            "execution settings no longer belongs in the bottom toolbar"
+        );
+    }
 
     #[test]
     fn referenced_mentions_do_not_match_label_prefixes() {

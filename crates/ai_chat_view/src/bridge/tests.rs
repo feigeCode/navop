@@ -110,7 +110,7 @@ fn empty_tools_map_to_none() {
 }
 
 #[test]
-fn deepseek_thinking_models_disable_function_calling() {
+fn deepseek_v4_keeps_tools_and_tool_choice() {
     let client = LlmModelClient::new(sample_provider_named("deepseek"), "deepseek-v4-flash");
     let request = ModelRequest::new(vec![Message::user("hi")])
         .with_tools(vec![Tool::function("echo", None, serde_json::json!({}))])
@@ -118,8 +118,8 @@ fn deepseek_thinking_models_disable_function_calling() {
 
     let chat_request = client.to_chat_request(request);
 
-    assert!(chat_request.tools.is_none());
-    assert!(chat_request.tool_choice.is_none());
+    assert!(chat_request.tools.as_ref().is_some_and(|t| t.len() == 1));
+    assert!(chat_request.tool_choice.is_some());
 }
 
 #[test]
@@ -144,7 +144,12 @@ fn ollama_keeps_tools_but_drops_tool_choice() {
 
     let chat_request = client.to_chat_request(request);
 
-    assert!(chat_request.tools.as_ref().is_some_and(|tools| tools.len() == 1));
+    assert!(
+        chat_request
+            .tools
+            .as_ref()
+            .is_some_and(|tools| tools.len() == 1)
+    );
     assert!(
         chat_request.tool_choice.is_none(),
         "ollama rejects explicit tool_choice but can still receive tools"
@@ -180,7 +185,10 @@ async fn ollama_stream_with_tools_uses_completion_fallback_for_tool_calls() {
     assert_eq!(0, stream_calls.load(Ordering::SeqCst));
     assert_eq!(1, response.tool_calls.len());
     assert_eq!("echo", response.tool_calls[0].function.name);
-    assert_eq!("{\"message\":\"db-1\"}", response.tool_calls[0].function.arguments);
+    assert_eq!(
+        "{\"message\":\"db-1\"}",
+        response.tool_calls[0].function.arguments
+    );
 }
 
 #[test]

@@ -157,6 +157,67 @@ impl ComposerMenuOption {
     }
 }
 
+/// 顶部「计划」面板中的一步。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerPlanItem {
+    pub title: SharedString,
+    pub status: SharedString,
+}
+
+impl ComposerPlanItem {
+    pub fn new(title: impl Into<SharedString>, status: impl Into<SharedString>) -> Self {
+        Self {
+            title: title.into(),
+            status: status.into(),
+        }
+    }
+}
+
+/// 顶部「子代理」面板中的可选 Agent。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerAgentOption {
+    /// `None` 表示内置 Agent;`Some(id)` 表示外部 ACP Agent。
+    pub id: Option<SharedString>,
+    pub label: SharedString,
+    pub subtitle: SharedString,
+    pub selected: bool,
+    pub connecting: bool,
+}
+
+impl ComposerAgentOption {
+    pub fn local(label: impl Into<SharedString>, selected: bool, connecting: bool) -> Self {
+        Self {
+            id: None,
+            label: label.into(),
+            subtitle: SharedString::from("内置 Agent"),
+            selected,
+            connecting,
+        }
+    }
+
+    pub fn acp(
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        selected: bool,
+        connecting: bool,
+    ) -> Self {
+        Self {
+            id: Some(id.into()),
+            label: label.into(),
+            subtitle: SharedString::from("ACP Agent"),
+            selected,
+            connecting,
+        }
+    }
+
+    pub fn element_id(&self) -> SharedString {
+        match &self.id {
+            Some(id) => SharedString::from(format!("agent-option-acp-{id}")),
+            None => SharedString::from("agent-option-local"),
+        }
+    }
+}
+
 /// 注入给输入框的整体上下文(只读展示)。
 ///
 /// 由上层构造并通过 [`AgentInput::set_context`](super::AgentInput::set_context) 注入。
@@ -168,6 +229,10 @@ pub struct AgentComposerContext {
     pub scopes: Vec<ComposerScope>,
     /// 右侧能力标签。
     pub capabilities: Vec<SharedString>,
+    /// 当前计划的 todo 列表,显示在顶部「计划」面板。
+    pub plan_items: Vec<ComposerPlanItem>,
+    /// 内置 Agent 与 ACP Agent 切换项,显示在顶部「子代理」面板。
+    pub agent_options: Vec<ComposerAgentOption>,
     /// 当前模型(底部高亮 chip);`None` 时显示「选择模型」。
     pub model: Option<ComposerModel>,
     /// 工具模式当前文案(如 `自动`)。

@@ -1,28 +1,36 @@
 use crate::ResourceContext;
 use crate::runtime::RuntimeServices;
-use crate::tasks::update_plan::{UPDATE_PLAN_TOOL, update_plan_spec};
+use crate::runtime::TaskKind;
+use crate::tasks::update_plan::update_plan_spec;
 use crate::tools::{ToolName, ToolSpec};
 
-pub(super) fn services_with_update_plan_specs(
+pub(super) fn specs_for_task(
+    kind: TaskKind,
     services: &RuntimeServices,
     resources: &ResourceContext,
 ) -> Vec<ToolSpec> {
+    if kind == TaskKind::Ask {
+        return Vec::new();
+    }
+
     let mut specs = services.tools.specs(resources);
     specs.push(update_plan_spec());
     specs
 }
 
-pub(super) fn tool_is_available(
-    services: &RuntimeServices,
-    resources: &ResourceContext,
-    name: &ToolName,
-) -> bool {
-    name.as_str() == UPDATE_PLAN_TOOL
-        || services
-            .tools
-            .specs(resources)
-            .iter()
-            .any(|spec| &spec.name == name)
+pub(super) fn tool_is_available(specs: &[ToolSpec], name: &ToolName) -> bool {
+    specs.iter().any(|spec| &spec.name == name)
+}
+
+pub(super) fn available_tool_names(specs: &[ToolSpec]) -> String {
+    if specs.is_empty() {
+        return "无".into();
+    }
+    specs
+        .iter()
+        .map(|spec| spec.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(super) fn malformed_tool_call_reason(

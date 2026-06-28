@@ -16,7 +16,8 @@ use one_core::{
 };
 
 use crate::{
-    AgentChatView, AgentChatViewConfig, CodeBlockAction, MentionItem, build_plan_tool_registry,
+    AcpAgentConfig, AgentChatView, AgentChatViewConfig, CodeBlockAction, MentionItem,
+    build_acp_agent_configs, build_plan_tool_registry,
 };
 
 #[derive(Clone, Debug)]
@@ -118,6 +119,10 @@ impl DefaultAgentChatPanel {
             tracing::warn!(%error, "Failed to build plan tool registry");
             agent_runtime::ToolRegistry::new()
         });
+        let acp_agents = build_acp_agent_configs(cx).unwrap_or_else(|error| {
+            tracing::warn!(%error, "Failed to build ACP agent configs");
+            Vec::new()
+        });
         let window_handle = window.window_handle();
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
@@ -130,7 +135,7 @@ impl DefaultAgentChatPanel {
                 provider_state,
             )
             .await
-            .map(|config| config.sidebar_mode(true));
+            .map(|config| build_sidebar_config(config, acp_agents));
 
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 if let Some(panel) = this.upgrade() {
@@ -254,10 +259,21 @@ fn enabled_provider_configs(configs: Vec<ProviderConfig>) -> Vec<ProviderConfig>
         .collect()
 }
 
+fn build_sidebar_config(
+    config: AgentChatViewConfig,
+    acp_agents: Vec<AcpAgentConfig>,
+) -> AgentChatViewConfig {
+    config.sidebar_mode(true).with_acp_agents(acp_agents)
+}
+
 #[cfg(test)]
 mod tests {
     use super::enabled_provider_configs;
+    use crate::{AcpAgentConfig, AgentChatViewConfig};
+    use agent_runtime::model::{MockModelClient, ModelClient};
+    use agent_runtime::{ResourceContext, Runtime, RuntimeServices, ToolRegistry, ToolRouter};
     use one_core::llm::{ProviderConfig, ProviderType};
+    use std::sync::Arc;
 
     #[test]
     fn enabled_provider_configs_filters_disabled_entries() {
@@ -280,5 +296,25 @@ mod tests {
 
         assert_eq!(1, configs.len());
         assert_eq!("enabled", configs[0].name);
+    }
+
+    #[test]
+    fn sidebar_config_keeps_acp_agents_available() {
+        let config = AgentChatViewConfig::new(test_runtime(), ResourceContext::new(), Vec::new());
+        let agents = vec![AcpAgentConfig::new("codex", "Codex ACP", "codex")];
+
+        let config = super::build_sidebar_config(config, agents);
+
+        assert!(config.sidebar_mode);
+        assert_eq!(1, config.acp_agents.len());
+        assert_eq!(config.acp_agents[0].id.as_ref(), "codex");
+    }
+
+    fn test_runtime() -> Arc<Runtime> {
+        let model: Arc<dyn ModelClient> = Arc::new(MockModelClient::new([]));
+        Arc::new(Runtime::new(RuntimeServices::new(
+            model,
+            Arc::new(ToolRouter::new(ToolRegistry::new())),
+        )))
     }
 }

@@ -78,9 +78,9 @@ pub use code_block::{
 pub use connection_selector::{ConnectionSelector, ConnectionSelectorEvent};
 pub use default_panel::{DefaultAgentChatPanel, DefaultAgentChatPanelEvent};
 pub use input::{
-    AgentComposerContext, AgentInput, AgentInputEvent, ComposerMenuOption, ComposerModel,
-    ComposerModelOption, ComposerScope, ComposerTarget, ImageAttachment, MentionCompletionProvider,
-    MentionItem,
+    AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
+    ComposerModel, ComposerModelOption, ComposerPlanItem, ComposerScope, ComposerTarget,
+    ImageAttachment, MentionCompletionProvider, MentionItem,
 };
 pub use message::{
     ChatMessageUI, ChatMessageUIGeneric, ChatRole, MESSAGE_RENDER_LIMIT, MESSAGE_RENDER_STEP,

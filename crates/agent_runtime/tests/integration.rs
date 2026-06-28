@@ -11,8 +11,8 @@ use std::sync::Arc;
 use agent_runtime::model::{MockModelClient, ModelResponse, function_tool_call};
 use agent_runtime::tools::builtin::EchoTool;
 use agent_runtime::{
-    ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, Runtime,
-    RuntimeEvent, RuntimeServices, StepStatus, TaskKind, TaskOutcome, ToolRegistry, ToolRouter,
+    ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, Runtime, RuntimeEvent,
+    RuntimeServices, StepStatus, TaskKind, TaskOutcome, ToolRegistry, ToolRouter,
 };
 use serde_json::json;
 
@@ -152,10 +152,53 @@ async fn agent_calls_business_tool_then_finishes() {
 }
 
 #[tokio::test]
-async fn malformed_tool_call_arguments_fail_without_retry_loop() {
+async fn ask_mode_does_not_send_tools_or_tool_choice() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::text("直接回答。")]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "解释一下索引".into(), TaskKind::Ask)
+        .await
+        .expect("run ask turn");
+
+    assert!(matches!(outcome, TaskOutcome::Completed { .. }));
+    let requests = model.received_requests();
+    assert_eq!(1, requests.len());
+    assert!(
+        requests[0].tools.is_empty(),
+        "Ask 模式不能向模型传递任何工具"
+    );
+    assert!(
+        requests[0].tool_choice.is_none(),
+        "Ask 模式不能向模型传递 tool_choice"
+    );
+    let system = requests[0].messages[0].content_as_text();
+    assert!(!system.contains("可用 function calling 工具名"));
+    assert!(!system.contains("update_plan"));
+}
+
+#[tokio::test]
+async fn agent_retries_after_unknown_pseudo_tool_call() {
     let model = Arc::new(MockModelClient::new([
         ModelResponse::tool_call(function_tool_call("c_bad", "tool", "db.schema")),
-        ModelResponse::text("不应进入第二轮"),
+        ModelResponse::tool_call(function_tool_call(
+            "c_plan",
+            "update_plan",
+            json!({
+                "plan": [
+                    {"step": "改用 update_plan 记录计划", "status": "completed"},
+                    {"step": "给出结论", "status": "in_progress"}
+                ]
+            })
+            .to_string(),
+        )),
+        ModelResponse::text("已纠正工具调用。"),
     ]));
     let runtime = Runtime::new(RuntimeServices::new(
         model.clone(),
@@ -171,8 +214,8 @@ async fn malformed_tool_call_arguments_fail_without_retry_loop() {
         .await
         .expect("run agent turn");
 
-    assert!(matches!(outcome, TaskOutcome::Failed { reason } if reason.contains("无效工具调用")));
-    assert_eq!(1, model.request_count(), "无效 tool call 不应继续循环重试");
+    assert!(matches!(outcome, TaskOutcome::Completed { .. }));
+    assert_eq!(3, model.request_count(), "伪工具调用应反馈给模型并重试");
     let events = drain_events(&mut rx);
     assert!(events.iter().any(|event| {
         matches!(
@@ -181,6 +224,12 @@ async fn malformed_tool_call_arguments_fail_without_retry_loop() {
                 if !observation.success && observation.tool_name.as_str() == "tool"
         )
     }));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::PlanUpdated { .. })),
+        "模型重试后应能使用真实 update_plan"
+    );
 }
 
 #[tokio::test]

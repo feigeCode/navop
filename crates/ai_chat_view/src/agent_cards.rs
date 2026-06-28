@@ -98,77 +98,6 @@ impl ToolCardData {
 // 渲染
 // ============================================================================
 
-/// 渲染计划分步列表(供输入框上方的 Tasks Popover 复用)。
-pub fn render_plan_list(data: &PlanCardData, cx: &mut App) -> AnyElement {
-    let rows: Vec<AnyElement> = data
-        .steps
-        .iter()
-        .enumerate()
-        .map(|(i, step)| {
-            let (glyph, color) = step_status_glyph(&step.status, cx);
-            h_flex()
-                .w_full()
-                .gap_2()
-                .items_start()
-                .child(div().text_color(color).child(glyph))
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap_0p5()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().foreground)
-                                .child(format!("{}. {}", i + 1, step.title)),
-                        )
-                        .when_some(
-                            (!step.description.is_empty()).then_some(step.description.clone()),
-                            |this, desc| {
-                                this.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(desc),
-                                )
-                            },
-                        ),
-                )
-                .when_some(risk_badge(&step.risk, cx), |this, badge| this.child(badge))
-                .into_any_element()
-        })
-        .collect();
-
-    v_flex()
-        .w_full()
-        .gap_2()
-        .p_3()
-        .rounded_lg()
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().muted)
-        .child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("执行计划"),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(plan_status_label(&data.status)),
-                ),
-        )
-        .child(v_flex().w_full().gap_1p5().children(rows))
-        .into_any_element()
-}
-
 /// 工具执行卡片渲染器。
 struct ToolCard {
     expanded: Arc<Mutex<HashSet<String>>>,
@@ -314,29 +243,6 @@ fn fallback(content: &str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// 步骤状态字形 + 颜色。
-fn step_status_glyph(status: &str, cx: &App) -> (&'static str, gpui::Hsla) {
-    match status {
-        "running" => ("◐", cx.theme().muted_foreground),
-        "observed" => ("◉", cx.theme().foreground),
-        "completed" => ("✓", cx.theme().success),
-        "failed" => ("✗", cx.theme().danger),
-        "skipped" => ("–", cx.theme().muted_foreground),
-        _ => ("○", cx.theme().muted_foreground),
-    }
-}
-
-fn plan_status_label(status: &str) -> &'static str {
-    match status {
-        "draft" => "草稿",
-        "running" => "执行中",
-        "waiting_user" => "等待用户",
-        "completed" => "已完成",
-        "failed" => "已失败",
-        _ => "",
-    }
-}
-
 fn tool_status_label(data: &ToolCardData) -> &'static str {
     if data.running {
         "执行中…"
@@ -345,27 +251,6 @@ fn tool_status_label(data: &ToolCardData) -> &'static str {
     } else {
         "已完成"
     }
-}
-
-/// 高于 Read 的风险才显示徽标。
-fn risk_badge(risk: &str, cx: &App) -> Option<AnyElement> {
-    let (label, color) = match risk {
-        "medium" => ("中风险", cx.theme().warning),
-        "high" => ("高风险", cx.theme().danger),
-        "critical" => ("危险", cx.theme().danger),
-        _ => return None,
-    };
-    Some(
-        div()
-            .px_1p5()
-            .rounded_md()
-            .text_xs()
-            .text_color(color)
-            .border_1()
-            .border_color(color)
-            .child(label)
-            .into_any_element(),
-    )
 }
 
 /// 按字符截断,超出加省略号。
