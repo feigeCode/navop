@@ -692,6 +692,10 @@ Settings:
         en: Switch the interface display language, some content requires restarting the application to take effect
         zh-CN: 切换界面显示语言，部分内容需要重启应用后生效
         zh-HK: 切換介面顯示語言，部分內容需要重啟應用後生效
+      system:
+        en: Follow System
+        zh-CN: 跟随系统
+        zh-HK: 跟隨系統
       zh_cn:
         en: Simplified Chinese
         zh-CN: 简体中文

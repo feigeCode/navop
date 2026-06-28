@@ -10,6 +10,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tracing::{error, info};
 
+mod locale;
+
+pub use locale::{
+    LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, effective_locale_for_setting,
+};
+
 // ============================================================================
 // 全局用户状态
 // ============================================================================
@@ -343,7 +349,7 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
-    #[serde(default)]
+    #[serde(default = "default_locale")]
     pub locale: String,
     #[serde(default)]
     pub theme_mode: String,
@@ -423,6 +429,10 @@ fn default_font_family() -> String {
     "Arial".to_string()
 }
 
+fn default_locale() -> String {
+    LOCALE_SYSTEM.to_string()
+}
+
 fn default_font_size() -> f64 {
     14.0
 }
@@ -473,7 +483,7 @@ fn default_sql_query_max_rows() -> u32 {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            locale: "zh-CN".to_string(),
+            locale: default_locale(),
             theme_mode: "light".to_string(),
             auto_switch_theme: false,
             font_family: default_font_family(),
@@ -607,7 +617,7 @@ impl AppSettings {
     }
 
     pub fn apply(&self, cx: &mut App) {
-        gpui_component::set_locale(&self.locale);
+        gpui_component::set_locale(effective_locale_for_setting(&self.locale));
 
         let mode = if self.theme_mode == "dark" {
             ThemeMode::Dark
@@ -638,7 +648,8 @@ impl AppSettings {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppSettings, CustomFont, LargeTextCellEditorOpenMode, McpPermissionMode, McpServerMode,
+        AppSettings, CustomFont, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, McpPermissionMode,
+        McpServerMode,
     };
 
     #[test]
@@ -679,6 +690,13 @@ mod tests {
     }
 
     #[test]
+    fn app_settings_default_follows_system_locale() {
+        let settings = AppSettings::default();
+
+        assert_eq!(LOCALE_SYSTEM, settings.locale);
+    }
+
+    #[test]
     fn app_settings_deserializes_sql_query_max_rows_from_legacy_json() {
         let settings: AppSettings = serde_json::from_value(serde_json::json!({
             "locale": "en",
@@ -687,6 +705,16 @@ mod tests {
         .expect("旧版 settings.json 应能读取");
 
         assert_eq!(1000, settings.sql_query_max_rows);
+    }
+
+    #[test]
+    fn app_settings_deserializes_missing_locale_as_system_mode() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "theme_mode": "dark"
+        }))
+        .expect("缺少 locale 的旧版 settings.json 应能读取");
+
+        assert_eq!(LOCALE_SYSTEM, settings.locale);
     }
 
     #[test]

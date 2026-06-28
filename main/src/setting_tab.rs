@@ -39,8 +39,9 @@ pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
 
 pub use one_core::settings::{
-    AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings,
-    LargeTextCellEditorOpenMode, ProxyType,
+    AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
+    LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LargeTextCellEditorOpenMode, ProxyType,
+    effective_locale_for_setting,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -340,21 +341,27 @@ impl SettingsPanel {
                                 SettingField::dropdown(
                                     vec![
                                         (
-                                            "zh-CN".into(),
+                                            LOCALE_SYSTEM.into(),
+                                            t!("Settings.General.Language.system").into(),
+                                        ),
+                                        (
+                                            LOCALE_ZH_CN.into(),
                                             t!("Settings.General.Language.zh_cn").into(),
                                         ),
                                         (
-                                            "zh-HK".into(),
+                                            LOCALE_ZH_HK.into(),
                                             t!("Settings.General.Language.zh_hk").into(),
                                         ),
-                                        ("en".into(), t!("Settings.General.Language.en").into()),
+                                        (LOCALE_EN.into(), t!("Settings.General.Language.en").into()),
                                     ],
                                     |cx: &App| {
                                         SharedString::from(AppSettings::global(cx).locale.clone())
                                     },
                                     |val: SharedString, cx: &mut App| {
                                         let locale = val.to_string();
-                                        gpui_component::set_locale(&locale);
+                                        gpui_component::set_locale(effective_locale_for_setting(
+                                            &locale,
+                                        ));
                                         AppSettings::update_and_save(cx, |settings| {
                                             settings.locale = locale;
                                         });
