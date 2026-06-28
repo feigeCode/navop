@@ -27,7 +27,7 @@ pub mod tools;
 
 pub use error::{RuntimeError, ToolError};
 pub use history::{HistoryItem, RuntimeHistory};
-pub use ids::{PlanId, PlanStepId, SessionId, ToolCallId, TurnId};
+pub use ids::{PlanId, PlanStepId, SessionId, SubAgentId, ToolCallId, TurnId};
 pub use model::{ModelClient, ModelRequest, ModelResponse, ModelStream, ModelStreamEvent};
 pub use planner::{Plan, PlanSource, PlanStatus, PlanStep, StepStatus};
 pub use resource::{ResourceContext, ResourceId, ResourceKind, ResourceRef, ResourceScope};

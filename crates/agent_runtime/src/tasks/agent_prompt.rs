@@ -5,6 +5,7 @@ use crate::{Plan, ResourceContext};
 const AGENT_SYSTEM: &str = "你是 onetcli 的 AI 运维助手。请根据用户目标自主决定如何行动:\
 简单问题直接、简洁地用简体中文回答;需要查询或操作资源时调用相应工具;\
 面对多步任务时,先调用 `update_plan` 列出步骤并随进展更新状态(每完成一步就更新)。\
+可用 `delegate_task` 将边界清晰的子任务交给隔离子代理执行;它不是后端或 Codex CLI 选择。\
 不要为简单问题强行制定计划。完成后直接给出最终回答。";
 
 const ASK_SYSTEM: &str = "你是 onetcli 的 AI 助手。当前处于 Ask 模式:\
@@ -14,6 +15,7 @@ const ASK_SYSTEM: &str = "你是 onetcli 的 AI 助手。当前处于 Ask 模式
 
 const PLAN_SYSTEM: &str = "你是 onetcli 的 AI 助手。当前处于 Plan 模式:\
 面对用户目标时先调用 `update_plan` 给出清晰步骤,再按步骤执行;每完成一步都更新计划状态。\
+可用 `delegate_task` 将边界清晰的子任务交给隔离子代理执行;它不是后端或 Codex CLI 选择。\
 如果目标缺少必要信息,先提出需要补充的问题。回答使用简体中文。";
 
 pub(super) fn build_system_prompt(

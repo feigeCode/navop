@@ -7,13 +7,17 @@
 //! - 模型调用业务工具(echo)后 follow-up 给出最终回答
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use agent_runtime::model::{MockModelClient, ModelResponse, function_tool_call};
+use agent_runtime::model::{
+    MockModelClient, ModelRequest, ModelResponse, ModelStream, ModelStreamEvent, function_tool_call,
+};
 use agent_runtime::tools::builtin::EchoTool;
 use agent_runtime::{
-    ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, Runtime, RuntimeEvent,
-    RuntimeServices, StepStatus, TaskKind, TaskOutcome, ToolRegistry, ToolRouter,
+    ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, Runtime, RuntimeError,
+    RuntimeEvent, RuntimeServices, StepStatus, TaskKind, TaskOutcome, ToolRegistry, ToolRouter,
 };
+use async_trait::async_trait;
 use serde_json::json;
 
 /// 用脚本化模型 + 给定工具注册表构造 Runtime。
@@ -29,6 +33,73 @@ fn drain_events(rx: &mut agent_runtime::RuntimeEventReceiver) -> Vec<RuntimeEven
         events.push(event);
     }
     events
+}
+
+struct ReasoningStreamModel;
+
+#[async_trait]
+impl ModelClient for ReasoningStreamModel {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, RuntimeError> {
+        Ok(ModelResponse::text("这是最终回答。"))
+    }
+
+    async fn complete_stream(&self, _request: ModelRequest) -> Result<ModelStream, RuntimeError> {
+        let response = ModelResponse::text("这是最终回答。");
+        Ok(Box::pin(futures::stream::iter([
+            Ok(ModelStreamEvent::ReasoningDelta("先判断问题边界。".into())),
+            Ok(ModelStreamEvent::TextDelta("这是最终回答。".into())),
+            Ok(ModelStreamEvent::Completed(response)),
+        ])))
+    }
+
+    fn model_name(&self) -> &str {
+        "reasoning-stream"
+    }
+}
+
+struct CompletedOnlySubagentToolCallModel {
+    count: AtomicUsize,
+}
+
+impl CompletedOnlySubagentToolCallModel {
+    fn new() -> Self {
+        Self {
+            count: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl ModelClient for CompletedOnlySubagentToolCallModel {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, RuntimeError> {
+        Ok(ModelResponse::text("unused"))
+    }
+
+    async fn complete_stream(&self, _request: ModelRequest) -> Result<ModelStream, RuntimeError> {
+        let response = match self.count.fetch_add(1, Ordering::SeqCst) {
+            0 => ModelResponse::tool_call(function_tool_call(
+                "c_sub",
+                "delegate_task",
+                json!({
+                    "name": "reviewer",
+                    "task": "检查 agent runtime 的事件流"
+                })
+                .to_string(),
+            )),
+            1 => ModelResponse::tool_call(function_tool_call("nested", "echo", "{}")),
+            _ => ModelResponse::text("已看到子代理失败。"),
+        };
+        if self.count.load(Ordering::SeqCst) == 2 {
+            return Ok(Box::pin(futures::stream::iter([Ok(
+                ModelStreamEvent::Completed(response),
+            )])));
+        }
+        Ok(agent_runtime::model::model_response_into_stream(response))
+    }
+
+    fn model_name(&self) -> &str {
+        "completed-only-subagent-tool-call"
+    }
 }
 
 #[tokio::test]
@@ -66,6 +137,36 @@ async fn agent_simple_question_answers_without_plan() {
             .any(|e| matches!(e, RuntimeEvent::PlanUpdated { .. })),
         "简单问答不应产生任何计划"
     );
+}
+
+#[tokio::test]
+async fn reasoning_stream_events_are_forwarded_to_runtime_events() {
+    let model: Arc<dyn ModelClient> = Arc::new(ReasoningStreamModel);
+    let runtime = Runtime::new(RuntimeServices::new(
+        model,
+        Arc::new(ToolRouter::new(ToolRegistry::new())),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    runtime
+        .run_turn_blocking(session.id(), "解释执行计划".into(), TaskKind::Ask)
+        .await
+        .expect("run ask turn");
+
+    let events = drain_events(&mut rx);
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ReasoningDelta { delta, .. } if delta == "先判断问题边界。"
+        )
+    }));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::AssistantMessage { text, .. } if text == "这是最终回答。"
+        )
+    }));
 }
 
 #[tokio::test]
@@ -109,6 +210,94 @@ async fn agent_uses_update_plan_checklist() {
     assert_eq!(plan.steps.len(), 2);
     assert_eq!(plan.steps[0].status, StepStatus::Completed);
     assert_eq!(plan.steps[1].status, StepStatus::Running);
+}
+
+#[tokio::test]
+async fn agent_delegate_task_runs_isolated_subagent_and_emits_events() {
+    let model = Arc::new(MockModelClient::new([
+        ModelResponse::tool_call(function_tool_call(
+            "c_sub",
+            "delegate_task",
+            json!({
+                "name": "reviewer",
+                "task": "检查 agent runtime 的事件流"
+            })
+            .to_string(),
+        )),
+        ModelResponse::text("子代理结论: reasoning 没有转发。"),
+        ModelResponse::text("已根据子代理结论完成修复建议。"),
+    ]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(ToolRegistry::new())),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "排查 agent runtime".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    assert!(matches!(outcome, TaskOutcome::Completed { .. }));
+    assert_eq!(3, model.request_count());
+    let events = drain_events(&mut rx);
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::SubAgentStarted { name, task, .. }
+                if name == "reviewer" && task == "检查 agent runtime 的事件流"
+        )
+    }));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::SubAgentFinished { success: true, summary, .. }
+                if summary.contains("reasoning 没有转发")
+        )
+    }));
+    assert!(session.history_snapshot().items().iter().any(|item| {
+        matches!(
+            item,
+            agent_runtime::HistoryItem::Observation(observation)
+                if observation.tool_name.as_str() == "delegate_task"
+                    && observation.summary.contains("子代理 reviewer 完成")
+        )
+    }));
+}
+
+#[tokio::test]
+async fn agent_delegate_task_rejects_subagent_tool_calls() {
+    let model = Arc::new(CompletedOnlySubagentToolCallModel::new());
+    let runtime = Runtime::new(RuntimeServices::new(
+        model,
+        Arc::new(ToolRouter::new(ToolRegistry::new())),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "排查 agent runtime".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    assert!(matches!(outcome, TaskOutcome::Completed { .. }));
+    let events = drain_events(&mut rx);
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::SubAgentFinished { success: false, summary, .. }
+                if summary.contains("子代理不支持工具调用")
+        )
+    }));
+    assert!(session.history_snapshot().items().iter().any(|item| {
+        matches!(
+            item,
+            agent_runtime::HistoryItem::Observation(observation)
+                if observation.tool_name.as_str() == "delegate_task"
+                    && !observation.success
+        )
+    }));
 }
 
 #[tokio::test]
@@ -225,6 +414,7 @@ async fn ask_mode_does_not_send_tools_or_tool_choice() {
     let system = requests[0].messages[0].content_as_text();
     assert!(!system.contains("可用 function calling 工具名"));
     assert!(!system.contains("update_plan"));
+    assert!(!system.contains("delegate_task"));
 }
 
 #[tokio::test]
@@ -296,6 +486,7 @@ async fn system_prompt_lists_available_tools_and_json_rule() {
     let system = requests[0].messages[0].content_as_text();
     assert!(system.contains("echo"));
     assert!(system.contains("update_plan"));
+    assert!(system.contains("delegate_task"));
     assert!(system.contains("arguments 必须是合法 JSON object"));
     assert!(system.contains("不要调用名为 `tool`"));
 }

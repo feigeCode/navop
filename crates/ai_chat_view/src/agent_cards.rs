@@ -21,6 +21,8 @@ use std::sync::{Arc, Mutex};
 
 /// 工具执行卡片的 `kind`。
 pub const TOOL_CARD: &str = "agent.tool";
+/// 子代理任务卡片的 `kind`。
+pub const SUBAGENT_CARD: &str = "agent.subagent";
 
 // ============================================================================
 // 数据契约(reducer 写入 / 卡片读取共用)
@@ -65,6 +67,22 @@ pub struct ToolCardData {
     pub data_text: String,
 }
 
+/// 子代理任务卡片数据。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubAgentCardData {
+    pub subagent_id: String,
+    pub name: String,
+    pub task: String,
+    /// 是否仍在执行。
+    pub running: bool,
+    /// 执行结果(完成后才有):成功 / 失败。
+    #[serde(default)]
+    pub success: Option<bool>,
+    /// 最近进展或最终摘要。
+    #[serde(default)]
+    pub summary: String,
+}
+
 impl PlanCardData {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
@@ -86,6 +104,15 @@ impl PlanCardData {
 }
 
 impl ToolCardData {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+    pub fn from_json(s: &str) -> Option<Self> {
+        serde_json::from_str(s).ok()
+    }
+}
+
+impl SubAgentCardData {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
     }
@@ -229,6 +256,45 @@ impl ChatCard for ToolCard {
     }
 }
 
+/// 子代理任务卡片渲染器。
+struct SubAgentCard {
+    expanded: Arc<Mutex<HashSet<String>>>,
+}
+
+impl SubAgentCard {
+    fn new() -> Self {
+        Self {
+            expanded: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    fn is_expanded(&self, message_id: &str) -> bool {
+        self.expanded
+            .lock()
+            .map(|ids| ids.contains(message_id))
+            .unwrap_or(false)
+    }
+}
+
+impl ChatCard for SubAgentCard {
+    fn kind(&self) -> &'static str {
+        SUBAGENT_CARD
+    }
+
+    fn render(&self, msg: &CardMessage, _window: &mut Window, cx: &mut App) -> AnyElement {
+        let Some(data) = SubAgentCardData::from_json(msg.content) else {
+            return fallback(msg.content, cx);
+        };
+        render_subagent_card(
+            &data,
+            msg.id,
+            self.is_expanded(msg.id),
+            self.expanded.clone(),
+            cx,
+        )
+    }
+}
+
 // ============================================================================
 // 渲染辅助
 // ============================================================================
@@ -253,6 +319,141 @@ fn tool_status_label(data: &ToolCardData) -> &'static str {
     }
 }
 
+fn render_subagent_card(
+    data: &SubAgentCardData,
+    message_id: &str,
+    is_expanded: bool,
+    expanded_ids: Arc<Mutex<HashSet<String>>>,
+    cx: &mut App,
+) -> AnyElement {
+    let has_details = !data.task.is_empty() || !data.summary.is_empty();
+    let expanded = has_details && is_expanded;
+    let mut card = v_flex()
+        .w_full()
+        .gap_2()
+        .p_2()
+        .rounded_lg()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().muted)
+        .child(subagent_header(
+            data,
+            message_id,
+            has_details,
+            expanded_ids,
+            cx,
+        ));
+    if expanded {
+        card = card.child(subagent_details(data, cx));
+    }
+    card.into_any_element()
+}
+
+fn subagent_header(
+    data: &SubAgentCardData,
+    message_id: &str,
+    has_details: bool,
+    expanded_ids: Arc<Mutex<HashSet<String>>>,
+    cx: &mut App,
+) -> AnyElement {
+    let (status_glyph, status_color) = subagent_status_style(data, cx);
+    let message_id = message_id.to_string();
+    let hover_bg = cx.theme().background;
+    h_flex()
+        .id(SharedString::from(format!(
+            "agent-subagent-card-toggle-{}",
+            data.subagent_id
+        )))
+        .w_full()
+        .gap_2()
+        .items_center()
+        .px_1()
+        .py_1()
+        .when(has_details, |this| {
+            this.cursor_pointer()
+                .hover(move |this| this.bg(hover_bg))
+                .on_click(move |_, _, cx| {
+                    toggle_expanded(&expanded_ids, &message_id);
+                    cx.refresh_windows();
+                })
+        })
+        .child(div().text_color(status_color).child(status_glyph))
+        .child(subagent_title(data, cx))
+        .child(div().flex_1())
+        .child(subagent_status(data, cx))
+        .into_any_element()
+}
+
+fn toggle_expanded(expanded_ids: &Arc<Mutex<HashSet<String>>>, message_id: &str) {
+    if let Ok(mut ids) = expanded_ids.lock()
+        && !ids.insert(message_id.to_string())
+    {
+        ids.remove(message_id);
+    }
+}
+
+fn subagent_title(data: &SubAgentCardData, cx: &App) -> AnyElement {
+    div()
+        .text_sm()
+        .text_color(cx.theme().foreground)
+        .child(format!("子代理 · {}", data.name))
+        .into_any_element()
+}
+
+fn subagent_status(data: &SubAgentCardData, cx: &App) -> AnyElement {
+    div()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(subagent_status_label(data))
+        .into_any_element()
+}
+
+fn subagent_status_style(data: &SubAgentCardData, cx: &App) -> (&'static str, gpui::Hsla) {
+    if data.running {
+        ("●", cx.theme().muted_foreground)
+    } else if data.success == Some(true) {
+        ("✓", cx.theme().success)
+    } else if data.success == Some(false) {
+        ("✗", cx.theme().danger)
+    } else {
+        ("•", cx.theme().muted_foreground)
+    }
+}
+
+fn subagent_status_label(data: &SubAgentCardData) -> &'static str {
+    if data.running {
+        "执行中…"
+    } else if data.success == Some(false) {
+        "失败"
+    } else {
+        "已完成"
+    }
+}
+
+fn subagent_details(data: &SubAgentCardData, cx: &App) -> AnyElement {
+    v_flex()
+        .w_full()
+        .gap_1()
+        .px_1()
+        .when(!data.task.is_empty(), |this| {
+            this.child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().foreground)
+                    .child(data.task.clone()),
+            )
+        })
+        .when(!data.summary.is_empty(), |this| {
+            this.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(data.summary.clone()),
+            )
+        })
+        .into_any_element()
+}
+
 /// 按字符截断,超出加省略号。
 fn truncate_chars(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
@@ -266,6 +467,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 /// 注册 Agent 运行时卡片到全局注册表。
 pub fn register_agent_cards(cx: &mut App) {
     CardRegistry::register_global(cx, Arc::new(ToolCard::new()));
+    CardRegistry::register_global(cx, Arc::new(SubAgentCard::new()));
 }
 
 #[cfg(test)]
@@ -304,6 +506,22 @@ mod tests {
         };
         let back = ToolCardData::from_json(&data.to_json()).expect("parse");
         assert_eq!(back.call_id, "call_1");
+        assert_eq!(back.success, Some(true));
+    }
+
+    #[test]
+    fn subagent_card_data_roundtrips() {
+        let data = SubAgentCardData {
+            subagent_id: "sub_1".into(),
+            name: "reviewer".into(),
+            task: "检查 runtime".into(),
+            running: false,
+            success: Some(true),
+            summary: "ok".into(),
+        };
+        let back = SubAgentCardData::from_json(&data.to_json()).expect("parse");
+        assert_eq!(back.subagent_id, "sub_1");
+        assert_eq!(back.name, "reviewer");
         assert_eq!(back.success, Some(true));
     }
 

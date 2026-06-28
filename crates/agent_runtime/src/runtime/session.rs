@@ -5,7 +5,7 @@
 //! 对齐 Codex 中"history + 事件一起处理"的做法。
 
 use crate::history::{HistoryItem, RuntimeHistory};
-use crate::ids::{SessionId, TurnId};
+use crate::ids::{SessionId, SubAgentId, TurnId};
 use crate::planner::{Plan, StepStatus};
 use crate::resource::ResourceContext;
 use crate::runtime::active_turn::ActiveTurn;
@@ -165,6 +165,15 @@ impl Session {
         });
     }
 
+    /// 发出一段思考增量。增量不写入历史,只用于 UI 折叠展示。
+    pub fn emit_reasoning_delta(&self, turn_id: &TurnId, delta: impl Into<String>) {
+        self.emit(RuntimeEvent::ReasoningDelta {
+            session_id: self.id.clone(),
+            turn_id: turn_id.clone(),
+            delta: delta.into(),
+        });
+    }
+
     pub fn record_tool_call(&self, turn_id: &TurnId, call: &ToolCall) {
         self.state
             .lock()
@@ -197,6 +206,52 @@ impl Session {
             turn_id: turn_id.clone(),
             call_id,
             success,
+        });
+    }
+
+    pub fn start_subagent(
+        &self,
+        turn_id: &TurnId,
+        subagent_id: SubAgentId,
+        name: impl Into<String>,
+        task: impl Into<String>,
+    ) {
+        self.emit(RuntimeEvent::SubAgentStarted {
+            session_id: self.id.clone(),
+            turn_id: turn_id.clone(),
+            subagent_id,
+            name: name.into(),
+            task: task.into(),
+        });
+    }
+
+    pub fn update_subagent(
+        &self,
+        turn_id: &TurnId,
+        subagent_id: SubAgentId,
+        summary: impl Into<String>,
+    ) {
+        self.emit(RuntimeEvent::SubAgentUpdated {
+            session_id: self.id.clone(),
+            turn_id: turn_id.clone(),
+            subagent_id,
+            summary: summary.into(),
+        });
+    }
+
+    pub fn finish_subagent(
+        &self,
+        turn_id: &TurnId,
+        subagent_id: SubAgentId,
+        success: bool,
+        summary: impl Into<String>,
+    ) {
+        self.emit(RuntimeEvent::SubAgentFinished {
+            session_id: self.id.clone(),
+            turn_id: turn_id.clone(),
+            subagent_id,
+            success,
+            summary: summary.into(),
         });
     }
 

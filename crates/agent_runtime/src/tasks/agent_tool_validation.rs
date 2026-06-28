@@ -1,6 +1,7 @@
 use crate::ResourceContext;
 use crate::runtime::RuntimeServices;
 use crate::runtime::TaskKind;
+use crate::tasks::delegate_task::delegate_task_spec;
 use crate::tasks::update_plan::update_plan_spec;
 use crate::tools::{ToolName, ToolSpec};
 
@@ -15,6 +16,7 @@ pub(super) fn specs_for_task(
 
     let mut specs = services.tools.specs(resources);
     specs.push(update_plan_spec());
+    specs.push(delegate_task_spec());
     specs
 }
 

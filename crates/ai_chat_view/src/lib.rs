@@ -52,7 +52,7 @@ pub use acp::{
     AcpPermissionProvider, AcpPermissionRequest, AcpTransport, build_acp_agent_configs,
     set_acp_agent_config_provider, set_acp_permission_provider,
 };
-pub use agent_cards::{PlanCardData, PlanStepData, ToolCardData};
+pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData};
 pub use agent_tab::{AGENT_TAB_CONTENT_KEY, AgentTabContent};
 pub use agent_transcript::AgentTranscript;
 pub use agent_view::{AgentChatView, AgentChatViewConfig, AgentChatViewEvent, AgentRuntimeFactory};

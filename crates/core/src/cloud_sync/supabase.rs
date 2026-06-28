@@ -638,7 +638,10 @@ impl SupabaseClient {
         body: &B,
     ) -> Result<Response<AsyncBody>, CloudApiError> {
         // 确保 token 有效
-        self.ensure_token_valid().await?;
+        if self.is_token_expiring_soon() {
+            info!("[supabase] proactive token refresh before PATCH {}", url);
+            self.ensure_token_valid().await?;
+        }
 
         let body_bytes =
             serde_json::to_vec(body).map_err(|e| CloudApiError::ParseError(e.to_string()))?;

@@ -3,7 +3,7 @@
 //! Runtime 通过 `tokio::sync::broadcast` 广播事件,UI / IPC 层订阅后渲染。
 //! 每个事件都带 `session_id`(以及多数带 `turn_id`)以便订阅方过滤。
 
-use crate::ids::{SessionId, ToolCallId, TurnId};
+use crate::ids::{SessionId, SubAgentId, ToolCallId, TurnId};
 use crate::planner::Plan;
 use crate::tools::{ToolName, ToolObservation};
 
@@ -39,6 +39,29 @@ pub enum RuntimeEvent {
         turn_id: TurnId,
         call_id: ToolCallId,
         success: bool,
+    },
+    /// 运行时或外部 ACP agent 派发了一个子代理任务。
+    SubAgentStarted {
+        session_id: SessionId,
+        turn_id: TurnId,
+        subagent_id: SubAgentId,
+        name: String,
+        task: String,
+    },
+    /// 子代理任务有新的进展摘要。
+    SubAgentUpdated {
+        session_id: SessionId,
+        turn_id: TurnId,
+        subagent_id: SubAgentId,
+        summary: String,
+    },
+    /// 子代理任务结束。
+    SubAgentFinished {
+        session_id: SessionId,
+        turn_id: TurnId,
+        subagent_id: SubAgentId,
+        success: bool,
+        summary: String,
     },
     /// 新增一条观测。
     ObservationAdded {
@@ -105,6 +128,9 @@ impl RuntimeEvent {
             | RuntimeEvent::PlanUpdated { session_id, .. }
             | RuntimeEvent::ToolCallStarted { session_id, .. }
             | RuntimeEvent::ToolCallFinished { session_id, .. }
+            | RuntimeEvent::SubAgentStarted { session_id, .. }
+            | RuntimeEvent::SubAgentUpdated { session_id, .. }
+            | RuntimeEvent::SubAgentFinished { session_id, .. }
             | RuntimeEvent::ObservationAdded { session_id, .. }
             | RuntimeEvent::AssistantMessageDelta { session_id, .. }
             | RuntimeEvent::ReasoningDelta { session_id, .. }

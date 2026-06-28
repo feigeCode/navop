@@ -6,6 +6,7 @@
 mod agent;
 mod agent_prompt;
 mod agent_tool_validation;
+mod delegate_task;
 mod update_plan;
 
 pub use agent::AgentTask;

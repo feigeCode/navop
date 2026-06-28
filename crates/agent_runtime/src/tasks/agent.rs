@@ -19,6 +19,7 @@ use crate::tasks::agent_prompt::build_system_prompt;
 use crate::tasks::agent_tool_validation::{
     available_tool_names, malformed_tool_call_reason, specs_for_task, tool_is_available,
 };
+use crate::tasks::delegate_task::{DELEGATE_TASK_TOOL, handle_delegate_task};
 use crate::tasks::update_plan::{UPDATE_PLAN_TOOL, parse_plan};
 use crate::tools::{ObservationData, ToolCall, ToolDispatchContext, ToolName, ToolObservation};
 use async_trait::async_trait;
@@ -167,6 +168,8 @@ impl RuntimeTask for AgentTask {
 
                 let observation = if call.tool_name.as_str() == UPDATE_PLAN_TOOL {
                     handle_update_plan(&session, &turn_id, &goal, &call)
+                } else if call.tool_name.as_str() == DELEGATE_TASK_TOOL {
+                    handle_delegate_task(&session, &services, &turn_id, &call, &cancellation).await
                 } else {
                     services
                         .tools
@@ -216,7 +219,9 @@ async fn sample(
                 text.push_str(&delta);
                 session.emit_assistant_delta(turn_id, delta);
             }
-            ModelStreamEvent::ReasoningDelta(_) => {}
+            ModelStreamEvent::ReasoningDelta(delta) => {
+                session.emit_reasoning_delta(turn_id, delta);
+            }
             // 工具调用以 Completed 聚合结果为准,避免重复计数。
             ModelStreamEvent::ToolCall(_) => {}
             ModelStreamEvent::Completed(resp) => completed = Some(resp),

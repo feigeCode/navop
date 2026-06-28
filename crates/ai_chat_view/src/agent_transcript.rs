@@ -6,7 +6,9 @@
 
 use agent_runtime::{HistoryItem, Plan, PlanStatus, RuntimeEvent, StepStatus, ToolObservation};
 
-use crate::agent_cards::{PlanCardData, PlanStepData, TOOL_CARD, ToolCardData};
+use crate::agent_cards::{
+    PlanCardData, PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, ToolCardData,
+};
 use crate::code_block::extract_fenced_code_blocks;
 use crate::{ChatMessageUI, MessageVariant, parse_chart_json_block};
 
@@ -125,6 +127,29 @@ impl AgentTranscript {
             } => {
                 self.finish_tool_call(call_id.as_str(), *success);
             }
+            RuntimeEvent::SubAgentStarted {
+                subagent_id,
+                name,
+                task,
+                ..
+            } => {
+                self.push_subagent(subagent_id.as_str(), name, task);
+            }
+            RuntimeEvent::SubAgentUpdated {
+                subagent_id,
+                summary,
+                ..
+            } => {
+                self.update_subagent(subagent_id.as_str(), summary);
+            }
+            RuntimeEvent::SubAgentFinished {
+                subagent_id,
+                success,
+                summary,
+                ..
+            } => {
+                self.finish_subagent(subagent_id.as_str(), *success, summary);
+            }
             RuntimeEvent::NeedUserInput { question, .. } => {
                 self.messages
                     .push(ChatMessageUI::assistant(format!("❓ {question}")));
@@ -174,7 +199,11 @@ impl AgentTranscript {
         self.finish_active_status();
         if let Some(id) = self.streaming_id.take() {
             if let Some(index) = self.messages.iter().position(|m| m.id == id) {
-                let messages = assistant_messages_from_content(text);
+                let reasoning = self.messages[index].reasoning_content.clone();
+                let mut messages = assistant_messages_from_content(text);
+                if let Some(first) = messages.first_mut() {
+                    first.reasoning_content = reasoning;
+                }
                 self.messages.splice(index..=index, messages);
                 return;
             }
@@ -307,6 +336,62 @@ impl AgentTranscript {
             msg.content = json;
         }
     }
+
+    // ===== 子代理卡片 =====
+
+    fn push_subagent(&mut self, subagent_id: &str, name: &str, task: &str) {
+        self.finish_active_status();
+        self.close_streaming_segment();
+        let data = SubAgentCardData {
+            subagent_id: subagent_id.to_string(),
+            name: name.to_string(),
+            task: task.to_string(),
+            running: true,
+            success: None,
+            summary: String::new(),
+        };
+        self.messages
+            .push(ChatMessageUI::card(SUBAGENT_CARD, data.to_json()));
+    }
+
+    fn update_subagent(&mut self, subagent_id: &str, summary: &str) {
+        if let Some(mut data) = self.find_subagent_card(subagent_id) {
+            data.summary = summary.to_string();
+            self.replace_subagent_card(subagent_id, data);
+        }
+    }
+
+    fn finish_subagent(&mut self, subagent_id: &str, success: bool, summary: &str) {
+        if let Some(mut data) = self.find_subagent_card(subagent_id) {
+            data.running = false;
+            data.success = Some(success);
+            if !summary.is_empty() {
+                data.summary = summary.to_string();
+            }
+            self.replace_subagent_card(subagent_id, data);
+        }
+    }
+
+    fn find_subagent_card(&self, subagent_id: &str) -> Option<SubAgentCardData> {
+        self.messages.iter().rev().find_map(|m| {
+            if m.variant.card_kind() == Some(SUBAGENT_CARD) {
+                SubAgentCardData::from_json(&m.content).filter(|d| d.subagent_id == subagent_id)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn replace_subagent_card(&mut self, subagent_id: &str, data: SubAgentCardData) {
+        let json = data.to_json();
+        if let Some(msg) = self.messages.iter_mut().rev().find(|m| {
+            m.variant.card_kind() == Some(SUBAGENT_CARD)
+                && SubAgentCardData::from_json(&m.content)
+                    .is_some_and(|d| d.subagent_id == subagent_id)
+        }) {
+            msg.content = json;
+        }
+    }
 }
 
 // ===== 枚举 → 卡片字符串 =====
@@ -386,7 +471,7 @@ fn push_assistant_text_segment(messages: &mut Vec<ChatMessageUI>, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_runtime::ids::{ToolCallId, TurnId};
+    use agent_runtime::ids::{SubAgentId, ToolCallId, TurnId};
     use agent_runtime::tools::{ObservationData, ToolName};
     use agent_runtime::{PlanSource, PlanStep, SessionId};
 
@@ -442,6 +527,30 @@ mod tests {
 
         assert_eq!(1, tr.messages.len());
         assert_eq!("答案", tr.messages[0].content);
+        assert_eq!("先分析", tr.messages[0].reasoning_content);
+    }
+
+    #[test]
+    fn reasoning_delta_is_preserved_when_final_message_replaces_stream() {
+        let mut tr = AgentTranscript::new();
+        tr.apply(&RuntimeEvent::ReasoningDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "先分析".to_string(),
+        });
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "临时答案".to_string(),
+        });
+        tr.apply(&RuntimeEvent::AssistantMessage {
+            session_id: sid(),
+            turn_id: tid(),
+            text: "最终答案".to_string(),
+        });
+
+        assert_eq!(1, tr.messages.len());
+        assert_eq!("最终答案", tr.messages[0].content);
         assert_eq!("先分析", tr.messages[0].reasoning_content);
     }
 
@@ -561,6 +670,41 @@ mod tests {
         let data = tr.latest_plan().expect("latest_plan 应已填充");
         assert_eq!(data.goal, "排查慢查询");
         assert_eq!(data.steps.len(), 1);
+    }
+
+    #[test]
+    fn subagent_events_update_same_card() {
+        let mut tr = AgentTranscript::new();
+        let subagent_id = SubAgentId::from_string("sub_1");
+        tr.apply(&RuntimeEvent::SubAgentStarted {
+            session_id: sid(),
+            turn_id: tid(),
+            subagent_id: subagent_id.clone(),
+            name: "reviewer".into(),
+            task: "检查 agent runtime".into(),
+        });
+        tr.apply(&RuntimeEvent::SubAgentUpdated {
+            session_id: sid(),
+            turn_id: tid(),
+            subagent_id: subagent_id.clone(),
+            summary: "正在读取事件流".into(),
+        });
+        tr.apply(&RuntimeEvent::SubAgentFinished {
+            session_id: sid(),
+            turn_id: tid(),
+            subagent_id,
+            success: true,
+            summary: "发现 reasoning 未转发".into(),
+        });
+
+        assert_eq!(tr.messages.len(), 1);
+        assert_eq!(tr.messages[0].variant.card_kind(), Some(SUBAGENT_CARD));
+        let data = SubAgentCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!(data.name, "reviewer");
+        assert_eq!(data.task, "检查 agent runtime");
+        assert!(!data.running);
+        assert_eq!(data.success, Some(true));
+        assert_eq!(data.summary, "发现 reasoning 未转发");
     }
 
     #[test]

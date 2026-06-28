@@ -87,6 +87,11 @@ string_id!(
     ToolCallId,
     "call"
 );
+string_id!(
+    /// 运行时或外部 ACP agent 派发的子代理任务标识。
+    SubAgentId,
+    "subagent"
+);
 
 #[cfg(test)]
 mod tests {

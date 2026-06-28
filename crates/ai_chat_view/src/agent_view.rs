@@ -1735,7 +1735,7 @@ fn composer_agent_options(
     acp_connecting: bool,
 ) -> Vec<ComposerAgentOption> {
     let mut options = vec![ComposerAgentOption::local(
-        "Codex CLI",
+        "One Agent",
         backend == Backend::Local,
         acp_connecting,
     )];
@@ -2074,6 +2074,24 @@ mod tests {
         assert_eq!(local.plan_items[0].title.as_ref(), "检查连接");
         assert!(local.agent_options[0].selected);
         assert!(acp.agent_options[1].selected);
+    }
+
+    #[test]
+    fn local_backend_option_is_not_named_after_a_specific_cli() {
+        let ctx = build_composer_context(
+            &ResourceContext::new(),
+            TaskKind::Agent,
+            &SharedString::from("自动"),
+            None,
+            None,
+            Backend::Local,
+            &[],
+            None,
+            false,
+            None,
+        );
+
+        assert_eq!(ctx.agent_options[0].label.as_ref(), "One Agent");
     }
 
     #[test]
