@@ -33,6 +33,7 @@ ed25519-dalek = "2.2.0"
 parking_lot.workspace = true
 util.workspace = true
 rust-i18n.workspace = true
+sys-locale.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

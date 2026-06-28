@@ -79,6 +79,7 @@ serde_yaml = "0.9"
 serde_repr = "0.1"
 smallvec = "1"
 smol = "2"
+sys-locale = "0.3.2"
 tracing = "0.1.41"
 
 
