@@ -4,6 +4,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      keep_build_cache:
+        description: "Restore and save Cargo build cache for faster release builds"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -96,15 +101,18 @@ jobs:
           cmake --version
 
       - name: Cache Cargo
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.keep_build_cache }}
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-          key: build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+            target/
+          key: release-cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
-            build-${{ matrix.target }}-
+            release-cargo-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}-
+            release-cargo-${{ runner.os }}-${{ matrix.target }}-
 
       - name: Set environment variables
         shell: bash
@@ -157,7 +165,7 @@ jobs:
 
 
       - name: Clean build artifacts (macOS)
-        if: runner.os == 'macOS'
+        if: ${{ runner.os == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.keep_build_cache == false }}
         run: |
           rm -rf target/debug
           find target -name "incremental" -o -name "deps" -o -name "build" | xargs rm -rf || true
