@@ -1,9 +1,9 @@
 use std::{fs, sync::Arc};
 
 use super::{
-    DatabaseDriverExtensionProvider, ExtensionKind, ExtensionProvider, ExtensionRegistry,
-    LanguageExtensionProvider, RemoteDesktopProviderExtensionProvider, builtin_registry,
-    load_language_extensions_from_root,
+    AcpAgentExtensionProvider, DatabaseDriverExtensionProvider, ExtensionKind, ExtensionProvider,
+    ExtensionRegistry, LanguageExtensionProvider, RemoteDesktopProviderExtensionProvider,
+    builtin_registry, load_language_extensions_from_root,
 };
 
 #[test]
@@ -15,6 +15,7 @@ fn extension_kind_maps_stable_directories() {
         ExtensionKind::RemoteDesktopProvider.dir_name()
     );
     assert_eq!("mcp_helpers", ExtensionKind::McpHelper.dir_name());
+    assert_eq!("acp_agents", ExtensionKind::AcpAgent.dir_name());
     assert_eq!("composite", ExtensionKind::Composite.dir_name());
 }
 
@@ -30,6 +31,13 @@ fn extension_kind_parses_mcp_helper() {
     let kind: ExtensionKind = serde_json::from_str(r#""mcp_helper""#).unwrap();
 
     assert_eq!(ExtensionKind::McpHelper, kind);
+}
+
+#[test]
+fn extension_kind_parses_acp_agent() {
+    let kind: ExtensionKind = serde_json::from_str(r#""acp_agent""#).unwrap();
+
+    assert_eq!(ExtensionKind::AcpAgent, kind);
 }
 
 #[test]
@@ -215,6 +223,42 @@ fn remote_desktop_provider_install_from_dir_requires_manifest() {
 }
 
 #[test]
+fn acp_agent_provider_lists_installed_agent_summaries() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("extensions");
+    let agent_dir = root.join("acp_agents").join("codex");
+    fs::create_dir_all(agent_dir.join("bin")).unwrap();
+    fs::write(agent_dir.join("bin/codex-acp"), b"#!/bin/sh\n").unwrap();
+    make_executable(&agent_dir.join("bin/codex-acp"));
+    fs::write(agent_dir.join("acp_agent.json"), acp_agent_json()).unwrap();
+
+    let mut registry = ExtensionRegistry::new(root);
+    registry.register_provider(Arc::new(AcpAgentExtensionProvider));
+
+    let list = registry
+        .list_installed_of(ExtensionKind::AcpAgent)
+        .expect("ACP agent extensions should list");
+
+    assert_eq!(1, list.len());
+    assert_eq!(ExtensionKind::AcpAgent, list[0].kind);
+    assert_eq!("codex", list[0].name);
+    assert_eq!("1.2.3", list[0].version);
+    assert_eq!("Codex ACP agent", list[0].description);
+}
+
+#[test]
+fn acp_agent_provider_install_from_dir_requires_manifest() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let empty_dir = tmp.path().join("acp_agents").join("empty");
+    fs::create_dir_all(&empty_dir).unwrap();
+
+    let provider = AcpAgentExtensionProvider;
+    let err = provider.install_from_dir(&empty_dir).unwrap_err();
+
+    assert!(err.to_string().contains("acp_agent"));
+}
+
+#[test]
 fn builtin_registry_registers_all_extension_providers() {
     let tmp = tempfile::TempDir::new().unwrap();
     let registry = builtin_registry(tmp.path().join("extensions"));
@@ -227,12 +271,45 @@ fn builtin_registry_registers_all_extension_providers() {
             .is_some()
     );
     assert!(registry.provider(ExtensionKind::McpHelper).is_some());
+    assert!(registry.provider(ExtensionKind::AcpAgent).is_some());
     assert!(registry.provider(ExtensionKind::Composite).is_some());
     assert_eq!(
         tmp.path().join("extensions/languages"),
         registry.root_for(ExtensionKind::Language)
     );
 }
+
+fn acp_agent_json() -> String {
+    r#"{
+        "id": "codex",
+        "name": "Codex",
+        "description": "Codex ACP agent",
+        "version": "1.2.3",
+        "agents": [{
+            "id": "codex",
+            "name": "Codex",
+            "transport": {
+                "type": "stdio",
+                "command": "bin/codex-acp",
+                "args": ["--stdio"],
+                "env": { "CODEX_HOME": "test-home" }
+            }
+        }]
+    }"#
+    .to_string()
+}
+
+#[cfg(unix)]
+fn make_executable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &std::path::Path) {}
 
 fn remote_desktop_provider_json(id: &str, name: &str, protocol: &str, command: &str) -> String {
     format!(

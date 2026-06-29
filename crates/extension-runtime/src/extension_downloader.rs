@@ -158,6 +158,7 @@ fn package_install_name(staging_dir: &Path, kind: ExtensionKind) -> Result<Strin
         ExtensionKind::DatabaseDriver => "driver.json",
         ExtensionKind::RemoteDesktopProvider => "remote_desktop_provider.json",
         ExtensionKind::McpHelper => "mcp_helper.json",
+        ExtensionKind::AcpAgent => "acp_agent.json",
         ExtensionKind::Composite => "extension.json",
     };
     let manifest_path = staging_dir.join(manifest_file);

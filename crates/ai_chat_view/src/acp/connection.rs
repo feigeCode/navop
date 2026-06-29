@@ -35,6 +35,7 @@ use crate::acp::state::AcpSessionState;
 use crate::acp::translate::{AcpEventTranslator, session_update_to_events};
 
 const AUTHENTICATE_TIMEOUT: Duration = Duration::from_secs(15);
+const SHUTDOWN_ABORT_GRACE: Duration = Duration::from_secs(2);
 
 /// 已建立的 ACP 会话连接(交互式)。
 pub struct AcpConnection {
@@ -46,14 +47,26 @@ pub struct AcpConnection {
     turn_id_tx: watch::Sender<TurnId>,
     events_tx: broadcast::Sender<RuntimeEvent>,
     state: Arc<Mutex<AcpSessionState>>,
-    join: tokio::task::JoinHandle<()>,
-    /// drop 时让 `main_fn` 的 `shutdown_rx` 解析,从而优雅结束连接(关闭子进程)。
-    _shutdown: oneshot::Sender<()>,
+    _lifecycle: AcpConnectionLifecycle,
 }
 
-impl Drop for AcpConnection {
+struct AcpConnectionLifecycle {
+    handle: tokio::runtime::Handle,
+    join: tokio::task::JoinHandle<()>,
+    /// drop 时让 `main_fn` 的 `shutdown_rx` 解析,从而优雅结束连接(关闭子进程)。
+    shutdown: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for AcpConnectionLifecycle {
     fn drop(&mut self) {
-        self.join.abort();
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        let abort = self.join.abort_handle();
+        self.handle.spawn(async move {
+            tokio::time::sleep(SHUTDOWN_ABORT_GRACE).await;
+            abort.abort();
+        });
     }
 }
 
@@ -215,15 +228,18 @@ impl AcpConnection {
 
         match ready_rx.await {
             Ok(Ok((conn, acp_session_id))) => Ok(Self {
-                handle,
+                handle: handle.clone(),
                 conn,
                 acp_session_id,
                 session_id,
                 turn_id_tx,
                 events_tx,
                 state,
-                join,
-                _shutdown: shutdown_tx,
+                _lifecycle: AcpConnectionLifecycle {
+                    handle: handle.clone(),
+                    join,
+                    shutdown: Some(shutdown_tx),
+                },
             }),
             Ok(Err(err)) => {
                 join.abort();
@@ -549,10 +565,37 @@ fn normalize_env_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::time::Duration;
 
     use agent_client_protocol::schema::FileSystemCapabilities;
+    use tokio::sync::oneshot;
 
-    use super::{build_client_capabilities, read_text_slice, workspace_path_allowed};
+    use super::{
+        AcpConnectionLifecycle, build_client_capabilities, read_text_slice, workspace_path_allowed,
+    };
+
+    #[tokio::test]
+    async fn dropping_connection_lifecycle_signals_shutdown_before_abort() {
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (observed_tx, observed_rx) = oneshot::channel();
+        let join = tokio::spawn(async move {
+            let graceful = shutdown_rx.await.is_ok();
+            let _ = observed_tx.send(graceful);
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+
+        drop(AcpConnectionLifecycle {
+            handle: tokio::runtime::Handle::current(),
+            join,
+            shutdown: Some(shutdown_tx),
+        });
+
+        let observed = tokio::time::timeout(Duration::from_millis(100), observed_rx)
+            .await
+            .expect("connection task should observe lifecycle drop")
+            .expect("connection task should report shutdown reason");
+        assert!(observed, "drop should send shutdown before aborting task");
+    }
 
     #[test]
     fn client_capabilities_match_registered_client_handlers() {

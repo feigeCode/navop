@@ -1,92 +1,8 @@
-use super::{
-    acp_agent_configs_from_settings, normalize_acp_agent_config_ids, parse_json_string_array,
-    parse_json_string_object,
-};
+use super::{acp_agent_config_from_extension_agent, normalize_acp_agent_config_ids};
 use ai_chat_view::{AcpAgentConfig, AcpTransport};
-use one_core::settings::{
-    AcpAgentSettings, AcpAgentTransportSettings, AiChatSettings, AppSettings,
-};
-
-#[test]
-fn parses_json_string_array_env() {
-    unsafe {
-        std::env::set_var("ONETCLI_TEST_ACP_ARGS", r#"["-y","agent"]"#);
-    }
-
-    assert_eq!(
-        vec!["-y".to_string(), "agent".to_string()],
-        parse_json_string_array("ONETCLI_TEST_ACP_ARGS")
-    );
-}
-
-#[test]
-fn parses_json_string_object_env() {
-    unsafe {
-        std::env::set_var("ONETCLI_TEST_ACP_ENV", r#"{"API_KEY":"sk"}"#);
-    }
-
-    assert_eq!(
-        vec![("API_KEY".to_string(), "sk".to_string())],
-        parse_json_string_object("ONETCLI_TEST_ACP_ENV")
-    );
-}
-
-#[test]
-fn builds_http_acp_agent_configs_from_settings() {
-    let settings = AppSettings {
-        ai_chat: AiChatSettings {
-            acp_agents: vec![AcpAgentSettings {
-                enabled: true,
-                id: "local".to_string(),
-                name: "Local ACP".to_string(),
-                transport: AcpAgentTransportSettings::Http {
-                    url: " http://127.0.0.1:9876 ".to_string(),
-                },
-            }],
-        },
-        ..AppSettings::default()
-    };
-
-    let configs = acp_agent_configs_from_settings(&settings);
-
-    assert_eq!(1, configs.len());
-    assert_eq!("local", configs[0].id.as_ref());
-    match &configs[0].transport {
-        AcpTransport::Http { url } => assert_eq!("http://127.0.0.1:9876", url),
-        AcpTransport::Stdio { .. } => panic!("expected http transport"),
-    }
-}
-
-#[test]
-fn skips_disabled_and_incomplete_acp_agent_settings() {
-    let settings = AppSettings {
-        ai_chat: AiChatSettings {
-            acp_agents: vec![
-                AcpAgentSettings {
-                    enabled: false,
-                    id: "disabled".to_string(),
-                    name: "Disabled".to_string(),
-                    transport: AcpAgentTransportSettings::Http {
-                        url: "http://127.0.0.1:9876".to_string(),
-                    },
-                },
-                AcpAgentSettings {
-                    enabled: true,
-                    id: "empty".to_string(),
-                    name: "Empty".to_string(),
-                    transport: AcpAgentTransportSettings::Stdio {
-                        command: " ".to_string(),
-                        args: Vec::new(),
-                        env: Vec::new(),
-                    },
-                },
-            ],
-        },
-        ..AppSettings::default()
-    };
-
-    assert!(acp_agent_configs_from_settings(&settings).is_empty());
-}
+use extension_runtime::extension::AcpAgentExtensionAgent;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 #[test]
 fn normalizes_duplicate_acp_agent_config_ids() {
@@ -103,4 +19,35 @@ fn normalizes_duplicate_acp_agent_config_ids() {
         .map(|config| config.id.to_string())
         .collect::<Vec<_>>();
     assert_eq!(vec!["agent", "agent-2", "acp-agent-3"], ids);
+}
+
+#[test]
+fn builds_acp_agent_config_from_extension_agent() {
+    let mut env = BTreeMap::new();
+    env.insert("CODEX_HOME".to_string(), "test-home".to_string());
+    let agent = AcpAgentExtensionAgent::stdio(
+        "com.example.codex",
+        "codex",
+        "Codex",
+        PathBuf::from("/tmp/onetcli-acp/codex"),
+        "bin/codex-acp",
+        vec!["--stdio".to_string()],
+        env,
+    );
+
+    let config = acp_agent_config_from_extension_agent(&agent).expect("extension agent config");
+
+    assert_eq!("com.example.codex.codex", config.id.as_ref());
+    assert_eq!("Codex", config.name.as_ref());
+    match config.transport {
+        AcpTransport::Stdio { command, args, env } => {
+            assert_eq!("/tmp/onetcli-acp/codex/bin/codex-acp", command);
+            assert_eq!(vec!["--stdio".to_string()], args);
+            assert_eq!(
+                vec![("CODEX_HOME".to_string(), "test-home".to_string())],
+                env
+            );
+        }
+        AcpTransport::Http { .. } => panic!("expected stdio transport"),
+    }
 }

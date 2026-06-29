@@ -90,6 +90,27 @@ mod tests {
         assert_eq!("fake_pg", filtered[0].id);
     }
 
+    #[test]
+    fn acp_agent_kind_matches_install_state_and_filters() {
+        let installed = vec![
+            summary(ExtensionKind::AcpAgent, "codex", "1.0.0").with_description("ACP coding agent"),
+        ];
+        let entry = marketplace_entry(ExtensionKind::AcpAgent, "codex", "1.0.0");
+
+        assert_eq!(
+            MarketplaceInstallState::Installed,
+            marketplace_install_state(&installed, &entry)
+        );
+        assert_eq!(
+            1,
+            filter_installed(&installed, "coding", Some(ExtensionKind::AcpAgent)).len()
+        );
+        assert_eq!(
+            1,
+            filter_marketplace(&[entry], "codex", Some(ExtensionKind::AcpAgent)).len()
+        );
+    }
+
     fn summary(kind: ExtensionKind, name: &str, version: &str) -> ExtensionSummary {
         ExtensionSummary::new(kind, name, version, PathBuf::from(format!("/tmp/{name}")))
     }

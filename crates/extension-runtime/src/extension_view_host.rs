@@ -358,6 +358,7 @@ fn to_view_kind(kind: host_extension::ExtensionKind) -> extension_view::Extensio
             extension_view::ExtensionKind::RemoteDesktopProvider
         }
         host_extension::ExtensionKind::McpHelper => extension_view::ExtensionKind::McpHelper,
+        host_extension::ExtensionKind::AcpAgent => extension_view::ExtensionKind::AcpAgent,
         host_extension::ExtensionKind::Composite => extension_view::ExtensionKind::Composite,
     }
 }
@@ -372,6 +373,7 @@ fn to_host_kind(kind: extension_view::ExtensionKind) -> host_extension::Extensio
             host_extension::ExtensionKind::RemoteDesktopProvider
         }
         extension_view::ExtensionKind::McpHelper => host_extension::ExtensionKind::McpHelper,
+        extension_view::ExtensionKind::AcpAgent => host_extension::ExtensionKind::AcpAgent,
         extension_view::ExtensionKind::Composite => host_extension::ExtensionKind::Composite,
     }
 }

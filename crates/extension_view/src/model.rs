@@ -8,6 +8,7 @@ pub enum ExtensionKind {
     DatabaseDriver,
     RemoteDesktopProvider,
     McpHelper,
+    AcpAgent,
     Composite,
 }
 

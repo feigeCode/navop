@@ -12,9 +12,11 @@ use llm_connector::types::{Message, MessageBlock, Role};
 pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
     let max = history.max_observation_bytes();
     let mut messages = Vec::with_capacity(history.len());
+    let mut pending_assistant: Option<(String, String)> = None;
     for item in history.items() {
         match item {
             HistoryItem::User { text, images } => {
+                flush_pending_assistant(&mut messages, &mut pending_assistant);
                 if images.is_empty() {
                     messages.push(Message::user(text.clone()));
                 } else {
@@ -22,28 +24,40 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
                 }
             }
             HistoryItem::Assistant(text) => {
-                if !text.is_empty() {
-                    messages.push(Message::assistant(text.clone()));
-                }
+                flush_pending_assistant(&mut messages, &mut pending_assistant);
+                push_assistant_message(&mut messages, text.clone(), String::new());
             }
-            HistoryItem::AssistantWithReasoning { text, .. } => {
-                if !text.is_empty() {
-                    messages.push(Message::assistant(text.clone()));
-                }
+            HistoryItem::AssistantWithReasoning { text, reasoning } => {
+                flush_pending_assistant(&mut messages, &mut pending_assistant);
+                pending_assistant = Some((text.clone(), reasoning.clone()));
             }
-            HistoryItem::System(text) => messages.push(Message::system(text.clone())),
-            HistoryItem::ToolCall(call) => messages.push(assistant_tool_call_message(call)),
-            HistoryItem::Observation(obs) => messages.push(tool_result_message(obs, max)),
+            HistoryItem::System(text) => {
+                flush_pending_assistant(&mut messages, &mut pending_assistant);
+                messages.push(Message::system(text.clone()));
+            }
+            HistoryItem::ToolCall(call) => {
+                messages.push(assistant_tool_call_message(call, pending_assistant.take()));
+            }
+            HistoryItem::Observation(obs) => {
+                flush_pending_assistant(&mut messages, &mut pending_assistant);
+                messages.push(tool_result_message(obs, max));
+            }
         }
     }
+    flush_pending_assistant(&mut messages, &mut pending_assistant);
     messages
 }
 
 /// 把 agent_runtime 的工具调用转为原生 assistant tool_calls 消息。
-fn assistant_tool_call_message(call: &ToolCall) -> Message {
+fn assistant_tool_call_message(call: &ToolCall, assistant: Option<(String, String)>) -> Message {
+    let (text, reasoning) = assistant.unwrap_or_default();
     Message {
         role: Role::Assistant,
-        content: vec![],
+        content: if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![MessageBlock::text(text)]
+        },
         tool_calls: Some(vec![llm_connector::types::ToolCall {
             id: call.call_id.to_string(),
             call_type: "function".to_string(),
@@ -55,8 +69,26 @@ fn assistant_tool_call_message(call: &ToolCall) -> Message {
             index: None,
             thought_signature: None,
         }]),
+        reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
         ..Default::default()
     }
+}
+
+fn flush_pending_assistant(messages: &mut Vec<Message>, pending: &mut Option<(String, String)>) {
+    if let Some((text, reasoning)) = pending.take() {
+        push_assistant_message(messages, text, reasoning);
+    }
+}
+
+fn push_assistant_message(messages: &mut Vec<Message>, text: String, reasoning: String) {
+    if text.is_empty() && reasoning.is_empty() {
+        return;
+    }
+    let mut message = Message::assistant(text);
+    if !reasoning.is_empty() {
+        message.reasoning_content = Some(reasoning);
+    }
+    messages.push(message);
 }
 
 /// 把 agent_runtime 的观测转为原生 tool result 消息(Role::Tool)。
@@ -112,15 +144,19 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].role, Role::Assistant);
         assert_eq!(messages[0].content_as_text(), "最终回答");
+        assert_eq!(messages[0].reasoning_content.as_deref(), Some("内部推理"));
     }
 
     #[test]
-    fn reasoning_only_history_is_not_sent_to_model() {
+    fn reasoning_only_history_is_sent_as_protocol_metadata() {
         let mut history = RuntimeHistory::new();
         history.record_assistant_with_reasoning("", "内部推理");
         let messages = history_to_messages(&history);
 
-        assert!(messages.is_empty());
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, Role::Assistant);
+        assert_eq!(messages[0].content_as_text(), "");
+        assert_eq!(messages[0].reasoning_content.as_deref(), Some("内部推理"));
     }
 
     #[test]
@@ -166,6 +202,28 @@ mod tests {
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].id, call_id.to_string());
         assert_eq!(tool_calls[0].function.name, "db_query");
+    }
+
+    #[test]
+    fn reasoning_before_tool_call_is_attached_to_tool_call_message() {
+        let call_id = ToolCallId::from_string("call_reasoning_tool");
+        let tool_call = ToolCall {
+            call_id: call_id.clone(),
+            tool_name: ToolName::new("db_query"),
+            arguments: serde_json::json!({"sql": "select 1"}),
+            resource_id: None,
+        };
+
+        let mut history = RuntimeHistory::new();
+        history.record_assistant_with_reasoning("", "需要先查库");
+        history.record_tool_call(tool_call);
+        let messages = history_to_messages(&history);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, Role::Assistant);
+        assert_eq!(messages[0].reasoning_content.as_deref(), Some("需要先查库"));
+        let tool_calls = messages[0].tool_calls.as_ref().expect("tool call");
+        assert_eq!(tool_calls[0].id, call_id.to_string());
     }
 
     #[test]

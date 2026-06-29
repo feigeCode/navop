@@ -7,6 +7,7 @@ pub enum ExtensionKind {
     DatabaseDriver,
     RemoteDesktopProvider,
     McpHelper,
+    AcpAgent,
     Composite,
 }
 
@@ -17,6 +18,7 @@ impl ExtensionKind {
             Self::DatabaseDriver => "database_drivers",
             Self::RemoteDesktopProvider => "remote_desktop_providers",
             Self::McpHelper => "mcp_helpers",
+            Self::AcpAgent => "acp_agents",
             Self::Composite => "composite",
         }
     }
@@ -27,6 +29,7 @@ impl ExtensionKind {
             Self::DatabaseDriver,
             Self::RemoteDesktopProvider,
             Self::McpHelper,
+            Self::AcpAgent,
             Self::Composite,
         ]
     }

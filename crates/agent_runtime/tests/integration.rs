@@ -7,6 +7,7 @@
 //! - 模型调用业务工具(echo)后 follow-up 给出最终回答
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -56,6 +57,53 @@ impl ModelClient for ReasoningStreamModel {
 
     fn model_name(&self) -> &str {
         "reasoning-stream"
+    }
+}
+
+struct ReasoningToolFollowupModel {
+    count: AtomicUsize,
+    requests: Mutex<Vec<ModelRequest>>,
+}
+
+impl ReasoningToolFollowupModel {
+    fn new() -> Self {
+        Self {
+            count: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn received_requests(&self) -> Vec<ModelRequest> {
+        self.requests.lock().expect("requests lock").clone()
+    }
+}
+
+#[async_trait]
+impl ModelClient for ReasoningToolFollowupModel {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, RuntimeError> {
+        Ok(ModelResponse::text("unused"))
+    }
+
+    async fn complete_stream(&self, request: ModelRequest) -> Result<ModelStream, RuntimeError> {
+        self.requests.lock().expect("requests lock").push(request);
+        match self.count.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                let call =
+                    function_tool_call("call_echo", "echo", json!({"text": "hello"}).to_string());
+                Ok(Box::pin(futures::stream::iter([
+                    Ok(ModelStreamEvent::ReasoningDelta("需要调用工具。".into())),
+                    Ok(ModelStreamEvent::ToolCall(call.clone())),
+                    Ok(ModelStreamEvent::Completed(ModelResponse::tool_call(call))),
+                ])))
+            }
+            _ => Ok(agent_runtime::model::model_response_into_stream(
+                ModelResponse::text("工具调用完成。"),
+            )),
+        }
+    }
+
+    fn model_name(&self) -> &str {
+        "reasoning-tool-followup"
     }
 }
 
@@ -196,6 +244,33 @@ async fn reasoning_stream_events_are_forwarded_to_runtime_events() {
                 if text == "这是最终回答。" && reasoning == "先判断问题边界。"
         )
     }));
+}
+
+#[tokio::test]
+async fn reasoning_before_tool_call_is_passed_back_in_followup_request() {
+    let model = Arc::new(ReasoningToolFollowupModel::new());
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(registry)),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    runtime
+        .run_turn_blocking(session.id(), "调用 echo".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    let requests = model.received_requests();
+    assert_eq!(2, requests.len());
+    assert!(
+        requests[1].messages.iter().any(|message| {
+            message.tool_calls.is_some()
+                && message.reasoning_content.as_deref() == Some("需要调用工具。")
+        }),
+        "follow-up request must pass reasoning_content back with assistant tool call"
+    );
 }
 
 #[tokio::test]

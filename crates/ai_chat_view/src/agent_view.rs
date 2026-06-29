@@ -23,7 +23,7 @@ use gpui::{
     Styled, Subscription, Task, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, IconName, Selectable, Sizable, WindowExt as _,
+    ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, WindowExt as _,
     button::{Button, ButtonVariants},
     dialog::DialogButtonProps,
     h_flex,
@@ -251,16 +251,28 @@ impl RuntimeBuildSpec {
 
 #[derive(Default)]
 struct AutoScrollState {
-    pending_bottom_scroll: bool,
+    pending_bottom_scroll_frames: usize,
 }
 
 impl AutoScrollState {
     fn request(&mut self) {
-        self.pending_bottom_scroll = true;
+        self.request_frames(2);
+    }
+
+    fn request_settle(&mut self) {
+        self.request_frames(5);
+    }
+
+    fn request_frames(&mut self, frames: usize) {
+        self.pending_bottom_scroll_frames = self.pending_bottom_scroll_frames.max(frames);
     }
 
     fn take_pending_for_render(&mut self) -> bool {
-        std::mem::take(&mut self.pending_bottom_scroll)
+        if self.pending_bottom_scroll_frames == 0 {
+            return false;
+        }
+        self.pending_bottom_scroll_frames -= 1;
+        true
     }
 }
 
@@ -617,6 +629,7 @@ impl AgentChatView {
         // 跟随流式输出 / 新卡片自动滚到底。
         self.request_scroll_to_bottom();
         if terminal {
+            self.auto_scroll.request_settle();
             self.set_running(false, cx);
             // 一轮结束:把会话快照落库(仅自研后端;ACP 会话由外部 agent 管理)。
             if self.backend == Backend::Local {
@@ -1371,12 +1384,7 @@ impl AgentChatView {
             .border_b_1()
             .border_color(border)
             .bg(muted)
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Agent"),
-            )
+            .child(self.render_agent_switcher(cx))
             .child(
                 h_flex()
                     .gap_1()
@@ -1510,7 +1518,6 @@ impl AgentChatView {
     }
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        // 任务模式与 Agent/ACP 切换都下沉到输入框,这里保留精简标题。
         h_flex()
             .w_full()
             .items_center()
@@ -1519,12 +1526,39 @@ impl AgentChatView {
             .py_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Agent"),
-            )
+            .child(self.render_agent_switcher(cx))
+            .into_any_element()
+    }
+
+    fn render_agent_switcher(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let view = cx.entity();
+        let label = current_agent_label(
+            self.backend,
+            &self.acp_agents,
+            self.current_acp_id.as_ref(),
+            self.acp_connecting,
+        );
+        let options = composer_agent_options(
+            self.backend,
+            &self.acp_agents,
+            self.current_acp_id.as_ref(),
+            self.acp_connecting,
+        );
+        let trigger = Button::new("agent-header-switcher-btn")
+            .small()
+            .icon(current_agent_icon(self.backend))
+            .label(compact_agent_label(label.as_ref(), 24))
+            .outline()
+            .dropdown_caret(true)
+            .disabled(self.is_running);
+
+        Popover::new("agent-header-switcher")
+            .anchor(Anchor::TopLeft)
+            .p_0()
+            .trigger(trigger)
+            .content(move |_state, _window, cx| {
+                render_agent_switcher_content(view.clone(), options.clone(), cx)
+            })
             .into_any_element()
     }
 }
@@ -1760,6 +1794,150 @@ fn composer_agent_options(
     options
 }
 
+fn current_agent_label(
+    backend: Backend,
+    acp_agents: &[AcpAgentConfig],
+    current_acp_id: Option<&SharedString>,
+    acp_connecting: bool,
+) -> SharedString {
+    if acp_connecting {
+        return SharedString::from("连接中...");
+    }
+    if backend == Backend::Local {
+        return SharedString::from("One Agent");
+    }
+    current_acp_id
+        .and_then(|id| acp_agents.iter().find(|agent| &agent.id == id))
+        .map(|agent| agent.name.clone())
+        .unwrap_or_else(|| SharedString::from("ACP Agent"))
+}
+
+fn current_agent_icon(backend: Backend) -> IconName {
+    if backend == Backend::Acp {
+        IconName::Bot
+    } else {
+        IconName::AI
+    }
+}
+
+fn compact_agent_label(label: &str, max_chars: usize) -> SharedString {
+    if label.chars().count() <= max_chars {
+        return SharedString::from(label.to_string());
+    }
+    let mut s: String = label.chars().take(max_chars.saturating_sub(1)).collect();
+    s.push_str("...");
+    SharedString::from(s)
+}
+
+fn render_agent_switcher_content(
+    view: Entity<AgentChatView>,
+    agents: Vec<ComposerAgentOption>,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(300.0));
+
+    col = col.child(header_switcher_group_label("Agent", cx));
+    if agents.is_empty() {
+        return col
+            .child(
+                div()
+                    .px_2()
+                    .py_2()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("无可用 Agent"),
+            )
+            .into_any_element();
+    }
+
+    for agent in agents {
+        col = col.child(header_agent_option_row(view.clone(), agent, muted, cx));
+    }
+    col.into_any_element()
+}
+
+fn header_switcher_group_label(
+    label: &'static str,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    div()
+        .px_2()
+        .py_1()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(label)
+        .into_any_element()
+}
+
+fn header_agent_option_row(
+    view: Entity<AgentChatView>,
+    agent: ComposerAgentOption,
+    muted: gpui::Hsla,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let hover_bg = cx.theme().list_hover;
+    let selected_bg = cx.theme().accent;
+    let icon_fg = if agent.selected {
+        cx.theme().accent_foreground
+    } else {
+        muted
+    };
+    let target = agent.id.clone();
+    let disabled = agent.connecting;
+
+    h_flex()
+        .id(SharedString::from(format!(
+            "agent-header-option-{}",
+            agent.element_id()
+        )))
+        .w_full()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1p5()
+        .rounded(cx.theme().radius)
+        .when(agent.selected, |this| this.bg(selected_bg))
+        .when(disabled, |this| this.opacity(0.5))
+        .when(!disabled, |this| {
+            this.cursor_pointer()
+                .hover(move |this| this.bg(hover_bg))
+                .on_click(move |_, _window, cx| {
+                    let target = target.clone();
+                    view.update(cx, |this, cx| {
+                        if !this.is_running {
+                            this.select_backend(target, cx);
+                        }
+                    });
+                })
+        })
+        .child(
+            Icon::new(current_agent_icon_for_option(&agent))
+                .small()
+                .text_color(icon_fg),
+        )
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(1.0))
+                .child(div().text_sm().truncate().child(agent.label))
+                .child(div().text_xs().text_color(muted).child(agent.subtitle)),
+        )
+        .when(agent.selected, |this| {
+            this.child(Icon::new(IconName::Check).xsmall().text_color(icon_fg))
+        })
+        .into_any_element()
+}
+
+fn current_agent_icon_for_option(agent: &ComposerAgentOption) -> IconName {
+    if agent.id.is_some() {
+        IconName::Bot
+    } else {
+        IconName::AI
+    }
+}
+
 fn target_from_resource(r: &ResourceRef) -> ComposerTarget {
     ComposerTarget::new(
         r.id.as_str().to_string(),
@@ -1968,6 +2146,18 @@ mod tests {
         assert!(!state.take_pending_for_render());
         state.request();
         assert!(state.take_pending_for_render());
+        assert!(state.take_pending_for_render());
+        assert!(!state.take_pending_for_render());
+    }
+
+    #[test]
+    fn auto_scroll_state_terminal_request_spans_multiple_renders() {
+        let mut state = AutoScrollState::default();
+
+        state.request_settle();
+        for _ in 0..5 {
+            assert!(state.take_pending_for_render());
+        }
         assert!(!state.take_pending_for_render());
     }
 
@@ -2102,6 +2292,29 @@ mod tests {
         );
 
         assert_eq!(ctx.agent_options[0].label.as_ref(), "One Agent");
+    }
+
+    #[test]
+    fn header_agent_switcher_lists_and_labels_multiple_acp_agents() {
+        let codex_id = SharedString::from("codex");
+        let opencode_id = SharedString::from("opencode");
+        let acp_agents = vec![
+            AcpAgentConfig::new(codex_id.clone(), "Codex", "codex"),
+            AcpAgentConfig::new(opencode_id.clone(), "OpenCode", "opencode"),
+        ];
+
+        let options = composer_agent_options(Backend::Acp, &acp_agents, Some(&opencode_id), false);
+        let labels = options
+            .iter()
+            .map(|option| option.label.as_ref())
+            .collect::<Vec<_>>();
+
+        assert_eq!(vec!["One Agent", "Codex", "OpenCode"], labels);
+        assert!(options[2].selected);
+        assert_eq!(
+            "OpenCode",
+            current_agent_label(Backend::Acp, &acp_agents, Some(&opencode_id), false).as_ref()
+        );
     }
 
     #[test]
