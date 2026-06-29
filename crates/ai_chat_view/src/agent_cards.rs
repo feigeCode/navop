@@ -63,6 +63,12 @@ pub struct PlanStepData {
 pub struct ToolCardData {
     pub call_id: String,
     pub tool_name: String,
+    /// 工具入参摘要,用于卡片头部。
+    #[serde(default)]
+    pub input_summary: String,
+    /// 脱敏后的工具入参 JSON,用于展开详情。
+    #[serde(default)]
+    pub input_json: String,
     /// 是否仍在执行。
     pub running: bool,
     /// 执行结果(完成后才有):成功 / 失败。
@@ -97,6 +103,12 @@ pub struct SubAgentCardData {
 pub struct ToolConfirmCardData {
     pub call_id: String,
     pub tool_name: String,
+    /// 工具入参摘要,用于确认卡片头部。
+    #[serde(default)]
+    pub input_summary: String,
+    /// 脱敏后的工具入参 JSON。
+    #[serde(default)]
+    pub input_json: String,
     pub question: String,
     #[serde(default = "default_tool_confirm_status")]
     pub status: String,
@@ -208,7 +220,8 @@ impl ChatCard for ToolCard {
         } else {
             ("•", cx.theme().muted_foreground)
         };
-        let has_details = !data.summary.is_empty() || !data.data_text.is_empty();
+        let has_details =
+            !data.input_json.is_empty() || !data.summary.is_empty() || !data.data_text.is_empty();
         let expanded = has_details && self.is_expanded(msg.id);
         let toggle_state = self.expanded.clone();
         let message_id = msg.id.to_string();
@@ -251,15 +264,7 @@ impl ChatCard for ToolCard {
                             .text_color(status_color)
                             .child(status_glyph),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_sm()
-                            .text_color(cx.theme().foreground)
-                            .truncate()
-                            .child(format!("工具 · {}", data.tool_name)),
-                    )
+                    .child(tool_card_title(&data, cx))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -282,43 +287,23 @@ impl ChatCard for ToolCard {
                     }),
             );
 
-        if expanded && !data.summary.is_empty() {
-            card = card.child(
-                div()
-                    .px_1()
-                    .min_w_0()
-                    .text_sm()
-                    .text_color(cx.theme().foreground)
-                    .child(
-                        TextView::markdown(
-                            SharedString::from(format!("agent-tool-summary-{}", data.call_id)),
-                            data.summary.clone(),
-                        )
-                        .selectable(true),
-                    ),
-            );
+        if expanded && !data.input_json.is_empty() {
+            card = card.child(tool_card_text_block(
+                "input",
+                SharedString::from(format!("agent-tool-input-{}", data.call_id)),
+                data.input_json.clone(),
+                cx,
+            ));
         }
 
-        if expanded && !data.data_text.is_empty() {
-            let preview = truncate_chars(&data.data_text, 600);
-            card = card.child(
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .p_2()
-                    .rounded_md()
-                    .bg(cx.theme().background)
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(
-                        TextView::markdown(
-                            SharedString::from(format!("agent-tool-data-{}", data.call_id)),
-                            preview,
-                        )
-                        .text_xs()
-                        .selectable(true),
-                    ),
-            );
+        let output = tool_output_text(&data);
+        if expanded && !output.is_empty() {
+            card = card.child(tool_card_text_block(
+                "output",
+                SharedString::from(format!("agent-tool-output-{}", data.call_id)),
+                output,
+                cx,
+            ));
         }
 
         card.into_any_element()
@@ -414,7 +399,7 @@ impl ChatCard for ToolConfirmCard {
                             .min_w_0()
                             .text_sm()
                             .text_color(cx.theme().foreground)
-                            .child(format!("工具 · {}", data.tool_name)),
+                            .child(confirm_card_title(&data)),
                     )
                     .child(
                         div()
@@ -433,6 +418,15 @@ impl ChatCard for ToolConfirmCard {
                     .selectable(true),
                 ),
             );
+
+        if !data.input_json.is_empty() {
+            card = card.child(tool_card_text_block(
+                "input",
+                SharedString::from(format!("agent-tool-confirm-input-{}", msg.id)),
+                data.input_json.clone(),
+                cx,
+            ));
+        }
 
         if is_pending {
             card = card.child(
@@ -487,6 +481,73 @@ impl ChatCard for ToolConfirmCard {
 // ============================================================================
 // 渲染辅助
 // ============================================================================
+
+fn tool_card_title(data: &ToolCardData, cx: &App) -> AnyElement {
+    div()
+        .flex_1()
+        .min_w_0()
+        .text_sm()
+        .text_color(cx.theme().foreground)
+        .truncate()
+        .child(if data.input_summary.is_empty() {
+            format!("工具 · {}", data.tool_name)
+        } else {
+            format!("工具 · {} · {}", data.tool_name, data.input_summary)
+        })
+        .into_any_element()
+}
+
+fn confirm_card_title(data: &ToolConfirmCardData) -> String {
+    if data.input_summary.is_empty() {
+        format!("工具 · {}", data.tool_name)
+    } else {
+        format!("工具 · {} · {}", data.tool_name, data.input_summary)
+    }
+}
+
+fn tool_output_text(data: &ToolCardData) -> String {
+    match (data.summary.is_empty(), data.data_text.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => data.summary.clone(),
+        (true, false) => truncate_chars(&data.data_text, 600),
+        (false, false) => format!(
+            "{}\n\n{}",
+            data.summary,
+            truncate_chars(&data.data_text, 600)
+        ),
+    }
+}
+
+fn tool_card_text_block(
+    label: &'static str,
+    id: SharedString,
+    content: String,
+    cx: &App,
+) -> AnyElement {
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_1()
+        .px_1()
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
+        )
+        .child(
+            div()
+                .w_full()
+                .min_w_0()
+                .p_2()
+                .rounded_md()
+                .bg(cx.theme().background)
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(TextView::markdown(id, content).text_xs().selectable(true)),
+        )
+        .into_any_element()
+}
 
 fn fallback(content: &str, cx: &App) -> AnyElement {
     div()
@@ -744,6 +805,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            input_summary: "hi".into(),
+            input_json: "{\"text\":\"hi\"}".into(),
             running: false,
             success: Some(true),
             summary: "echo: hi".into(),
@@ -751,6 +814,8 @@ mod tests {
         };
         let back = ToolCardData::from_json(&data.to_json()).expect("parse");
         assert_eq!(back.call_id, "call_1");
+        assert_eq!(back.input_summary, "hi");
+        assert_eq!(back.input_json, "{\"text\":\"hi\"}");
         assert_eq!(back.success, Some(true));
     }
 
@@ -775,6 +840,8 @@ mod tests {
         let data = ToolConfirmCardData {
             call_id: "call_1".into(),
             tool_name: "db_schema".into(),
+            input_summary: "show tables".into(),
+            input_json: "{\"sql\":\"show tables\"}".into(),
             question: "确认执行工具 `db_schema` 吗?".into(),
             status: "pending".into(),
         };
@@ -782,6 +849,8 @@ mod tests {
 
         assert_eq!(back.call_id, "call_1");
         assert_eq!(back.tool_name, "db_schema");
+        assert_eq!(back.input_summary, "show tables");
+        assert_eq!(back.input_json, "{\"sql\":\"show tables\"}");
         assert_eq!(back.question, "确认执行工具 `db_schema` 吗?");
         assert_eq!(back.status, "pending");
     }

@@ -246,6 +246,7 @@ fn tool_call_events(call: &AcpToolCall, sid: &SessionId, tid: &TurnId) -> Vec<Ru
         turn_id: tid.clone(),
         call_id: call_id.clone(),
         tool_name: tool_name.clone(),
+        arguments: call.raw_input.clone().unwrap_or(serde_json::Value::Null),
     }];
     // ToolCall 携带终态(部分 agent 一步到位),补观测 + 完成事件。
     if let Some(success) = terminal_success(call.status) {
@@ -643,12 +644,16 @@ mod tests {
     #[test]
     fn tool_call_emits_started() {
         let (sid, tid) = ids();
-        let update = SessionUpdate::ToolCall(AcpToolCall::new("call_1", "执行 SQL"));
+        let update = SessionUpdate::ToolCall(
+            AcpToolCall::new("call_1", "执行 SQL")
+                .raw_input(serde_json::json!({"sql": "select 1"})),
+        );
         let events = session_update_to_events(&update, &sid, &tid);
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
-            RuntimeEvent::ToolCallStarted { tool_name, .. } if tool_name.as_str() == "SQL"
+            RuntimeEvent::ToolCallStarted { tool_name, arguments, .. }
+                if tool_name.as_str() == "SQL" && arguments["sql"] == "select 1"
         ));
     }
 

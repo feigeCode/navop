@@ -226,6 +226,7 @@ impl Session {
             turn_id: turn_id.clone(),
             call_id: call.call_id.clone(),
             tool_name: call.tool_name.clone(),
+            arguments: call.arguments.clone(),
         });
     }
 
@@ -458,6 +459,27 @@ mod tests {
         // 未知 step_id:plan.mark_step 返回 false,不应再发事件。
         session.mark_step(&turn_id, &PlanStepId::new(), StepStatus::Completed);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn record_tool_call_emits_arguments() {
+        use crate::tools::{ToolCall, ToolName};
+
+        let (session, mut rx) = test_session();
+        let turn_id = TurnId::from_string("turn_test");
+        let call = ToolCall::new(
+            ToolName::new("exec_command"),
+            serde_json::json!({"command": "rtk cargo check"}),
+        );
+
+        session.record_tool_call(&turn_id, &call);
+
+        match rx.try_recv() {
+            Ok(RuntimeEvent::ToolCallStarted { arguments, .. }) => {
+                assert_eq!(arguments["command"], "rtk cargo check");
+            }
+            other => panic!("期望 ToolCallStarted 携带 arguments,实际:{other:?}"),
+        }
     }
 
     #[test]

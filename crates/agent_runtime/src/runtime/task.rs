@@ -11,6 +11,7 @@ use crate::runtime::session::Session;
 use crate::runtime::turn_context::TurnContext;
 use crate::tools::{ToolCall, ToolName};
 use async_trait::async_trait;
+use serde_json::Value;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -49,6 +50,7 @@ pub enum TaskOutcome {
         question: String,
         pending_tool_call_id: Option<ToolCallId>,
         tool_name: Option<ToolName>,
+        arguments: Option<Value>,
     },
     /// 失败。
     Failed { reason: String },

@@ -686,8 +686,11 @@ async fn manual_tool_mode_requires_confirmation_before_business_tool_dispatch() 
             RuntimeEvent::NeedUserInput {
                 pending_tool_call_id: Some(event_call_id),
                 tool_name: Some(tool_name),
+                arguments: Some(arguments),
                 ..
-            } if event_call_id == &call_id && tool_name.as_str() == "write_data"
+            } if event_call_id == &call_id
+                && tool_name.as_str() == "write_data"
+                && arguments["value"] == "x"
         )
     }));
     assert!(

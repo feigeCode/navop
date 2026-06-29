@@ -315,12 +315,14 @@ fn emit_outcome(session: &Session, turn_id: &TurnId, outcome: &TaskOutcome) {
             question,
             pending_tool_call_id,
             tool_name,
+            arguments,
         } => RuntimeEvent::NeedUserInput {
             session_id,
             turn_id: turn_id.clone(),
             question: question.clone(),
             pending_tool_call_id: pending_tool_call_id.clone(),
             tool_name: tool_name.clone(),
+            arguments: arguments.clone(),
         },
         TaskOutcome::Failed { reason } => RuntimeEvent::TurnFailed {
             session_id,

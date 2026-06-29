@@ -10,6 +10,7 @@ use crate::agent_cards::{
     PlanCardData, PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD,
     ToolCardData, ToolConfirmCardData,
 };
+use crate::agent_tool_input::build_tool_input_display;
 use crate::code_block::extract_fenced_code_blocks;
 use crate::{ChatMessageUI, MessageVariant, parse_chart_json_block};
 
@@ -67,7 +68,11 @@ impl AgentTranscript {
                 }
                 HistoryItem::System(text) => self.push_system(text.clone()),
                 HistoryItem::ToolCall(call) => {
-                    self.push_tool_call(call.call_id.as_str(), call.tool_name.as_str());
+                    self.push_tool_call(
+                        call.call_id.as_str(),
+                        call.tool_name.as_str(),
+                        &call.arguments,
+                    );
                 }
                 HistoryItem::Observation(obs) => {
                     self.apply_observation(obs);
@@ -122,9 +127,12 @@ impl AgentTranscript {
                 self.upsert_plan(plan);
             }
             RuntimeEvent::ToolCallStarted {
-                call_id, tool_name, ..
+                call_id,
+                tool_name,
+                arguments,
+                ..
             } => {
-                self.push_tool_call(call_id.as_str(), tool_name.as_str());
+                self.push_tool_call(call_id.as_str(), tool_name.as_str(), arguments);
             }
             RuntimeEvent::ObservationAdded { observation, .. } => {
                 self.apply_observation(observation);
@@ -161,17 +169,25 @@ impl AgentTranscript {
                 question,
                 pending_tool_call_id,
                 tool_name,
+                arguments,
                 ..
             } => {
+                let tool_name_text = tool_name
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "unknown".into());
+                let input = arguments
+                    .as_ref()
+                    .map(|args| build_tool_input_display(&tool_name_text, args))
+                    .unwrap_or_default();
                 let data = ToolConfirmCardData {
                     call_id: pending_tool_call_id
                         .as_ref()
                         .map(ToString::to_string)
                         .unwrap_or_default(),
-                    tool_name: tool_name
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| "unknown".into()),
+                    tool_name: tool_name_text,
+                    input_summary: input.summary,
+                    input_json: input.json,
                     question: question.clone(),
                     status: "pending".into(),
                 };
@@ -295,12 +311,15 @@ impl AgentTranscript {
 
     // ===== 工具卡片 =====
 
-    fn push_tool_call(&mut self, call_id: &str, tool_name: &str) {
+    fn push_tool_call(&mut self, call_id: &str, tool_name: &str, arguments: &serde_json::Value) {
         self.finish_active_status();
         self.close_streaming_segment();
+        let input = build_tool_input_display(tool_name, arguments);
         let data = ToolCardData {
             call_id: call_id.to_string(),
             tool_name: tool_name.to_string(),
+            input_summary: input.summary,
+            input_json: input.json,
             running: true,
             success: None,
             summary: String::new(),
@@ -326,6 +345,8 @@ impl AgentTranscript {
             let data = ToolCardData {
                 call_id,
                 tool_name: obs.tool_name.to_string(),
+                input_summary: String::new(),
+                input_json: String::new(),
                 running: false,
                 success: Some(success),
                 summary,
@@ -529,7 +550,7 @@ fn push_assistant_text_segment(messages: &mut Vec<ChatMessageUI>, text: &str) {
 mod tests {
     use super::*;
     use agent_runtime::ids::{SubAgentId, ToolCallId, TurnId};
-    use agent_runtime::tools::{ObservationData, ToolName};
+    use agent_runtime::tools::{ObservationData, ToolCall, ToolName};
     use agent_runtime::{PlanSource, PlanStep, SessionId};
 
     fn sid() -> SessionId {
@@ -628,6 +649,27 @@ mod tests {
     }
 
     #[test]
+    fn load_history_preserves_tool_input_display() {
+        let mut tr = AgentTranscript::new();
+        let call = ToolCall::new(
+            ToolName::new("exec_command"),
+            serde_json::json!({
+                "command": "rtk cargo check -p ai_chat_view",
+                "token": "secret"
+            }),
+        );
+
+        tr.load_history(&[HistoryItem::ToolCall(call)], None);
+
+        assert_eq!(1, tr.messages.len());
+        let data = ToolCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!("rtk cargo check -p ai_chat_view", data.input_summary);
+        assert!(data.input_json.contains("rtk cargo check -p ai_chat_view"));
+        assert!(data.input_json.contains("\"token\": \"***\""));
+        assert!(!data.input_json.contains("secret"));
+    }
+
+    #[test]
     fn tool_call_closes_reasoning_segment_before_followup_answer() {
         let mut tr = AgentTranscript::new();
         let call = ToolCallId::from_string("call_1");
@@ -641,6 +683,7 @@ mod tests {
             turn_id: tid(),
             call_id: call.clone(),
             tool_name: ToolName::new("echo"),
+            arguments: serde_json::json!({"text": "hi"}),
         });
         tr.apply(&RuntimeEvent::ToolCallFinished {
             session_id: sid(),
@@ -675,6 +718,7 @@ mod tests {
             turn_id: tid(),
             call_id: call.clone(),
             tool_name: ToolName::new("echo"),
+            arguments: serde_json::json!({"text": "hi"}),
         });
         assert_eq!(tr.messages.len(), 1);
 
@@ -702,6 +746,8 @@ mod tests {
         assert!(!data.running);
         assert_eq!(data.success, Some(true));
         assert_eq!(data.summary, "echo: hi");
+        assert_eq!(data.input_summary, "hi");
+        assert!(data.input_json.contains("\"text\": \"hi\""));
     }
 
     #[test]
@@ -714,6 +760,7 @@ mod tests {
             question: "确认执行工具 `db_schema` 吗?".into(),
             pending_tool_call_id: Some(ToolCallId::from_string("call_confirm")),
             tool_name: Some(ToolName::new("db_schema")),
+            arguments: Some(serde_json::json!({"sql": "show tables"})),
         });
 
         assert_eq!(1, tr.messages.len());
@@ -721,6 +768,8 @@ mod tests {
         let data = ToolConfirmCardData::from_json(&tr.messages[0].content).unwrap();
         assert_eq!(data.call_id, "call_confirm");
         assert_eq!(data.tool_name, "db_schema");
+        assert_eq!(data.input_summary, "show tables");
+        assert!(data.input_json.contains("\"sql\": \"show tables\""));
         assert_eq!(data.question, "确认执行工具 `db_schema` 吗?");
         assert_eq!(data.status, "pending");
     }
@@ -736,6 +785,7 @@ mod tests {
             question: "确认执行工具 `db_schema` 吗?".into(),
             pending_tool_call_id: Some(call_id.clone()),
             tool_name: Some(ToolName::new("db_schema")),
+            arguments: Some(serde_json::json!({"sql": "show tables"})),
         });
         tr.apply(&RuntimeEvent::ToolApprovalResolved {
             session_id: sid(),
@@ -762,6 +812,7 @@ mod tests {
             turn_id: tid(),
             call_id: call,
             tool_name: ToolName::new("Read"),
+            arguments: serde_json::json!({"path": "/tmp/a.txt"}),
         });
         tr.apply(&RuntimeEvent::AssistantMessageDelta {
             session_id: sid(),

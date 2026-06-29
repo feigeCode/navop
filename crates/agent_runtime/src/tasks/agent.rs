@@ -255,6 +255,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
             {
                 let pending_tool_call_id = call.call_id.clone();
                 let tool_name = call.tool_name.clone();
+                let arguments = call.arguments.clone();
                 ctx.session.set_pending_tool_approval(PendingToolApproval {
                     turn_id: ctx.turn_id.clone(),
                     task_kind: ctx.task_kind,
@@ -267,6 +268,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
                     question: format!("确认执行工具 `{tool_name}` 吗?"),
                     pending_tool_call_id: Some(pending_tool_call_id),
                     tool_name: Some(tool_name),
+                    arguments: Some(arguments),
                 };
             }
 

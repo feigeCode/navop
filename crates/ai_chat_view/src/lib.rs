@@ -18,6 +18,7 @@ pub use agent_runtime::{ResourceContext, ResourceId, ResourceScope};
 mod acp;
 mod agent_cards;
 mod agent_tab;
+mod agent_tool_input;
 mod agent_transcript;
 mod agent_view;
 mod ask_ai;

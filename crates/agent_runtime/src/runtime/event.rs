@@ -6,6 +6,7 @@
 use crate::ids::{SessionId, SubAgentId, ToolCallId, TurnId};
 use crate::planner::Plan;
 use crate::tools::{ToolName, ToolObservation};
+use serde_json::Value;
 
 /// 事件发送端(克隆给各 Session)。
 pub type RuntimeEventSender = tokio::sync::broadcast::Sender<RuntimeEvent>;
@@ -32,6 +33,7 @@ pub enum RuntimeEvent {
         turn_id: TurnId,
         call_id: ToolCallId,
         tool_name: ToolName,
+        arguments: Value,
     },
     /// 工具调用结束。
     ToolCallFinished {
@@ -107,6 +109,7 @@ pub enum RuntimeEvent {
         question: String,
         pending_tool_call_id: Option<ToolCallId>,
         tool_name: Option<ToolName>,
+        arguments: Option<Value>,
     },
     /// 用户已处理工具执行审批。
     ToolApprovalResolved {
