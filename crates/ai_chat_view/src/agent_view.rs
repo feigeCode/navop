@@ -198,11 +198,13 @@ impl AgentChatViewConfig {
         mentions: Vec<MentionItem>,
         specs: Vec<RuntimeBuildSpec>,
     ) -> anyhow::Result<Self> {
-        let first = specs
-            .first()
+        let initial = specs
+            .iter()
+            .find(|spec| spec.is_default)
+            .or_else(|| specs.first())
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("没有可用模型配置"))?;
-        let runtime = first.build();
+        let runtime = initial.build();
         let selected_model_id = selected_provider_model_id(&specs);
         let model_options = specs.iter().map(|spec| spec.option.clone()).collect();
         let spec_map: Arc<HashMap<String, RuntimeBuildSpec>> = Arc::new(
@@ -211,7 +213,7 @@ impl AgentChatViewConfig {
                 .map(|spec| (spec.option.id.to_string(), spec))
                 .collect(),
         );
-        let fallback = first;
+        let fallback = initial;
         let runtime_factory: AgentRuntimeFactory = Arc::new(move |option| {
             spec_map
                 .get(option.id.as_ref())
@@ -2802,6 +2804,43 @@ mod tests {
         assert_eq!(
             selected_provider_model_id(&specs),
             Some(SharedString::from("provider:7:qwen3:14b"))
+        );
+    }
+
+    #[test]
+    fn provider_config_initial_runtime_uses_default_model() {
+        let first = ProviderConfig {
+            id: 7,
+            name: "First".to_string(),
+            provider_type: ProviderType::Ollama,
+            model: "first-model".to_string(),
+            is_default: false,
+            ..Default::default()
+        };
+        let second = ProviderConfig {
+            id: 8,
+            name: "Default".to_string(),
+            provider_type: ProviderType::Ollama,
+            model: "default-model".to_string(),
+            is_default: true,
+            ..Default::default()
+        };
+
+        let config = AgentChatViewConfig::from_provider_configs(
+            ResourceContext::new(),
+            vec![],
+            vec![first, second],
+            ToolRegistry::new(),
+        )
+        .expect("provider configs should build");
+
+        assert_eq!(
+            config.selected_model_id,
+            Some(SharedString::from("provider:8:default-model"))
+        );
+        assert_eq!(
+            config.runtime.services().model.model_name(),
+            "default-model"
         );
     }
 
