@@ -181,6 +181,14 @@ fn should_start_selection_from_pending_sgr_press(start: AlacPoint, current: Alac
     start != current
 }
 
+fn should_extend_selection_on_shift_click(
+    button: MouseButton,
+    modifiers: Modifiers,
+    has_selection: bool,
+) -> bool {
+    button == MouseButton::Left && modifiers.shift && has_selection
+}
+
 fn should_scroll_to_bottom_on_user_input(
     display_offset: usize,
     pending_display_offset: &StdCell<Option<usize>>,
@@ -3650,6 +3658,17 @@ impl TerminalView {
         let bounds = self.terminal_bounds;
 
         let point = self.pixel_to_point(event.position, bounds, cx);
+        let has_selection = self.terminal.read(cx).term().lock().selection.is_some();
+        if should_extend_selection_on_shift_click(event.button, event.modifiers, has_selection) {
+            let side = self.pixel_to_side(event.position, bounds);
+            self.terminal.update(cx, |terminal, _| {
+                terminal.update_selection(point, side);
+            });
+            self.mouse_state.selecting = true;
+            cx.notify();
+            return;
+        }
+
         let screen_line = point.line.0 as usize;
         let column = point.column.0;
         let line_text = self.get_line_text(screen_line, cx);
@@ -4534,8 +4553,8 @@ mod tests {
         should_defer_inline_history_prompt_input_to_text_system, should_defer_sgr_left_press,
         should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
         should_dismiss_history_prompt_for_scroll, should_reset_history_prompt_for_terminal_event,
-        should_scroll_to_bottom_on_user_input, should_start_selection_from_pending_sgr_press,
-        take_whole_scroll_lines,
+        should_extend_selection_on_shift_click, should_scroll_to_bottom_on_user_input,
+        should_start_selection_from_pending_sgr_press, take_whole_scroll_lines,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
@@ -4802,6 +4821,36 @@ mod tests {
         assert!(should_start_selection_from_pending_sgr_press(
             start,
             AlacPoint::new(Line(2), Column(1))
+        ));
+    }
+
+    #[test]
+    fn shift_left_click_extends_existing_terminal_selection_only() {
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let none = Modifiers::default();
+
+        assert!(should_extend_selection_on_shift_click(
+            MouseButton::Left,
+            shift,
+            true
+        ));
+        assert!(!should_extend_selection_on_shift_click(
+            MouseButton::Left,
+            shift,
+            false
+        ));
+        assert!(!should_extend_selection_on_shift_click(
+            MouseButton::Left,
+            none,
+            true
+        ));
+        assert!(!should_extend_selection_on_shift_click(
+            MouseButton::Right,
+            shift,
+            true
         ));
     }
 

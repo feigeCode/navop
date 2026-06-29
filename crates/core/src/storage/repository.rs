@@ -218,7 +218,7 @@ impl Repository for ConnectionRepository {
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections ORDER BY sort_order ASC, COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map([], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -253,9 +253,9 @@ impl ConnectionRepository {
     pub fn list_by_workspace(&self, workspace_id: Option<i64>) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let sql = if workspace_id.is_some() {
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id = ?1 ORDER BY sort_order ASC, COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
             } else {
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id IS NULL ORDER BY sort_order ASC, COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE workspace_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC"
             };
             let mut stmt = conn.prepare(sql)?;
 
@@ -321,7 +321,8 @@ impl ConnectionRepository {
         })
     }
 
-    /// 批量更新连接的 sort_order（拖拽排序后持久化）
+    /// 暂停连接拖拽排序：当前连接列表以 LRU 为准，后续重新设计手动排序与 LRU 的关系后再启用。
+    #[allow(dead_code)]
     pub fn update_sort_orders(&self, orders: &[(i64, i32)]) -> Result<()> {
         self.conn.with_connection(|conn| {
             for (id, sort_order) in orders {
@@ -398,7 +399,7 @@ impl ConnectionRepository {
     pub fn list_by_team(&self, team_id: &str) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id = ?1 ORDER BY sort_order ASC, COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id = ?1 ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map(params![team_id], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -413,7 +414,7 @@ impl ConnectionRepository {
     pub fn list_personal(&self) -> Result<Vec<StoredConnection>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id IS NULL ORDER BY sort_order ASC, COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
+                "SELECT id, name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, last_used_at, sort_order, created_at, updated_at, team_id, owner_id FROM connections WHERE team_id IS NULL ORDER BY COALESCE(last_used_at, updated_at, created_at) DESC, id DESC",
             )?;
             let rows = stmt.query_map([], |row| ConnectionRow::from_row(row))?;
             let mut results = Vec::new();
@@ -867,6 +868,33 @@ mod tests {
             .unwrap();
         assert_eq!(1000, updated_at);
         assert!(last_used_at.is_some());
+    }
+
+    #[test]
+    fn list_ignores_legacy_sort_order_for_recent_use() {
+        let (conn, repo) = test_repository();
+        let mut old_connection = ssh_connection("old");
+        let old_id = repo.insert(&mut old_connection).unwrap();
+        let mut new_connection = ssh_connection("new");
+        let new_id = repo.insert(&mut new_connection).unwrap();
+
+        conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE connections SET created_at = ?1, updated_at = ?1, sort_order = ?2 WHERE id = ?3",
+                params![1000i64, 0i32, old_id],
+            )?;
+            conn.execute(
+                "UPDATE connections SET created_at = ?1, updated_at = ?1, sort_order = ?2 WHERE id = ?3",
+                params![2000i64, 100i32, new_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            Some(new_id),
+            repo.list().unwrap().first().and_then(|c| c.id)
+        );
     }
 }
 

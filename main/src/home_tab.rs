@@ -153,6 +153,7 @@ impl ConnectionLayout {
 /// 拖拽排序的荷载，在渲染连接列表时由 on_drag 创建，
 /// 拖入另一个连接条目时由 on_drop handler 读取。
 #[derive(Clone)]
+#[allow(dead_code)]
 struct DragConnection {
     source_index: usize,
     source_id: Option<i64>,
@@ -569,6 +570,7 @@ impl HomePage {
     }
 
     /// 拖拽排序：将 `from` 位置的连接移动到 `to` 位置，并异步持久化 sort_order。
+    #[allow(dead_code)]
     fn reorder_connections(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
         if from >= self.connections.len() || to >= self.connections.len() || from == to {
             return;
@@ -593,6 +595,7 @@ impl HomePage {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     fn reorder_connection_by_id(
         &mut self,
         source_id: Option<i64>,
@@ -3100,7 +3103,7 @@ impl HomePage {
         &self,
         conn: StoredConnection,
         selected_id: Option<i64>,
-        index: usize,
+        _index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let conn_id = conn.id;
@@ -3117,10 +3120,6 @@ impl HomePage {
             .id
             .map_or(false, |id| cx.global::<ActiveConnections>().is_active(id));
         let can_edit = can_edit_connection(&conn, cx);
-
-        let accent = cx.theme().accent;
-        let drag_connection = self.drag_connection(&conn, index);
-        let drop_target_id = conn.id;
 
         h_flex()
             .id(SharedString::from(format!(
@@ -3152,21 +3151,6 @@ impl HomePage {
                 this.selected_connection_id = conn_id;
                 cx.notify();
             }))
-            .on_drag(drag_connection, |drag, _, window, cx| {
-                window.prevent_default();
-                cx.stop_propagation();
-                cx.new(|_| drag.clone())
-            })
-            .drag_over::<DragConnection>(move |el, _, _, _cx| el.border_t_2().border_color(accent))
-            .on_drop(
-                cx.listener(move |this, drag: &DragConnection, _window, cx| {
-                    if drag.source_id.is_some() && drop_target_id.is_some() {
-                        this.reorder_connection_by_id(drag.source_id, drop_target_id, cx);
-                    } else if drag.source_index != index {
-                        this.reorder_connections(drag.source_index, index, cx);
-                    }
-                }),
-            )
             // 激活指示灯
             .when(is_active, |this| {
                 // list_item version
@@ -3488,6 +3472,7 @@ impl HomePage {
         }
     }
 
+    #[allow(dead_code)]
     fn drag_connection(&self, conn: &StoredConnection, index: usize) -> DragConnection {
         DragConnection {
             source_index: index,
@@ -3502,7 +3487,7 @@ impl HomePage {
         &self,
         conn: StoredConnection,
         selected_id: Option<i64>,
-        index: usize,
+        _index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let conn_id = conn.id;
@@ -3522,10 +3507,6 @@ impl HomePage {
 
         let can_edit = can_edit_connection(&conn, cx);
         let has_team = conn.team_id.is_some();
-        let accent = cx.theme().accent;
-        let drag_connection = self.drag_connection(&conn, index);
-        let drop_target_id = conn.id;
-
         let card = v_flex()
             .justify_center()
             .id(SharedString::from(format!(
@@ -3563,21 +3544,6 @@ impl HomePage {
                 this.selected_connection_id = conn_id;
                 cx.notify();
             }))
-            .on_drag(drag_connection, |drag, _, window, cx| {
-                window.prevent_default();
-                cx.stop_propagation();
-                cx.new(|_| drag.clone())
-            })
-            .drag_over::<DragConnection>(move |el, _, _, _cx| el.border_l_2().border_color(accent))
-            .on_drop(
-                cx.listener(move |this, drag: &DragConnection, _window, cx| {
-                    if drag.source_id.is_some() && drop_target_id.is_some() {
-                        this.reorder_connection_by_id(drag.source_id, drop_target_id, cx);
-                    } else if drag.source_index != index {
-                        this.reorder_connections(drag.source_index, index, cx);
-                    }
-                }),
-            )
             .when(is_active, |this| {
                 // card version
                 this.child(
