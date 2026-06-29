@@ -21,14 +21,16 @@ pub use session::Session;
 pub use session::SessionSnapshot;
 pub use session_manager::SessionManager;
 pub use session_state::SessionState;
-pub use task::{RuntimeTask, TaskContext, TaskKind, TaskOutcome};
+pub use task::{
+    PendingToolApproval, RuntimeTask, TaskContext, TaskKind, TaskOutcome, ToolExecutionMode,
+};
 pub use turn_context::TurnContext;
 
 use crate::error::RuntimeError;
-use crate::ids::{SessionId, TurnId};
+use crate::ids::{SessionId, ToolCallId, TurnId};
 use crate::model::ModelClient;
 use crate::resource::ResourceContext;
-use crate::tasks::AgentTask;
+use crate::tasks::{AgentTask, continue_after_tool_decision};
 use crate::tools::ToolRouter;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -112,6 +114,17 @@ impl Runtime {
         input: UserInput,
         kind: TaskKind,
     ) -> Result<TaskOutcome, RuntimeError> {
+        self.run_turn_blocking_with_tool_mode(session_id, input, kind, ToolExecutionMode::default())
+            .await
+    }
+
+    pub async fn run_turn_blocking_with_tool_mode(
+        &self,
+        session_id: &SessionId,
+        input: UserInput,
+        kind: TaskKind,
+        tool_mode: ToolExecutionMode,
+    ) -> Result<TaskOutcome, RuntimeError> {
         let session = self
             .session(session_id)
             .ok_or_else(|| RuntimeError::SessionNotFound(session_id.clone()))?;
@@ -134,6 +147,7 @@ impl Runtime {
         let task = Self::build_task(kind);
         let ctx = TaskContext {
             kind,
+            tool_mode,
             session: session.clone(),
             services: self.services.clone(),
             turn: turn.clone(),
@@ -143,6 +157,73 @@ impl Runtime {
 
         session.clear_active_turn();
         emit_outcome(&session, &turn.turn_id, &outcome);
+        Ok(outcome)
+    }
+
+    pub async fn approve_pending_tool(
+        &self,
+        session_id: &SessionId,
+        call_id: &ToolCallId,
+    ) -> Result<TaskOutcome, RuntimeError> {
+        self.resolve_pending_tool(session_id, call_id, true).await
+    }
+
+    pub async fn reject_pending_tool(
+        &self,
+        session_id: &SessionId,
+        call_id: &ToolCallId,
+    ) -> Result<TaskOutcome, RuntimeError> {
+        self.resolve_pending_tool(session_id, call_id, false).await
+    }
+
+    async fn resolve_pending_tool(
+        &self,
+        session_id: &SessionId,
+        call_id: &ToolCallId,
+        approved: bool,
+    ) -> Result<TaskOutcome, RuntimeError> {
+        let session = self
+            .session(session_id)
+            .ok_or_else(|| RuntimeError::SessionNotFound(session_id.clone()))?;
+        if session.is_busy() {
+            return Err(RuntimeError::SessionBusy(session_id.clone()));
+        }
+
+        let Some(pending) = session.take_pending_tool_approval() else {
+            return Err(RuntimeError::Other(anyhow::anyhow!("没有待审批的工具调用")));
+        };
+        if &pending.call.call_id != call_id {
+            session.restore_pending_tool_approval(pending);
+            return Err(RuntimeError::Other(anyhow::anyhow!(
+                "待审批工具调用不匹配: {call_id}"
+            )));
+        }
+
+        let cancellation = CancellationToken::new();
+        session.set_active_turn(ActiveTurn::new(
+            pending.turn_id.clone(),
+            cancellation.clone(),
+            None,
+        ));
+        session.emit(RuntimeEvent::ToolApprovalResolved {
+            session_id: session_id.clone(),
+            turn_id: pending.turn_id.clone(),
+            call_id: call_id.clone(),
+            approved,
+        });
+
+        let turn_id = pending.turn_id.clone();
+        let outcome = continue_after_tool_decision(
+            self.services.clone(),
+            session.clone(),
+            pending,
+            approved,
+            cancellation,
+        )
+        .await;
+
+        session.clear_active_turn();
+        emit_outcome(&session, &turn_id, &outcome);
         Ok(outcome)
     }
 
@@ -178,6 +259,7 @@ impl Runtime {
         tokio::spawn(async move {
             let ctx = TaskContext {
                 kind,
+                tool_mode: ToolExecutionMode::default(),
                 session: session_run.clone(),
                 services,
                 turn: turn_run.clone(),
@@ -229,10 +311,16 @@ fn emit_outcome(session: &Session, turn_id: &TurnId, outcome: &TaskOutcome) {
             turn_id: turn_id.clone(),
             answer: answer.clone(),
         },
-        TaskOutcome::NeedUserInput { question } => RuntimeEvent::NeedUserInput {
+        TaskOutcome::NeedUserInput {
+            question,
+            pending_tool_call_id,
+            tool_name,
+        } => RuntimeEvent::NeedUserInput {
             session_id,
             turn_id: turn_id.clone(),
             question: question.clone(),
+            pending_tool_call_id: pending_tool_call_id.clone(),
+            tool_name: tool_name.clone(),
         },
         TaskOutcome::Failed { reason } => RuntimeEvent::TurnFailed {
             session_id,

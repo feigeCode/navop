@@ -3,6 +3,7 @@
 //! 复用 `ai_chat_view` 既有的卡片机制([`CardRegistry`]):
 //! - `agent.plan`:计划清单(目标 + 分步 + 状态 + 风险);
 //! - `agent.tool`:一次工具执行(调用 + 观测结果合并为一张卡片,随事件演进)。
+//! - `agent.confirm`:工具执行前的人工确认请求。
 //!
 //! 卡片的数据载体是消息 `content` 中的 JSON;[`AgentTranscript`](crate::agent_transcript)
 //! 负责在收到 [`RuntimeEvent`](agent_runtime::RuntimeEvent) 时写入 / 更新这些 JSON。
@@ -11,10 +12,16 @@
 use crate::card::{CardMessage, CardRegistry, ChatCard};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
+    Action, AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window, div,
 };
-use gpui_component::{ActiveTheme, h_flex, text::TextView, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, Sizable, Size,
+    button::{Button, ButtonVariants},
+    h_flex,
+    text::TextView,
+    v_flex,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -23,6 +30,8 @@ use std::sync::{Arc, Mutex};
 pub const TOOL_CARD: &str = "agent.tool";
 /// 子代理任务卡片的 `kind`。
 pub const SUBAGENT_CARD: &str = "agent.subagent";
+/// 工具确认卡片的 `kind`。
+pub const TOOL_CONFIRM_CARD: &str = "agent.confirm";
 
 // ============================================================================
 // 数据契约(reducer 写入 / 卡片读取共用)
@@ -83,6 +92,28 @@ pub struct SubAgentCardData {
     pub summary: String,
 }
 
+/// 工具执行确认卡片数据。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolConfirmCardData {
+    pub call_id: String,
+    pub tool_name: String,
+    pub question: String,
+    #[serde(default = "default_tool_confirm_status")]
+    pub status: String,
+}
+
+#[derive(Clone, Action, PartialEq, Eq, Deserialize)]
+#[action(namespace = ai_chat_view, no_json)]
+pub struct ApproveToolCall {
+    pub call_id: String,
+}
+
+#[derive(Clone, Action, PartialEq, Eq, Deserialize)]
+#[action(namespace = ai_chat_view, no_json)]
+pub struct RejectToolCall {
+    pub call_id: String,
+}
+
 impl PlanCardData {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
@@ -119,6 +150,19 @@ impl SubAgentCardData {
     pub fn from_json(s: &str) -> Option<Self> {
         serde_json::from_str(s).ok()
     }
+}
+
+impl ToolConfirmCardData {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+    pub fn from_json(s: &str) -> Option<Self> {
+        serde_json::from_str(s).ok()
+    }
+}
+
+fn default_tool_confirm_status() -> String {
+    "pending".into()
 }
 
 // ============================================================================
@@ -320,6 +364,126 @@ impl ChatCard for SubAgentCard {
     }
 }
 
+struct ToolConfirmCard;
+
+impl ChatCard for ToolConfirmCard {
+    fn kind(&self) -> &'static str {
+        TOOL_CONFIRM_CARD
+    }
+
+    fn render(&self, msg: &CardMessage, _window: &mut Window, cx: &mut App) -> AnyElement {
+        let Some(data) = ToolConfirmCardData::from_json(msg.content) else {
+            return fallback(msg.content, cx);
+        };
+        let is_pending = data.status == "pending";
+        let call_id = data.call_id.clone();
+        let approve_call_id = call_id.clone();
+        let reject_call_id = call_id.clone();
+
+        let mut card = v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().warning.opacity(0.35))
+            .bg(cx.theme().muted)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_lg().text_color(cx.theme().danger).child("?"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(cx.theme().foreground)
+                            .child("工具执行确认"),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .child(format!("工具 · {}", data.tool_name)),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(confirm_status_color(&data.status, cx))
+                            .child(confirm_status_label(&data.status)),
+                    ),
+            )
+            .child(
+                div().text_sm().text_color(cx.theme().foreground).child(
+                    TextView::markdown(
+                        SharedString::from(format!("agent-tool-confirm-{}", msg.id)),
+                        data.question,
+                    )
+                    .selectable(true),
+                ),
+            );
+
+        if is_pending {
+            card = card.child(
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        Button::new(SharedString::from(format!("reject-tool-{call_id}")))
+                            .with_size(Size::Small)
+                            .danger()
+                            .label("拒绝")
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(RejectToolCall {
+                                        call_id: reject_call_id.clone(),
+                                    }),
+                                    cx,
+                                );
+                            }),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("approve-tool-{call_id}")))
+                            .with_size(Size::Small)
+                            .primary()
+                            .label("执行")
+                            .on_click(move |_, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(ApproveToolCall {
+                                        call_id: approve_call_id.clone(),
+                                    }),
+                                    cx,
+                                );
+                            }),
+                    ),
+            );
+        } else {
+            card = card.child(
+                h_flex().w_full().justify_end().gap_2().child(
+                    Button::new(SharedString::from(format!("resolved-tool-{call_id}")))
+                        .with_size(Size::Small)
+                        .disabled(true)
+                        .label(confirm_status_label(&data.status)),
+                ),
+            );
+        }
+
+        card.into_any_element()
+    }
+}
+
 // ============================================================================
 // 渲染辅助
 // ============================================================================
@@ -349,6 +513,22 @@ fn tool_status_label(data: &ToolCardData) -> &'static str {
         "失败"
     } else {
         "已完成"
+    }
+}
+
+fn confirm_status_label(status: &str) -> &'static str {
+    match status {
+        "approved" => "已批准",
+        "rejected" => "已拒绝",
+        _ => "待确认",
+    }
+}
+
+fn confirm_status_color(status: &str, cx: &App) -> gpui::Hsla {
+    match status {
+        "approved" => cx.theme().success,
+        "rejected" => cx.theme().danger,
+        _ => cx.theme().warning,
     }
 }
 
@@ -532,6 +712,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 pub fn register_agent_cards(cx: &mut App) {
     CardRegistry::register_global(cx, Arc::new(ToolCard::new()));
     CardRegistry::register_global(cx, Arc::new(SubAgentCard::new()));
+    CardRegistry::register_global(cx, Arc::new(ToolConfirmCard));
 }
 
 #[cfg(test)]
@@ -587,6 +768,22 @@ mod tests {
         assert_eq!(back.subagent_id, "sub_1");
         assert_eq!(back.name, "reviewer");
         assert_eq!(back.success, Some(true));
+    }
+
+    #[test]
+    fn tool_confirm_card_data_roundtrips() {
+        let data = ToolConfirmCardData {
+            call_id: "call_1".into(),
+            tool_name: "db_schema".into(),
+            question: "确认执行工具 `db_schema` 吗?".into(),
+            status: "pending".into(),
+        };
+        let back = ToolConfirmCardData::from_json(&data.to_json()).expect("parse");
+
+        assert_eq!(back.call_id, "call_1");
+        assert_eq!(back.tool_name, "db_schema");
+        assert_eq!(back.question, "确认执行工具 `db_schema` 吗?");
+        assert_eq!(back.status, "pending");
     }
 
     #[test]

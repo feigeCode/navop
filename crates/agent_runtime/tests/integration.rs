@@ -11,13 +11,18 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use agent_runtime::error::ToolError;
 use agent_runtime::model::{
     MockModelClient, ModelRequest, ModelResponse, ModelStream, ModelStreamEvent, function_tool_call,
 };
 use agent_runtime::tools::builtin::EchoTool;
+use agent_runtime::tools::{
+    ObservationData, Tool, ToolInvocation, ToolName, ToolObservation, ToolSpec,
+};
 use agent_runtime::{
-    ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, Runtime, RuntimeError,
-    RuntimeEvent, RuntimeServices, StepStatus, TaskKind, TaskOutcome, ToolRegistry, ToolRouter,
+    ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, RiskLevel, Runtime,
+    RuntimeError, RuntimeEvent, RuntimeServices, StepStatus, TaskKind, TaskOutcome,
+    ToolExecutionMode, ToolRegistry, ToolRouter,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -28,6 +33,39 @@ fn build_runtime(responses: Vec<ModelResponse>, registry: ToolRegistry) -> Runti
     let model: Arc<dyn ModelClient> = Arc::new(MockModelClient::new(responses));
     let tools = Arc::new(ToolRouter::new(registry));
     Runtime::new(RuntimeServices::new(model, tools))
+}
+
+struct WriteTool;
+
+#[async_trait]
+impl Tool for WriteTool {
+    fn name(&self) -> ToolName {
+        ToolName::new("write_data")
+    }
+
+    fn spec(&self, _resources: &ResourceContext) -> ToolSpec {
+        ToolSpec::new(
+            "write_data",
+            "写入测试数据。",
+            json!({
+                "type": "object",
+                "properties": {
+                    "value": {"type": "string"}
+                },
+                "required": ["value"]
+            }),
+        )
+        .with_risk(RiskLevel::Low)
+    }
+
+    async fn execute(&self, invocation: ToolInvocation) -> Result<ToolObservation, ToolError> {
+        Ok(ToolObservation::success(
+            invocation.call_id,
+            invocation.tool_name,
+            "write executed",
+            ObservationData::Text("executed".into()),
+        ))
+    }
 }
 
 fn drain_events(rx: &mut agent_runtime::RuntimeEventReceiver) -> Vec<RuntimeEvent> {
@@ -573,6 +611,205 @@ async fn ask_mode_does_not_send_tools_or_tool_choice() {
     assert!(!system.contains("可用 function calling 工具名"));
     assert!(!system.contains("update_plan"));
     assert!(!system.contains("delegate_task"));
+}
+
+#[tokio::test]
+async fn read_only_tool_mode_exposes_only_read_tools() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::text("直接回答。")]));
+    let registry = ToolRegistry::new()
+        .with_tool(Arc::new(EchoTool))
+        .with_tool(Arc::new(WriteTool));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(registry)),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    let outcome = runtime
+        .run_turn_blocking_with_tool_mode(
+            session.id(),
+            "只读分析".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::ReadOnly,
+        )
+        .await
+        .expect("run readonly turn");
+
+    assert!(matches!(outcome, TaskOutcome::Completed { .. }));
+    let requests = model.received_requests();
+    let tool_names = requests[0]
+        .tools
+        .iter()
+        .map(|tool| tool.function.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(tool_names.contains(&"echo"));
+    assert!(!tool_names.contains(&"write_data"));
+}
+
+#[tokio::test]
+async fn manual_tool_mode_requires_confirmation_before_business_tool_dispatch() {
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_call(function_tool_call(
+                "c_write",
+                "write_data",
+                json!({"value": "x"}).to_string(),
+            )),
+            ModelResponse::text("写入已完成。"),
+        ],
+        ToolRegistry::new().with_tool(Arc::new(WriteTool)),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking_with_tool_mode(
+            session.id(),
+            "写入 x".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Manual,
+        )
+        .await
+        .expect("run manual turn");
+
+    let call_id = match outcome {
+        TaskOutcome::NeedUserInput {
+            pending_tool_call_id: Some(call_id),
+            ..
+        } => call_id,
+        other => panic!("manual mode should pause for tool approval, got {other:?}"),
+    };
+    let events = drain_events(&mut rx);
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::NeedUserInput {
+                pending_tool_call_id: Some(event_call_id),
+                tool_name: Some(tool_name),
+                ..
+            } if event_call_id == &call_id && tool_name.as_str() == "write_data"
+        )
+    }));
+    assert!(
+        !events.iter().any(|event| {
+            matches!(
+                event,
+                RuntimeEvent::ObservationAdded { observation, .. }
+                    if observation.summary.contains("write executed")
+            )
+        }),
+        "manual mode must not dispatch the business tool before confirmation"
+    );
+
+    let outcome = runtime
+        .approve_pending_tool(session.id(), &call_id)
+        .await
+        .expect("approve pending tool");
+
+    assert!(
+        matches!(outcome, TaskOutcome::Completed { answer: Some(answer) } if answer == "写入已完成。")
+    );
+    let events = drain_events(&mut rx);
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ToolApprovalResolved {
+                call_id: event_call_id,
+                approved: true,
+                ..
+            } if event_call_id == &call_id
+        )
+    }));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ObservationAdded { observation, .. }
+                if observation.success && observation.summary.contains("write executed")
+        )
+    }));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::TurnCompleted { answer: Some(answer), .. }
+                if answer == "写入已完成。"
+        )
+    }));
+}
+
+#[tokio::test]
+async fn manual_tool_mode_rejects_pending_tool_and_continues_followup() {
+    let model = Arc::new(MockModelClient::new([
+        ModelResponse::tool_call(function_tool_call(
+            "c_write",
+            "write_data",
+            json!({"value": "x"}).to_string(),
+        )),
+        ModelResponse::text("已取消写入。"),
+    ]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new().with_tool(Arc::new(WriteTool)),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking_with_tool_mode(
+            session.id(),
+            "写入 x".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Manual,
+        )
+        .await
+        .expect("run manual turn");
+    let call_id = match outcome {
+        TaskOutcome::NeedUserInput {
+            pending_tool_call_id: Some(call_id),
+            ..
+        } => call_id,
+        other => panic!("manual mode should pause for tool approval, got {other:?}"),
+    };
+    let _ = drain_events(&mut rx);
+
+    let outcome = runtime
+        .reject_pending_tool(session.id(), &call_id)
+        .await
+        .expect("reject pending tool");
+
+    assert!(
+        matches!(outcome, TaskOutcome::Completed { answer: Some(answer) } if answer == "已取消写入。")
+    );
+    assert_eq!(2, model.request_count());
+    let events = drain_events(&mut rx);
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ToolApprovalResolved {
+                call_id: event_call_id,
+                approved: false,
+                ..
+            } if event_call_id == &call_id
+        )
+    }));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ObservationAdded { observation, .. }
+                if !observation.success && observation.summary.contains("用户拒绝执行工具")
+        )
+    }));
+    assert!(
+        !events.iter().any(|event| {
+            matches!(
+                event,
+                RuntimeEvent::ObservationAdded { observation, .. }
+                    if observation.summary.contains("write executed")
+            )
+        }),
+        "rejecting a pending tool must not dispatch the business tool"
+    );
 }
 
 #[tokio::test]

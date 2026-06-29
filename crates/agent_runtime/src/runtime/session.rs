@@ -12,6 +12,7 @@ use crate::runtime::active_turn::ActiveTurn;
 use crate::runtime::event::{RuntimeEvent, RuntimeEventSender};
 use crate::runtime::input_queue::{InputQueue, TurnInput};
 use crate::runtime::session_state::SessionState;
+use crate::runtime::task::PendingToolApproval;
 use crate::tools::{ToolCall, ToolObservation};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -41,6 +42,7 @@ pub struct Session {
     resources: Mutex<ResourceContext>,
     input_queue: Mutex<InputQueue>,
     active_turn: Mutex<Option<ActiveTurn>>,
+    pending_tool_approval: Mutex<Option<PendingToolApproval>>,
     events: RuntimeEventSender,
 }
 
@@ -52,6 +54,7 @@ impl Session {
             resources: Mutex::new(resources),
             input_queue: Mutex::new(InputQueue::new()),
             active_turn: Mutex::new(None),
+            pending_tool_approval: Mutex::new(None),
             events,
         })
     }
@@ -71,6 +74,7 @@ impl Session {
             resources: Mutex::new(snapshot.resources),
             input_queue: Mutex::new(InputQueue::new()),
             active_turn: Mutex::new(None),
+            pending_tool_approval: Mutex::new(None),
             events,
         })
     }
@@ -345,6 +349,23 @@ impl Session {
             .lock()
             .expect("session 锁中毒")
             .has_pending()
+    }
+
+    // ===== 工具审批 =====
+
+    pub fn set_pending_tool_approval(&self, pending: PendingToolApproval) {
+        *self.pending_tool_approval.lock().expect("session 锁中毒") = Some(pending);
+    }
+
+    pub fn take_pending_tool_approval(&self) -> Option<PendingToolApproval> {
+        self.pending_tool_approval
+            .lock()
+            .expect("session 锁中毒")
+            .take()
+    }
+
+    pub fn restore_pending_tool_approval(&self, pending: PendingToolApproval) {
+        self.set_pending_tool_approval(pending);
     }
 
     // ===== 当前轮 / 中断 =====

@@ -10,3 +10,4 @@ mod delegate_task;
 mod update_plan;
 
 pub use agent::AgentTask;
+pub(crate) use agent::continue_after_tool_decision;

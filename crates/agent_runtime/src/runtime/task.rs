@@ -3,10 +3,13 @@
 //! 对应 Codex 的 `SessionTask`。一个任务封装一种工作流(普通对话、诊断等),
 //! 在后台 Tokio 任务上运行,期间通过 [`Session`] 发事件、写历史。
 
+use crate::ids::{ToolCallId, TurnId};
+use crate::resource::ResourceContext;
 use crate::runtime::RuntimeServices;
 use crate::runtime::input_queue::{InputImage, TurnInput};
 use crate::runtime::session::Session;
 use crate::runtime::turn_context::TurnContext;
+use crate::tools::{ToolCall, ToolName};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -24,22 +27,50 @@ pub enum TaskKind {
     Plan,
 }
 
+/// 本轮工具执行策略。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ToolExecutionMode {
+    /// 自动:把可用工具暴露给模型,并执行模型请求的工具。
+    #[default]
+    Auto,
+    /// 只读:只暴露 `RiskLevel::Read` 工具。
+    ReadOnly,
+    /// 手动确认:允许模型请求工具,但业务工具执行前需要用户确认。
+    Manual,
+}
+
 /// 任务运行结果。
 #[derive(Clone, Debug)]
 pub enum TaskOutcome {
     /// 完成,带可选最终回答。
     Completed { answer: Option<String> },
     /// 需要用户补充输入。
-    NeedUserInput { question: String },
+    NeedUserInput {
+        question: String,
+        pending_tool_call_id: Option<ToolCallId>,
+        tool_name: Option<ToolName>,
+    },
     /// 失败。
     Failed { reason: String },
     /// 被取消。
     Cancelled,
 }
 
+/// 暂停等待用户审批的一次工具调用。
+#[derive(Clone, Debug)]
+pub struct PendingToolApproval {
+    pub turn_id: TurnId,
+    pub task_kind: TaskKind,
+    pub tool_mode: ToolExecutionMode,
+    pub goal: String,
+    pub call: ToolCall,
+    pub resources: ResourceContext,
+}
+
 /// 任务执行所需的上下文。
 pub struct TaskContext {
     pub kind: TaskKind,
+    pub tool_mode: ToolExecutionMode,
     pub session: Arc<Session>,
     pub services: Arc<RuntimeServices>,
     pub turn: Arc<TurnContext>,

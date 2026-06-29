@@ -14,7 +14,11 @@
 use crate::ids::{ToolCallId, TurnId};
 use crate::model::{ModelRequest, ModelResponse, ModelStreamEvent};
 use crate::planner::history_to_messages;
-use crate::runtime::{RuntimeServices, RuntimeTask, Session, TaskContext, TaskKind, TaskOutcome};
+use crate::resource::ResourceContext;
+use crate::runtime::{
+    PendingToolApproval, RuntimeServices, RuntimeTask, Session, TaskContext, TaskKind, TaskOutcome,
+    ToolExecutionMode,
+};
 use crate::tasks::agent_prompt::build_system_prompt;
 use crate::tasks::agent_tool_validation::{
     available_tool_names, malformed_tool_call_reason, specs_for_task, tool_is_available,
@@ -55,6 +59,7 @@ impl RuntimeTask for AgentTask {
     ) -> TaskOutcome {
         let goal = ctx.goal();
         let task_kind = ctx.kind;
+        let tool_mode = ctx.tool_mode;
         let session = ctx.session.clone();
         let services = ctx.services.clone();
         let turn_id = ctx.turn.turn_id.clone();
@@ -62,146 +67,283 @@ impl RuntimeTask for AgentTask {
 
         session.record_user_input_with_images(goal.clone(), ctx.input_images());
 
-        let dispatch_ctx = ToolDispatchContext {
-            session_id: session.id().clone(),
-            turn_id: turn_id.clone(),
-            resources: resources.clone(),
-        };
-
-        for iteration in 0..MAX_ITERATIONS {
-            if cancellation.is_cancelled() {
-                return TaskOutcome::Cancelled;
-            }
-
-            let tool_specs = specs_for_task(task_kind, &services, &resources);
-            let tools: Vec<_> = tool_specs.iter().map(|s| s.to_llm_tool()).collect();
-
-            // 构造请求:system + 历史 + (业务工具 + update_plan)。
-            let mut messages = vec![Message::system(build_system_prompt(
+        run_agent_loop(
+            AgentLoopContext {
+                goal,
                 task_kind,
-                &tool_specs,
-                &resources,
-                session.system_instruction().as_deref(),
-                session.current_plan().as_ref(),
-            ))];
-            messages.extend(history_to_messages(&session.history_snapshot()));
+                tool_mode,
+                session,
+                services,
+                turn_id,
+                resources,
+            },
+            cancellation,
+        )
+        .await
+    }
+}
 
-            let mut request = ModelRequest::new(messages);
-            if !tools.is_empty() {
-                request = request
-                    .with_tools(tools)
-                    .with_tool_choice(ToolChoice::auto());
-            }
-            log_model_request(iteration, &request);
+struct AgentLoopContext {
+    goal: String,
+    task_kind: TaskKind,
+    tool_mode: ToolExecutionMode,
+    session: Arc<Session>,
+    services: Arc<RuntimeServices>,
+    turn_id: TurnId,
+    resources: ResourceContext,
+}
 
-            // 流式采样:边收边推文本增量,聚合出完整响应(文本 + 工具调用)。
-            let sample = match sample(&services, request, &session, &turn_id, &cancellation).await {
-                Ok(Some(sample)) => sample,
-                Ok(None) => return TaskOutcome::Cancelled,
-                Err(reason) => return TaskOutcome::Failed { reason },
-            };
-            let response = sample.response;
-            let reasoning = sample.reasoning;
+pub(crate) async fn continue_after_tool_decision(
+    services: Arc<RuntimeServices>,
+    session: Arc<Session>,
+    pending: PendingToolApproval,
+    approved: bool,
+    cancellation: CancellationToken,
+) -> TaskOutcome {
+    let turn_id = pending.turn_id.clone();
+    session.record_tool_call(&turn_id, &pending.call);
+    let observation = if approved {
+        execute_agent_tool(
+            &session,
+            &services,
+            &dispatch_context(&session, &turn_id, &pending.resources),
+            &turn_id,
+            &pending.goal,
+            pending.call.clone(),
+            &cancellation,
+        )
+        .await
+    } else {
+        rejected_tool_observation(&pending.call)
+    };
+    session.record_observation(&turn_id, observation);
 
-            let tool_names: Vec<&str> = response
-                .tool_calls
-                .iter()
-                .map(|tc| tc.function.name.as_str())
-                .collect();
-            tracing::info!(
-                text_len = response.text.as_deref().map(str::len).unwrap_or(0),
-                tool_calls = ?tool_names,
-                "Agent 模型响应"
+    run_agent_loop(
+        AgentLoopContext {
+            goal: pending.goal,
+            task_kind: pending.task_kind,
+            tool_mode: pending.tool_mode,
+            session,
+            services,
+            turn_id,
+            resources: pending.resources,
+        },
+        cancellation,
+    )
+    .await
+}
+
+async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) -> TaskOutcome {
+    let dispatch_ctx = dispatch_context(&ctx.session, &ctx.turn_id, &ctx.resources);
+    for iteration in 0..MAX_ITERATIONS {
+        if cancellation.is_cancelled() {
+            return TaskOutcome::Cancelled;
+        }
+
+        let tool_specs =
+            specs_for_task(ctx.task_kind, ctx.tool_mode, &ctx.services, &ctx.resources);
+        let tools: Vec<_> = tool_specs.iter().map(|s| s.to_llm_tool()).collect();
+
+        // 构造请求:system + 历史 + (业务工具 + update_plan)。
+        let mut messages = vec![Message::system(build_system_prompt(
+            ctx.task_kind,
+            &tool_specs,
+            &ctx.resources,
+            ctx.session.system_instruction().as_deref(),
+            ctx.session.current_plan().as_ref(),
+        ))];
+        messages.extend(history_to_messages(&ctx.session.history_snapshot()));
+
+        let mut request = ModelRequest::new(messages);
+        if !tools.is_empty() {
+            request = request
+                .with_tools(tools)
+                .with_tool_choice(ToolChoice::auto());
+        }
+        log_model_request(iteration, &request);
+
+        // 流式采样:边收边推文本增量,聚合出完整响应(文本 + 工具调用)。
+        let sample = match sample(
+            &ctx.services,
+            request,
+            &ctx.session,
+            &ctx.turn_id,
+            &cancellation,
+        )
+        .await
+        {
+            Ok(Some(sample)) => sample,
+            Ok(None) => return TaskOutcome::Cancelled,
+            Err(reason) => return TaskOutcome::Failed { reason },
+        };
+        let response = sample.response;
+        let reasoning = sample.reasoning;
+
+        let tool_names: Vec<&str> = response
+            .tool_calls
+            .iter()
+            .map(|tc| tc.function.name.as_str())
+            .collect();
+        tracing::info!(
+            text_len = response.text.as_deref().map(str::len).unwrap_or(0),
+            tool_calls = ?tool_names,
+            "Agent 模型响应"
+        );
+        log_model_response(iteration, &response);
+
+        // 无工具调用:本次文本即最终回答(增量已流式发出,这里落历史并发完整消息)。
+        if response.tool_calls.is_empty() {
+            let answer = response.text.unwrap_or_default();
+            ctx.session.record_assistant_message_with_reasoning(
+                &ctx.turn_id,
+                answer.clone(),
+                reasoning,
             );
-            log_model_response(iteration, &response);
+            return TaskOutcome::Completed {
+                answer: Some(answer),
+            };
+        }
 
-            // 无工具调用:本次文本即最终回答(增量已流式发出,这里落历史并发完整消息)。
-            if response.tool_calls.is_empty() {
-                let answer = response.text.unwrap_or_default();
-                session.record_assistant_message_with_reasoning(
-                    &turn_id,
-                    answer.clone(),
-                    reasoning,
+        if ctx.task_kind == TaskKind::Ask {
+            return TaskOutcome::Failed {
+                reason: "Ask 模式不支持工具调用;请切换到 Agent 或 Plan 模式后再使用工具。".into(),
+            };
+        }
+
+        // 模型在调用工具前可能附带一段说明:落历史并 finalize 当前流式消息。
+        if let Some(text) = response.text.as_ref().filter(|t| !t.is_empty()) {
+            ctx.session.record_assistant_message_with_reasoning(
+                &ctx.turn_id,
+                text.clone(),
+                reasoning.clone(),
+            );
+        } else if !reasoning.is_empty() {
+            ctx.session.record_assistant_message_with_reasoning(
+                &ctx.turn_id,
+                "",
+                reasoning.clone(),
+            );
+        }
+
+        // 逐个执行工具调用,把调用与观测写回历史供下一轮 follow-up。
+        for llm_call in &response.tool_calls {
+            log_llm_tool_call("agent_dispatch", llm_call);
+            let call_id = llm_tool_call_id(llm_call);
+            let tool_name = ToolName::new(llm_call.function.name.clone());
+            if !tool_is_available(&tool_specs, &tool_name) {
+                ctx.session.record_observation(
+                    &ctx.turn_id,
+                    unavailable_tool_observation(call_id, tool_name, &tool_specs),
                 );
-                return TaskOutcome::Completed {
-                    answer: Some(answer),
-                };
+                continue;
             }
 
-            if task_kind == TaskKind::Ask {
-                return TaskOutcome::Failed {
-                    reason: "Ask 模式不支持工具调用;请切换到 Agent 或 Plan 模式后再使用工具。"
-                        .into(),
-                };
-            }
-
-            // 模型在调用工具前可能附带一段说明:落历史并 finalize 当前流式消息。
-            if let Some(text) = response.text.as_ref().filter(|t| !t.is_empty()) {
-                session.record_assistant_message_with_reasoning(
-                    &turn_id,
-                    text.clone(),
-                    reasoning.clone(),
-                );
-            } else if !reasoning.is_empty() {
-                session.record_assistant_message_with_reasoning(&turn_id, "", reasoning.clone());
-            }
-
-            // 逐个执行工具调用,把调用与观测写回历史供下一轮 follow-up。
-            for llm_call in &response.tool_calls {
-                log_llm_tool_call("agent_dispatch", llm_call);
-                let call_id = llm_tool_call_id(llm_call);
-                let tool_name = ToolName::new(llm_call.function.name.clone());
-                if !tool_is_available(&tool_specs, &tool_name) {
-                    session.record_observation(
-                        &turn_id,
-                        unavailable_tool_observation(call_id, tool_name, &tool_specs),
-                    );
+            let call = match ToolCall::from_llm(llm_call) {
+                Ok(call) => call,
+                Err(err) => {
+                    // 非 JSON 参数通常是模型/Provider 返回了非标准工具格式;
+                    // 写回观测让模型用同一批可用工具和 JSON object 参数纠正。
+                    let reason = malformed_tool_call_reason(llm_call, &err);
+                    let observation = ToolObservation::failure(call_id, tool_name, reason);
+                    ctx.session.record_observation(&ctx.turn_id, observation);
                     continue;
                 }
+            };
 
-                let call = match ToolCall::from_llm(llm_call) {
-                    Ok(call) => call,
-                    Err(err) => {
-                        // 非 JSON 参数通常是模型/Provider 返回了非标准工具格式;
-                        // 写回观测让模型用同一批可用工具和 JSON object 参数纠正。
-                        let reason = malformed_tool_call_reason(llm_call, &err);
-                        let observation = ToolObservation::failure(call_id, tool_name, reason);
-                        session.record_observation(&turn_id, observation);
-                        continue;
-                    }
+            if ctx.tool_mode == ToolExecutionMode::Manual
+                && requires_manual_confirmation(call.tool_name.as_str())
+            {
+                let pending_tool_call_id = call.call_id.clone();
+                let tool_name = call.tool_name.clone();
+                ctx.session.set_pending_tool_approval(PendingToolApproval {
+                    turn_id: ctx.turn_id.clone(),
+                    task_kind: ctx.task_kind,
+                    tool_mode: ctx.tool_mode,
+                    goal: ctx.goal.clone(),
+                    call,
+                    resources: ctx.resources.clone(),
+                });
+                return TaskOutcome::NeedUserInput {
+                    question: format!("确认执行工具 `{tool_name}` 吗?"),
+                    pending_tool_call_id: Some(pending_tool_call_id),
+                    tool_name: Some(tool_name),
                 };
-
-                tracing::info!(
-                    tool = %call.tool_name,
-                    args = %call.arguments,
-                    "Agent 执行工具调用"
-                );
-                session.record_tool_call(&turn_id, &call);
-
-                let observation = if call.tool_name.as_str() == UPDATE_PLAN_TOOL {
-                    handle_update_plan(&session, &turn_id, &goal, &call)
-                } else if call.tool_name.as_str() == DELEGATE_TASK_TOOL {
-                    handle_delegate_task(&session, &services, &turn_id, &call, &cancellation).await
-                } else {
-                    services
-                        .tools
-                        .dispatch(&dispatch_ctx, call, cancellation.clone())
-                        .await
-                };
-                tracing::debug!(
-                    tool = %observation.tool_name,
-                    success = observation.success,
-                    summary = %observation.summary,
-                    "Agent 工具观测"
-                );
-                session.record_observation(&turn_id, observation);
             }
-        }
 
-        TaskOutcome::Failed {
-            reason: format!("超过单轮最大迭代次数({MAX_ITERATIONS})仍未完成"),
+            tracing::info!(
+                tool = %call.tool_name,
+                args = %call.arguments,
+                "Agent 执行工具调用"
+            );
+            ctx.session.record_tool_call(&ctx.turn_id, &call);
+            let observation = execute_agent_tool(
+                &ctx.session,
+                &ctx.services,
+                &dispatch_ctx,
+                &ctx.turn_id,
+                &ctx.goal,
+                call,
+                &cancellation,
+            )
+            .await;
+            tracing::debug!(
+                tool = %observation.tool_name,
+                success = observation.success,
+                summary = %observation.summary,
+                "Agent 工具观测"
+            );
+            ctx.session.record_observation(&ctx.turn_id, observation);
         }
     }
+
+    TaskOutcome::Failed {
+        reason: format!("超过单轮最大迭代次数({MAX_ITERATIONS})仍未完成"),
+    }
+}
+
+fn dispatch_context(
+    session: &Session,
+    turn_id: &TurnId,
+    resources: &ResourceContext,
+) -> ToolDispatchContext {
+    ToolDispatchContext {
+        session_id: session.id().clone(),
+        turn_id: turn_id.clone(),
+        resources: resources.clone(),
+    }
+}
+
+async fn execute_agent_tool(
+    session: &Session,
+    services: &RuntimeServices,
+    dispatch_ctx: &ToolDispatchContext,
+    turn_id: &TurnId,
+    goal: &str,
+    call: ToolCall,
+    cancellation: &CancellationToken,
+) -> ToolObservation {
+    if call.tool_name.as_str() == UPDATE_PLAN_TOOL {
+        handle_update_plan(session, turn_id, goal, &call)
+    } else if call.tool_name.as_str() == DELEGATE_TASK_TOOL {
+        handle_delegate_task(session, services, turn_id, &call, cancellation).await
+    } else {
+        services
+            .tools
+            .dispatch(dispatch_ctx, call, cancellation.clone())
+            .await
+    }
+}
+
+fn rejected_tool_observation(call: &ToolCall) -> ToolObservation {
+    ToolObservation::failure(
+        call.call_id.clone(),
+        call.tool_name.clone(),
+        format!("用户拒绝执行工具 `{}`。", call.tool_name),
+    )
+}
+
+fn requires_manual_confirmation(tool_name: &str) -> bool {
+    !matches!(tool_name, UPDATE_PLAN_TOOL | DELEGATE_TASK_TOOL)
 }
 
 /// 执行一次流式采样:把文本增量作为事件推送,聚合出完整 [`ModelResponse`]。

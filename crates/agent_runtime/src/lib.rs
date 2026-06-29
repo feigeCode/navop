@@ -35,7 +35,7 @@ pub use risk::RiskLevel;
 pub use runtime::{InputImage, TurnInput};
 pub use runtime::{
     Runtime, RuntimeCommand, RuntimeEvent, RuntimeEventReceiver, RuntimeServices, Session,
-    SessionSnapshot, TaskKind, TaskOutcome, TurnContext, UserInput,
+    SessionSnapshot, TaskKind, TaskOutcome, ToolExecutionMode, TurnContext, UserInput,
 };
 pub use tasks::AgentTask;
 pub use tools::{

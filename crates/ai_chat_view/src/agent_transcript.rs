@@ -7,7 +7,8 @@
 use agent_runtime::{HistoryItem, Plan, PlanStatus, RuntimeEvent, StepStatus, ToolObservation};
 
 use crate::agent_cards::{
-    PlanCardData, PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, ToolCardData,
+    PlanCardData, PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD,
+    ToolCardData, ToolConfirmCardData,
 };
 use crate::code_block::extract_fenced_code_blocks;
 use crate::{ChatMessageUI, MessageVariant, parse_chart_json_block};
@@ -156,9 +157,31 @@ impl AgentTranscript {
             } => {
                 self.finish_subagent(subagent_id.as_str(), *success, summary);
             }
-            RuntimeEvent::NeedUserInput { question, .. } => {
+            RuntimeEvent::NeedUserInput {
+                question,
+                pending_tool_call_id,
+                tool_name,
+                ..
+            } => {
+                let data = ToolConfirmCardData {
+                    call_id: pending_tool_call_id
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default(),
+                    tool_name: tool_name
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "unknown".into()),
+                    question: question.clone(),
+                    status: "pending".into(),
+                };
                 self.messages
-                    .push(ChatMessageUI::assistant(format!("❓ {question}")));
+                    .push(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
+            }
+            RuntimeEvent::ToolApprovalResolved {
+                call_id, approved, ..
+            } => {
+                self.resolve_tool_confirm(call_id.as_str(), *approved);
             }
             RuntimeEvent::TurnFailed { reason, .. } => {
                 self.streaming_id = None;
@@ -321,6 +344,14 @@ impl AgentTranscript {
         }
     }
 
+    fn resolve_tool_confirm(&mut self, call_id: &str, approved: bool) {
+        let Some(mut data) = self.find_confirm_card(call_id) else {
+            return;
+        };
+        data.status = if approved { "approved" } else { "rejected" }.into();
+        self.replace_confirm_card(call_id, data);
+    }
+
     /// 按 call_id 查找工具卡片数据。
     fn find_tool_card(&self, call_id: &str) -> Option<ToolCardData> {
         self.messages.iter().rev().find_map(|m| {
@@ -338,6 +369,26 @@ impl AgentTranscript {
         if let Some(msg) = self.messages.iter_mut().rev().find(|m| {
             m.variant.card_kind() == Some(TOOL_CARD)
                 && ToolCardData::from_json(&m.content).is_some_and(|d| d.call_id == call_id)
+        }) {
+            msg.content = json;
+        }
+    }
+
+    fn find_confirm_card(&self, call_id: &str) -> Option<ToolConfirmCardData> {
+        self.messages.iter().rev().find_map(|m| {
+            if m.variant.card_kind() == Some(TOOL_CONFIRM_CARD) {
+                ToolConfirmCardData::from_json(&m.content).filter(|d| d.call_id == call_id)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn replace_confirm_card(&mut self, call_id: &str, data: ToolConfirmCardData) {
+        let json = data.to_json();
+        if let Some(msg) = self.messages.iter_mut().rev().find(|m| {
+            m.variant.card_kind() == Some(TOOL_CONFIRM_CARD)
+                && ToolConfirmCardData::from_json(&m.content).is_some_and(|d| d.call_id == call_id)
         }) {
             msg.content = json;
         }
@@ -651,6 +702,50 @@ mod tests {
         assert!(!data.running);
         assert_eq!(data.success, Some(true));
         assert_eq!(data.summary, "echo: hi");
+    }
+
+    #[test]
+    fn need_user_input_renders_as_tool_confirm_card() {
+        let mut tr = AgentTranscript::new();
+
+        tr.apply(&RuntimeEvent::NeedUserInput {
+            session_id: sid(),
+            turn_id: tid(),
+            question: "确认执行工具 `db_schema` 吗?".into(),
+            pending_tool_call_id: Some(ToolCallId::from_string("call_confirm")),
+            tool_name: Some(ToolName::new("db_schema")),
+        });
+
+        assert_eq!(1, tr.messages.len());
+        assert_eq!(Some(TOOL_CONFIRM_CARD), tr.messages[0].variant.card_kind());
+        let data = ToolConfirmCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!(data.call_id, "call_confirm");
+        assert_eq!(data.tool_name, "db_schema");
+        assert_eq!(data.question, "确认执行工具 `db_schema` 吗?");
+        assert_eq!(data.status, "pending");
+    }
+
+    #[test]
+    fn tool_approval_resolved_updates_confirm_card_status() {
+        let mut tr = AgentTranscript::new();
+        let call_id = ToolCallId::from_string("call_confirm");
+
+        tr.apply(&RuntimeEvent::NeedUserInput {
+            session_id: sid(),
+            turn_id: tid(),
+            question: "确认执行工具 `db_schema` 吗?".into(),
+            pending_tool_call_id: Some(call_id.clone()),
+            tool_name: Some(ToolName::new("db_schema")),
+        });
+        tr.apply(&RuntimeEvent::ToolApprovalResolved {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id,
+            approved: true,
+        });
+
+        let data = ToolConfirmCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!(data.status, "approved");
     }
 
     #[test]

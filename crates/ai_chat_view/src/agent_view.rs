@@ -14,7 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use agent_runtime::{
     ResourceContext, ResourceId, ResourceKind, ResourceRef, Runtime, RuntimeEvent,
-    RuntimeEventReceiver, SessionId, TaskKind, ToolRegistry, UserInput,
+    RuntimeEventReceiver, SessionId, TaskKind, ToolCallId, ToolExecutionMode, ToolRegistry,
+    UserInput,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -37,7 +38,7 @@ use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConf
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::acp::{AcpAgentConfig, AcpConnection, AcpSessionState};
-use crate::agent_cards::PlanCardData;
+use crate::agent_cards::{ApproveToolCall, PlanCardData, RejectToolCall};
 use crate::agent_transcript::AgentTranscript;
 use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
@@ -552,17 +553,18 @@ impl AgentChatView {
         let runtime = self.runtime.clone();
         let session_id = self.session_id.clone();
         let task_kind = self.task_kind;
+        let tool_mode = tool_execution_mode_from_label(&self.selected_tool);
         cx.spawn(async move |this, cx| {
             #[cfg(test)]
             let result = runtime
-                .run_turn_blocking(&session_id, input, task_kind)
+                .run_turn_blocking_with_tool_mode(&session_id, input, task_kind, tool_mode)
                 .await;
 
             #[cfg(not(test))]
             let result = {
                 let task = Tokio::spawn(cx, async move {
                     runtime
-                        .run_turn_blocking(&session_id, input, task_kind)
+                        .run_turn_blocking_with_tool_mode(&session_id, input, task_kind, tool_mode)
                         .await
                 });
                 match task.await {
@@ -614,6 +616,73 @@ impl AgentChatView {
             self.transcript.push_system(format!("停止失败:{err}"));
             self.set_running(false, cx);
         }
+        cx.notify();
+    }
+
+    fn approve_tool_call(
+        &mut self,
+        action: &ApproveToolCall,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.resolve_tool_call(action.call_id.clone(), true, cx);
+    }
+
+    fn reject_tool_call(
+        &mut self,
+        action: &RejectToolCall,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.resolve_tool_call(action.call_id.clone(), false, cx);
+    }
+
+    fn resolve_tool_call(&mut self, call_id: String, approved: bool, cx: &mut Context<Self>) {
+        if self.backend != Backend::Local || self.is_running {
+            return;
+        }
+        self.set_running(true, cx);
+
+        let runtime = self.runtime.clone();
+        let session_id = self.session_id.clone();
+        let call_id = ToolCallId::from_string(call_id);
+        cx.spawn(async move |this, cx| {
+            #[cfg(test)]
+            let result = if approved {
+                runtime.approve_pending_tool(&session_id, &call_id).await
+            } else {
+                runtime.reject_pending_tool(&session_id, &call_id).await
+            };
+
+            #[cfg(not(test))]
+            let result = {
+                let task = Tokio::spawn(cx, async move {
+                    if approved {
+                        runtime.approve_pending_tool(&session_id, &call_id).await
+                    } else {
+                        runtime.reject_pending_tool(&session_id, &call_id).await
+                    }
+                });
+                match task.await {
+                    Ok(result) => result,
+                    Err(err) => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.transcript.push_system(format!("工具审批失败:{err}"));
+                            this.set_running(false, cx);
+                        });
+                        return;
+                    }
+                }
+            };
+
+            if let Err(err) = result {
+                let _ = this.update(cx, |this, cx| {
+                    this.transcript.push_system(format!("工具审批失败:{err}"));
+                    this.set_running(false, cx);
+                });
+            }
+        })
+        .detach();
         cx.notify();
     }
 
@@ -1588,28 +1657,38 @@ impl Render for AgentChatView {
         if self.sidebar_mode {
             // 侧边栏视图:紧凑头部(新建对话 / 历史记录) + 消息 + 输入。
             let header = self.render_sidebar_mode_header(cx);
-            div().size_full().bg(cx.theme().background).child(
-                v_flex()
-                    .size_full()
-                    .child(header)
-                    .child(messages)
-                    .child(input_area),
-            )
+            div()
+                .size_full()
+                .bg(cx.theme().background)
+                .on_action(cx.listener(Self::approve_tool_call))
+                .on_action(cx.listener(Self::reject_tool_call))
+                .child(
+                    v_flex()
+                        .size_full()
+                        .child(header)
+                        .child(messages)
+                        .child(input_area),
+                )
         } else {
             // 普通全宽视图:常驻左侧会话栏 + 主区(标题 / 消息 / 输入)。
             let sidebar = self.render_sidebar(cx);
             let toolbar = self.render_toolbar(cx);
-            div().size_full().bg(cx.theme().background).child(
-                h_flex().size_full().child(sidebar).child(
-                    div().flex_1().h_full().min_w_0().child(
-                        v_flex()
-                            .size_full()
-                            .child(toolbar)
-                            .child(messages)
-                            .child(input_area),
+            div()
+                .size_full()
+                .bg(cx.theme().background)
+                .on_action(cx.listener(Self::approve_tool_call))
+                .on_action(cx.listener(Self::reject_tool_call))
+                .child(
+                    h_flex().size_full().child(sidebar).child(
+                        div().flex_1().h_full().min_w_0().child(
+                            v_flex()
+                                .size_full()
+                                .child(toolbar)
+                                .child(messages)
+                                .child(input_area),
+                        ),
                     ),
-                ),
-            )
+                )
         }
     }
 }
@@ -1976,6 +2055,14 @@ fn task_kind_from_id(id: &str) -> Option<TaskKind> {
     }
 }
 
+fn tool_execution_mode_from_label(label: &SharedString) -> ToolExecutionMode {
+    match label.as_ref() {
+        "只读" => ToolExecutionMode::ReadOnly,
+        "手动确认" => ToolExecutionMode::Manual,
+        _ => ToolExecutionMode::Auto,
+    }
+}
+
 fn static_runtime_model_option(runtime: &Runtime) -> ComposerModelOption {
     let model = runtime.services().model.model_name().to_string();
     ComposerModelOption::new("runtime:current", "runtime", "当前 Runtime", model)
@@ -2122,13 +2209,48 @@ mod tests {
     use agent_runtime::model::MockModelClient;
     use agent_runtime::model::function_tool_call;
     use agent_runtime::model::{ModelClient, ModelRequest, ModelResponse, ModelStream};
+    use agent_runtime::tools::ToolInvocation;
     use agent_runtime::tools::builtin::EchoTool;
-    use agent_runtime::{ToolRegistry, ToolRouter};
+    use agent_runtime::{
+        ObservationData, RiskLevel, Tool, ToolError, ToolName, ToolObservation, ToolRegistry,
+        ToolRouter, ToolSpec,
+    };
     use async_trait::async_trait;
     use gpui::{TestAppContext, VisualTestContext};
     use one_core::llm::{ProviderConfig, ProviderType};
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct WriteTool;
+
+    #[async_trait]
+    impl Tool for WriteTool {
+        fn name(&self) -> ToolName {
+            ToolName::new("write_data")
+        }
+
+        fn spec(&self, _resources: &ResourceContext) -> ToolSpec {
+            ToolSpec::new(
+                "write_data",
+                "写入测试数据。",
+                json!({
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"]
+                }),
+            )
+            .with_risk(RiskLevel::Low)
+        }
+
+        async fn execute(&self, invocation: ToolInvocation) -> Result<ToolObservation, ToolError> {
+            Ok(ToolObservation::success(
+                invocation.call_id,
+                invocation.tool_name,
+                "write executed",
+                ObservationData::Text("executed".into()),
+            ))
+        }
+    }
 
     #[test]
     fn target_maps_label_kind_icon() {
@@ -2212,6 +2334,22 @@ mod tests {
         assert_eq!(task_kind_from_id("plan"), Some(TaskKind::Plan));
         assert_eq!(task_kind_from_id("chat"), None);
         assert_eq!(task_kind_from_id("nope"), None);
+    }
+
+    #[test]
+    fn tool_label_maps_to_runtime_execution_mode() {
+        assert_eq!(
+            ToolExecutionMode::Auto,
+            tool_execution_mode_from_label(&SharedString::from("自动"))
+        );
+        assert_eq!(
+            ToolExecutionMode::ReadOnly,
+            tool_execution_mode_from_label(&SharedString::from("只读"))
+        );
+        assert_eq!(
+            ToolExecutionMode::Manual,
+            tool_execution_mode_from_label(&SharedString::from("手动确认"))
+        );
     }
 
     #[test]
@@ -2412,6 +2550,41 @@ mod tests {
                 .content_as_text()
                 .contains("update_plan")
         );
+    }
+
+    #[gpui::test]
+    fn gpui_submit_readonly_tool_mode_filters_write_tools(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let model = Arc::new(MockModelClient::new([ModelResponse::text("直接回答。")]));
+        let runtime = test_runtime_with_model_and_write_tool(model.clone());
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update_in(cx, |view, window, cx| {
+            view.select_tool("readonly", cx);
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "只读分析".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+
+        let requests = model.received_requests();
+        let tool_names = requests[0]
+            .tools
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(tool_names.contains(&"echo"));
+        assert!(!tool_names.contains(&"write_data"));
     }
 
     #[gpui::test]
@@ -2657,6 +2830,15 @@ mod tests {
     fn test_runtime_with_model(model: Arc<MockModelClient>) -> Arc<Runtime> {
         let tools = Arc::new(ToolRouter::new(
             ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+        ));
+        Arc::new(Runtime::new(RuntimeServices::new(model, tools)))
+    }
+
+    fn test_runtime_with_model_and_write_tool(model: Arc<MockModelClient>) -> Arc<Runtime> {
+        let tools = Arc::new(ToolRouter::new(
+            ToolRegistry::new()
+                .with_tool(Arc::new(EchoTool))
+                .with_tool(Arc::new(WriteTool)),
         ));
         Arc::new(Runtime::new(RuntimeServices::new(model, tools)))
     }

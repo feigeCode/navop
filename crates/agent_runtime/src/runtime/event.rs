@@ -105,6 +105,15 @@ pub enum RuntimeEvent {
         session_id: SessionId,
         turn_id: TurnId,
         question: String,
+        pending_tool_call_id: Option<ToolCallId>,
+        tool_name: Option<ToolName>,
+    },
+    /// 用户已处理工具执行审批。
+    ToolApprovalResolved {
+        session_id: SessionId,
+        turn_id: TurnId,
+        call_id: ToolCallId,
+        approved: bool,
     },
     /// 一轮成功完成。
     TurnCompleted {
@@ -138,6 +147,7 @@ impl RuntimeEvent {
             | RuntimeEvent::UserMessage { session_id, .. }
             | RuntimeEvent::Status { session_id, .. }
             | RuntimeEvent::NeedUserInput { session_id, .. }
+            | RuntimeEvent::ToolApprovalResolved { session_id, .. }
             | RuntimeEvent::TurnCompleted { session_id, .. }
             | RuntimeEvent::TurnFailed { session_id, .. } => session_id,
         }
