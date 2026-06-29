@@ -3,11 +3,12 @@
 //! 提供数据库视图的侧边栏功能，包括：
 //! - AI 聊天面板
 
+mod ai_context;
 pub(crate) mod cell_preview_panel;
 
 use ai_chat_view::{
     AskAiEvent, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent, ResourceId,
-    ResourceScope, build_agent_context_all, get_ask_ai_notifier,
+    build_agent_context_all, get_ask_ai_notifier,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -18,6 +19,10 @@ use gpui::{
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::storage::StoredConnection;
+
+use self::ai_context::{
+    SelectedDatabaseScope, TableMentionLoad, TableMentionLoadParts, apply_database_scope,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarPanel {
@@ -43,6 +48,7 @@ pub struct DatabaseSidebar {
     chat_panel: Entity<DefaultAgentChatPanel>,
     connections: Vec<StoredConnection>,
     active_conn_id: Option<i64>,
+    table_context_seq: usize,
     focus_handle: FocusHandle,
     is_active: bool,
     _subs: Vec<Subscription>,
@@ -88,6 +94,7 @@ impl DatabaseSidebar {
             chat_panel,
             connections,
             active_conn_id,
+            table_context_seq: 0,
             focus_handle: cx.focus_handle(),
             is_active: false,
             _subs: subs,
@@ -146,18 +153,29 @@ impl DatabaseSidebar {
         let (mut resources, mentions) =
             build_agent_context_all(active_connection, &self.connections);
         let resource_id = ResourceId::new(connection_id.to_string());
-        if let Some(resource) = resources.get_mut(&resource_id) {
-            if let Some(database) = database.filter(|value| !value.is_empty()) {
-                resource.set_scope(ResourceScope::new("database", "Database", database));
-            }
-            if let Some(schema) = schema.filter(|value| !value.is_empty()) {
-                resource.set_scope(ResourceScope::new("schema", "Schema", schema));
-            }
-        }
+        apply_database_scope(
+            &mut resources,
+            &resource_id,
+            SelectedDatabaseScope {
+                database: database.as_deref(),
+                schema: schema.as_deref(),
+            },
+        );
         resources.current = Some(resource_id);
-        self.chat_panel.update(cx, |panel, cx| {
-            panel.set_resource_context(resources, mentions, cx);
+        self.table_context_seq = self.table_context_seq.wrapping_add(1);
+        let seq = self.table_context_seq;
+        let load = TableMentionLoad::new(TableMentionLoadParts {
+            seq,
+            connection_id: connection_id.to_string(),
+            database,
+            schema,
+            resources: resources.clone(),
+            mentions: mentions.clone(),
         });
+        self.chat_panel.update(cx, |panel, cx| {
+            panel.set_resource_context(resources.clone(), mentions.clone(), cx);
+        });
+        self.load_table_mentions(load, cx);
         cx.notify();
     }
 
