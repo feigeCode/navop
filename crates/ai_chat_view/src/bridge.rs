@@ -10,6 +10,7 @@
 //! [`build_runtime`] 则用一个 `ModelClient` 装配出可直接驱动的 [`Runtime`]
 //! (内部使用 [`LlmPlanner`])。
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use self::model_policy::{
@@ -27,7 +28,7 @@ use futures::StreamExt;
 use futures::stream;
 use one_core::llm::{
     ChatRequest, GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig,
-    extract_stream_text,
+    extract_stream_text_parts,
 };
 
 mod model_policy;
@@ -175,6 +176,7 @@ impl ModelClient for LlmModelClient {
                 inner,
                 text: String::new(),
                 tool_calls: Vec::new(),
+                pending_events: VecDeque::new(),
             },
             |state| async move {
                 match state {
@@ -184,7 +186,21 @@ impl ModelClient for LlmModelClient {
                         mut inner,
                         mut text,
                         mut tool_calls,
+                        mut pending_events,
                     } => {
+                        if let Some(event) = pending_events.pop_front() {
+                            return Some((
+                                Ok(event),
+                                StreamState::Streaming {
+                                    provider_name,
+                                    model,
+                                    inner,
+                                    text,
+                                    tool_calls,
+                                    pending_events,
+                                },
+                            ));
+                        }
                         loop {
                             match inner.next().await {
                                 Some(Ok(chunk)) => {
@@ -201,11 +217,19 @@ impl ModelClient for LlmModelClient {
                                         );
                                     }
                                     merge_stream_tool_calls(&mut tool_calls, &chunk);
-                                    if let Some(t) = extract_stream_text(&chunk)
-                                        && !t.is_empty()
-                                    {
-                                        text.push_str(t);
-                                        let event = ModelStreamEvent::TextDelta(t.to_string());
+                                    let parts = extract_stream_text_parts(&chunk);
+                                    if let Some(reasoning) = parts.reasoning {
+                                        pending_events.push_back(ModelStreamEvent::ReasoningDelta(
+                                            reasoning.to_string(),
+                                        ));
+                                    }
+                                    if let Some(content) = parts.content {
+                                        text.push_str(content);
+                                        pending_events.push_back(ModelStreamEvent::TextDelta(
+                                            content.to_string(),
+                                        ));
+                                    }
+                                    if let Some(event) = pending_events.pop_front() {
                                         return Some((
                                             Ok(event),
                                             StreamState::Streaming {
@@ -214,6 +238,7 @@ impl ModelClient for LlmModelClient {
                                                 inner,
                                                 text,
                                                 tool_calls,
+                                                pending_events,
                                             },
                                         ));
                                     }
@@ -335,6 +360,7 @@ enum StreamState {
         inner: one_core::llm::ChatStream,
         text: String,
         tool_calls: Vec<ToolCall>,
+        pending_events: VecDeque<ModelStreamEvent>,
     },
     /// 已产出 Completed,流结束。
     Done,

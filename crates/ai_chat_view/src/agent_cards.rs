@@ -14,7 +14,7 @@ use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window, div,
 };
-use gpui_component::{ActiveTheme, h_flex, v_flex};
+use gpui_component::{ActiveTheme, h_flex, text::TextView, v_flex};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -183,6 +183,7 @@ impl ChatCard for ToolCard {
                 h_flex()
                     .id(toggle_id)
                     .w_full()
+                    .min_w_0()
                     .gap_2()
                     .items_center()
                     .px_1()
@@ -200,16 +201,24 @@ impl ChatCard for ToolCard {
                                 cx.refresh_windows();
                             })
                     })
-                    .child(div().text_color(status_color).child(status_glyph))
                     .child(
                         div()
+                            .flex_shrink_0()
+                            .text_color(status_color)
+                            .child(status_glyph),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
                             .text_sm()
                             .text_color(cx.theme().foreground)
+                            .truncate()
                             .child(format!("工具 · {}", data.tool_name)),
                     )
-                    .child(div().flex_1())
                     .child(
                         div()
+                            .flex_shrink_0()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(tool_status_label(&data)),
@@ -217,6 +226,7 @@ impl ChatCard for ToolCard {
                     .when(has_details, |this| {
                         this.child(
                             div()
+                                .flex_shrink_0()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(if expanded {
@@ -232,9 +242,16 @@ impl ChatCard for ToolCard {
             card = card.child(
                 div()
                     .px_1()
+                    .min_w_0()
                     .text_sm()
                     .text_color(cx.theme().foreground)
-                    .child(data.summary.clone()),
+                    .child(
+                        TextView::markdown(
+                            SharedString::from(format!("agent-tool-summary-{}", data.call_id)),
+                            data.summary.clone(),
+                        )
+                        .selectable(true),
+                    ),
             );
         }
 
@@ -243,12 +260,20 @@ impl ChatCard for ToolCard {
             card = card.child(
                 div()
                     .w_full()
+                    .min_w_0()
                     .p_2()
                     .rounded_md()
                     .bg(cx.theme().background)
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(preview),
+                    .child(
+                        TextView::markdown(
+                            SharedString::from(format!("agent-tool-data-{}", data.call_id)),
+                            preview,
+                        )
+                        .text_xs()
+                        .selectable(true),
+                    ),
             );
         }
 
@@ -302,10 +327,18 @@ impl ChatCard for SubAgentCard {
 fn fallback(content: &str, cx: &App) -> AnyElement {
     div()
         .w_full()
+        .min_w_0()
         .p_2()
         .text_xs()
         .text_color(cx.theme().muted_foreground)
-        .child(format!("[无法解析的 Agent 卡片] {content}"))
+        .child(
+            TextView::markdown(
+                SharedString::from("agent-card-fallback"),
+                format!("[无法解析的 Agent 卡片] {content}"),
+            )
+            .text_xs()
+            .selectable(true),
+        )
         .into_any_element()
 }
 
@@ -330,6 +363,7 @@ fn render_subagent_card(
     let expanded = has_details && is_expanded;
     let mut card = v_flex()
         .w_full()
+        .min_w_0()
         .gap_2()
         .p_2()
         .rounded_lg()
@@ -365,6 +399,7 @@ fn subagent_header(
             data.subagent_id
         )))
         .w_full()
+        .min_w_0()
         .gap_2()
         .items_center()
         .px_1()
@@ -377,9 +412,13 @@ fn subagent_header(
                     cx.refresh_windows();
                 })
         })
-        .child(div().text_color(status_color).child(status_glyph))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(status_color)
+                .child(status_glyph),
+        )
         .child(subagent_title(data, cx))
-        .child(div().flex_1())
         .child(subagent_status(data, cx))
         .into_any_element()
 }
@@ -394,14 +433,18 @@ fn toggle_expanded(expanded_ids: &Arc<Mutex<HashSet<String>>>, message_id: &str)
 
 fn subagent_title(data: &SubAgentCardData, cx: &App) -> AnyElement {
     div()
+        .flex_1()
+        .min_w_0()
         .text_sm()
         .text_color(cx.theme().foreground)
+        .truncate()
         .child(format!("子代理 · {}", data.name))
         .into_any_element()
 }
 
 fn subagent_status(data: &SubAgentCardData, cx: &App) -> AnyElement {
     div()
+        .flex_shrink_0()
         .text_xs()
         .text_color(cx.theme().muted_foreground)
         .child(subagent_status_label(data))
@@ -433,22 +476,43 @@ fn subagent_status_label(data: &SubAgentCardData) -> &'static str {
 fn subagent_details(data: &SubAgentCardData, cx: &App) -> AnyElement {
     v_flex()
         .w_full()
+        .min_w_0()
         .gap_1()
         .px_1()
         .when(!data.task.is_empty(), |this| {
             this.child(
                 div()
+                    .w_full()
+                    .min_w_0()
                     .text_sm()
                     .text_color(cx.theme().foreground)
-                    .child(data.task.clone()),
+                    .child(
+                        TextView::markdown(
+                            SharedString::from(format!("agent-subagent-task-{}", data.subagent_id)),
+                            data.task.clone(),
+                        )
+                        .selectable(true),
+                    ),
             )
         })
         .when(!data.summary.is_empty(), |this| {
             this.child(
                 div()
+                    .w_full()
+                    .min_w_0()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(data.summary.clone()),
+                    .child(
+                        TextView::markdown(
+                            SharedString::from(format!(
+                                "agent-subagent-summary-{}",
+                                data.subagent_id
+                            )),
+                            data.summary.clone(),
+                        )
+                        .text_xs()
+                        .selectable(true),
+                    ),
             )
         })
         .into_any_element()

@@ -1,5 +1,5 @@
 use super::*;
-use agent_runtime::model::{Message, Tool, ToolChoice, collect_model_stream};
+use agent_runtime::model::{Message, ModelStreamEvent, Tool, ToolChoice, collect_model_stream};
 use llm_connector::types::{ChatResponse, Choice, Delta, FunctionCall, StreamingChoice};
 use one_core::llm::StreamingResponse;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -80,6 +80,41 @@ fn completion_provider_named(
         }),
         stream_calls,
     )
+}
+
+fn streaming_provider_named(
+    name: &'static str,
+    chunks: Vec<StreamingResponse>,
+) -> Arc<dyn LlmProvider> {
+    struct StreamingProvider {
+        name: &'static str,
+        chunks: Vec<StreamingResponse>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for StreamingProvider {
+        async fn chat(&self, _request: &ChatRequest) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: &ChatRequest,
+        ) -> anyhow::Result<one_core::llm::ChatStream> {
+            let chunks = self.chunks.clone().into_iter().map(Ok);
+            Ok(Box::pin(stream::iter(chunks)))
+        }
+
+        async fn models(&self) -> anyhow::Result<Vec<String>> {
+            Ok(vec![])
+        }
+
+        fn provider_name(&self) -> &str {
+            self.name
+        }
+    }
+
+    Arc::new(StreamingProvider { name, chunks })
 }
 
 #[test]
@@ -188,6 +223,57 @@ async fn ollama_stream_with_tools_uses_completion_fallback_for_tool_calls() {
     assert_eq!(
         "{\"message\":\"db-1\"}",
         response.tool_calls[0].function.arguments
+    );
+}
+
+#[tokio::test]
+async fn stream_reasoning_and_content_are_distinct_events() {
+    let provider = streaming_provider_named(
+        "test",
+        vec![
+            StreamingResponse {
+                choices: vec![StreamingChoice {
+                    index: 0,
+                    delta: Delta {
+                        thinking: Some("内部思考".to_string()),
+                        ..Default::default()
+                    },
+                    finish_reason: None,
+                    logprobs: None,
+                }],
+                ..Default::default()
+            },
+            StreamingResponse {
+                choices: vec![StreamingChoice {
+                    index: 0,
+                    delta: Delta {
+                        content: Some("正式回复".to_string()),
+                        ..Default::default()
+                    },
+                    finish_reason: None,
+                    logprobs: None,
+                }],
+                ..Default::default()
+            },
+        ],
+    );
+    let client = LlmModelClient::new(provider, "thinking-model");
+    let request = ModelRequest::new(vec![Message::user("hi")]);
+    let mut stream = client
+        .complete_stream(request)
+        .await
+        .expect("stream should be created");
+
+    let first = stream.next().await.expect("reasoning event").expect("ok");
+    assert!(
+        matches!(first, ModelStreamEvent::ReasoningDelta(delta) if delta == "内部思考"),
+        "thinking delta must not be emitted as visible assistant text"
+    );
+    let second = stream.next().await.expect("text event").expect("ok");
+    assert!(matches!(second, ModelStreamEvent::TextDelta(delta) if delta == "正式回复"));
+    let third = stream.next().await.expect("completed event").expect("ok");
+    assert!(
+        matches!(third, ModelStreamEvent::Completed(response) if response.text.as_deref() == Some("正式回复"))
     );
 }
 

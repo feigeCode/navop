@@ -22,6 +22,7 @@ pub fn render_reasoning_block<E: MessageExtension>(
 
     v_flex()
         .w_full()
+        .min_w_0()
         .gap_1()
         .pl_2()
         .border_l_2()
@@ -50,6 +51,7 @@ fn reasoning_header<E: MessageExtension>(
 
     h_flex()
         .w_full()
+        .min_w_0()
         .items_center()
         .gap_1()
         .child(
@@ -67,8 +69,11 @@ fn reasoning_header<E: MessageExtension>(
         )
         .child(
             div()
+                .flex_1()
+                .min_w_0()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
+                .truncate()
                 .child("思考过程"),
         )
         .into_any_element()
@@ -76,6 +81,8 @@ fn reasoning_header<E: MessageExtension>(
 
 fn reasoning_body<E: MessageExtension>(msg: &ChatMessageUIGeneric<E>, cx: &App) -> AnyElement {
     div()
+        .w_full()
+        .min_w_0()
         .pl_6()
         .pr_2()
         .pb_1()

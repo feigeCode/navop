@@ -120,8 +120,15 @@ async fn collect_subagent_stream(
         match event.map_err(|err| format!("子代理流式输出失败:{err}"))? {
             ModelStreamEvent::TextDelta(delta) => text.push_str(&delta),
             ModelStreamEvent::ReasoningDelta(_) => {}
-            ModelStreamEvent::ToolCall(_) => return Err("子代理不支持工具调用".to_string()),
-            ModelStreamEvent::Completed(response) => completed = Some(response),
+            ModelStreamEvent::ToolCall(call) => {
+                return Err(subagent_tool_call_error(&call.function.name));
+            }
+            ModelStreamEvent::Completed(response) => {
+                if let Some(call) = response.tool_calls.first() {
+                    return Err(subagent_tool_call_error(&call.function.name));
+                }
+                completed = Some(response);
+            }
         }
     }
     let fallback = completed
@@ -129,6 +136,10 @@ async fn collect_subagent_stream(
         .unwrap_or_default();
     let summary = if text.is_empty() { fallback } else { text };
     Ok(summary.trim().to_string())
+}
+
+fn subagent_tool_call_error(tool_name: &str) -> String {
+    format!("子代理不支持工具调用: {tool_name}")
 }
 
 fn finish_success(

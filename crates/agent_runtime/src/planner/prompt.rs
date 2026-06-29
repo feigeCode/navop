@@ -1,10 +1,11 @@
 //! 把会话历史转换为模型消息。
 //!
-//! 第一版用"文字转录"的方式表达工具调用与观测(assistant / user 文本),而不
-//! 严格复刻各家 provider 的 tool_call / tool_result 配对协议——后者跨 provider
-//! 约束较多。转录方式简单、稳定,模型据此即可还原上下文做决策。
+//! 使用 llm-connector 原生 tool_call / tool_result 协议表达工具调用与观测,
+//! 确保模型在历史中看到工具调用时能正确驱动 function calling 循环,而非将
+//! 观测文本误解为用户输入并跳过工具调用。
 
 use crate::history::{HistoryItem, RuntimeHistory};
+use crate::tools::ToolCall;
 use llm_connector::types::{Message, MessageBlock, Role};
 
 /// 将历史转换为消息序列(不含 system 提示,由调用方在最前面拼接)。
@@ -22,22 +23,41 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
             }
             HistoryItem::Assistant(text) => messages.push(Message::assistant(text.clone())),
             HistoryItem::System(text) => messages.push(Message::system(text.clone())),
-            HistoryItem::ToolCall(call) => {
-                messages.push(Message::assistant(format!(
-                    "我调用工具 `{}`,参数: {}",
-                    call.tool_name, call.arguments
-                )));
-            }
-            HistoryItem::Observation(obs) => {
-                messages.push(Message::user(format!(
-                    "工具 `{}` 的执行结果:\n{}",
-                    obs.tool_name,
-                    obs.model_text(max)
-                )));
-            }
+            HistoryItem::ToolCall(call) => messages.push(assistant_tool_call_message(call)),
+            HistoryItem::Observation(obs) => messages.push(tool_result_message(obs, max)),
         }
     }
     messages
+}
+
+/// 把 agent_runtime 的工具调用转为原生 assistant tool_calls 消息。
+fn assistant_tool_call_message(call: &ToolCall) -> Message {
+    Message {
+        role: Role::Assistant,
+        content: vec![],
+        tool_calls: Some(vec![llm_connector::types::ToolCall {
+            id: call.call_id.to_string(),
+            call_type: "function".to_string(),
+            function: llm_connector::types::FunctionCall {
+                name: call.tool_name.to_string(),
+                arguments: call.arguments.to_string(),
+                thought_signature: None,
+            },
+            index: None,
+            thought_signature: None,
+        }]),
+        ..Default::default()
+    }
+}
+
+/// 把 agent_runtime 的观测转为原生 tool result 消息(Role::Tool)。
+fn tool_result_message(obs: &crate::tools::ToolObservation, max_bytes: usize) -> Message {
+    Message {
+        role: Role::Tool,
+        content: vec![MessageBlock::text(obs.model_text(max_bytes))],
+        tool_call_id: Some(obs.call_id.to_string()),
+        ..Default::default()
+    }
 }
 
 /// 构造含图片的多模态用户消息(文本块 + 各图片的 base64 块)。
@@ -59,7 +79,9 @@ fn user_message_with_images(text: &str, images: &[crate::runtime::InputImage]) -
 mod tests {
     use super::*;
     use crate::history::RuntimeHistory;
+    use crate::ids::ToolCallId;
     use crate::runtime::InputImage;
+    use crate::tools::{ToolCall, ToolName, ToolObservation};
 
     #[test]
     fn plain_user_history_becomes_text_message() {
@@ -84,5 +106,89 @@ mod tests {
         assert_eq!(msg.content.len(), 2);
         assert!(msg.content[0].is_text());
         assert!(!msg.content[1].is_text(), "第二块应为图片块");
+    }
+
+    #[test]
+    fn tool_call_history_item_becomes_assistant_tool_call() {
+        let call_id = ToolCallId::from_string("call_test_1");
+        let tool_call = ToolCall {
+            call_id: call_id.clone(),
+            tool_name: ToolName::new("db_query"),
+            arguments: serde_json::json!({
+                "connection": "5",
+                "database": "ai_app",
+                "sql": "SELECT COUNT(*) AS total FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'ai_app'"
+            }),
+            resource_id: None,
+        };
+
+        let mut history = RuntimeHistory::new();
+        history.record_tool_call(tool_call);
+        let messages = history_to_messages(&history);
+        assert_eq!(messages.len(), 1);
+
+        let msg = &messages[0];
+        assert_eq!(msg.role, Role::Assistant);
+        assert!(msg.tool_calls.is_some());
+        let tool_calls = msg
+            .tool_calls
+            .as_ref()
+            .expect("assistant tool message should carry tool_calls");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, call_id.to_string());
+        assert_eq!(tool_calls[0].function.name, "db_query");
+    }
+
+    #[test]
+    fn observation_history_item_becomes_tool_role_with_call_id() {
+        let call_id = ToolCallId::from_string("call_test_2");
+        let observation = ToolObservation::success(
+            call_id,
+            ToolName::new("db_query"),
+            "count success",
+            crate::tools::ObservationData::Text("1".into()),
+        );
+        let mut history = RuntimeHistory::new();
+        history.record_observation(observation);
+        let messages = history_to_messages(&history);
+        assert_eq!(messages.len(), 1);
+
+        let msg = &messages[0];
+        assert_eq!(msg.role, Role::Tool);
+        assert_eq!(msg.tool_call_id, Some("call_test_2".to_string()));
+        assert_eq!(msg.content.len(), 1);
+        assert!(msg.content[0].is_text());
+    }
+
+    #[test]
+    fn tool_call_and_observation_generate_distinct_roles() {
+        let call_id = ToolCallId::from_string("call_test_3");
+        let tool_call = ToolCall {
+            call_id: call_id.clone(),
+            tool_name: ToolName::new("db_query"),
+            arguments: serde_json::json!({
+                "connection": "5",
+                "database": "ai_app",
+                "sql": "SELECT COUNT(*) AS total FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'ai_app'"
+            }),
+            resource_id: None,
+        };
+        let observation = ToolObservation::success(
+            call_id,
+            ToolName::new("db_query"),
+            "count success",
+            crate::tools::ObservationData::Text("1".into()),
+        );
+
+        let mut history = RuntimeHistory::new();
+        history.record_tool_call(tool_call);
+        history.record_observation(observation);
+        let messages = history_to_messages(&history);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, Role::Assistant);
+        assert!(messages[0].tool_calls.is_some());
+        assert_eq!(messages[1].role, Role::Tool);
+        assert_eq!(messages[1].tool_call_id, Some("call_test_3".to_string()));
     }
 }

@@ -111,6 +111,7 @@ pub fn render_user_message<E: MessageExtension>(
         .child(
             div()
                 .max_w(px(720.0))
+                .min_w_0()
                 .px_3()
                 .py_2()
                 .rounded_lg()
@@ -140,14 +141,23 @@ pub fn render_system_message<E: MessageExtension>(
         .py_1()
         .child(
             div()
+                .w_full()
                 .max_w(px(760.0))
+                .min_w_0()
                 .px_2()
                 .py_1()
                 .rounded_md()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .bg(cx.theme().muted.opacity(0.45))
-                .child(msg.content.clone()),
+                .child(
+                    TextView::markdown(
+                        SharedString::from(format!("system-msg-{}", msg.id)),
+                        msg.content.clone(),
+                    )
+                    .text_xs()
+                    .selectable(true),
+                ),
         )
         .into_any_element()
 }
@@ -168,14 +178,23 @@ pub fn render_status_message<E: MessageExtension>(
     h_flex()
         .id(SharedString::from(msg.id.clone()))
         .w_full()
+        .min_w_0()
         .items_center()
         .gap_2()
         .py_1()
-        .child(Icon::new(icon).with_size(Size::Small).text_color(color))
+        .child(
+            Icon::new(icon)
+                .with_size(Size::Small)
+                .text_color(color)
+                .flex_shrink_0(),
+        )
         .child(
             div()
+                .flex_1()
+                .min_w_0()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
+                .truncate()
                 .child(title.to_string()),
         )
         .into_any_element()
@@ -202,16 +221,18 @@ fn render_assistant_text_with_code_actions<E: MessageExtension>(
     div()
         .w_full()
         .max_w(px(820.0))
+        .min_w_0()
         .child(
             v_flex()
                 .w_full()
+                .min_w_0()
                 .gap_2()
                 .when(!msg.reasoning_content.is_empty(), |this| {
                     this.child(render_reasoning_block(msg, window, cx))
                 })
                 .when(!msg.content.is_empty(), |this| {
                     this.child(
-                        div().w_full().px_1().py_1().child(
+                        div().w_full().min_w_0().px_1().py_1().child(
                             TextView::markdown(
                                 SharedString::from(format!("ai-msg-{}", msg.id)),
                                 msg.content.clone(),
