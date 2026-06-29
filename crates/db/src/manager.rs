@@ -1008,13 +1008,32 @@ impl GlobalDbState {
         database: String,
         table_name: String,
     ) -> anyhow::Result<SqlResult> {
-        let config = self
+        self.truncate_table_with_schema(cx, config_id, database, None, table_name)
+            .await
+    }
+
+    /// Truncate table with an optional schema.
+    pub async fn truncate_table_with_schema(
+        &self,
+        cx: &mut AsyncApp,
+        config_id: String,
+        database: String,
+        schema: Option<String>,
+        table_name: String,
+    ) -> anyhow::Result<SqlResult> {
+        let mut config = self
             .get_config(&config_id)
             .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", config_id))?;
         let plugin = self.get_plugin(&config.database_type)?;
-        let sql = plugin.truncate_table(&database, &table_name);
+        let sql = plugin.truncate_table_with_schema(&database, schema.as_deref(), &table_name);
 
-        let result = self.execute_with_session(cx, config, sql, None).await?;
+        if config.database_type != DatabaseType::Oracle {
+            config.database = Some(database);
+        }
+
+        let result = self
+            .execute_with_session_internal(cx, config, sql, None, schema)
+            .await?;
 
         Self::wrapper_result(result)
     }

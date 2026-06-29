@@ -1918,6 +1918,22 @@ impl DatabasePlugin for PostgresPlugin {
         }
     }
 
+    fn truncate_table_with_schema(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> String {
+        if let Some(schema) = schema {
+            return format!(
+                "TRUNCATE TABLE {}.{}",
+                self.quote_identifier(schema),
+                self.quote_identifier(table)
+            );
+        }
+        format!("TRUNCATE TABLE {}", self.quote_identifier(table))
+    }
+
     fn rename_table(&self, _database: &str, old_name: &str, new_name: &str) -> String {
         format!(
             "ALTER TABLE {} RENAME TO {}",
@@ -2305,6 +2321,14 @@ mod tests {
         let sql = plugin.truncate_table("test_db", "users");
         assert!(sql.contains("TRUNCATE TABLE"));
         assert!(sql.contains("\"users\""));
+    }
+
+    #[test]
+    fn test_truncate_table_with_schema() {
+        let plugin = create_plugin();
+        let sql = plugin.truncate_table_with_schema("test_db", Some("app"), "users");
+        assert_eq!(sql, "TRUNCATE TABLE \"app\".\"users\"");
+        assert!(!sql.contains("test_db"));
     }
 
     #[test]

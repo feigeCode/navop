@@ -2325,6 +2325,16 @@ pub trait DatabasePlugin: Send + Sync {
         format!("TRUNCATE TABLE {}", self.quote_identifier(table))
     }
 
+    /// Truncate table with an optional schema.
+    fn truncate_table_with_schema(
+        &self,
+        database: &str,
+        _schema: Option<&str>,
+        table: &str,
+    ) -> String {
+        self.truncate_table(database, table)
+    }
+
     /// Rename table
     fn rename_table(&self, database: &str, old_name: &str, new_name: &str) -> String;
 

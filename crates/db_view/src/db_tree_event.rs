@@ -3237,8 +3237,15 @@ impl DatabaseEventHandler {
                             .get("database")
                             .map(|s| s.to_string())
                             .unwrap_or_default();
+                        let schema = meta.get("schema").map(|s| s.to_string());
                         let task = state
-                            .truncate_table(cx, conn_id.clone(), database, tbl_name.clone())
+                            .truncate_table_with_schema(
+                                cx,
+                                conn_id.clone(),
+                                database,
+                                schema,
+                                tbl_name.clone(),
+                            )
                             .await;
 
                         match task {
