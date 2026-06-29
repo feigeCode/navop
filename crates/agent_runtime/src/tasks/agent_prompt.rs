@@ -22,9 +22,11 @@ pub(super) fn build_system_prompt(
     kind: TaskKind,
     tools: &[ToolSpec],
     resources: &ResourceContext,
+    system_instruction: Option<&str>,
     current_plan: Option<&Plan>,
 ) -> String {
     let mut prompt = system_prompt(kind).to_string();
+    append_system_instruction(&mut prompt, system_instruction);
     append_resource_context(&mut prompt, resources);
     if let Some(plan) = current_plan {
         append_current_plan(&mut prompt, plan);
@@ -42,6 +44,14 @@ pub(super) fn build_system_prompt(
         );
     }
     prompt
+}
+
+fn append_system_instruction(prompt: &mut String, instruction: Option<&str>) {
+    let Some(instruction) = instruction.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    prompt.push_str("\n\n用户自定义系统提示:\n");
+    prompt.push_str(instruction);
 }
 
 fn append_current_plan(prompt: &mut String, plan: &Plan) {

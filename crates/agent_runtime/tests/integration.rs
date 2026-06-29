@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use agent_runtime::model::{
     MockModelClient, ModelRequest, ModelResponse, ModelStream, ModelStreamEvent, function_tool_call,
@@ -19,6 +20,7 @@ use agent_runtime::{
 };
 use async_trait::async_trait;
 use serde_json::json;
+use tokio::sync::Notify;
 
 /// 用脚本化模型 + 给定工具注册表构造 Runtime。
 fn build_runtime(responses: Vec<ModelResponse>, registry: ToolRegistry) -> Runtime {
@@ -59,6 +61,26 @@ impl ModelClient for ReasoningStreamModel {
 
 struct CompletedOnlySubagentToolCallModel {
     count: AtomicUsize,
+}
+
+struct PendingStreamModel {
+    called: Arc<Notify>,
+}
+
+#[async_trait]
+impl ModelClient for PendingStreamModel {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, RuntimeError> {
+        Ok(ModelResponse::text("unused"))
+    }
+
+    async fn complete_stream(&self, _request: ModelRequest) -> Result<ModelStream, RuntimeError> {
+        self.called.notify_waiters();
+        futures::future::pending().await
+    }
+
+    fn model_name(&self) -> &str {
+        "pending-stream"
+    }
 }
 
 impl CompletedOnlySubagentToolCallModel {
@@ -167,6 +189,67 @@ async fn reasoning_stream_events_are_forwarded_to_runtime_events() {
             RuntimeEvent::AssistantMessage { text, .. } if text == "这是最终回答。"
         )
     }));
+    assert!(session.history_snapshot().items().iter().any(|item| {
+        matches!(
+            item,
+            agent_runtime::HistoryItem::AssistantWithReasoning { text, reasoning }
+                if text == "这是最终回答。" && reasoning == "先判断问题边界。"
+        )
+    }));
+}
+
+#[tokio::test]
+async fn custom_system_instruction_is_included_in_model_prompt() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::text("直接回答。")]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(ToolRegistry::new())),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+    session.set_system_instruction(Some("始终用 DBA 视角回答。".into()));
+
+    runtime
+        .run_turn_blocking(session.id(), "解释索引".into(), TaskKind::Ask)
+        .await
+        .expect("run ask turn");
+
+    let requests = model.received_requests();
+    assert_eq!(1, requests.len());
+    let system = requests[0].messages[0].content_as_text();
+    assert!(system.contains("始终用 DBA 视角回答。"));
+}
+
+#[tokio::test]
+async fn interrupt_cancels_turn_while_model_stream_is_starting() {
+    let called = Arc::new(Notify::new());
+    let model: Arc<dyn ModelClient> = Arc::new(PendingStreamModel {
+        called: called.clone(),
+    });
+    let runtime = Runtime::new(RuntimeServices::new(
+        model,
+        Arc::new(ToolRouter::new(ToolRegistry::new())),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    runtime
+        .start_turn(session.id(), "hello".into(), TaskKind::Ask)
+        .expect("start turn");
+    tokio::time::timeout(Duration::from_secs(1), called.notified())
+        .await
+        .expect("model should be called");
+    runtime.interrupt(session.id()).expect("interrupt turn");
+
+    let event = tokio::time::timeout(Duration::from_millis(200), async {
+        loop {
+            if let RuntimeEvent::TurnFailed { reason, .. } = rx.recv().await.unwrap() {
+                break reason;
+            }
+        }
+    })
+    .await
+    .expect("interrupt should emit TurnFailed promptly");
+    assert_eq!("任务已取消", event);
 }
 
 #[tokio::test]

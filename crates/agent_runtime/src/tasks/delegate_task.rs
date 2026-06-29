@@ -99,11 +99,13 @@ async fn run_subagent_model(
         Message::system(subagent_system_prompt(name)),
         Message::user(task.to_string()),
     ]);
-    let mut stream = services
-        .model
-        .complete_stream(request)
-        .await
-        .map_err(|err| format!("子代理模型调用失败:{err}"))?;
+    let mut stream = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err("子代理任务已取消".to_string()),
+        result = services.model.complete_stream(request) => {
+            result.map_err(|err| format!("子代理模型调用失败:{err}"))?
+        }
+    };
     collect_subagent_stream(&mut stream, cancellation).await
 }
 

@@ -22,6 +22,8 @@ pub enum HistoryItem {
     },
     /// 助手文本回复。
     Assistant(String),
+    /// 助手文本回复及其独立 reasoning。reasoning 只用于 UI 恢复,不回灌模型上下文。
+    AssistantWithReasoning { text: String, reasoning: String },
     /// 系统提示 / 内部说明。
     System(String),
     /// 一次工具调用。
@@ -103,6 +105,20 @@ impl RuntimeHistory {
 
     pub fn record_assistant(&mut self, text: impl Into<String>) {
         self.record(HistoryItem::Assistant(text.into()));
+    }
+
+    pub fn record_assistant_with_reasoning(
+        &mut self,
+        text: impl Into<String>,
+        reasoning: impl Into<String>,
+    ) {
+        let text = text.into();
+        let reasoning = reasoning.into();
+        if reasoning.is_empty() {
+            self.record_assistant(text);
+        } else {
+            self.record(HistoryItem::AssistantWithReasoning { text, reasoning });
+        }
     }
 
     pub fn record_system(&mut self, text: impl Into<String>) {

@@ -32,7 +32,7 @@ use tokio::sync::{broadcast, oneshot, watch};
 use crate::acp::config::AcpAgentConfig;
 use crate::acp::permission::{acp_permission_provider, resolve_acp_permission_request};
 use crate::acp::state::AcpSessionState;
-use crate::acp::translate::session_update_to_events;
+use crate::acp::translate::{AcpEventTranslator, session_update_to_events};
 
 const AUTHENTICATE_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -68,6 +68,7 @@ impl AcpConnection {
         let session_id = SessionId::from_string(format!("acp:{}", uuid::Uuid::new_v4()));
         let (turn_id_tx, turn_id_rx) = watch::channel(new_acp_turn_id());
         let state = Arc::new(Mutex::new(AcpSessionState::default()));
+        let translator = Arc::new(Mutex::new(AcpEventTranslator::default()));
         let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
 
         let (ready_tx, ready_rx) =
@@ -84,6 +85,7 @@ impl AcpConnection {
         let permission_provider_for_request = permission_provider.clone();
         let state_for_notification = state.clone();
         let state_for_setup = state.clone();
+        let translator_for_notification = translator.clone();
         let read_root = workspace_root.clone();
         let write_root = workspace_root.clone();
 
@@ -97,9 +99,19 @@ impl AcpConnection {
                             state.apply_session_update(&notification.update);
                         }
                         let tid_notif = turn_id_for_notification.borrow().clone();
-                        for event in
-                            session_update_to_events(&notification.update, &sid_notif, &tid_notif)
-                        {
+                        let events = translator_for_notification
+                            .lock()
+                            .map(|mut translator| {
+                                translator.session_update_to_events(
+                                    &notification.update,
+                                    &sid_notif,
+                                    &tid_notif,
+                                )
+                            })
+                            .unwrap_or_else(|_| {
+                                session_update_to_events(&notification.update, &sid_notif, &tid_notif)
+                            });
+                        for event in events {
                             let _ = ev_notif.send(event);
                         }
                         Ok(())

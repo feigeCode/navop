@@ -115,6 +115,7 @@ mod tests {
                 HistoryItem::Assistant("hi".into()),
             ],
             plan: None,
+            system_instruction: None,
         }
     }
 
@@ -140,6 +141,7 @@ mod tests {
             resources: ResourceContext::new(),
             history: vec![HistoryItem::System("only system".into())],
             plan: None,
+            system_instruction: None,
         };
         assert_eq!(derive_title(&snap), "新 Agent 会话");
     }

@@ -30,6 +30,8 @@ pub struct SessionSnapshot {
     pub history: Vec<HistoryItem>,
     #[serde(default)]
     pub plan: Option<Plan>,
+    #[serde(default)]
+    pub system_instruction: Option<String>,
 }
 
 /// 一次会话。
@@ -60,6 +62,7 @@ impl Session {
         let state = SessionState {
             history: RuntimeHistory::from_items(snapshot.history),
             current_plan: snapshot.plan,
+            system_instruction: snapshot.system_instruction,
             last_error: None,
         };
         Arc::new(Self {
@@ -78,15 +81,20 @@ impl Session {
 
     /// 生成会话的可持久化快照(历史 + 当前计划 + 资源 + 标识)。
     pub fn snapshot(&self) -> SessionSnapshot {
-        let (history, plan) = {
+        let (history, plan, system_instruction) = {
             let state = self.state.lock().expect("session 锁中毒");
-            (state.history.items().to_vec(), state.current_plan.clone())
+            (
+                state.history.items().to_vec(),
+                state.current_plan.clone(),
+                state.system_instruction.clone(),
+            )
         };
         SessionSnapshot {
             id: self.id.clone(),
             resources: self.resources(),
             history,
             plan,
+            system_instruction,
         }
     }
 
@@ -112,6 +120,25 @@ impl Session {
             .expect("session 锁中毒")
             .current_plan
             .clone()
+    }
+
+    pub fn system_instruction(&self) -> Option<String> {
+        self.state
+            .lock()
+            .expect("session 锁中毒")
+            .system_instruction
+            .clone()
+    }
+
+    pub fn set_system_instruction(&self, instruction: Option<String>) {
+        let instruction = instruction.and_then(|text| {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        });
+        self.state
+            .lock()
+            .expect("session 锁中毒")
+            .system_instruction = instruction;
     }
 
     pub fn set_last_error(&self, error: Option<String>) {
@@ -142,12 +169,22 @@ impl Session {
     }
 
     pub fn record_assistant_message(&self, turn_id: &TurnId, text: impl Into<String>) {
+        self.record_assistant_message_with_reasoning(turn_id, text, "");
+    }
+
+    pub fn record_assistant_message_with_reasoning(
+        &self,
+        turn_id: &TurnId,
+        text: impl Into<String>,
+        reasoning: impl Into<String>,
+    ) {
         let text = text.into();
+        let reasoning = reasoning.into();
         self.state
             .lock()
             .expect("session 锁中毒")
             .history
-            .record_assistant(text.clone());
+            .record_assistant_with_reasoning(text.clone(), reasoning);
         self.emit(RuntimeEvent::AssistantMessage {
             session_id: self.id.clone(),
             turn_id: turn_id.clone(),
@@ -410,6 +447,7 @@ mod tests {
         let turn_id = TurnId::from_string("turn_test");
 
         // 构造一段有代表性的历史:用户、助手、工具调用 + 观测。
+        session.set_system_instruction(Some("始终用 DBA 视角回答。".into()));
         session.record_user_input("查询连接数");
         session.record_assistant_message(&turn_id, "好的,我来查询");
         let call = ToolCall::new(ToolName::new("echo"), serde_json::json!({"text": "hi"}));
@@ -438,6 +476,10 @@ mod tests {
         let restored = Session::restore(parsed, tx);
 
         assert_eq!(restored.id(), session.id());
+        assert_eq!(
+            restored.system_instruction().as_deref(),
+            Some("始终用 DBA 视角回答。")
+        );
         assert_eq!(restored.history_snapshot().len(), 4);
         let restored_plan = restored.current_plan().expect("应恢复出当前计划");
         assert_eq!(restored_plan.goal, "查询连接数");

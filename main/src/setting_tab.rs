@@ -42,8 +42,8 @@ pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
 
 pub use one_core::settings::{
     AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
-    LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LargeTextCellEditorOpenMode, ProxyType,PersonalSyncBackendKind, PersonalSyncSettings,
-    effective_locale_for_setting,
+    LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LargeTextCellEditorOpenMode,
+    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, effective_locale_for_setting,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -2471,8 +2471,8 @@ mod tests {
     use super::{
         AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, ProxyType,
         build_app_http_client, builtin_monospace_font_options, is_supported_font_file,
-        merge_font_options_with_custom_fonts, parse_font_families,
-        personal_sync_backend_options, personal_sync_status_label,
+        merge_font_options_with_custom_fonts, parse_font_families, personal_sync_backend_options,
+        personal_sync_status_label,
     };
     use std::path::Path;
 

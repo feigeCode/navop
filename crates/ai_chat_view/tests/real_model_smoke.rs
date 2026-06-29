@@ -231,6 +231,9 @@ fn summarize_history(history: &agent_runtime::RuntimeHistory) -> String {
             agent_runtime::HistoryItem::Assistant(text) => {
                 format!("assistant:{}", truncate(text))
             }
+            agent_runtime::HistoryItem::AssistantWithReasoning { text, .. } => {
+                format!("assistant:{}", truncate(text))
+            }
             agent_runtime::HistoryItem::System(text) => {
                 format!("system:{}", truncate(text))
             }

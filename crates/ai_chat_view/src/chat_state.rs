@@ -77,6 +77,14 @@ impl ChatViewState {
         self.push(ChatMessageUI::assistant(content))
     }
 
+    pub fn push_assistant_with_reasoning(
+        &mut self,
+        content: impl Into<String>,
+        reasoning: impl Into<String>,
+    ) -> String {
+        self.push(ChatMessageUI::assistant(content).with_reasoning_content(reasoning))
+    }
+
     pub fn push_system(&mut self, content: impl Into<String>) -> String {
         self.push(ChatMessageUI::system(content))
     }
@@ -98,6 +106,14 @@ impl ChatViewState {
             return false;
         };
         message.content.push_str(delta);
+        true
+    }
+
+    pub fn append_reasoning_to_message(&mut self, id: &str, delta: &str) -> bool {
+        let Some(message) = self.messages.iter_mut().find(|message| message.id == id) else {
+            return false;
+        };
+        message.reasoning_content.push_str(delta);
         true
     }
 
@@ -173,5 +189,28 @@ mod tests {
             state.messages()[0].variant,
             MessageVariant::Status { ref title, is_done: false } if title == "running"
         ));
+    }
+
+    #[test]
+    fn state_can_store_assistant_reasoning_separately_from_content() {
+        let mut state = ChatViewState::new();
+
+        state.push_assistant_with_reasoning("最终回答", "内部推理");
+
+        assert_eq!("最终回答", state.messages()[0].content);
+        assert_eq!("内部推理", state.messages()[0].reasoning_content);
+    }
+
+    #[test]
+    fn state_can_append_reasoning_to_streaming_message() {
+        let mut state = ChatViewState::new();
+
+        let id = state.push_streaming_assistant();
+        assert!(state.append_reasoning_to_message(&id, "先分析"));
+        assert!(state.append_to_message(&id, "再回答"));
+
+        assert_eq!("再回答", state.messages()[0].content);
+        assert_eq!("先分析", state.messages()[0].reasoning_content);
+        assert!(state.messages()[0].is_reasoning_expanded);
     }
 }

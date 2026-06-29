@@ -688,6 +688,7 @@ impl AgentChatView {
         if binding.switch_model(&opt, &self.resources) {
             self.runtime = binding.runtime;
             self.session_id = binding.session_id;
+            self.apply_system_instruction_to_current_session();
             self.selected_model = binding.selected_model;
             self.current_session = self.session_id.to_string();
             self.sessions.insert(
@@ -856,6 +857,7 @@ impl AgentChatView {
         }
         let session = self.runtime.create_session(self.resources.clone());
         self.session_id = session.id().clone();
+        self.apply_system_instruction_to_current_session();
         self.current_session = self.session_id.to_string();
         self.transcript.clear();
         self._event_task =
@@ -958,6 +960,7 @@ impl AgentChatView {
         // 用当前视图环境覆盖会话资源,保证后续轮次使用现有连接。
         restored.set_resources(self.resources.clone());
         self.session_id = restored.id().clone();
+        self.system_instruction = restored.system_instruction();
         self.current_session = self.session_id.to_string();
         self.transcript.load_history(&history, plan.as_ref());
         self._event_task =
@@ -1085,9 +1088,16 @@ impl AgentChatView {
     }
 
     /// 设置系统提示词（用于自定义 AI 行为）。
-    pub fn set_system_instruction(&mut self, instruction: Option<String>, _cx: &mut Context<Self>) {
-        self.system_instruction = instruction;
-        // TODO: 将系统提示词应用到 Runtime 会话中
+    pub fn set_system_instruction(&mut self, instruction: Option<String>, cx: &mut Context<Self>) {
+        self.system_instruction = instruction.clone();
+        self.apply_system_instruction_to_current_session();
+        cx.notify();
+    }
+
+    fn apply_system_instruction_to_current_session(&self) {
+        if let Some(session) = self.runtime.session(&self.session_id) {
+            session.set_system_instruction(self.system_instruction.clone());
+        }
     }
 
     /// 更新可操作资源上下文与 `@` 提及项。
@@ -2188,6 +2198,97 @@ mod tests {
             !requests[0].messages[0]
                 .content_as_text()
                 .contains("update_plan")
+        );
+    }
+
+    #[gpui::test]
+    fn gpui_system_instruction_is_sent_to_runtime_prompt(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let model = Arc::new(MockModelClient::new([ModelResponse::text("直接回答。")]));
+        let runtime = test_runtime_with_model(model.clone());
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update_in(cx, |view, window, cx| {
+            view.set_system_instruction(Some("始终用 DBA 视角回答。".into()), cx);
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "解释一下索引".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+
+        let requests = model.received_requests();
+        assert_eq!(1, requests.len());
+        assert!(
+            requests[0].messages[0]
+                .content_as_text()
+                .contains("始终用 DBA 视角回答。")
+        );
+    }
+
+    #[gpui::test]
+    fn gpui_system_instruction_survives_new_local_session(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let runtime = test_runtime("m");
+        let config = AgentChatViewConfig::new(runtime.clone(), ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let session_id = view.update(cx, |view, cx| {
+            view.set_system_instruction(Some("只输出 SQL 审计建议。".into()), cx);
+            view.start_fresh_session(cx);
+            view.session_id.clone()
+        });
+
+        let session = runtime.session(&session_id).expect("session should exist");
+        assert_eq!(
+            session.system_instruction().as_deref(),
+            Some("只输出 SQL 审计建议。")
+        );
+    }
+
+    #[gpui::test]
+    fn gpui_system_instruction_survives_model_switch(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let first = ComposerModelOption::new("openai:gpt-a", "openai", "OpenAI", "gpt-a");
+        let second = ComposerModelOption::new("ollama:qwen", "ollama", "Ollama", "qwen3:14b");
+        let runtimes = Arc::new(std::sync::Mutex::new(Vec::<Arc<Runtime>>::new()));
+        let factory_runtimes = runtimes.clone();
+        let factory: AgentRuntimeFactory = Arc::new(move |option| {
+            let runtime = test_runtime(option.model.as_ref());
+            factory_runtimes.lock().unwrap().push(runtime.clone());
+            runtime
+        });
+        let initial_runtime = test_runtime("gpt-a");
+        let config = AgentChatViewConfig::new(initial_runtime, ResourceContext::new(), vec![])
+            .with_models(
+                vec![first, second],
+                Some(SharedString::from("openai:gpt-a")),
+                factory,
+            );
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            view.set_system_instruction(Some("只输出 SQL 审计建议。".into()), cx);
+            view.select_model("ollama:qwen", "ollama", "qwen3:14b", cx);
+        });
+
+        let runtime = runtimes.lock().unwrap().last().cloned().unwrap();
+        let session_id = view.read_with(cx, |view, _| view.session_id.clone());
+        let session = runtime.session(&session_id).expect("session should exist");
+        assert_eq!(
+            session.system_instruction().as_deref(),
+            Some("只输出 SQL 审计建议。")
         );
     }
 

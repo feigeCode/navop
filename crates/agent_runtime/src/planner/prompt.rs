@@ -21,7 +21,16 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
                     messages.push(user_message_with_images(text, images));
                 }
             }
-            HistoryItem::Assistant(text) => messages.push(Message::assistant(text.clone())),
+            HistoryItem::Assistant(text) => {
+                if !text.is_empty() {
+                    messages.push(Message::assistant(text.clone()));
+                }
+            }
+            HistoryItem::AssistantWithReasoning { text, .. } => {
+                if !text.is_empty() {
+                    messages.push(Message::assistant(text.clone()));
+                }
+            }
             HistoryItem::System(text) => messages.push(Message::system(text.clone())),
             HistoryItem::ToolCall(call) => messages.push(assistant_tool_call_message(call)),
             HistoryItem::Observation(obs) => messages.push(tool_result_message(obs, max)),
@@ -92,6 +101,26 @@ mod tests {
         assert_eq!(messages[0].role, Role::User);
         assert_eq!(messages[0].content.len(), 1);
         assert!(messages[0].content[0].is_text());
+    }
+
+    #[test]
+    fn assistant_reasoning_history_sends_only_visible_text_to_model() {
+        let mut history = RuntimeHistory::new();
+        history.record_assistant_with_reasoning("最终回答", "内部推理");
+        let messages = history_to_messages(&history);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, Role::Assistant);
+        assert_eq!(messages[0].content_as_text(), "最终回答");
+    }
+
+    #[test]
+    fn reasoning_only_history_is_not_sent_to_model() {
+        let mut history = RuntimeHistory::new();
+        history.record_assistant_with_reasoning("", "内部推理");
+        let messages = history_to_messages(&history);
+
+        assert!(messages.is_empty());
     }
 
     #[test]

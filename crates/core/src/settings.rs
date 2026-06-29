@@ -342,8 +342,6 @@ impl Default for AcpAgentSettings {
     }
 }
 
-
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AcpAgentTransportSettings {
@@ -790,9 +788,8 @@ impl AppSettings {
 #[cfg(test)]
 mod tests {
     use super::{
-        AcpAgentSettings, AcpAgentTransportSettings, AppSettings, CustomFont,
-        LargeTextCellEditorOpenMode, McpPermissionMode, McpServerMode,
-        PersonalSyncBackendKind,LOCALE_SYSTEM
+        AcpAgentSettings, AcpAgentTransportSettings, AppSettings, CustomFont, LOCALE_SYSTEM,
+        LargeTextCellEditorOpenMode, McpPermissionMode, McpServerMode, PersonalSyncBackendKind,
     };
 
     #[test]
@@ -850,7 +847,7 @@ mod tests {
         assert_eq!(1000, settings.sql_query_max_rows);
     }
 
-      #[test]
+    #[test]
     fn app_settings_deserializes_missing_locale_as_system_mode() {
         let settings: AppSettings = serde_json::from_value(serde_json::json!({
             "theme_mode": "dark"

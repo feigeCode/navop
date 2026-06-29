@@ -58,6 +58,12 @@ impl AgentTranscript {
                 HistoryItem::Assistant(text) => {
                     self.messages.push(ChatMessageUI::assistant(text.clone()));
                 }
+                HistoryItem::AssistantWithReasoning { text, reasoning } => {
+                    self.messages.push(
+                        ChatMessageUI::assistant(text.clone())
+                            .with_reasoning_content(reasoning.clone()),
+                    );
+                }
                 HistoryItem::System(text) => self.push_system(text.clone()),
                 HistoryItem::ToolCall(call) => {
                     self.push_tool_call(call.call_id.as_str(), call.tool_name.as_str());
@@ -552,6 +558,61 @@ mod tests {
         assert_eq!(1, tr.messages.len());
         assert_eq!("最终答案", tr.messages[0].content);
         assert_eq!("先分析", tr.messages[0].reasoning_content);
+    }
+
+    #[test]
+    fn load_history_preserves_assistant_reasoning() {
+        let mut tr = AgentTranscript::new();
+        tr.load_history(
+            &[HistoryItem::AssistantWithReasoning {
+                text: "最终回答".to_string(),
+                reasoning: "内部推理".to_string(),
+            }],
+            None,
+        );
+
+        assert_eq!(1, tr.messages.len());
+        assert_eq!("最终回答", tr.messages[0].content);
+        assert_eq!("内部推理", tr.messages[0].reasoning_content);
+    }
+
+    #[test]
+    fn tool_call_closes_reasoning_segment_before_followup_answer() {
+        let mut tr = AgentTranscript::new();
+        let call = ToolCallId::from_string("call_1");
+        tr.apply(&RuntimeEvent::ReasoningDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "先分析工具选择".to_string(),
+        });
+        tr.apply(&RuntimeEvent::ToolCallStarted {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call.clone(),
+            tool_name: ToolName::new("echo"),
+        });
+        tr.apply(&RuntimeEvent::ToolCallFinished {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call,
+            success: true,
+        });
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "最终回答".to_string(),
+        });
+        tr.apply(&RuntimeEvent::TurnCompleted {
+            session_id: sid(),
+            turn_id: tid(),
+            answer: None,
+        });
+
+        assert_eq!(3, tr.messages.len());
+        assert_eq!("先分析工具选择", tr.messages[0].reasoning_content);
+        assert_eq!("", tr.messages[0].content);
+        assert_eq!(Some(TOOL_CARD), tr.messages[1].variant.card_kind());
+        assert_eq!("最终回答", tr.messages[2].content);
     }
 
     #[test]

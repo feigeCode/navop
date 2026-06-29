@@ -81,6 +81,7 @@ impl RuntimeTask for AgentTask {
                 task_kind,
                 &tool_specs,
                 &resources,
+                session.system_instruction().as_deref(),
                 session.current_plan().as_ref(),
             ))];
             messages.extend(history_to_messages(&session.history_snapshot()));
@@ -94,12 +95,13 @@ impl RuntimeTask for AgentTask {
             log_model_request(iteration, &request);
 
             // 流式采样:边收边推文本增量,聚合出完整响应(文本 + 工具调用)。
-            let response = match sample(&services, request, &session, &turn_id, &cancellation).await
-            {
-                Ok(Some(resp)) => resp,
+            let sample = match sample(&services, request, &session, &turn_id, &cancellation).await {
+                Ok(Some(sample)) => sample,
                 Ok(None) => return TaskOutcome::Cancelled,
                 Err(reason) => return TaskOutcome::Failed { reason },
             };
+            let response = sample.response;
+            let reasoning = sample.reasoning;
 
             let tool_names: Vec<&str> = response
                 .tool_calls
@@ -116,7 +118,11 @@ impl RuntimeTask for AgentTask {
             // 无工具调用:本次文本即最终回答(增量已流式发出,这里落历史并发完整消息)。
             if response.tool_calls.is_empty() {
                 let answer = response.text.unwrap_or_default();
-                session.record_assistant_message(&turn_id, answer.clone());
+                session.record_assistant_message_with_reasoning(
+                    &turn_id,
+                    answer.clone(),
+                    reasoning,
+                );
                 return TaskOutcome::Completed {
                     answer: Some(answer),
                 };
@@ -131,7 +137,13 @@ impl RuntimeTask for AgentTask {
 
             // 模型在调用工具前可能附带一段说明:落历史并 finalize 当前流式消息。
             if let Some(text) = response.text.as_ref().filter(|t| !t.is_empty()) {
-                session.record_assistant_message(&turn_id, text.clone());
+                session.record_assistant_message_with_reasoning(
+                    &turn_id,
+                    text.clone(),
+                    reasoning.clone(),
+                );
+            } else if !reasoning.is_empty() {
+                session.record_assistant_message_with_reasoning(&turn_id, "", reasoning.clone());
             }
 
             // 逐个执行工具调用,把调用与观测写回历史供下一轮 follow-up。
@@ -195,20 +207,28 @@ impl RuntimeTask for AgentTask {
 /// 执行一次流式采样:把文本增量作为事件推送,聚合出完整 [`ModelResponse`]。
 ///
 /// 返回 `Ok(None)` 表示中途被取消;`Err` 表示模型调用失败。
+struct AgentSample {
+    response: ModelResponse,
+    reasoning: String,
+}
+
 async fn sample(
     services: &RuntimeServices,
     request: ModelRequest,
     session: &Session,
     turn_id: &TurnId,
     cancellation: &CancellationToken,
-) -> Result<Option<ModelResponse>, String> {
-    let mut stream = services
-        .model
-        .complete_stream(request)
-        .await
-        .map_err(|e| format!("模型调用失败: {e}"))?;
+) -> Result<Option<AgentSample>, String> {
+    let mut stream = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Ok(None),
+        result = services.model.complete_stream(request) => {
+            result.map_err(|e| format!("模型调用失败: {e}"))?
+        }
+    };
 
     let mut text = String::new();
+    let mut reasoning = String::new();
     let mut completed: Option<ModelResponse> = None;
     while let Some(event) = stream.next().await {
         if cancellation.is_cancelled() {
@@ -220,6 +240,7 @@ async fn sample(
                 session.emit_assistant_delta(turn_id, delta);
             }
             ModelStreamEvent::ReasoningDelta(delta) => {
+                reasoning.push_str(&delta);
                 session.emit_reasoning_delta(turn_id, delta);
             }
             // 工具调用以 Completed 聚合结果为准,避免重复计数。
@@ -229,9 +250,12 @@ async fn sample(
     }
 
     let tool_calls = completed.map(|r| r.tool_calls).unwrap_or_default();
-    Ok(Some(ModelResponse {
-        text: (!text.is_empty()).then_some(text),
-        tool_calls,
+    Ok(Some(AgentSample {
+        response: ModelResponse {
+            text: (!text.is_empty()).then_some(text),
+            tool_calls,
+        },
+        reasoning,
     }))
 }
 
