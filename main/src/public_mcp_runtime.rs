@@ -1,3 +1,4 @@
+mod agent_db_tools;
 mod config;
 mod connection_sessions;
 mod internal_functions;
@@ -5,6 +6,9 @@ mod redis;
 mod session;
 mod status;
 mod tool_registry;
+
+#[cfg(test)]
+mod agent_db_registry_tests;
 
 pub use config::{PublicMcpEnvOverride, PublicMcpStartConfig};
 pub use session::{mcp_server_enabled, set_mcp_server_enabled, set_mcp_server_mode};
@@ -102,12 +106,19 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
         session_enabled,
         PublicMcpEnvOverride::from_env(),
     );
-    let registry = build_tool_registry(cx, &config.toolsets)?;
-    Ok(public_mcp::tools::agent_runtime_tool_registry(
+    let mut agent_toolsets = config.toolsets.clone();
+    let agent_database_enabled = agent_toolsets.database;
+    agent_toolsets.database = false;
+    let registry = build_tool_registry(cx, &agent_toolsets)?;
+    let mut agent_registry = public_mcp::tools::agent_runtime_tool_registry(
         registry,
         config.permission_mode,
         build_approval_manager(cx),
-    ))
+    );
+    if agent_database_enabled {
+        agent_db_tools::register_agent_db_tools(cx, &mut agent_registry)?;
+    }
+    Ok(agent_registry)
 }
 
 fn reconcile_runtime(cx: &mut App) {

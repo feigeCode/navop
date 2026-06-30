@@ -253,9 +253,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
                 }
             };
 
-            if ctx.tool_mode == ToolExecutionMode::Manual
-                && requires_manual_confirmation(call.tool_name.as_str())
-            {
+            if requires_tool_approval(ctx.tool_mode, &call, &tool_specs) {
                 let pending_tool_call_id = call.call_id.clone();
                 let tool_name = call.tool_name.clone();
                 let arguments = call.arguments.clone();
@@ -356,6 +354,23 @@ fn rejected_tool_observation(call: &ToolCall) -> ToolObservation {
 
 fn requires_manual_confirmation(tool_name: &str) -> bool {
     !matches!(tool_name, UPDATE_PLAN_TOOL | DELEGATE_TASK_TOOL)
+}
+
+fn requires_tool_approval(
+    mode: ToolExecutionMode,
+    call: &ToolCall,
+    specs: &[crate::tools::ToolSpec],
+) -> bool {
+    if !requires_manual_confirmation(call.tool_name.as_str()) {
+        return false;
+    }
+    if mode == ToolExecutionMode::Manual {
+        return true;
+    }
+    specs
+        .iter()
+        .find(|spec| spec.name == call.tool_name)
+        .is_some_and(|spec| spec.risk.requires_confirmation())
 }
 
 /// 执行一次流式采样:把文本增量作为事件推送,聚合出完整 [`ModelResponse`]。
