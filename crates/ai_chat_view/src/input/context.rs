@@ -162,6 +162,9 @@ impl ComposerMenuOption {
 pub struct ComposerPlanItem {
     pub title: SharedString,
     pub status: SharedString,
+    pub description: SharedString,
+    pub risk: SharedString,
+    pub tool: Option<SharedString>,
 }
 
 impl ComposerPlanItem {
@@ -169,11 +172,30 @@ impl ComposerPlanItem {
         Self {
             title: title.into(),
             status: status.into(),
+            description: SharedString::default(),
+            risk: SharedString::default(),
+            tool: None,
         }
+    }
+
+    pub fn with_details(
+        mut self,
+        description: impl Into<SharedString>,
+        risk: impl Into<SharedString>,
+        tool: Option<SharedString>,
+    ) -> Self {
+        self.description = description.into();
+        self.risk = risk.into();
+        self.tool = tool;
+        self
+    }
+
+    pub fn has_details(&self) -> bool {
+        !self.description.is_empty() || !self.risk.is_empty() || self.tool.is_some()
     }
 }
 
-/// 顶部「子代理」面板中的可选 Agent。
+/// 顶部「Agent」面板中的可选执行后端。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComposerAgentOption {
     /// `None` 表示内置 Agent;`Some(id)` 表示外部 ACP Agent。
@@ -231,7 +253,7 @@ pub struct AgentComposerContext {
     pub capabilities: Vec<SharedString>,
     /// 当前计划的 todo 列表,显示在顶部「计划」面板。
     pub plan_items: Vec<ComposerPlanItem>,
-    /// 内置 Agent 与 ACP Agent 切换项,显示在顶部「子代理」面板。
+    /// 内置 Agent 与 ACP Agent 切换项,显示在顶部「Agent」面板。
     pub agent_options: Vec<ComposerAgentOption>,
     /// 当前模型(底部高亮 chip);`None` 时显示「选择模型」。
     pub model: Option<ComposerModel>,
@@ -251,6 +273,26 @@ mod tests {
         assert!(plain.hint.is_none());
         let hinted = ComposerMenuOption::new("b", "Beta").with_hint("快");
         assert_eq!(hinted.hint, Some(SharedString::from("快")));
+    }
+
+    #[test]
+    fn plan_item_details_are_optional() {
+        let plain = ComposerPlanItem::new("检查连接", "pending");
+        assert!(!plain.has_details());
+
+        let detailed = ComposerPlanItem::new("执行测试", "running").with_details(
+            "运行相关验证",
+            "只读",
+            Some(SharedString::from("cargo test")),
+        );
+
+        assert!(detailed.has_details());
+        assert_eq!(detailed.description.as_ref(), "运行相关验证");
+        assert_eq!(detailed.risk.as_ref(), "只读");
+        assert_eq!(
+            detailed.tool.as_ref().map(|s| s.as_ref()),
+            Some("cargo test")
+        );
     }
 
     #[test]

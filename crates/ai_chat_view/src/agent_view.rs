@@ -379,6 +379,9 @@ impl AgentChatView {
         let input = cx.new(|cx| {
             AgentInput::with_mentions(mentions, "描述目标，输入 @ 引用资源…", window, cx)
         });
+        if sidebar_mode {
+            input.update(cx, |input, cx| input.set_edge_to_edge(true, cx));
+        }
 
         let task_kind = default_task_kind();
         let selected_tool = SharedString::from("自动");
@@ -1668,12 +1671,18 @@ impl Render for AgentChatView {
             cx,
         );
         let input_area = div()
+            .debug_selector(|| "agent-input-area".to_string())
             .w_full()
             .flex_shrink_0()
             .border_t_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
-            .child(v_flex().w_full().p_3().gap_2().child(self.input.clone()));
+            .child(
+                v_flex()
+                    .w_full()
+                    .when(!self.sidebar_mode, |this| this.p_3())
+                    .child(self.input.clone()),
+            );
 
         if self.sidebar_mode {
             // 侧边栏视图:紧凑头部(新建对话 / 历史记录) + 消息 + 输入。
@@ -1866,7 +1875,13 @@ fn composer_plan_items(plan: Option<&PlanCardData>) -> Vec<ComposerPlanItem> {
     plan.map(|plan| {
         plan.steps
             .iter()
-            .map(|step| ComposerPlanItem::new(step.title.clone(), step.status.clone()))
+            .map(|step| {
+                ComposerPlanItem::new(step.title.clone(), step.status.clone()).with_details(
+                    step.description.clone(),
+                    step.risk.clone(),
+                    step.tool.clone().map(SharedString::from),
+                )
+            })
             .collect()
     })
     .unwrap_or_default()
@@ -2395,10 +2410,10 @@ mod tests {
             status: "running".to_string(),
             steps: vec![crate::agent_cards::PlanStepData {
                 title: "检查连接".to_string(),
-                description: String::new(),
+                description: "确认服务可达".to_string(),
                 status: "running".to_string(),
-                risk: String::new(),
-                tool: None,
+                risk: "只读".to_string(),
+                tool: Some("ping".to_string()),
             }],
         };
         let acp_id = SharedString::from("codex");
@@ -2431,6 +2446,12 @@ mod tests {
 
         assert_eq!(local.plan_items, acp.plan_items);
         assert_eq!(local.plan_items[0].title.as_ref(), "检查连接");
+        assert_eq!(local.plan_items[0].description.as_ref(), "确认服务可达");
+        assert_eq!(local.plan_items[0].risk.as_ref(), "只读");
+        assert_eq!(
+            local.plan_items[0].tool.as_ref().map(|s| s.as_ref()),
+            Some("ping")
+        );
         assert!(local.agent_options[0].selected);
         assert!(acp.agent_options[1].selected);
     }
@@ -2769,6 +2790,31 @@ mod tests {
         assert_eq!(
             vec!["new", "history", "close"],
             sidebar_mode_header_action_ids()
+        );
+    }
+
+    #[gpui::test]
+    fn sidebar_mode_input_is_edge_to_edge(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .sidebar_mode(true);
+        let (_, cx) = cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        let cx: &mut VisualTestContext = cx;
+
+        let area = cx
+            .debug_bounds("agent-input-area")
+            .expect("input area should render");
+        let input = cx
+            .debug_bounds("agent-input-root")
+            .expect("input root should render");
+
+        assert_eq!(
+            area.size.width, input.size.width,
+            "sidebar input should fill the bottom area: area={area:?}, input={input:?}"
+        );
+        assert_eq!(
+            area.origin.x, input.origin.x,
+            "sidebar input should not be inset: area={area:?}, input={input:?}"
         );
     }
 
