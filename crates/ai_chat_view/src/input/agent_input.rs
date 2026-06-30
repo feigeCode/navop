@@ -26,8 +26,8 @@ use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, 
 
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
-    AgentComposerContext, ComposerAgentOption, ComposerMenuOption, ComposerModelOption,
-    ComposerPlanItem, ComposerScope, ComposerTarget,
+    AgentComposerContext, ComposerMenuOption, ComposerModelOption, ComposerPlanItem, ComposerScope,
+    ComposerSubAgentItem, ComposerTarget,
 };
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
 
@@ -68,7 +68,7 @@ pub enum AgentInputEvent {
 enum ComposerMenuKind {
     Target,
     Plan,
-    Agent,
+    SubAgent,
     Mode,
     Model,
 }
@@ -371,7 +371,7 @@ impl AgentInput {
                 .bg(cx.theme().muted)
                 .child(self.render_plan_mode_tab(cx))
                 .child(self.render_mode_separator(cx))
-                .child(self.render_agent_mode_tab(cx))
+                .child(self.render_subagent_mode_tab(cx))
                 .child(self.render_mode_separator(cx))
                 .child(self.render_context_mode_tab(cx)),
         )
@@ -416,12 +416,13 @@ impl AgentInput {
             })
     }
 
-    fn render_agent_mode_tab(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_subagent_mode_tab(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let view = cx.entity();
-        let is_open = self.open_menu == Some(ComposerMenuKind::Agent);
-        let agents = self.context.agent_options.clone();
+        let is_open = self.open_menu == Some(ComposerMenuKind::SubAgent);
+        let subagents = self.context.subagent_items.clone();
+        let trigger_label = subagent_trigger_label(&subagents);
 
-        Popover::new("agent-backend-popover")
+        Popover::new("agent-subagents-popover")
             .p_0()
             .open(is_open)
             .on_open_change({
@@ -430,22 +431,19 @@ impl AgentInput {
                     let open = *open;
                     view.update(cx, |this, cx| {
                         this.open_menu =
-                            menu_state_after_open_change(open, ComposerMenuKind::Agent);
+                            menu_state_after_open_change(open, ComposerMenuKind::SubAgent);
                         cx.notify();
                     });
                 }
             })
             .trigger(self.render_capability_trigger(
-                "agent-backend-trigger",
-                "Agent",
+                "agent-subagents-trigger",
+                trigger_label,
                 IconName::Bot,
                 cx,
             ))
             .content({
-                let view = view.clone();
-                move |_state, _window, cx| {
-                    render_agent_mode_content(view.clone(), agents.clone(), cx)
-                }
+                move |_state, _window, cx| render_subagent_mode_content(subagents.clone(), cx)
             })
     }
 
@@ -1209,97 +1207,98 @@ fn plan_status_label(status: &str) -> &'static str {
     }
 }
 
-fn render_agent_mode_content(
-    view: Entity<AgentInput>,
-    agents: Vec<ComposerAgentOption>,
+fn render_subagent_mode_content(
+    subagents: Vec<ComposerSubAgentItem>,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
     let muted = cx.theme().muted_foreground;
     let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(300.0));
 
-    col = col.child(context_group_label("Agent", cx));
-    if agents.is_empty() {
-        return col
-            .child(
-                div()
-                    .px_2()
-                    .py_2()
-                    .text_sm()
-                    .text_color(muted)
-                    .child("无可用 Agent"),
-            )
-            .into_any_element();
+    col = col.child(context_group_label("子代理", cx));
+    if subagents.is_empty() {
+        col = col.child(
+            div()
+                .px_2()
+                .py_2()
+                .text_sm()
+                .text_color(muted)
+                .child("暂无子代理"),
+        );
     }
-
-    for agent in agents {
-        col = col.child(agent_option_row(view.clone(), agent, muted, cx));
+    for subagent in subagents {
+        col = col.child(subagent_item_row(subagent, muted, cx));
     }
     col.into_any_element()
 }
 
-fn agent_option_row(
-    view: Entity<AgentInput>,
-    agent: ComposerAgentOption,
+fn subagent_trigger_label(subagents: &[ComposerSubAgentItem]) -> SharedString {
+    if subagents.is_empty() {
+        SharedString::from("子代理")
+    } else {
+        SharedString::from(format!("子代理 · {}", subagents.len()))
+    }
+}
+
+fn subagent_item_row(
+    item: ComposerSubAgentItem,
     muted: gpui::Hsla,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let hover_bg = cx.theme().list_hover;
-    let selected_bg = cx.theme().accent;
-    let icon_fg = if agent.selected {
-        cx.theme().accent_foreground
-    } else {
-        muted
-    };
-    let id = agent.element_id();
-    let target = agent.id.clone();
-    let disabled = agent.connecting;
-
+    let (icon, icon_color) = subagent_item_status_style(item.status.as_ref(), muted, cx);
     h_flex()
-        .id(id)
+        .id(SharedString::from(format!(
+            "agent-running-subagent-{}",
+            item.id
+        )))
         .w_full()
         .items_center()
         .gap_2()
         .px_2()
         .py_1p5()
-        .rounded(cx.theme().radius)
-        .when(agent.selected, |this| this.bg(selected_bg))
-        .when(disabled, |this| this.opacity(0.5))
-        .when(!disabled, |this| {
-            this.cursor_pointer()
-                .hover(move |this| this.bg(hover_bg))
-                .on_click(move |_, _window, cx| {
-                    let target = target.clone();
-                    view.update(cx, |this, cx| {
-                        if this.is_running {
-                            return;
-                        }
-                        this.open_menu = None;
-                        cx.emit(AgentInputEvent::SelectAgentBackend { id: target });
-                        cx.notify();
-                    });
-                })
-        })
-        .child(
-            Icon::new(if agent.id.is_some() {
-                IconName::Bot
-            } else {
-                IconName::AI
-            })
-            .small()
-            .text_color(icon_fg),
-        )
+        .child(Icon::new(icon).xsmall().text_color(icon_color))
         .child(
             v_flex()
                 .flex_1()
                 .min_w_0()
                 .gap(px(1.0))
-                .child(div().text_sm().truncate().child(agent.label))
-                .child(div().text_xs().text_color(muted).child(agent.subtitle)),
+                .child(div().text_sm().truncate().child(item.name))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .truncate()
+                        .child(format!("用途: {}", item.task)),
+                )
+                .when(!item.summary.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .truncate()
+                            .child(format!("进展: {}", item.summary)),
+                    )
+                }),
         )
-        .when(agent.selected, |this| {
-            this.child(Icon::new(IconName::Check).xsmall().text_color(icon_fg))
-        })
+        .child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child(plan_status_label(item.status.as_ref())),
+        )
         .into_any_element()
+}
+
+fn subagent_item_status_style(
+    status: &str,
+    muted: gpui::Hsla,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> (IconName, gpui::Hsla) {
+    match status {
+        "completed" => (IconName::CircleCheck, cx.theme().success),
+        "failed" => (IconName::CircleX, cx.theme().danger),
+        "running" | "in_progress" => (IconName::LoaderCircle, cx.theme().warning),
+        _ => (IconName::Bot, muted),
+    }
 }
 
 fn render_context_mode_content(
@@ -1626,7 +1625,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn plan_trigger_stays_and_tool_mode_merges_into_task_menu(cx: &mut TestAppContext) {
+    fn plan_and_subagent_triggers_stay_and_tool_mode_merges_into_task_menu(
+        cx: &mut TestAppContext,
+    ) {
         cx.update(|cx| {
             gpui_component::init(cx);
             crate::init(cx);
@@ -1639,8 +1640,8 @@ mod tests {
             "plan should stay as a top capability trigger"
         );
         assert!(
-            cx.debug_bounds("agent-backend-trigger").is_some(),
-            "agent backend should be a top capability trigger for local/ACP agents"
+            cx.debug_bounds("agent-subagents-trigger").is_some(),
+            "subagents should be a top capability trigger"
         );
         assert!(
             cx.debug_bounds("agent-task-mode").is_some(),
@@ -1706,14 +1707,28 @@ mod tests {
     }
 
     #[test]
+    fn subagent_trigger_label_shows_running_subagent_count() {
+        assert_eq!(subagent_trigger_label(&[]).as_ref(), "子代理");
+
+        let items = vec![ComposerSubAgentItem::new(
+            "sub_1",
+            "reviewer",
+            "检查事件流",
+            "running",
+        )];
+
+        assert_eq!(subagent_trigger_label(&items).as_ref(), "子代理 · 1");
+    }
+
+    #[test]
     fn top_capability_menus_can_open_while_agent_is_running() {
         assert_eq!(
             Some(ComposerMenuKind::Plan),
             menu_state_after_open_change(true, ComposerMenuKind::Plan)
         );
         assert_eq!(
-            Some(ComposerMenuKind::Agent),
-            menu_state_after_open_change(true, ComposerMenuKind::Agent)
+            Some(ComposerMenuKind::SubAgent),
+            menu_state_after_open_change(true, ComposerMenuKind::SubAgent)
         );
         assert_eq!(
             None,

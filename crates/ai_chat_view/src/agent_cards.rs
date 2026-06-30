@@ -833,7 +833,7 @@ fn subagent_details(data: &SubAgentCardData, cx: &App) -> AnyElement {
                     .child(
                         TextView::markdown(
                             SharedString::from(format!("agent-subagent-task-{}", data.subagent_id)),
-                            data.task.clone(),
+                            format!("**用途**\n\n{}", data.task),
                         )
                         .selectable(true),
                     ),

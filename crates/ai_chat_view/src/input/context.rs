@@ -195,6 +195,38 @@ impl ComposerPlanItem {
     }
 }
 
+/// 顶部「子代理」面板中的最近子代理。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerSubAgentItem {
+    pub id: SharedString,
+    pub name: SharedString,
+    pub task: SharedString,
+    pub summary: SharedString,
+    pub status: SharedString,
+}
+
+impl ComposerSubAgentItem {
+    pub fn new(
+        id: impl Into<SharedString>,
+        name: impl Into<SharedString>,
+        task: impl Into<SharedString>,
+        status: impl Into<SharedString>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            task: task.into(),
+            summary: SharedString::default(),
+            status: status.into(),
+        }
+    }
+
+    pub fn with_summary(mut self, summary: impl Into<SharedString>) -> Self {
+        self.summary = summary.into();
+        self
+    }
+}
+
 /// 顶部「Agent」面板中的可选执行后端。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComposerAgentOption {
@@ -253,6 +285,8 @@ pub struct AgentComposerContext {
     pub capabilities: Vec<SharedString>,
     /// 当前计划的 todo 列表,显示在顶部「计划」面板。
     pub plan_items: Vec<ComposerPlanItem>,
+    /// 当前会话最近的子代理列表,显示在顶部「子代理」面板。
+    pub subagent_items: Vec<ComposerSubAgentItem>,
     /// 内置 Agent 与 ACP Agent 切换项,显示在顶部「Agent」面板。
     pub agent_options: Vec<ComposerAgentOption>,
     /// 当前模型(底部高亮 chip);`None` 时显示「选择模型」。

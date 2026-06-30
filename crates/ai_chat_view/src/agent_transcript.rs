@@ -30,6 +30,8 @@ pub struct AgentTranscript {
     active_status_id: Option<String>,
     /// 本轮最新计划(渲染到输入框上方的 Tasks 面板,不进消息流)。
     latest_plan: Option<PlanCardData>,
+    /// 当前会话最近的子代理(渲染到输入框上方的子代理面板,不进消息流)。
+    active_subagents: Vec<SubAgentCardData>,
 }
 
 impl AgentTranscript {
@@ -43,11 +45,17 @@ impl AgentTranscript {
         self.streaming_id = None;
         self.active_status_id = None;
         self.latest_plan = None;
+        self.active_subagents.clear();
     }
 
     /// 当前轮的最新计划(供输入框上方的 Tasks 面板渲染;不进消息流)。
     pub fn latest_plan(&self) -> Option<&PlanCardData> {
         self.latest_plan.as_ref()
+    }
+
+    /// 当前会话最近的子代理(供输入框上方的子代理面板渲染;不进消息流)。
+    pub fn active_subagents(&self) -> &[SubAgentCardData] {
+        &self.active_subagents
     }
 
     /// 用持久化的历史条目重建转录(切换 / 恢复会话时调用)。
@@ -452,6 +460,7 @@ impl AgentTranscript {
             success: None,
             summary: String::new(),
         };
+        self.upsert_active_subagent(data.clone());
         self.messages
             .push(ChatMessageUI::card(SUBAGENT_CARD, data.to_json()));
     }
@@ -459,6 +468,7 @@ impl AgentTranscript {
     fn update_subagent(&mut self, subagent_id: &str, summary: &str) {
         if let Some(mut data) = self.find_subagent_card(subagent_id) {
             data.summary = summary.to_string();
+            self.upsert_active_subagent(data.clone());
             self.replace_subagent_card(subagent_id, data);
         }
     }
@@ -470,7 +480,20 @@ impl AgentTranscript {
             if !summary.is_empty() {
                 data.summary = summary.to_string();
             }
+            self.upsert_active_subagent(data.clone());
             self.replace_subagent_card(subagent_id, data);
+        }
+    }
+
+    fn upsert_active_subagent(&mut self, data: SubAgentCardData) {
+        if let Some(existing) = self
+            .active_subagents
+            .iter_mut()
+            .find(|item| item.subagent_id == data.subagent_id)
+        {
+            *existing = data;
+        } else {
+            self.active_subagents.push(data);
         }
     }
 
@@ -951,6 +974,9 @@ mod tests {
             subagent_id: subagent_id.clone(),
             summary: "正在读取事件流".into(),
         });
+        assert_eq!(tr.active_subagents().len(), 1);
+        assert_eq!(tr.active_subagents()[0].summary, "正在读取事件流");
+
         tr.apply(&RuntimeEvent::SubAgentFinished {
             session_id: sid(),
             turn_id: tid(),
@@ -958,6 +984,9 @@ mod tests {
             success: true,
             summary: "发现 reasoning 未转发".into(),
         });
+        assert_eq!(tr.active_subagents().len(), 1);
+        assert!(!tr.active_subagents()[0].running);
+        assert_eq!(tr.active_subagents()[0].success, Some(true));
 
         assert_eq!(tr.messages.len(), 1);
         assert_eq!(tr.messages[0].variant.card_kind(), Some(SUBAGENT_CARD));

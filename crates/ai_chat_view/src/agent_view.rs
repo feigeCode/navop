@@ -38,13 +38,14 @@ use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConf
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::acp::{AcpAgentConfig, AcpConnection, AcpSessionState};
-use crate::agent_cards::{ApproveToolCall, PlanCardData, RejectToolCall};
+use crate::agent_cards::{ApproveToolCall, PlanCardData, RejectToolCall, SubAgentCardData};
 use crate::agent_transcript::AgentTranscript;
 use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::input::{
     AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
-    ComposerModelOption, ComposerPlanItem, ComposerScope, ComposerTarget, MentionItem,
+    ComposerModelOption, ComposerPlanItem, ComposerScope, ComposerSubAgentItem, ComposerTarget,
+    MentionItem,
 };
 use crate::message_view::render_messages_with_code_actions;
 use crate::persistence;
@@ -394,6 +395,7 @@ impl AgentChatView {
             &selected_tool,
             selected_model.as_ref(),
             None,
+            &[],
             Backend::Local,
             &acp_agents,
             None,
@@ -737,6 +739,7 @@ impl AgentChatView {
             &self.selected_tool,
             self.selected_model.as_ref(),
             self.transcript.latest_plan(),
+            self.transcript.active_subagents(),
             self.backend,
             &self.acp_agents,
             self.current_acp_id.as_ref(),
@@ -1729,6 +1732,7 @@ fn build_composer_context(
     tool_label: &SharedString,
     model: Option<&ComposerModelOption>,
     plan: Option<&PlanCardData>,
+    subagents: &[SubAgentCardData],
     backend: Backend,
     acp_agents: &[AcpAgentConfig],
     current_acp_id: Option<&SharedString>,
@@ -1737,6 +1741,7 @@ fn build_composer_context(
 ) -> AgentComposerContext {
     let mut context = build_context(resources, task_kind, tool_label, model);
     context.plan_items = composer_plan_items(plan);
+    context.subagent_items = composer_subagent_items(subagents);
     context.agent_options =
         composer_agent_options(backend, acp_agents, current_acp_id, acp_connecting);
     if backend == Backend::Acp {
@@ -1864,6 +1869,7 @@ fn build_context(
         scopes,
         capabilities,
         plan_items: Vec::new(),
+        subagent_items: Vec::new(),
         agent_options: Vec::new(),
         model: model.map(ComposerModelOption::to_composer_model),
         tool_label: tool_label.clone(),
@@ -1885,6 +1891,31 @@ fn composer_plan_items(plan: Option<&PlanCardData>) -> Vec<ComposerPlanItem> {
             .collect()
     })
     .unwrap_or_default()
+}
+
+fn composer_subagent_items(subagents: &[SubAgentCardData]) -> Vec<ComposerSubAgentItem> {
+    subagents
+        .iter()
+        .map(|subagent| {
+            ComposerSubAgentItem::new(
+                subagent.subagent_id.clone(),
+                subagent.name.clone(),
+                subagent.task.clone(),
+                subagent_status_for_composer(subagent),
+            )
+            .with_summary(subagent.summary.clone())
+        })
+        .collect()
+}
+
+fn subagent_status_for_composer(subagent: &SubAgentCardData) -> &'static str {
+    if subagent.running {
+        "running"
+    } else if subagent.success == Some(false) {
+        "failed"
+    } else {
+        "completed"
+    }
 }
 
 fn composer_agent_options(
@@ -2425,6 +2456,7 @@ mod tests {
             &SharedString::from("自动"),
             None,
             Some(&plan),
+            &[],
             Backend::Local,
             &acp_agents,
             None,
@@ -2437,6 +2469,7 @@ mod tests {
             &SharedString::from("自动"),
             None,
             Some(&plan),
+            &[],
             Backend::Acp,
             &acp_agents,
             Some(&acp_id),
@@ -2464,6 +2497,7 @@ mod tests {
             &SharedString::from("自动"),
             None,
             None,
+            &[],
             Backend::Local,
             &[],
             None,
@@ -2472,6 +2506,50 @@ mod tests {
         );
 
         assert_eq!(ctx.agent_options[0].label.as_ref(), "One Agent");
+    }
+
+    #[test]
+    fn composer_context_includes_running_subagents() {
+        let subagents = vec![
+            SubAgentCardData {
+                subagent_id: "sub_1".into(),
+                name: "reviewer".into(),
+                task: "检查事件流".into(),
+                running: true,
+                success: None,
+                summary: "正在读取事件".into(),
+            },
+            SubAgentCardData {
+                subagent_id: "sub_2".into(),
+                name: "done".into(),
+                task: "已完成任务".into(),
+                running: false,
+                success: Some(true),
+                summary: "完成".into(),
+            },
+        ];
+
+        let ctx = build_composer_context(
+            &ResourceContext::new(),
+            TaskKind::Agent,
+            &SharedString::from("自动"),
+            None,
+            None,
+            &subagents,
+            Backend::Local,
+            &[],
+            None,
+            false,
+            None,
+        );
+
+        assert_eq!(ctx.subagent_items.len(), 2);
+        assert_eq!(ctx.subagent_items[0].name.as_ref(), "reviewer");
+        assert_eq!(ctx.subagent_items[0].task.as_ref(), "检查事件流");
+        assert_eq!(ctx.subagent_items[0].summary.as_ref(), "正在读取事件");
+        assert_eq!(ctx.subagent_items[0].status.as_ref(), "running");
+        assert_eq!(ctx.subagent_items[1].name.as_ref(), "done");
+        assert_eq!(ctx.subagent_items[1].status.as_ref(), "completed");
     }
 
     #[test]
@@ -2534,6 +2612,7 @@ mod tests {
             &SharedString::from("自动"),
             None,
             None,
+            &[],
             Backend::Acp,
             &[],
             None,

@@ -9,6 +9,6 @@ pub use agent_input::{AgentInput, AgentInputEvent};
 pub use attachment::ImageAttachment;
 pub use context::{
     AgentComposerContext, ComposerAgentOption, ComposerMenuOption, ComposerModel,
-    ComposerModelOption, ComposerPlanItem, ComposerScope, ComposerTarget,
+    ComposerModelOption, ComposerPlanItem, ComposerScope, ComposerSubAgentItem, ComposerTarget,
 };
 pub use mention::{MentionCompletionProvider, MentionItem};

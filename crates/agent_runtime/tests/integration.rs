@@ -199,10 +199,6 @@ impl ModelClient for MultiToolReasoningFollowupModel {
     }
 }
 
-struct CompletedOnlySubagentToolCallModel {
-    count: AtomicUsize,
-}
-
 struct PendingStreamModel {
     called: Arc<Notify>,
 }
@@ -220,47 +216,6 @@ impl ModelClient for PendingStreamModel {
 
     fn model_name(&self) -> &str {
         "pending-stream"
-    }
-}
-
-impl CompletedOnlySubagentToolCallModel {
-    fn new() -> Self {
-        Self {
-            count: AtomicUsize::new(0),
-        }
-    }
-}
-
-#[async_trait]
-impl ModelClient for CompletedOnlySubagentToolCallModel {
-    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, RuntimeError> {
-        Ok(ModelResponse::text("unused"))
-    }
-
-    async fn complete_stream(&self, _request: ModelRequest) -> Result<ModelStream, RuntimeError> {
-        let response = match self.count.fetch_add(1, Ordering::SeqCst) {
-            0 => ModelResponse::tool_call(function_tool_call(
-                "c_sub",
-                "delegate_task",
-                json!({
-                    "name": "reviewer",
-                    "task": "检查 agent runtime 的事件流"
-                })
-                .to_string(),
-            )),
-            1 => ModelResponse::tool_call(function_tool_call("nested", "echo", "{}")),
-            _ => ModelResponse::text("已看到子代理失败。"),
-        };
-        if self.count.load(Ordering::SeqCst) == 2 {
-            return Ok(Box::pin(futures::stream::iter([Ok(
-                ModelStreamEvent::Completed(response),
-            )])));
-        }
-        Ok(agent_runtime::model::model_response_into_stream(response))
-    }
-
-    fn model_name(&self) -> &str {
-        "completed-only-subagent-tool-call"
     }
 }
 
@@ -551,10 +506,20 @@ async fn agent_delegate_task_runs_isolated_subagent_and_emits_events() {
 }
 
 #[tokio::test]
-async fn agent_delegate_task_rejects_subagent_tool_calls() {
-    let model = Arc::new(CompletedOnlySubagentToolCallModel::new());
+async fn agent_delegate_task_requires_subagent_name() {
+    let model = Arc::new(MockModelClient::new([
+        ModelResponse::tool_call(function_tool_call(
+            "c_sub",
+            "delegate_task",
+            json!({
+                "task": "检查 agent runtime 的事件流"
+            })
+            .to_string(),
+        )),
+        ModelResponse::text("已要求补充子代理名称。"),
+    ]));
     let runtime = Runtime::new(RuntimeServices::new(
-        model,
+        model.clone(),
         Arc::new(ToolRouter::new(ToolRegistry::new())),
     ));
     let session = runtime.create_session(ResourceContext::new());
@@ -566,12 +531,77 @@ async fn agent_delegate_task_rejects_subagent_tool_calls() {
         .expect("run agent turn");
 
     assert!(matches!(outcome, TaskOutcome::Completed { .. }));
+    assert_eq!(2, model.request_count());
+    let events = drain_events(&mut rx);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::SubAgentStarted { .. }))
+    );
+    assert!(session.history_snapshot().items().iter().any(|item| {
+        matches!(
+            item,
+            agent_runtime::HistoryItem::Observation(observation)
+                if observation.tool_name.as_str() == "delegate_task"
+                    && !observation.success
+                    && observation.summary.contains("name")
+        )
+    }));
+}
+
+#[tokio::test]
+async fn agent_delegate_task_allows_read_only_subagent_tools() {
+    let model = Arc::new(MockModelClient::new([
+        ModelResponse::tool_call(function_tool_call(
+            "c_sub",
+            "delegate_task",
+            json!({
+                "name": "researcher",
+                "task": "查询连接状态"
+            })
+            .to_string(),
+        )),
+        ModelResponse::tool_call(function_tool_call(
+            "sub_echo",
+            "echo",
+            json!({"message": "连接数正常"}).to_string(),
+        )),
+        ModelResponse::text("子代理结论: echo 返回连接数正常。"),
+        ModelResponse::text("主代理收到子代理结论。"),
+    ]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new()
+                .with_tool(Arc::new(EchoTool))
+                .with_tool(Arc::new(WriteTool)),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking(session.id(), "排查 agent runtime".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    assert!(matches!(outcome, TaskOutcome::Completed { .. }));
+    assert_eq!(4, model.request_count());
+    let requests = model.received_requests();
+    let subagent_request = &requests[1];
+    let subagent_tool_names: Vec<&str> = subagent_request
+        .tools
+        .iter()
+        .map(|tool| tool.function.name.as_str())
+        .collect();
+    assert_eq!(subagent_tool_names, vec!["echo"]);
+
     let events = drain_events(&mut rx);
     assert!(events.iter().any(|event| {
         matches!(
             event,
-            RuntimeEvent::SubAgentFinished { success: false, summary, .. }
-                if summary.contains("子代理不支持工具调用")
+            RuntimeEvent::SubAgentFinished { success: true, summary, .. }
+                if summary.contains("连接数正常")
         )
     }));
     assert!(session.history_snapshot().items().iter().any(|item| {
@@ -579,7 +609,8 @@ async fn agent_delegate_task_rejects_subagent_tool_calls() {
             item,
             agent_runtime::HistoryItem::Observation(observation)
                 if observation.tool_name.as_str() == "delegate_task"
-                    && !observation.success
+                    && observation.success
+                    && observation.data.to_text().contains("连接数正常")
         )
     }));
 }

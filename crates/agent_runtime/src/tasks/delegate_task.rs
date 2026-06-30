@@ -4,11 +4,9 @@
 //! 把一个清晰子任务交给隔离的子代理采样执行,结果再作为 observation 回到主会话。
 
 use crate::ids::{SubAgentId, TurnId};
-use crate::model::{ModelRequest, ModelResponse, ModelStreamEvent};
 use crate::runtime::{RuntimeServices, Session};
+use crate::tasks::subagent_task::run_subagent_model;
 use crate::tools::{ObservationData, ToolCall, ToolName, ToolObservation, ToolSpec};
-use futures::StreamExt;
-use llm_connector::types::Message;
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -17,28 +15,27 @@ pub const DELEGATE_TASK_TOOL: &str = "delegate_task";
 
 #[derive(Deserialize)]
 struct DelegateTaskArgs {
-    #[serde(default)]
-    name: Option<String>,
+    name: String,
     task: String,
 }
 
 pub fn delegate_task_spec() -> ToolSpec {
     ToolSpec::new(
         DELEGATE_TASK_TOOL,
-        "将一个边界清晰的子任务派发给隔离子代理执行。子代理不能调用工具,只返回结论摘要。",
+        "将一个边界清晰的子任务派发给隔离子代理执行。子代理只能调用只读业务工具,不能继续委派或更新计划,最终返回结论摘要。",
         json!({
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "子代理显示名称,例如 reviewer、researcher、planner"
+                    "description": "根据子任务用途分配的子代理名称,例如 reviewer、researcher、planner"
                 },
                 "task": {
                     "type": "string",
-                    "description": "子代理需要完成的明确任务"
+                    "description": "说明这个子代理被用来做什么,并给出需要完成的明确任务"
                 }
             },
-            "required": ["task"],
+            "required": ["name", "task"],
             "additionalProperties": false
         }),
     )
@@ -55,7 +52,7 @@ pub async fn handle_delegate_task(
         Ok(args) => args,
         Err(observation) => return observation,
     };
-    let name = args.name.unwrap_or_else(|| "worker".to_string());
+    let name = args.name;
     let subagent_id = SubAgentId::from_string(call.call_id.as_str().to_string());
     session.start_subagent(
         turn_id,
@@ -64,7 +61,17 @@ pub async fn handle_delegate_task(
         args.task.clone(),
     );
 
-    match run_subagent_model(services, &name, &args.task, cancellation).await {
+    match run_subagent_model(
+        session,
+        services,
+        turn_id,
+        &subagent_id,
+        &name,
+        &args.task,
+        cancellation,
+    )
+    .await
+    {
         Ok(summary) => finish_success(session, turn_id, call, subagent_id, &name, summary),
         Err(message) => finish_failure(session, turn_id, call, subagent_id, message),
     }
@@ -86,62 +93,14 @@ fn parse_args(call: &ToolCall) -> Result<DelegateTaskArgs, ToolObservation> {
             "delegate_task.task 不能为空",
         ));
     }
-    Ok(args)
-}
-
-async fn run_subagent_model(
-    services: &RuntimeServices,
-    name: &str,
-    task: &str,
-    cancellation: &CancellationToken,
-) -> Result<String, String> {
-    let request = ModelRequest::new(vec![
-        Message::system(subagent_system_prompt(name)),
-        Message::user(task.to_string()),
-    ]);
-    let mut stream = tokio::select! {
-        biased;
-        _ = cancellation.cancelled() => return Err("子代理任务已取消".to_string()),
-        result = services.model.complete_stream(request) => {
-            result.map_err(|err| format!("子代理模型调用失败:{err}"))?
-        }
-    };
-    collect_subagent_stream(&mut stream, cancellation).await
-}
-
-async fn collect_subagent_stream(
-    stream: &mut crate::model::ModelStream,
-    cancellation: &CancellationToken,
-) -> Result<String, String> {
-    let mut text = String::new();
-    let mut completed: Option<ModelResponse> = None;
-    while let Some(event) = stream.next().await {
-        if cancellation.is_cancelled() {
-            return Err("子代理任务已取消".to_string());
-        }
-        match event.map_err(|err| format!("子代理流式输出失败:{err}"))? {
-            ModelStreamEvent::TextDelta(delta) => text.push_str(&delta),
-            ModelStreamEvent::ReasoningDelta(_) => {}
-            ModelStreamEvent::ToolCall(call) => {
-                return Err(subagent_tool_call_error(&call.function.name));
-            }
-            ModelStreamEvent::Completed(response) => {
-                if let Some(call) = response.tool_calls.first() {
-                    return Err(subagent_tool_call_error(&call.function.name));
-                }
-                completed = Some(response);
-            }
-        }
+    if args.name.trim().is_empty() {
+        return Err(ToolObservation::failure(
+            call.call_id.clone(),
+            call.tool_name.clone(),
+            "delegate_task.name 不能为空",
+        ));
     }
-    let fallback = completed
-        .and_then(|response| response.text)
-        .unwrap_or_default();
-    let summary = if text.is_empty() { fallback } else { text };
-    Ok(summary.trim().to_string())
-}
-
-fn subagent_tool_call_error(tool_name: &str) -> String {
-    format!("子代理不支持工具调用: {tool_name}")
+    Ok(args)
 }
 
 fn finish_success(
@@ -178,13 +137,5 @@ fn finish_failure(
         call.call_id.clone(),
         ToolName::new(DELEGATE_TASK_TOOL),
         message,
-    )
-}
-
-fn subagent_system_prompt(name: &str) -> String {
-    format!(
-        "你是 onetcli agent runtime 派发的隔离子代理 `{name}`。\
-只完成用户给你的子任务,不要调用工具,不要修改外部状态。\
-输出简体中文结论摘要,包含关键发现、证据和下一步建议。"
     )
 }

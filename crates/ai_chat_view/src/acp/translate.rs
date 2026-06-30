@@ -9,17 +9,14 @@ use agent_client_protocol::schema::{
 };
 use agent_runtime::tools::{ObservationData, ToolName};
 use agent_runtime::{
-    Plan, PlanSource, PlanStatus, PlanStep, RuntimeEvent, SessionId, StepStatus, SubAgentId,
-    ToolCallId, ToolObservation, TurnId,
+    Plan, PlanSource, PlanStatus, PlanStep, RuntimeEvent, SessionId, StepStatus, ToolCallId,
+    ToolObservation, TurnId,
 };
-use std::collections::HashMap;
 
 const MAX_DELTA_CHARS: usize = 8;
 
 #[derive(Default)]
-pub(crate) struct AcpEventTranslator {
-    subagents: HashMap<String, SubAgentEventData>,
-}
+pub(crate) struct AcpEventTranslator;
 
 impl AcpEventTranslator {
     pub(crate) fn session_update_to_events(
@@ -28,50 +25,7 @@ impl AcpEventTranslator {
         session_id: &SessionId,
         turn_id: &TurnId,
     ) -> Vec<RuntimeEvent> {
-        match update {
-            SessionUpdate::ToolCall(call) => self.tool_call_events(call, session_id, turn_id),
-            SessionUpdate::ToolCallUpdate(update) => {
-                self.tool_call_update_events(update, session_id, turn_id)
-            }
-            _ => session_update_to_events(update, session_id, turn_id),
-        }
-    }
-
-    fn tool_call_events(
-        &mut self,
-        call: &AcpToolCall,
-        sid: &SessionId,
-        tid: &TurnId,
-    ) -> Vec<RuntimeEvent> {
-        let Some(data) = subagent_from_tool_call(call) else {
-            return tool_call_events(call, sid, tid);
-        };
-        let key = call.tool_call_id.0.to_string();
-        if terminal_success(call.status).is_some() {
-            self.subagents.remove(&key);
-        } else {
-            self.subagents.insert(key, data.clone());
-        }
-        subagent_call_events(call, data, sid, tid)
-    }
-
-    fn tool_call_update_events(
-        &mut self,
-        update: &ToolCallUpdate,
-        sid: &SessionId,
-        tid: &TurnId,
-    ) -> Vec<RuntimeEvent> {
-        let key = update.tool_call_id.0.to_string();
-        let data = subagent_from_tool_update(update).or_else(|| self.subagents.get(&key).cloned());
-        let Some(data) = data else {
-            return tool_call_update_events(update, sid, tid);
-        };
-        if update.fields.status.and_then(terminal_success).is_some() {
-            self.subagents.remove(&key);
-        } else {
-            self.subagents.insert(key, data.clone());
-        }
-        subagent_update_events(update, data, sid, tid)
+        session_update_to_events(update, session_id, turn_id)
     }
 }
 
@@ -236,9 +190,6 @@ fn acp_update_kind(update: &SessionUpdate) -> &'static str {
 }
 
 fn tool_call_events(call: &AcpToolCall, sid: &SessionId, tid: &TurnId) -> Vec<RuntimeEvent> {
-    if let Some(subagent) = subagent_from_tool_call(call) {
-        return subagent_call_events(call, subagent, sid, tid);
-    }
     let call_id = ToolCallId::from_string(call.tool_call_id.0.to_string());
     let tool_name = ToolName::new(call.title.clone());
     let mut events = vec![RuntimeEvent::ToolCallStarted {
@@ -270,9 +221,6 @@ fn tool_call_events(call: &AcpToolCall, sid: &SessionId, tid: &TurnId) -> Vec<Ru
 }
 
 fn tool_call_update_events(u: &ToolCallUpdate, sid: &SessionId, tid: &TurnId) -> Vec<RuntimeEvent> {
-    if let Some(subagent) = subagent_from_tool_update(u) {
-        return subagent_update_events(u, subagent, sid, tid);
-    }
     let Some(status) = u.fields.status else {
         return Vec::new();
     };
@@ -301,127 +249,6 @@ fn tool_call_update_events(u: &ToolCallUpdate, sid: &SessionId, tid: &TurnId) ->
             success,
         },
     ]
-}
-
-#[derive(Clone)]
-struct SubAgentEventData {
-    id: SubAgentId,
-    name: String,
-    task: String,
-}
-
-fn subagent_call_events(
-    call: &AcpToolCall,
-    data: SubAgentEventData,
-    sid: &SessionId,
-    tid: &TurnId,
-) -> Vec<RuntimeEvent> {
-    let mut events = vec![RuntimeEvent::SubAgentStarted {
-        session_id: sid.clone(),
-        turn_id: tid.clone(),
-        subagent_id: data.id.clone(),
-        name: data.name,
-        task: data.task,
-    }];
-    if let Some(success) = terminal_success(call.status) {
-        events.push(RuntimeEvent::SubAgentFinished {
-            session_id: sid.clone(),
-            turn_id: tid.clone(),
-            subagent_id: data.id,
-            success,
-            summary: tool_text(
-                call.raw_output.as_ref(),
-                serde_json::to_string(&call.content).ok(),
-            ),
-        });
-    }
-    events
-}
-
-fn subagent_update_events(
-    update: &ToolCallUpdate,
-    data: SubAgentEventData,
-    sid: &SessionId,
-    tid: &TurnId,
-) -> Vec<RuntimeEvent> {
-    let summary = tool_text(
-        update.fields.raw_output.as_ref(),
-        update
-            .fields
-            .content
-            .as_ref()
-            .and_then(|content| serde_json::to_string(content).ok()),
-    );
-    match update.fields.status.and_then(terminal_success) {
-        Some(success) => vec![RuntimeEvent::SubAgentFinished {
-            session_id: sid.clone(),
-            turn_id: tid.clone(),
-            subagent_id: data.id,
-            success,
-            summary,
-        }],
-        None if !summary.is_empty() => vec![RuntimeEvent::SubAgentUpdated {
-            session_id: sid.clone(),
-            turn_id: tid.clone(),
-            subagent_id: data.id,
-            summary,
-        }],
-        None => Vec::new(),
-    }
-}
-
-fn subagent_from_tool_call(call: &AcpToolCall) -> Option<SubAgentEventData> {
-    let (name, title_task) = parse_subagent_title(&call.title)?;
-    let raw_input = call.raw_input.as_ref();
-    Some(SubAgentEventData {
-        id: SubAgentId::from_string(call.tool_call_id.0.to_string()),
-        name: name_from_raw_input(raw_input).unwrap_or(name),
-        task: task_from_raw_input(raw_input).unwrap_or(title_task),
-    })
-}
-
-fn subagent_from_tool_update(update: &ToolCallUpdate) -> Option<SubAgentEventData> {
-    let title = update.fields.title.as_ref()?;
-    let (name, title_task) = parse_subagent_title(title)?;
-    let raw_input = update.fields.raw_input.as_ref();
-    Some(SubAgentEventData {
-        id: SubAgentId::from_string(update.tool_call_id.0.to_string()),
-        name: name_from_raw_input(raw_input).unwrap_or(name),
-        task: task_from_raw_input(raw_input).unwrap_or(title_task),
-    })
-}
-
-fn parse_subagent_title(title: &str) -> Option<(String, String)> {
-    let trimmed = title.trim();
-    for prefix in ["Task:", "Subagent:", "Sub-agent:", "子代理:"] {
-        if let Some(task) = trimmed.strip_prefix(prefix) {
-            return Some((
-                prefix.trim_end_matches(':').to_string(),
-                task.trim().to_string(),
-            ));
-        }
-    }
-    if trimmed.eq_ignore_ascii_case("task") || trimmed.eq_ignore_ascii_case("subagent") {
-        return Some((trimmed.to_string(), String::new()));
-    }
-    None
-}
-
-fn task_from_raw_input(input: Option<&serde_json::Value>) -> Option<String> {
-    string_field_from_raw_input(input, &["description", "task", "prompt"])
-}
-
-fn name_from_raw_input(input: Option<&serde_json::Value>) -> Option<String> {
-    string_field_from_raw_input(input, &["subagent_type", "subagent", "agent", "name"])
-}
-
-fn string_field_from_raw_input(input: Option<&serde_json::Value>, keys: &[&str]) -> Option<String> {
-    let object = input?.as_object()?;
-    keys.iter()
-        .filter_map(|key| object.get(*key)?.as_str())
-        .map(str::trim)
-        .find(|value| !value.is_empty())
-        .map(ToString::to_string)
 }
 
 fn build_observation(
@@ -658,42 +485,47 @@ mod tests {
     }
 
     #[test]
-    fn subagent_tool_call_emits_subagent_started() {
+    fn task_titled_tool_call_stays_tool_call() {
         let (sid, tid) = ids();
-        let update = SessionUpdate::ToolCall(AcpToolCall::new("sub_1", "Task: review runtime"));
-
-        let events = session_update_to_events(&update, &sid, &tid);
-
-        assert_eq!(events.len(), 1);
-        assert!(matches!(
-            &events[0],
-            RuntimeEvent::SubAgentStarted { name, task, .. }
-                if name == "Task" && task == "review runtime"
-        ));
-    }
-
-    #[test]
-    fn subagent_tool_call_uses_raw_input_name_and_task() {
-        let (sid, tid) = ids();
-        let update = SessionUpdate::ToolCall(AcpToolCall::new("sub_1", "Task").raw_input(
-            serde_json::json!({
+        let update = SessionUpdate::ToolCall(
+            AcpToolCall::new("sub_1", "Task: review runtime").raw_input(serde_json::json!({
                 "subagent_type": "reviewer",
                 "description": "检查 agent runtime 的事件流"
-            }),
-        ));
+            })),
+        );
 
         let events = session_update_to_events(&update, &sid, &tid);
 
         assert_eq!(events.len(), 1);
         assert!(matches!(
             &events[0],
-            RuntimeEvent::SubAgentStarted { name, task, .. }
-                if name == "reviewer" && task == "检查 agent runtime 的事件流"
+            RuntimeEvent::ToolCallStarted { tool_name, arguments, .. }
+                if tool_name.as_str() == "Task_review_runtime"
+                    && arguments["description"] == "检查 agent runtime 的事件流"
         ));
     }
 
     #[test]
-    fn tracked_subagent_update_without_title_emits_finished() {
+    fn task_titled_tool_update_stays_tool_finished() {
+        let (sid, tid) = ids();
+        let mut fields = ToolCallUpdateFields::default();
+        fields.status = Some(ToolCallStatus::Completed);
+        fields.title = Some("Subagent: review runtime".to_string());
+        fields.raw_output = Some(serde_json::json!("review complete"));
+        let update = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("sub_1", fields));
+
+        let events = session_update_to_events(&update, &sid, &tid);
+
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], RuntimeEvent::ObservationAdded { .. }));
+        assert!(matches!(
+            events[1],
+            RuntimeEvent::ToolCallFinished { success: true, .. }
+        ));
+    }
+
+    #[test]
+    fn translator_does_not_track_task_tool_calls_as_subagents() {
         let (sid, tid) = ids();
         let mut translator = AcpEventTranslator::default();
         let start = SessionUpdate::ToolCall(AcpToolCall::new("sub_1", "Task: review runtime"));
@@ -703,8 +535,8 @@ mod tests {
         assert_eq!(started.len(), 1);
         assert!(matches!(
             &started[0],
-            RuntimeEvent::SubAgentStarted { name, task, .. }
-                if name == "Task" && task == "review runtime"
+            RuntimeEvent::ToolCallStarted { tool_name, .. }
+                if tool_name.as_str() == "Task_review_runtime"
         ));
 
         let mut fields = ToolCallUpdateFields::default();
@@ -714,11 +546,11 @@ mod tests {
 
         let finished = translator.session_update_to_events(&update, &sid, &tid);
 
-        assert_eq!(finished.len(), 1);
+        assert_eq!(finished.len(), 2);
+        assert!(matches!(finished[0], RuntimeEvent::ObservationAdded { .. }));
         assert!(matches!(
-            &finished[0],
-            RuntimeEvent::SubAgentFinished { success: true, summary, .. }
-                if summary.contains("review complete")
+            finished[1],
+            RuntimeEvent::ToolCallFinished { success: true, .. }
         ));
     }
 
