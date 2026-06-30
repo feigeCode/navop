@@ -17,8 +17,8 @@ use gpui::{
     PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window, div,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, IndexPath, Sizable, Size, Theme, ThemeMode, TitleBar,
-    WindowExt,
+    ActiveTheme, AxisExt, Disableable, Icon, IconName, IndexPath, Sizable, Size, Theme, ThemeMode,
+    TitleBar, WindowExt,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     group_box::GroupBoxVariant,
@@ -39,6 +39,7 @@ use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
 
+use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
     LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LargeTextCellEditorOpenMode,
@@ -811,7 +812,10 @@ impl SettingsPanel {
                 ]),
             SettingPage::new(t!("Settings.Sync.title"))
                 .resettable(true)
-                .group(personal_sync_setting_group(&default_settings.personal_sync)),
+                .group(personal_sync_setting_group(
+                    &default_settings.personal_sync,
+                    default_settings.supabase_auto_sync,
+                )),
             // 快捷键页面
             SettingPage::new(t!("Settings.Shortcuts.title")).group(
                 SettingGroup::new().item(SettingItem::render(move |_options, window, cx| {
@@ -835,11 +839,15 @@ impl SettingsPanel {
     }
 }
 
-fn personal_sync_setting_group(defaults: &PersonalSyncSettings) -> SettingGroup {
+fn personal_sync_setting_group(
+    defaults: &PersonalSyncSettings,
+    supabase_auto_sync_default: bool,
+) -> SettingGroup {
     SettingGroup::new()
         .title(t!("Settings.Sync.group_title"))
         .items(vec![
             personal_sync_enabled_item(defaults.enabled),
+            supabase_auto_sync_item(supabase_auto_sync_default),
             personal_sync_backend_item(defaults.backend),
             personal_sync_path_item(defaults.path.clone()),
             personal_sync_auto_sync_item(defaults.auto_sync),
@@ -848,6 +856,20 @@ fn personal_sync_setting_group(defaults: &PersonalSyncSettings) -> SettingGroup 
                 render_personal_sync_actions(window, cx)
             }),
         ])
+}
+
+fn supabase_auto_sync_item(default: bool) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.Sync.supabase_auto_sync"),
+        SettingField::switch(
+            |cx: &App| AppSettings::global(cx).supabase_auto_sync,
+            |val: bool, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| settings.supabase_auto_sync = val);
+            },
+        )
+        .default_value(default),
+    )
+    .description(t!("Settings.Sync.supabase_auto_sync_desc").to_string())
 }
 
 fn personal_sync_enabled_item(default: bool) -> SettingItem {
@@ -884,17 +906,108 @@ fn personal_sync_backend_item(default: PersonalSyncBackendKind) -> SettingItem {
 fn personal_sync_path_item(default: String) -> SettingItem {
     SettingItem::new(
         t!("Settings.Sync.path"),
-        SettingField::input(
-            |cx: &App| SharedString::from(AppSettings::global(cx).personal_sync.path.clone()),
-            |val: SharedString, cx: &mut App| {
-                AppSettings::update_and_save(cx, |settings| {
-                    settings.personal_sync.path = val.trim().to_string();
-                });
-            },
-        )
-        .default_value(SharedString::from(default)),
+        SettingField::render(move |options, window, cx| {
+            render_personal_sync_path_field(default.clone(), options, window, cx)
+        }),
     )
     .description(t!("Settings.Sync.path_desc").to_string())
+}
+
+struct PersonalSyncPathInputState {
+    input: Entity<InputState>,
+    _subscription: gpui::Subscription,
+}
+
+fn render_personal_sync_path_field(
+    default: String,
+    options: &gpui_component::setting::RenderOptions,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let value = SharedString::from(AppSettings::global(cx).personal_sync.path.clone());
+    let state = window
+        .use_keyed_state(
+            SharedString::from(format!(
+                "personal-sync-path-{}-{}-{}",
+                options.page_ix, options.group_ix, options.item_ix
+            )),
+            cx,
+            |window, cx| {
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .default_value(value)
+                        .placeholder(default)
+                });
+                let _subscription = cx.subscribe(&input, |_, input, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let path = input.read(cx).value();
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.personal_sync.path = path.trim().to_string();
+                        });
+                    }
+                });
+                PersonalSyncPathInputState {
+                    input,
+                    _subscription,
+                }
+            },
+        )
+        .read(cx);
+    let input = state.input.clone();
+    h_flex()
+        .gap_2()
+        .child(Input::new(&input).with_size(options.size).map(|this| {
+            if options.layout.is_horizontal() {
+                this.w_64()
+            } else {
+                this.w_full()
+            }
+        }))
+        .child(
+            Button::new("personal-sync-select-directory")
+                .icon(IconName::Folder)
+                .with_size(options.size)
+                .tooltip(t!("Settings.Sync.select_directory").to_string())
+                .on_click(move |_, window, cx| {
+                    prompt_for_personal_sync_directory(input.clone(), window, cx);
+                }),
+        )
+        .into_any_element()
+}
+
+fn prompt_for_personal_sync_directory(
+    input: Entity<InputState>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let target_window = window.window_handle();
+    let future = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some(t!("Settings.Sync.select_directory").to_string().into()),
+    });
+    window
+        .spawn(cx, async move |cx| {
+            if let Ok(Ok(Some(paths))) = future.await {
+                if let Some(path) = paths.into_iter().next() {
+                    let path = path.to_string_lossy().to_string();
+                    let _ = cx.update(|_view, cx: &mut App| {
+                        AppSettings::update_and_save(cx, |settings| {
+                            settings.personal_sync.path = path.clone();
+                        });
+                        let _ = cx.update_window(target_window, |_, window, cx| {
+                            input.update(cx, |state, cx| {
+                                state.set_value(path, window, cx);
+                            });
+                            window.refresh();
+                        });
+                    });
+                }
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+        .detach();
 }
 
 fn personal_sync_auto_sync_item(default: bool) -> SettingItem {

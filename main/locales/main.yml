@@ -1333,6 +1333,14 @@ Settings:
       en: Sync personal connections and workspaces through a user-managed backend.
       zh-CN: 通过用户自定义后端同步个人连接和工作区。
       zh-HK: 透過使用者自訂後端同步個人連線和工作區。
+    supabase_auto_sync:
+      en: Supabase Auto Sync
+      zh-CN: Supabase 自动同步
+      zh-HK: Supabase 自動同步
+    supabase_auto_sync_desc:
+      en: Automatically sync with Supabase when local connections or workspaces change. Manual sync remains available.
+      zh-CN: 本地连接或工作区变化时自动同步到 Supabase。关闭后仍可手动同步。
+      zh-HK: 本機連線或工作區變更時自動同步到 Supabase。關閉後仍可手動同步。
     backend:
       en: Backend
       zh-CN: 后端
@@ -1349,6 +1357,10 @@ Settings:
       en: Choose the folder or Git repository that stores the .onetcli-sync package.
       zh-CN: 选择保存 .onetcli-sync 同步包的文件夹或 Git 仓库。
       zh-HK: 選擇保存 .onetcli-sync 同步包的資料夾或 Git 倉庫。
+    select_directory:
+      en: Select Directory
+      zh-CN: 选择目录
+      zh-HK: 選擇目錄
     auto_sync:
       en: Auto Sync
       zh-CN: 自动同步
