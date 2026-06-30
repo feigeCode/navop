@@ -132,6 +132,8 @@ fn source_icon(kind: ImportSourceKind) -> impl IntoElement {
         ImportSourceKind::BeekeeperStudio => IconName::Apps,
         ImportSourceKind::DataGrip => IconName::Database,
         ImportSourceKind::Xshell => IconName::TerminalColor,
+        ImportSourceKind::FinalShell => IconName::TerminalColor,
+        ImportSourceKind::Termius => IconName::TerminalColor,
     };
     Icon::new(icon).size_5()
 }
@@ -153,6 +155,8 @@ fn is_supported_source(kind: ImportSourceKind) -> bool {
             | ImportSourceKind::BeekeeperStudio
             | ImportSourceKind::DataGrip
             | ImportSourceKind::Xshell
+            | ImportSourceKind::FinalShell
+            | ImportSourceKind::Termius
     )
 }
 
@@ -228,6 +232,18 @@ mod tests {
                     connection_count: 1,
                 },
             ),
+            ImportSourceStatus::new(
+                ImportSourceKind::FinalShell,
+                SourceAvailability::Available {
+                    connection_count: 1,
+                },
+            ),
+            ImportSourceStatus::new(
+                ImportSourceKind::Termius,
+                SourceAvailability::Available {
+                    connection_count: 1,
+                },
+            ),
         ];
 
         let kinds = importable_source_kinds(&sources);
@@ -237,7 +253,9 @@ mod tests {
                 ImportSourceKind::TablePlus,
                 ImportSourceKind::DBeaver,
                 ImportSourceKind::DataGrip,
-                ImportSourceKind::Xshell
+                ImportSourceKind::Xshell,
+                ImportSourceKind::FinalShell,
+                ImportSourceKind::Termius
             ],
             kinds
         );

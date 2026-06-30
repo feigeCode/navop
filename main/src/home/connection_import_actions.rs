@@ -26,7 +26,10 @@ fn import_connections(kind: ImportSourceKind, cx: &mut App) -> Result<usize, Str
 }
 
 fn is_ssh_source(kind: ImportSourceKind) -> bool {
-    matches!(kind, ImportSourceKind::Xshell)
+    matches!(
+        kind,
+        ImportSourceKind::Xshell | ImportSourceKind::FinalShell | ImportSourceKind::Termius
+    )
 }
 
 fn import_database_connections(kind: ImportSourceKind, cx: &mut App) -> Result<usize, String> {

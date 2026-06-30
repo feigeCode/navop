@@ -9,6 +9,8 @@ pub enum ImportSourceKind {
     BeekeeperStudio,
     DataGrip,
     Xshell,
+    FinalShell,
+    Termius,
 }
 
 impl ImportSourceKind {
@@ -20,6 +22,8 @@ impl ImportSourceKind {
             Self::BeekeeperStudio => "Beekeeper Studio",
             Self::DataGrip => "DataGrip",
             Self::Xshell => "Xshell",
+            Self::FinalShell => "FinalShell",
+            Self::Termius => "Termius",
         }
     }
 }

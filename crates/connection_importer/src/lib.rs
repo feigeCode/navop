@@ -2,10 +2,12 @@ mod beekeeper;
 mod credentials;
 mod datagrip;
 mod dbeaver;
+mod finalshell;
 mod model;
 mod sequel_ace;
 mod simple_encryptor;
 mod tableplus;
+mod termius;
 mod xshell;
 
 pub use credentials::{
@@ -13,12 +15,14 @@ pub use credentials::{
 };
 pub use datagrip::parse_datagrip_data_sources_xml;
 pub use dbeaver::parse_dbeaver_data_sources_json;
+pub use finalshell::parse_finalshell_connections_json;
 pub use model::{
     ImportError, ImportOptions, ImportSourceKind, ImportSourceStatus, ImportedConnection,
     ImportedSshAuthMethod, ImportedSshConnection, PasswordImportStatus, SourceAvailability,
 };
 pub use sequel_ace::parse_sequel_ace_favorites_plist_with_credentials;
 pub use tableplus::parse_tableplus_connections_json_with_credentials;
+pub use termius::parse_termius_hosts_json;
 pub use xshell::parse_xshell_session;
 
 use one_core::storage::{DatabaseType, DbConnectionConfig, SshAuthMethod, SshParams};
@@ -41,6 +45,11 @@ pub fn list_sources() -> Vec<ImportSourceStatus> {
         ),
         ImportSourceStatus::new(ImportSourceKind::DataGrip, datagrip::detect_availability()),
         ImportSourceStatus::new(ImportSourceKind::Xshell, xshell::detect_availability()),
+        ImportSourceStatus::new(
+            ImportSourceKind::FinalShell,
+            finalshell::detect_availability(),
+        ),
+        ImportSourceStatus::new(ImportSourceKind::Termius, termius::detect_availability()),
     ]
 }
 
@@ -65,9 +74,9 @@ pub fn preview_connections_with_credentials(
         }
         ImportSourceKind::BeekeeperStudio => beekeeper::preview_default_connections(options),
         ImportSourceKind::DataGrip => datagrip::preview_default_connections(options),
-        ImportSourceKind::Xshell => Err(ImportError::UnsupportedSource(
-            kind.display_name().to_string(),
-        )),
+        ImportSourceKind::Xshell | ImportSourceKind::FinalShell | ImportSourceKind::Termius => Err(
+            ImportError::UnsupportedSource(kind.display_name().to_string()),
+        ),
     }
 }
 
@@ -98,9 +107,9 @@ pub fn preview_connections_from_path_with_credentials(
             beekeeper::preview_connections_from_path(path, options)
         }
         ImportSourceKind::DataGrip => datagrip::preview_connections_from_path(path, options),
-        ImportSourceKind::Xshell => Err(ImportError::UnsupportedSource(
-            kind.display_name().to_string(),
-        )),
+        ImportSourceKind::Xshell | ImportSourceKind::FinalShell | ImportSourceKind::Termius => Err(
+            ImportError::UnsupportedSource(kind.display_name().to_string()),
+        ),
     }
 }
 
@@ -110,6 +119,8 @@ pub fn preview_ssh_connections(
 ) -> Result<Vec<ImportedSshConnection>, ImportError> {
     match kind {
         ImportSourceKind::Xshell => xshell::preview_default_ssh_connections(options),
+        ImportSourceKind::FinalShell => finalshell::preview_default_ssh_connections(options),
+        ImportSourceKind::Termius => termius::preview_default_ssh_connections(options),
         _ => Err(ImportError::UnsupportedSource(
             kind.display_name().to_string(),
         )),
@@ -123,6 +134,10 @@ pub fn preview_ssh_connections_from_path(
 ) -> Result<Vec<ImportedSshConnection>, ImportError> {
     match kind {
         ImportSourceKind::Xshell => xshell::preview_ssh_connections_from_path(path, options),
+        ImportSourceKind::FinalShell => {
+            finalshell::preview_ssh_connections_from_path(path, options)
+        }
+        ImportSourceKind::Termius => termius::preview_ssh_connections_from_path(path, options),
         _ => Err(ImportError::UnsupportedSource(
             kind.display_name().to_string(),
         )),
