@@ -199,7 +199,7 @@ fn preview_connections_reads_dbeaver_file_from_path() {
 }
 
 #[test]
-fn preview_connections_rejects_reserved_sources() {
+fn preview_connections_rejects_wrong_file_for_source() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let data_sources = temp_dir.path().join("data-sources.json");
     fs::write(&data_sources, DBEAVER_SAMPLE).expect("write data sources");
@@ -211,9 +211,12 @@ fn preview_connections_rejects_reserved_sources() {
             include_passwords: false,
         },
     )
-    .expect_err("reserved source should not preview");
+    .expect_err("wrong source file should not preview");
 
-    assert!(error.to_string().contains("unsupported import source"));
+    assert!(
+        error.to_string().contains("unable to read source data")
+            || error.to_string().contains("invalid source data")
+    );
 }
 
 #[test]

@@ -1,7 +1,9 @@
+mod beekeeper;
 mod credentials;
 mod dbeaver;
 mod model;
 mod sequel_ace;
+mod simple_encryptor;
 mod tableplus;
 
 pub use credentials::{
@@ -31,7 +33,7 @@ pub fn list_sources() -> Vec<ImportSourceStatus> {
         ImportSourceStatus::new(ImportSourceKind::DBeaver, dbeaver::detect_availability()),
         ImportSourceStatus::new(
             ImportSourceKind::BeekeeperStudio,
-            SourceAvailability::Unsupported,
+            beekeeper::detect_availability(),
         ),
     ]
 }
@@ -55,9 +57,7 @@ pub fn preview_connections_with_credentials(
         ImportSourceKind::SequelAce => {
             sequel_ace::preview_default_connections(options, credentials)
         }
-        _ => Err(ImportError::UnsupportedSource(
-            kind.display_name().to_string(),
-        )),
+        ImportSourceKind::BeekeeperStudio => beekeeper::preview_default_connections(options),
     }
 }
 
@@ -84,9 +84,9 @@ pub fn preview_connections_from_path_with_credentials(
         ImportSourceKind::SequelAce => {
             sequel_ace::preview_connections_from_path(path, options, credentials)
         }
-        _ => Err(ImportError::UnsupportedSource(
-            kind.display_name().to_string(),
-        )),
+        ImportSourceKind::BeekeeperStudio => {
+            beekeeper::preview_connections_from_path(path, options)
+        }
     }
 }
 

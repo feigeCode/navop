@@ -150,7 +150,10 @@ fn importable_source_kinds(sources: &[ImportSourceStatus]) -> Vec<ImportSourceKi
 fn is_supported_source(kind: ImportSourceKind) -> bool {
     matches!(
         kind,
-        ImportSourceKind::DBeaver | ImportSourceKind::TablePlus | ImportSourceKind::SequelAce
+        ImportSourceKind::DBeaver
+            | ImportSourceKind::TablePlus
+            | ImportSourceKind::SequelAce
+            | ImportSourceKind::BeekeeperStudio
     )
 }
 
