@@ -18,6 +18,7 @@ use crate::{ChatMessageUI, MessageVariant, parse_chart_json_block};
 
 /// 观测数据文本入卡片时的最大字符数(渲染时还会再截断展示)。
 const MAX_DATA_CHARS: usize = 2000;
+const DELEGATE_TASK_TOOL: &str = "delegate_task";
 
 /// Agent 对话转录状态。
 #[derive(Default)]
@@ -78,15 +79,19 @@ impl AgentTranscript {
                 }
                 HistoryItem::System(text) => self.push_system(text.clone()),
                 HistoryItem::ToolCall(call) => {
-                    self.push_tool_call(
-                        call.call_id.as_str(),
-                        call.tool_name.as_str(),
-                        &call.arguments,
-                    );
+                    if !self.push_delegate_task_from_history(call) {
+                        self.push_tool_call(
+                            call.call_id.as_str(),
+                            call.tool_name.as_str(),
+                            &call.arguments,
+                        );
+                    }
                 }
                 HistoryItem::Observation(obs) => {
-                    self.apply_observation(obs);
-                    self.finish_tool_call(obs.call_id.as_str(), obs.success);
+                    if !self.finish_delegate_task_from_history(obs) {
+                        self.apply_observation(obs);
+                        self.finish_tool_call(obs.call_id.as_str(), obs.success);
+                    }
                 }
             }
         }
@@ -449,6 +454,30 @@ impl AgentTranscript {
 
     // ===== 子代理卡片 =====
 
+    fn push_delegate_task_from_history(&mut self, call: &agent_runtime::ToolCall) -> bool {
+        if call.tool_name.as_str() != DELEGATE_TASK_TOOL {
+            return false;
+        }
+        let Some((name, task)) = delegate_task_args(&call.arguments) else {
+            return false;
+        };
+        self.push_subagent(call.call_id.as_str(), &name, &task);
+        true
+    }
+
+    fn finish_delegate_task_from_history(&mut self, obs: &ToolObservation) -> bool {
+        if obs.tool_name.as_str() != DELEGATE_TASK_TOOL {
+            return false;
+        }
+        let subagent_id = obs.call_id.as_str();
+        if self.find_subagent_card(subagent_id).is_none() {
+            return false;
+        }
+        let summary = history_subagent_summary(obs);
+        self.finish_subagent(subagent_id, obs.success, &summary);
+        true
+    }
+
     fn push_subagent(&mut self, subagent_id: &str, name: &str, task: &str) {
         self.finish_active_status();
         self.close_streaming_segment();
@@ -520,6 +549,24 @@ impl AgentTranscript {
 }
 
 // ===== 枚举 → 卡片字符串 =====
+
+fn delegate_task_args(arguments: &serde_json::Value) -> Option<(String, String)> {
+    let name = arguments.get("name")?.as_str()?.trim();
+    let task = arguments.get("task")?.as_str()?.trim();
+    if name.is_empty() || task.is_empty() {
+        return None;
+    }
+    Some((name.to_string(), task.to_string()))
+}
+
+fn history_subagent_summary(obs: &ToolObservation) -> String {
+    let data_text = obs.data.to_text();
+    if data_text.trim().is_empty() {
+        obs.summary.clone()
+    } else {
+        data_text
+    }
+}
 
 fn plan_to_card(plan: &Plan) -> PlanCardData {
     PlanCardData {
@@ -714,6 +761,46 @@ mod tests {
         assert!(data.input_json.contains("rtk cargo check -p ai_chat_view"));
         assert!(data.input_json.contains("\"token\": \"***\""));
         assert!(!data.input_json.contains("secret"));
+    }
+
+    #[test]
+    fn load_history_replays_delegate_task_as_subagent_card() {
+        let mut tr = AgentTranscript::new();
+        let call_id = ToolCallId::from_string("call_delegate");
+        let call = ToolCall::new(
+            ToolName::new("delegate_task"),
+            serde_json::json!({
+                "name": "reviewer",
+                "task": "检查历史回放是否保留子代理卡片"
+            }),
+        )
+        .with_call_id(call_id.clone());
+        let observation = ToolObservation::success(
+            call_id,
+            ToolName::new("delegate_task"),
+            "子代理 reviewer 完成",
+            ObservationData::Text("历史回放应显示完成态子代理".into()),
+        );
+
+        tr.load_history(
+            &[
+                HistoryItem::ToolCall(call),
+                HistoryItem::Observation(observation),
+            ],
+            None,
+        );
+
+        assert_eq!(1, tr.messages.len());
+        assert_eq!(Some(SUBAGENT_CARD), tr.messages[0].variant.card_kind());
+        let data = SubAgentCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!("call_delegate", data.subagent_id);
+        assert_eq!("reviewer", data.name);
+        assert_eq!("检查历史回放是否保留子代理卡片", data.task);
+        assert!(!data.running);
+        assert_eq!(Some(true), data.success);
+        assert_eq!("历史回放应显示完成态子代理", data.summary);
+        assert_eq!(1, tr.active_subagents().len());
+        assert_eq!("reviewer", tr.active_subagents()[0].name);
     }
 
     #[test]
