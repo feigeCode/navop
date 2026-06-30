@@ -1726,6 +1726,74 @@ impl CloudApiClient for SupabaseClient {
         }
     }
 
+    async fn rotate_team_key(
+        &self,
+        team: &Team,
+        records: &[CloudSyncData],
+    ) -> Result<(), CloudApiError> {
+        let url = format!("{}/rest/v1/rpc/rotate_team_key", self.config.project_url);
+
+        #[derive(Serialize)]
+        struct RotateRecord<'a> {
+            id: &'a str,
+            version: u32,
+            encrypted_data: &'a str,
+            key_version: u32,
+            checksum: &'a str,
+            deleted_at: Option<String>,
+        }
+
+        #[derive(Serialize)]
+        struct RotatePayload<'a> {
+            p_team_id: &'a str,
+            p_key_verification: &'a str,
+            p_key_version: u32,
+            p_records: Vec<RotateRecord<'a>>,
+        }
+
+        let key_verification = team
+            .key_verification
+            .as_deref()
+            .ok_or_else(|| CloudApiError::ServerError("团队密钥验证数据为空".to_string()))?;
+        let records = records
+            .iter()
+            .map(|record| RotateRecord {
+                id: &record.id,
+                version: record.version,
+                encrypted_data: &record.encrypted_data,
+                key_version: record.key_version,
+                checksum: &record.checksum,
+                deleted_at: record.deleted_at.and_then(|ts| {
+                    chrono::DateTime::from_timestamp_millis(ts).map(|dt| dt.to_rfc3339())
+                }),
+            })
+            .collect();
+        let payload = RotatePayload {
+            p_team_id: &team.id,
+            p_key_verification: key_verification,
+            p_key_version: team.key_version,
+            p_records: records,
+        };
+
+        let (status, result) = self
+            .post_json_with_retry::<serde_json::Value, _>(&url, vec![], &payload)
+            .await?;
+
+        if status.is_success() {
+            Ok(())
+        } else if status == StatusCode::CONFLICT || status.as_u16() == 409 {
+            Err(CloudApiError::Conflict(
+                "团队密钥轮换冲突，请重新同步后再试".to_string(),
+            ))
+        } else {
+            let error_body = Self::format_error_summary(&result);
+            Err(CloudApiError::ServerError(format!(
+                "团队密钥轮换失败: {}",
+                error_body
+            )))
+        }
+    }
+
     // ========================================================================
     // AI 聊天
     // ========================================================================

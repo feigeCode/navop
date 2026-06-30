@@ -1,7 +1,7 @@
 use std::fmt;
 use std::sync::{Arc, RwLock};
 
-use crate::cloud_sync::{CloudSyncService, Team};
+use crate::cloud_sync::{CloudSyncData, CloudSyncService, Team};
 use crate::crypto;
 use crate::storage::{TeamKeyCache, TeamKeyCacheRepository, now};
 
@@ -45,6 +45,11 @@ impl std::error::Error for TeamKeyError {}
 pub struct TeamKeyManager {
     repo: TeamKeyCacheRepository,
     service: Arc<RwLock<CloudSyncService>>,
+}
+
+pub struct TeamKeyRotation {
+    pub team: Team,
+    pub records: Vec<CloudSyncData>,
 }
 
 impl TeamKeyManager {
@@ -169,6 +174,37 @@ impl TeamKeyManager {
             .collect()
     }
 
+    pub fn rotate_team_key_records(
+        team: &Team,
+        old_key: &str,
+        new_key: &str,
+        records: &[CloudSyncData],
+    ) -> Result<TeamKeyRotation, TeamKeyError> {
+        let verification = team
+            .key_verification
+            .as_deref()
+            .ok_or(TeamKeyError::MissingVerification)?;
+        if !crypto::verify_master_key(old_key, verification) {
+            return Err(TeamKeyError::InvalidTeamKey);
+        }
+
+        let new_version = team.key_version.saturating_add(1);
+        let service = CloudSyncService::new();
+        let records = records
+            .iter()
+            .map(|record| {
+                service
+                    .re_encrypt_sync_data(record, old_key, new_key, new_version)
+                    .map_err(|e| TeamKeyError::Storage(e.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut team = team.clone();
+        team.key_verification = Some(crypto::generate_key_verification(new_key));
+        team.key_version = new_version;
+
+        Ok(TeamKeyRotation { team, records })
+    }
+
     pub fn forget_team_key(&self, team_id: &str) -> Result<(), TeamKeyError> {
         if let Some(cache) = self
             .repo
@@ -227,10 +263,13 @@ impl TeamKeyManager {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, RwLock};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, RwLock};
 
-    use crate::cloud_sync::{CloudSyncService, Team, TeamKeyManager, TeamKeyStatus};
+    use crate::cloud_sync::{
+        CloudSyncData, CloudSyncService, Team, TeamKeyManager, TeamKeyStatus, data_type,
+    };
+    use crate::crypto;
     use crate::storage::connection::SqliteConnection;
     use crate::storage::migration::run_migrations;
     use crate::storage::{TeamKeyCache, TeamKeyCacheRepository};
@@ -440,6 +479,63 @@ mod tests {
                 .expect("service lock")
                 .is_team_unlocked("team-1")
         );
+    }
+
+    #[test]
+    fn rotate_team_key_reencrypts_team_records_with_next_version() {
+        let service = CloudSyncService::new();
+        let team = team(&service, 3);
+        let old_key = "team-secret";
+        let new_key = "new-team-secret";
+        let record = CloudSyncData {
+            id: "record-1".to_string(),
+            owner_id: "owner-1".to_string(),
+            team_id: Some(team.id.clone()),
+            data_type: data_type::CONNECTION.to_string(),
+            encrypted_data: crypto::encrypt_with_key(r#"{"name":"db"}"#, old_key),
+            key_version: team.key_version,
+            checksum: "checksum".to_string(),
+            version: 7,
+            updated_at: 100,
+            deleted_at: None,
+        };
+
+        let rotation = TeamKeyManager::rotate_team_key_records(&team, old_key, new_key, &[record])
+            .expect("rotation succeeds");
+
+        assert_eq!(4, rotation.team.key_version);
+        assert_ne!(team.key_verification, rotation.team.key_verification);
+        assert_eq!(1, rotation.records.len());
+        let rotated = &rotation.records[0];
+        assert_eq!(4, rotated.key_version);
+        assert_eq!(7, rotated.version);
+        let decrypted = crypto::decrypt_with_key(&rotated.encrypted_data, new_key)
+            .expect("rotated data decrypts with new key");
+        assert_eq!(r#"{"name":"db"}"#, decrypted);
+        assert!(crypto::decrypt_with_key(&rotated.encrypted_data, old_key).is_err());
+    }
+
+    #[test]
+    fn rotate_team_key_rejects_invalid_old_key() {
+        let service = CloudSyncService::new();
+        let team = team(&service, 3);
+        let record = CloudSyncData {
+            id: "record-1".to_string(),
+            owner_id: "owner-1".to_string(),
+            team_id: Some(team.id.clone()),
+            data_type: data_type::CONNECTION.to_string(),
+            encrypted_data: crypto::encrypt_with_key("{}", "team-secret"),
+            key_version: team.key_version,
+            checksum: "checksum".to_string(),
+            version: 1,
+            updated_at: 100,
+            deleted_at: None,
+        };
+
+        let result =
+            TeamKeyManager::rotate_team_key_records(&team, "wrong-key", "new-key", &[record]);
+
+        assert!(result.is_err());
     }
 
     #[test]

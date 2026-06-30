@@ -302,6 +302,14 @@ TeamSync:
     en: Team key
     zh-CN: 团队密钥
     zh-HK: 團隊密鑰
+  new_key_label:
+    en: New key
+    zh-CN: 新密钥
+    zh-HK: 新密鑰
+  new_key_placeholder:
+    en: Optional, fill to rotate and re-encrypt
+    zh-CN: 可选，填写后轮换并批量重加密
+    zh-HK: 可選，填寫後輪換並批量重加密
   key_placeholder:
     en: Enter the team key
     zh-CN: 输入团队密钥
@@ -310,10 +318,18 @@ TeamSync:
     en: The key is verified locally and saved encrypted on this device only.
     zh-CN: 密钥只在本机校验，并加密保存到本机。
     zh-HK: 密鑰只在本機校驗，並加密保存到本機。
+  rotate_help:
+    en: Fill the new key to rotate the team key and re-encrypt all team sync records.
+    zh-CN: 填写新密钥会轮换团队密钥，并批量重加密该团队的所有同步数据。
+    zh-HK: 填寫新密鑰會輪換團隊密鑰，並批量重加密該團隊的所有同步資料。
   key_empty:
     en: Please enter the team key
     zh-CN: 请输入团队密钥
     zh-HK: 請輸入團隊密鑰
+  new_key_same:
+    en: New team key must be different from the current key
+    zh-CN: 新团队密钥不能和当前密钥相同
+    zh-HK: 新團隊密鑰不能和目前密鑰相同
   select_team_required:
     en: Please select a team
     zh-CN: 请选择团队

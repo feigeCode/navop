@@ -2283,23 +2283,34 @@ impl HomePage {
                 .placeholder(t!("TeamSync.key_placeholder").to_string())
                 .masked(true)
         });
+        let new_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("TeamSync.new_key_placeholder").to_string())
+                .masked(true)
+        });
         let error_message = cx.new(|_| Option::<String>::None);
         let saved = cx.new(|_| false);
+        let rotation_request = cx.new(|_| Option::<(String, String, String)>::None);
 
         let team_select_for_ok = team_select.clone();
         let key_input_for_ok = key_input.clone();
+        let new_key_input_for_ok = new_key_input.clone();
         let error_for_ok = error_message.clone();
         let saved_for_ok = saved.clone();
+        let rotation_for_ok = rotation_request.clone();
         let team_select_for_render = team_select.clone();
         let key_input_for_render = key_input.clone();
+        let new_key_input_for_render = new_key_input.clone();
         let error_for_render = error_message.clone();
         let has_teams = !teams.is_empty();
 
         window.open_dialog(cx, move |dialog, _window, cx| {
             let team_select_ok = team_select_for_ok.clone();
             let key_input_ok = key_input_for_ok.clone();
+            let new_key_input_ok = new_key_input_for_ok.clone();
             let error_ok = error_for_ok.clone();
             let saved_ok = saved_for_ok.clone();
+            let rotation_ok = rotation_for_ok.clone();
 
             dialog
                 .title(t!("TeamSync.manage_keys").to_string())
@@ -2333,6 +2344,21 @@ impl HomePage {
                         });
                         return false;
                     }
+                    let new_team_key = new_key_input_ok.read(cx).text().to_string();
+                    if !new_team_key.is_empty() {
+                        if new_team_key == team_key {
+                            error_ok.update(cx, |msg, cx| {
+                                *msg = Some(t!("TeamSync.new_key_same").to_string());
+                                cx.notify();
+                            });
+                            return false;
+                        }
+                        rotation_ok.update(cx, |request, cx| {
+                            *request = Some((team_id, team_key, new_team_key));
+                            cx.notify();
+                        });
+                        return true;
+                    }
                     match save_team_key_for_cached_team(&team_id, &team_key, cx) {
                         Ok(()) => {
                             saved_ok.update(cx, |saved, cx| {
@@ -2353,9 +2379,16 @@ impl HomePage {
                 .on_close({
                     let view_for_close = view.clone();
                     let saved_for_close = saved.clone();
+                    let rotation_for_close = rotation_request.clone();
                     move |_window, _result, cx| {
                         view_for_close.update(cx, |this, cx| {
                             this.team_key_dialog_open = false;
+                            if let Some((team_id, old_key, new_key)) =
+                                rotation_for_close.read(cx).clone()
+                            {
+                                this.rotate_team_key(team_id, old_key, new_key, cx);
+                                return;
+                            }
                             if *saved_for_close.read(cx) {
                                 this.trigger_sync(cx);
                             }
@@ -2393,10 +2426,31 @@ impl HomePage {
                                 .child(Input::new(&key_input_for_render).mask_toggle().w_full()),
                         )
                         .child(
+                            h_flex()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .flex_shrink_0()
+                                        .w(px(80.))
+                                        .child(t!("TeamSync.new_key_label").to_string()),
+                                )
+                                .child(
+                                    Input::new(&new_key_input_for_render).mask_toggle().w_full(),
+                                ),
+                        )
+                        .child(
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(t!("TeamSync.key_help").to_string()),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("TeamSync.rotate_help").to_string()),
                         )
                         .when(!has_teams, |this| {
                             this.child(
@@ -2411,6 +2465,63 @@ impl HomePage {
                         }),
                 )
         });
+    }
+
+    fn rotate_team_key(
+        &mut self,
+        team_id: String,
+        old_key: String,
+        new_key: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.syncing {
+            self.cloud_error = Some(t!("Home.syncing").to_string());
+            cx.notify();
+            return;
+        }
+        if self.current_user.is_none() {
+            self.cloud_error = Some(t!("Home.cloud_need_login").to_string());
+            cx.notify();
+            return;
+        }
+
+        let cloud_client = self.auth_service.cloud_client();
+        let sync_service = self.cloud_sync_service.clone();
+        if let Some(user) = &self.current_user {
+            if let Ok(mut service) = sync_service.write() {
+                service.set_logged_in(user.id.clone());
+            }
+        }
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let engine = SyncEngine::new(cloud_client, sync_service, storage);
+
+        self.syncing = true;
+        self.cloud_error = None;
+        cx.notify();
+
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let result = engine.rotate_team_key(&team_id, &old_key, &new_key).await;
+            _ = this.update(cx, |this, cx| {
+                this.syncing = false;
+                match result {
+                    Ok(rotation) => {
+                        tracing::info!(
+                            "团队密钥轮换完成：重加密 {} 条，版本 {}",
+                            rotation.re_encrypted,
+                            rotation.key_version
+                        );
+                        this.refresh_local_home_data(cx);
+                        this.trigger_sync(cx);
+                    }
+                    Err(error) => {
+                        tracing::error!("团队密钥轮换失败: {}", error);
+                        this.cloud_error = Some(error.to_string());
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
