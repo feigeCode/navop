@@ -24,7 +24,10 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use one_core::cloud_sync::{GlobalCloudUser, TeamOption, get_cached_team_options};
+use one_core::cloud_sync::{
+    GlobalCloudUser, TeamKeyStatus, TeamOption, ensure_team_key_ready_for_save,
+    get_cached_team_options,
+};
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
@@ -116,7 +119,18 @@ impl TeamSelectItem {
     pub fn from_team(team: &TeamOption) -> Self {
         Self {
             id: Some(team.id.clone()),
-            name: team.name.clone(),
+            name: team_select_name(team),
+        }
+    }
+}
+
+fn team_select_name(team: &TeamOption) -> String {
+    match team.key_status {
+        TeamKeyStatus::Missing | TeamKeyStatus::VersionMismatch => {
+            format!("{} ({})", team.name, t!("TeamSync.key_missing_short"))
+        }
+        TeamKeyStatus::Cached | TeamKeyStatus::Unlocked => {
+            format!("{} ({})", team.name, t!("TeamSync.key_cached_short"))
         }
     }
 }
@@ -1882,6 +1896,7 @@ impl DbConnectionForm {
             .selected_value()
             .cloned()
             .flatten();
+        ensure_team_key_ready_for_save(team_id.as_deref(), cx).map_err(|e| e.to_string())?;
 
         let mut stored = match &self.editing_connection {
             Some(conn) => {

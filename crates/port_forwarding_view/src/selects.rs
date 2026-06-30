@@ -1,6 +1,6 @@
 use gpui::SharedString;
 use gpui_component::select::SelectItem;
-use one_core::cloud_sync::TeamOption;
+use one_core::cloud_sync::{TeamKeyStatus, TeamOption};
 use one_core::storage::{PortForwardingKind, StoredConnection, Workspace};
 use rust_i18n::t;
 
@@ -55,7 +55,18 @@ impl TeamSelectItem {
     pub(super) fn from_team(team: &TeamOption) -> Self {
         Self {
             id: Some(team.id.clone()),
-            name: team.name.clone(),
+            name: team_select_name(team),
+        }
+    }
+}
+
+fn team_select_name(team: &TeamOption) -> String {
+    match team.key_status {
+        TeamKeyStatus::Missing | TeamKeyStatus::VersionMismatch => {
+            format!("{} ({})", team.name, t!("TeamSync.key_missing_short"))
+        }
+        TeamKeyStatus::Cached | TeamKeyStatus::Unlocked => {
+            format!("{} ({})", team.name, t!("TeamSync.key_cached_short"))
         }
     }
 }

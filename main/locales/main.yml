@@ -286,6 +286,42 @@ TeamSync:
     en: No edit permission
     zh-CN: 无编辑权限
     zh-HK: 無編輯權限
+  key_missing_short:
+    en: Needs key
+    zh-CN: 需密钥
+    zh-HK: 需密鑰
+  key_cached_short:
+    en: Key saved
+    zh-CN: 已保存密钥
+    zh-HK: 已保存密鑰
+  manage_keys:
+    en: Team keys
+    zh-CN: 团队密钥
+    zh-HK: 團隊密鑰
+  key_label:
+    en: Team key
+    zh-CN: 团队密钥
+    zh-HK: 團隊密鑰
+  key_placeholder:
+    en: Enter the team key
+    zh-CN: 输入团队密钥
+    zh-HK: 輸入團隊密鑰
+  key_help:
+    en: The key is verified locally and saved encrypted on this device only.
+    zh-CN: 密钥只在本机校验，并加密保存到本机。
+    zh-HK: 密鑰只在本機校驗，並加密保存到本機。
+  key_empty:
+    en: Please enter the team key
+    zh-CN: 请输入团队密钥
+    zh-HK: 請輸入團隊密鑰
+  select_team_required:
+    en: Please select a team
+    zh-CN: 请选择团队
+    zh-HK: 請選擇團隊
+  no_teams:
+    en: No teams found. Sync teams first.
+    zh-CN: 暂无团队，请先同步团队列表。
+    zh-HK: 暫無團隊，請先同步團隊列表。
 
 # 用户认证
 Auth:

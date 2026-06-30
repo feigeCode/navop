@@ -12,20 +12,22 @@ use gpui::{
 };
 use gpui_component::button::ButtonVariant;
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
+    ActiveTheme, Disableable, Icon, IconName, IndexPath, InteractiveElementExt, Sizable, Size,
+    WindowExt,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     input::{Input, InputEvent, InputState},
     list::{List, ListState},
     popover::Popover,
+    select::{Select, SelectItem, SelectState},
     tooltip::Tooltip,
     v_flex,
 };
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
 use one_core::cloud_sync::{
     CloudApiClient, CloudSyncService, ConflictResolution, SyncConflict, SyncEngine, UserInfo,
-    can_edit_connection, get_cached_team_options,
+    can_edit_connection, get_cached_team_options, save_team_key_for_cached_team,
 };
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use one_core::crypto;
@@ -265,7 +267,26 @@ pub struct HomePage {
     master_key_unlock_prompt_pending: bool,
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
+    team_key_dialog_open: bool,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
+}
+
+#[derive(Clone, Default, PartialEq)]
+struct TeamKeyDialogItem {
+    id: String,
+    name: String,
+}
+
+impl SelectItem for TeamKeyDialogItem {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.name.clone().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
 }
 
 fn external_driver_id_for_connection_form(
@@ -414,6 +435,7 @@ impl HomePage {
             auth_error: None,
             master_key_unlock_prompt_pending: false,
             master_key_dialog_open: false,
+            team_key_dialog_open: false,
             port_forwarding_runtime: Arc::new(
                 tokio::sync::Mutex::new(PortForwardingRuntime::new()),
             ),
@@ -2239,6 +2261,158 @@ impl HomePage {
         });
     }
 
+    fn show_team_key_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.team_key_dialog_open {
+            return;
+        }
+        self.team_key_dialog_open = true;
+
+        let view = cx.entity();
+        let teams = get_cached_team_options(cx);
+        let items = teams
+            .iter()
+            .map(|team| TeamKeyDialogItem {
+                id: team.id.clone(),
+                name: team.name.clone(),
+            })
+            .collect::<Vec<_>>();
+        let selected_team = (!items.is_empty()).then(IndexPath::default);
+        let team_select = cx.new(|cx| SelectState::new(items, selected_team, window, cx));
+        let key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("TeamSync.key_placeholder").to_string())
+                .masked(true)
+        });
+        let error_message = cx.new(|_| Option::<String>::None);
+        let saved = cx.new(|_| false);
+
+        let team_select_for_ok = team_select.clone();
+        let key_input_for_ok = key_input.clone();
+        let error_for_ok = error_message.clone();
+        let saved_for_ok = saved.clone();
+        let team_select_for_render = team_select.clone();
+        let key_input_for_render = key_input.clone();
+        let error_for_render = error_message.clone();
+        let has_teams = !teams.is_empty();
+
+        window.open_dialog(cx, move |dialog, _window, cx| {
+            let team_select_ok = team_select_for_ok.clone();
+            let key_input_ok = key_input_for_ok.clone();
+            let error_ok = error_for_ok.clone();
+            let saved_ok = saved_for_ok.clone();
+
+            dialog
+                .title(t!("TeamSync.manage_keys").to_string())
+                .width(px(460.))
+                .confirm()
+                .on_ok(move |_, _window, cx| {
+                    if !has_teams {
+                        error_ok.update(cx, |msg, cx| {
+                            *msg = Some(t!("TeamSync.no_teams").to_string());
+                            cx.notify();
+                        });
+                        return false;
+                    }
+                    let team_id = team_select_ok
+                        .read(cx)
+                        .selected_value()
+                        .cloned()
+                        .filter(|id| !id.is_empty());
+                    let Some(team_id) = team_id else {
+                        error_ok.update(cx, |msg, cx| {
+                            *msg = Some(t!("TeamSync.select_team_required").to_string());
+                            cx.notify();
+                        });
+                        return false;
+                    };
+                    let team_key = key_input_ok.read(cx).text().to_string();
+                    if team_key.is_empty() {
+                        error_ok.update(cx, |msg, cx| {
+                            *msg = Some(t!("TeamSync.key_empty").to_string());
+                            cx.notify();
+                        });
+                        return false;
+                    }
+                    match save_team_key_for_cached_team(&team_id, &team_key, cx) {
+                        Ok(()) => {
+                            saved_ok.update(cx, |saved, cx| {
+                                *saved = true;
+                                cx.notify();
+                            });
+                            true
+                        }
+                        Err(error) => {
+                            error_ok.update(cx, |msg, cx| {
+                                *msg = Some(error.to_string());
+                                cx.notify();
+                            });
+                            false
+                        }
+                    }
+                })
+                .on_close({
+                    let view_for_close = view.clone();
+                    let saved_for_close = saved.clone();
+                    move |_window, _result, cx| {
+                        view_for_close.update(cx, |this, cx| {
+                            this.team_key_dialog_open = false;
+                            if *saved_for_close.read(cx) {
+                                this.trigger_sync(cx);
+                            }
+                        });
+                    }
+                })
+                .child(
+                    v_flex()
+                        .gap_4()
+                        .p_4()
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .flex_shrink_0()
+                                        .w(px(80.))
+                                        .child(t!("TeamSync.team_label").to_string()),
+                                )
+                                .child(Select::new(&team_select_for_render).w_full()),
+                        )
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .flex_shrink_0()
+                                        .w(px(80.))
+                                        .child(t!("TeamSync.key_label").to_string()),
+                                )
+                                .child(Input::new(&key_input_for_render).mask_toggle().w_full()),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("TeamSync.key_help").to_string()),
+                        )
+                        .when(!has_teams, |this| {
+                            this.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().warning)
+                                    .child(t!("TeamSync.no_teams").to_string()),
+                            )
+                        })
+                        .when_some(error_for_render.read(cx).clone(), |this, msg| {
+                            this.child(div().text_sm().text_color(cx.theme().danger).child(msg))
+                        }),
+                )
+        });
+    }
+
     fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
 
@@ -2346,6 +2520,16 @@ impl HomePage {
                             })
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.show_encryption_key_dialog(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("team-key-button")
+                            .icon(IconName::Key)
+                            .label(t!("TeamSync.manage_keys").to_string())
+                            .ghost()
+                            .tooltip(t!("TeamSync.key_help").to_string())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.show_team_key_dialog(window, cx);
                             })),
                     ),
             )
