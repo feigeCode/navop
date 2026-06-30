@@ -32,6 +32,8 @@ mod code_block;
 mod code_block_parse;
 mod connection_selector;
 mod default_panel;
+#[cfg(test)]
+mod default_panel_tests;
 mod input;
 mod message;
 mod message_code_actions;

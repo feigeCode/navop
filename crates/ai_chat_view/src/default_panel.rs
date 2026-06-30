@@ -5,8 +5,8 @@
 
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
-    prelude::FluentBuilder,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
+    Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
 use one_core::{
@@ -16,8 +16,8 @@ use one_core::{
 };
 
 use crate::{
-    AcpAgentConfig, AgentChatView, AgentChatViewConfig, CodeBlockAction, MentionItem,
-    build_acp_agent_configs, build_plan_tool_registry,
+    AcpAgentConfig, AgentChatView, AgentChatViewConfig, AgentChatViewEvent, CodeBlockAction,
+    MentionItem, build_acp_agent_configs, build_plan_tool_registry,
 };
 
 #[derive(Clone, Debug)]
@@ -28,6 +28,7 @@ pub enum DefaultAgentChatPanelEvent {
 pub struct DefaultAgentChatPanel {
     focus_handle: FocusHandle,
     view: Option<Entity<AgentChatView>>,
+    view_subscription: Option<Subscription>,
     pending_message: Option<String>,
     pending_system_instruction: Option<String>,
     pending_resource_context: Option<(agent_runtime::ResourceContext, Vec<MentionItem>)>,
@@ -54,6 +55,7 @@ impl DefaultAgentChatPanel {
         let panel = Self {
             focus_handle: cx.focus_handle(),
             view: None,
+            view_subscription: None,
             pending_message: None,
             pending_system_instruction: None,
             pending_resource_context: None,
@@ -142,6 +144,14 @@ impl DefaultAgentChatPanel {
                     panel.update(cx, |panel, cx| match config {
                         Ok(config) => {
                             let view = AgentChatView::view_with_config(config, window, cx);
+                            let view_subscription =
+                                cx.subscribe(&view, |_, _, event: &AgentChatViewEvent, cx| {
+                                    match event {
+                                        AgentChatViewEvent::Close => {
+                                            cx.emit(DefaultAgentChatPanelEvent::Close);
+                                        }
+                                    }
+                                });
                             if let Some(instruction) = panel.pending_system_instruction.clone() {
                                 view.update(cx, |view, cx| {
                                     view.set_system_instruction(Some(instruction), cx);
@@ -165,6 +175,7 @@ impl DefaultAgentChatPanel {
                                 });
                             }
                             panel.view = Some(view);
+                            panel.view_subscription = Some(view_subscription);
                             panel.error = None;
                             cx.notify();
                         }
@@ -252,69 +263,16 @@ fn load_enabled_provider_configs(
     }
 }
 
-fn enabled_provider_configs(configs: Vec<ProviderConfig>) -> Vec<ProviderConfig> {
+pub(crate) fn enabled_provider_configs(configs: Vec<ProviderConfig>) -> Vec<ProviderConfig> {
     configs
         .into_iter()
         .filter(|config| config.enabled)
         .collect()
 }
 
-fn build_sidebar_config(
+pub(crate) fn build_sidebar_config(
     config: AgentChatViewConfig,
     acp_agents: Vec<AcpAgentConfig>,
 ) -> AgentChatViewConfig {
     config.sidebar_mode(true).with_acp_agents(acp_agents)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::enabled_provider_configs;
-    use crate::{AcpAgentConfig, AgentChatViewConfig};
-    use agent_runtime::model::{MockModelClient, ModelClient};
-    use agent_runtime::{ResourceContext, Runtime, RuntimeServices, ToolRegistry, ToolRouter};
-    use one_core::llm::{ProviderConfig, ProviderType};
-    use std::sync::Arc;
-
-    #[test]
-    fn enabled_provider_configs_filters_disabled_entries() {
-        let enabled = ProviderConfig {
-            id: 1,
-            name: "enabled".to_string(),
-            provider_type: ProviderType::OpenAI,
-            enabled: true,
-            ..ProviderConfig::default()
-        };
-        let disabled = ProviderConfig {
-            id: 2,
-            name: "disabled".to_string(),
-            provider_type: ProviderType::OpenAI,
-            enabled: false,
-            ..ProviderConfig::default()
-        };
-
-        let configs = enabled_provider_configs(vec![enabled, disabled]);
-
-        assert_eq!(1, configs.len());
-        assert_eq!("enabled", configs[0].name);
-    }
-
-    #[test]
-    fn sidebar_config_keeps_acp_agents_available() {
-        let config = AgentChatViewConfig::new(test_runtime(), ResourceContext::new(), Vec::new());
-        let agents = vec![AcpAgentConfig::new("codex", "Codex ACP", "codex")];
-
-        let config = super::build_sidebar_config(config, agents);
-
-        assert!(config.sidebar_mode);
-        assert_eq!(1, config.acp_agents.len());
-        assert_eq!(config.acp_agents[0].id.as_ref(), "codex");
-    }
-
-    fn test_runtime() -> Arc<Runtime> {
-        let model: Arc<dyn ModelClient> = Arc::new(MockModelClient::new([]));
-        Arc::new(Runtime::new(RuntimeServices::new(
-            model,
-            Arc::new(ToolRouter::new(ToolRegistry::new())),
-        )))
-    }
 }

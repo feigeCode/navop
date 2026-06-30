@@ -6,7 +6,7 @@
 
 use crate::card::{CardMessage, CardRegistry};
 use crate::code_block::CodeBlockActionRegistry;
-use crate::message_code_actions::render_code_block_actions;
+use crate::message_code_actions::apply_code_block_features;
 use crate::{
     ChatMessageUI, ChatMessageUIGeneric, ChatRole, MessageExtension, MessageVariant,
     render_reasoning_block,
@@ -218,6 +218,13 @@ fn render_assistant_text_with_code_actions<E: MessageExtension>(
     if msg.is_streaming && msg.content.is_empty() && msg.reasoning_content.is_empty() {
         return render_thinking(cx);
     }
+    let text = TextView::markdown(
+        SharedString::from(format!("ai-msg-{}", msg.id)),
+        msg.content.clone(),
+    )
+    .selectable(true);
+    let text = apply_code_block_features(text, code_actions);
+
     div()
         .w_full()
         .max_w(px(820.0))
@@ -231,20 +238,8 @@ fn render_assistant_text_with_code_actions<E: MessageExtension>(
                     this.child(render_reasoning_block(msg, window, cx))
                 })
                 .when(!msg.content.is_empty(), |this| {
-                    this.child(
-                        div().w_full().min_w_0().px_1().py_1().child(
-                            TextView::markdown(
-                                SharedString::from(format!("ai-msg-{}", msg.id)),
-                                msg.content.clone(),
-                            )
-                            .selectable(true),
-                        ),
-                    )
-                })
-                .when_some(
-                    code_actions.and_then(|r| render_code_block_actions(msg, r, cx)),
-                    |this, actions| this.child(actions),
-                ),
+                    this.child(div().w_full().min_w_0().px_1().py_1().child(text))
+                }),
         )
         .into_any_element()
 }

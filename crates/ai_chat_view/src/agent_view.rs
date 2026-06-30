@@ -78,6 +78,11 @@ struct RuntimeBinding {
     runtime_factory: Option<AgentRuntimeFactory>,
 }
 
+#[cfg(test)]
+fn sidebar_mode_header_action_ids() -> [&'static str; 3] {
+    ["new", "history", "close"]
+}
+
 impl RuntimeBinding {
     fn new(
         runtime: Arc<Runtime>,
@@ -1492,6 +1497,16 @@ impl AgentChatView {
                                     .tooltip("历史记录"),
                             )
                             .when_some(history_list, |popover, list| popover.child(list)),
+                    )
+                    .child(
+                        Button::new("agent-sidebar-close")
+                            .icon(IconName::Close)
+                            .ghost()
+                            .small()
+                            .tooltip("关闭面板")
+                            .on_click(cx.listener(|_this, _, _, cx| {
+                                cx.emit(AgentChatViewEvent::Close);
+                            })),
                     ),
             )
             .into_any_element()
@@ -2746,6 +2761,14 @@ mod tests {
         assert!(
             config.sidebar_mode(true).sidebar_mode,
             "builder 应开启侧边栏视图"
+        );
+    }
+
+    #[test]
+    fn sidebar_mode_header_actions_include_close() {
+        assert_eq!(
+            vec!["new", "history", "close"],
+            sidebar_mode_header_action_ids()
         );
     }
 

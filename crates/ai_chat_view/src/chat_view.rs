@@ -1,18 +1,10 @@
-//! 通用聊天视图 `ChatView`。
-//!
-//! 组合「可折叠会话侧边栏 + 消息列表 + 底部操作条」。本视图用
-//! [`ChatViewState`](crate::ChatViewState) 驱动,上层可以注入消息、会话并追加文本 / 卡片:
-//! - 历史会话侧边栏可收起 / 展开;
-//! - 文本消息走本 crate 的通用渲染;
-//! - `MessageVariant::Card { kind }` 走 [`CardRegistry`](crate::CardRegistry) 分发到注册卡片;
-//! - 未注册的卡片 kind 回退占位符。
-
 use crate::message_view::render_messages;
 use crate::session_sidebar::{self, SessionSummary};
 use crate::{ChatMessageUI, ChatViewState};
 use gpui::{
     App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, IconName, Sizable,
@@ -21,10 +13,10 @@ use gpui_component::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// 通用聊天视图。
 pub struct ChatView {
     state: ChatViewState,
     sidebar_collapsed: bool,
+    sidebar_hidden: bool,
     scroll_handle: ScrollHandle,
 }
 
@@ -39,32 +31,27 @@ const SAMPLE_JSON: &str =
     r#"{"name":"onetcli","feature":"chat cards","registered":["json"],"ok":true}"#;
 
 impl ChatView {
-    /// 在窗口上下文中创建视图实体。
     pub fn view(window: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|cx| Self::new(window, cx))
     }
 
-    /// 用外部状态创建视图实体。
     pub fn view_with_state(
         state: ChatViewState,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut App,
     ) -> Entity<Self> {
-        cx.new(|cx| Self::new_with_state(state, window, cx))
+        cx.new(|_| Self::from_state(state))
     }
 
     fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
         Self::from_state(Self::sample_state())
     }
 
-    fn new_with_state(state: ChatViewState, _window: &mut Window, _cx: &mut Context<Self>) -> Self {
-        Self::from_state(state)
-    }
-
     fn from_state(state: ChatViewState) -> Self {
         Self {
             state,
             sidebar_collapsed: false,
+            sidebar_hidden: false,
             scroll_handle: ScrollHandle::new(),
         }
     }
@@ -134,6 +121,12 @@ impl ChatView {
         cx.notify();
     }
 
+    fn set_sidebar_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
+        self.sidebar_hidden = hidden;
+        self.sidebar_collapsed = false;
+        cx.notify();
+    }
+
     fn new_session(&mut self, cx: &mut Context<Self>) {
         let mut sessions = self.state.sessions().to_vec();
         let id = format!("s{}", sessions.len() + 1);
@@ -146,6 +139,10 @@ impl ChatView {
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let border = cx.theme().border;
         let muted = cx.theme().muted;
+
+        if self.sidebar_hidden {
+            return div().into_any_element();
+        }
 
         if self.sidebar_collapsed {
             return v_flex()
@@ -230,11 +227,27 @@ impl ChatView {
                             ),
                     )
                     .child(
-                        Button::new("ai-chat-new-session")
-                            .icon(IconName::Plus)
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                Button::new("ai-chat-new-session")
+                                    .icon(IconName::Plus)
+                                    .ghost()
+                                    .small()
+                                    .tooltip("新建会话")
+                                    .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
+                            )
+                            .child(
+                                Button::new("ai-chat-close-sidebar")
+                                    .icon(IconName::Close)
+                                    .ghost()
+                                    .small()
+                                    .tooltip("关闭侧边栏")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.set_sidebar_hidden(true, cx)
+                                    })),
+                            ),
                     ),
             )
             .child(
@@ -265,7 +278,22 @@ impl Render for ChatView {
                     .flex_1()
                     .h_full()
                     .min_w_0()
-                    .child(v_flex().size_full().child(messages)),
+                    .relative()
+                    .child(v_flex().size_full().child(messages))
+                    .when(self.sidebar_hidden, |this| {
+                        this.child(
+                            div().absolute().top_2().left_2().child(
+                                Button::new("ai-chat-open-sidebar")
+                                    .icon(IconName::PanelLeftOpen)
+                                    .ghost()
+                                    .small()
+                                    .tooltip("打开侧边栏")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.set_sidebar_hidden(false, cx)
+                                    })),
+                            ),
+                        )
+                    }),
             )
     }
 }
