@@ -29,6 +29,7 @@ mod service;
 pub mod state_manager;
 pub mod supabase;
 pub mod sync_type;
+pub mod team_key_manager;
 mod workspace_sync;
 
 use std::sync::{Arc, RwLock};
@@ -43,7 +44,9 @@ pub use queue::*;
 pub use service::*;
 pub use state_manager::*;
 pub use sync_type::*;
+pub use team_key_manager::*;
 
+use crate::crypto;
 use crate::storage::{GlobalStorageState, StoredConnection, TeamKeyCacheRepository};
 
 // ============================================================================
@@ -95,6 +98,29 @@ impl GlobalCloudUser {
 pub struct TeamOption {
     pub id: String,
     pub name: String,
+    pub key_status: TeamKeyStatus,
+    pub key_version: u32,
+    pub key_verification: Option<String>,
+    pub last_verified_at: Option<i64>,
+    pub role: Option<String>,
+}
+
+fn team_option_from_cache(c: crate::storage::TeamKeyCache) -> TeamOption {
+    let key_status = if c.encrypted_team_key.is_some() && c.last_verified_at.is_some() {
+        TeamKeyStatus::Cached
+    } else {
+        TeamKeyStatus::Missing
+    };
+
+    TeamOption {
+        id: c.team_id,
+        name: c.team_name,
+        key_status,
+        key_version: c.key_version,
+        key_verification: c.key_verification,
+        last_verified_at: c.last_verified_at,
+        role: c.role,
+    }
 }
 
 /// 获取可用团队列表（从本地 team_key_cache 缓存读取）
@@ -106,15 +132,54 @@ pub fn get_cached_team_options(cx: &App) -> Vec<TeamOption> {
         return Vec::new();
     };
     match repo.list() {
-        Ok(caches) => caches
-            .into_iter()
-            .map(|c| TeamOption {
-                id: c.team_id,
-                name: c.team_name,
-            })
-            .collect(),
+        Ok(caches) => caches.into_iter().map(team_option_from_cache).collect(),
         Err(_) => Vec::new(),
     }
+}
+
+pub fn ensure_team_key_ready_for_save(team_id: Option<&str>, cx: &App) -> Result<(), TeamKeyError> {
+    let Some(team_id) = team_id else {
+        return Ok(());
+    };
+    let raw_key = crypto::get_raw_master_key().ok_or(TeamKeyError::MissingPersonalKey)?;
+    let repo = team_key_cache_repo(cx)?;
+    let service = Arc::new(RwLock::new(CloudSyncService::new()));
+    let manager = TeamKeyManager::new((*repo).clone(), service);
+    match manager.load_cached_team_key_by_id(team_id, &raw_key)? {
+        TeamKeyStatus::Unlocked => Ok(()),
+        TeamKeyStatus::Missing | TeamKeyStatus::Cached => Err(TeamKeyError::MissingTeamKey),
+        TeamKeyStatus::VersionMismatch => Err(TeamKeyError::VersionMismatch),
+    }
+}
+
+pub fn save_team_key_for_cached_team(
+    team_id: &str,
+    team_key: &str,
+    cx: &App,
+) -> Result<(), TeamKeyError> {
+    let raw_key = crypto::get_raw_master_key().ok_or(TeamKeyError::MissingPersonalKey)?;
+    let repo = team_key_cache_repo(cx)?;
+    let service = Arc::new(RwLock::new(CloudSyncService::new()));
+    TeamKeyManager::new((*repo).clone(), service)
+        .save_key_for_cached_team(team_id, team_key, &raw_key)?;
+    Ok(())
+}
+
+pub fn forget_team_key_for_cached_team(team_id: &str, cx: &App) -> Result<(), TeamKeyError> {
+    let repo = team_key_cache_repo(cx)?;
+    let service = Arc::new(RwLock::new(CloudSyncService::new()));
+    TeamKeyManager::new((*repo).clone(), service).forget_team_key(team_id)?;
+    Ok(())
+}
+
+fn team_key_cache_repo(cx: &App) -> Result<Arc<TeamKeyCacheRepository>, TeamKeyError> {
+    let storage = cx
+        .try_global::<GlobalStorageState>()
+        .ok_or_else(|| TeamKeyError::Storage("GlobalStorageState not found".to_string()))?;
+    storage
+        .storage
+        .get::<TeamKeyCacheRepository>()
+        .ok_or_else(|| TeamKeyError::Storage("TeamKeyCacheRepository not found".to_string()))
 }
 
 // ============================================================================
@@ -154,7 +219,22 @@ fn role_can_edit_team_connection(role: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::role_can_edit_team_connection;
+    use super::{role_can_edit_team_connection, team_option_from_cache};
+    use crate::cloud_sync::TeamKeyStatus;
+    use crate::storage::TeamKeyCache;
+
+    fn team_cache(encrypted_team_key: Option<&str>, last_verified_at: Option<i64>) -> TeamKeyCache {
+        TeamKeyCache {
+            team_id: "team-1".to_string(),
+            team_name: "Platform".to_string(),
+            key_version: 3,
+            key_verification: Some("verification".to_string()),
+            encrypted_team_key: encrypted_team_key.map(str::to_string),
+            last_verified_at,
+            updated_at: 100,
+            role: Some("admin".to_string()),
+        }
+    }
 
     #[test]
     fn owner_and_admin_roles_can_edit_team_connections() {
@@ -167,5 +247,23 @@ mod tests {
         assert!(!role_can_edit_team_connection(Some("member")));
         assert!(!role_can_edit_team_connection(Some("unknown")));
         assert!(!role_can_edit_team_connection(None));
+    }
+
+    #[test]
+    fn team_option_reports_missing_key_without_cached_secret() {
+        let option = team_option_from_cache(team_cache(None, None));
+
+        assert_eq!(TeamKeyStatus::Missing, option.key_status);
+        assert_eq!(3, option.key_version);
+        assert_eq!(None, option.last_verified_at);
+        assert_eq!(Some("admin".to_string()), option.role);
+    }
+
+    #[test]
+    fn team_option_reports_cached_key_when_secret_was_verified() {
+        let option = team_option_from_cache(team_cache(Some("ENC:cached"), Some(1234)));
+
+        assert_eq!(TeamKeyStatus::Cached, option.key_status);
+        assert_eq!(Some(1234), option.last_verified_at);
     }
 }

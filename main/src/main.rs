@@ -21,6 +21,7 @@ mod public_mcp_approval;
 mod public_mcp_runtime;
 mod setting_tab;
 mod settings;
+mod team_management;
 mod update;
 mod user_avatar;
 

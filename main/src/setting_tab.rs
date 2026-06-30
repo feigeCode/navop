@@ -27,17 +27,26 @@ use gpui_component::{
     kbd::Kbd,
     scroll::ScrollableElement,
     select::{Select, SelectItem, SelectState},
-    setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
+    setting::{
+        NumberFieldOptions, SelectIndex, SettingField, SettingGroup, SettingItem, SettingPage,
+        Settings,
+    },
     switch::Switch,
     v_flex,
 };
-use one_core::cloud_sync::personal::SyncStoreHealth;
+use one_core::cloud_sync::{
+    CloudSyncService, GlobalCloudUser, SyncEngine, TeamKeyStatus, TeamOption,
+    forget_team_key_for_cached_team, get_cached_team_options, personal::SyncStoreHealth,
+    save_team_key_for_cached_team,
+};
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::action_id;
 use one_core::llm::manager::GlobalProviderState;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use one_core::storage::GlobalStorageState;
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
+const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 2;
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
@@ -310,16 +319,26 @@ pub struct SettingsPanel {
     llm_providers_view: Entity<LlmProvidersView>,
     size: Size,
     group_variant: GroupBoxVariant,
+    initial_page_index: usize,
 }
 
 impl SettingsPanel {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_initial_page(0, cx)
+    }
+
+    pub fn new_team_keys(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_initial_page(TEAM_KEYS_SETTINGS_PAGE_INDEX, cx)
+    }
+
+    fn new_with_initial_page(initial_page_index: usize, cx: &mut Context<Self>) -> Self {
         let llm_providers_view = cx.new(|cx| LlmProvidersView::new(cx));
         Self {
             focus_handle: cx.focus_handle(),
             llm_providers_view,
             size: Size::default(),
             group_variant: GroupBoxVariant::Outline,
+            initial_page_index,
         }
     }
 
@@ -816,6 +835,9 @@ impl SettingsPanel {
                     &default_settings.personal_sync,
                     default_settings.supabase_auto_sync,
                 )),
+            SettingPage::new(t!("TeamSync.manage_keys"))
+                .resettable(false)
+                .group(team_key_setting_group()),
             // 快捷键页面
             SettingPage::new(t!("Settings.Shortcuts.title")).group(
                 SettingGroup::new().item(SettingItem::render(move |_options, window, cx| {
@@ -1124,6 +1146,380 @@ fn render_personal_sync_actions(_window: &mut Window, cx: &mut App) -> gpui::Any
         .into_any_element()
 }
 
+fn team_key_setting_group() -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("TeamSync.manage_keys"))
+        .item(SettingItem::render(move |_options, window, cx| {
+            render_team_key_management_section(window, cx)
+        }))
+}
+
+fn render_team_key_management_section(_window: &mut Window, cx: &mut App) -> gpui::AnyElement {
+    let teams = get_cached_team_options(cx);
+    v_flex()
+        .w_full()
+        .gap_3()
+        .child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(t!("TeamSync.page_desc").to_string()),
+        )
+        .when(teams.is_empty(), |this| {
+            this.child(render_team_key_empty(cx))
+        })
+        .children(teams.into_iter().map(|team| render_team_key_row(team, cx)))
+        .into_any_element()
+}
+
+fn render_team_key_empty(cx: &mut App) -> gpui::AnyElement {
+    v_flex()
+        .w_full()
+        .gap_2()
+        .p_4()
+        .border_1()
+        .border_color(cx.theme().border)
+        .rounded(gpui::px(8.0))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(t!("TeamSync.empty_title").to_string()),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(t!("TeamSync.no_teams").to_string()),
+        )
+        .into_any_element()
+}
+
+fn render_team_key_row(team: TeamOption, cx: &mut App) -> gpui::AnyElement {
+    let can_rotate = team_key_role_can_rotate(team.role.as_deref());
+    let can_forget = !matches!(team.key_status, TeamKeyStatus::Missing);
+    let team_for_save = team.clone();
+    let team_for_rotate = team.clone();
+    let team_id_for_forget = team.id.clone();
+
+    v_flex()
+        .w_full()
+        .gap_3()
+        .p_3()
+        .border_1()
+        .border_color(cx.theme().border)
+        .rounded(gpui::px(8.0))
+        .child(
+            h_flex()
+                .w_full()
+                .items_start()
+                .justify_between()
+                .gap_3()
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .child(team.name.clone()),
+                        )
+                        .child(render_team_key_meta(&team, cx)),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new(format!("team-key-save-{}", team.id))
+                                .icon(IconName::Key)
+                                .label(t!("TeamSync.save_local_key").to_string())
+                                .small()
+                                .on_click(move |_, window, cx| {
+                                    show_team_key_entry_dialog(team_for_save.clone(), window, cx);
+                                }),
+                        )
+                        .child(
+                            Button::new(format!("team-key-rotate-{}", team.id))
+                                .icon(IconName::Refresh)
+                                .label(t!("TeamSync.rotate_key").to_string())
+                                .small()
+                                .disabled(!can_rotate)
+                                .on_click(move |_, window, cx| {
+                                    show_team_key_rotation_dialog(
+                                        team_for_rotate.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                        )
+                        .child(
+                            Button::new(format!("team-key-forget-{}", team.id))
+                                .icon(IconName::Key)
+                                .label(t!("TeamSync.forget_local_key").to_string())
+                                .small()
+                                .danger()
+                                .disabled(!can_forget)
+                                .on_click(move |_, window, cx| {
+                                    forget_team_key_from_settings(
+                                        team_id_for_forget.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                        ),
+                ),
+        )
+        .into_any_element()
+}
+
+fn render_team_key_meta(team: &TeamOption, cx: &mut App) -> gpui::AnyElement {
+    h_flex()
+        .gap_3()
+        .flex_wrap()
+        .child(team_key_status_badge(team.key_status, cx))
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("{} {}", t!("TeamSync.version"), team.key_version)),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!(
+                    "{} {}",
+                    t!("TeamSync.role"),
+                    team.role.as_deref().unwrap_or("-")
+                )),
+        )
+        .into_any_element()
+}
+
+fn team_key_status_badge(status: TeamKeyStatus, cx: &mut App) -> gpui::AnyElement {
+    let (label, color) = match status {
+        TeamKeyStatus::Missing => (
+            t!("TeamSync.status_missing").to_string(),
+            cx.theme().warning,
+        ),
+        TeamKeyStatus::Cached => (t!("TeamSync.status_cached").to_string(), cx.theme().success),
+        TeamKeyStatus::Unlocked => (
+            t!("TeamSync.status_unlocked").to_string(),
+            cx.theme().success,
+        ),
+        TeamKeyStatus::VersionMismatch => (
+            t!("TeamSync.status_version_mismatch").to_string(),
+            cx.theme().danger,
+        ),
+    };
+    div()
+        .text_xs()
+        .text_color(color)
+        .child(label)
+        .into_any_element()
+}
+
+fn show_team_key_entry_dialog(team: TeamOption, window: &mut Window, cx: &mut App) {
+    let team_id = team.id.clone();
+    let team_name = team.name.clone();
+    let key_input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder(t!("TeamSync.key_placeholder").to_string())
+            .masked(true)
+    });
+    let error_message = cx.new(|_| Option::<String>::None);
+    let key_input_for_ok = key_input.clone();
+    let key_input_for_render = key_input.clone();
+    let error_for_ok = error_message.clone();
+    let error_for_render = error_message.clone();
+
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let team_id_ok = team_id.clone();
+        let key_input_ok = key_input_for_ok.clone();
+        let error_ok = error_for_ok.clone();
+        dialog
+            .title(format!("{} - {}", t!("TeamSync.save_local_key"), team_name))
+            .width(gpui::px(460.))
+            .confirm()
+            .on_ok(move |_, window, cx| {
+                let team_key = key_input_ok.read(cx).text().to_string();
+                if team_key.is_empty() {
+                    set_team_key_dialog_error(&error_ok, t!("TeamSync.key_empty").to_string(), cx);
+                    return false;
+                }
+                match save_team_key_for_cached_team(&team_id_ok, &team_key, cx) {
+                    Ok(()) => {
+                        window.push_notification(t!("TeamSync.save_success").to_string(), cx);
+                        true
+                    }
+                    Err(error) => {
+                        set_team_key_dialog_error(&error_ok, error.to_string(), cx);
+                        false
+                    }
+                }
+            })
+            .child(
+                v_flex()
+                    .gap_4()
+                    .p_4()
+                    .child(Input::new(&key_input_for_render).mask_toggle().w_full())
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("TeamSync.key_help").to_string()),
+                    )
+                    .when_some(error_for_render.read(cx).clone(), |this, msg| {
+                        this.child(div().text_sm().text_color(cx.theme().danger).child(msg))
+                    }),
+            )
+    });
+}
+
+fn show_team_key_rotation_dialog(team: TeamOption, window: &mut Window, cx: &mut App) {
+    let team_id = team.id.clone();
+    let team_name = team.name.clone();
+    let old_key_input = team_key_input(window, cx, t!("TeamSync.key_placeholder").to_string());
+    let new_key_input = team_key_input(window, cx, t!("TeamSync.new_key_placeholder").to_string());
+    let error_message = cx.new(|_| Option::<String>::None);
+    let old_for_ok = old_key_input.clone();
+    let new_for_ok = new_key_input.clone();
+    let old_for_render = old_key_input.clone();
+    let new_for_render = new_key_input.clone();
+    let error_for_ok = error_message.clone();
+    let error_for_render = error_message.clone();
+
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let team_id_ok = team_id.clone();
+        let old_ok = old_for_ok.clone();
+        let new_ok = new_for_ok.clone();
+        let error_ok = error_for_ok.clone();
+        dialog
+            .title(format!("{} - {}", t!("TeamSync.rotate_key"), team_name))
+            .width(gpui::px(500.))
+            .confirm()
+            .on_ok(move |_, window, cx| {
+                let old_key = old_ok.read(cx).text().to_string();
+                let new_key = new_ok.read(cx).text().to_string();
+                if old_key.is_empty() || new_key.is_empty() {
+                    set_team_key_dialog_error(
+                        &error_ok,
+                        t!("TeamSync.rotate_key_empty").to_string(),
+                        cx,
+                    );
+                    return false;
+                }
+                if old_key == new_key {
+                    set_team_key_dialog_error(
+                        &error_ok,
+                        t!("TeamSync.new_key_same").to_string(),
+                        cx,
+                    );
+                    return false;
+                }
+                rotate_team_key_from_settings(team_id_ok.clone(), old_key, new_key, window, cx);
+                true
+            })
+            .child(
+                v_flex()
+                    .gap_4()
+                    .p_4()
+                    .child(Input::new(&old_for_render).mask_toggle().w_full())
+                    .child(Input::new(&new_for_render).mask_toggle().w_full())
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("TeamSync.rotate_help").to_string()),
+                    )
+                    .when_some(error_for_render.read(cx).clone(), |this, msg| {
+                        this.child(div().text_sm().text_color(cx.theme().danger).child(msg))
+                    }),
+            )
+    });
+}
+
+fn team_key_input(window: &mut Window, cx: &mut App, placeholder: String) -> Entity<InputState> {
+    cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder(placeholder)
+            .masked(true)
+    })
+}
+
+fn set_team_key_dialog_error(error: &Entity<Option<String>>, message: String, cx: &mut App) {
+    error.update(cx, |msg, cx| {
+        *msg = Some(message);
+        cx.notify();
+    });
+}
+
+fn forget_team_key_from_settings(team_id: String, window: &mut Window, cx: &mut App) {
+    match forget_team_key_for_cached_team(&team_id, cx) {
+        Ok(()) => {
+            window.push_notification(t!("TeamSync.forget_success").to_string(), cx);
+            window.refresh();
+        }
+        Err(error) => window.push_notification(error.to_string(), cx),
+    }
+}
+
+fn rotate_team_key_from_settings(
+    team_id: String,
+    old_key: String,
+    new_key: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(user) = GlobalCloudUser::get_user(cx) else {
+        window.push_notification(t!("Home.cloud_need_login").to_string(), cx);
+        return;
+    };
+    let Some(storage) = cx.try_global::<GlobalStorageState>() else {
+        window.push_notification("GlobalStorageState not found".to_string(), cx);
+        return;
+    };
+    let sync_service = Arc::new(std::sync::RwLock::new(CloudSyncService::new()));
+    if let Ok(mut service) = sync_service.write() {
+        service.set_logged_in(user.id);
+    }
+    let engine = SyncEngine::new(
+        get_auth_service(cx).cloud_client(),
+        sync_service,
+        storage.storage.clone(),
+    );
+    let target_window = window.window_handle();
+    window.push_notification(t!("TeamSync.rotate_started").to_string(), cx);
+    window
+        .spawn(cx, async move |cx| {
+            let result = engine.rotate_team_key(&team_id, &old_key, &new_key).await;
+            let message = match result {
+                Ok(rotation) => t!(
+                    "TeamSync.rotate_success",
+                    count = rotation.re_encrypted,
+                    version = rotation.key_version
+                )
+                .to_string(),
+                Err(error) => error.to_string(),
+            };
+            let _ = cx.update(|_view, cx: &mut App| {
+                let _ = cx.update_window(target_window, |_, window, cx| {
+                    window.push_notification(message, cx);
+                    window.refresh();
+                });
+            });
+        })
+        .detach();
+}
+
+fn team_key_role_can_rotate(role: Option<&str>) -> bool {
+    matches!(role, Some("owner" | "admin"))
+}
+
 impl Focusable for SettingsPanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -1162,10 +1558,20 @@ impl Render for SettingsPanel {
             init_settings(cx);
         }
 
+        let settings_id = if self.initial_page_index == TEAM_KEYS_SETTINGS_PAGE_INDEX {
+            "main-app-settings-team-keys"
+        } else {
+            "main-app-settings"
+        };
+
         div().track_focus(&self.focus_handle).size_full().child(
-            Settings::new("main-app-settings")
+            Settings::new(settings_id)
                 .with_size(self.size)
                 .with_group_variant(self.group_variant)
+                .default_selected_index(SelectIndex {
+                    page_ix: self.initial_page_index,
+                    ..Default::default()
+                })
                 .pages(self.setting_pages(window, cx)),
         )
     }

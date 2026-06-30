@@ -676,6 +676,7 @@ pub struct TeamKeyCache {
     pub team_id: String,
     pub team_name: String,
     pub key_version: u32,
+    pub key_verification: Option<String>,
     /// 用 personal_key 加密后的 team_key
     pub encrypted_team_key: Option<String>,
     pub last_verified_at: Option<i64>,
@@ -699,7 +700,7 @@ impl TeamKeyCacheRepository {
     pub fn get(&self, team_id: &str) -> Result<Option<TeamKeyCache>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT team_id, team_name, key_version, encrypted_team_key, last_verified_at, updated_at, role FROM team_key_cache WHERE team_id = ?1",
+                "SELECT team_id, team_name, key_version, key_verification, encrypted_team_key, last_verified_at, updated_at, role FROM team_key_cache WHERE team_id = ?1",
             )?;
             let mut rows = stmt.query(params![team_id])?;
             if let Some(row) = rows.next()? {
@@ -707,10 +708,11 @@ impl TeamKeyCacheRepository {
                     team_id: row.get(0)?,
                     team_name: row.get(1)?,
                     key_version: row.get::<_, i64>(2)? as u32,
-                    encrypted_team_key: row.get(3)?,
-                    last_verified_at: row.get(4)?,
-                    updated_at: row.get(5)?,
-                    role: row.get(6).unwrap_or(None),
+                    key_verification: row.get(3)?,
+                    encrypted_team_key: row.get(4)?,
+                    last_verified_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    role: row.get(7).unwrap_or(None),
                 }))
             } else {
                 Ok(None)
@@ -723,16 +725,17 @@ impl TeamKeyCacheRepository {
         let ts = now();
         self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO team_key_cache (team_id, team_name, key_version, encrypted_team_key, last_verified_at, updated_at, role)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "INSERT INTO team_key_cache (team_id, team_name, key_version, key_verification, encrypted_team_key, last_verified_at, updated_at, role)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT(team_id) DO UPDATE SET
                  team_name = excluded.team_name,
                  key_version = excluded.key_version,
+                 key_verification = excluded.key_verification,
                  encrypted_team_key = excluded.encrypted_team_key,
                  last_verified_at = excluded.last_verified_at,
                  updated_at = excluded.updated_at,
                  role = excluded.role",
-                params![cache.team_id, cache.team_name, cache.key_version as i64, cache.encrypted_team_key, cache.last_verified_at, ts, cache.role],
+                params![cache.team_id, cache.team_name, cache.key_version as i64, cache.key_verification, cache.encrypted_team_key, cache.last_verified_at, ts, cache.role],
             )?;
             Ok(())
         })
@@ -742,17 +745,18 @@ impl TeamKeyCacheRepository {
     pub fn list(&self) -> Result<Vec<TeamKeyCache>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT team_id, team_name, key_version, encrypted_team_key, last_verified_at, updated_at, role FROM team_key_cache ORDER BY updated_at DESC",
+                "SELECT team_id, team_name, key_version, key_verification, encrypted_team_key, last_verified_at, updated_at, role FROM team_key_cache ORDER BY updated_at DESC",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok(TeamKeyCache {
                     team_id: row.get(0)?,
                     team_name: row.get(1)?,
                     key_version: row.get::<_, i64>(2)? as u32,
-                    encrypted_team_key: row.get(3)?,
-                    last_verified_at: row.get(4)?,
-                    updated_at: row.get(5)?,
-                    role: row.get(6).unwrap_or(None),
+                    key_verification: row.get(3)?,
+                    encrypted_team_key: row.get(4)?,
+                    last_verified_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    role: row.get(7).unwrap_or(None),
                 })
             })?;
             let mut results = Vec::new();

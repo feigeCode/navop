@@ -490,6 +490,27 @@ impl HomePage {
         });
     }
 
+    pub(crate) fn add_team_key_settings_tab(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_container = self.tab_container.clone();
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tc, cx| {
+                tc.activate_or_add_tab_lazy(
+                    "settings-team-keys",
+                    |win, cx| {
+                        let settings = cx.new(|cx| SettingsPanel::new_team_keys(win, cx));
+                        TabItem::new("settings-team-keys", "home", settings)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
     pub(crate) fn add_extensions_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_container = self.tab_container.clone();
         window.defer(cx, move |window, cx| {

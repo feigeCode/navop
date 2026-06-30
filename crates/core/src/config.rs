@@ -32,6 +32,8 @@ pub struct UpdateConfig {
     pub download_url: Option<String>,
 }
 
+pub const DEFAULT_TEAM_MANAGEMENT_URL_TEMPLATE: &str = "/zh-CN/auth/desktop?access_token={access-token}&refresh_token={refresh-token}&next=/zh-CN/dashboard";
+
 pub fn public_base_url_from_parts(
     runtime: Option<&str>,
     build_time: Option<&str>,
@@ -51,6 +53,12 @@ pub fn update_url_from_public_base(base_url: &str) -> String {
         "{}/updates/latest.json",
         base_url.trim().trim_end_matches('/')
     )
+}
+
+pub fn team_management_url_template() -> String {
+    runtime_env("ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE")
+        .or_else(|| trimmed_value(option_env!("ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE")))
+        .unwrap_or_else(|| DEFAULT_TEAM_MANAGEMENT_URL_TEMPLATE.to_string())
 }
 
 impl UpdateConfig {

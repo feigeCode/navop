@@ -16,6 +16,7 @@ use crate::cloud_sync::client::CloudApiClient;
 use crate::cloud_sync::models::{ConflictResolution, SyncResult, Team, TeamRole};
 use crate::cloud_sync::queue::OperationQueue;
 use crate::cloud_sync::service::{CloudSyncService, SyncError};
+use crate::cloud_sync::team_key_manager::{TeamKeyManager, TeamKeyStatus};
 use crate::crypto;
 use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
 use std::future::Future;
@@ -28,6 +29,12 @@ pub type SyncFuture<'a> = Pin<Box<dyn Future<Output = Result<SyncResult, SyncErr
 pub trait SyncHandler: Send + Sync {
     fn name(&self) -> &'static str;
     fn sync<'a>(&'a self, engine: &'a SyncEngine) -> SyncFuture<'a>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TeamKeyRotationResult {
+    pub re_encrypted: usize,
+    pub key_version: u32,
 }
 
 /// 泛型桥接器：将 `SyncTypeHandler` 适配为 `SyncHandler`
@@ -171,6 +178,7 @@ impl SyncEngine {
                 if let Some(uid) = &user_id {
                     self.cache_team_roles(&teams, uid).await;
                 }
+                self.restore_cached_team_keys(&teams);
 
                 if let Ok(mut cache) = self.cached_teams.write() {
                     *cache = teams;
@@ -280,6 +288,91 @@ impl SyncEngine {
                 }
             }
         }
+    }
+
+    fn restore_cached_team_keys(&self, teams: &[Team]) {
+        let Some(personal_key) = crypto::get_raw_master_key() else {
+            return;
+        };
+        let Some(repo) = self.storage.get::<TeamKeyCacheRepository>() else {
+            return;
+        };
+        let manager = TeamKeyManager::new((*repo).clone(), self.crypto_service.clone());
+        for (team_id, status) in manager.load_cached_team_keys(teams, &personal_key) {
+            match status {
+                Ok(TeamKeyStatus::Unlocked) => {
+                    tracing::info!("[同步] 已从本地缓存解锁团队 {}", team_id);
+                }
+                Ok(TeamKeyStatus::Missing | TeamKeyStatus::Cached) => {}
+                Ok(TeamKeyStatus::VersionMismatch) => {
+                    tracing::warn!("[同步] 团队 {} 的本地密钥版本已过期", team_id);
+                }
+                Err(error) => {
+                    tracing::warn!("[同步] 恢复团队 {} 密钥失败: {}", team_id, error);
+                }
+            }
+        }
+    }
+
+    pub async fn rotate_team_key(
+        &self,
+        team_id: &str,
+        old_key: &str,
+        new_key: &str,
+    ) -> Result<TeamKeyRotationResult, SyncError> {
+        self.ensure_unlocked()?;
+        let teams = self
+            .cloud_client
+            .list_teams()
+            .await
+            .map_err(|e| SyncError::NetworkError(e.to_string()))?;
+        let team = teams
+            .iter()
+            .find(|team| team.id == team_id)
+            .cloned()
+            .ok_or_else(|| SyncError::StorageError("团队不存在或无权限".to_string()))?;
+        let records = self
+            .cloud_client
+            .list_sync_data(None, Some(team_id), None)
+            .await
+            .map_err(|e| SyncError::NetworkError(e.to_string()))?;
+        let records_to_rotate = records
+            .into_iter()
+            .filter(|record| !record.encrypted_data.is_empty())
+            .collect::<Vec<_>>();
+        let rotation =
+            TeamKeyManager::rotate_team_key_records(&team, old_key, new_key, &records_to_rotate)
+                .map_err(|e| SyncError::DataFormatError(e.to_string()))?;
+        self.cloud_client
+            .rotate_team_key(&rotation.team, &rotation.records)
+            .await
+            .map_err(|e| SyncError::NetworkError(e.to_string()))?;
+        self.save_rotated_team_key(&rotation.team, new_key)?;
+        Ok(TeamKeyRotationResult {
+            re_encrypted: rotation.records.len(),
+            key_version: rotation.team.key_version,
+        })
+    }
+
+    fn save_rotated_team_key(&self, team: &Team, new_key: &str) -> Result<(), SyncError> {
+        let personal_key = crypto::get_raw_master_key().ok_or(SyncError::NotUnlocked)?;
+        let repo = self
+            .storage
+            .get::<TeamKeyCacheRepository>()
+            .ok_or_else(|| {
+                SyncError::StorageError("TeamKeyCacheRepository not found".to_string())
+            })?;
+        TeamKeyManager::new((*repo).clone(), self.crypto_service.clone())
+            .save_verified_team_key(team, new_key, &personal_key)
+            .map_err(|e| SyncError::StorageError(e.to_string()))?;
+        if let Ok(mut cache) = self.cached_teams.write() {
+            if let Some(existing) = cache.iter_mut().find(|cached| cached.id == team.id) {
+                *existing = team.clone();
+            } else {
+                cache.push(team.clone());
+            }
+        }
+        Ok(())
     }
 
     /// 使用指定的策略映射应用冲突解决方案
@@ -454,6 +547,7 @@ fn team_key_cache_for_cloud_team(
         team_id: team.id.clone(),
         team_name: team.name.clone(),
         key_version: team.key_version,
+        key_verification: team.key_verification.clone(),
         encrypted_team_key,
         last_verified_at,
         updated_at: team.updated_at,
@@ -498,6 +592,7 @@ mod tests {
             team_id: "team-1".to_string(),
             team_name: "Old name".to_string(),
             key_version: 3,
+            key_verification: Some("old-verification".to_string()),
             encrypted_team_key: Some("encrypted-key".to_string()),
             last_verified_at: Some(1234),
             updated_at: 5678,
@@ -509,6 +604,7 @@ mod tests {
         assert_eq!("Platform", cache.team_name);
         assert_eq!(7, cache.key_version);
         assert_eq!(Some("encrypted-key".to_string()), cache.encrypted_team_key);
+        assert_eq!(team().key_verification, cache.key_verification);
         assert_eq!(Some(1234), cache.last_verified_at);
         assert_eq!(Some("owner".to_string()), cache.role);
     }

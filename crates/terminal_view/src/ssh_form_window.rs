@@ -15,7 +15,10 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use one_core::cloud_sync::{GlobalCloudUser, TeamOption, get_cached_team_options};
+use one_core::cloud_sync::{
+    GlobalCloudUser, TeamKeyStatus, TeamOption, ensure_team_key_ready_for_save,
+    get_cached_team_options,
+};
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
@@ -93,7 +96,18 @@ impl TeamSelectItem {
     fn from_team(team: &TeamOption) -> Self {
         Self {
             id: Some(team.id.clone()),
-            name: team.name.clone(),
+            name: team_select_name(team),
+        }
+    }
+}
+
+fn team_select_name(team: &TeamOption) -> String {
+    match team.key_status {
+        TeamKeyStatus::Missing | TeamKeyStatus::VersionMismatch => {
+            format!("{} ({})", team.name, t!("TeamSync.key_missing_short"))
+        }
+        TeamKeyStatus::Cached | TeamKeyStatus::Unlocked => {
+            format!("{} ({})", team.name, t!("TeamSync.key_cached_short"))
         }
     }
 }
@@ -970,6 +984,11 @@ impl SshFormWindow {
         let mut conn = StoredConnection::new_ssh(name, params, workspace_id);
         conn.sync_enabled = self.sync_enabled; // 设置同步状态
         conn.team_id = self.get_team_id(cx);
+        if let Err(error) = ensure_team_key_ready_for_save(conn.team_id.as_deref(), cx) {
+            self.test_result = Some(Err(error.to_string()));
+            cx.notify();
+            return;
+        }
         conn.owner_id = if self.is_editing {
             self.editing_owner_id.clone()
         } else {

@@ -5,10 +5,10 @@ use std::sync::Arc;
 use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, Context, ElementId, Entity, EventEmitter, FocusHandle,
-    Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding, ListSizingBehavior,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
+    AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, ElementId, Entity, EventEmitter,
+    FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding,
+    ListSizingBehavior, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
 };
 use gpui_component::button::ButtonVariant;
 use gpui_component::{
@@ -27,6 +27,7 @@ use one_core::cloud_sync::{
     CloudApiClient, CloudSyncService, ConflictResolution, SyncConflict, SyncEngine, UserInfo,
     can_edit_connection, get_cached_team_options,
 };
+use one_core::config::{public_base_url, team_management_url_template};
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use one_core::crypto;
 use one_core::key_storage;
@@ -51,7 +52,7 @@ use rust_i18n::t;
 use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
-use crate::auth::{AuthService, show_auth_dialog};
+use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
 use crate::external_driver_display::external_driver_icon_for_config;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
@@ -59,6 +60,7 @@ use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace
 use crate::license::{get_license_service, is_feature_enabled, show_upgrade_dialog};
 use crate::new_connection::NewConnectionWindow;
 use crate::setting_tab::GlobalCurrentUser;
+use crate::team_management::{build_team_management_url, resolve_team_management_url};
 use crate::user_avatar::render_user_avatar;
 use remote_desktop_view::remote_desktop_form::{
     RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
@@ -2239,6 +2241,37 @@ impl HomePage {
         });
     }
 
+    fn team_management_url(&self) -> Result<String, String> {
+        let Some((access_token, refresh_token, _, _)) = load_auth_data() else {
+            return Err(t!("Home.cloud_need_login").to_string());
+        };
+
+        let template = team_management_url_template();
+        let template = template.trim();
+        let url = build_team_management_url(template, &access_token, &refresh_token);
+        Ok(resolve_team_management_url(
+            &url,
+            public_base_url().as_deref(),
+        ))
+    }
+
+    fn open_team_management(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.team_management_url() {
+            Ok(url) => cx.open_url(&url),
+            Err(message) => window.push_notification(message, cx),
+        }
+    }
+
+    fn copy_team_management_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.team_management_url() {
+            Ok(url) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(url));
+                window.push_notification(t!("TeamManagement.copy_success").to_string(), cx);
+            }
+            Err(message) => window.push_notification(message, cx),
+        }
+    }
+
     fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
 
@@ -2346,6 +2379,16 @@ impl HomePage {
                             })
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.show_encryption_key_dialog(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("team-key-button")
+                            .icon(IconName::Key)
+                            .label(t!("TeamSync.manage_keys").to_string())
+                            .ghost()
+                            .tooltip(t!("TeamSync.key_help").to_string())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.add_team_key_settings_tab(window, cx);
                             })),
                     ),
             )
@@ -2642,6 +2685,29 @@ impl HomePage {
                     .gap_3()
                     .border_t_1()
                     .border_color(cx.theme().border)
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_1()
+                            .child(
+                                Button::new("open_team_management")
+                                    .icon(IconName::Building2)
+                                    .label(t!("TeamManagement.title").to_string())
+                                    .w_full()
+                                    .justify_start()
+                                    .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
+                                        this.open_team_management(window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("copy_team_management_url")
+                                    .icon(IconName::Copy)
+                                    .tooltip(t!("TeamManagement.copy_url").to_string())
+                                    .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
+                                        this.copy_team_management_url(window, cx);
+                                    })),
+                            ),
+                    )
                     .child(
                         Button::new("open_extensions")
                             .icon(IconName::GalleryVerticalEnd)

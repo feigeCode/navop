@@ -1,6 +1,6 @@
 use gpui::{App, AppContext, Context, Entity, FocusHandle, SharedString, Window};
 use gpui_component::{IndexPath, input::InputState, select::SelectState};
-use one_core::cloud_sync::{GlobalCloudUser, TeamOption};
+use one_core::cloud_sync::{GlobalCloudUser, TeamOption, ensure_team_key_ready_for_save};
 use one_core::storage::{
     ConnectionType, PortForwardingKind, PortForwardingParams, StoredConnection, Workspace,
 };
@@ -241,6 +241,11 @@ impl PortForwardingFormWindow {
         let mut conn = StoredConnection::new_port_forwarding(name, params, self.workspace_id(cx));
         conn.sync_enabled = self.sync_enabled;
         conn.team_id = self.team_id(cx);
+        if let Err(error) = ensure_team_key_ready_for_save(conn.team_id.as_deref(), cx) {
+            self.validation_error = Some(error.to_string());
+            cx.notify();
+            return;
+        }
         conn.remark = non_empty_text(&self.remark_input, cx);
         if !self.is_editing {
             conn.owner_id = GlobalCloudUser::get_user(cx).map(|user| user.id);

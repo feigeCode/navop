@@ -6,7 +6,9 @@ mod view;
 use gpui::{App, Context, Entity, FocusHandle, SharedString, Window};
 use gpui_component::input::InputState;
 use gpui_component::select::SelectState;
-use one_core::cloud_sync::{GlobalCloudUser, TeamOption, get_cached_team_options};
+use one_core::cloud_sync::{
+    GlobalCloudUser, TeamOption, ensure_team_key_ready_for_save, get_cached_team_options,
+};
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
 use one_core::storage::{RemoteDesktopParams, RemoteDesktopProtocol, StoredConnection, Workspace};
 use rust_i18n::t;
@@ -190,6 +192,8 @@ impl RemoteDesktopFormWindow {
         );
         connection.sync_enabled = self.sync_enabled;
         connection.team_id = self.team_id(cx);
+        ensure_team_key_ready_for_save(connection.team_id.as_deref(), cx)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         connection.owner_id = if self.is_editing {
             self.editing_connection
                 .as_ref()
