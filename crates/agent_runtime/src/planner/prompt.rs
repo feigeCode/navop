@@ -36,7 +36,7 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
                 messages.push(Message::system(text.clone()));
             }
             HistoryItem::ToolCall(call) => {
-                messages.push(assistant_tool_call_message(call, pending_assistant.take()));
+                push_assistant_tool_call_message(&mut messages, call, pending_assistant.take());
             }
             HistoryItem::Observation(obs) => {
                 flush_pending_assistant(&mut messages, &mut pending_assistant);
@@ -46,6 +46,23 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
     }
     flush_pending_assistant(&mut messages, &mut pending_assistant);
     messages
+}
+
+fn push_assistant_tool_call_message(
+    messages: &mut Vec<Message>,
+    call: &ToolCall,
+    assistant: Option<(String, String)>,
+) {
+    if assistant.is_none()
+        && let Some(message) = messages.last_mut()
+        && message.role == Role::Assistant
+        && let Some(tool_calls) = message.tool_calls.as_mut()
+    {
+        tool_calls.push(llm_tool_call(call));
+        return;
+    }
+
+    messages.push(assistant_tool_call_message(call, assistant));
 }
 
 /// 把 agent_runtime 的工具调用转为原生 assistant tool_calls 消息。
@@ -58,19 +75,23 @@ fn assistant_tool_call_message(call: &ToolCall, assistant: Option<(String, Strin
         } else {
             vec![MessageBlock::text(text)]
         },
-        tool_calls: Some(vec![llm_connector::types::ToolCall {
-            id: call.call_id.to_string(),
-            call_type: "function".to_string(),
-            function: llm_connector::types::FunctionCall {
-                name: call.tool_name.to_string(),
-                arguments: call.arguments.to_string(),
-                thought_signature: None,
-            },
-            index: None,
-            thought_signature: None,
-        }]),
+        tool_calls: Some(vec![llm_tool_call(call)]),
         reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
         ..Default::default()
+    }
+}
+
+fn llm_tool_call(call: &ToolCall) -> llm_connector::types::ToolCall {
+    llm_connector::types::ToolCall {
+        id: call.call_id.to_string(),
+        call_type: "function".to_string(),
+        function: llm_connector::types::FunctionCall {
+            name: call.tool_name.to_string(),
+            arguments: call.arguments.to_string(),
+            thought_signature: None,
+        },
+        index: None,
+        thought_signature: None,
     }
 }
 

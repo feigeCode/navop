@@ -225,7 +225,9 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
             );
         }
 
-        // 逐个执行工具调用,把调用与观测写回历史供下一轮 follow-up。
+        // 先写入同一轮模型返回的所有合法工具调用,再写观测结果。OpenAI thinking
+        // mode 要求 assistant tool_calls 消息原样带回对应 reasoning_content。
+        let mut executable_calls = Vec::new();
         for llm_call in &response.tool_calls {
             log_llm_tool_call("agent_dispatch", llm_call);
             let call_id = llm_tool_call_id(llm_call);
@@ -272,12 +274,19 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
                 };
             }
 
+            executable_calls.push(call);
+        }
+
+        for call in &executable_calls {
+            ctx.session.record_tool_call(&ctx.turn_id, call);
+        }
+
+        for call in executable_calls {
             tracing::info!(
                 tool = %call.tool_name,
                 args = %call.arguments,
                 "Agent 执行工具调用"
             );
-            ctx.session.record_tool_call(&ctx.turn_id, &call);
             let observation = execute_agent_tool(
                 &ctx.session,
                 &ctx.services,

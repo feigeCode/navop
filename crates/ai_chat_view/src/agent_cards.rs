@@ -12,19 +12,31 @@
 use crate::card::{CardMessage, CardRegistry, ChatCard};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Window, div,
+    Action, AnyElement, App, AppContext, Entity, InteractiveElement, IntoElement, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Sizable, Size,
     button::{Button, ButtonVariants},
     h_flex,
+    input::{Input, InputState},
     text::TextView,
     v_flex,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+
+const MAX_TOOL_OUTPUT_JSON_CHARS: usize = 4000;
+const TOOL_JSON_MIN_ROWS: usize = 6;
+const TOOL_JSON_MAX_ROWS: usize = 14;
+const TOOL_JSON_LINE_HEIGHT_PX: f32 = 18.0;
+const TOOL_JSON_VERTICAL_PADDING_PX: f32 = 20.0;
+
+struct ToolJsonInputState {
+    input: Entity<InputState>,
+    value: String,
+}
 
 /// 工具执行卡片的 `kind`。
 pub const TOOL_CARD: &str = "agent.tool";
@@ -206,7 +218,7 @@ impl ChatCard for ToolCard {
         TOOL_CARD
     }
 
-    fn render(&self, msg: &CardMessage, _window: &mut Window, cx: &mut App) -> AnyElement {
+    fn render(&self, msg: &CardMessage, window: &mut Window, cx: &mut App) -> AnyElement {
         let Some(data) = ToolCardData::from_json(msg.content) else {
             return fallback(msg.content, cx);
         };
@@ -288,20 +300,22 @@ impl ChatCard for ToolCard {
             );
 
         if expanded && !data.input_json.is_empty() {
-            card = card.child(tool_card_text_block(
+            card = card.child(tool_card_json_block(
                 "input",
                 SharedString::from(format!("agent-tool-input-{}", data.call_id)),
                 data.input_json.clone(),
+                window,
                 cx,
             ));
         }
 
-        let output = tool_output_text(&data);
+        let output = distinct_tool_output_json(&data);
         if expanded && !output.is_empty() {
-            card = card.child(tool_card_text_block(
+            card = card.child(tool_card_json_block(
                 "output",
                 SharedString::from(format!("agent-tool-output-{}", data.call_id)),
                 output,
+                window,
                 cx,
             ));
         }
@@ -356,7 +370,7 @@ impl ChatCard for ToolConfirmCard {
         TOOL_CONFIRM_CARD
     }
 
-    fn render(&self, msg: &CardMessage, _window: &mut Window, cx: &mut App) -> AnyElement {
+    fn render(&self, msg: &CardMessage, window: &mut Window, cx: &mut App) -> AnyElement {
         let Some(data) = ToolConfirmCardData::from_json(msg.content) else {
             return fallback(msg.content, cx);
         };
@@ -420,10 +434,11 @@ impl ChatCard for ToolConfirmCard {
             );
 
         if !data.input_json.is_empty() {
-            card = card.child(tool_card_text_block(
+            card = card.child(tool_card_json_block(
                 "input",
                 SharedString::from(format!("agent-tool-confirm-input-{}", msg.id)),
                 data.input_json.clone(),
+                window,
                 cx,
             ));
         }
@@ -505,25 +520,75 @@ fn confirm_card_title(data: &ToolConfirmCardData) -> String {
     }
 }
 
-fn tool_output_text(data: &ToolCardData) -> String {
-    match (data.summary.is_empty(), data.data_text.is_empty()) {
-        (true, true) => String::new(),
-        (false, true) => data.summary.clone(),
-        (true, false) => truncate_chars(&data.data_text, 600),
-        (false, false) => format!(
-            "{}\n\n{}",
-            data.summary,
-            truncate_chars(&data.data_text, 600)
-        ),
+fn tool_output_json(data: &ToolCardData) -> String {
+    let source = if data.data_text.trim().is_empty() {
+        data.summary.trim()
+    } else {
+        data.data_text.trim()
+    };
+    if source.is_empty() {
+        return String::new();
+    }
+    let formatted = serde_json::from_str::<serde_json::Value>(source)
+        .ok()
+        .and_then(|value| serde_json::to_string_pretty(&value).ok())
+        .unwrap_or_else(|| {
+            serde_json::to_string_pretty(&serde_json::json!({ "output": source }))
+                .unwrap_or_default()
+        });
+    truncate_chars(&formatted, MAX_TOOL_OUTPUT_JSON_CHARS)
+}
+
+fn distinct_tool_output_json(data: &ToolCardData) -> String {
+    let output = tool_output_json(data);
+    if output.is_empty() || tool_output_duplicates_input(data, &output) {
+        String::new()
+    } else {
+        output
     }
 }
 
-fn tool_card_text_block(
+fn tool_output_duplicates_input(data: &ToolCardData, output_json: &str) -> bool {
+    json_values_equal(&data.input_json, output_json)
+        || wrapped_output_matches_input_summary(&data.input_summary, output_json)
+}
+
+fn json_values_equal(left: &str, right: &str) -> bool {
+    let Ok(left) = serde_json::from_str::<serde_json::Value>(left) else {
+        return false;
+    };
+    let Ok(right) = serde_json::from_str::<serde_json::Value>(right) else {
+        return false;
+    };
+    left == right
+}
+
+fn wrapped_output_matches_input_summary(input_summary: &str, output_json: &str) -> bool {
+    let input_summary = input_summary.trim();
+    if input_summary.is_empty() {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(output_json)
+        .ok()
+        .and_then(|value| {
+            value
+                .as_object()
+                .and_then(|object| object.get("output"))
+                .and_then(|output| output.as_str())
+                .map(|output| output.trim() == input_summary)
+        })
+        .unwrap_or(false)
+}
+
+fn tool_card_json_block(
     label: &'static str,
     id: SharedString,
     content: String,
-    cx: &App,
+    window: &mut Window,
+    cx: &mut App,
 ) -> AnyElement {
+    let height = tool_json_height(&content);
+    let input = tool_json_input(id.clone(), content, window, cx);
     v_flex()
         .w_full()
         .min_w_0()
@@ -538,15 +603,53 @@ fn tool_card_text_block(
         .child(
             div()
                 .w_full()
-                .min_w_0()
-                .p_2()
-                .rounded_md()
-                .bg(cx.theme().background)
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(TextView::markdown(id, content).text_xs().selectable(true)),
+                .h(height)
+                .child(Input::new(&input).bare().h_full().disabled(true).text_xs()),
         )
         .into_any_element()
+}
+
+fn tool_json_height(content: &str) -> gpui::Pixels {
+    let rows = content
+        .lines()
+        .count()
+        .clamp(TOOL_JSON_MIN_ROWS, TOOL_JSON_MAX_ROWS);
+    px(rows as f32 * TOOL_JSON_LINE_HEIGHT_PX + TOOL_JSON_VERTICAL_PADDING_PX)
+}
+
+fn tool_json_input(
+    id: SharedString,
+    content: String,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<InputState> {
+    let state = window.use_keyed_state(
+        SharedString::from(format!("{}-json-input", id)),
+        cx,
+        |window, cx| {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .code_editor("json")
+                    .line_number(false)
+                    .rows(TOOL_JSON_MAX_ROWS)
+                    .soft_wrap(false)
+                    .default_value(content.clone())
+            });
+            ToolJsonInputState {
+                input,
+                value: content.clone(),
+            }
+        },
+    );
+    state.update(cx, |data, cx| {
+        if data.value != content {
+            data.value = content.clone();
+            data.input.update(cx, |input, cx| {
+                input.set_value(content, window, cx);
+            });
+        }
+        data.input.clone()
+    })
 }
 
 fn fallback(content: &str, cx: &App) -> AnyElement {
@@ -860,5 +963,102 @@ mod tests {
         let s = "a".repeat(10);
         assert_eq!(truncate_chars(&s, 100), s);
         assert!(truncate_chars(&s, 3).contains("已截断"));
+    }
+
+    #[test]
+    fn tool_output_json_prefers_data_without_repeating_summary() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "echo".into(),
+            input_summary: String::new(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: "ok".into(),
+            data_text: "{\"rows\":[1]}".into(),
+        };
+
+        let output = tool_output_json(&data);
+
+        assert_eq!("{\n  \"rows\": [\n    1\n  ]\n}", output);
+        assert!(!output.contains("summary"));
+    }
+
+    #[test]
+    fn tool_output_json_wraps_plain_text_as_json() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "echo".into(),
+            input_summary: String::new(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: "ok".into(),
+            data_text: "plain output".into(),
+        };
+
+        assert_eq!(
+            "{\n  \"output\": \"plain output\"\n}",
+            tool_output_json(&data)
+        );
+    }
+
+    #[test]
+    fn tool_json_height_keeps_short_json_readable_and_long_json_bounded() {
+        let min_height =
+            px(TOOL_JSON_MIN_ROWS as f32 * TOOL_JSON_LINE_HEIGHT_PX + TOOL_JSON_VERTICAL_PADDING_PX);
+        let max_height =
+            px(TOOL_JSON_MAX_ROWS as f32 * TOOL_JSON_LINE_HEIGHT_PX + TOOL_JSON_VERTICAL_PADDING_PX);
+
+        assert_eq!(min_height, tool_json_height("{\"sql\":\"select 1\"}"));
+        assert_eq!(max_height, tool_json_height(&"{\n".repeat(40)));
+    }
+
+    #[test]
+    fn distinct_tool_output_json_hides_structurally_equal_input() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "echo".into(),
+            input_summary: String::new(),
+            input_json: "{\n  \"rows\": [\n    1\n  ]\n}".into(),
+            running: false,
+            success: Some(true),
+            summary: "ok".into(),
+            data_text: "{\"rows\":[1]}".into(),
+        };
+
+        assert_eq!("", distinct_tool_output_json(&data));
+    }
+
+    #[test]
+    fn distinct_tool_output_json_hides_plain_output_matching_input_summary() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "echo".into(),
+            input_summary: "hello".into(),
+            input_json: "{\n  \"text\": \"hello\"\n}".into(),
+            running: false,
+            success: Some(true),
+            summary: "hello".into(),
+            data_text: "hello".into(),
+        };
+
+        assert_eq!("", distinct_tool_output_json(&data));
+    }
+
+    #[test]
+    fn distinct_tool_output_json_keeps_different_output() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "query".into(),
+            input_summary: "select 1".into(),
+            input_json: "{\n  \"sql\": \"select 1\"\n}".into(),
+            running: false,
+            success: Some(true),
+            summary: "1 row".into(),
+            data_text: "{\"rows\":[{\"value\":1}]}".into(),
+        };
+
+        assert!(distinct_tool_output_json(&data).contains("\"rows\""));
     }
 }

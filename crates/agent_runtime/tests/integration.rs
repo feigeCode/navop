@@ -103,7 +103,25 @@ struct ReasoningToolFollowupModel {
     requests: Mutex<Vec<ModelRequest>>,
 }
 
+struct MultiToolReasoningFollowupModel {
+    count: AtomicUsize,
+    requests: Mutex<Vec<ModelRequest>>,
+}
+
 impl ReasoningToolFollowupModel {
+    fn new() -> Self {
+        Self {
+            count: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn received_requests(&self) -> Vec<ModelRequest> {
+        self.requests.lock().expect("requests lock").clone()
+    }
+}
+
+impl MultiToolReasoningFollowupModel {
     fn new() -> Self {
         Self {
             count: AtomicUsize::new(0),
@@ -142,6 +160,42 @@ impl ModelClient for ReasoningToolFollowupModel {
 
     fn model_name(&self) -> &str {
         "reasoning-tool-followup"
+    }
+}
+
+#[async_trait]
+impl ModelClient for MultiToolReasoningFollowupModel {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse, RuntimeError> {
+        Ok(ModelResponse::text("unused"))
+    }
+
+    async fn complete_stream(&self, request: ModelRequest) -> Result<ModelStream, RuntimeError> {
+        self.requests.lock().expect("requests lock").push(request);
+        match self.count.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                let first =
+                    function_tool_call("call_echo_1", "echo", json!({"text": "hello"}).to_string());
+                let second =
+                    function_tool_call("call_echo_2", "echo", json!({"text": "world"}).to_string());
+                Ok(Box::pin(futures::stream::iter([
+                    Ok(ModelStreamEvent::ReasoningDelta(
+                        "需要调用两个工具。".into(),
+                    )),
+                    Ok(ModelStreamEvent::ToolCall(first.clone())),
+                    Ok(ModelStreamEvent::ToolCall(second.clone())),
+                    Ok(ModelStreamEvent::Completed(ModelResponse::tool_calls(
+                        vec![first, second],
+                    ))),
+                ])))
+            }
+            _ => Ok(agent_runtime::model::model_response_into_stream(
+                ModelResponse::text("工具调用完成。"),
+            )),
+        }
+    }
+
+    fn model_name(&self) -> &str {
+        "multi-tool-reasoning-followup"
     }
 }
 
@@ -308,6 +362,40 @@ async fn reasoning_before_tool_call_is_passed_back_in_followup_request() {
                 && message.reasoning_content.as_deref() == Some("需要调用工具。")
         }),
         "follow-up request must pass reasoning_content back with assistant tool call"
+    );
+}
+
+#[tokio::test]
+async fn reasoning_before_multiple_tool_calls_is_grouped_in_followup_request() {
+    let model = Arc::new(MultiToolReasoningFollowupModel::new());
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(EchoTool));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(registry)),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    runtime
+        .run_turn_blocking(session.id(), "调用两次 echo".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    let requests = model.received_requests();
+    assert_eq!(2, requests.len());
+    let assistant_tool_message = requests[1]
+        .messages
+        .iter()
+        .find(|message| {
+            message
+                .tool_calls
+                .as_ref()
+                .is_some_and(|calls| calls.len() == 2)
+        })
+        .expect("follow-up request should group sibling tool calls");
+    assert_eq!(
+        assistant_tool_message.reasoning_content.as_deref(),
+        Some("需要调用两个工具。")
     );
 }
 
