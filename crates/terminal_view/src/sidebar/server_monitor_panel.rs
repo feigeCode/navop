@@ -1061,6 +1061,7 @@ impl ServerMonitorPanel {
                     )
                     .child(
                         Progress::new(SharedString::from(format!("disk-{mount}")))
+                            .color(cx.theme().chart_1)
                             .value(disk.percent as f32),
                     )
             }))
@@ -1260,6 +1261,7 @@ fn render_cpu_core_grid(
                         )
                         .child(
                             Progress::new(SharedString::from(format!("cpu-core-{label}")))
+                                .color(cx.theme().chart_1)
                                 .value(value as f32),
                         )
                 })),
