@@ -27,7 +27,10 @@ use gpui_component::{
     kbd::Kbd,
     scroll::ScrollableElement,
     select::{Select, SelectItem, SelectState},
-    setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
+    setting::{
+        NumberFieldOptions, SelectIndex, SettingField, SettingGroup, SettingItem, SettingPage,
+        Settings,
+    },
     switch::Switch,
     v_flex,
 };
@@ -43,6 +46,7 @@ use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::GlobalStorageState;
 pub const DEFAULT_SYSTEM_HOTKEY_MACOS: &str = "cmd-alt-m";
 pub const DEFAULT_SYSTEM_HOTKEY_OTHER: &str = "ctrl-alt-m";
+const TEAM_KEYS_SETTINGS_PAGE_INDEX: usize = 2;
 
 use gpui_component::input::InputEvent;
 pub use one_core::settings::{
@@ -315,16 +319,26 @@ pub struct SettingsPanel {
     llm_providers_view: Entity<LlmProvidersView>,
     size: Size,
     group_variant: GroupBoxVariant,
+    initial_page_index: usize,
 }
 
 impl SettingsPanel {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_initial_page(0, cx)
+    }
+
+    pub fn new_team_keys(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_initial_page(TEAM_KEYS_SETTINGS_PAGE_INDEX, cx)
+    }
+
+    fn new_with_initial_page(initial_page_index: usize, cx: &mut Context<Self>) -> Self {
         let llm_providers_view = cx.new(|cx| LlmProvidersView::new(cx));
         Self {
             focus_handle: cx.focus_handle(),
             llm_providers_view,
             size: Size::default(),
             group_variant: GroupBoxVariant::Outline,
+            initial_page_index,
         }
     }
 
@@ -1544,10 +1558,20 @@ impl Render for SettingsPanel {
             init_settings(cx);
         }
 
+        let settings_id = if self.initial_page_index == TEAM_KEYS_SETTINGS_PAGE_INDEX {
+            "main-app-settings-team-keys"
+        } else {
+            "main-app-settings"
+        };
+
         div().track_focus(&self.focus_handle).size_full().child(
-            Settings::new("main-app-settings")
+            Settings::new(settings_id)
                 .with_size(self.size)
                 .with_group_variant(self.group_variant)
+                .default_selected_index(SelectIndex {
+                    page_ix: self.initial_page_index,
+                    ..Default::default()
+                })
                 .pages(self.setting_pages(window, cx)),
         )
     }

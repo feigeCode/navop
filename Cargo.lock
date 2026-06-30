@@ -6753,6 +6753,7 @@ dependencies = [
  "one-core",
  "one-ui",
  "onetcli_runtime",
+ "percent-encoding",
  "port_forwarding",
  "port_forwarding_view",
  "public_mcp",

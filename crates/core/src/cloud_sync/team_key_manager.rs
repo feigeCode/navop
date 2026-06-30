@@ -30,8 +30,10 @@ impl fmt::Display for TeamKeyError {
         match self {
             Self::MissingVerification => write!(f, "团队尚未初始化密钥验证数据"),
             Self::MissingPersonalKey => write!(f, "请先解锁个人主密钥"),
-            Self::MissingTeamKey => write!(f, "请先设置团队密钥"),
-            Self::VersionMismatch => write!(f, "团队密钥版本已变更，请重新输入"),
+            Self::MissingTeamKey => write!(f, "请先在 设置 > 团队密钥 中录入该团队密钥"),
+            Self::VersionMismatch => {
+                write!(f, "团队密钥版本已变更，请在 设置 > 团队密钥 中重新录入")
+            }
             Self::InvalidTeamKey => write!(f, "团队密钥错误"),
             Self::InvalidCachedKey => write!(f, "本地缓存的团队密钥无法解密或验证"),
             Self::Storage(error) => write!(f, "团队密钥缓存读写失败: {error}"),

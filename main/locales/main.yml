@@ -268,6 +268,20 @@ Home:
     zh-CN: "%{name} (副本 %{index})"
     zh-HK: "%{name} (副本 %{index})"
 
+TeamManagement:
+  title:
+    en: Team
+    zh-CN: 团队
+    zh-HK: 團隊
+  copy_url:
+    en: Copy team management URL
+    zh-CN: 复制团队管理地址
+    zh-HK: 複製團隊管理地址
+  copy_success:
+    en: Team management URL copied
+    zh-CN: 已复制团队管理地址
+    zh-HK: 已複製團隊管理地址
+
 # 团队同步
 TeamSync:
   personal:

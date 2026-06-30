@@ -23,6 +23,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 rust-i18n = { workspace = true }
 base64 = { workspace = true }
+percent-encoding = { workspace = true }
 dirs = {workspace = true}
 futures = { workspace = true }
 smol = { workspace = true }
