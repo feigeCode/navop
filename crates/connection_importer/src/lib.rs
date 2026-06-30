@@ -3,7 +3,9 @@ mod credentials;
 mod datagrip;
 mod dbeaver;
 mod finalshell;
+mod heidisql;
 mod model;
+mod navicat;
 mod sequel_ace;
 mod simple_encryptor;
 mod tableplus;
@@ -16,10 +18,12 @@ pub use credentials::{
 pub use datagrip::parse_datagrip_data_sources_xml;
 pub use dbeaver::parse_dbeaver_data_sources_json;
 pub use finalshell::parse_finalshell_connections_json;
+pub use heidisql::parse_heidisql_settings_ini;
 pub use model::{
     ImportError, ImportOptions, ImportSourceKind, ImportSourceStatus, ImportedConnection,
     ImportedSshAuthMethod, ImportedSshConnection, PasswordImportStatus, SourceAvailability,
 };
+pub use navicat::parse_navicat_connections_xml;
 pub use sequel_ace::parse_sequel_ace_favorites_plist_with_credentials;
 pub use tableplus::parse_tableplus_connections_json_with_credentials;
 pub use termius::parse_termius_hosts_json;
@@ -44,6 +48,8 @@ pub fn list_sources() -> Vec<ImportSourceStatus> {
             beekeeper::detect_availability(),
         ),
         ImportSourceStatus::new(ImportSourceKind::DataGrip, datagrip::detect_availability()),
+        ImportSourceStatus::new(ImportSourceKind::HeidiSQL, heidisql::detect_availability()),
+        ImportSourceStatus::new(ImportSourceKind::Navicat, navicat::detect_availability()),
         ImportSourceStatus::new(ImportSourceKind::Xshell, xshell::detect_availability()),
         ImportSourceStatus::new(
             ImportSourceKind::FinalShell,
@@ -74,6 +80,8 @@ pub fn preview_connections_with_credentials(
         }
         ImportSourceKind::BeekeeperStudio => beekeeper::preview_default_connections(options),
         ImportSourceKind::DataGrip => datagrip::preview_default_connections(options),
+        ImportSourceKind::HeidiSQL => heidisql::preview_default_connections(options),
+        ImportSourceKind::Navicat => navicat::preview_default_connections(options),
         ImportSourceKind::Xshell | ImportSourceKind::FinalShell | ImportSourceKind::Termius => Err(
             ImportError::UnsupportedSource(kind.display_name().to_string()),
         ),
@@ -107,6 +115,8 @@ pub fn preview_connections_from_path_with_credentials(
             beekeeper::preview_connections_from_path(path, options)
         }
         ImportSourceKind::DataGrip => datagrip::preview_connections_from_path(path, options),
+        ImportSourceKind::HeidiSQL => heidisql::preview_connections_from_path(path, options),
+        ImportSourceKind::Navicat => navicat::preview_connections_from_path(path, options),
         ImportSourceKind::Xshell | ImportSourceKind::FinalShell | ImportSourceKind::Termius => Err(
             ImportError::UnsupportedSource(kind.display_name().to_string()),
         ),

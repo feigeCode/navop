@@ -11,6 +11,8 @@ pub enum ImportSourceKind {
     Xshell,
     FinalShell,
     Termius,
+    HeidiSQL,
+    Navicat,
 }
 
 impl ImportSourceKind {
@@ -24,6 +26,8 @@ impl ImportSourceKind {
             Self::Xshell => "Xshell",
             Self::FinalShell => "FinalShell",
             Self::Termius => "Termius",
+            Self::HeidiSQL => "HeidiSQL",
+            Self::Navicat => "Navicat",
         }
     }
 }

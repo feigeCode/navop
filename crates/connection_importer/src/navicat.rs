@@ -1,0 +1,147 @@
+use crate::{
+    ImportError, ImportOptions, ImportSourceKind, ImportedConnection, PasswordImportStatus,
+    SourceAvailability,
+};
+use one_core::storage::DatabaseType;
+use roxmltree::{Document, Node};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+pub fn detect_availability() -> SourceAvailability {
+    let Some(path) = default_connections_path() else {
+        return SourceAvailability::NotInstalled;
+    };
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return SourceAvailability::PermissionRequired;
+    };
+    match parse_navicat_connections_xml(
+        &contents,
+        ImportOptions {
+            include_passwords: false,
+        },
+    ) {
+        Ok(connections) if connections.is_empty() => SourceAvailability::NoConnections,
+        Ok(connections) => SourceAvailability::Available {
+            connection_count: connections.len(),
+        },
+        Err(error) => SourceAvailability::Error {
+            message: error.to_string(),
+        },
+    }
+}
+
+pub fn preview_default_connections(
+    options: ImportOptions,
+) -> Result<Vec<ImportedConnection>, ImportError> {
+    let path = default_connections_path()
+        .ok_or_else(|| ImportError::SourceDataNotFound("Navicat connections".to_string()))?;
+    preview_connections_from_path(path, options)
+}
+
+pub fn preview_connections_from_path(
+    path: impl AsRef<Path>,
+    options: ImportOptions,
+) -> Result<Vec<ImportedConnection>, ImportError> {
+    let contents = std::fs::read_to_string(path.as_ref())
+        .map_err(|error| ImportError::ReadSourceData(error.to_string()))?;
+    parse_navicat_connections_xml(&contents, options)
+}
+
+pub fn parse_navicat_connections_xml(
+    contents: &str,
+    options: ImportOptions,
+) -> Result<Vec<ImportedConnection>, ImportError> {
+    let document = Document::parse(contents)
+        .map_err(|error| ImportError::InvalidSourceData(error.to_string()))?;
+    document
+        .descendants()
+        .filter(|node| node.has_tag_name("Connection") && attr_any(*node, &["Host"]).is_some())
+        .map(|node| parse_connection(node, options))
+        .collect()
+}
+
+fn parse_connection(
+    node: Node<'_, '_>,
+    options: ImportOptions,
+) -> Result<ImportedConnection, ImportError> {
+    let name = attr_any(node, &["ConnectionName", "Name", "ConnName"]).unwrap_or("Navicat");
+    let database_type = database_type(node)?;
+    Ok(ImportedConnection {
+        source: ImportSourceKind::Navicat,
+        source_id: name.to_string(),
+        name: name.to_string(),
+        database_type: database_type.clone(),
+        host: required_attr_any(node, &["Host"])?.to_string(),
+        port: port(node).or_else(|| default_port(&database_type)),
+        username: attr_any(node, &["UserName", "User", "Username"])
+            .unwrap_or_default()
+            .to_string(),
+        password: None,
+        database: attr_any(node, &["Database", "DBName", "Schema"]).map(str::to_string),
+        extra_params: HashMap::new(),
+        password_status: password_status(options),
+    })
+}
+
+fn database_type(node: Node<'_, '_>) -> Result<DatabaseType, ImportError> {
+    let raw = attr_any(node, &["ConnType", "Type", "DatabaseType"])
+        .unwrap_or_default()
+        .to_lowercase();
+    match raw.as_str() {
+        value if value.contains("mysql") || value.contains("maria") => Ok(DatabaseType::MySQL),
+        value if value.contains("postgre") || value.contains("pgsql") => {
+            Ok(DatabaseType::PostgreSQL)
+        }
+        value if value.contains("mssql") || value.contains("sqlserver") => Ok(DatabaseType::MSSQL),
+        value if value.contains("oracle") => Ok(DatabaseType::Oracle),
+        value if value.contains("sqlite") => Ok(DatabaseType::SQLite),
+        value if value.contains("clickhouse") => Ok(DatabaseType::ClickHouse),
+        _ => Err(ImportError::UnsupportedDatabaseType(raw)),
+    }
+}
+
+fn default_connections_path() -> Option<PathBuf> {
+    candidate_paths().into_iter().find(|path| path.exists())
+}
+
+fn candidate_paths() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    vec![
+        home.join("Documents/Navicat/connections.ncx"),
+        home.join("Documents/Navicat/connections.xml"),
+        home.join("AppData/Roaming/PremiumSoft/Navicat/connections.ncx"),
+        home.join("Library/Application Support/PremiumSoft CyberTech/Navicat/connections.ncx"),
+    ]
+}
+
+fn attr_any<'a>(node: Node<'a, 'a>, fields: &[&str]) -> Option<&'a str> {
+    fields.iter().find_map(|field| node.attribute(*field))
+}
+
+fn required_attr_any<'a>(
+    node: Node<'a, 'a>,
+    fields: &[&'static str],
+) -> Result<&'a str, ImportError> {
+    attr_any(node, fields).ok_or(ImportError::MissingField(fields[0]))
+}
+
+fn port(node: Node<'_, '_>) -> Option<u16> {
+    attr_any(node, &["Port"]).and_then(|value| value.parse().ok())
+}
+
+fn default_port(database_type: &DatabaseType) -> Option<u16> {
+    match database_type {
+        DatabaseType::MySQL => Some(3306),
+        DatabaseType::PostgreSQL => Some(5432),
+        DatabaseType::MSSQL => Some(1433),
+        DatabaseType::Oracle => Some(1521),
+        DatabaseType::ClickHouse => Some(8123),
+        DatabaseType::SQLite | DatabaseType::DuckDB | DatabaseType::External { .. } => None,
+    }
+}
+
+fn password_status(_options: ImportOptions) -> PasswordImportStatus {
+    PasswordImportStatus::Unsupported
+}

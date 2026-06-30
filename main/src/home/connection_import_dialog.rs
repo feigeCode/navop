@@ -131,6 +131,8 @@ fn source_icon(kind: ImportSourceKind) -> impl IntoElement {
         ImportSourceKind::SequelAce => IconName::Database,
         ImportSourceKind::BeekeeperStudio => IconName::Apps,
         ImportSourceKind::DataGrip => IconName::Database,
+        ImportSourceKind::HeidiSQL => IconName::Database,
+        ImportSourceKind::Navicat => IconName::Database,
         ImportSourceKind::Xshell => IconName::TerminalColor,
         ImportSourceKind::FinalShell => IconName::TerminalColor,
         ImportSourceKind::Termius => IconName::TerminalColor,
@@ -154,6 +156,8 @@ fn is_supported_source(kind: ImportSourceKind) -> bool {
             | ImportSourceKind::SequelAce
             | ImportSourceKind::BeekeeperStudio
             | ImportSourceKind::DataGrip
+            | ImportSourceKind::HeidiSQL
+            | ImportSourceKind::Navicat
             | ImportSourceKind::Xshell
             | ImportSourceKind::FinalShell
             | ImportSourceKind::Termius
@@ -233,6 +237,18 @@ mod tests {
                 },
             ),
             ImportSourceStatus::new(
+                ImportSourceKind::HeidiSQL,
+                SourceAvailability::Available {
+                    connection_count: 1,
+                },
+            ),
+            ImportSourceStatus::new(
+                ImportSourceKind::Navicat,
+                SourceAvailability::Available {
+                    connection_count: 1,
+                },
+            ),
+            ImportSourceStatus::new(
                 ImportSourceKind::FinalShell,
                 SourceAvailability::Available {
                     connection_count: 1,
@@ -254,6 +270,8 @@ mod tests {
                 ImportSourceKind::DBeaver,
                 ImportSourceKind::DataGrip,
                 ImportSourceKind::Xshell,
+                ImportSourceKind::HeidiSQL,
+                ImportSourceKind::Navicat,
                 ImportSourceKind::FinalShell,
                 ImportSourceKind::Termius
             ],
