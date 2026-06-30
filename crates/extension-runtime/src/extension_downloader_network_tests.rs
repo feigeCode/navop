@@ -20,7 +20,7 @@ use crate::extension_downloader::{
 #[cfg(not(feature = "github-marketplace"))]
 use crate::extension_downloader::{
     GITHUB_EXTENSION_MANIFEST_URL, fetch_manifest_url_with_fallback,
-    github_extension_manifest_url_from_parts, manifest_urls_for_configured_url,
+    manifest_urls_for_configured_url,
     manifest_urls_for_configured_url_with_github_fallback,
 };
 
@@ -75,28 +75,6 @@ fn missing_extension_manifest_env_uses_github_only() {
     );
 }
 
-#[cfg(not(feature = "github-marketplace"))]
-#[test]
-fn github_extension_manifest_url_prefers_runtime_then_build_time() {
-    assert_eq!(
-        "https://github.example.test/runtime/extension-manifest.json",
-        github_extension_manifest_url_from_parts(
-            Some(" https://github.example.test/runtime/extension-manifest.json "),
-            Some("https://github.example.test/build/extension-manifest.json")
-        )
-    );
-    assert_eq!(
-        "https://github.example.test/build/extension-manifest.json",
-        github_extension_manifest_url_from_parts(
-            Some(" "),
-            Some(" https://github.example.test/build/extension-manifest.json ")
-        )
-    );
-    assert_eq!(
-        GITHUB_EXTENSION_MANIFEST_URL,
-        github_extension_manifest_url_from_parts(None, None)
-    );
-}
 
 #[cfg(not(feature = "github-marketplace"))]
 #[test]
@@ -680,11 +658,11 @@ impl FakeHttpClient {
 }
 
 impl HttpClient for FakeHttpClient {
-    fn proxy(&self) -> Option<&Url> {
+    fn user_agent(&self) -> Option<&http::HeaderValue> {
         None
     }
 
-    fn user_agent(&self) -> Option<&http::HeaderValue> {
+    fn proxy(&self) -> Option<&Url> {
         None
     }
 
