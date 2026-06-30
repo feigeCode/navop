@@ -176,6 +176,10 @@ pub trait DbConnection: Sync + Send {
     ) -> Result<Vec<SqlResult>, DbError>;
     async fn query(&self, query: &str) -> Result<SqlResult, DbError>;
 
+    fn ping_query(&self) -> &'static str {
+        "SELECT 1"
+    }
+
     async fn driver_request_value(&self, _method: &str, _params: Value) -> Result<Value, DbError> {
         Err(DbError::NotSupported(
             "driver request is not supported by this connection".to_string(),
@@ -183,7 +187,7 @@ pub trait DbConnection: Sync + Send {
     }
 
     async fn ping(&self) -> Result<(), DbError> {
-        match self.query("SELECT 1").await? {
+        match self.query(self.ping_query()).await? {
             SqlResult::Error(error) => Err(DbError::connection(format!(
                 "connection ping failed: {}",
                 error.message

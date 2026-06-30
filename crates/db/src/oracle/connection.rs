@@ -370,6 +370,10 @@ impl DbConnection for OracleDbConnection {
         self.config.database = database;
     }
 
+    fn ping_query(&self) -> &'static str {
+        "SELECT 1 FROM DUAL"
+    }
+
     async fn connect(&mut self) -> Result<(), DbError> {
         let config = self.config.clone();
         info!("[Oracle] Connecting to {}:{}", config.host, config.port);
@@ -805,5 +809,36 @@ impl DbConnection for OracleDbConnection {
 
         debug!("[Oracle] execute_streaming() completed");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use one_core::storage::DatabaseType;
+    use std::collections::HashMap;
+
+    fn test_config() -> DbConnectionConfig {
+        DbConnectionConfig {
+            id: "oracle-test".to_string(),
+            database_type: DatabaseType::Oracle,
+            name: "Oracle Test".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 1521,
+            username: "user".to_string(),
+            password: "password".to_string(),
+            database: None,
+            service_name: Some("ORCL".to_string()),
+            sid: None,
+            workspace_id: None,
+            extra_params: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn oracle_ping_uses_dual_for_legacy_oracle_versions() {
+        let connection = OracleDbConnection::new(test_config());
+
+        assert_eq!("SELECT 1 FROM DUAL", connection.ping_query());
     }
 }
