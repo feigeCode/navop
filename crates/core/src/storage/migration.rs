@@ -30,6 +30,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260626000001",
         include_str!("../../migrations/20260626000001_personal_sync.sql"),
     ),
+    (
+        "20260630000001",
+        include_str!("../../migrations/20260630000001_agent_sessions.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

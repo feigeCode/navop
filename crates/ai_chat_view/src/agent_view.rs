@@ -1032,6 +1032,7 @@ impl AgentChatView {
         }
         self.persist_current(cx);
 
+        let should_use_ask_mode = persistence::should_use_ask_mode(cx, uid);
         let Some(snapshot) = persistence::load_snapshot(cx, uid) else {
             // 无快照(如尚未落库的实时会话):仅切换高亮。
             self.current_session = uid.to_string();
@@ -1045,6 +1046,9 @@ impl AgentChatView {
         restored.set_resources(self.resources.clone());
         self.session_id = restored.id().clone();
         self.system_instruction = restored.system_instruction();
+        if should_use_ask_mode {
+            self.task_kind = TaskKind::Ask;
+        }
         self.current_session = self.session_id.to_string();
         self.transcript.load_history(&history, plan.as_ref());
         self._event_task =

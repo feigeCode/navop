@@ -29,6 +29,7 @@ use crate::tools::{ObservationData, ToolCall, ToolDispatchContext, ToolName, Too
 use async_trait::async_trait;
 use futures::StreamExt;
 use llm_connector::types::{Message, ToolCall as LlmToolCall, ToolChoice};
+use serde_json::Value;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -284,7 +285,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
         for call in executable_calls {
             tracing::info!(
                 tool = %call.tool_name,
-                args = %call.arguments,
+                args = %debug_json_redacted(&call.arguments),
                 "Agent 执行工具调用"
             );
             let observation = execute_agent_tool(
@@ -429,9 +430,9 @@ fn log_model_request(iteration: usize, request: &ModelRequest) {
     );
     tracing::trace!(
         iteration,
-        messages = %debug_json(&request.messages),
-        tools = %debug_json(&request.tools),
-        tool_choice = %debug_json(&request.tool_choice),
+        messages = %debug_model_messages(&request.messages),
+        tools = %debug_json_redacted(&request.tools),
+        tool_choice = %debug_json_redacted(&request.tool_choice),
         "Agent 模型输入详情"
     );
 }
@@ -445,7 +446,7 @@ fn log_model_response(iteration: usize, response: &ModelResponse) {
     tracing::debug!(
         iteration,
         text_len = response.text.as_deref().map(str::len).unwrap_or(0),
-        text_preview = %preview(response.text.as_deref().unwrap_or_default()),
+        text_preview = %redacted_text_summary(response.text.as_deref().unwrap_or_default()),
         tool_calls = ?tool_calls,
         "Agent 模型输出详情"
     );
@@ -459,7 +460,7 @@ fn log_llm_tool_call(stage: &str, call: &LlmToolCall) {
         call_type = %call.call_type,
         function_name = %call.function.name,
         arguments_len = call.function.arguments.len(),
-        arguments_preview = %preview(&call.function.arguments),
+        arguments_preview = %redacted_arguments_preview(&call.function.arguments),
         "Agent 工具调用原始字段"
     );
 }
@@ -472,12 +473,147 @@ fn debug_tool_call(call: &LlmToolCall) -> String {
         call.call_type,
         call.function.name,
         call.function.arguments.len(),
-        preview(&call.function.arguments)
+        redacted_arguments_preview(&call.function.arguments)
     )
 }
 
-fn debug_json<T: serde::Serialize>(value: &T) -> String {
-    serde_json::to_string(value).unwrap_or_else(|err| format!("<json encode failed: {err}>"))
+fn debug_model_messages(messages: &[Message]) -> String {
+    match serde_json::to_value(messages) {
+        Ok(mut value) => {
+            redact_model_payloads(&mut value);
+            redact_sensitive_value(&mut value);
+            serde_json::to_string(&value)
+                .unwrap_or_else(|err| format!("<json encode failed: {err}>"))
+        }
+        Err(err) => format!("<json encode failed: {err}>"),
+    }
+}
+
+fn debug_json_redacted<T: serde::Serialize>(value: &T) -> String {
+    match serde_json::to_value(value) {
+        Ok(mut value) => {
+            redact_sensitive_value(&mut value);
+            serde_json::to_string(&value)
+                .unwrap_or_else(|err| format!("<json encode failed: {err}>"))
+        }
+        Err(err) => format!("<json encode failed: {err}>"),
+    }
+}
+
+fn redacted_arguments_preview(arguments: &str) -> String {
+    match serde_json::from_str::<Value>(arguments) {
+        Ok(mut value) => {
+            redact_sensitive_value(&mut value);
+            preview(&serde_json::to_string(&value).unwrap_or_else(|_| "<redacted>".into()))
+        }
+        Err(_) => format!(
+            "<non-json arguments redacted chars={}>",
+            arguments.chars().count()
+        ),
+    }
+}
+
+fn redacted_text_summary(value: &str) -> String {
+    if value.is_empty() {
+        String::new()
+    } else {
+        format!("<text redacted chars={}>", value.chars().count())
+    }
+}
+
+fn redact_model_payloads(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, item) in object.iter_mut() {
+                if is_model_payload_key(key) {
+                    *item = redacted_summary(item);
+                } else {
+                    redact_model_payloads(item);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_model_payloads(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn redact_sensitive_value(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, item) in object.iter_mut() {
+                if is_sensitive_key(key) {
+                    *item = Value::String("***".into());
+                } else if key_is_json_arguments(key) {
+                    redact_arguments_value(item);
+                } else {
+                    redact_sensitive_value(item);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_sensitive_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn redact_arguments_value(value: &mut Value) {
+    if let Value::String(text) = value
+        && let Ok(mut parsed) = serde_json::from_str::<Value>(text)
+    {
+        redact_sensitive_value(&mut parsed);
+        *value = parsed;
+        return;
+    }
+    redact_sensitive_value(value);
+}
+
+fn redacted_summary(value: &Value) -> Value {
+    Value::String(format!(
+        "<redacted chars={}>",
+        value.to_string().chars().count()
+    ))
+}
+
+fn is_model_payload_key(key: &str) -> bool {
+    matches!(
+        normalize_key(key).as_str(),
+        "content" | "reasoningcontent" | "reasoning" | "thought" | "thinking"
+    )
+}
+
+fn key_is_json_arguments(key: &str) -> bool {
+    normalize_key(key) == "arguments"
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized = normalize_key(key);
+    [
+        "password",
+        "passwd",
+        "token",
+        "apikey",
+        "secret",
+        "authorization",
+        "cookie",
+        "privatekey",
+        "accesskey",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+fn normalize_key(key: &str) -> String {
+    key.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn preview(value: &str) -> String {
@@ -538,5 +674,80 @@ fn llm_tool_call_id(call: &llm_connector::types::ToolCall) -> ToolCallId {
         ToolCallId::new()
     } else {
         ToolCallId::from_string(call.id.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use llm_connector::types::{FunctionCall, Role};
+    use serde_json::json;
+
+    #[test]
+    fn debug_json_redacts_sensitive_keys_recursively() {
+        let rendered = debug_json_redacted(&json!({
+            "headers": {
+                "Authorization": "Bearer secret-token",
+                "cookie": "sid=abc"
+            },
+            "nested": [
+                {"password": "p@ss"},
+                {"api_key": "key-123"},
+                {"query": "select 1"}
+            ]
+        }));
+
+        assert!(rendered.contains("***"));
+        assert!(rendered.contains("select 1"));
+        assert!(!rendered.contains("secret-token"));
+        assert!(!rendered.contains("sid=abc"));
+        assert!(!rendered.contains("p@ss"));
+        assert!(!rendered.contains("key-123"));
+    }
+
+    #[test]
+    fn tool_call_arguments_preview_redacts_json_argument_strings() {
+        let call = LlmToolCall {
+            id: "call_1".into(),
+            call_type: "function".into(),
+            function: FunctionCall {
+                name: "http".into(),
+                arguments: json!({
+                    "url": "https://example.test",
+                    "headers": {"Authorization": "Bearer token"},
+                    "password": "plain-secret"
+                })
+                .to_string(),
+                thought_signature: None,
+            },
+            index: Some(0),
+            thought_signature: None,
+        };
+
+        let rendered = debug_tool_call(&call);
+
+        assert!(rendered.contains("https://example.test"));
+        assert!(rendered.contains("***"));
+        assert!(!rendered.contains("Bearer token"));
+        assert!(!rendered.contains("plain-secret"));
+    }
+
+    #[test]
+    fn non_json_tool_arguments_are_not_logged_verbatim() {
+        let rendered = redacted_arguments_preview("password=plain-secret");
+
+        assert!(rendered.contains("<non-json arguments redacted"));
+        assert!(!rendered.contains("plain-secret"));
+    }
+
+    #[test]
+    fn model_message_payloads_are_summarized_not_logged_verbatim() {
+        let mut message = Message::text(Role::User, "客户 token 是 secret-token");
+        message.reasoning_content = Some("private chain".into());
+        let rendered = debug_model_messages(&[message]);
+
+        assert!(rendered.contains("<redacted chars="));
+        assert!(!rendered.contains("secret-token"));
+        assert!(!rendered.contains("private chain"));
     }
 }

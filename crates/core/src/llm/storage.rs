@@ -2,7 +2,7 @@ use anyhow::Result;
 use gpui::{App, SharedString};
 use rusqlite::params;
 
-use crate::llm::chat_history::{MessageRepository, SessionRepository};
+use crate::llm::chat_history::{AgentSessionRepository, MessageRepository, SessionRepository};
 use crate::storage::connection::SqliteConnection;
 use crate::storage::row_mapping::FromSqliteRow;
 use crate::storage::traits::{Entity, Repository};
@@ -285,9 +285,11 @@ pub fn init(cx: &mut App) {
     let conn = storage.connection();
     let provider_repo = ProviderRepository::new(conn.clone());
     let session_repo = SessionRepository::new(conn.clone());
-    let message_repo = MessageRepository::new(conn);
+    let message_repo = MessageRepository::new(conn.clone());
+    let agent_session_repo = AgentSessionRepository::new(conn);
 
     storage.register(provider_repo);
     storage.register(session_repo);
     storage.register(message_repo);
+    storage.register(agent_session_repo);
 }
