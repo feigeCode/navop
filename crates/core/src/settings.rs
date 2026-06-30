@@ -459,6 +459,8 @@ pub struct AppSettings {
     pub log_file_path: String,
     #[serde(default = "default_true")]
     pub auto_update: bool,
+    #[serde(default = "default_true")]
+    pub supabase_auto_sync: bool,
     #[serde(default)]
     pub global_proxy: GlobalProxySettings,
     #[serde(default)]
@@ -573,6 +575,7 @@ impl Default for AppSettings {
             terminal_confirm_high_risk_command: default_true(),
             log_file_path: String::new(),
             auto_update: true,
+            supabase_auto_sync: true,
             global_proxy: GlobalProxySettings::default(),
             mcp: McpSettings::default(),
             ai_chat: AiChatSettings::default(),
@@ -813,11 +816,13 @@ mod tests {
 
         assert!(!settings.personal_sync.enabled);
         assert!(settings.personal_sync.auto_sync);
+        assert!(settings.supabase_auto_sync);
     }
 
     #[test]
     fn app_settings_round_trip_preserves_personal_sync() {
         let mut settings = AppSettings::default();
+        settings.supabase_auto_sync = false;
         settings.personal_sync.enabled = true;
         settings.personal_sync.backend = PersonalSyncBackendKind::Git;
         settings.personal_sync.path = "/tmp/repo".to_string();
