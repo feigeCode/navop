@@ -3039,7 +3039,6 @@ mod tests {
             sort_order: None,
             created_at: None,
             updated_at: None,
-            sort_order: None,
             team_id: None,
             owner_id: None,
         }
