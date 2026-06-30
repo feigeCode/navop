@@ -4,7 +4,9 @@
 //! 视图([`AgentChatView`](crate::agent_view::AgentChatView))只需在收到事件时调用
 //! [`AgentTranscript::apply`],再渲染 `messages`。
 
-use agent_runtime::{HistoryItem, Plan, PlanStatus, RuntimeEvent, StepStatus, ToolObservation};
+use agent_runtime::{
+    HistoryItem, Plan, PlanStatus, RuntimeEvent, StepStatus, ToolObservation, ids::ToolCallId,
+};
 
 use crate::agent_cards::{
     PlanCardData, PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD,
@@ -176,10 +178,11 @@ impl AgentTranscript {
                     .as_ref()
                     .map(ToString::to_string)
                     .unwrap_or_else(|| "unknown".into());
-                let input = arguments
-                    .as_ref()
-                    .map(|args| build_tool_input_display(&tool_name_text, args))
-                    .unwrap_or_default();
+                let input = self.confirm_input_display(
+                    pending_tool_call_id.as_ref(),
+                    &tool_name_text,
+                    arguments.as_ref(),
+                );
                 let data = ToolConfirmCardData {
                     call_id: pending_tool_call_id
                         .as_ref()
@@ -371,6 +374,27 @@ impl AgentTranscript {
         };
         data.status = if approved { "approved" } else { "rejected" }.into();
         self.replace_confirm_card(call_id, data);
+    }
+
+    fn confirm_input_display(
+        &self,
+        call_id: Option<&ToolCallId>,
+        tool_name: &str,
+        arguments: Option<&serde_json::Value>,
+    ) -> crate::agent_tool_input::ToolInputDisplay {
+        if let Some(args) = arguments {
+            let input = build_tool_input_display(tool_name, args);
+            if !input.json.is_empty() {
+                return input;
+            }
+        }
+        call_id
+            .and_then(|id| self.find_tool_card(id.as_str()))
+            .map(|data| crate::agent_tool_input::ToolInputDisplay {
+                summary: data.input_summary,
+                json: data.input_json,
+            })
+            .unwrap_or_default()
     }
 
     /// 按 call_id 查找工具卡片数据。
@@ -772,6 +796,37 @@ mod tests {
         assert!(data.input_json.contains("\"sql\": \"show tables\""));
         assert_eq!(data.question, "确认执行工具 `db_schema` 吗?");
         assert_eq!(data.status, "pending");
+    }
+
+    #[test]
+    fn need_user_input_falls_back_to_existing_tool_call_input() {
+        let mut tr = AgentTranscript::new();
+        let call_id = ToolCallId::from_string("call_confirm");
+
+        tr.apply(&RuntimeEvent::ToolCallStarted {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call_id.clone(),
+            tool_name: ToolName::new("db_query"),
+            arguments: serde_json::json!({"sql": "select count(*) from users"}),
+        });
+        tr.apply(&RuntimeEvent::NeedUserInput {
+            session_id: sid(),
+            turn_id: tid(),
+            question: "确认执行工具 `db_query` 吗?".into(),
+            pending_tool_call_id: Some(call_id),
+            tool_name: Some(ToolName::new("db_query")),
+            arguments: None,
+        });
+
+        assert_eq!(2, tr.messages.len());
+        assert_eq!(Some(TOOL_CONFIRM_CARD), tr.messages[1].variant.card_kind());
+        let data = ToolConfirmCardData::from_json(&tr.messages[1].content).unwrap();
+        assert_eq!("select count(*) from users", data.input_summary);
+        assert!(
+            data.input_json
+                .contains("\"sql\": \"select count(*) from users\"")
+        );
     }
 
     #[test]

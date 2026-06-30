@@ -435,7 +435,7 @@ impl ChatCard for ToolConfirmCard {
 
         if !data.input_json.is_empty() {
             card = card.child(tool_card_json_block(
-                "input",
+                "待执行入参",
                 SharedString::from(format!("agent-tool-confirm-input-{}", msg.id)),
                 data.input_json.clone(),
                 window,
@@ -513,7 +513,7 @@ fn tool_card_title(data: &ToolCardData, cx: &App) -> AnyElement {
 }
 
 fn confirm_card_title(data: &ToolConfirmCardData) -> String {
-    if data.input_summary.is_empty() {
+    if data.input_summary.is_empty() || !data.input_json.is_empty() {
         format!("工具 · {}", data.tool_name)
     } else {
         format!("工具 · {} · {}", data.tool_name, data.input_summary)
@@ -959,6 +959,34 @@ mod tests {
     }
 
     #[test]
+    fn confirm_card_title_omits_summary_when_input_details_are_visible() {
+        let data = ToolConfirmCardData {
+            call_id: "call_1".into(),
+            tool_name: "db_schema".into(),
+            input_summary: "{\"connection\":\"8\",\"database\":\"ai_app3\"}".into(),
+            input_json: "{\n  \"connection\": \"8\",\n  \"database\": \"ai_app3\"\n}".into(),
+            question: "确认执行工具 `db_schema` 吗?".into(),
+            status: "pending".into(),
+        };
+
+        assert_eq!("工具 · db_schema", confirm_card_title(&data));
+    }
+
+    #[test]
+    fn confirm_card_title_keeps_summary_when_input_details_are_absent() {
+        let data = ToolConfirmCardData {
+            call_id: "call_1".into(),
+            tool_name: "db_schema".into(),
+            input_summary: "show tables".into(),
+            input_json: String::new(),
+            question: "确认执行工具 `db_schema` 吗?".into(),
+            status: "pending".into(),
+        };
+
+        assert_eq!("工具 · db_schema · show tables", confirm_card_title(&data));
+    }
+
+    #[test]
     fn truncate_adds_marker() {
         let s = "a".repeat(10);
         assert_eq!(truncate_chars(&s, 100), s);
@@ -1006,9 +1034,11 @@ mod tests {
     #[test]
     fn tool_json_height_keeps_short_json_readable_and_long_json_bounded() {
         let min_height =
-            px(TOOL_JSON_MIN_ROWS as f32 * TOOL_JSON_LINE_HEIGHT_PX + TOOL_JSON_VERTICAL_PADDING_PX);
+            px(TOOL_JSON_MIN_ROWS as f32 * TOOL_JSON_LINE_HEIGHT_PX
+                + TOOL_JSON_VERTICAL_PADDING_PX);
         let max_height =
-            px(TOOL_JSON_MAX_ROWS as f32 * TOOL_JSON_LINE_HEIGHT_PX + TOOL_JSON_VERTICAL_PADDING_PX);
+            px(TOOL_JSON_MAX_ROWS as f32 * TOOL_JSON_LINE_HEIGHT_PX
+                + TOOL_JSON_VERTICAL_PADDING_PX);
 
         assert_eq!(min_height, tool_json_height("{\"sql\":\"select 1\"}"));
         assert_eq!(max_height, tool_json_height(&"{\n".repeat(40)));
