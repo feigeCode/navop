@@ -165,6 +165,13 @@ pub fn save_team_key_for_cached_team(
     Ok(())
 }
 
+pub fn forget_team_key_for_cached_team(team_id: &str, cx: &App) -> Result<(), TeamKeyError> {
+    let repo = team_key_cache_repo(cx)?;
+    let service = Arc::new(RwLock::new(CloudSyncService::new()));
+    TeamKeyManager::new((*repo).clone(), service).forget_team_key(team_id)?;
+    Ok(())
+}
+
 fn team_key_cache_repo(cx: &App) -> Result<Arc<TeamKeyCacheRepository>, TeamKeyError> {
     let storage = cx
         .try_global::<GlobalStorageState>()
