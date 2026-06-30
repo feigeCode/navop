@@ -1960,6 +1960,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "510ca239cf13b7f8d16a2b48f263de7b4f8c566f0af58d901031473c76afb1e3"
 
 [[package]]
+name = "connection_importer"
+version = "0.1.0"
+dependencies = [
+ "dirs 6.0.0",
+ "one-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "console_error_panic_hook"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6737,6 +6750,7 @@ dependencies = [
  "ai_chat_view",
  "anyhow",
  "base64 0.22.1",
+ "connection_importer",
  "db",
  "db_view",
  "dirs 6.0.0",

@@ -53,6 +53,7 @@ use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
 use crate::auth::{AuthService, show_auth_dialog};
 use crate::external_driver_display::external_driver_icon_for_config;
+use crate::home::connection_import_dialog::show_connection_import_dialog;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
 use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
@@ -2276,6 +2277,15 @@ impl HomePage {
                             .on_click(window.listener_for(&view, move |this, _, window, cx| {
                                 this.show_new_connection_dialog(window, cx);
                             })),
+                    )
+                    .child(
+                        Button::new("import-connection-button")
+                            .icon(IconName::Upload)
+                            .label(t!("Home.import"))
+                            .tooltip(t!("Home.import"))
+                            .on_click(move |_, window, cx| {
+                                show_connection_import_dialog(window, cx);
+                            }),
                     )
                     // 分隔线
                     .child(div().h(px(20.0)).w(px(1.0)).bg(cx.theme().border).mx_1())
