@@ -1,21 +1,28 @@
-use super::connection_import_actions::import_connection_sources;
+use super::connection_import_actions::{preview_import_drafts, save_selected_import_drafts};
+use super::connection_import_preview_view::ConnectionImportPreview;
 use connection_importer::{ImportSourceKind, ImportSourceStatus, SourceAvailability, list_sources};
-use gpui::{
-    AnyElement, App, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
-};
-use gpui_component::{
-    ActiveTheme, Icon, IconName, WindowExt, dialog::DialogButtonProps, h_flex, v_flex,
-};
+#[cfg(test)]
+use gpui::SharedString;
+use gpui::{App, AppContext, ParentElement, Window, px};
+use gpui_component::{WindowExt, dialog::DialogButtonProps};
 use rust_i18n::t;
 
 pub(crate) fn show_connection_import_dialog(window: &mut Window, cx: &mut App) {
     let sources = list_sources();
-    window.open_dialog(cx, move |dialog, _window, cx| {
-        let sources_for_ok = sources.clone();
+    let source_kinds = importable_source_kinds(&sources);
+    let (drafts, preview_error) = match preview_import_drafts(&source_kinds) {
+        Ok(drafts) => (drafts, None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    let preview = cx.new(|cx| ConnectionImportPreview::new(drafts, preview_error, window, cx));
+    let preview_for_render = preview.clone();
+    let preview_for_ok = preview.clone();
+
+    window.open_dialog(cx, move |dialog, _window, _cx| {
         dialog
             .title(t!("Home.import").to_string())
-            .w(px(520.0))
-            .child(render_import_dialog_content(&sources, cx))
+            .w(px(760.0))
+            .child(preview_for_render.clone())
             .confirm()
             .button_props(
                 DialogButtonProps::default()
@@ -23,121 +30,36 @@ pub(crate) fn show_connection_import_dialog(window: &mut Window, cx: &mut App) {
                     .cancel_text(t!("Common.cancel"))
                     .show_cancel(true),
             )
-            .on_ok(move |_, window, cx| {
-                let sources = importable_source_kinds(&sources_for_ok);
-                match import_connection_sources(&sources, cx) {
-                    Ok(0) => {
-                        window.push_notification("没有可导入的连接".to_string(), cx);
-                    }
-                    Ok(count) => {
-                        window.push_notification(
-                            t!("Home.import_success", count = count).to_string(),
-                            cx,
-                        );
-                    }
-                    Err(error) => {
-                        window.push_notification(format!("导入失败：{}", error), cx);
+            .on_ok({
+                let preview_for_ok = preview_for_ok.clone();
+                move |_, window, cx| {
+                    let drafts = match preview_for_ok.read(cx).collect_drafts(cx) {
+                        Ok(drafts) => drafts,
+                        Err(error) => {
+                            window.push_notification(format!("导入失败：{}", error), cx);
+                            return false;
+                        }
+                    };
+                    match save_selected_import_drafts(&drafts, cx) {
+                        Ok(0) => {
+                            window.push_notification("没有选择要导入的连接".to_string(), cx);
+                            false
+                        }
+                        Ok(count) => {
+                            window.push_notification(
+                                t!("Home.import_success", count = count).to_string(),
+                                cx,
+                            );
+                            true
+                        }
+                        Err(error) => {
+                            window.push_notification(format!("导入失败：{}", error), cx);
+                            false
+                        }
                     }
                 }
-                true
             })
     });
-}
-
-fn render_import_dialog_content(sources: &[ImportSourceStatus], cx: &mut App) -> impl IntoElement {
-    let rows = sources
-        .iter()
-        .map(|source| render_source_row(source, cx))
-        .collect::<Vec<_>>();
-
-    v_flex()
-        .gap_4()
-        .child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(
-                    "从已安装的数据库和 SSH 客户端导入连接配置，并尝试通过系统 keychain 导入密码。",
-                ),
-        )
-        .child(v_flex().gap_2().children(rows))
-}
-
-fn render_source_row(source: &ImportSourceStatus, cx: &mut App) -> AnyElement {
-    let available = matches!(
-        source.availability,
-        SourceAvailability::Available { .. }
-            | SourceAvailability::Installed
-            | SourceAvailability::NoConnections
-    );
-    h_flex()
-        .items_center()
-        .justify_between()
-        .gap_3()
-        .p_3()
-        .border_1()
-        .border_color(cx.theme().border)
-        .rounded(px(6.0))
-        .child(
-            h_flex()
-                .gap_3()
-                .items_center()
-                .min_w_0()
-                .child(source_icon(source.kind))
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(cx.theme().foreground)
-                                .child(source.display_name.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(source_availability_summary(&source.availability)),
-                        ),
-                ),
-        )
-        .child(
-            div()
-                .text_xs()
-                .px_2()
-                .py_1()
-                .rounded(px(4.0))
-                .bg(if available {
-                    cx.theme().success
-                } else {
-                    cx.theme().muted
-                })
-                .text_color(if available {
-                    cx.theme().success_foreground
-                } else {
-                    cx.theme().muted_foreground
-                })
-                .child(if available { "可用" } else { "不可用" }),
-        )
-        .into_any_element()
-}
-
-fn source_icon(kind: ImportSourceKind) -> impl IntoElement {
-    let icon = match kind {
-        ImportSourceKind::DBeaver => IconName::Database,
-        ImportSourceKind::TablePlus => IconName::Table,
-        ImportSourceKind::SequelAce => IconName::Database,
-        ImportSourceKind::BeekeeperStudio => IconName::Apps,
-        ImportSourceKind::DataGrip => IconName::Database,
-        ImportSourceKind::HeidiSQL => IconName::Database,
-        ImportSourceKind::Navicat => IconName::Database,
-        ImportSourceKind::Xshell => IconName::TerminalColor,
-        ImportSourceKind::FinalShell => IconName::TerminalColor,
-        ImportSourceKind::Termius => IconName::TerminalColor,
-    };
-    Icon::new(icon).size_5()
 }
 
 fn importable_source_kinds(sources: &[ImportSourceStatus]) -> Vec<ImportSourceKind> {
@@ -173,6 +95,7 @@ fn is_available_source(source: &ImportSourceStatus) -> bool {
     )
 }
 
+#[cfg(test)]
 fn source_availability_summary(availability: &SourceAvailability) -> SharedString {
     match availability {
         SourceAvailability::Available { connection_count } => {
@@ -210,57 +133,7 @@ mod tests {
 
     #[test]
     fn importable_source_kinds_include_supported_available_sources() {
-        let sources = vec![
-            ImportSourceStatus::new(
-                ImportSourceKind::TablePlus,
-                SourceAvailability::Available {
-                    connection_count: 1,
-                },
-            ),
-            ImportSourceStatus::new(
-                ImportSourceKind::DBeaver,
-                SourceAvailability::Available {
-                    connection_count: 2,
-                },
-            ),
-            ImportSourceStatus::new(ImportSourceKind::SequelAce, SourceAvailability::Unsupported),
-            ImportSourceStatus::new(
-                ImportSourceKind::DataGrip,
-                SourceAvailability::Available {
-                    connection_count: 1,
-                },
-            ),
-            ImportSourceStatus::new(
-                ImportSourceKind::Xshell,
-                SourceAvailability::Available {
-                    connection_count: 1,
-                },
-            ),
-            ImportSourceStatus::new(
-                ImportSourceKind::HeidiSQL,
-                SourceAvailability::Available {
-                    connection_count: 1,
-                },
-            ),
-            ImportSourceStatus::new(
-                ImportSourceKind::Navicat,
-                SourceAvailability::Available {
-                    connection_count: 1,
-                },
-            ),
-            ImportSourceStatus::new(
-                ImportSourceKind::FinalShell,
-                SourceAvailability::Available {
-                    connection_count: 1,
-                },
-            ),
-            ImportSourceStatus::new(
-                ImportSourceKind::Termius,
-                SourceAvailability::Available {
-                    connection_count: 1,
-                },
-            ),
-        ];
+        let sources = supported_source_statuses();
 
         let kinds = importable_source_kinds(&sources);
 
@@ -277,5 +150,23 @@ mod tests {
             ],
             kinds
         );
+    }
+
+    fn supported_source_statuses() -> Vec<ImportSourceStatus> {
+        vec![
+            available(ImportSourceKind::TablePlus, 1),
+            available(ImportSourceKind::DBeaver, 2),
+            ImportSourceStatus::new(ImportSourceKind::SequelAce, SourceAvailability::Unsupported),
+            available(ImportSourceKind::DataGrip, 1),
+            available(ImportSourceKind::Xshell, 1),
+            available(ImportSourceKind::HeidiSQL, 1),
+            available(ImportSourceKind::Navicat, 1),
+            available(ImportSourceKind::FinalShell, 1),
+            available(ImportSourceKind::Termius, 1),
+        ]
+    }
+
+    fn available(kind: ImportSourceKind, connection_count: usize) -> ImportSourceStatus {
+        ImportSourceStatus::new(kind, SourceAvailability::Available { connection_count })
     }
 }

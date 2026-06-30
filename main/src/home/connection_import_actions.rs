@@ -1,29 +1,15 @@
+use super::connection_import_draft::{
+    EditableImportDraft, selected_import_count, selected_import_drafts_to_connections,
+};
 use crate::setting_tab::GlobalCurrentUser;
 use connection_importer::{
     ImportOptions, ImportSourceKind, preview_connections, preview_ssh_connections,
-    to_db_connection_config, to_ssh_params,
 };
 use gpui::App;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::storage::{
     ConnectionRepository, GlobalStorageState, StoredConnection, traits::Repository,
 };
-
-pub(crate) fn import_connection_sources(
-    sources: &[ImportSourceKind],
-    cx: &mut App,
-) -> Result<usize, String> {
-    sources.iter().try_fold(0usize, |count, source| {
-        import_connections(*source, cx).map(|n| count + n)
-    })
-}
-
-fn import_connections(kind: ImportSourceKind, cx: &mut App) -> Result<usize, String> {
-    if is_ssh_source(kind) {
-        return import_ssh_connections(kind, cx);
-    }
-    import_database_connections(kind, cx)
-}
 
 fn is_ssh_source(kind: ImportSourceKind) -> bool {
     matches!(
@@ -32,7 +18,39 @@ fn is_ssh_source(kind: ImportSourceKind) -> bool {
     )
 }
 
-fn import_database_connections(kind: ImportSourceKind, cx: &mut App) -> Result<usize, String> {
+pub(crate) fn preview_import_drafts(
+    sources: &[ImportSourceKind],
+) -> Result<Vec<EditableImportDraft>, String> {
+    let mut drafts = Vec::new();
+    for source in sources {
+        drafts.extend(preview_source_import_drafts(*source)?);
+    }
+    Ok(drafts)
+}
+
+pub(crate) fn save_selected_import_drafts(
+    drafts: &[EditableImportDraft],
+    cx: &mut App,
+) -> Result<usize, String> {
+    if selected_import_count(drafts) == 0 {
+        return Ok(0);
+    }
+    let connections = selected_import_drafts_to_connections(drafts)?;
+    save_imported_connections(connections, cx)
+}
+
+fn preview_source_import_drafts(
+    kind: ImportSourceKind,
+) -> Result<Vec<EditableImportDraft>, String> {
+    if is_ssh_source(kind) {
+        return preview_ssh_import_drafts(kind);
+    }
+    preview_database_import_drafts(kind)
+}
+
+fn preview_database_import_drafts(
+    kind: ImportSourceKind,
+) -> Result<Vec<EditableImportDraft>, String> {
     let imported = preview_connections(
         kind,
         ImportOptions {
@@ -40,21 +58,13 @@ fn import_database_connections(kind: ImportSourceKind, cx: &mut App) -> Result<u
         },
     )
     .map_err(|error| error.to_string())?;
-    if imported.is_empty() {
-        return Ok(0);
-    }
-
-    let mut saved = Vec::with_capacity(imported.len());
-    for imported_connection in imported {
-        let config =
-            to_db_connection_config(imported_connection).map_err(|error| error.to_string())?;
-        saved.push(StoredConnection::from_db_connection(config));
-    }
-
-    save_imported_connections(saved, cx)
+    Ok(imported
+        .into_iter()
+        .map(EditableImportDraft::database)
+        .collect())
 }
 
-fn import_ssh_connections(kind: ImportSourceKind, cx: &mut App) -> Result<usize, String> {
+fn preview_ssh_import_drafts(kind: ImportSourceKind) -> Result<Vec<EditableImportDraft>, String> {
     let imported = preview_ssh_connections(
         kind,
         ImportOptions {
@@ -62,18 +72,7 @@ fn import_ssh_connections(kind: ImportSourceKind, cx: &mut App) -> Result<usize,
         },
     )
     .map_err(|error| error.to_string())?;
-    if imported.is_empty() {
-        return Ok(0);
-    }
-
-    let mut saved = Vec::with_capacity(imported.len());
-    for imported_connection in imported {
-        let name = imported_connection.name.clone();
-        let params = to_ssh_params(imported_connection).map_err(|error| error.to_string())?;
-        saved.push(StoredConnection::new_ssh(name, params, None));
-    }
-
-    save_imported_connections(saved, cx)
+    Ok(imported.into_iter().map(EditableImportDraft::ssh).collect())
 }
 
 fn save_imported_connections(
