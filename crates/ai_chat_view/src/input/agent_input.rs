@@ -1322,10 +1322,14 @@ fn render_context_mode_content(
                 cx,
             ));
     }
+    let has_database_scope = scopes.iter().any(|scope| scope.key.as_ref() == "database");
     if !scopes.is_empty() {
         col = col.child(context_group_label("作用域", cx));
         for scope in scopes {
             col = col.child(context_scope_row(view.clone(), scope, muted, border, cx));
+        }
+        if has_database_scope {
+            col = col.child(context_database_hint(muted, cx));
         }
     }
     col = col.child(context_group_label("选择目标", cx));
@@ -1337,6 +1341,19 @@ fn render_context_mode_content(
     }
 
     col.into_any_element()
+}
+
+fn context_database_hint(
+    muted: gpui::Hsla,
+    _cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    div()
+        .px_2()
+        .py_1()
+        .text_xs()
+        .text_color(muted)
+        .child("如需切换数据库,请在数据库侧边栏中点击目标数据库。")
+        .into_any_element()
 }
 
 fn context_group_label(

@@ -59,13 +59,17 @@ pub fn build_agent_context_all(
 }
 
 /// 从单个连接构建 `@` 提及项。
-pub fn build_mentions_single(connection: &StoredConnection) -> Vec<MentionItem> {
-    vec![connection_to_mention_item(connection)]
+///
+/// 连接本身通过顶部上下文选择器切换,不进入输入框 `@` 补全。
+pub fn build_mentions_single(_connection: &StoredConnection) -> Vec<MentionItem> {
+    Vec::new()
 }
 
 /// 从连接列表构建 `@` 提及项。
-pub fn build_mentions_from_connections(connections: &[StoredConnection]) -> Vec<MentionItem> {
-    connections.iter().map(connection_to_mention_item).collect()
+///
+/// 连接本身通过顶部上下文选择器切换,不进入输入框 `@` 补全。
+pub fn build_mentions_from_connections(_connections: &[StoredConnection]) -> Vec<MentionItem> {
+    Vec::new()
 }
 
 /// 将 StoredConnection 转换为 ResourceRef。
@@ -88,39 +92,6 @@ fn connection_to_resource_ref(connection: &StoredConnection) -> ResourceRef {
         resource.set_scope(scope);
     }
     resource
-}
-
-/// 将 StoredConnection 转换为 MentionItem。
-fn connection_to_mention_item(connection: &StoredConnection) -> MentionItem {
-    let resource = connection_to_resource_ref(connection);
-    let endpoint = connection_endpoint_detail(&connection.params);
-    let detail = if endpoint.is_empty() {
-        resource.kind.to_string()
-    } else {
-        format!("{} | {}", resource.kind, endpoint)
-    };
-
-    MentionItem::new(
-        resource.id.to_string(),
-        resource.label,
-        detail,
-        resource.kind.to_string(),
-    )
-}
-
-fn connection_endpoint_detail(params: &str) -> String {
-    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(params) else {
-        return String::new();
-    };
-    let host = string_field(&map, &["host", "hostname", "address"]);
-    let port = string_field(&map, &["port"]);
-    match (host, port) {
-        (Some(host), Some(port)) if !host.is_empty() && !port.is_empty() => {
-            format!("{host}:{port}")
-        }
-        (Some(host), _) => host,
-        _ => String::new(),
-    }
 }
 
 fn string_field(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {

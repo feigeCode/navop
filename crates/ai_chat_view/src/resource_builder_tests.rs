@@ -2,8 +2,8 @@ use agent_runtime::{ResourceKind, ResourceScope};
 use one_core::storage::{ConnectionType, StoredConnection};
 
 use crate::{
-    build_agent_context_all, build_mentions_single, build_resource_context_all,
-    build_resource_context_single,
+    build_agent_context_all, build_mentions_from_connections, build_mentions_single,
+    build_resource_context_all, build_resource_context_single,
 };
 
 fn stored_connection(
@@ -69,7 +69,7 @@ fn all_connections_builds_context_with_multiple_resources() {
 }
 
 #[test]
-fn mentions_include_connection_id_label_kind_and_endpoint() {
+fn connection_mentions_are_not_suggested_in_input() {
     let conn = stored_connection(
         7,
         "cache",
@@ -79,11 +79,24 @@ fn mentions_include_connection_id_label_kind_and_endpoint() {
 
     let mentions = build_mentions_single(&conn);
 
-    assert_eq!(1, mentions.len());
-    assert_eq!("7", mentions[0].id);
-    assert_eq!("cache", mentions[0].label);
-    assert_eq!("redis", mentions[0].kind);
-    assert_eq!("redis | 127.0.0.1:6379", mentions[0].detail);
+    assert!(mentions.is_empty());
+}
+
+#[test]
+fn connection_list_mentions_are_not_suggested_in_input() {
+    let conns = vec![
+        stored_connection(
+            1,
+            "mysql-1",
+            ConnectionType::Database,
+            r#"{"type":"mysql"}"#,
+        ),
+        stored_connection(2, "redis-1", ConnectionType::Redis, "{}"),
+    ];
+
+    let mentions = build_mentions_from_connections(&conns);
+
+    assert!(mentions.is_empty());
 }
 
 #[test]
@@ -117,7 +130,7 @@ fn agent_context_all_pairs_resources_with_mentions() {
     let (ctx, mentions) = build_agent_context_all(Some(&conns[1]), &conns);
 
     assert_eq!(2, ctx.resources.len());
-    assert_eq!(2, mentions.len());
+    assert!(mentions.is_empty());
     assert_eq!(
         Some("ssh-1"),
         ctx.current().map(|resource| resource.label.as_str())
