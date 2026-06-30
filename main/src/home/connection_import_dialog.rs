@@ -1,17 +1,10 @@
-use crate::setting_tab::GlobalCurrentUser;
-use connection_importer::{
-    ImportOptions, ImportSourceKind, ImportSourceStatus, SourceAvailability, list_sources,
-    preview_connections, to_db_connection_config,
-};
+use super::connection_import_actions::import_connection_sources;
+use connection_importer::{ImportSourceKind, ImportSourceStatus, SourceAvailability, list_sources};
 use gpui::{
     AnyElement, App, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, WindowExt, dialog::DialogButtonProps, h_flex, v_flex,
-};
-use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
-use one_core::storage::{
-    ConnectionRepository, GlobalStorageState, StoredConnection, traits::Repository,
 };
 use rust_i18n::t;
 
@@ -63,7 +56,9 @@ fn render_import_dialog_content(sources: &[ImportSourceStatus], cx: &mut App) ->
             div()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("从已安装的数据库客户端导入连接配置，并尝试通过系统 keychain 导入密码。"),
+                .child(
+                    "从已安装的数据库和 SSH 客户端导入连接配置，并尝试通过系统 keychain 导入密码。",
+                ),
         )
         .child(v_flex().gap_2().children(rows))
 }
@@ -135,6 +130,8 @@ fn source_icon(kind: ImportSourceKind) -> impl IntoElement {
         ImportSourceKind::TablePlus => IconName::Table,
         ImportSourceKind::SequelAce => IconName::Database,
         ImportSourceKind::BeekeeperStudio => IconName::Apps,
+        ImportSourceKind::DataGrip => IconName::Database,
+        ImportSourceKind::Xshell => IconName::TerminalColor,
     };
     Icon::new(icon).size_5()
 }
@@ -154,6 +151,8 @@ fn is_supported_source(kind: ImportSourceKind) -> bool {
             | ImportSourceKind::TablePlus
             | ImportSourceKind::SequelAce
             | ImportSourceKind::BeekeeperStudio
+            | ImportSourceKind::DataGrip
+            | ImportSourceKind::Xshell
     )
 }
 
@@ -164,56 +163,6 @@ fn is_available_source(source: &ImportSourceStatus) -> bool {
             | SourceAvailability::Installed
             | SourceAvailability::NoConnections
     )
-}
-
-fn import_connection_sources(sources: &[ImportSourceKind], cx: &mut App) -> Result<usize, String> {
-    sources.iter().try_fold(0usize, |count, source| {
-        import_connections(*source, cx).map(|n| count + n)
-    })
-}
-
-fn import_connections(kind: ImportSourceKind, cx: &mut App) -> Result<usize, String> {
-    let imported = preview_connections(
-        kind,
-        ImportOptions {
-            include_passwords: true,
-        },
-    )
-    .map_err(|error| error.to_string())?;
-    if imported.is_empty() {
-        return Ok(0);
-    }
-
-    let owner_id = GlobalCurrentUser::get_user(cx).map(|user| user.id);
-    let storage = cx.global::<GlobalStorageState>().storage.clone();
-    let repo = storage
-        .get::<ConnectionRepository>()
-        .ok_or_else(|| "ConnectionRepository not found".to_string())?;
-
-    let mut saved = Vec::with_capacity(imported.len());
-    for imported_connection in imported {
-        let config =
-            to_db_connection_config(imported_connection).map_err(|error| error.to_string())?;
-        let mut stored = StoredConnection::from_db_connection(config);
-        stored.owner_id = owner_id.clone();
-        repo.insert(&mut stored)
-            .map_err(|error| error.to_string())?;
-        saved.push(stored);
-    }
-
-    notify_connections_created(saved.clone(), cx);
-    Ok(saved.len())
-}
-
-fn notify_connections_created(connections: Vec<StoredConnection>, cx: &mut App) {
-    let Some(notifier) = get_notifier(cx) else {
-        return;
-    };
-    for connection in connections {
-        notifier.update(cx, |_, cx| {
-            cx.emit(ConnectionDataEvent::ConnectionCreated { connection });
-        });
-    }
 }
 
 fn source_availability_summary(availability: &SourceAvailability) -> SharedString {
@@ -267,12 +216,29 @@ mod tests {
                 },
             ),
             ImportSourceStatus::new(ImportSourceKind::SequelAce, SourceAvailability::Unsupported),
+            ImportSourceStatus::new(
+                ImportSourceKind::DataGrip,
+                SourceAvailability::Available {
+                    connection_count: 1,
+                },
+            ),
+            ImportSourceStatus::new(
+                ImportSourceKind::Xshell,
+                SourceAvailability::Available {
+                    connection_count: 1,
+                },
+            ),
         ];
 
         let kinds = importable_source_kinds(&sources);
 
         assert_eq!(
-            vec![ImportSourceKind::TablePlus, ImportSourceKind::DBeaver],
+            vec![
+                ImportSourceKind::TablePlus,
+                ImportSourceKind::DBeaver,
+                ImportSourceKind::DataGrip,
+                ImportSourceKind::Xshell
+            ],
             kinds
         );
     }

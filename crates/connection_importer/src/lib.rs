@@ -1,23 +1,27 @@
 mod beekeeper;
 mod credentials;
+mod datagrip;
 mod dbeaver;
 mod model;
 mod sequel_ace;
 mod simple_encryptor;
 mod tableplus;
+mod xshell;
 
 pub use credentials::{
     CredentialQuery, CredentialStore, NoopCredentialStore, SystemCredentialStore,
 };
+pub use datagrip::parse_datagrip_data_sources_xml;
 pub use dbeaver::parse_dbeaver_data_sources_json;
 pub use model::{
     ImportError, ImportOptions, ImportSourceKind, ImportSourceStatus, ImportedConnection,
-    PasswordImportStatus, SourceAvailability,
+    ImportedSshAuthMethod, ImportedSshConnection, PasswordImportStatus, SourceAvailability,
 };
 pub use sequel_ace::parse_sequel_ace_favorites_plist_with_credentials;
 pub use tableplus::parse_tableplus_connections_json_with_credentials;
+pub use xshell::parse_xshell_session;
 
-use one_core::storage::{DatabaseType, DbConnectionConfig};
+use one_core::storage::{DatabaseType, DbConnectionConfig, SshAuthMethod, SshParams};
 use std::path::Path;
 
 pub fn list_sources() -> Vec<ImportSourceStatus> {
@@ -35,6 +39,8 @@ pub fn list_sources() -> Vec<ImportSourceStatus> {
             ImportSourceKind::BeekeeperStudio,
             beekeeper::detect_availability(),
         ),
+        ImportSourceStatus::new(ImportSourceKind::DataGrip, datagrip::detect_availability()),
+        ImportSourceStatus::new(ImportSourceKind::Xshell, xshell::detect_availability()),
     ]
 }
 
@@ -58,6 +64,10 @@ pub fn preview_connections_with_credentials(
             sequel_ace::preview_default_connections(options, credentials)
         }
         ImportSourceKind::BeekeeperStudio => beekeeper::preview_default_connections(options),
+        ImportSourceKind::DataGrip => datagrip::preview_default_connections(options),
+        ImportSourceKind::Xshell => Err(ImportError::UnsupportedSource(
+            kind.display_name().to_string(),
+        )),
     }
 }
 
@@ -87,6 +97,35 @@ pub fn preview_connections_from_path_with_credentials(
         ImportSourceKind::BeekeeperStudio => {
             beekeeper::preview_connections_from_path(path, options)
         }
+        ImportSourceKind::DataGrip => datagrip::preview_connections_from_path(path, options),
+        ImportSourceKind::Xshell => Err(ImportError::UnsupportedSource(
+            kind.display_name().to_string(),
+        )),
+    }
+}
+
+pub fn preview_ssh_connections(
+    kind: ImportSourceKind,
+    options: ImportOptions,
+) -> Result<Vec<ImportedSshConnection>, ImportError> {
+    match kind {
+        ImportSourceKind::Xshell => xshell::preview_default_ssh_connections(options),
+        _ => Err(ImportError::UnsupportedSource(
+            kind.display_name().to_string(),
+        )),
+    }
+}
+
+pub fn preview_ssh_connections_from_path(
+    kind: ImportSourceKind,
+    path: impl AsRef<Path>,
+    options: ImportOptions,
+) -> Result<Vec<ImportedSshConnection>, ImportError> {
+    match kind {
+        ImportSourceKind::Xshell => xshell::preview_ssh_connections_from_path(path, options),
+        _ => Err(ImportError::UnsupportedSource(
+            kind.display_name().to_string(),
+        )),
     }
 }
 
@@ -112,6 +151,40 @@ pub fn to_db_connection_config(
         workspace_id: None,
         extra_params: imported.extra_params,
     })
+}
+
+pub fn to_ssh_params(imported: ImportedSshConnection) -> Result<SshParams, ImportError> {
+    Ok(SshParams {
+        host: imported.host,
+        port: imported.port,
+        username: imported.username,
+        auth_method: to_ssh_auth_method(imported.auth_method),
+        connect_timeout: None,
+        keepalive_interval: None,
+        keepalive_max: None,
+        default_directory: None,
+        init_script: None,
+        disable_shell_integration: None,
+        jump_server: None,
+        proxy: None,
+    })
+}
+
+fn to_ssh_auth_method(auth_method: ImportedSshAuthMethod) -> SshAuthMethod {
+    match auth_method {
+        ImportedSshAuthMethod::Password { password } => SshAuthMethod::Password {
+            password: password.unwrap_or_default(),
+        },
+        ImportedSshAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        } => SshAuthMethod::PrivateKey {
+            key_path,
+            passphrase,
+        },
+        ImportedSshAuthMethod::Agent => SshAuthMethod::Agent,
+        ImportedSshAuthMethod::AutoPublicKey => SshAuthMethod::AutoPublicKey,
+    }
 }
 
 pub fn duplicate_fingerprint(imported: &ImportedConnection) -> String {

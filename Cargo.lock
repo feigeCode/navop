@@ -1971,6 +1971,7 @@ dependencies = [
  "hmac 0.12.1",
  "one-core",
  "plist",
+ "roxmltree",
  "rusqlite",
  "serde",
  "serde_json",

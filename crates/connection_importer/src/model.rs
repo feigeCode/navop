@@ -7,6 +7,8 @@ pub enum ImportSourceKind {
     TablePlus,
     SequelAce,
     BeekeeperStudio,
+    DataGrip,
+    Xshell,
 }
 
 impl ImportSourceKind {
@@ -16,6 +18,8 @@ impl ImportSourceKind {
             Self::TablePlus => "TablePlus",
             Self::SequelAce => "Sequel Ace",
             Self::BeekeeperStudio => "Beekeeper Studio",
+            Self::DataGrip => "DataGrip",
+            Self::Xshell => "Xshell",
         }
     }
 }
@@ -73,6 +77,31 @@ pub struct ImportedConnection {
     pub password: Option<String>,
     pub database: Option<String>,
     pub extra_params: HashMap<String, String>,
+    pub password_status: PasswordImportStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImportedSshAuthMethod {
+    Password {
+        password: Option<String>,
+    },
+    PrivateKey {
+        key_path: String,
+        passphrase: Option<String>,
+    },
+    Agent,
+    AutoPublicKey,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportedSshConnection {
+    pub source: ImportSourceKind,
+    pub source_id: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_method: ImportedSshAuthMethod,
     pub password_status: PasswordImportStatus,
 }
 
