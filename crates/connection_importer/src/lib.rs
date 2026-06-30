@@ -1,18 +1,27 @@
+mod credentials;
 mod dbeaver;
 mod model;
+mod tableplus;
 
+pub use credentials::{
+    CredentialQuery, CredentialStore, NoopCredentialStore, SystemCredentialStore,
+};
 pub use dbeaver::parse_dbeaver_data_sources_json;
 pub use model::{
     ImportError, ImportOptions, ImportSourceKind, ImportSourceStatus, ImportedConnection,
     PasswordImportStatus, SourceAvailability,
 };
+pub use tableplus::parse_tableplus_connections_json_with_credentials;
 
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use std::path::Path;
 
 pub fn list_sources() -> Vec<ImportSourceStatus> {
     vec![
-        ImportSourceStatus::new(ImportSourceKind::TablePlus, SourceAvailability::Unsupported),
+        ImportSourceStatus::new(
+            ImportSourceKind::TablePlus,
+            tableplus::detect_availability(),
+        ),
         ImportSourceStatus::new(ImportSourceKind::SequelAce, SourceAvailability::Unsupported),
         ImportSourceStatus::new(ImportSourceKind::DBeaver, dbeaver::detect_availability()),
         ImportSourceStatus::new(
@@ -26,8 +35,18 @@ pub fn preview_connections(
     kind: ImportSourceKind,
     options: ImportOptions,
 ) -> Result<Vec<ImportedConnection>, ImportError> {
+    let system_credentials = SystemCredentialStore;
+    preview_connections_with_credentials(kind, options, &system_credentials)
+}
+
+pub fn preview_connections_with_credentials(
+    kind: ImportSourceKind,
+    options: ImportOptions,
+    credentials: &dyn CredentialStore,
+) -> Result<Vec<ImportedConnection>, ImportError> {
     match kind {
         ImportSourceKind::DBeaver => dbeaver::preview_default_connections(options),
+        ImportSourceKind::TablePlus => tableplus::preview_default_connections(options, credentials),
         _ => Err(ImportError::UnsupportedSource(
             kind.display_name().to_string(),
         )),
@@ -39,8 +58,21 @@ pub fn preview_connections_from_path(
     path: impl AsRef<Path>,
     options: ImportOptions,
 ) -> Result<Vec<ImportedConnection>, ImportError> {
+    let no_credentials = NoopCredentialStore;
+    preview_connections_from_path_with_credentials(kind, path, options, &no_credentials)
+}
+
+pub fn preview_connections_from_path_with_credentials(
+    kind: ImportSourceKind,
+    path: impl AsRef<Path>,
+    options: ImportOptions,
+    credentials: &dyn CredentialStore,
+) -> Result<Vec<ImportedConnection>, ImportError> {
     match kind {
         ImportSourceKind::DBeaver => dbeaver::preview_connections_from_path(path, options),
+        ImportSourceKind::TablePlus => {
+            tableplus::preview_connections_from_path(path, options, credentials)
+        }
         _ => Err(ImportError::UnsupportedSource(
             kind.display_name().to_string(),
         )),

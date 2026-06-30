@@ -31,8 +31,8 @@ pub(crate) fn show_connection_import_dialog(window: &mut Window, cx: &mut App) {
                     .show_cancel(true),
             )
             .on_ok(move |_, window, cx| {
-                let source = selected_import_source(&sources_for_ok);
-                match import_connections(source, cx) {
+                let sources = importable_source_kinds(&sources_for_ok);
+                match import_connection_sources(&sources, cx) {
                     Ok(0) => {
                         window.push_notification("没有可导入的连接".to_string(), cx);
                     }
@@ -63,7 +63,7 @@ fn render_import_dialog_content(sources: &[ImportSourceStatus], cx: &mut App) ->
             div()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("从已安装的数据库客户端导入连接配置。当前版本不导入密码。"),
+                .child("从已安装的数据库客户端导入连接配置，并尝试通过系统 keychain 导入密码。"),
         )
         .child(v_flex().gap_2().children(rows))
 }
@@ -139,27 +139,41 @@ fn source_icon(kind: ImportSourceKind) -> impl IntoElement {
     Icon::new(icon).size_5()
 }
 
-fn selected_import_source(sources: &[ImportSourceStatus]) -> ImportSourceKind {
+fn importable_source_kinds(sources: &[ImportSourceStatus]) -> Vec<ImportSourceKind> {
     sources
         .iter()
-        .find(|source| {
-            source.kind == ImportSourceKind::DBeaver
-                && matches!(
-                    source.availability,
-                    SourceAvailability::Available { .. }
-                        | SourceAvailability::Installed
-                        | SourceAvailability::NoConnections
-                )
-        })
+        .filter(|source| is_supported_source(source.kind) && is_available_source(source))
         .map(|source| source.kind)
-        .unwrap_or(ImportSourceKind::DBeaver)
+        .collect()
+}
+
+fn is_supported_source(kind: ImportSourceKind) -> bool {
+    matches!(
+        kind,
+        ImportSourceKind::DBeaver | ImportSourceKind::TablePlus
+    )
+}
+
+fn is_available_source(source: &ImportSourceStatus) -> bool {
+    matches!(
+        source.availability,
+        SourceAvailability::Available { .. }
+            | SourceAvailability::Installed
+            | SourceAvailability::NoConnections
+    )
+}
+
+fn import_connection_sources(sources: &[ImportSourceKind], cx: &mut App) -> Result<usize, String> {
+    sources.iter().try_fold(0usize, |count, source| {
+        import_connections(*source, cx).map(|n| count + n)
+    })
 }
 
 fn import_connections(kind: ImportSourceKind, cx: &mut App) -> Result<usize, String> {
     let imported = preview_connections(
         kind,
         ImportOptions {
-            include_passwords: false,
+            include_passwords: true,
         },
     )
     .map_err(|error| error.to_string())?;
@@ -216,7 +230,7 @@ fn source_availability_summary(availability: &SourceAvailability) -> SharedStrin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use connection_importer::SourceAvailability;
+    use connection_importer::{ImportSourceKind, ImportSourceStatus, SourceAvailability};
 
     #[test]
     fn source_availability_summary_formats_available_count() {
@@ -232,5 +246,31 @@ mod tests {
         let summary = source_availability_summary(&SourceAvailability::Unsupported);
 
         assert_eq!(summary, "暂不支持");
+    }
+
+    #[test]
+    fn importable_source_kinds_include_supported_available_sources() {
+        let sources = vec![
+            ImportSourceStatus::new(
+                ImportSourceKind::TablePlus,
+                SourceAvailability::Available {
+                    connection_count: 1,
+                },
+            ),
+            ImportSourceStatus::new(
+                ImportSourceKind::DBeaver,
+                SourceAvailability::Available {
+                    connection_count: 2,
+                },
+            ),
+            ImportSourceStatus::new(ImportSourceKind::SequelAce, SourceAvailability::Unsupported),
+        ];
+
+        let kinds = importable_source_kinds(&sources);
+
+        assert_eq!(
+            vec![ImportSourceKind::TablePlus, ImportSourceKind::DBeaver],
+            kinds
+        );
     }
 }
