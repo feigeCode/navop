@@ -5,10 +5,10 @@ use std::sync::Arc;
 use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, AsyncApp, ClipboardItem, Context, ElementId, Entity, EventEmitter,
-    FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding,
-    ListSizingBehavior, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
+    AnyElement, App, AppContext, AsyncApp, Context, ElementId, Entity, EventEmitter, FocusHandle,
+    Focusable, FontWeight, InteractiveElement, IntoElement, KeyBinding, ListSizingBehavior,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
 };
 use gpui_component::button::ButtonVariant;
 use gpui_component::{
@@ -2262,16 +2262,6 @@ impl HomePage {
         }
     }
 
-    fn copy_team_management_url(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.team_management_url() {
-            Ok(url) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(url));
-                window.push_notification(t!("TeamManagement.copy_success").to_string(), cx);
-            }
-            Err(message) => window.push_notification(message, cx),
-        }
-    }
-
     fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
 
@@ -2686,27 +2676,14 @@ impl HomePage {
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .child(
-                        h_flex()
+                        Button::new("open_team_management")
+                            .icon(IconName::Building2)
+                            .label(t!("TeamManagement.title").to_string())
                             .w_full()
-                            .gap_1()
-                            .child(
-                                Button::new("open_team_management")
-                                    .icon(IconName::Building2)
-                                    .label(t!("TeamManagement.title").to_string())
-                                    .w_full()
-                                    .justify_start()
-                                    .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
-                                        this.open_team_management(window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("copy_team_management_url")
-                                    .icon(IconName::Copy)
-                                    .tooltip(t!("TeamManagement.copy_url").to_string())
-                                    .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
-                                        this.copy_team_management_url(window, cx);
-                                    })),
-                            ),
+                            .justify_start()
+                            .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
+                                this.open_team_management(window, cx);
+                            })),
                     )
                     .child(
                         Button::new("open_extensions")
