@@ -205,7 +205,7 @@ fn preview_connections_rejects_reserved_sources() {
     fs::write(&data_sources, DBEAVER_SAMPLE).expect("write data sources");
 
     let error = preview_connections_from_path(
-        ImportSourceKind::SequelAce,
+        ImportSourceKind::BeekeeperStudio,
         &data_sources,
         ImportOptions {
             include_passwords: false,

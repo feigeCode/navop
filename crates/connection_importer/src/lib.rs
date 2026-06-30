@@ -1,6 +1,7 @@
 mod credentials;
 mod dbeaver;
 mod model;
+mod sequel_ace;
 mod tableplus;
 
 pub use credentials::{
@@ -11,6 +12,7 @@ pub use model::{
     ImportError, ImportOptions, ImportSourceKind, ImportSourceStatus, ImportedConnection,
     PasswordImportStatus, SourceAvailability,
 };
+pub use sequel_ace::parse_sequel_ace_favorites_plist_with_credentials;
 pub use tableplus::parse_tableplus_connections_json_with_credentials;
 
 use one_core::storage::{DatabaseType, DbConnectionConfig};
@@ -22,7 +24,10 @@ pub fn list_sources() -> Vec<ImportSourceStatus> {
             ImportSourceKind::TablePlus,
             tableplus::detect_availability(),
         ),
-        ImportSourceStatus::new(ImportSourceKind::SequelAce, SourceAvailability::Unsupported),
+        ImportSourceStatus::new(
+            ImportSourceKind::SequelAce,
+            sequel_ace::detect_availability(),
+        ),
         ImportSourceStatus::new(ImportSourceKind::DBeaver, dbeaver::detect_availability()),
         ImportSourceStatus::new(
             ImportSourceKind::BeekeeperStudio,
@@ -47,6 +52,9 @@ pub fn preview_connections_with_credentials(
     match kind {
         ImportSourceKind::DBeaver => dbeaver::preview_default_connections(options),
         ImportSourceKind::TablePlus => tableplus::preview_default_connections(options, credentials),
+        ImportSourceKind::SequelAce => {
+            sequel_ace::preview_default_connections(options, credentials)
+        }
         _ => Err(ImportError::UnsupportedSource(
             kind.display_name().to_string(),
         )),
@@ -72,6 +80,9 @@ pub fn preview_connections_from_path_with_credentials(
         ImportSourceKind::DBeaver => dbeaver::preview_connections_from_path(path, options),
         ImportSourceKind::TablePlus => {
             tableplus::preview_connections_from_path(path, options, credentials)
+        }
+        ImportSourceKind::SequelAce => {
+            sequel_ace::preview_connections_from_path(path, options, credentials)
         }
         _ => Err(ImportError::UnsupportedSource(
             kind.display_name().to_string(),
