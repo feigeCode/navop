@@ -1,8 +1,8 @@
 use super::connection_import_actions::{preview_import_drafts, save_selected_import_drafts};
 use super::connection_import_preview_view::ConnectionImportPreview;
+use super::connection_import_source_picker::ConnectionImportSourcePicker;
 #[cfg(test)]
 use super::connection_import_source_picker::source_availability_summary;
-use super::connection_import_source_picker::{ConnectionImportSourcePicker, is_available_source};
 use connection_importer::{ImportSourceKind, ImportSourceStatus, list_sources};
 use gpui::{App, AppContext, ParentElement, Window, px};
 use gpui_component::{WindowExt, dialog::DialogButtonProps};
@@ -124,7 +124,7 @@ fn save_preview_drafts(
 fn importable_source_kinds(sources: &[ImportSourceStatus]) -> Vec<ImportSourceKind> {
     sources
         .iter()
-        .filter(|source| is_supported_source(source.kind) && is_available_source(source))
+        .filter(|source| is_supported_source(source.kind))
         .map(|source| source.kind)
         .collect()
 }
@@ -167,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn importable_source_kinds_include_supported_available_sources() {
+    fn importable_source_kinds_include_supported_sources() {
         let sources = supported_source_statuses();
 
         let kinds = importable_source_kinds(&sources);
@@ -176,6 +176,7 @@ mod tests {
             vec![
                 ImportSourceKind::TablePlus,
                 ImportSourceKind::DBeaver,
+                ImportSourceKind::SequelAce,
                 ImportSourceKind::DataGrip,
                 ImportSourceKind::Xshell,
                 ImportSourceKind::HeidiSQL,

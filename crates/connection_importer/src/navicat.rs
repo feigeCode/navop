@@ -9,7 +9,11 @@ use std::path::{Path, PathBuf};
 
 pub fn detect_availability() -> SourceAvailability {
     let Some(path) = default_connections_path() else {
-        return SourceAvailability::NotInstalled;
+        return if installed_marker_path().is_some() {
+            SourceAvailability::Installed
+        } else {
+            SourceAvailability::NotInstalled
+        };
     };
     let Ok(contents) = std::fs::read_to_string(path) else {
         return SourceAvailability::PermissionRequired;
@@ -101,18 +105,46 @@ fn database_type(node: Node<'_, '_>) -> Result<DatabaseType, ImportError> {
 }
 
 fn default_connections_path() -> Option<PathBuf> {
-    candidate_paths().into_iter().find(|path| path.exists())
+    candidate_connection_paths()
+        .into_iter()
+        .find(|path| path.exists())
 }
 
-fn candidate_paths() -> Vec<PathBuf> {
+fn installed_marker_path() -> Option<PathBuf> {
+    candidate_installed_marker_paths()
+        .into_iter()
+        .find(|path| path.exists())
+}
+
+fn candidate_connection_paths() -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
+    candidate_connection_paths_for_home(&home)
+}
+
+fn candidate_installed_marker_paths() -> Vec<PathBuf> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    candidate_installed_marker_paths_for_home(&home)
+}
+
+fn candidate_connection_paths_for_home(home: &Path) -> Vec<PathBuf> {
     vec![
         home.join("Documents/Navicat/connections.ncx"),
         home.join("Documents/Navicat/connections.xml"),
         home.join("AppData/Roaming/PremiumSoft/Navicat/connections.ncx"),
         home.join("Library/Application Support/PremiumSoft CyberTech/Navicat/connections.ncx"),
+    ]
+}
+
+fn candidate_installed_marker_paths_for_home(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join("Library/Preferences/com.navicat.NavicatPremiumLite.plist"),
+        home.join("Library/Preferences/com.prect.Navicat.plist"),
+        home.join("Library/Preferences/com.prect.NavicatPremium.plist"),
+        home.join("Library/Preferences/com.prect.NavicatPremiumEssentials.plist"),
     ]
 }
 
@@ -144,4 +176,36 @@ fn default_port(database_type: &DatabaseType) -> Option<u16> {
 
 fn password_status(_options: ImportOptions) -> PasswordImportStatus {
     PasswordImportStatus::Unsupported
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{candidate_connection_paths_for_home, candidate_installed_marker_paths_for_home};
+
+    #[test]
+    fn navicat_candidates_include_premium_lite_preferences_marker() {
+        let paths = candidate_installed_marker_paths_for_home(Path::new("/home/me"));
+
+        assert!(paths.iter().any(|path| {
+            path.ends_with("Library/Preferences/com.navicat.NavicatPremiumLite.plist")
+        }));
+    }
+
+    #[test]
+    fn navicat_candidates_include_exported_connection_files() {
+        let paths = candidate_connection_paths_for_home(Path::new("/home/me"));
+
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.ends_with("Documents/Navicat/connections.ncx"))
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.ends_with("Documents/Navicat/connections.xml"))
+        );
+    }
 }

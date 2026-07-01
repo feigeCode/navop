@@ -58,10 +58,10 @@ pub fn parse_dbeaver_data_sources_json(
         .and_then(Value::as_object)
         .ok_or(ImportError::MissingField("connections"))?;
 
-    connections
+    Ok(connections
         .iter()
-        .map(|(source_id, value)| parse_connection(source_id, value, options))
-        .collect()
+        .filter_map(|(source_id, value)| parse_connection(source_id, value, options).ok())
+        .collect())
 }
 
 fn parse_connection(

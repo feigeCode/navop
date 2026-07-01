@@ -3,7 +3,9 @@ use connection_importer::{ImportSourceKind, ImportSourceStatus, SourceAvailabili
 use gpui::{
     AnyElement, Context, IntoElement, ParentElement, Render, SharedString, Styled, Window, div, px,
 };
-use gpui_component::{ActiveTheme, Disableable, checkbox::Checkbox, h_flex, v_flex};
+use gpui_component::{
+    ActiveTheme, Disableable, checkbox::Checkbox, h_flex, scroll::ScrollableElement, v_flex,
+};
 
 pub(crate) struct ConnectionImportSourcePicker {
     rows: Vec<ImportSourceRow>,
@@ -19,7 +21,7 @@ impl ConnectionImportSourcePicker {
         let rows = sources
             .into_iter()
             .map(|status| ImportSourceRow {
-                checked: is_available_source(&status),
+                checked: should_select_source_by_default(&status),
                 status,
             })
             .collect();
@@ -29,7 +31,7 @@ impl ConnectionImportSourcePicker {
     pub(crate) fn selected_sources(&self) -> Vec<ImportSourceKind> {
         self.rows
             .iter()
-            .filter(|row| row.checked && is_available_source(&row.status))
+            .filter(|row| row.checked && is_selectable_source(&row.status))
             .map(|row| row.status.kind)
             .collect()
     }
@@ -38,7 +40,7 @@ impl ConnectionImportSourcePicker {
         let Some(row) = self.rows.iter_mut().find(|row| row.status.kind == kind) else {
             return;
         };
-        if is_available_source(&row.status) {
+        if is_selectable_source(&row.status) {
             row.checked = !row.checked;
         }
     }
@@ -69,10 +71,13 @@ impl Render for ConnectionImportSourcePicker {
             .map(|row| render_source_row(row, cx))
             .collect::<Vec<_>>();
 
-        v_flex()
-            .gap_4()
-            .child(self.render_summary(cx))
-            .child(v_flex().gap_2().children(rows))
+        v_flex().gap_4().child(self.render_summary(cx)).child(
+            v_flex()
+                .gap_2()
+                .max_h(px(520.0))
+                .overflow_y_scrollbar()
+                .children(rows),
+        )
     }
 }
 
@@ -80,7 +85,7 @@ fn render_source_row(
     row: &ImportSourceRow,
     cx: &mut Context<ConnectionImportSourcePicker>,
 ) -> AnyElement {
-    let available = is_available_source(&row.status);
+    let selectable = is_selectable_source(&row.status);
     let kind = row.status.kind;
     h_flex()
         .items_center()
@@ -90,11 +95,12 @@ fn render_source_row(
         .border_1()
         .border_color(cx.theme().border)
         .rounded(px(6.0))
+        .min_w_0()
         .child(render_source_label(row, cx))
         .child(
             Checkbox::new(format!("import-source-{:?}", kind))
-                .checked(row.checked && available)
-                .disabled(!available)
+                .checked(row.checked && selectable)
+                .disabled(!selectable)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.toggle_source(kind);
                     cx.notify();
@@ -131,13 +137,12 @@ fn render_source_label(
         )
 }
 
-pub(crate) fn is_available_source(source: &ImportSourceStatus) -> bool {
-    matches!(
-        source.availability,
-        SourceAvailability::Available { .. }
-            | SourceAvailability::Installed
-            | SourceAvailability::NoConnections
-    )
+fn is_selectable_source(source: &ImportSourceStatus) -> bool {
+    !matches!(source.availability, SourceAvailability::Unsupported)
+}
+
+fn should_select_source_by_default(source: &ImportSourceStatus) -> bool {
+    matches!(source.availability, SourceAvailability::Available { .. })
 }
 
 pub(crate) fn source_availability_summary(availability: &SourceAvailability) -> SharedString {
@@ -192,12 +197,24 @@ mod tests {
                     connection_count: 2,
                 },
             ),
-            status(ImportSourceKind::Navicat, SourceAvailability::NotInstalled),
+            status(ImportSourceKind::Navicat, SourceAvailability::Unsupported),
         ]);
 
         picker.toggle_source(ImportSourceKind::Navicat);
 
         assert_eq!(vec![ImportSourceKind::DataGrip], picker.selected_sources());
+    }
+
+    #[test]
+    fn source_picker_allows_manual_scan_for_not_detected_sources() {
+        let mut picker = ConnectionImportSourcePicker::new(vec![status(
+            ImportSourceKind::Navicat,
+            SourceAvailability::NotInstalled,
+        )]);
+
+        picker.toggle_source(ImportSourceKind::Navicat);
+
+        assert_eq!(vec![ImportSourceKind::Navicat], picker.selected_sources());
     }
 
     fn status(kind: ImportSourceKind, availability: SourceAvailability) -> ImportSourceStatus {

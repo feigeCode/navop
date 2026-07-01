@@ -15,5 +15,5 @@ pub(super) fn source_icon(kind: ImportSourceKind) -> impl IntoElement {
         | ImportSourceKind::HeidiSQL
         | ImportSourceKind::Navicat => IconName::Database,
     };
-    Icon::new(icon).size_5()
+    Icon::new(icon).color().size_5()
 }

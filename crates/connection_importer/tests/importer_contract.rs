@@ -117,6 +117,39 @@ fn dbeaver_parser_uses_database_default_port_when_missing() {
 }
 
 #[test]
+fn dbeaver_parser_skips_entries_without_host() {
+    let imported = parse_dbeaver_data_sources_json(
+        r#"
+        {
+          "connections": {
+            "metadata-only": {
+              "provider": "mysql",
+              "driver": "mysql8",
+              "name": "Metadata Only",
+              "configuration": {}
+            },
+            "valid": {
+              "provider": "mysql",
+              "driver": "mysql8",
+              "name": "Valid",
+              "configuration": {
+                "host": "127.0.0.1"
+              }
+            }
+          }
+        }
+        "#,
+        ImportOptions {
+            include_passwords: false,
+        },
+    )
+    .expect("valid entries should parse");
+
+    assert_eq!(1, imported.len());
+    assert_eq!("valid", imported[0].source_id);
+}
+
+#[test]
 fn conversion_builds_db_connection_config() {
     let imported = parse_dbeaver_data_sources_json(
         DBEAVER_SAMPLE,
