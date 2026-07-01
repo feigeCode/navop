@@ -289,8 +289,12 @@ impl NewConnectionWindow {
                     .shadow_lg()
                     .border_color(cx.theme().list_active_border)
             })
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
                 this.selected_kind = Some(click_kind.clone());
+                if matches!(click_kind, NewConnectionKind::MoreConnections) {
+                    this.open_selected(window, cx);
+                    return;
+                }
                 cx.notify();
             }))
             .on_double_click(cx.listener(move |this, _, window, cx| {

@@ -739,6 +739,10 @@ NewConnection:
     en: Select a type, then click Next, or double-click to open the connection form.
     zh-CN: 单击选择后点击下一步，或双击直接进入连接表单。
     zh-HK: 單擊選擇後點擊下一步，或雙擊直接進入連線表單。
+  more_connections:
+    en: "More Connections"
+    zh-CN: "更多连接"
+    zh-HK: "更多連線"
   description_ssh:
     en: Remote server terminal and file connection
     zh-CN: 远程服务器终端与文件连接
@@ -771,6 +775,10 @@ NewConnection:
     en: SSH local port forwarding or SOCKS tunnel
     zh-CN: SSH 本地端口转发或 SOCKS 隧道
     zh-HK: SSH 本地端口轉發或 SOCKS 隧道
+  description_more_connections:
+    en: Find more connection drivers in Extensions
+    zh-CN: 前往扩展市场发现更多连接类型
+    zh-HK: 前往擴展市場探索更多連線類型
   description_database:
     en: Relational database connection
     zh-CN: 关系型数据库连接
@@ -1525,6 +1533,10 @@ Settings:
         en: Ready
         zh-CN: 就绪
         zh-HK: 就緒
+      syncing:
+        en: Syncing
+        zh-CN: 同步中
+        zh-HK: 同步中
       not_configured:
         en: Not configured
         zh-CN: 未配置

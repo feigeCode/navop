@@ -61,6 +61,7 @@ pub(super) enum NewConnectionKind {
     MongoDB,
     Serial,
     PortForwarding,
+    MoreConnections,
     Database(DatabaseType),
     ExternalDatabase {
         driver_id: String,
@@ -91,6 +92,7 @@ impl NewConnectionKind {
                 .map(Self::Database),
         );
         items.extend(external_database_kinds(&IpcDriverRegistry::load_default()));
+        items.push(Self::MoreConnections);
         items
     }
 
@@ -104,6 +106,7 @@ impl NewConnectionKind {
             Self::MongoDB => "MongoDB".to_string(),
             Self::Serial => t!("Serial.new").to_string(),
             Self::PortForwarding => t!("PortForwarding.new").to_string(),
+            Self::MoreConnections => t!("NewConnection.more_connections").to_string(),
             Self::Database(db_type) => db_type.as_str().to_string(),
             Self::ExternalDatabase { name, .. } => name.clone(),
         }
@@ -119,6 +122,7 @@ impl NewConnectionKind {
             Self::MongoDB => t!("NewConnection.description_mongodb").to_string(),
             Self::Serial => t!("NewConnection.description_serial").to_string(),
             Self::PortForwarding => t!("NewConnection.description_port_forwarding").to_string(),
+            Self::MoreConnections => t!("NewConnection.description_more_connections").to_string(),
             Self::Database(_) => t!("NewConnection.description_database").to_string(),
             Self::ExternalDatabase { description, .. } => description.clone(),
         }
@@ -132,6 +136,7 @@ impl NewConnectionKind {
             | Self::Vnc
             | Self::Serial
             | Self::PortForwarding => NewConnectionCategory::Terminal,
+            Self::MoreConnections => NewConnectionCategory::All,
             Self::Redis | Self::MongoDB => NewConnectionCategory::NoSql,
             Self::Database(_) => NewConnectionCategory::Database,
             Self::ExternalDatabase { category, .. } => {
@@ -157,6 +162,10 @@ impl NewConnectionKind {
             Self::MongoDB => IconName::MongoDB.color().with_size(px(40.0)),
             Self::Serial => IconName::SerialPort.color().with_size(px(40.0)),
             Self::PortForwarding => IconName::PortForwardingColor.color().with_size(px(40.0)),
+            Self::MoreConnections => IconName::Plus
+                .mono()
+                .text_color(gpui::rgb(0x16a34a))
+                .with_size(px(40.0)),
             Self::Database(db_type) => db_type.as_icon().with_size(px(40.0)),
             Self::ExternalDatabase {
                 icon_asset_path,
@@ -257,6 +266,20 @@ mod tests {
         assert_eq!(
             NewConnectionKind::Vnc.category(),
             NewConnectionCategory::Terminal
+        );
+    }
+
+    #[test]
+    fn more_connections_kind_is_last_and_only_visible_in_all() {
+        let kinds = NewConnectionKind::all();
+
+        assert!(matches!(
+            kinds.last(),
+            Some(NewConnectionKind::MoreConnections)
+        ));
+        assert_eq!(
+            NewConnectionKind::MoreConnections.category(),
+            NewConnectionCategory::All
         );
     }
 

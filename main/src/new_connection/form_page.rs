@@ -47,6 +47,7 @@ impl NewConnectionFormPage for NewConnectionKind {
             Self::MongoDB => build_mongo_form(parent, window, cx),
             Self::Serial => build_serial_form(parent, window, cx),
             Self::PortForwarding => build_port_forwarding_form(parent, window, cx),
+            Self::MoreConnections => open_extensions_tab(parent, parent_window, cx),
             Self::Database(db_type) => build_database_form(parent, db_type, None, window, cx),
             Self::ExternalDatabase { driver_id, .. } => {
                 let db_type = DatabaseType::external(driver_id.clone());
@@ -137,6 +138,19 @@ fn open_terminal_tab(
     let _ = parent_window.update(cx, |_, window, cx| {
         let _ = parent.update(cx, |home, cx| {
             home.add_terminal_tab(window, cx);
+        });
+    });
+    NewConnectionFormResult::Done
+}
+
+fn open_extensions_tab(
+    parent: Entity<HomePage>,
+    parent_window: AnyWindowHandle,
+    cx: &mut Context<NewConnectionWindow>,
+) -> NewConnectionFormResult {
+    let _ = parent_window.update(cx, |_, window, cx| {
+        let _ = parent.update(cx, |home, cx| {
+            home.add_extensions_tab(window, cx);
         });
     });
     NewConnectionFormResult::Done
