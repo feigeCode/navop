@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error};
+use serde_json::Value;
 
 use crate::extension::ExtensionKind;
 
@@ -10,11 +11,11 @@ const DEFAULT_GITHUB_RELEASE_DOWNLOAD_BASE: &str =
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketplaceManifest {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
     #[serde(default)]
     pub release_version: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_marketplace_entries")]
     pub extensions: Vec<MarketplaceEntry>,
 }
 
@@ -246,6 +247,41 @@ impl MarketplaceEntry {
 
 fn default_marketplace_kind() -> ExtensionKind {
     ExtensionKind::Language
+}
+
+fn deserialize_schema_version<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::Null => Ok(0),
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| D::Error::custom("schema_version must be a u32")),
+        Value::String(value) => value
+            .parse::<u32>()
+            .map_err(|_| D::Error::custom("schema_version string must be a u32")),
+        _ => Err(D::Error::custom("schema_version must be a u32 or string")),
+    }
+}
+
+fn deserialize_marketplace_entries<'de, D>(
+    deserializer: D,
+) -> Result<Vec<MarketplaceEntry>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Vec::<Value>::deserialize(deserializer)?
+        .into_iter()
+        .filter_map(|value| match serde_json::from_value(value) {
+            Ok(entry) => Some(entry),
+            Err(err) => {
+                tracing::warn!("跳过不兼容的扩展市场条目: {err}");
+                None
+            }
+        })
+        .collect())
 }
 
 fn non_empty(value: String) -> Option<String> {

@@ -49,6 +49,61 @@ fn marketplace_manifest_accepts_v2_universal_language_artifact() {
 }
 
 #[test]
+fn marketplace_manifest_accepts_string_schema_version() {
+    let manifest: MarketplaceManifest = serde_json::from_str(
+        r#"{
+            "schema_version": "2",
+            "release_version": "2026.05",
+            "extensions": []
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(2, manifest.schema_version);
+    assert_eq!("2026.05", manifest.release_version);
+    assert!(manifest.into_entries().is_empty());
+}
+
+#[test]
+fn marketplace_manifest_skips_entries_with_future_extension_kind() {
+    let manifest: MarketplaceManifest = serde_json::from_str(
+        r#"{
+            "schema_version": 3,
+            "release_version": "2026.07",
+            "extensions": [
+                {
+                    "id": "future_tool",
+                    "kind": "future_tool",
+                    "name": "Future Tool",
+                    "version": "1.0.0",
+                    "manifest": "future_tool/manifest.json"
+                },
+                {
+                    "id": "rust",
+                    "kind": "language",
+                    "name": "rust",
+                    "version": "0.24.0",
+                    "release_tag": "rust-v0.24.0",
+                    "file_extensions": ["rs"],
+                    "artifacts": {
+                        "universal": {
+                            "file": "rust-universal.tar.gz"
+                        }
+                    }
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let entries = manifest.into_entries();
+
+    assert_eq!(1, entries.len());
+    assert_eq!("rust", entries[0].id);
+    assert_eq!(ExtensionKind::Language, entries[0].kind);
+}
+
+#[test]
 fn detect_package_kind_identifies_language_database_composite() {
     let tmp = tempfile::TempDir::new().unwrap();
     let language_dir = tmp.path().join("language");

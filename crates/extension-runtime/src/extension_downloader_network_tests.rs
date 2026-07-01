@@ -20,8 +20,7 @@ use crate::extension_downloader::{
 #[cfg(not(feature = "github-marketplace"))]
 use crate::extension_downloader::{
     GITHUB_EXTENSION_MANIFEST_URL, fetch_manifest_url_with_fallback,
-    manifest_urls_for_configured_url,
-    manifest_urls_for_configured_url_with_github_fallback,
+    manifest_urls_for_configured_url, manifest_urls_for_configured_url_with_github_fallback,
 };
 
 #[test]
@@ -74,7 +73,6 @@ fn missing_extension_manifest_env_uses_github_only() {
         manifest_urls_for_configured_url(None)
     );
 }
-
 
 #[cfg(not(feature = "github-marketplace"))]
 #[test]
