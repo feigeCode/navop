@@ -1,8 +1,9 @@
 use super::connection_import_actions::{preview_import_drafts, save_selected_import_drafts};
 use super::connection_import_preview_view::ConnectionImportPreview;
-use connection_importer::{ImportSourceKind, ImportSourceStatus, SourceAvailability, list_sources};
 #[cfg(test)]
-use gpui::SharedString;
+use super::connection_import_source_picker::source_availability_summary;
+use super::connection_import_source_picker::{ConnectionImportSourcePicker, is_available_source};
+use connection_importer::{ImportSourceKind, ImportSourceStatus, list_sources};
 use gpui::{App, AppContext, ParentElement, Window, px};
 use gpui_component::{WindowExt, dialog::DialogButtonProps};
 use rust_i18n::t;
@@ -10,6 +11,59 @@ use rust_i18n::t;
 pub(crate) fn show_connection_import_dialog(window: &mut Window, cx: &mut App) {
     let sources = list_sources();
     let source_kinds = importable_source_kinds(&sources);
+    let picker = cx.new(|_| ConnectionImportSourcePicker::new(sources));
+    let picker_for_render = picker.clone();
+    let picker_for_ok = picker.clone();
+
+    window.open_dialog(cx, move |dialog, _window, _cx| {
+        dialog
+            .title(t!("Home.import").to_string())
+            .w(px(620.0))
+            .child(picker_for_render.clone())
+            .confirm()
+            .button_props(
+                DialogButtonProps::default()
+                    .ok_text("扫描")
+                    .cancel_text(t!("Common.cancel"))
+                    .show_cancel(true),
+            )
+            .on_ok({
+                let source_kinds = source_kinds.clone();
+                let picker_for_ok = picker_for_ok.clone();
+                move |_, window, cx| {
+                    let selected = selected_source_kinds(&picker_for_ok, &source_kinds, cx);
+                    if selected.is_empty() {
+                        window.push_notification("请选择要扫描的应用".to_string(), cx);
+                        return false;
+                    }
+                    window.close_dialog(cx);
+                    window.defer(cx, move |window, cx| {
+                        show_connection_import_preview_dialog(selected.clone(), window, cx);
+                    });
+                    false
+                }
+            })
+    });
+}
+
+fn selected_source_kinds(
+    picker: &gpui::Entity<ConnectionImportSourcePicker>,
+    supported: &[ImportSourceKind],
+    cx: &App,
+) -> Vec<ImportSourceKind> {
+    picker
+        .read(cx)
+        .selected_sources()
+        .into_iter()
+        .filter(|kind| supported.contains(kind))
+        .collect()
+}
+
+fn show_connection_import_preview_dialog(
+    source_kinds: Vec<ImportSourceKind>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let (drafts, preview_error) = match preview_import_drafts(&source_kinds) {
         Ok(drafts) => (drafts, None),
         Err(error) => (Vec::new(), Some(error)),
@@ -40,26 +94,31 @@ pub(crate) fn show_connection_import_dialog(window: &mut Window, cx: &mut App) {
                             return false;
                         }
                     };
-                    match save_selected_import_drafts(&drafts, cx) {
-                        Ok(0) => {
-                            window.push_notification("没有选择要导入的连接".to_string(), cx);
-                            false
-                        }
-                        Ok(count) => {
-                            window.push_notification(
-                                t!("Home.import_success", count = count).to_string(),
-                                cx,
-                            );
-                            true
-                        }
-                        Err(error) => {
-                            window.push_notification(format!("导入失败：{}", error), cx);
-                            false
-                        }
-                    }
+                    save_preview_drafts(&drafts, window, cx)
                 }
             })
     });
+}
+
+fn save_preview_drafts(
+    drafts: &[super::connection_import_draft::EditableImportDraft],
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    match save_selected_import_drafts(drafts, cx) {
+        Ok(0) => {
+            window.push_notification("没有选择要导入的连接".to_string(), cx);
+            false
+        }
+        Ok(count) => {
+            window.push_notification(t!("Home.import_success", count = count).to_string(), cx);
+            true
+        }
+        Err(error) => {
+            window.push_notification(format!("导入失败：{}", error), cx);
+            false
+        }
+    }
 }
 
 fn importable_source_kinds(sources: &[ImportSourceStatus]) -> Vec<ImportSourceKind> {
@@ -84,30 +143,6 @@ fn is_supported_source(kind: ImportSourceKind) -> bool {
             | ImportSourceKind::FinalShell
             | ImportSourceKind::Termius
     )
-}
-
-fn is_available_source(source: &ImportSourceStatus) -> bool {
-    matches!(
-        source.availability,
-        SourceAvailability::Available { .. }
-            | SourceAvailability::Installed
-            | SourceAvailability::NoConnections
-    )
-}
-
-#[cfg(test)]
-fn source_availability_summary(availability: &SourceAvailability) -> SharedString {
-    match availability {
-        SourceAvailability::Available { connection_count } => {
-            format!("找到 {} 个连接", connection_count).into()
-        }
-        SourceAvailability::Installed => "已安装，未发现连接".into(),
-        SourceAvailability::NoConnections => "未发现连接".into(),
-        SourceAvailability::NotInstalled => "未检测到应用数据".into(),
-        SourceAvailability::Unsupported => "暂不支持".into(),
-        SourceAvailability::PermissionRequired => "需要文件访问权限".into(),
-        SourceAvailability::Error { message } => format!("读取失败：{}", message).into(),
-    }
 }
 
 #[cfg(test)]
