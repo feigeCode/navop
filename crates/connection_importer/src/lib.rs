@@ -6,6 +6,7 @@ mod finalshell;
 mod heidisql;
 mod model;
 mod navicat;
+mod navicat_plist;
 mod sequel_ace;
 mod simple_encryptor;
 mod tableplus;
@@ -24,6 +25,7 @@ pub use model::{
     ImportedSshAuthMethod, ImportedSshConnection, PasswordImportStatus, SourceAvailability,
 };
 pub use navicat::parse_navicat_connections_xml;
+pub use navicat_plist::parse_navicat_connections_plist;
 pub use sequel_ace::parse_sequel_ace_favorites_plist_with_credentials;
 pub use tableplus::parse_tableplus_connections_json_with_credentials;
 pub use termius::parse_termius_hosts_json;

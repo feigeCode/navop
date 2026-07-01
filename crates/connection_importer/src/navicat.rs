@@ -1,3 +1,4 @@
+use crate::navicat_plist::parse_navicat_connections_plist;
 use crate::{
     ImportError, ImportOptions, ImportSourceKind, ImportedConnection, PasswordImportStatus,
     SourceAvailability,
@@ -15,11 +16,8 @@ pub fn detect_availability() -> SourceAvailability {
             SourceAvailability::NotInstalled
         };
     };
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return SourceAvailability::PermissionRequired;
-    };
-    match parse_navicat_connections_xml(
-        &contents,
+    match preview_connections_from_path(
+        path,
         ImportOptions {
             include_passwords: false,
         },
@@ -28,6 +26,7 @@ pub fn detect_availability() -> SourceAvailability {
         Ok(connections) => SourceAvailability::Available {
             connection_count: connections.len(),
         },
+        Err(ImportError::ReadSourceData(_)) => SourceAvailability::PermissionRequired,
         Err(error) => SourceAvailability::Error {
             message: error.to_string(),
         },
@@ -46,7 +45,16 @@ pub fn preview_connections_from_path(
     path: impl AsRef<Path>,
     options: ImportOptions,
 ) -> Result<Vec<ImportedConnection>, ImportError> {
-    let contents = std::fs::read_to_string(path.as_ref())
+    let path = path.as_ref();
+    let contents =
+        std::fs::read(path).map_err(|error| ImportError::ReadSourceData(error.to_string()))?;
+    if path
+        .extension()
+        .is_some_and(|extension| extension == "plist")
+    {
+        return parse_navicat_connections_plist(&contents, options);
+    }
+    let contents = String::from_utf8(contents)
         .map_err(|error| ImportError::ReadSourceData(error.to_string()))?;
     parse_navicat_connections_xml(&contents, options)
 }
@@ -132,6 +140,11 @@ fn candidate_installed_marker_paths() -> Vec<PathBuf> {
 
 fn candidate_connection_paths_for_home(home: &Path) -> Vec<PathBuf> {
     vec![
+        home.join("Library/Application Support/PremiumSoft CyberTech/Navicat CC/Common/conn.plist"),
+        home.join(
+            "Library/Application Support/PremiumSoft CyberTech/Navicat Premium/Common/conn.plist",
+        ),
+        home.join("Library/Application Support/PremiumSoft CyberTech/Navicat/Common/conn.plist"),
         home.join("Documents/Navicat/connections.ncx"),
         home.join("Documents/Navicat/connections.xml"),
         home.join("AppData/Roaming/PremiumSoft/Navicat/connections.ncx"),
@@ -197,6 +210,11 @@ mod tests {
     fn navicat_candidates_include_exported_connection_files() {
         let paths = candidate_connection_paths_for_home(Path::new("/home/me"));
 
+        assert!(paths.iter().any(|path| {
+            path.ends_with(
+                "Library/Application Support/PremiumSoft CyberTech/Navicat CC/Common/conn.plist",
+            )
+        }));
         assert!(
             paths
                 .iter()
