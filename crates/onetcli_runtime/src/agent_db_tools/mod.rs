@@ -14,7 +14,6 @@ use agent_runtime::{
     tools::{Tool, ToolInvocation},
 };
 use async_trait::async_trait;
-use gpui::App;
 use one_core::storage::ConnectionRepository;
 use std::sync::Arc;
 
@@ -34,23 +33,8 @@ struct AgentDbTool {
     kind: AgentDbToolKind,
 }
 
-pub(super) fn register_agent_db_tools(
-    cx: &mut App,
-    registry: &mut ToolRegistry,
-) -> anyhow::Result<()> {
-    let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() else {
-        tracing::warn!("Agent database tools enabled before storage is initialized");
-        return Ok(());
-    };
-    let Some(repo) = storage
-        .storage
-        .get::<one_core::storage::ConnectionRepository>()
-    else {
-        tracing::warn!("Agent database tools enabled without ConnectionRepository");
-        return Ok(());
-    };
+pub fn register_agent_db_tools(repo: Arc<ConnectionRepository>, registry: &mut ToolRegistry) {
     register_agent_db_tool_handlers(registry, repo);
-    Ok(())
 }
 
 fn register_agent_db_tool_handlers(registry: &mut ToolRegistry, repo: Arc<ConnectionRepository>) {

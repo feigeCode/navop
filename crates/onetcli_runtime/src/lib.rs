@@ -1,3 +1,5 @@
+pub mod agent_db_tools;
+pub mod agent_ssh_tools;
 pub mod cli_host;
 pub mod connections;
 pub mod database_tools;

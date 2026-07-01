@@ -4552,8 +4552,8 @@ mod tests {
         sgr_mouse_wheel_report, should_confirm_local_terminal_close,
         should_defer_inline_history_prompt_input_to_text_system, should_defer_sgr_left_press,
         should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
-        should_dismiss_history_prompt_for_scroll, should_reset_history_prompt_for_terminal_event,
-        should_extend_selection_on_shift_click, should_scroll_to_bottom_on_user_input,
+        should_dismiss_history_prompt_for_scroll, should_extend_selection_on_shift_click,
+        should_reset_history_prompt_for_terminal_event, should_scroll_to_bottom_on_user_input,
         should_start_selection_from_pending_sgr_press, take_whole_scroll_lines,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};

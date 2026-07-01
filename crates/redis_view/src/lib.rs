@@ -11,6 +11,7 @@ use gpui::App;
 rust_i18n::i18n!("locales", fallback = "zh-CN");
 
 // 核心模块
+pub mod agent_tools;
 pub mod connection;
 pub mod manager;
 pub mod types;

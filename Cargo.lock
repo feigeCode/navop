@@ -6736,7 +6736,6 @@ dependencies = [
  "agent_runtime",
  "ai_chat_view",
  "anyhow",
- "async-trait",
  "base64 0.22.1",
  "db",
  "db_view",
@@ -6764,7 +6763,6 @@ dependencies = [
  "remote_desktop_view",
  "remote_file_editor",
  "reqwest_client",
- "rusqlite",
  "rust-i18n",
  "semver",
  "serde",
@@ -6777,7 +6775,6 @@ dependencies = [
  "terminal",
  "terminal_view",
  "tokio",
- "tokio-util",
  "tool_runtime",
  "tracing",
  "tracing-appender",
@@ -7929,7 +7926,9 @@ dependencies = [
 name = "onetcli_runtime"
 version = "0.1.0"
 dependencies = [
+ "agent_runtime",
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "db",
  "futures",
@@ -7942,6 +7941,7 @@ dependencies = [
  "ssh",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tool_runtime",
 ]
 
@@ -9517,9 +9517,11 @@ dependencies = [
 name = "redis_view"
 version = "0.1.0"
 dependencies = [
+ "agent_runtime",
  "ai_chat_view",
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "dashmap 5.5.3",
  "futures",

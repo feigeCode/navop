@@ -1,4 +1,5 @@
 use super::agent_runtime_tool_registry;
+use agent_runtime::{ResourceContext, RiskLevel, ToolName};
 use gpui::TestAppContext;
 use one_core::settings::{AppSettings, McpToolsetSettings};
 use one_core::storage::connection::SqliteConnection;
@@ -34,6 +35,81 @@ fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContex
     assert!(
         !names.contains(&"db_exec".to_string()),
         "Agent registry should not expose the old MCP db.exec adapter"
+    );
+}
+
+#[gpui::test]
+fn agent_runtime_tool_registry_uses_native_redis_tools(cx: &mut TestAppContext) {
+    let registry = cx.update(|cx| {
+        register_connection_repository(cx);
+        let mut settings = AppSettings::default();
+        settings.mcp.toolsets = McpToolsetSettings {
+            terminal: false,
+            connections: false,
+            redis: true,
+            ..Default::default()
+        };
+        cx.set_global(settings);
+
+        agent_runtime_tool_registry(cx).expect("agent registry should build")
+    });
+    let names = registry
+        .names()
+        .into_iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&"redis_execute_command".to_string()));
+    assert!(
+        !names.contains(&"redis.execute_command".to_string()),
+        "Agent registry should not expose the old MCP redis.execute_command adapter"
+    );
+    let exec = registry
+        .get(&ToolName::new("redis_execute_command"))
+        .expect("redis execute tool");
+    assert_eq!(
+        RiskLevel::High,
+        exec.spec(&ResourceContext::new()).risk,
+        "Redis command execution must require approval through high risk"
+    );
+}
+
+#[gpui::test]
+fn agent_runtime_tool_registry_uses_native_ssh_sftp_tools(cx: &mut TestAppContext) {
+    let registry = cx.update(|cx| {
+        register_connection_repository(cx);
+        let mut settings = AppSettings::default();
+        settings.mcp.toolsets = McpToolsetSettings {
+            terminal: false,
+            connections: false,
+            sftp: true,
+            ..Default::default()
+        };
+        cx.set_global(settings);
+
+        agent_runtime_tool_registry(cx).expect("agent registry should build")
+    });
+    let names = registry
+        .names()
+        .into_iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&"ssh_list_dir".to_string()));
+    assert!(names.contains(&"ssh_read_file".to_string()));
+    assert!(names.contains(&"ssh_file_stat".to_string()));
+    assert!(names.contains(&"ssh_write_file".to_string()));
+    assert!(
+        !names.contains(&"sftp.write".to_string()),
+        "Agent registry should not expose the old MCP sftp.write adapter"
+    );
+    let write = registry
+        .get(&ToolName::new("ssh_write_file"))
+        .expect("ssh write tool");
+    assert_eq!(
+        RiskLevel::High,
+        write.spec(&ResourceContext::new()).risk,
+        "SSH/SFTP writes must require approval through high risk"
     );
 }
 

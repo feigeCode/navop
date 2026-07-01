@@ -1,4 +1,3 @@
-mod agent_db_tools;
 mod config;
 mod connection_sessions;
 mod internal_functions;
@@ -108,7 +107,11 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
     );
     let mut agent_toolsets = config.toolsets.clone();
     let agent_database_enabled = agent_toolsets.database;
+    let agent_redis_enabled = agent_toolsets.redis;
+    let agent_sftp_enabled = agent_toolsets.sftp;
     agent_toolsets.database = false;
+    agent_toolsets.redis = false;
+    agent_toolsets.sftp = false;
     let registry = build_tool_registry(cx, &agent_toolsets)?;
     let mut agent_registry = public_mcp::tools::agent_runtime_tool_registry(
         registry,
@@ -116,9 +119,31 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
         build_approval_manager(cx),
     );
     if agent_database_enabled {
-        agent_db_tools::register_agent_db_tools(cx, &mut agent_registry)?;
+        if let Some(repo) = connection_repository(cx) {
+            onetcli_runtime::agent_db_tools::register_agent_db_tools(repo, &mut agent_registry);
+        } else {
+            tracing::warn!("Agent database tools enabled without ConnectionRepository");
+        }
+    }
+    if agent_redis_enabled {
+        redis_view::agent_tools::register_agent_redis_tools(cx, &mut agent_registry)?;
+    }
+    if agent_sftp_enabled {
+        if let Some(repo) = connection_repository(cx) {
+            onetcli_runtime::agent_ssh_tools::register_agent_ssh_tools(repo, &mut agent_registry);
+        } else {
+            tracing::warn!("Agent SSH/SFTP tools enabled without ConnectionRepository");
+        }
     }
     Ok(agent_registry)
+}
+
+fn connection_repository(
+    cx: &App,
+) -> Option<std::sync::Arc<one_core::storage::ConnectionRepository>> {
+    cx.try_global::<one_core::storage::GlobalStorageState>()?
+        .storage
+        .get::<one_core::storage::ConnectionRepository>()
 }
 
 fn reconcile_runtime(cx: &mut App) {

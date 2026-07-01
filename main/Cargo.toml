@@ -26,7 +26,6 @@ base64 = { workspace = true }
 percent-encoding = { workspace = true }
 dirs = {workspace = true}
 futures = { workspace = true }
-async-trait = { workspace = true }
 smol = { workspace = true }
 db_view = { workspace = true }
 extension-runtime = { workspace = true }
@@ -50,8 +49,6 @@ one-ui.workspace = true
 onetcli_runtime.workspace = true
 reqwest_client.workspace = true
 db.workspace = true
-rusqlite.workspace = true
-tokio-util.workspace = true
 global-hotkey.workspace = true
 sha2 = { workspace = true }
 flate2 = "1"
