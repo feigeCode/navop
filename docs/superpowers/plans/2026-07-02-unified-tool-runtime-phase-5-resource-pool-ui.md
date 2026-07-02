@@ -615,7 +615,7 @@ rtk git commit -m "feat(ai_chat): filter resource pool by type"
 - Modify: `crates/ai_chat_view/src/resource_builder_tests.rs`
 - Modify: `crates/ai_chat_view/src/resource_builder.rs`
 
-- [ ] **Step 1: Add resource pool semantics tests**
+- [x] **Step 1: Add resource pool semantics tests**
 
 Add tests:
 
@@ -649,7 +649,7 @@ fn all_connections_keep_all_resources_when_default_is_selected() {
 
 Expected: these should pass without production code changes. If they fail, fix `build_resource_context_all` without removing non-current resources.
 
-- [ ] **Step 2: Update comments**
+- [x] **Step 2: Update comments**
 
 Change comments in `resource_builder.rs` from “当前连接” language to “默认目标” where they describe `current`, for example:
 
@@ -659,7 +659,7 @@ Change comments in `resource_builder.rs` from “当前连接” language to “
 
 Do not rename public functions in this task.
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run:
 
@@ -671,7 +671,7 @@ rtk cargo test -p ai_chat_view resource_builder
 
 Expected: all pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/resource_builder.rs crates/ai_chat_view/src/resource_builder_tests.rs

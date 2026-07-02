@@ -69,6 +69,44 @@ fn all_connections_builds_context_with_multiple_resources() {
 }
 
 #[test]
+fn single_connection_sets_connection_as_default_target() {
+    let conn = stored_connection(42, "prod-a", ConnectionType::SshSftp, "{}");
+
+    let ctx = build_resource_context_single(&conn);
+
+    assert_eq!(1, ctx.resources.len());
+    assert_eq!(
+        Some("prod-a"),
+        ctx.current().map(|resource| resource.label.as_str())
+    );
+}
+
+#[test]
+fn all_connections_keep_all_resources_when_default_is_selected() {
+    let conns = vec![
+        stored_connection(1, "prod-a", ConnectionType::SshSftp, "{}"),
+        stored_connection(2, "prod-b", ConnectionType::SshSftp, "{}"),
+        stored_connection(
+            3,
+            "prod-db",
+            ConnectionType::Database,
+            r#"{"type":"mysql"}"#,
+        ),
+    ];
+
+    let current = conns[1].clone();
+    let ctx = build_resource_context_all(Some(&current), conns);
+
+    assert_eq!(3, ctx.resources.len());
+    assert_eq!(
+        Some("prod-b"),
+        ctx.current().map(|resource| resource.label.as_str())
+    );
+    assert!(ctx.resources.iter().any(|resource| resource.label == "prod-a"));
+    assert!(ctx.resources.iter().any(|resource| resource.label == "prod-db"));
+}
+
+#[test]
 fn connection_mentions_are_not_suggested_in_input() {
     let conn = stored_connection(
         7,

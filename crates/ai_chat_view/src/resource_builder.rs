@@ -22,7 +22,7 @@ pub fn build_agent_context_single(
     )
 }
 
-/// 从所有连接构建 ResourceContext，并设置当前连接（用于非侧边栏模式）。
+/// 从所有连接构建 ResourceContext，并设置默认目标（用于非侧边栏模式）。
 pub fn build_resource_context_all(
     current_connection: Option<&StoredConnection>,
     all_connections: Vec<StoredConnection>,
@@ -47,7 +47,7 @@ pub fn build_resource_context_all(
     ctx
 }
 
-/// 从所有连接构建 Agent 视图所需的资源上下文与 `@` 提及项。
+/// 从所有连接构建 Agent 视图所需的资源池与 `@` 提及项。
 pub fn build_agent_context_all(
     current_connection: Option<&StoredConnection>,
     connections: &[StoredConnection],
