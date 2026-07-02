@@ -46,6 +46,17 @@ started, finished, split, or blocked.
 
 Last updated: 2026-07-02
 
+Tracking rules:
+
+1. Keep this section as the global source of truth for migration status.
+2. Mark a row `Done` only after the code or doc checkpoint is committed and targeted
+   verification has been run.
+3. Mark a row `In progress` when relevant changes exist in the worktree, when a
+   checkpoint has partial verification, or when manual smoke is still pending.
+4. Add a new row when a phase splits into a separately testable checkpoint.
+5. Keep the current active checkpoint explicit so future workers can resume without
+   rereading the whole conversation.
+
 Status labels:
 
 ```text
@@ -68,8 +79,61 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 4 Public MCP app registry merge | Done | `main/src/public_mcp_runtime/tool_registry.rs` collects enabled `tool_runtime::ToolRegistry` values, merges them, and exposes one `ToolRuntimeMcpProvider`. Terminal toolset now exposes both `ssh.exec` and `terminal.exec` through the real app registry path. Public MCP runtime tests passed on 2026-07-02. | Continue replacing remaining Public MCP-specific permission settings with unified `PermissionPolicy`. |
 | Phase 4 Public MCP runtime permission policy | Done | `PermissionMode` now maps to `tool_runtime::PermissionPolicy` for runtime-backed MCP tools. `Allow` maps to Auto, so high-risk/destructive/open-world tools such as `ssh.exec`, `terminal.exec`, and generic Redis command execution still require approval. Public MCP and app runtime tests passed on 2026-07-02. | Migrate settings/UI terminology from MCP permission mode to unified permission profile. |
 | Phase 4 Public MCP settings profile wording | Done | `McpPermissionMode` keeps old persisted values but exposes profile ids `safe/confirm/auto`; Public MCP runtime config carries `permission_profile`; settings UI labels now show Safe / Confirm / Auto. Core settings and app runtime tests passed on 2026-07-02. | Later storage migration can replace `permission_mode` only when a broader settings migration is planned. |
-| Phase 5 Resource Pool UI | In progress | Resource pool wording, default target display, search, type filtering, explicit add/remove membership, and default-target builder semantics are implemented in `ai_chat_view`. Focused tests and `cargo check -p ai_chat_view` passed on 2026-07-02. | Next checkpoint: workspace/tag/all source selector and persisted resource-pool presets. |
+| Phase 5a Resource Pool UI wording/filtering | Done | `6010dad7 feat(ai_chat): add resource pool display model`, `e8985154 feat(ai_chat): rename context selector to resource pool`, `d7b82ab0 feat(ai_chat): filter resource pool by type`, `84d8fe65 test(ai_chat): document resource pool default target semantics`, `ad195aab docs: track resource pool ui checkpoint` | Keep wording and default-target semantics while wiring broader catalogs. |
+| Phase 5b Resource Pool membership | Done | `1e980c66 feat(ai_chat): add resource pool item display model`, `f271dc59 feat(ai_chat): add available resource catalog`, `07a8b217 feat(ai_chat): map resource catalog to pool rows`, `666b55a2 feat(ai_chat): render resource pool membership actions`, `f7099082 feat(ai_chat): handle resource pool membership changes`, `cf3babff feat(ai_chat): build resource catalog for pool management`, `00094e15 docs: track resource pool management checkpoint` | Wire real entry points so sidebars pass broader catalogs instead of only the selected pool. |
+| Phase 5c Sidebar catalog wiring | In progress | Worktree changes currently wire DB, Redis, and Mongo sidebars through `DefaultAgentChatPanel::new_with_context_and_catalog` / `set_resource_context_with_catalog`; terminal sidebar is intentionally not wired because it only receives the current `StoredConnection`. | Rerun focused verification, commit `feat(ai_chat): wire resource catalog into sidebars`, then update this row to `Done`. |
+| Phase 5d Resource source presets | Planned | Architecture scope below. | Add workspace/tag/all/manual source selector and persisted resource-pool presets. |
 | Phase 6 Multi-resource execution | Planned | Architecture scope below. | Add safe parallel routing and target-grouped result display. |
+
+### Active Checkpoint
+
+Current checkpoint: Phase 5c sidebar catalog wiring.
+
+Purpose:
+
+1. Keep side-panel sessions single-resource by default.
+2. Pass a broader `available_resources` catalog to the resource pool popover for DB,
+   Redis, and Mongo sidebars.
+3. Preserve existing `set_resource_context` behavior for callers that do not have a
+   broader catalog.
+4. Avoid guessing a terminal catalog until `TerminalSidebar` has a real full-connection
+   source.
+
+Current worktree files:
+
+```text
+crates/ai_chat_view/src/agent_view.rs
+crates/ai_chat_view/src/default_panel.rs
+crates/ai_chat_view/src/default_panel_tests.rs
+crates/db_view/src/sidebar/mod.rs
+crates/mongodb_view/src/sidebar.rs
+crates/redis_view/src/sidebar.rs
+```
+
+Before committing the checkpoint, rerun:
+
+```bash
+rtk cargo test -p ai_chat_view sidebar_config_preserves_available_resource_catalog
+rtk cargo test -p ai_chat_view resource_pool
+rtk cargo check -p ai_chat_view
+rtk cargo check -p db_view
+rtk cargo check -p redis_view
+rtk cargo check -p mongodb_view
+rtk git diff --check
+```
+
+Expected commit:
+
+```bash
+rtk git add \
+  crates/ai_chat_view/src/agent_view.rs \
+  crates/ai_chat_view/src/default_panel.rs \
+  crates/ai_chat_view/src/default_panel_tests.rs \
+  crates/db_view/src/sidebar/mod.rs \
+  crates/mongodb_view/src/sidebar.rs \
+  crates/redis_view/src/sidebar.rs
+rtk git commit -m "feat(ai_chat): wire resource catalog into sidebars"
+```
 
 Current product decision:
 
@@ -79,11 +143,14 @@ Current product decision:
 4. Agent-facing prompts should expose canonical ids only after the relevant adapter can
    route them safely.
 
-Next recommended checkpoint:
+Next recommended checkpoints:
 
-1. Run a manual app smoke where a command appears in the visible terminal pane.
-2. If smoke passes, start Phase 4 Public MCP adapter unification.
-3. If smoke exposes a gap, fix the smallest provider, prompt, or card layer that owns it.
+1. Finish and commit Phase 5c sidebar catalog wiring.
+2. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
+   through `terminal.exec`.
+3. Start Phase 5d resource source presets only after Phase 5c is committed.
+4. Start Phase 6 only after at least one multi-resource UI path can produce explicit
+   targets from the resource pool.
 
 ## Design Principles
 

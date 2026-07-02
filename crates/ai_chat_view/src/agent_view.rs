@@ -1276,6 +1276,18 @@ impl AgentChatView {
         mentions: Vec<MentionItem>,
         cx: &mut Context<Self>,
     ) {
+        let available_resources = resources.resources.clone();
+        self.set_resource_context_with_catalog(resources, mentions, available_resources, cx);
+    }
+
+    pub fn set_resource_context_with_catalog(
+        &mut self,
+        resources: ResourceContext,
+        mentions: Vec<MentionItem>,
+        available_resources: Vec<ResourceRef>,
+        cx: &mut Context<Self>,
+    ) {
+        self.available_resources = available_resources;
         self.resources = resources.clone();
         self.sync_session_resources();
         let target_options: Vec<ComposerTarget> = self

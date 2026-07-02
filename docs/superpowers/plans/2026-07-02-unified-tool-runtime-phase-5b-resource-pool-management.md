@@ -8,7 +8,8 @@
 
 **Tech Stack:** Rust, GPUI, `ai_chat_view`, `agent_runtime::ResourceContext`, `agent_runtime::ResourceRef`.
 
-Current status: Resource pool membership add/remove checkpoint verified.
+Current status: Resource pool membership add/remove checkpoint verified and committed.
+Follow-up sidebar catalog wiring is in progress in the worktree; see Task 8.
 
 ---
 
@@ -39,12 +40,32 @@ Modify:
 - `docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md`
   - Update Phase 5 row after verification.
 
+Follow-up checkpoint:
+
+- `crates/ai_chat_view/src/default_panel.rs`
+  - Carry `available_resources` through the default panel pending state and view
+    construction.
+  - Add catalog-aware setter APIs while preserving existing callers.
+
+- `crates/ai_chat_view/src/default_panel_tests.rs`
+  - Cover that sidebar panel config preserves a broader available-resource catalog.
+
+- `crates/db_view/src/sidebar/mod.rs`
+  - Build a catalog from all DB connections and pass it to the AI side panel.
+
+- `crates/redis_view/src/sidebar.rs`
+  - Build a catalog from all Redis connections and pass it to the AI side panel.
+
+- `crates/mongodb_view/src/sidebar.rs`
+  - Build a catalog from all Mongo connections and pass it to the AI side panel.
+
 Out of scope:
 
 - Workspace/tag/all source UI selector.
 - Persisting custom resource-pool membership.
 - Multi-resource execution or parallel ToolRouter behavior.
 - Replacing `agent_runtime::ResourceContext` with `tool_runtime::ResourcePool` in `AgentChatView` storage.
+- Expanding `TerminalSidebar` catalog without a real all-connections data source.
 
 ## Task 1: Add Display Rows For Resource Pool Membership
 
@@ -769,6 +790,131 @@ rtk git commit -m "docs: track resource pool management checkpoint"
 6. Select the second resource and confirm it becomes default.
 7. Remove the first resource and confirm the second resource remains default.
 8. Confirm running a prompt still uses the current default target when the user says “这台机器”.
+
+## Task 8: Wire Resource Catalogs Into Real Sidebars
+
+**Files:**
+- Modify: `crates/ai_chat_view/src/agent_view.rs`
+- Modify: `crates/ai_chat_view/src/default_panel.rs`
+- Modify: `crates/ai_chat_view/src/default_panel_tests.rs`
+- Modify: `crates/db_view/src/sidebar/mod.rs`
+- Modify: `crates/mongodb_view/src/sidebar.rs`
+- Modify: `crates/redis_view/src/sidebar.rs`
+
+Status: In progress in the worktree.
+
+- [x] **Step 1: Add catalog-aware default panel construction APIs**
+
+Implemented shape:
+
+```rust
+DefaultAgentChatPanel::new_with_context_and_catalog(
+    resources,
+    mentions,
+    available_resources,
+    window,
+    cx,
+)
+```
+
+and:
+
+```rust
+DefaultAgentChatPanel::set_resource_context_with_catalog(
+    resources,
+    mentions,
+    available_resources,
+    cx,
+)
+```
+
+Existing `new_with_context` and `set_resource_context` remain compatibility paths and
+default the available catalog to `resources.resources.clone()`.
+
+- [x] **Step 2: Preserve available catalog when spawning `AgentChatView`**
+
+Implemented behavior:
+
+1. Pending panel state stores `(ResourceContext, Vec<MentionItem>, Vec<ResourceRef>)`.
+2. `spawn_build_view` receives `available_resources`.
+3. `AgentChatViewConfig` is built with `.with_available_resources(available_resources)`.
+
+- [x] **Step 3: Add sidebar config regression coverage**
+
+Test added:
+
+```bash
+rtk cargo test -p ai_chat_view sidebar_config_preserves_available_resource_catalog
+```
+
+Expected: pass.
+
+- [x] **Step 4: Wire DB, Redis, and Mongo sidebars**
+
+Implemented behavior:
+
+1. DB sidebar imports `build_resource_catalog`.
+2. DB initial panel creation and `set_database_scope` pass
+   `build_resource_catalog(&self.connections)`.
+3. Redis sidebar imports `build_resource_catalog` and passes a catalog at initial panel
+   creation.
+4. Mongo sidebar imports `build_resource_catalog` and passes a catalog at initial panel
+   creation.
+
+Terminal sidebar is intentionally unchanged because its constructor currently receives
+only the current `StoredConnection`, not the full connection list.
+
+- [ ] **Step 5: Rerun focused verification before commit**
+
+Run:
+
+```bash
+rtk cargo test -p ai_chat_view sidebar_config_preserves_available_resource_catalog
+rtk cargo test -p ai_chat_view resource_pool
+rtk cargo check -p ai_chat_view
+rtk cargo check -p db_view
+rtk cargo check -p redis_view
+rtk cargo check -p mongodb_view
+rtk git diff --check
+```
+
+Expected:
+
+1. Focused tests pass.
+2. Crate checks exit 0.
+3. `rtk git diff --check` has no output.
+4. Existing `block v0.1.6` future-incompat warning can remain.
+
+- [ ] **Step 6: Commit sidebar catalog wiring**
+
+Run:
+
+```bash
+rtk git add \
+  crates/ai_chat_view/src/agent_view.rs \
+  crates/ai_chat_view/src/default_panel.rs \
+  crates/ai_chat_view/src/default_panel_tests.rs \
+  crates/db_view/src/sidebar/mod.rs \
+  crates/mongodb_view/src/sidebar.rs \
+  crates/redis_view/src/sidebar.rs \
+  docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md \
+  docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5b-resource-pool-management.md
+rtk git commit -m "feat(ai_chat): wire resource catalog into sidebars"
+```
+
+- [ ] **Step 7: Update global tracking after commit**
+
+Update `docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md`:
+
+```text
+Phase 5c Sidebar catalog wiring | Done | <commit hash> wires DB, Redis, and Mongo sidebars through catalog-aware default panel APIs. Focused ai_chat_view tests and checks for ai_chat_view/db_view/redis_view/mongodb_view passed on 2026-07-02. | Start Phase 5d resource source presets or run manual resource-pool smoke.
+```
+
+Update this plan status:
+
+```text
+Current status: Resource pool membership and sidebar catalog wiring checkpoints verified and committed.
+```
 
 ## Self-Review
 
