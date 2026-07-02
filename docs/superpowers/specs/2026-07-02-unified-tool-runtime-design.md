@@ -82,37 +82,37 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 5a Resource Pool UI wording/filtering | Done | `6010dad7 feat(ai_chat): add resource pool display model`, `e8985154 feat(ai_chat): rename context selector to resource pool`, `d7b82ab0 feat(ai_chat): filter resource pool by type`, `84d8fe65 test(ai_chat): document resource pool default target semantics`, `ad195aab docs: track resource pool ui checkpoint` | Keep wording and default-target semantics while wiring broader catalogs. |
 | Phase 5b Resource Pool membership | Done | `1e980c66 feat(ai_chat): add resource pool item display model`, `f271dc59 feat(ai_chat): add available resource catalog`, `07a8b217 feat(ai_chat): map resource catalog to pool rows`, `666b55a2 feat(ai_chat): render resource pool membership actions`, `f7099082 feat(ai_chat): handle resource pool membership changes`, `cf3babff feat(ai_chat): build resource catalog for pool management`, `00094e15 docs: track resource pool management checkpoint` | Wire real entry points so sidebars pass broader catalogs instead of only the selected pool. |
 | Phase 5c Sidebar catalog wiring | Done | `a2cd12e feat(ai_chat): wire resource catalog into sidebars` wires DB, Redis, and Mongo sidebars through catalog-aware default panel APIs. Focused `ai_chat_view` tests and checks for `ai_chat_view`, `db_view`, `redis_view`, and `mongodb_view` passed on 2026-07-02. | Start Phase 5d resource source presets or run manual resource-pool smoke. |
-| Phase 5d Resource source presets | Planned | Architecture scope below. | Add workspace/tag/all/manual source selector and persisted resource-pool presets. |
+| Phase 5d Resource source presets | Done | `9f10d13 feat(ai_chat): add resource source option model`, `cd8839d feat(ai_chat): derive resource source options`, `f90e41b feat(ai_chat): apply resource source presets`, and `a78388c feat(ai_chat): render resource source presets` add current/all/type/manual source presets while keeping workspace/tag disabled until real metadata exists. `resource_source`, `resource_pool`, and `cargo check -p ai_chat_view` passed on 2026-07-02. | Run manual resource-pool smoke and keep persisted workspace/tag presets for a later storage-backed checkpoint. |
 | Phase 6 Multi-resource execution | Planned | Architecture scope below. | Add safe parallel routing and target-grouped result display. |
 
 ### Active Checkpoint
 
-Current checkpoint: Phase 3c manual terminal-exec smoke and Phase 5d resource source presets.
+Current checkpoint: Phase 3c manual terminal-exec smoke and Phase 6 multi-resource execution planning.
 
 Purpose:
 
 1. Verify `terminal.exec` writes into the visible terminal pane with real app behavior.
-2. Add resource source presets only after the sidebar catalog wiring is committed.
+2. Start Phase 6 only after at least one UI path can produce explicit targets from the
+   resource pool.
 3. Keep side-panel sessions single-resource by default while allowing explicit expansion
    from a broader catalog.
-4. Avoid guessing a terminal catalog until `TerminalSidebar` has a real full-connection
+4. Keep persisted workspace/tag presets deferred until a real workspace/tag resource
+   catalog source exists.
+5. Avoid guessing a terminal catalog until `TerminalSidebar` has a real full-connection
    source.
 
 Last completed checkpoint:
 
 ```text
-a2cd12e feat(ai_chat): wire resource catalog into sidebars
+a78388c feat(ai_chat): render resource source presets
 ```
 
-Phase 5c verification run:
+Phase 5d verification run:
 
 ```bash
-rtk cargo test -p ai_chat_view sidebar_config_preserves_available_resource_catalog
+rtk cargo test -p ai_chat_view resource_source
 rtk cargo test -p ai_chat_view resource_pool
 rtk cargo check -p ai_chat_view
-rtk cargo check -p db_view
-rtk cargo check -p redis_view
-rtk cargo check -p mongodb_view
 rtk git diff --check
 ```
 
@@ -131,9 +131,9 @@ Next recommended checkpoints:
 
 1. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
    through `terminal.exec`.
-2. Start Phase 5d resource source presets.
-3. Start Phase 6 only after at least one multi-resource UI path can produce explicit
-   targets from the resource pool.
+2. Run manual resource-pool smoke for source presets.
+3. Start Phase 6 multi-resource execution planning now that at least one UI path can
+   produce explicit targets from the resource pool.
 
 ## Design Principles
 

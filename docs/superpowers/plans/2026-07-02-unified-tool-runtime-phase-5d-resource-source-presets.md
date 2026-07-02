@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, GPUI, `ai_chat_view`, `agent_runtime::ResourceContext`, `agent_runtime::ResourceRef`.
 
-Current status: Task 4 verified; ready to commit.
+Current status: Phase 5d resource source preset checkpoint verified; tracking ready to commit.
 
 ---
 
@@ -388,7 +388,7 @@ rtk git diff --check
 
 Expected: pass, with only the existing `block v0.1.6` future-incompat warning if emitted.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/input/agent_input.rs docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5d-resource-source-presets.md
@@ -401,7 +401,7 @@ rtk git commit -m "feat(ai_chat): render resource source presets"
 - Modify: `docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md`
 - Modify: `docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5d-resource-source-presets.md`
 
-- [ ] **Step 1: Run verification**
+- [x] **Step 1: Run verification**
 
 Run:
 
@@ -414,7 +414,7 @@ rtk git diff --check
 
 Expected: pass, with only the existing `block v0.1.6` future-incompat warning if emitted.
 
-- [ ] **Step 2: Update tracking**
+- [x] **Step 2: Update tracking**
 
 Update the Phase 5d row in the design doc with commit hashes and the verification result.
 
