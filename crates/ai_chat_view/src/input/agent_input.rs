@@ -26,8 +26,9 @@ use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, 
 
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
-    AgentComposerContext, ComposerMenuOption, ComposerModelOption, ComposerPlanItem, ComposerScope,
-    ComposerResourcePoolItem, ComposerResourceTypeFilter, ComposerSubAgentItem, ComposerTarget,
+    AgentComposerContext, ComposerMenuOption, ComposerModelOption, ComposerPlanItem,
+    ComposerResourcePoolItem, ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem,
+    ComposerTarget,
 };
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
 
@@ -1316,7 +1317,10 @@ fn resource_pool_trigger_label(context: &AgentComposerContext) -> SharedString {
     if context.resource_pool.total_resources == 0 {
         return SharedString::from("资源池");
     }
-    SharedString::from(format!("资源池 · {}", context.resource_pool.total_resources))
+    SharedString::from(format!(
+        "资源池 · {}",
+        context.resource_pool.total_resources
+    ))
 }
 
 fn subagent_item_row(
@@ -1638,7 +1642,14 @@ fn resource_pool_item_row(
                 .flex_1()
                 .min_w_0()
                 .gap(px(1.0))
-                .child(div().w_full().min_w_0().text_sm().truncate().child(item.label))
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .text_sm()
+                        .truncate()
+                        .child(item.label),
+                )
                 .child(
                     div()
                         .w_full()

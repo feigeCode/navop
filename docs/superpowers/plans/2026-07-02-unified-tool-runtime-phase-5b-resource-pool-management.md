@@ -626,7 +626,7 @@ rtk git commit -m "feat(ai_chat): handle resource pool membership changes"
 - Modify: `crates/ai_chat_view/src/resource_builder.rs`
 - Modify: `crates/ai_chat_view/src/resource_builder_tests.rs`
 
-- [ ] **Step 1: Write failing catalog tests**
+- [x] **Step 1: Write failing catalog tests**
 
 Add tests:
 
@@ -668,7 +668,7 @@ cannot find function `build_resource_catalog`
 cannot find function `build_agent_context_single_with_catalog`
 ```
 
-- [ ] **Step 2: Add helpers**
+- [x] **Step 2: Add helpers**
 
 Add:
 
@@ -688,7 +688,7 @@ pub fn build_agent_context_single_with_catalog(
 
 Update exports in `crates/ai_chat_view/src/lib.rs` if needed.
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run:
 
@@ -700,7 +700,7 @@ rtk cargo test -p ai_chat_view resource_builder
 
 Expected: all pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/resource_builder.rs crates/ai_chat_view/src/resource_builder_tests.rs crates/ai_chat_view/src/lib.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5b-resource-pool-management.md

@@ -22,6 +22,20 @@ pub fn build_agent_context_single(
     )
 }
 
+/// 从连接列表构建可添加到资源池的资源 catalog。
+pub fn build_resource_catalog(connections: &[StoredConnection]) -> Vec<ResourceRef> {
+    connections.iter().map(connection_to_resource_ref).collect()
+}
+
+/// 从单个连接构建侧边栏默认资源池,并附带全部连接 catalog。
+pub fn build_agent_context_single_with_catalog(
+    connection: &StoredConnection,
+    connections: &[StoredConnection],
+) -> (ResourceContext, Vec<MentionItem>, Vec<ResourceRef>) {
+    let (pool, mentions) = build_agent_context_single(connection);
+    (pool, mentions, build_resource_catalog(connections))
+}
+
 /// 从所有连接构建 ResourceContext，并设置默认目标（用于非侧边栏模式）。
 pub fn build_resource_context_all(
     current_connection: Option<&StoredConnection>,

@@ -45,7 +45,7 @@ use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::input::{
     AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
     ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem, ComposerResourcePoolSummary,
-    ComposerScope, ComposerResourceTypeFilter, ComposerSubAgentItem, ComposerTarget, MentionItem,
+    ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem, ComposerTarget, MentionItem,
 };
 use crate::message_view::render_messages_with_code_actions;
 use crate::persistence;
@@ -2180,7 +2180,9 @@ fn resource_pool_summary(resources: &ResourceContext) -> ComposerResourcePoolSum
 fn resource_type_filters(resources: &ResourceContext) -> Vec<ComposerResourceTypeFilter> {
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
     for resource in &resources.resources {
-        *counts.entry(resource.kind.as_str().to_string()).or_default() += 1;
+        *counts
+            .entry(resource.kind.as_str().to_string())
+            .or_default() += 1;
     }
 
     let mut filters = vec![ComposerResourceTypeFilter::new(
@@ -2229,11 +2231,7 @@ fn add_resource_to_pool(pool: &mut ResourceContext, catalog: &[ResourceRef], id:
     if pool.get(&rid).is_some() {
         return false;
     }
-    let Some(resource) = catalog
-        .iter()
-        .find(|resource| resource.id == rid)
-        .cloned()
-    else {
+    let Some(resource) = catalog.iter().find(|resource| resource.id == rid).cloned() else {
         return false;
     };
     pool.resources.push(resource);
@@ -2619,8 +2617,11 @@ mod tests {
 
     #[test]
     fn agent_config_defaults_available_resources_to_pool_resources() {
-        let resources = ResourceContext::new()
-            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"));
+        let resources = ResourceContext::new().with_resource(ResourceRef::new(
+            "ssh-a",
+            ResourceKind::Ssh,
+            "prod-a",
+        ));
 
         let config = AgentChatViewConfig::new(test_runtime("m"), resources.clone(), Vec::new());
 
@@ -2629,24 +2630,29 @@ mod tests {
 
     #[test]
     fn agent_config_accepts_available_resource_catalog() {
-        let pool = ResourceContext::new()
-            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"));
+        let pool = ResourceContext::new().with_resource(ResourceRef::new(
+            "ssh-a",
+            ResourceKind::Ssh,
+            "prod-a",
+        ));
         let catalog = vec![
             ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
             ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"),
         ];
 
-        let config =
-            AgentChatViewConfig::new(test_runtime("m"), pool, Vec::new())
-                .with_available_resources(catalog.clone());
+        let config = AgentChatViewConfig::new(test_runtime("m"), pool, Vec::new())
+            .with_available_resources(catalog.clone());
 
         assert_eq!(config.available_resources, catalog);
     }
 
     #[test]
     fn resource_pool_items_mark_pool_membership_and_default_target() {
-        let pool = ResourceContext::new()
-            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"));
+        let pool = ResourceContext::new().with_resource(ResourceRef::new(
+            "ssh-a",
+            ResourceKind::Ssh,
+            "prod-a",
+        ));
         let catalog = vec![
             ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
             ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"),
@@ -2665,8 +2671,11 @@ mod tests {
 
     #[test]
     fn add_resource_to_pool_uses_catalog_resource() {
-        let mut pool = ResourceContext::new()
-            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"));
+        let mut pool = ResourceContext::new().with_resource(ResourceRef::new(
+            "ssh-a",
+            ResourceKind::Ssh,
+            "prod-a",
+        ));
         let catalog = vec![
             ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
             ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"),

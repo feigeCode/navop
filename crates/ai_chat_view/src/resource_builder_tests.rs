@@ -2,7 +2,8 @@ use agent_runtime::{ResourceKind, ResourceScope};
 use one_core::storage::{ConnectionType, StoredConnection};
 
 use crate::{
-    build_agent_context_all, build_mentions_from_connections, build_mentions_single,
+    build_agent_context_all, build_agent_context_single_with_catalog,
+    build_mentions_from_connections, build_mentions_single, build_resource_catalog,
     build_resource_context_all, build_resource_context_single,
 };
 
@@ -102,8 +103,45 @@ fn all_connections_keep_all_resources_when_default_is_selected() {
         Some("prod-b"),
         ctx.current().map(|resource| resource.label.as_str())
     );
-    assert!(ctx.resources.iter().any(|resource| resource.label == "prod-a"));
-    assert!(ctx.resources.iter().any(|resource| resource.label == "prod-db"));
+    assert!(
+        ctx.resources
+            .iter()
+            .any(|resource| resource.label == "prod-a")
+    );
+    assert!(
+        ctx.resources
+            .iter()
+            .any(|resource| resource.label == "prod-db")
+    );
+}
+
+#[test]
+fn connection_catalog_contains_all_saved_resources() {
+    let conns = vec![
+        stored_connection(1, "prod-a", ConnectionType::SshSftp, "{}"),
+        stored_connection(2, "prod-b", ConnectionType::SshSftp, "{}"),
+    ];
+
+    let catalog = build_resource_catalog(&conns);
+
+    assert_eq!(2, catalog.len());
+    assert_eq!("prod-a", catalog[0].label);
+    assert_eq!("prod-b", catalog[1].label);
+}
+
+#[test]
+fn agent_context_single_can_receive_all_resources_as_catalog() {
+    let conns = vec![
+        stored_connection(1, "prod-a", ConnectionType::SshSftp, "{}"),
+        stored_connection(2, "prod-b", ConnectionType::SshSftp, "{}"),
+    ];
+    let current = conns[0].clone();
+
+    let (pool, mentions, catalog) = build_agent_context_single_with_catalog(&current, &conns);
+
+    assert_eq!(1, pool.resources.len());
+    assert_eq!(2, catalog.len());
+    assert!(mentions.is_empty());
 }
 
 #[test]
