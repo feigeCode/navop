@@ -109,6 +109,34 @@ fn tool_runtime_provider_requests_approval_for_mutating_tools_and_redacts_secret
     );
 }
 
+#[test]
+fn tool_runtime_provider_asks_for_high_risk_tools_in_allow_mode() {
+    let provider = ToolRuntimeMcpProvider::new(ToolRegistry::new(vec![Arc::new(RuntimeWriteTool)]));
+    let registry = PublicMcpToolRegistry::new(vec![Arc::new(provider)]);
+    let approver = Arc::new(RecordingApprover::approved());
+
+    let result = futures::executor::block_on(registry.call_tool(
+        "example.write",
+        Some(rmcp::model::JsonObject::from_iter([(
+            "message".to_string(),
+            json!("ship"),
+        )])),
+        PublicMcpToolContext {
+            permission_mode: PermissionMode::Allow,
+            approver: PublicMcpApprovalManager::new(approver.clone()),
+        },
+    ))
+    .expect("approved high-risk runtime tool should run");
+
+    assert_eq!(
+        Some(json!({ "written": "ship" })),
+        result.structured_content
+    );
+    let requests = approver.requests();
+    assert_eq!(1, requests.len());
+    assert_eq!("example.write", requests[0].tool_name);
+}
+
 #[derive(Clone)]
 struct RuntimeEchoTool;
 

@@ -29,6 +29,15 @@ pub enum ApprovalDecision {
     Deny,
 }
 
+pub fn permission_policy_for_mode(mode: PermissionMode) -> tool_runtime::PermissionPolicy {
+    let profile = match mode {
+        PermissionMode::Deny => tool_runtime::PermissionProfile::Safe,
+        PermissionMode::Ask => tool_runtime::PermissionProfile::Confirm,
+        PermissionMode::Allow => tool_runtime::PermissionProfile::Auto,
+    };
+    tool_runtime::PermissionPolicy::for_profile(profile)
+}
+
 pub fn decide_permission(
     mode: PermissionMode,
     operation: PublicMcpOperationKind,

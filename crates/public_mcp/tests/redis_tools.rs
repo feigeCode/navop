@@ -1,3 +1,7 @@
+use public_mcp::approval::{
+    PublicMcpApprovalFuture, PublicMcpApprovalManager, PublicMcpApprovalOutcome,
+    PublicMcpApprovalRequest, PublicMcpApprover,
+};
 use public_mcp::permissions::PermissionMode;
 use public_mcp::tools::{
     PublicMcpToolContext, PublicMcpToolRegistry, RedisCommandExecution,
@@ -5,7 +9,7 @@ use public_mcp::tools::{
     RedisToolProvider, ToolRuntimeMcpProvider,
 };
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tool_runtime::ToolRegistry;
 
 #[tokio::test]
@@ -69,6 +73,7 @@ async fn redis_provider_executes_runtime_command() {
     let registry = PublicMcpToolRegistry::new(vec![Arc::new(ToolRuntimeMcpProvider::new(
         runtime_registry,
     ))]);
+    let approver = Arc::new(RecordingApprover::approved());
 
     let result = registry
         .call_tool(
@@ -80,7 +85,7 @@ async fn redis_provider_executes_runtime_command() {
             ])),
             PublicMcpToolContext {
                 permission_mode: PermissionMode::Allow,
-                approver: Default::default(),
+                approver: PublicMcpApprovalManager::new(approver.clone()),
             },
         )
         .await
@@ -99,6 +104,9 @@ async fn redis_provider_executes_runtime_command() {
         })),
         result.structured_content
     );
+    let requests = approver.requests();
+    assert_eq!(1, requests.len());
+    assert_eq!("redis.execute_command", requests[0].tool_name);
 }
 
 #[test]
@@ -164,5 +172,35 @@ impl RedisCommandExecutionProvider for FakeRedisRuntime {
     ) -> tool_runtime::ToolFuture {
         let execution = self.execution.clone();
         Box::pin(async move { Ok(tool_runtime::ToolResult::structured(execution.into_json())) })
+    }
+}
+
+#[derive(Clone)]
+struct RecordingApprover {
+    requests: Arc<Mutex<Vec<PublicMcpApprovalRequest>>>,
+}
+
+impl RecordingApprover {
+    fn approved() -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn requests(&self) -> Vec<PublicMcpApprovalRequest> {
+        self.requests
+            .lock()
+            .expect("requests lock poisoned")
+            .clone()
+    }
+}
+
+impl PublicMcpApprover for RecordingApprover {
+    fn request_approval(&self, request: PublicMcpApprovalRequest) -> PublicMcpApprovalFuture {
+        self.requests
+            .lock()
+            .expect("requests lock poisoned")
+            .push(request);
+        Box::pin(async { PublicMcpApprovalOutcome::Approved })
     }
 }

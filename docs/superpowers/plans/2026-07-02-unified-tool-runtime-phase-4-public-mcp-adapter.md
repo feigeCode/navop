@@ -14,7 +14,7 @@
 
 Last updated: 2026-07-02
 
-Current status: App runtime registry merge checkpoint verified.
+Current status: App runtime registry merge and runtime-backed permission policy checkpoints verified.
 
 ## File Structure
 
@@ -150,10 +150,72 @@ Known warning:
 block v0.1.6 future-incompat warning
 ```
 
+## Task 3: Runtime-backed MCP Tools Use Unified PermissionPolicy
+
+- [x] **Step 1: Write failing permission mapping test**
+
+Add `permission_modes_map_to_unified_runtime_profiles` in `crates/public_mcp/tests/permissions.rs`.
+
+Expected red result:
+
+```text
+no `permission_policy_for_mode` in `permissions`
+```
+
+- [x] **Step 2: Write failing high-risk runtime tool test**
+
+Add `tool_runtime_provider_asks_for_high_risk_tools_in_allow_mode` in
+`crates/public_mcp/tests/tool_runtime_adapter.rs`.
+
+Expected before implementation: high-risk runtime tool runs directly in `PermissionMode::Allow`
+without recording an approval request.
+
+- [x] **Step 3: Add compatibility mapping**
+
+Add:
+
+```rust
+PermissionMode::Deny  -> PermissionProfile::Safe
+PermissionMode::Ask   -> PermissionProfile::Confirm
+PermissionMode::Allow -> PermissionProfile::Auto
+```
+
+- [x] **Step 4: Use PermissionPolicy in ToolRuntimeMcpProvider**
+
+Runtime-backed MCP calls now use:
+
+```rust
+permission_policy_for_mode(context.permission_mode)
+    .decide(&descriptor.tool_id(), None, &call_annotations)
+```
+
+This keeps read-only calls automatic, allows low/medium mutating calls in Auto, and asks for
+high-risk/destructive/open-world calls.
+
+- [x] **Step 5: Update legacy expectations**
+
+Update tests that previously treated `PermissionMode::Allow` as unrestricted for `ssh.exec`
+and `redis.execute_command`. These tools are high-risk/open-world or mutating, so `Allow`
+now maps to Auto and still asks for approval.
+
+- [x] **Step 6: Verify**
+
+Run:
+
+```bash
+rtk cargo test -p public_mcp
+rtk cargo test -p main public_mcp_runtime
+rtk cargo check -p public_mcp
+rtk cargo check -p main
+```
+
+Expected: all pass. Existing `block v0.1.6` future-incompat warning can remain.
+
 ## Out Of Scope
 
 1. Removing `PublicMcpToolProvider`.
-2. Replacing `PermissionMode` with full `PermissionPolicy`.
+2. Removing `PermissionMode` from settings/protocol/UI. It is now a compatibility input that maps
+   to `PermissionPolicy` for runtime-backed tools.
 3. Rewriting Public MCP approval UI.
 4. Migrating external MCP or ACP providers.
 5. Manual visible terminal smoke for Phase 3c.

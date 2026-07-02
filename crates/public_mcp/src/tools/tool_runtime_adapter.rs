@@ -1,6 +1,6 @@
 use super::{PublicMcpToolContext, PublicMcpToolFuture, PublicMcpToolProvider};
 use crate::approval::PublicMcpApprovalOutcome;
-use crate::permissions::{ApprovalDecision, PublicMcpOperationKind, decide_permission};
+use crate::permissions::{PublicMcpOperationKind, permission_policy_for_mode};
 use rmcp::{
     ErrorData as McpError,
     model::{CallToolResult, JsonObject, Tool, ToolAnnotations},
@@ -59,19 +59,13 @@ async fn call_runtime_tool(
     input: Value,
     context: PublicMcpToolContext,
 ) -> Result<CallToolResult, McpError> {
-    if call_annotations.read_only {
-        return run_runtime_tool(registry, name, input).await;
-    }
-
-    match decide_permission(
-        context.permission_mode,
-        PublicMcpOperationKind::CallToolRuntimeTool,
-    ) {
-        ApprovalDecision::Allow => run_runtime_tool(registry, name, input).await,
-        ApprovalDecision::Ask => {
+    let policy = permission_policy_for_mode(context.permission_mode);
+    match policy.decide(&descriptor.tool_id(), None, &call_annotations) {
+        tool_runtime::PermissionDecision::Allow => run_runtime_tool(registry, name, input).await,
+        tool_runtime::PermissionDecision::Ask => {
             ask_then_run_runtime_tool(registry, descriptor, name, input, context).await
         }
-        ApprovalDecision::Deny => Ok(permission_denied_result(
+        tool_runtime::PermissionDecision::Deny => Ok(permission_denied_result(
             "tool runtime call denied by permission mode",
         )),
     }
