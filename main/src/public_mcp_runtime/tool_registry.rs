@@ -3,7 +3,7 @@ use gpui::App;
 use one_core::settings::McpToolsetSettings;
 use public_mcp::tools::{
     PublicMcpToolProvider, PublicMcpToolRegistry, ToolRuntimeMcpProvider,
-    internal_function_tool_registry, remote_ops_tool_registry,
+    internal_function_tool_registry, remote_ops_tool_registry, terminal_exec_tool_registry,
 };
 use std::sync::Arc;
 
@@ -12,22 +12,22 @@ pub(super) fn build_tool_registry(
     toolsets: &McpToolsetSettings,
 ) -> anyhow::Result<PublicMcpToolRegistry> {
     let mut providers: Vec<Arc<dyn PublicMcpToolProvider>> = Vec::new();
+    let mut runtime_registries = Vec::new();
     if toolsets.terminal {
         if let Some(registry) = terminal_view::public_mcp::registry(cx) {
-            providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-                remote_ops_tool_registry(registry),
-            )));
+            runtime_registries.push(remote_ops_tool_registry(registry.clone()));
+            runtime_registries.push(terminal_exec_tool_registry(registry));
         } else {
             tracing::warn!("Public MCP terminal registry is not initialized");
         }
     }
     if toolsets.internal_functions {
-        providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-            onetcli_runtime::builtin_tool_registry_with_version(env!("CARGO_PKG_VERSION")),
+        runtime_registries.push(onetcli_runtime::builtin_tool_registry_with_version(env!(
+            "CARGO_PKG_VERSION"
         )));
-        providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-            internal_function_tool_registry(internal_functions::definitions(cx)),
-        )));
+        runtime_registries.push(internal_function_tool_registry(
+            internal_functions::definitions(cx),
+        ));
     }
     if toolsets.connections {
         if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
@@ -39,17 +39,17 @@ pub(super) fn build_tool_registry(
                     .storage
                     .get::<one_core::storage::WorkspaceRepository>();
                 let session_opener = super::connection_sessions::connection_session_opener(cx);
-                providers.push(Arc::new(ToolRuntimeMcpProvider::new(
+                runtime_registries.push(
                     onetcli_runtime::connections::connection_tool_registry_with_workspaces_and_session_opener(
                         repo,
                         workspace_repo.clone(),
                         Some(session_opener),
                     ),
-                )));
+                );
                 if let Some(workspace_repo) = workspace_repo {
-                    providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-                        onetcli_runtime::workspaces::workspace_tool_registry(workspace_repo),
-                    )));
+                    runtime_registries.push(onetcli_runtime::workspaces::workspace_tool_registry(
+                        workspace_repo,
+                    ));
                 } else {
                     tracing::warn!(
                         "Public MCP connection tools enabled without WorkspaceRepository"
@@ -68,9 +68,7 @@ pub(super) fn build_tool_registry(
                 .storage
                 .get::<one_core::storage::ConnectionRepository>()
             {
-                providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-                    onetcli_runtime::sftp_tools::sftp_tool_registry(repo),
-                )));
+                runtime_registries.push(onetcli_runtime::sftp_tools::sftp_tool_registry(repo));
             } else {
                 tracing::warn!("Public MCP SFTP tools enabled without ConnectionRepository");
             }
@@ -84,9 +82,9 @@ pub(super) fn build_tool_registry(
                 .storage
                 .get::<one_core::storage::ConnectionRepository>()
             {
-                providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-                    onetcli_runtime::database_tools::database_tool_registry(repo),
-                )));
+                runtime_registries.push(onetcli_runtime::database_tools::database_tool_registry(
+                    repo,
+                ));
             } else {
                 tracing::warn!("Public MCP database tools enabled without ConnectionRepository");
             }
@@ -95,8 +93,13 @@ pub(super) fn build_tool_registry(
         }
     }
     if toolsets.redis {
+        runtime_registries.push(tool_runtime::ToolRegistry::new(redis::redis_tool_handlers(
+            cx,
+        )));
+    }
+    if !runtime_registries.is_empty() {
         providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-            tool_runtime::ToolRegistry::new(redis::redis_tool_handlers(cx)),
+            tool_runtime::ToolRegistry::merge(runtime_registries)?,
         )));
     }
     if providers.is_empty() {
@@ -248,6 +251,26 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "db.schema"));
         assert!(tools.iter().any(|tool| tool.name == "db.query"));
         assert!(tools.iter().any(|tool| tool.name == "db.exec"));
+    }
+
+    #[gpui::test]
+    fn build_tool_registry_terminal_toolset_includes_terminal_exec(cx: &mut TestAppContext) {
+        let toolsets = McpToolsetSettings {
+            terminal: true,
+            connections: false,
+            internal_functions: false,
+            ..Default::default()
+        };
+
+        let tools = cx.update(|cx| {
+            terminal_view::public_mcp::init(cx);
+            build_tool_registry(cx, &toolsets)
+                .expect("terminal registry should build")
+                .tools()
+        });
+
+        assert!(tools.iter().any(|tool| tool.name == "ssh.exec"));
+        assert!(tools.iter().any(|tool| tool.name == "terminal.exec"));
     }
 
     #[gpui::test]
