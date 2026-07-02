@@ -174,6 +174,34 @@ ssh_write_file        -> sftp.write
 ssh_file_stat         -> sftp.stat
 ```
 
+### SSH Command Surface
+
+`ssh.exec` should match the way users type commands in the terminal. The Agent-facing
+schema keeps the command as one shell line and uses `target` only to select the
+resource:
+
+```json
+{
+  "target": "ssh-prod-a",
+  "command": "df -h && echo \"===INODE===\" && df -i",
+  "cwd": "/root",
+  "timeout_ms": 60000
+}
+```
+
+The command string is displayed unchanged in approval cards and tool result cards.
+Adapter-specific details such as `session_id`, PTY management, command polling, and
+output collection stay behind the adapter boundary. Historical fields are still
+accepted by compatibility adapters in this precedence order:
+
+```text
+target > connection > connection_id > session_id > default_target
+```
+
+This keeps Agent behavior consistent with terminal input: if a user can paste the
+same command into the terminal, the model should be able to call `ssh.exec` with that
+command text and an explicit resource target.
+
 ### ToolDescriptor
 
 `ToolDescriptor` describes one canonical tool.

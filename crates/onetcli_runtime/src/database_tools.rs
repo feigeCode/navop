@@ -32,6 +32,13 @@ pub fn database_tool_registry(repo: Arc<ConnectionRepository>) -> ToolRegistry {
     ])
 }
 
+pub fn database_read_tool_registry(repo: Arc<ConnectionRepository>) -> ToolRegistry {
+    ToolRegistry::new(vec![
+        Arc::new(DatabaseToolHandler::new(repo.clone(), DatabaseTool::Schema)),
+        Arc::new(DatabaseToolHandler::new(repo, DatabaseTool::Query)),
+    ])
+}
+
 impl DatabaseToolHandler {
     fn new(repo: Arc<ConnectionRepository>, tool: DatabaseTool) -> Self {
         Self { repo, tool }

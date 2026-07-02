@@ -42,6 +42,16 @@ fn database_tool_registry_exposes_schema_query_and_exec_tools() {
 }
 
 #[test]
+fn database_read_tool_registry_exposes_only_schema_and_query() {
+    let registry = onetcli_runtime::database_tools::database_read_tool_registry(repo());
+    let tools = registry.list(ToolAdapter::FunctionCalling);
+    let ids = tools.iter().map(|tool| tool.id.clone()).collect::<Vec<_>>();
+
+    assert_eq!(vec!["db.schema".to_string(), "db.query".to_string()], ids);
+    assert!(tools.iter().all(|tool| tool.annotations.read_only));
+}
+
+#[test]
 fn database_tools_reject_non_database_connections_before_connecting() {
     let repo = repo();
     let registry = onetcli_runtime::database_tools::database_tool_registry(repo.clone());

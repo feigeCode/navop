@@ -10,7 +10,7 @@ use one_core::storage::{
 
 #[gpui::test]
 fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContext) {
-    let names = cx.update(|cx| {
+    let registry = cx.update(|cx| {
         register_connection_repository(cx);
         let mut settings = AppSettings::default();
         settings.mcp.toolsets = McpToolsetSettings {
@@ -21,20 +21,36 @@ fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContex
         };
         cx.set_global(settings);
 
-        agent_runtime_tool_registry(cx)
-            .expect("agent registry should build")
-            .names()
-            .into_iter()
-            .map(|name| name.to_string())
-            .collect::<Vec<_>>()
+        agent_runtime_tool_registry(cx).expect("agent registry should build")
     });
+    let names = registry
+        .names()
+        .into_iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
 
     assert!(names.contains(&"db_query".to_string()));
+    assert!(names.contains(&"db_schema".to_string()));
     assert!(names.contains(&"db_execute_sql".to_string()));
     assert!(names.contains(&"db_list_tables".to_string()));
     assert!(
         !names.contains(&"db_exec".to_string()),
-        "Agent registry should not expose the old MCP db.exec adapter"
+        "Agent registry must not expose write-capable db.exec through runtime bridge in Phase 3a"
+    );
+
+    let db_query = registry
+        .get(&ToolName::new("db.query"))
+        .expect("runtime-backed db.query should be registered");
+    let spec = db_query.spec(&ResourceContext::new());
+    assert_eq!(RiskLevel::Read, spec.risk);
+    assert!(
+        spec.description
+            .contains("Run read-only SQL through a saved database connection"),
+        "db_query should be backed by tool_runtime db.query descriptor"
+    );
+    assert_eq!(
+        serde_json::json!(["connection", "sql"]),
+        spec.parameters["required"]
     );
 }
 

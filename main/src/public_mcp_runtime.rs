@@ -120,7 +120,18 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
     );
     if agent_database_enabled {
         if let Some(repo) = connection_repository(cx) {
-            onetcli_runtime::agent_db_tools::register_agent_db_tools(repo, &mut agent_registry);
+            onetcli_runtime::agent_db_tools::register_agent_db_tools(
+                repo.clone(),
+                &mut agent_registry,
+            );
+            let runtime_db_read_registry =
+                onetcli_runtime::database_tools::database_read_tool_registry(repo);
+            let runtime_agent_db_read_registry =
+                agent_runtime::tools::tool_runtime_agent_tool_registry(
+                    runtime_db_read_registry,
+                    tool_runtime::ToolAdapter::FunctionCalling,
+                );
+            agent_registry.extend(runtime_agent_db_read_registry);
         } else {
             tracing::warn!("Agent database tools enabled without ConnectionRepository");
         }
