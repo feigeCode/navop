@@ -2,7 +2,7 @@ use crate::cloud_sync::{GlobalCloudUser, UserInfo};
 use crate::storage::get_config_dir;
 use crate::utils::auto_save_config::AutoSaveConfig;
 use gpui::http_client::Url;
-use gpui::{App, Global};
+use gpui::{App, Font, FontFallbacks, Global, font};
 use gpui_component::{Theme, ThemeMode};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
@@ -531,6 +531,10 @@ fn default_font_size() -> f64 {
 }
 
 fn default_monospace_font_family() -> String {
+    default_grid_monospace_font_family().to_string()
+}
+
+pub fn default_grid_monospace_font_family() -> &'static str {
     if cfg!(target_os = "macos") {
         "Menlo"
     } else if cfg!(target_os = "windows") {
@@ -538,7 +542,170 @@ fn default_monospace_font_family() -> String {
     } else {
         "DejaVu Sans Mono"
     }
-    .to_string()
+}
+
+fn grid_monospace_resolution_candidates() -> &'static [&'static str] {
+    if cfg!(target_os = "macos") {
+        &[
+            "Menlo",
+            "Monaco",
+            "SF Mono",
+            "Courier New",
+            "Fira Code",
+            "JetBrains Mono",
+            "Source Code Pro",
+            "Cascadia Code",
+            "Hack",
+            "IBM Plex Mono",
+        ]
+    } else if cfg!(target_os = "windows") {
+        &[
+            "Consolas",
+            "Cascadia Mono",
+            "Cascadia Code",
+            "Courier New",
+            "Lucida Console",
+            "Fira Code",
+            "JetBrains Mono",
+            "Source Code Pro",
+            "Hack",
+            "IBM Plex Mono",
+        ]
+    } else {
+        &[
+            "DejaVu Sans Mono",
+            "Ubuntu Mono",
+            "Liberation Mono",
+            "Courier New",
+            "Fira Code",
+            "JetBrains Mono",
+            "Source Code Pro",
+            "Cascadia Code",
+            "Hack",
+            "IBM Plex Mono",
+        ]
+    }
+}
+
+fn is_fallback_only_grid_font(font: &str) -> bool {
+    [
+        "Apple Color Emoji",
+        "Apple Symbols",
+        "Heiti SC",
+        "Hiragino Sans GB",
+        "Kaiti SC",
+        "Microsoft YaHei",
+        "Noto Color Emoji",
+        "Noto Sans CJK SC",
+        "Noto Sans Mono CJK SC",
+        "Noto Sans SC",
+        "Noto Serif CJK SC",
+        "PingFang SC",
+        "PingFang TC",
+        "Segoe UI Emoji",
+        "SimSun",
+        "Songti SC",
+        "Source Han Mono SC",
+        "Source Han Sans SC",
+        "WenQuanYi Micro Hei",
+    ]
+    .iter()
+    .any(|fallback| fallback.eq_ignore_ascii_case(font.trim()))
+}
+
+pub fn is_supported_grid_monospace_font(font: &str) -> bool {
+    let font = font.trim();
+    !font.is_empty() && !is_fallback_only_grid_font(font)
+}
+
+pub fn normalize_grid_monospace_font_family(font: &str) -> String {
+    let font = font.trim();
+    if is_supported_grid_monospace_font(font) {
+        return font.to_string();
+    }
+    default_grid_monospace_font_family().to_string()
+}
+
+pub fn is_installed_font_family(font: &str, installed_font_names: &[String]) -> bool {
+    let font = font.trim();
+    !font.is_empty()
+        && installed_font_names
+            .iter()
+            .any(|installed| installed.trim().eq_ignore_ascii_case(font))
+}
+
+pub fn resolve_installed_grid_monospace_font_family(
+    font_family: &str,
+    installed_font_names: &[String],
+) -> String {
+    let normalized = normalize_grid_monospace_font_family(font_family);
+    if is_installed_font_family(&normalized, installed_font_names) {
+        return normalized;
+    }
+
+    grid_monospace_resolution_candidates()
+        .iter()
+        .copied()
+        .find(|candidate| is_installed_font_family(candidate, installed_font_names))
+        .unwrap_or(default_grid_monospace_font_family())
+        .to_string()
+}
+
+pub fn default_grid_font_fallback_families() -> Vec<String> {
+    if cfg!(target_os = "macos") {
+        vec![
+            "PingFang SC",
+            "PingFang TC",
+            "Hiragino Sans GB",
+            "Noto Sans CJK SC",
+            "Noto Sans Mono CJK SC",
+            "Source Han Sans SC",
+            "Source Han Mono SC",
+            "Apple Color Emoji",
+            "Apple Symbols",
+        ]
+    } else if cfg!(target_os = "windows") {
+        vec![
+            "Microsoft YaHei",
+            "SimSun",
+            "Noto Sans CJK SC",
+            "Noto Sans Mono CJK SC",
+            "Source Han Sans SC",
+            "Source Han Mono SC",
+            "Segoe UI Emoji",
+        ]
+    } else {
+        vec![
+            "Noto Sans CJK SC",
+            "Noto Sans Mono CJK SC",
+            "Source Han Sans SC",
+            "Source Han Mono SC",
+            "WenQuanYi Micro Hei",
+            "Noto Color Emoji",
+        ]
+    }
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+pub fn grid_monospace_font(font_family: &str) -> Font {
+    let mut font = font(normalize_grid_monospace_font_family(font_family));
+    font.fallbacks = Some(FontFallbacks::from_fonts(
+        default_grid_font_fallback_families(),
+    ));
+    font
+}
+
+pub fn installed_grid_monospace_font(font_family: &str, installed_font_names: &[String]) -> Font {
+    let mut font = font(resolve_installed_grid_monospace_font_family(
+        font_family,
+        installed_font_names,
+    ));
+    font.fallbacks = Some(FontFallbacks::from_fonts(
+        default_grid_font_fallback_families(),
+    ));
+    font
 }
 
 fn default_terminal_font_size() -> f64 {
@@ -617,6 +784,15 @@ impl Default for AppSettings {
 impl Global for AppSettings {}
 
 impl AppSettings {
+    pub fn normalize_font_settings(&mut self) {
+        self.sql_editor_font_family =
+            normalize_grid_monospace_font_family(&self.sql_editor_font_family);
+        self.table_preview_font_family =
+            normalize_grid_monospace_font_family(&self.table_preview_font_family);
+        self.terminal_font_family =
+            normalize_grid_monospace_font_family(&self.terminal_font_family);
+    }
+
     pub fn current(cx: &App) -> Self {
         cx.try_global::<AppSettings>().cloned().unwrap_or_default()
     }
@@ -632,12 +808,14 @@ impl AppSettings {
     pub fn update(cx: &mut App, update: impl FnOnce(&mut AppSettings)) {
         let mut settings = Self::current(cx);
         update(&mut settings);
+        settings.normalize_font_settings();
         cx.set_global(settings);
     }
 
     pub fn update_and_save(cx: &mut App, update: impl FnOnce(&mut AppSettings)) {
         let mut settings = Self::current(cx);
         update(&mut settings);
+        settings.normalize_font_settings();
         settings.save();
         cx.set_global(settings);
     }
@@ -668,9 +846,10 @@ impl AppSettings {
         }
 
         match std::fs::read_to_string(&path) {
-            Ok(content) => match serde_json::from_str(&content) {
-                Ok(settings) => {
+            Ok(content) => match serde_json::from_str::<Self>(&content) {
+                Ok(mut settings) => {
                     info!("Settings loaded from {:?}", path);
+                    settings.normalize_font_settings();
                     settings
                 }
                 Err(e) => {
@@ -745,7 +924,9 @@ impl AppSettings {
 mod tests {
     use super::{
         AppSettings, CustomFont, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, McpPermissionMode,
-        McpServerMode, PersonalSyncBackendKind, SyncProvider,
+        McpServerMode, PersonalSyncBackendKind, SyncProvider, default_grid_font_fallback_families,
+        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
+        is_installed_font_family, resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -907,6 +1088,109 @@ mod tests {
             settings.terminal_font_family
         );
         assert!(settings.custom_fonts.is_empty());
+    }
+
+    #[test]
+    fn app_settings_normalizes_grid_font_settings() {
+        let mut settings = AppSettings {
+            sql_editor_font_family: "Noto Sans Mono CJK SC".to_string(),
+            table_preview_font_family: "PingFang SC".to_string(),
+            terminal_font_family: "Microsoft YaHei".to_string(),
+            ..AppSettings::default()
+        };
+
+        settings.normalize_font_settings();
+
+        let default = default_grid_monospace_font_family();
+        assert_eq!(default, settings.sql_editor_font_family);
+        assert_eq!(default, settings.table_preview_font_family);
+        assert_eq!(default, settings.terminal_font_family);
+    }
+
+    #[test]
+    fn app_settings_keeps_grid_safe_custom_monospace_fonts() {
+        let mut settings = AppSettings {
+            sql_editor_font_family: "JetBrains Mono".to_string(),
+            table_preview_font_family: "Table Safe Mono".to_string(),
+            terminal_font_family: "Custom Mono".to_string(),
+            ..AppSettings::default()
+        };
+
+        settings.normalize_font_settings();
+
+        assert_eq!("JetBrains Mono", settings.sql_editor_font_family);
+        assert_eq!("Table Safe Mono", settings.table_preview_font_family);
+        assert_eq!("Custom Mono", settings.terminal_font_family);
+    }
+
+    #[test]
+    fn default_grid_font_fallbacks_include_cjk_before_symbol_fonts() {
+        let fallbacks = default_grid_font_fallback_families();
+        let cjk_index = fallbacks
+            .iter()
+            .position(|font| font == "Noto Sans CJK SC" || font == "Microsoft YaHei")
+            .expect("grid font fallback should include a CJK font");
+
+        for symbol_font in ["Apple Color Emoji", "Apple Symbols", "Noto Color Emoji"] {
+            if let Some(symbol_index) = fallbacks.iter().position(|font| font == symbol_font) {
+                assert!(cjk_index < symbol_index);
+            }
+        }
+    }
+
+    #[test]
+    fn grid_monospace_font_normalizes_family_and_sets_fallbacks() {
+        let font = grid_monospace_font("PingFang SC");
+
+        assert_eq!(default_grid_monospace_font_family(), font.family.as_ref());
+        assert!(font.fallbacks.as_ref().is_some_and(|fallbacks| {
+            fallbacks.fallback_list().iter().any(|family| {
+                family == "Noto Sans CJK SC"
+                    || family == "Microsoft YaHei"
+                    || family == "PingFang SC"
+            })
+        }));
+    }
+
+    #[test]
+    fn installed_font_family_matches_case_insensitively() {
+        let installed = vec!["Menlo".to_string(), "JetBrains Mono".to_string()];
+
+        assert!(is_installed_font_family(" jetbrains mono ", &installed));
+        assert!(!is_installed_font_family("Fira Code", &installed));
+    }
+
+    #[test]
+    fn resolve_installed_grid_font_rejects_missing_requested_family() {
+        let installed = vec!["Menlo".to_string(), "PingFang SC".to_string()];
+
+        assert_eq!(
+            "Menlo",
+            resolve_installed_grid_monospace_font_family("Fira Code", &installed)
+        );
+        assert_eq!(
+            "Menlo",
+            resolve_installed_grid_monospace_font_family("PingFang SC", &installed)
+        );
+    }
+
+    #[test]
+    fn resolve_installed_grid_font_keeps_installed_requested_family() {
+        let installed = vec!["Menlo".to_string(), "JetBrains Mono".to_string()];
+
+        assert_eq!(
+            "JetBrains Mono",
+            resolve_installed_grid_monospace_font_family("JetBrains Mono", &installed)
+        );
+    }
+
+    #[test]
+    fn installed_grid_monospace_font_uses_effective_installed_family() {
+        let installed = vec!["Menlo".to_string()];
+        let font = installed_grid_monospace_font("Fira Code", &installed);
+
+        assert_eq!("Menlo", font.family.as_ref());
+        assert!(font.fallbacks.is_some());
     }
 
     #[test]

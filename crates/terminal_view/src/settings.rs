@@ -1,4 +1,5 @@
 use crate::highlight_presets::{builtin_highlight_rules, merge_builtin_highlight_rules};
+use crate::theme::normalize_terminal_primary_font;
 use gpui::{App, AppContext, Context, Entity, EventEmitter};
 use one_core::settings::AppSettings;
 use one_core::storage::get_config_dir;
@@ -72,7 +73,7 @@ impl TerminalSettings {
     fn from_parts(app_settings: &AppSettings, local_settings: &TerminalLocalSettings) -> Self {
         Self {
             font_size: app_settings.terminal_font_size as f32,
-            font_family: app_settings.terminal_font_family.clone(),
+            font_family: normalize_terminal_primary_font(&app_settings.terminal_font_family),
             auto_copy: app_settings.terminal_auto_copy,
             enable_autocomplete: app_settings.terminal_enable_autocomplete,
             middle_click_paste: app_settings.terminal_middle_click_paste,
@@ -197,6 +198,7 @@ pub fn update_settings<T>(
     let previous = current_settings(cx);
     let mut next = previous.clone();
     updater(&mut next);
+    next.font_family = normalize_terminal_primary_font(&next.font_family);
     if previous == next {
         return Some(next);
     }
@@ -303,6 +305,7 @@ mod tests {
         TerminalHighlightRule, TerminalLocalSettings, TerminalSettings, TerminalSettingsStore,
         load_settings_from_path, resolve_initial_settings, save_settings_to_path,
     };
+    use crate::theme::default_monospace_font;
     use one_core::settings::AppSettings;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -386,6 +389,19 @@ mod tests {
             TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
 
         assert_eq!("JetBrains Mono", settings.font_family);
+    }
+
+    #[test]
+    fn terminal_settings_normalizes_fallback_only_primary_font() {
+        let app_settings = AppSettings {
+            terminal_font_family: "PingFang SC".to_string(),
+            ..AppSettings::default()
+        };
+
+        let settings =
+            TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
+
+        assert_eq!(default_monospace_font(), settings.font_family);
     }
 
     #[test]

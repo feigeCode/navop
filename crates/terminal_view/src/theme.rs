@@ -14,7 +14,11 @@
 //! - 在 `muted` 上使用 `foreground` 或 `muted_foreground`
 //! - 在 `accent` 上使用 `accent_foreground`
 
-use gpui::{Hsla, SharedString, rgb};
+use gpui::{Hsla, Pixels, SharedString, rgb};
+use one_core::settings::{
+    default_grid_font_fallback_families, default_grid_monospace_font_family,
+    is_supported_grid_monospace_font, normalize_grid_monospace_font_family,
+};
 
 /// 最小字体大小
 pub const MIN_FONT_SIZE: f32 = 8.0;
@@ -22,6 +26,9 @@ pub const MIN_FONT_SIZE: f32 = 8.0;
 pub const MAX_FONT_SIZE: f32 = 32.0;
 /// 默认行高比例
 pub const DEFAULT_LINE_HEIGHT_SCALE: f32 = 1.4;
+const TERMINAL_CELL_WIDTH_RATIO: f32 = 0.6;
+const MIN_TERMINAL_CELL_WIDTH_RATIO: f32 = 0.3;
+const MAX_TERMINAL_CELL_WIDTH_RATIO: f32 = 1.2;
 
 /// 终端主题配色（用于侧边栏等 UI 组件）
 ///
@@ -76,55 +83,60 @@ impl PartialEq for TerminalTheme {
 
 /// 获取当前操作系统的默认等宽字体
 pub fn default_monospace_font() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "Menlo"
-    } else if cfg!(target_os = "windows") {
-        "Consolas"
+    default_grid_monospace_font_family()
+}
+
+pub fn is_supported_terminal_primary_font(font: &str) -> bool {
+    is_supported_grid_monospace_font(font)
+}
+
+pub fn normalize_terminal_primary_font(font: &str) -> String {
+    normalize_grid_monospace_font_family(font)
+}
+
+pub fn terminal_cell_width_from_advance(font_size: Pixels, measured_width: Pixels) -> Pixels {
+    let min_width = font_size * MIN_TERMINAL_CELL_WIDTH_RATIO;
+    let max_width = font_size * MAX_TERMINAL_CELL_WIDTH_RATIO;
+
+    if measured_width < min_width || measured_width > max_width {
+        font_size * TERMINAL_CELL_WIDTH_RATIO
     } else {
-        // Linux 和其他系统
-        "DejaVu Sans Mono"
+        measured_width
     }
+}
+
+pub fn terminal_cell_width_from_advances<I>(font_size: Pixels, measured_widths: I) -> Pixels
+where
+    I: IntoIterator<Item = Pixels>,
+{
+    let measured_width = measured_widths
+        .into_iter()
+        .max_by(|left, right| f32::from(*left).total_cmp(&f32::from(*right)))
+        .unwrap_or(font_size * TERMINAL_CELL_WIDTH_RATIO);
+    terminal_cell_width_from_advance(font_size, measured_width)
 }
 
 /// 默认备用字体列表（按优先级排序，跨平台兼容）
 pub fn default_font_fallbacks() -> Vec<SharedString> {
-    if cfg!(target_os = "macos") {
-        vec![
-            "Monaco".into(),
-            "SF Mono".into(),
-            "Courier New".into(),
-            "Apple Color Emoji".into(),
-            "Apple Symbols".into(),
-            "Noto Sans Mono CJK SC".into(),
-            "Source Han Mono SC".into(),
-            "PingFang SC".into(),
-            "PingFang TC".into(),
-            "Hiragino Sans GB".into(),
-        ]
+    let mut fonts = if cfg!(target_os = "macos") {
+        vec!["Monaco", "SF Mono", "Courier New"]
     } else if cfg!(target_os = "windows") {
-        vec![
-            "Cascadia Mono".into(),
-            "Courier New".into(),
-            "Lucida Console".into(),
-            "Segoe UI Emoji".into(),
-            "Noto Sans Mono CJK SC".into(),
-            "Source Han Mono SC".into(),
-            "Microsoft YaHei".into(),
-            "SimSun".into(),
-        ]
+        vec!["Cascadia Mono", "Courier New", "Lucida Console"]
     } else {
         // Linux 和其他系统
-        vec![
-            "Ubuntu Mono".into(),
-            "Liberation Mono".into(),
-            "Courier New".into(),
-            "Noto Color Emoji".into(),
-            "Noto Sans Mono CJK SC".into(),
-            "Source Han Mono SC".into(),
-            "Noto Sans CJK SC".into(),
-            "WenQuanYi Micro Hei".into(),
-        ]
+        vec!["Ubuntu Mono", "Liberation Mono", "Courier New"]
     }
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+
+    for fallback in default_grid_font_fallback_families() {
+        if !fonts.iter().any(|font| font == &fallback) {
+            fonts.push(fallback);
+        }
+    }
+
+    fonts.into_iter().map(SharedString::from).collect()
 }
 
 impl TerminalTheme {
@@ -386,8 +398,6 @@ impl TerminalTheme {
                 "Monaco",
                 "SF Mono",
                 "Courier New",
-                "Noto Sans Mono CJK SC",
-                "Source Han Mono SC",
                 // 跨平台字体（需要安装）
                 "Fira Code",
                 "JetBrains Mono",
@@ -403,8 +413,6 @@ impl TerminalTheme {
                 "Cascadia Code",
                 "Courier New",
                 "Lucida Console",
-                "Noto Sans Mono CJK SC",
-                "Source Han Mono SC",
                 // 跨平台字体（需要安装）
                 "Fira Code",
                 "JetBrains Mono",
@@ -419,8 +427,6 @@ impl TerminalTheme {
                 "Ubuntu Mono",
                 "Liberation Mono",
                 "Courier New",
-                "Noto Sans Mono CJK SC",
-                "Source Han Mono SC",
                 // 跨平台字体（需要安装）
                 "Fira Code",
                 "JetBrains Mono",
@@ -435,29 +441,97 @@ impl TerminalTheme {
 
 #[cfg(test)]
 mod tests {
-    use super::default_font_fallbacks;
+    use super::{
+        TerminalTheme, default_font_fallbacks, default_monospace_font,
+        normalize_terminal_primary_font, terminal_cell_width_from_advance,
+        terminal_cell_width_from_advances,
+    };
+    use gpui::{Pixels, px};
 
     #[test]
-    fn terminal_default_fallbacks_include_monospace_cjk_fonts_first() {
+    fn terminal_default_fallbacks_put_cjk_before_emoji_and_symbols() {
         let fallbacks = default_font_fallbacks()
             .into_iter()
             .map(|font| font.to_string())
             .collect::<Vec<_>>();
 
-        let noto_mono = fallbacks
-            .iter()
-            .position(|font| font == "Noto Sans Mono CJK SC")
-            .expect("Noto Sans Mono CJK SC should be a terminal fallback");
-        let source_han_mono = fallbacks
-            .iter()
-            .position(|font| font == "Source Han Mono SC")
-            .expect("Source Han Mono SC should be a terminal fallback");
-
-        for ui_font in ["PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC"] {
-            if let Some(ui_index) = fallbacks.iter().position(|font| font == ui_font) {
-                assert!(noto_mono < ui_index);
-                assert!(source_han_mono < ui_index);
+        for cjk_font in ["PingFang SC", "Noto Sans CJK SC", "Noto Sans Mono CJK SC"] {
+            if let Some(cjk_index) = fallbacks.iter().position(|font| font == cjk_font) {
+                for symbol_font in ["Apple Color Emoji", "Apple Symbols", "Noto Color Emoji"] {
+                    if let Some(symbol_index) =
+                        fallbacks.iter().position(|font| font == symbol_font)
+                    {
+                        assert!(cjk_index < symbol_index);
+                    }
+                }
             }
         }
+    }
+
+    #[test]
+    fn terminal_primary_font_options_exclude_fallback_only_cjk_fonts() {
+        let fonts = TerminalTheme::available_monospace_fonts();
+
+        assert!(!fonts.contains(&"Noto Sans Mono CJK SC"));
+        assert!(!fonts.contains(&"Source Han Mono SC"));
+    }
+
+    #[test]
+    fn terminal_primary_font_normalizes_fallback_only_cjk_fonts() {
+        for font in [
+            "Noto Sans Mono CJK SC",
+            "Source Han Mono SC",
+            "PingFang SC",
+            "Microsoft YaHei",
+            "SimSun",
+            "Apple Color Emoji",
+        ] {
+            assert_eq!(
+                default_monospace_font(),
+                normalize_terminal_primary_font(font)
+            );
+        }
+        assert_eq!(
+            "JetBrains Mono",
+            normalize_terminal_primary_font("JetBrains Mono")
+        );
+    }
+
+    #[test]
+    fn terminal_cell_width_keeps_measured_width_unless_extreme() {
+        fn assert_px_close(expected: Pixels, actual: Pixels) {
+            let expected = f32::from(expected);
+            let actual = f32::from(actual);
+            assert!((expected - actual).abs() < 0.001);
+        }
+
+        assert_px_close(
+            px(14.0),
+            terminal_cell_width_from_advance(px(14.0), px(14.0)),
+        );
+        assert_px_close(
+            px(8.4),
+            terminal_cell_width_from_advance(px(14.0), px(20.0)),
+        );
+        assert_px_close(px(8.4), terminal_cell_width_from_advance(px(14.0), px(2.0)));
+        assert_px_close(px(8.0), terminal_cell_width_from_advance(px(14.0), px(8.0)));
+    }
+
+    #[test]
+    fn terminal_cell_width_uses_widest_representative_advance() {
+        fn assert_px_close(expected: Pixels, actual: Pixels) {
+            let expected = f32::from(expected);
+            let actual = f32::from(actual);
+            assert!((expected - actual).abs() < 0.001);
+        }
+
+        assert_px_close(
+            px(10.0),
+            terminal_cell_width_from_advances(px(14.0), [px(8.0), px(10.0), px(9.0)]),
+        );
+        assert_px_close(
+            px(8.4),
+            terminal_cell_width_from_advances(px(14.0), std::iter::empty()),
+        );
     }
 }

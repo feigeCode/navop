@@ -18,7 +18,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
     notification::Notification,
     scroll::ScrollableElement,
-    select::{Select, SelectEvent, SelectState},
+    select::{Select, SelectEvent, SelectItem, SelectState},
     switch::Switch,
     try_parse_color, v_flex,
 };
@@ -27,24 +27,69 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     TerminalHighlightRule,
-    theme::{MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme},
+    theme::{MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, is_supported_terminal_primary_font},
 };
-use one_core::settings::{AppSettings, CustomFont};
+use one_core::settings::{AppSettings, CustomFont, is_installed_font_family};
 
-fn terminal_font_options(custom_fonts: &[CustomFont]) -> Vec<SharedString> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TerminalFontOption {
+    value: SharedString,
+    label: SharedString,
+}
+
+impl TerminalFontOption {
+    fn new(font_family: &str, installed_font_names: &[String]) -> Self {
+        let label = if is_installed_font_family(font_family, installed_font_names) {
+            SharedString::from(font_family)
+        } else {
+            format!("{} (未安装)", font_family).into()
+        };
+
+        Self {
+            value: font_family.into(),
+            label,
+        }
+    }
+}
+
+impl SelectItem for TerminalFontOption {
+    type Value = SharedString;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+
+    fn matches(&self, query: &str) -> bool {
+        self.value.to_lowercase().contains(&query.to_lowercase())
+    }
+}
+
+fn terminal_font_options(
+    custom_fonts: &[CustomFont],
+    installed_font_names: &[String],
+) -> Vec<TerminalFontOption> {
     let mut fonts = TerminalTheme::available_monospace_fonts()
         .into_iter()
-        .map(SharedString::from)
+        .map(|font| TerminalFontOption::new(font, installed_font_names))
         .collect::<Vec<_>>();
 
     for family in custom_fonts
         .iter()
         .flat_map(|font| font.monospace_families.iter())
     {
-        if family.trim().is_empty() || fonts.iter().any(|existing| existing.as_ref() == family) {
+        let family = family.trim();
+        if !is_supported_terminal_primary_font(family)
+            || fonts
+                .iter()
+                .any(|existing| existing.value.as_ref() == family)
+        {
             continue;
         }
-        fonts.push(family.clone().into());
+        fonts.push(TerminalFontOption::new(family, installed_font_names));
     }
 
     fonts
@@ -94,7 +139,7 @@ pub struct SettingsPanel {
     /// 字体大小输入框状态
     font_size_input_state: Entity<InputState>,
     /// 字体选择状态
-    font_select_state: Entity<SelectState<Vec<SharedString>>>,
+    font_select_state: Entity<SelectState<Vec<TerminalFontOption>>>,
     /// 当前主题
     current_theme: TerminalTheme,
     /// 当前终端字体大小
@@ -154,13 +199,17 @@ impl SettingsPanel {
         });
 
         // 字体选择列表
-        let fonts = terminal_font_options(AppSettings::global(cx).custom_fonts.as_slice());
+        let installed_font_names = cx.text_system().all_font_names();
+        let fonts = terminal_font_options(
+            AppSettings::global(cx).custom_fonts.as_slice(),
+            &installed_font_names,
+        );
 
         // 找到当前字体的索引
         let current_font = initial_font_family.to_string();
         let selected_index = fonts
             .iter()
-            .position(|f| f.as_ref() == current_font)
+            .position(|f| f.value.as_ref() == current_font)
             .map(|i| gpui_component::IndexPath::default().row(i));
 
         let font_select_state =
@@ -235,10 +284,12 @@ impl SettingsPanel {
         subscriptions.push(cx.subscribe_in(
             &font_select_state,
             window,
-            move |this, _state, event: &SelectEvent<Vec<SharedString>>, _window, cx| {
-                if let SelectEvent::Confirm(Some(font)) = event {
-                    this.font_family = font.clone();
-                    cx.emit(SettingsPanelEvent::FontFamilyChanged(font.to_string()));
+            move |this, _state, event: &SelectEvent<Vec<TerminalFontOption>>, _window, cx| {
+                if let SelectEvent::Confirm(Some(font_family)) = event {
+                    this.font_family = font_family.clone();
+                    cx.emit(SettingsPanelEvent::FontFamilyChanged(
+                        font_family.to_string(),
+                    ));
                 }
             },
         ));
@@ -294,7 +345,11 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) {
         self.font_family = font_family.clone();
-        let fonts = terminal_font_options(AppSettings::global(cx).custom_fonts.as_slice());
+        let installed_font_names = cx.text_system().all_font_names();
+        let fonts = terminal_font_options(
+            AppSettings::global(cx).custom_fonts.as_slice(),
+            &installed_font_names,
+        );
         self.font_select_state.update(cx, |state, cx| {
             state.set_items(fonts, window, cx);
             state.set_selected_value(&font_family, window, cx);
@@ -1379,21 +1434,25 @@ mod tests {
 
     #[test]
     fn terminal_font_options_include_only_custom_monospace_families() {
-        let fonts = terminal_font_options(&[
-            CustomFont {
-                path: "/tmp/NotoSansSC-VF.ttf".to_string(),
-                families: vec!["Noto Sans SC".to_string()],
-                monospace_families: Vec::new(),
-            },
-            CustomFont {
-                path: "/tmp/CustomMono.ttf".to_string(),
-                families: vec!["Custom Mono".to_string()],
-                monospace_families: vec!["Custom Mono".to_string()],
-            },
-        ]);
+        let installed = vec!["Custom Mono".to_string()];
+        let fonts = terminal_font_options(
+            &[
+                CustomFont {
+                    path: "/tmp/NotoSansSC-VF.ttf".to_string(),
+                    families: vec!["Noto Sans SC".to_string()],
+                    monospace_families: Vec::new(),
+                },
+                CustomFont {
+                    path: "/tmp/CustomMono.ttf".to_string(),
+                    families: vec!["Custom Mono".to_string()],
+                    monospace_families: vec!["Custom Mono".to_string()],
+                },
+            ],
+            &installed,
+        );
         let values = fonts
             .into_iter()
-            .map(|font| font.to_string())
+            .map(|font| font.value.to_string())
             .collect::<Vec<_>>();
 
         assert!(values.iter().any(|font| font == "Custom Mono"));
@@ -1402,19 +1461,69 @@ mod tests {
 
     #[test]
     fn terminal_font_options_exclude_builtin_cjk_ui_fonts() {
-        let fonts = terminal_font_options(&[]);
+        let fonts = terminal_font_options(&[], &[]);
         let values = fonts
             .into_iter()
-            .map(|font| font.to_string())
+            .map(|font| font.value.to_string())
             .collect::<Vec<_>>();
 
-        assert!(values.iter().any(|font| font == "Noto Sans Mono CJK SC"));
-        assert!(values.iter().any(|font| font == "Source Han Mono SC"));
+        assert!(!values.iter().any(|font| font == "Noto Sans Mono CJK SC"));
+        assert!(!values.iter().any(|font| font == "Source Han Mono SC"));
         assert!(!values.iter().any(|font| font == "Noto Sans CJK SC"));
         assert!(!values.iter().any(|font| font == "Source Han Sans SC"));
         assert!(!values.iter().any(|font| font == "Microsoft YaHei"));
         assert!(!values.iter().any(|font| font == "PingFang SC"));
         assert!(!values.iter().any(|font| font == "SimSun"));
+    }
+
+    #[test]
+    fn terminal_font_options_exclude_custom_fallback_only_fonts() {
+        let installed = vec!["Custom Mono".to_string()];
+        let fonts = terminal_font_options(
+            &[CustomFont {
+                path: "/tmp/CjkFonts.ttc".to_string(),
+                families: vec!["PingFang SC".to_string()],
+                monospace_families: vec![
+                    "Noto Sans Mono CJK SC".to_string(),
+                    "PingFang SC".to_string(),
+                    "Custom Mono".to_string(),
+                ],
+            }],
+            &installed,
+        );
+        let values = fonts
+            .into_iter()
+            .map(|font| font.value.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(values.iter().any(|font| font == "Custom Mono"));
+        assert!(!values.iter().any(|font| font == "Noto Sans Mono CJK SC"));
+        assert!(!values.iter().any(|font| font == "PingFang SC"));
+    }
+
+    #[test]
+    fn terminal_font_options_mark_missing_fonts_without_changing_values() {
+        let installed = vec!["Menlo".to_string()];
+        let fonts = terminal_font_options(
+            &[CustomFont {
+                path: "/tmp/CustomMono.ttf".to_string(),
+                families: vec!["Custom Mono".to_string()],
+                monospace_families: vec!["Custom Mono".to_string()],
+            }],
+            &installed,
+        );
+
+        assert!(
+            fonts
+                .iter()
+                .any(|font| { font.value.as_ref() == "Menlo" && font.label.as_ref() == "Menlo" })
+        );
+        assert!(fonts.iter().any(|font| {
+            font.value.as_ref() == "Fira Code" && font.label.as_ref() == "Fira Code (未安装)"
+        }));
+        assert!(fonts.iter().any(|font| {
+            font.value.as_ref() == "Custom Mono" && font.label.as_ref() == "Custom Mono (未安装)"
+        }));
     }
 
     #[test]

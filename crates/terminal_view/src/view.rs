@@ -15,7 +15,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{
     action_id, keystroke_matches_shortcuts, rebind_keybindings, shortcuts_for,
 };
-use one_core::settings::AppSettings;
+use one_core::settings::{AppSettings, resolve_installed_grid_monospace_font_family};
 use std::borrow::Cow;
 use std::cell::{Cell as StdCell, RefCell};
 use std::collections::HashMap;
@@ -41,7 +41,7 @@ use crate::sidebar::{SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
 use crate::terminal_element::{RenderCache, TerminalElement};
 use crate::theme::{
     DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, default_font_fallbacks,
-    default_monospace_font,
+    default_monospace_font, normalize_terminal_primary_font, terminal_cell_width_from_advances,
 };
 use one_core::layout::{SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
 use one_core::storage::models::{ActiveConnections, StoredConnection};
@@ -2145,10 +2145,12 @@ impl TerminalView {
         if (current - clamped).abs() >= f32::EPSILON {
             self.font_size = px(clamped);
             self.line_height = self.font_size * self.line_height_scale;
+            self.last_size = None;
         }
-        let font_family = SharedString::from(font_family);
+        let font_family = SharedString::from(normalize_terminal_primary_font(&font_family));
         if self.font_family != font_family {
             self.font_family = font_family.clone();
+            self.last_size = None;
         }
 
         self.auto_copy_on_select = auto_copy;
@@ -2360,7 +2362,8 @@ impl TerminalView {
 
     /// 设置主字体
     pub fn set_font_family(&mut self, family: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.font_family = family.into();
+        self.font_family = normalize_terminal_primary_font(family.into().as_ref()).into();
+        self.last_size = None;
         cx.notify();
     }
 
@@ -2373,6 +2376,7 @@ impl TerminalView {
     pub fn set_line_height_scale(&mut self, scale: f32, cx: &mut Context<Self>) {
         self.line_height_scale = scale.clamp(1.0, 2.5);
         self.line_height = self.font_size * self.line_height_scale;
+        self.last_size = None;
         cx.notify();
     }
 
@@ -3143,7 +3147,11 @@ impl TerminalView {
             .to_string()
     }
 
-    fn render_terminal(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_terminal(
+        &mut self,
+        font_family: SharedString,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         // Prepare addons before rendering
         {
             let is_local =
@@ -3179,7 +3187,7 @@ impl TerminalView {
 
         TerminalElement::new(
             &self.render_cache,
-            self.font_family.clone(),
+            font_family,
             self.font_size,
             self.font_fallbacks.iter().map(|s| s.to_string()).collect(),
             self.line_height_scale,
@@ -4087,6 +4095,13 @@ impl TabContent for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let installed_font_names = cx.text_system().all_font_names();
+        let effective_font_family: SharedString = resolve_installed_grid_monospace_font_family(
+            self.font_family.as_ref(),
+            &installed_font_names,
+        )
+        .into();
+
         // 创建与 terminal_element 一致的字体配置（包含 fallbacks）
         let fallbacks = if self.font_fallbacks.is_empty() {
             None
@@ -4101,23 +4116,29 @@ impl Render for TerminalView {
         let features = FontFeatures(std::sync::Arc::new(vec![("calt".to_string(), 0)]));
 
         let font = Font {
-            family: self.font_family.clone(),
+            family: effective_font_family.clone(),
             weight: FontWeight::NORMAL,
             style: FontStyle::Normal,
             features,
             fallbacks,
         };
         let font_id = window.text_system().resolve_font(&font);
-        // 使用 advance('m').width 计算 cell_width
-        // advance 返回字符的前进宽度，比 em_width 更准确反映等宽字体的单元格宽度
-        let new_cell_width = window
-            .text_system()
-            .advance(font_id, self.font_size, 'm')
-            .map(|size| size.width)
-            .unwrap_or(self.font_size * 0.6);
+        // 使用一组 ASCII glyph 的最大 advance 计算 cell_width。
+        // 部分字体虽然被系统标记为 monospace，但单个 'm' 不能代表最宽终端 glyph。
+        let measured_widths = "mMW@#0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            .chars()
+            .filter_map(|ch| {
+                window
+                    .text_system()
+                    .advance(font_id, self.font_size, ch)
+                    .map(|size| size.width)
+                    .ok()
+            });
+        let new_cell_width = terminal_cell_width_from_advances(self.font_size, measured_widths);
 
         if self.cell_width != new_cell_width {
             self.cell_width = new_cell_width;
+            self.last_size = None;
         }
 
         self.line_height = self.font_size * self.line_height_scale;
@@ -4251,7 +4272,7 @@ impl Render for TerminalView {
                             .bottom(px(12.))
                             .bg(self.current_theme.background)
                             .overflow_hidden()
-                            .child(self.render_terminal(cx))
+                            .child(self.render_terminal(effective_font_family.clone(), cx))
                             .when_some(self.render_history_prompt_overlay(cx), |this, overlay| {
                                 this.child(overlay)
                             })

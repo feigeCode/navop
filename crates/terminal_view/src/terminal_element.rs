@@ -15,6 +15,7 @@ use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{RenderableContent, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use gpui::*;
+use one_core::settings::default_grid_font_fallback_families;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -27,6 +28,10 @@ pub struct FontVariants {
     pub bold: Font,
     pub italic: Font,
     pub bold_italic: Font,
+    pub cjk_normal: Font,
+    pub cjk_bold: Font,
+    pub cjk_italic: Font,
+    pub cjk_bold_italic: Font,
 }
 
 impl FontVariants {
@@ -40,6 +45,7 @@ impl FontVariants {
 
         // 只禁用 calt（上下文替代），避免等宽字符出现连字影响栅格对齐
         let features = FontFeatures(Arc::new(vec![("calt".to_string(), 0)]));
+        let cjk_family = terminal_cjk_font_family();
 
         Self {
             normal: Font {
@@ -67,6 +73,34 @@ impl FontVariants {
                 family,
                 weight: FontWeight::BOLD,
                 style: FontStyle::Italic,
+                features: features.clone(),
+                fallbacks: fallbacks.clone(),
+            },
+            cjk_normal: Font {
+                family: cjk_family.clone(),
+                weight: FontWeight::NORMAL,
+                style: FontStyle::Normal,
+                features: features.clone(),
+                fallbacks: fallbacks.clone(),
+            },
+            cjk_bold: Font {
+                family: cjk_family.clone(),
+                weight: FontWeight::BOLD,
+                style: FontStyle::Normal,
+                features: features.clone(),
+                fallbacks: fallbacks.clone(),
+            },
+            cjk_italic: Font {
+                family: cjk_family.clone(),
+                weight: FontWeight::NORMAL,
+                style: FontStyle::Italic,
+                features: features.clone(),
+                fallbacks: fallbacks.clone(),
+            },
+            cjk_bold_italic: Font {
+                family: cjk_family,
+                weight: FontWeight::BOLD,
+                style: FontStyle::Italic,
                 features,
                 fallbacks,
             },
@@ -74,14 +108,26 @@ impl FontVariants {
     }
 
     #[inline]
-    pub fn get(&self, bold: bool, italic: bool) -> &Font {
-        match (bold, italic) {
-            (false, false) => &self.normal,
-            (true, false) => &self.bold,
-            (false, true) => &self.italic,
-            (true, true) => &self.bold_italic,
+    pub fn get(&self, role: TextRunFontRole, bold: bool, italic: bool) -> &Font {
+        match (role, bold, italic) {
+            (TextRunFontRole::Primary, false, false) => &self.normal,
+            (TextRunFontRole::Primary, true, false) => &self.bold,
+            (TextRunFontRole::Primary, false, true) => &self.italic,
+            (TextRunFontRole::Primary, true, true) => &self.bold_italic,
+            (TextRunFontRole::CjkFallback, false, false) => &self.cjk_normal,
+            (TextRunFontRole::CjkFallback, true, false) => &self.cjk_bold,
+            (TextRunFontRole::CjkFallback, false, true) => &self.cjk_italic,
+            (TextRunFontRole::CjkFallback, true, true) => &self.cjk_bold_italic,
         }
     }
+}
+
+fn terminal_cjk_font_family() -> SharedString {
+    default_grid_font_fallback_families()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "Noto Sans CJK SC".to_string())
+        .into()
 }
 
 /// 检查是否为装饰字符（边框、块元素、Powerline 等）
@@ -96,6 +142,33 @@ fn is_decorative_character(ch: char) -> bool {
         | 0x25A0..=0x25FF   // Geometric Shapes: ■ □ ▪ ▫ ● ○
         | 0xE0B0..=0xE0D7   // Powerline symbols
         | 0x2800..=0x28FF   // Braille Patterns
+    )
+}
+
+#[inline]
+fn terminal_text_font_role(ch: char) -> TextRunFontRole {
+    if is_cjk_terminal_character(ch) {
+        TextRunFontRole::CjkFallback
+    } else {
+        TextRunFontRole::Primary
+    }
+}
+
+#[inline]
+fn is_cjk_terminal_character(ch: char) -> bool {
+    let code = ch as u32;
+    matches!(
+        code,
+        0x3000..=0x303F   // CJK Symbols and Punctuation
+        | 0x3040..=0x309F // Hiragana
+        | 0x30A0..=0x30FF // Katakana
+        | 0x31F0..=0x31FF // Katakana Phonetic Extensions
+        | 0x3400..=0x4DBF // CJK Unified Ideographs Extension A
+        | 0x4E00..=0x9FFF // CJK Unified Ideographs
+        | 0xAC00..=0xD7AF // Hangul Syllables
+        | 0xF900..=0xFAFF // CJK Compatibility Ideographs
+        | 0xFF00..=0xFFEF // Halfwidth and Fullwidth Forms
+        | 0x20000..=0x2FA1F // CJK Unified Ideographs Extensions
     )
 }
 
@@ -281,6 +354,13 @@ pub struct CachedTextRun {
     pub underline: bool,
     pub cell_width_cols: usize,
     pub column_count: usize,
+    pub font_role: TextRunFontRole,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextRunFontRole {
+    Primary,
+    CjkFallback,
 }
 
 /// 单个 cell 内的几何块字符渲染数据
@@ -880,12 +960,14 @@ impl RenderCache {
             } else {
                 1
             };
+            let font_role = terminal_text_font_role(cell.c);
 
             // Check if we can merge with existing run
             let can_merge = if let Some(ref run) = text_run {
                 // Merge only if columns are consecutive
                 run.start_col + run.column_count == cell.column
                     && run.cell_width_cols == cell_width_cols
+                    && run.font_role == font_role
                     && hsla_eq(run.color, fg)
                     && run.bold == bold
                     && run.italic == italic
@@ -911,6 +993,7 @@ impl RenderCache {
                     underline,
                     cell_width_cols,
                     column_count: cell_width_cols,
+                    font_role,
                 });
             }
         }
@@ -1241,7 +1324,7 @@ impl Element for TerminalElementImpl {
         for line_idx in first_visible..visible_end {
             let line = &self.lines[line_idx];
             for run in &line.text_runs {
-                let font = fonts.get(run.bold, run.italic);
+                let font = fonts.get(run.font_role, run.bold, run.italic);
 
                 let underline = if run.underline {
                     Some(UnderlineStyle {
@@ -1526,7 +1609,10 @@ fn indexed_color_to_hsla(idx: u8) -> Hsla {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlockRect, CellData, RenderCache, block_element_geometry};
+    use super::{
+        BlockRect, CellData, RenderCache, TextRunFontRole, block_element_geometry,
+        terminal_text_font_role,
+    };
     use alacritty_terminal::term::cell::Flags;
     use alacritty_terminal::term::color::Colors;
     use alacritty_terminal::vte::ansi::{Color, NamedColor};
@@ -1575,14 +1661,25 @@ mod tests {
         assert_eq!(0, runs[0].start_col);
         assert_eq!(1, runs[0].cell_width_cols);
         assert_eq!(1, runs[0].column_count);
+        assert_eq!(TextRunFontRole::Primary, runs[0].font_role);
         assert_eq!("协同", runs[1].text);
         assert_eq!(1, runs[1].start_col);
         assert_eq!(2, runs[1].cell_width_cols);
         assert_eq!(4, runs[1].column_count);
+        assert_eq!(TextRunFontRole::CjkFallback, runs[1].font_role);
         assert_eq!("B", runs[2].text);
         assert_eq!(5, runs[2].start_col);
         assert_eq!(1, runs[2].cell_width_cols);
         assert_eq!(1, runs[2].column_count);
+        assert_eq!(TextRunFontRole::Primary, runs[2].font_role);
+    }
+
+    #[test]
+    fn terminal_text_font_role_routes_cjk_to_fallback_font() {
+        assert_eq!(TextRunFontRole::Primary, terminal_text_font_role('A'));
+        assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('协'));
+        assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('，'));
+        assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('あ'));
     }
 
     #[test]

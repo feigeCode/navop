@@ -53,7 +53,7 @@ pub use one_core::settings::{
     AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
     LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LargeTextCellEditorOpenMode,
     PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
-    effective_locale_for_setting,
+    effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -85,6 +85,7 @@ fn app_font_options(cx: &App) -> Vec<(SharedString, SharedString)> {
         builtin_app_font_options(),
         &AppSettings::global(cx).custom_fonts,
         FontFamilyKind::Any,
+        None,
     )
 }
 
@@ -96,10 +97,12 @@ fn builtin_monospace_font_options() -> Vec<(SharedString, SharedString)> {
 }
 
 fn monospace_font_options(cx: &App) -> Vec<(SharedString, SharedString)> {
+    let installed_font_names = cx.text_system().all_font_names();
     merge_font_options_with_custom_fonts(
         builtin_monospace_font_options(),
         &AppSettings::global(cx).custom_fonts,
         FontFamilyKind::Monospace,
+        Some(&installed_font_names),
     )
 }
 
@@ -113,18 +116,49 @@ fn merge_font_options_with_custom_fonts(
     mut options: Vec<(SharedString, SharedString)>,
     custom_fonts: &[CustomFont],
     kind: FontFamilyKind,
+    installed_font_names: Option<&[String]>,
 ) -> Vec<(SharedString, SharedString)> {
+    if let Some(installed_font_names) = installed_font_names {
+        mark_missing_font_options(&mut options, installed_font_names);
+    }
+
     let custom_families = custom_fonts.iter().flat_map(|font| match kind {
         FontFamilyKind::Any => font.families.iter(),
         FontFamilyKind::Monospace => font.monospace_families.iter(),
     });
     for family in custom_families {
-        if family.trim().is_empty() || options.iter().any(|(value, _)| value.as_ref() == family) {
+        let family = family.trim();
+        if family.is_empty()
+            || matches!(kind, FontFamilyKind::Monospace)
+                && !is_supported_grid_monospace_font(family)
+            || options.iter().any(|(value, _)| value.as_ref() == family)
+        {
             continue;
         }
-        options.push((family.clone().into(), family.clone().into()));
+        let label =
+            if installed_font_names.is_some_and(|names| !is_installed_font_family(family, names)) {
+                missing_font_label(family)
+            } else {
+                family.into()
+            };
+        options.push((family.into(), label));
     }
     options
+}
+
+fn mark_missing_font_options(
+    options: &mut [(SharedString, SharedString)],
+    installed_font_names: &[String],
+) {
+    for (value, label) in options {
+        if !is_installed_font_family(value.as_ref(), installed_font_names) {
+            *label = missing_font_label(value.as_ref());
+        }
+    }
+}
+
+fn missing_font_label(font_family: &str) -> SharedString {
+    format!("{} (未安装)", font_family).into()
 }
 
 const FONT_FILE_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
@@ -3103,14 +3137,14 @@ mod tests {
     }
 
     #[test]
-    fn monospace_font_options_include_only_cjk_monospace_fonts() {
+    fn monospace_font_options_exclude_fallback_only_cjk_fonts() {
         let values = builtin_monospace_font_options()
             .into_iter()
             .map(|(value, _)| value.to_string())
             .collect::<Vec<_>>();
 
-        assert!(values.iter().any(|value| value == "Noto Sans Mono CJK SC"));
-        assert!(values.iter().any(|value| value == "Source Han Mono SC"));
+        assert!(!values.iter().any(|value| value == "Noto Sans Mono CJK SC"));
+        assert!(!values.iter().any(|value| value == "Source Han Mono SC"));
         assert!(!values.iter().any(|value| value == "Noto Sans CJK SC"));
         assert!(!values.iter().any(|value| value == "Source Han Sans SC"));
         assert!(!values.iter().any(|value| value == "Microsoft YaHei"));
@@ -3134,6 +3168,7 @@ mod tests {
                 ],
             }],
             FontFamilyKind::Monospace,
+            None,
         );
 
         let values = options
@@ -3142,13 +3177,34 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(values.iter().any(|value| value == "Custom Mono SC"));
-        assert_eq!(
-            1,
-            values
-                .iter()
-                .filter(|value| value.as_str() == "Noto Sans Mono CJK SC")
-                .count()
+        assert!(!values.iter().any(|value| value == "Noto Sans Mono CJK SC"));
+    }
+
+    #[test]
+    fn monospace_font_options_filter_custom_fonts_unsuitable_for_grid_preview() {
+        let options = merge_font_options_with_custom_fonts(
+            builtin_monospace_font_options(),
+            &[CustomFont {
+                path: "/tmp/CjkFonts.ttc".to_string(),
+                families: vec!["PingFang SC".to_string()],
+                monospace_families: vec![
+                    "Noto Sans Mono CJK SC".to_string(),
+                    "PingFang SC".to_string(),
+                    "Table Safe Mono".to_string(),
+                ],
+            }],
+            FontFamilyKind::Monospace,
+            None,
         );
+
+        let values = options
+            .into_iter()
+            .map(|(value, _)| value.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(values.iter().any(|value| value == "Table Safe Mono"));
+        assert!(!values.iter().any(|value| value == "Noto Sans Mono CJK SC"));
+        assert!(!values.iter().any(|value| value == "PingFang SC"));
     }
 
     #[test]
@@ -3161,6 +3217,7 @@ mod tests {
                 monospace_families: Vec::new(),
             }],
             FontFamilyKind::Monospace,
+            None,
         );
 
         let values = options
@@ -3169,6 +3226,35 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(!values.iter().any(|value| value == "Noto Sans SC"));
+    }
+
+    #[test]
+    fn monospace_font_options_mark_missing_fonts_without_changing_values() {
+        let options = merge_font_options_with_custom_fonts(
+            vec![
+                ("Menlo".into(), "Menlo".into()),
+                ("Fira Code".into(), "Fira Code".into()),
+            ],
+            &[CustomFont {
+                path: "/tmp/CustomMono.ttf".to_string(),
+                families: vec!["Custom Mono".to_string()],
+                monospace_families: vec!["Custom Mono".to_string()],
+            }],
+            FontFamilyKind::Monospace,
+            Some(&["Menlo".to_string()]),
+        );
+
+        assert!(
+            options
+                .iter()
+                .any(|(value, label)| { value.as_ref() == "Menlo" && label.as_ref() == "Menlo" })
+        );
+        assert!(options.iter().any(|(value, label)| {
+            value.as_ref() == "Fira Code" && label.as_ref() == "Fira Code (未安装)"
+        }));
+        assert!(options.iter().any(|(value, label)| {
+            value.as_ref() == "Custom Mono" && label.as_ref() == "Custom Mono (未安装)"
+        }));
     }
 
     #[test]

@@ -18,7 +18,7 @@ use lsp_types::{
     InlineCompletionContext, InlineCompletionItem, InlineCompletionResponse, InsertReplaceEdit,
     InsertTextFormat, Range as LspRange,
 };
-use one_core::settings::AppSettings;
+use one_core::settings::{AppSettings, installed_grid_monospace_font};
 use rust_i18n::t;
 use sum_tree::Bias;
 
@@ -1519,8 +1519,12 @@ impl SqlEditor {
 
 impl Render for SqlEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let installed_font_names = cx.text_system().all_font_names();
         Input::new(&self.editor)
-            .font_family(AppSettings::global(cx).sql_editor_font_family.clone())
+            .font(installed_grid_monospace_font(
+                &AppSettings::global(cx).sql_editor_font_family,
+                &installed_font_names,
+            ))
             .size_full()
     }
 }
