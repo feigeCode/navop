@@ -13,7 +13,7 @@ use public_mcp::remote_ops::{
 use public_mcp::tools::{PublicMcpToolRegistry, remote_ops_tool_registry};
 use serde_json::json;
 use std::collections::BTreeMap;
-use tool_runtime::ToolAdapter;
+use tool_runtime::{ToolAdapter, ToolContext};
 
 #[derive(Clone)]
 struct FakeRemoteSession {
@@ -113,14 +113,36 @@ fn remote_ops_tools_are_registered() {
         .map(|t| t.name.to_string())
         .collect();
 
-    assert!(names.contains(&"ssh.remote_exec".to_string()));
+    assert!(names.contains(&"ssh.exec".to_string()));
+    assert!(names.contains(&"ssh.list_sessions".to_string()));
     assert!(names.contains(&"ssh.session_diagnostics".to_string()));
-    assert!(names.contains(&"ssh.remote_command_poll".to_string()));
-    assert!(names.contains(&"ssh.remote_command_output".to_string()));
-    assert!(names.contains(&"ssh.remote_command_cancel".to_string()));
+    assert!(names.contains(&"ssh.command.poll".to_string()));
+    assert!(names.contains(&"ssh.command.output".to_string()));
+    assert!(names.contains(&"ssh.command.cancel".to_string()));
     assert!(!names.contains(&"ssh.remote_file_write".to_string()));
     assert!(!names.iter().any(|name| name.starts_with("public_mcp.")));
     assert!(!names.iter().any(|name| name == "remote_exec"));
+    assert!(!names.contains(&"ssh.remote_exec".to_string()));
+    assert!(!names.contains(&"ssh.remote_command_poll".to_string()));
+    assert!(!names.contains(&"ssh.remote_command_output".to_string()));
+    assert!(!names.contains(&"ssh.remote_command_cancel".to_string()));
+}
+
+#[test]
+fn ssh_exec_schema_uses_terminal_target_input() {
+    let runtime_registry = remote_ops_tool_registry(PublicMcpRegistry::default());
+    let exec = runtime_registry
+        .list(ToolAdapter::Mcp)
+        .into_iter()
+        .find(|tool| tool.id == "ssh.exec")
+        .expect("ssh.exec should be listed");
+
+    assert_eq!(json!(["target", "command"]), exec.input_schema["required"]);
+    assert_eq!("string", exec.input_schema["properties"]["target"]["type"]);
+    assert_eq!(
+        "string",
+        exec.input_schema["properties"]["session_id"]["type"]
+    );
 }
 
 #[test]
@@ -186,6 +208,51 @@ fn remote_exec_via_registry_returns_structured_result() {
     assert_eq!(RemoteCommandStatus::Exited, result.status);
     assert_eq!(Some(0), result.exit_code);
     assert!(result.stdout.contains("ran pwd"));
+}
+
+#[test]
+fn ssh_exec_accepts_target_argument() {
+    let runtime_registry = remote_ops_tool_registry(registry_with_session());
+    let result = futures::executor::block_on(runtime_registry.call(
+        "ssh.exec",
+        json!({
+            "target": "ssh-1",
+            "command": "pwd"
+        }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect("ssh.exec should execute against target");
+
+    assert_eq!(json!("exited"), result.structured_content["status"]);
+    assert_eq!(json!(0), result.structured_content["exit_code"]);
+    assert!(
+        result.structured_content["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ran pwd")
+    );
+}
+
+#[test]
+fn ssh_remote_exec_alias_still_accepts_session_id() {
+    let runtime_registry = remote_ops_tool_registry(registry_with_session());
+    let result = futures::executor::block_on(runtime_registry.call(
+        "ssh.remote_exec",
+        json!({
+            "session_id": "ssh-1",
+            "command": "pwd"
+        }),
+        ToolContext::for_adapter(ToolAdapter::Mcp),
+    ))
+    .expect("ssh.remote_exec alias should remain callable");
+
+    assert_eq!(json!("exited"), result.structured_content["status"]);
+    assert!(
+        result.structured_content["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ran pwd")
+    );
 }
 
 #[test]

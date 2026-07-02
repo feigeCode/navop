@@ -223,9 +223,9 @@ impl TestClient {
             "id": id,
             "method": "tools/call",
             "params": {
-                "name": "ssh.remote_exec",
+                "name": "ssh.exec",
                 "arguments": {
-                    "session_id": "ssh-1",
+                    "target": "ssh-1",
                     "command": command
                 }
             }
