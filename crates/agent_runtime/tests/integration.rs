@@ -41,14 +41,25 @@ struct ParallelProbeTool {
     name: &'static str,
     barrier: Arc<Barrier>,
     started: Arc<AtomicUsize>,
+    delay_after_barrier: Duration,
 }
 
 impl ParallelProbeTool {
     fn new(name: &'static str, barrier: Arc<Barrier>, started: Arc<AtomicUsize>) -> Self {
+        Self::new_with_delay(name, barrier, started, Duration::ZERO)
+    }
+
+    fn new_with_delay(
+        name: &'static str,
+        barrier: Arc<Barrier>,
+        started: Arc<AtomicUsize>,
+        delay_after_barrier: Duration,
+    ) -> Self {
         Self {
             name,
             barrier,
             started,
+            delay_after_barrier,
         }
     }
 }
@@ -109,6 +120,9 @@ impl Tool for ParallelProbeTool {
     async fn execute(&self, invocation: ToolInvocation) -> Result<ToolObservation, ToolError> {
         self.started.fetch_add(1, Ordering::SeqCst);
         self.barrier.wait().await;
+        if !self.delay_after_barrier.is_zero() {
+            tokio::time::sleep(self.delay_after_barrier).await;
+        }
         Ok(ToolObservation::success(
             invocation.call_id,
             invocation.tool_name,
@@ -833,6 +847,96 @@ async fn parallel_tool_calls_start_before_first_finishes() {
 
     assert!(matches!(outcome, TaskOutcome::Completed { .. }));
     assert_eq!(2, started.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn parallel_tool_observations_preserve_original_call_order() {
+    let barrier = Arc::new(Barrier::new(2));
+    let started = Arc::new(AtomicUsize::new(0));
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_calls(vec![
+                function_tool_call("call_parallel_slow", "parallel_slow", json!({}).to_string()),
+                function_tool_call("call_parallel_fast", "parallel_fast", json!({}).to_string()),
+            ]),
+            ModelResponse::text("并发检查完成。"),
+        ],
+        ToolRegistry::new()
+            .with_tool(Arc::new(ParallelProbeTool::new_with_delay(
+                "parallel_slow",
+                barrier.clone(),
+                started.clone(),
+                Duration::from_millis(40),
+            )))
+            .with_tool(Arc::new(ParallelProbeTool::new(
+                "parallel_fast",
+                barrier,
+                started.clone(),
+            ))),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    runtime
+        .run_turn_blocking(session.id(), "并发顺序检查".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    let observed_tools = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::ObservationAdded { observation, .. }
+                if observation.tool_name.as_str().starts_with("parallel_") =>
+            {
+                Some(observation.tool_name.to_string())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(vec!["parallel_slow", "parallel_fast"], observed_tools);
+    assert_eq!(2, started.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn manual_mode_pauses_parallel_safe_tool_before_dispatch() {
+    let barrier = Arc::new(Barrier::new(1));
+    let started = Arc::new(AtomicUsize::new(0));
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_call(function_tool_call(
+                "call_parallel_manual",
+                "parallel_manual",
+                json!({}).to_string(),
+            )),
+            ModelResponse::text("并发手动工具完成。"),
+        ],
+        ToolRegistry::new().with_tool(Arc::new(ParallelProbeTool::new(
+            "parallel_manual",
+            barrier,
+            started.clone(),
+        ))),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+
+    let outcome = runtime
+        .run_turn_blocking_with_tool_mode(
+            session.id(),
+            "手动并发工具".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Manual,
+        )
+        .await
+        .expect("run manual turn");
+
+    assert!(matches!(
+        outcome,
+        TaskOutcome::NeedUserInput {
+            tool_name: Some(name),
+            ..
+        } if name.as_str() == "parallel_manual"
+    ));
+    assert_eq!(0, started.load(Ordering::SeqCst));
 }
 
 #[tokio::test]

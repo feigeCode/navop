@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Tokio, `agent_runtime`, `ai_chat_view`, existing `Tool::supports_parallel` and `ToolRouter::supports_parallel`.
 
-Current status: Task 2 verified; ready to commit.
+Current status: Task 3 verified; ready to commit.
 
 ---
 
@@ -197,7 +197,7 @@ rtk cargo test -p agent_runtime --test integration
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 rtk git add crates/agent_runtime/src/tasks/agent.rs crates/agent_runtime/tests/integration.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-6-multi-resource-execution.md
@@ -210,7 +210,7 @@ rtk git commit -m "feat(agent): dispatch parallel-safe tool batches"
 - Modify: `crates/agent_runtime/tests/high_risk_approval.rs`
 - Modify: `crates/agent_runtime/tests/integration.rs`
 
-- [ ] **Step 1: Add regression tests**
+- [x] **Step 1: Add regression tests**
 
 Cover:
 
@@ -218,14 +218,15 @@ Cover:
 2. A non-parallel call between two parallel calls creates three batches.
 3. Observation order remains the original tool-call order.
 
-- [ ] **Step 2: Run tests and fix gaps**
+- [x] **Step 2: Run tests and fix gaps**
 
 Run:
 
 ```bash
-rtk cargo test -p agent_runtime high_risk_approval
+rtk cargo test -p agent_runtime --test high_risk_approval
 rtk cargo test -p agent_runtime executable_call_batches
-rtk cargo test -p agent_runtime observation_order
+rtk cargo test -p agent_runtime parallel_tool_observations_preserve_original_call_order
+rtk cargo test -p agent_runtime manual_mode_pauses_parallel_safe_tool_before_dispatch
 ```
 
 - [ ] **Step 3: Commit**
