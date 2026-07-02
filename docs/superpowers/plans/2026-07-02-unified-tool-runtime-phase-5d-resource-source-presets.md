@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, GPUI, `ai_chat_view`, `agent_runtime::ResourceContext`, `agent_runtime::ResourceRef`.
 
-Current status: Task 2 verified; ready to commit.
+Current status: Task 3 verified; ready to commit.
 
 ---
 
@@ -260,7 +260,7 @@ rtk cargo test -p ai_chat_view resource_pool
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/agent_view.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5d-resource-source-presets.md
@@ -273,13 +273,13 @@ rtk git commit -m "feat(ai_chat): derive resource source options"
 - Modify: `crates/ai_chat_view/src/agent_view.rs`
 - Modify: `crates/ai_chat_view/src/input/agent_input.rs`
 
-- [ ] **Step 1: Write failing pure mutation tests**
+- [x] **Step 1: Write failing pure mutation tests**
 
 Add tests in `agent_view.rs`:
 
 ```rust
 #[test]
-fn apply_all_resource_source_replaces_pool_with_catalog() {
+fn apply_resource_source_all_replaces_pool_with_catalog() {
     let mut pool = ResourceContext::new()
         .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"));
     let catalog = vec![
@@ -293,7 +293,7 @@ fn apply_all_resource_source_replaces_pool_with_catalog() {
 }
 
 #[test]
-fn apply_ssh_resource_source_selects_only_ssh_resources() {
+fn apply_resource_source_ssh_selects_only_ssh_resources() {
     let mut pool = ResourceContext::new()
         .with_resource(ResourceRef::new("redis-a", ResourceKind::Redis, "cache"));
     let catalog = vec![
@@ -313,17 +313,17 @@ Expected red result:
 cannot find function `apply_resource_source` in this scope
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run:
 
 ```bash
-rtk cargo test -p ai_chat_view apply_ssh_resource_source_selects_only_ssh_resources
+rtk cargo test -p ai_chat_view apply_resource_source_ssh_selects_only_ssh_resources
 ```
 
 Expected: fail because `apply_resource_source` is missing.
 
-- [ ] **Step 3: Implement minimal source application**
+- [x] **Step 3: Implement minimal source application**
 
 Add an `AgentInputEvent::SelectResourceSource { id: SharedString }` event and handle it in
 `AgentChatView::on_input_event`. The pure helper should:
@@ -335,7 +335,7 @@ Add an `AgentInputEvent::SelectResourceSource { id: SharedString }` event and ha
 5. Type ids: replace pool with matching catalog resources.
 6. Preserve current default if it is still in the new pool; otherwise use first resource.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run:
 

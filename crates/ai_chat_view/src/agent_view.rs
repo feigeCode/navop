@@ -532,6 +532,11 @@ impl AgentChatView {
                     self.remove_resource_from_pool(&id, cx);
                 }
             }
+            AgentInputEvent::SelectResourceSource { id } => {
+                if !self.is_running {
+                    self.select_resource_source(&id, cx);
+                }
+            }
             AgentInputEvent::PickScope { key: _ } => {}
             AgentInputEvent::SelectModel {
                 id,
@@ -795,6 +800,14 @@ impl AgentChatView {
 
     fn remove_resource_from_pool(&mut self, id: &str, cx: &mut Context<Self>) {
         if remove_resource_from_pool(&mut self.resources, id) {
+            self.sync_session_resources();
+            self.sync_resource_targets(cx);
+            cx.notify();
+        }
+    }
+
+    fn select_resource_source(&mut self, id: &str, cx: &mut Context<Self>) {
+        if apply_resource_source(&mut self.resources, &self.available_resources, id) {
             self.sync_session_resources();
             self.sync_resource_targets(cx);
             cx.notify();
@@ -2348,6 +2361,57 @@ fn remove_resource_from_pool(pool: &mut ResourceContext, id: &str) -> bool {
     true
 }
 
+fn apply_resource_source(pool: &mut ResourceContext, catalog: &[ResourceRef], id: &str) -> bool {
+    let resources = match id {
+        "current" => pool.current().cloned().map(|resource| vec![resource]),
+        "all" => Some(catalog.to_vec()),
+        "ssh" => Some(resources_matching(catalog, |kind| {
+            matches!(kind, ResourceKind::Ssh)
+        })),
+        "db" => Some(resources_matching(catalog, is_database_kind)),
+        "redis" => Some(resources_matching(catalog, |kind| {
+            matches!(kind, ResourceKind::Redis)
+        })),
+        "terminal" => Some(resources_matching(catalog, |kind| {
+            matches!(kind, ResourceKind::Terminal)
+        })),
+        "pool" | "manual" | "workspace" | "tag" => None,
+        _ => None,
+    };
+    let Some(resources) = resources else {
+        return false;
+    };
+    replace_pool_resources(pool, resources)
+}
+
+fn resources_matching(
+    catalog: &[ResourceRef],
+    predicate: fn(&ResourceKind) -> bool,
+) -> Vec<ResourceRef> {
+    catalog
+        .iter()
+        .filter(|resource| predicate(&resource.kind))
+        .cloned()
+        .collect()
+}
+
+fn replace_pool_resources(pool: &mut ResourceContext, resources: Vec<ResourceRef>) -> bool {
+    if resources.is_empty() {
+        return false;
+    }
+    let next_current = pool
+        .current
+        .clone()
+        .filter(|id| resources.iter().any(|resource| resource.id == *id))
+        .or_else(|| resources.first().map(|resource| resource.id.clone()));
+    let changed = pool.resources != resources || pool.current != next_current;
+    if changed {
+        pool.resources = resources;
+        pool.current = next_current;
+    }
+    changed
+}
+
 fn target_from_resource(r: &ResourceRef) -> ComposerTarget {
     ComposerTarget::new(
         r.id.as_str().to_string(),
@@ -2803,6 +2867,46 @@ mod tests {
             .iter()
             .find(|option| option.id.as_ref() == id)
             .unwrap()
+    }
+
+    #[test]
+    fn apply_resource_source_all_replaces_pool_with_catalog() {
+        let mut pool = ResourceContext::new().with_resource(ResourceRef::new(
+            "ssh-a",
+            ResourceKind::Ssh,
+            "prod-a",
+        ));
+        let catalog = vec![
+            ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
+            ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"),
+        ];
+
+        assert!(apply_resource_source(&mut pool, &catalog, "all"));
+        assert_eq!(2, pool.resources.len());
+        assert_eq!(
+            Some("prod-a"),
+            pool.current().map(|resource| resource.label.as_str())
+        );
+    }
+
+    #[test]
+    fn apply_resource_source_ssh_selects_only_ssh_resources() {
+        let mut pool = ResourceContext::new().with_resource(ResourceRef::new(
+            "redis-a",
+            ResourceKind::Redis,
+            "cache",
+        ));
+        let catalog = vec![
+            ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
+            ResourceRef::new("redis-a", ResourceKind::Redis, "cache"),
+        ];
+
+        assert!(apply_resource_source(&mut pool, &catalog, "ssh"));
+        assert_eq!(1, pool.resources.len());
+        assert_eq!(
+            Some("prod-a"),
+            pool.current().map(|resource| resource.label.as_str())
+        );
     }
 
     #[test]

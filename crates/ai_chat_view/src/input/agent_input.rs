@@ -52,6 +52,8 @@ pub enum AgentInputEvent {
     AddResourceToPool { id: SharedString },
     /// 将资源移出本会话资源池。
     RemoveResourceFromPool { id: SharedString },
+    /// 选择资源池来源预设。
+    SelectResourceSource { id: SharedString },
     /// 点击某个派生上下文 chip —— 上层据 `key` 弹出对应选择器。
     PickScope { key: SharedString },
     /// 在内置下拉中选择了模型。
