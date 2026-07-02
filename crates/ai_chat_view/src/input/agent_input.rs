@@ -73,6 +73,10 @@ enum ComposerMenuKind {
     Model,
 }
 
+const CONTEXT_POPOVER_WIDTH: f32 = 400.0;
+const CONTEXT_TARGET_LIST_MAX_HEIGHT: f32 = 320.0;
+const CONTEXT_KIND_MAX_WIDTH: f32 = 92.0;
+
 fn current_task_label(label: &SharedString) -> SharedString {
     if label.is_empty() {
         SharedString::from("Auto Mode")
@@ -126,6 +130,12 @@ pub struct AgentInput {
     tool_options: Vec<ComposerMenuOption>,
     /// 任务模式下拉选项(上层注入)。
     task_options: Vec<ComposerMenuOption>,
+    /// 上下文面板的目标搜索框(与顶部输入框分离,避免抢焦点 / 拦截回车提交)。
+    context_search_input: Entity<InputState>,
+    /// 上下文面板当前搜索关键字(每次打开面板时重置为空)。
+    context_search_query: SharedString,
+    /// 打开上下文面板时置位,下次 render 时据此清空搜索框(需 &mut Window)。
+    context_search_needs_reset: bool,
     /// 当前展开的下拉(受控开合)。
     open_menu: Option<ComposerMenuKind>,
     /// 顶部计划面板中已展开的只读计划项。
@@ -196,6 +206,27 @@ impl AgentInput {
             this.update(cx, |this, cx| this.add_attachments(atts, cx));
         });
 
+        let context_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("搜索目标…")
+                .clean_on_escape()
+        });
+        let context_search_sub = cx.subscribe_in(
+            &context_search_input,
+            window,
+            |this: &mut Self,
+             input: &Entity<InputState>,
+             event: &InputEvent,
+             _window,
+             cx: &mut Context<Self>| {
+                if let InputEvent::Change = event {
+                    let query = input.read(cx).text().to_string();
+                    this.context_search_query = SharedString::from(query);
+                    cx.notify();
+                }
+            },
+        );
+
         Self {
             focus_handle: cx.focus_handle(),
             input_state,
@@ -207,11 +238,14 @@ impl AgentInput {
             model_options: Vec::new(),
             tool_options: Vec::new(),
             task_options: Vec::new(),
+            context_search_input,
+            context_search_query: SharedString::default(),
+            context_search_needs_reset: false,
             open_menu: None,
             expanded_plan_items: HashSet::new(),
             top_capabilities_collapsed: false,
             edge_to_edge: false,
-            _subscriptions: vec![enter_sub, paste_sub],
+            _subscriptions: vec![enter_sub, paste_sub, context_search_sub],
         }
     }
 
@@ -480,6 +514,8 @@ impl AgentInput {
         let options = self.target_options.clone();
         let current = self.context.target.clone();
         let scopes = self.context.scopes.clone();
+        let search_input = self.context_search_input.clone();
+        let search_query = self.context_search_query.clone();
 
         Popover::new("agent-context-mode-popover")
             .p_0()
@@ -489,8 +525,13 @@ impl AgentInput {
                 move |open, _window, cx| {
                     let open = *open;
                     view.update(cx, |this, cx| {
-                        this.open_menu =
+                        let became_open =
                             menu_state_after_open_change(open, ComposerMenuKind::Target);
+                        this.open_menu = became_open;
+                        // 标记在下次 render 时重置搜索框(render 持有 &mut Window,可安全 set_value)。
+                        if became_open.is_some() {
+                            this.context_search_needs_reset = true;
+                        }
                         cx.notify();
                     });
                 }
@@ -504,6 +545,8 @@ impl AgentInput {
                         options.clone(),
                         current.clone(),
                         scopes.clone(),
+                        search_input.clone(),
+                        search_query.clone(),
                         cx,
                     )
                 }
@@ -1306,25 +1349,28 @@ fn render_context_mode_content(
     options: Vec<ComposerTarget>,
     current: Option<ComposerTarget>,
     scopes: Vec<ComposerScope>,
+    search_input: Entity<InputState>,
+    search_query: SharedString,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
     let muted = cx.theme().muted_foreground;
     let border = cx.theme().border;
-    let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(300.0));
+    let mut col = v_flex()
+        .debug_selector(|| "agent-context-popover-content".to_string())
+        .w(px(CONTEXT_POPOVER_WIDTH))
+        .min_w(px(CONTEXT_POPOVER_WIDTH))
+        .overflow_x_hidden();
 
     if let Some(target) = current {
         col = col
+            .px_1()
+            .pt_1()
             .child(context_group_label("当前上下文", cx))
-            .child(context_summary_row(
-                target.label,
-                target.subtitle,
-                muted,
-                cx,
-            ));
+            .child(context_summary_row(target, muted, cx));
     }
     let has_database_scope = scopes.iter().any(|scope| scope.key.as_ref() == "database");
     if !scopes.is_empty() {
-        col = col.child(context_group_label("作用域", cx));
+        col = col.px_1().child(context_group_label("作用域", cx));
         for scope in scopes {
             col = col.child(context_scope_row(view.clone(), scope, muted, border, cx));
         }
@@ -1332,15 +1378,86 @@ fn render_context_mode_content(
             col = col.child(context_database_hint(muted, cx));
         }
     }
-    col = col.child(context_group_label("选择目标", cx));
-    if options.is_empty() {
-        col = col.child(div().p_2().text_xs().text_color(muted).child("无可用目标"));
+
+    // 搜索框:固定在列表上方,不参与滚动,避免长列表里输入框被滚出可视区。
+    col = col.child(
+        div()
+            .debug_selector(|| "context-target-search".to_string())
+            .w_full()
+            .min_w_0()
+            .px_1()
+            .pb_1()
+            .child(
+                Input::new(&search_input)
+                    .prefix(Icon::new(IconName::Search).text_color(muted))
+                    .cleanable(true)
+                    .small()
+                    .w_full(),
+            ),
+    );
+
+    // 按关键字过滤目标(label / subtitle / kind 不区分大小写)。
+    let needle = normalize_target_search_query(search_query.as_ref());
+    let filtered: Vec<ComposerTarget> = options
+        .into_iter()
+        .filter(|opt| needle.is_empty() || target_matches(opt, &needle))
+        .collect();
+
+    col = col.child(
+        div()
+            .w_full()
+            .min_w_0()
+            .px_1()
+            .text_xs()
+            .text_color(muted)
+            .child(filter_result_label(&filtered, &search_query)),
+    );
+
+    // 列表区:限定最大高度并内部滚动,避免目标多时撑爆 popover。
+    let mut list = v_flex()
+        .id("context-target-list")
+        .w_full()
+        .px_1()
+        .pb_1()
+        .gap(px(2.0))
+        .max_h(px(CONTEXT_TARGET_LIST_MAX_HEIGHT))
+        .overflow_x_hidden()
+        .overflow_y_scroll();
+    if filtered.is_empty() {
+        list = list.child(div().px_2().py_2().text_sm().text_color(muted).child(
+            if search_query.is_empty() {
+                "无可用目标"
+            } else {
+                "未匹配到目标"
+            },
+        ));
     }
-    for opt in options {
-        col = col.child(context_target_option(view.clone(), opt, muted, cx));
+    for opt in filtered {
+        list = list.child(context_target_option(view.clone(), opt, muted, cx));
     }
 
+    col = col.child(list);
     col.into_any_element()
+}
+
+/// 目标是否匹配搜索关键字(子串匹配,忽略大小写)。
+fn target_matches(opt: &ComposerTarget, needle: &str) -> bool {
+    let needle = normalize_target_search_query(needle);
+    opt.label.to_lowercase().contains(&needle)
+        || opt.subtitle.to_lowercase().contains(&needle)
+        || opt.kind.to_lowercase().contains(&needle)
+}
+
+fn normalize_target_search_query(query: &str) -> String {
+    query.trim().to_lowercase()
+}
+
+/// 列表结果计数文案:有关键字时展示匹配数,无关键字时展示总数。
+fn filter_result_label(filtered: &[ComposerTarget], query: &SharedString) -> SharedString {
+    if query.is_empty() {
+        return SharedString::default();
+    }
+    SharedString::from(format!("匹配到 {} 个目标", filtered.len()))
 }
 
 fn context_database_hint(
@@ -1370,19 +1487,76 @@ fn context_group_label(
 }
 
 fn context_summary_row(
-    label: SharedString,
-    subtitle: SharedString,
+    target: ComposerTarget,
     muted: gpui::Hsla,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    v_flex()
+    context_target_row(target, muted, cx, true)
+        .debug_selector(|| "context-current-summary".to_string())
+        .into_any_element()
+}
+
+fn context_target_row(
+    opt: ComposerTarget,
+    muted: gpui::Hsla,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+    selected: bool,
+) -> gpui::Div {
+    let hover_bg = cx.theme().list_hover;
+    let radius = cx.theme().radius;
+
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .items_center()
+        .gap(px(8.0))
         .px_2()
         .py_1()
-        .rounded(cx.theme().radius)
-        .bg(cx.theme().list_hover)
-        .child(div().text_sm().child(label))
-        .child(div().text_xs().text_color(muted).child(subtitle))
-        .into_any_element()
+        .rounded(radius)
+        .when(selected, |this| this.bg(hover_bg))
+        .child(
+            h_flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .size(px(24.0))
+                .rounded(radius)
+                .bg(hover_bg)
+                .text_xs()
+                .child(opt.icon),
+        )
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(1.0))
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .text_sm()
+                        .truncate()
+                        .child(opt.label),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(muted)
+                        .truncate()
+                        .child(opt.subtitle),
+                ),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .max_w(px(CONTEXT_KIND_MAX_WIDTH))
+                .text_xs()
+                .text_color(muted)
+                .truncate()
+                .child(opt.kind),
+        )
 }
 
 fn context_scope_row(
@@ -1431,38 +1605,13 @@ fn context_target_option(
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
     let sel = opt.id.clone();
+    let row_id = SharedString::from(format!("context-target-opt-{}", opt.id));
     let hover_bg = cx.theme().list_hover;
-    let radius = cx.theme().radius;
 
-    h_flex()
-        .id(SharedString::from(format!("context-target-opt-{}", opt.id)))
-        .w_full()
-        .items_center()
-        .gap(px(8.0))
-        .px_2()
-        .py_1()
-        .rounded(radius)
+    context_target_row(opt, muted, cx, false)
+        .id(row_id)
         .cursor_pointer()
         .hover(move |s| s.bg(hover_bg))
-        .child(
-            h_flex()
-                .items_center()
-                .justify_center()
-                .size(px(24.0))
-                .rounded(radius)
-                .bg(hover_bg)
-                .text_xs()
-                .child(opt.icon),
-        )
-        .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap(px(1.0))
-                .child(div().text_sm().child(opt.label))
-                .child(div().text_xs().text_color(muted).child(opt.subtitle)),
-        )
-        .child(div().text_xs().text_color(muted).child(opt.kind))
         .on_click(move |_, _window, cx| {
             let sel = sel.clone();
             view.update(cx, |this, cx| {
@@ -1485,6 +1634,14 @@ impl Focusable for AgentInput {
 
 impl Render for AgentInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 打开上下文面板时,在 render 时(持有 &mut Window)清空搜索框。
+        if self.context_search_needs_reset {
+            self.context_search_input.update(cx, |state, cx| {
+                state.set_value("", _window, cx);
+            });
+            self.context_search_query = SharedString::default();
+            self.context_search_needs_reset = false;
+        }
         let context_bar = self.render_context_bar(cx);
         let attachments = self.render_attachments(cx);
         let editor_top_bar = self.render_editor_top_bar(cx);
@@ -1735,6 +1892,34 @@ mod tests {
         )];
 
         assert_eq!(subagent_trigger_label(&items).as_ref(), "子代理 · 1");
+    }
+
+    #[test]
+    fn target_search_matches_label_subtitle_and_kind_case_insensitively() {
+        let opt = ComposerTarget::new(
+            "prod-pg",
+            "Prod PostgreSQL",
+            "DB",
+            "database",
+            "PostgreSQL · 10.0.0.8:5432",
+        );
+
+        assert!(target_matches(&opt, "prod"));
+        assert!(target_matches(&opt, "postgresql"));
+        assert!(target_matches(&opt, "DATABASE"));
+    }
+
+    #[test]
+    fn target_search_query_ignores_surrounding_whitespace() {
+        let opt = ComposerTarget::new(
+            "prod-pg",
+            "Prod PostgreSQL",
+            "DB",
+            "database",
+            "PostgreSQL · 10.0.0.8:5432",
+        );
+
+        assert!(target_matches(&opt, "  prod  "));
     }
 
     #[test]
