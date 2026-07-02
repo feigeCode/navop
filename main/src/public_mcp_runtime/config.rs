@@ -7,6 +7,7 @@ pub struct PublicMcpStartConfig {
     pub enabled: bool,
     pub mode: PublicMcpMode,
     pub permission_mode: PermissionMode,
+    pub permission_profile: &'static str,
     pub toolsets: McpToolsetSettings,
 }
 
@@ -24,14 +25,16 @@ impl PublicMcpStartConfig {
         session_enabled: bool,
         env_override: PublicMcpEnvOverride,
     ) -> Self {
+        let permission_mode = env_override
+            .permission_mode
+            .unwrap_or_else(|| map_permission_mode(settings.mcp.permission_mode));
         Self {
             enabled: env_override
                 .enabled
                 .unwrap_or_else(|| configured_enabled(settings, session_enabled)),
             mode: map_server_mode(settings.mcp.server_mode),
-            permission_mode: env_override
-                .permission_mode
-                .unwrap_or_else(|| map_permission_mode(settings.mcp.permission_mode)),
+            permission_mode,
+            permission_profile: permission_profile_id(permission_mode),
             toolsets: settings.mcp.toolsets.clone(),
         }
     }
@@ -109,6 +112,14 @@ fn map_permission_mode(mode: McpPermissionMode) -> PermissionMode {
     }
 }
 
+fn permission_profile_id(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Deny => McpPermissionMode::Deny.profile_id(),
+        PermissionMode::Ask => McpPermissionMode::Ask.profile_id(),
+        PermissionMode::Allow => McpPermissionMode::Allow.profile_id(),
+    }
+}
+
 fn bool_env(name: &str) -> Option<bool> {
     match std::env::var(name).ok()?.to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" => Some(true),
@@ -151,6 +162,7 @@ mod tests {
         assert!(config.enabled);
         assert_eq!(config.mode, PublicMcpMode::Persistent);
         assert_eq!(config.permission_mode, PermissionMode::Ask);
+        assert_eq!("confirm", config.permission_profile);
     }
 
     #[test]

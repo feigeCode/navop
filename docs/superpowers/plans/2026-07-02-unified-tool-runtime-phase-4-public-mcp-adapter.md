@@ -14,7 +14,7 @@
 
 Last updated: 2026-07-02
 
-Current status: App runtime registry merge and runtime-backed permission policy checkpoints verified.
+Current status: App runtime registry merge, runtime-backed permission policy, and settings profile wording checkpoints verified.
 
 ## File Structure
 
@@ -211,11 +211,66 @@ rtk cargo check -p main
 
 Expected: all pass. Existing `block v0.1.6` future-incompat warning can remain.
 
+## Task 4: Settings Use Unified Permission Profile Wording
+
+- [x] **Step 1: Write failing core settings test**
+
+Add `mcp_permission_modes_expose_unified_profile_ids` in `crates/core/src/settings.rs`.
+
+Expected red result:
+
+```text
+no method named `profile_id` found for enum `McpPermissionMode`
+```
+
+- [x] **Step 2: Add compatibility profile ids**
+
+Keep persisted values unchanged, but expose unified profile ids:
+
+```text
+deny  -> safe
+ask   -> confirm
+allow -> auto
+```
+
+- [x] **Step 3: Expose profile id in runtime config**
+
+`PublicMcpStartConfig` keeps `permission_mode` for protocol compatibility and adds
+`permission_profile` for unified status/product semantics.
+
+- [x] **Step 4: Update settings UI labels**
+
+The dropdown still saves `deny`, `ask`, and `allow`, but displays:
+
+```text
+Safe
+Confirm
+Auto
+```
+
+This avoids a storage migration while moving the product concept away from raw MCP
+deny/ask/allow.
+
+- [x] **Step 5: Verify**
+
+Run:
+
+```bash
+rtk cargo test -p one-core mcp_permission_modes_expose_unified_profile_ids
+rtk cargo test -p main runtime_config_reads_global_mcp_settings
+rtk cargo test -p main mcp_permission_mode_options_match_persisted_values
+rtk cargo test -p one-core settings
+rtk cargo test -p main public_mcp_runtime
+rtk cargo check -p main
+```
+
+Expected: all pass. Existing `block v0.1.6` future-incompat warning can remain.
+
 ## Out Of Scope
 
 1. Removing `PublicMcpToolProvider`.
-2. Removing `PermissionMode` from settings/protocol/UI. It is now a compatibility input that maps
-   to `PermissionPolicy` for runtime-backed tools.
+2. Removing `PermissionMode` from settings/protocol storage. It is now a compatibility input that
+   maps to `PermissionPolicy` for runtime-backed tools and to profile wording in settings UI.
 3. Rewriting Public MCP approval UI.
 4. Migrating external MCP or ACP providers.
 5. Manual visible terminal smoke for Phase 3c.

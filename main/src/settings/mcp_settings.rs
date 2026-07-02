@@ -80,15 +80,15 @@ fn mcp_permission_mode_options() -> Vec<(SharedString, SharedString)> {
     vec![
         (
             McpPermissionMode::Deny.as_str().into(),
-            t!("Settings.General.Mcp.permission_mode_deny").into(),
+            t!("Settings.General.Mcp.permission_profile_safe").into(),
         ),
         (
             McpPermissionMode::Ask.as_str().into(),
-            t!("Settings.General.Mcp.permission_mode_ask").into(),
+            t!("Settings.General.Mcp.permission_profile_confirm").into(),
         ),
         (
             McpPermissionMode::Allow.as_str().into(),
-            t!("Settings.General.Mcp.permission_mode_allow").into(),
+            t!("Settings.General.Mcp.permission_profile_auto").into(),
         ),
     ]
 }
@@ -213,12 +213,18 @@ mod tests {
 
     #[test]
     fn mcp_permission_mode_options_match_persisted_values() {
-        let values = mcp_permission_mode_options()
-            .into_iter()
+        let options = mcp_permission_mode_options();
+        let values = options
+            .iter()
             .map(|(value, _)| value.to_string())
+            .collect::<Vec<_>>();
+        let labels = options
+            .into_iter()
+            .map(|(_, label)| label.to_string())
             .collect::<Vec<_>>();
 
         assert_eq!(vec!["deny", "ask", "allow"], values);
+        assert_eq!(vec!["Safe", "Confirm", "Auto"], labels);
     }
 
     #[test]
