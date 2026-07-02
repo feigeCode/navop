@@ -75,6 +75,12 @@ pub struct PlanStepData {
 pub struct ToolCardData {
     pub call_id: String,
     pub tool_name: String,
+    /// 目标资源 id,用于多资源任务分组展示。
+    #[serde(default)]
+    pub target_id: Option<String>,
+    /// 目标资源展示名。缺失时 UI 可回退到 `target_id`。
+    #[serde(default)]
+    pub target_label: Option<String>,
     /// 工具入参摘要,用于卡片头部。
     #[serde(default)]
     pub input_summary: String,
@@ -504,17 +510,29 @@ fn tool_card_title(data: &ToolCardData, cx: &App) -> AnyElement {
         .text_sm()
         .text_color(cx.theme().foreground)
         .truncate()
-        .child(if data.input_summary.is_empty() {
-            format!("{} · {}", tool_card_prefix(&data.tool_name), data.tool_name)
-        } else {
-            format!(
-                "{} · {} · {}",
-                tool_card_prefix(&data.tool_name),
-                data.tool_name,
-                data.input_summary
-            )
-        })
+        .child(tool_card_title_text(data))
         .into_any_element()
+}
+
+fn tool_card_title_text(data: &ToolCardData) -> String {
+    let mut parts = vec![
+        tool_card_prefix(&data.tool_name).to_string(),
+        data.tool_name.clone(),
+    ];
+    if let Some(target) = tool_card_target_label(data) {
+        parts.push(format!("@{target}"));
+    }
+    if !data.input_summary.is_empty() {
+        parts.push(data.input_summary.clone());
+    }
+    parts.join(" · ")
+}
+
+fn tool_card_target_label(data: &ToolCardData) -> Option<&str> {
+    data.target_label
+        .as_deref()
+        .filter(|label| !label.is_empty())
+        .or_else(|| data.target_id.as_deref().filter(|id| !id.is_empty()))
 }
 
 fn confirm_card_header(data: &ToolConfirmCardData) -> &'static str {
@@ -934,6 +952,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            target_id: Some("ssh-b".into()),
+            target_label: Some("prod-b".into()),
             input_summary: "hi".into(),
             input_json: "{\"text\":\"hi\"}".into(),
             running: false,
@@ -946,6 +966,29 @@ mod tests {
         assert_eq!(back.input_summary, "hi");
         assert_eq!(back.input_json, "{\"text\":\"hi\"}");
         assert_eq!(back.success, Some(true));
+        assert_eq!(back.target_id.as_deref(), Some("ssh-b"));
+        assert_eq!(back.target_label.as_deref(), Some("prod-b"));
+    }
+
+    #[test]
+    fn tool_card_title_includes_target_label_for_multi_resource_results() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "ssh.exec".into(),
+            target_id: Some("ssh-b".into()),
+            target_label: Some("prod-b".into()),
+            input_summary: "df -h".into(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: "ok".into(),
+            data_text: "ok".into(),
+        };
+
+        assert_eq!(
+            "工具 · ssh.exec · @prod-b · df -h",
+            tool_card_title_text(&data)
+        );
     }
 
     #[test]
@@ -1043,6 +1086,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            target_id: None,
+            target_label: None,
             input_summary: String::new(),
             input_json: String::new(),
             running: false,
@@ -1062,6 +1107,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            target_id: None,
+            target_label: None,
             input_summary: String::new(),
             input_json: String::new(),
             running: false,
@@ -1094,6 +1141,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            target_id: None,
+            target_label: None,
             input_summary: String::new(),
             input_json: "{\n  \"rows\": [\n    1\n  ]\n}".into(),
             running: false,
@@ -1110,6 +1159,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            target_id: None,
+            target_label: None,
             input_summary: "hello".into(),
             input_json: "{\n  \"text\": \"hello\"\n}".into(),
             running: false,
@@ -1126,6 +1177,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "query".into(),
+            target_id: None,
+            target_label: None,
             input_summary: "select 1".into(),
             input_json: "{\n  \"sql\": \"select 1\"\n}".into(),
             running: false,

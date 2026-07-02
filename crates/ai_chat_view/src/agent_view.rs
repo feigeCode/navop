@@ -433,6 +433,8 @@ impl AgentChatView {
         let subscriptions = vec![cx.subscribe_in(&input, window, Self::on_input_event)];
         let event_task = Self::spawn_event_pump(runtime.subscribe(), session_id.clone(), cx);
         let current_session = session_id.to_string();
+        let mut transcript = AgentTranscript::new();
+        transcript.set_resource_context(&resources);
 
         // 载入已持久化的会话列表,并把当前实时会话置顶(尚无内容,落库前为占位)。
         let mut sessions = persistence::list_summaries(cx);
@@ -448,7 +450,7 @@ impl AgentChatView {
             session_id,
             resources,
             available_resources,
-            transcript: AgentTranscript::new(),
+            transcript,
             input,
             sessions,
             current_session,
@@ -1256,7 +1258,8 @@ impl AgentChatView {
         }
     }
 
-    fn sync_resource_targets(&self, cx: &mut Context<Self>) {
+    fn sync_resource_targets(&mut self, cx: &mut Context<Self>) {
+        self.transcript.set_resource_context(&self.resources);
         let target_options: Vec<ComposerTarget> = self
             .resources
             .resources
@@ -1303,6 +1306,7 @@ impl AgentChatView {
     ) {
         self.available_resources = available_resources;
         self.resources = resources.clone();
+        self.transcript.set_resource_context(&self.resources);
         self.sync_session_resources();
         let target_options: Vec<ComposerTarget> = self
             .resources

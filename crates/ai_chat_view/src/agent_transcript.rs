@@ -5,8 +5,10 @@
 //! [`AgentTranscript::apply`],再渲染 `messages`。
 
 use agent_runtime::{
-    HistoryItem, Plan, PlanStatus, RuntimeEvent, StepStatus, ToolObservation, ids::ToolCallId,
+    HistoryItem, Plan, PlanStatus, ResourceContext, RuntimeEvent, StepStatus, ToolObservation,
+    ids::ToolCallId,
 };
+use std::collections::HashMap;
 
 use crate::agent_cards::{
     PlanCardData, PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD,
@@ -33,11 +35,22 @@ pub struct AgentTranscript {
     latest_plan: Option<PlanCardData>,
     /// 当前会话最近的子代理(渲染到输入框上方的子代理面板,不进消息流)。
     active_subagents: Vec<SubAgentCardData>,
+    /// 当前资源池 id -> label 快照,用于工具结果卡片展示目标资源。
+    resource_labels: HashMap<String, String>,
 }
 
 impl AgentTranscript {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 更新当前会话资源池快照,供后续工具 observation 展示目标资源。
+    pub fn set_resource_context(&mut self, resources: &ResourceContext) {
+        self.resource_labels = resources
+            .resources
+            .iter()
+            .map(|resource| (resource.id.as_str().to_string(), resource.label.clone()))
+            .collect();
     }
 
     /// 清空(切换 / 新建会话)。
@@ -334,6 +347,8 @@ impl AgentTranscript {
         let data = ToolCardData {
             call_id: call_id.to_string(),
             tool_name: tool_name.to_string(),
+            target_id: None,
+            target_label: None,
             input_summary: input.summary,
             input_json: input.json,
             running: true,
@@ -350,8 +365,17 @@ impl AgentTranscript {
         let summary = obs.summary.clone();
         let data_text = truncate_chars(&obs.data.to_text(), MAX_DATA_CHARS);
         let success = obs.success;
+        let target_id = obs.resource_id.as_ref().map(|id| id.as_str().to_string());
+        let target_label = target_id.as_ref().map(|id| {
+            self.resource_labels
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| id.clone())
+        });
 
         if let Some(mut data) = self.find_tool_card(&call_id) {
+            data.target_id = target_id;
+            data.target_label = target_label;
             data.summary = summary;
             data.data_text = data_text;
             data.success = Some(success);
@@ -361,6 +385,8 @@ impl AgentTranscript {
             let data = ToolCardData {
                 call_id,
                 tool_name: obs.tool_name.to_string(),
+                target_id,
+                target_label,
                 input_summary: String::new(),
                 input_json: String::new(),
                 running: false,
@@ -645,7 +671,9 @@ mod tests {
     use super::*;
     use agent_runtime::ids::{SubAgentId, ToolCallId, TurnId};
     use agent_runtime::tools::{ObservationData, ToolCall, ToolName};
-    use agent_runtime::{PlanSource, PlanStep, SessionId};
+    use agent_runtime::{
+        PlanSource, PlanStep, ResourceContext, ResourceId, ResourceKind, ResourceRef, SessionId,
+    };
 
     fn sid() -> SessionId {
         SessionId::from_string("s1")
@@ -882,6 +910,41 @@ mod tests {
         assert_eq!(data.summary, "echo: hi");
         assert_eq!(data.input_summary, "hi");
         assert!(data.input_json.contains("\"text\": \"hi\""));
+    }
+
+    #[test]
+    fn tool_observation_records_target_resource_label_on_card() {
+        let mut tr = AgentTranscript::new();
+        tr.set_resource_context(
+            &ResourceContext::new()
+                .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"))
+                .with_resource(ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b")),
+        );
+        let call = ToolCallId::from_string("call_target");
+        tr.apply(&RuntimeEvent::ToolCallStarted {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call.clone(),
+            tool_name: ToolName::new("ssh.exec"),
+            arguments: serde_json::json!({"command": "df -h"}),
+        });
+        let obs = ToolObservation::success(
+            call,
+            ToolName::new("ssh.exec"),
+            "ok",
+            ObservationData::Text("disk ok".into()),
+        )
+        .with_resource(Some(ResourceId::new("ssh-b")));
+
+        tr.apply(&RuntimeEvent::ObservationAdded {
+            session_id: sid(),
+            turn_id: tid(),
+            observation: obs,
+        });
+
+        let data = ToolCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!(data.target_id.as_deref(), Some("ssh-b"));
+        assert_eq!(data.target_label.as_deref(), Some("prod-b"));
     }
 
     #[test]
