@@ -521,8 +521,16 @@ impl AgentChatView {
                     self.select_target(&id, cx);
                 }
             }
-            AgentInputEvent::AddResourceToPool { id: _ } => {}
-            AgentInputEvent::RemoveResourceFromPool { id: _ } => {}
+            AgentInputEvent::AddResourceToPool { id } => {
+                if !self.is_running {
+                    self.add_resource_to_pool(&id, cx);
+                }
+            }
+            AgentInputEvent::RemoveResourceFromPool { id } => {
+                if !self.is_running {
+                    self.remove_resource_from_pool(&id, cx);
+                }
+            }
             AgentInputEvent::PickScope { key: _ } => {}
             AgentInputEvent::SelectModel {
                 id,
@@ -771,11 +779,25 @@ impl AgentChatView {
             return;
         }
         self.resources.current = Some(rid);
-        if let Some(session) = self.runtime.session(&self.session_id) {
-            session.set_resources(self.resources.clone());
-        }
-        self.sync_composer(cx);
+        self.sync_session_resources();
+        self.sync_resource_targets(cx);
         cx.notify();
+    }
+
+    fn add_resource_to_pool(&mut self, id: &str, cx: &mut Context<Self>) {
+        if add_resource_to_pool(&mut self.resources, &self.available_resources, id) {
+            self.sync_session_resources();
+            self.sync_resource_targets(cx);
+            cx.notify();
+        }
+    }
+
+    fn remove_resource_from_pool(&mut self, id: &str, cx: &mut Context<Self>) {
+        if remove_resource_from_pool(&mut self.resources, id) {
+            self.sync_session_resources();
+            self.sync_resource_targets(cx);
+            cx.notify();
+        }
     }
 
     fn select_model(&mut self, id: &str, provider_id: &str, model: &str, cx: &mut Context<Self>) {
@@ -1214,6 +1236,39 @@ impl AgentChatView {
         }
     }
 
+    fn sync_session_resources(&self) {
+        if let Some(session) = self.runtime.session(&self.session_id) {
+            session.set_resources(self.resources.clone());
+        }
+    }
+
+    fn sync_resource_targets(&self, cx: &mut Context<Self>) {
+        let target_options: Vec<ComposerTarget> = self
+            .resources
+            .resources
+            .iter()
+            .map(target_from_resource)
+            .collect();
+        let ctx = build_composer_context(
+            &self.resources,
+            self.task_kind,
+            &self.selected_tool,
+            self.selected_model.as_ref(),
+            self.transcript.latest_plan(),
+            self.transcript.active_subagents(),
+            self.backend,
+            &self.acp_agents,
+            self.current_acp_id.as_ref(),
+            self.acp_connecting,
+            self.acp.as_ref().map(|acp| acp.state()),
+            &self.available_resources,
+        );
+        self.input.update(cx, |input, cx| {
+            input.set_target_options(target_options, cx);
+            input.set_context(ctx, cx);
+        });
+    }
+
     /// 更新可操作资源上下文与 `@` 提及项。
     pub fn set_resource_context(
         &mut self,
@@ -1222,19 +1277,26 @@ impl AgentChatView {
         cx: &mut Context<Self>,
     ) {
         self.resources = resources.clone();
-        if let Some(session) = self.runtime.session(&self.session_id) {
-            session.set_resources(resources.clone());
-        }
-        let target_options: Vec<ComposerTarget> = resources
+        self.sync_session_resources();
+        let target_options: Vec<ComposerTarget> = self
+            .resources
             .resources
             .iter()
             .map(target_from_resource)
             .collect();
-        let ctx = build_context(
-            &resources,
+        let ctx = build_composer_context(
+            &self.resources,
             self.task_kind,
             &self.selected_tool,
             self.selected_model.as_ref(),
+            self.transcript.latest_plan(),
+            self.transcript.active_subagents(),
+            self.backend,
+            &self.acp_agents,
+            self.current_acp_id.as_ref(),
+            self.acp_connecting,
+            self.acp.as_ref().map(|acp| acp.state()),
+            &self.available_resources,
         );
         self.input.update(cx, |input, cx| {
             input.set_mentions(mentions, cx);
@@ -2162,6 +2224,38 @@ fn resource_pool_items(
         .collect()
 }
 
+fn add_resource_to_pool(pool: &mut ResourceContext, catalog: &[ResourceRef], id: &str) -> bool {
+    let rid = ResourceId::new(id.to_string());
+    if pool.get(&rid).is_some() {
+        return false;
+    }
+    let Some(resource) = catalog
+        .iter()
+        .find(|resource| resource.id == rid)
+        .cloned()
+    else {
+        return false;
+    };
+    pool.resources.push(resource);
+    if pool.current.is_none() {
+        pool.current = Some(rid);
+    }
+    true
+}
+
+fn remove_resource_from_pool(pool: &mut ResourceContext, id: &str) -> bool {
+    let rid = ResourceId::new(id.to_string());
+    let before = pool.resources.len();
+    pool.resources.retain(|resource| resource.id != rid);
+    if pool.resources.len() == before {
+        return false;
+    }
+    if pool.current.as_ref() == Some(&rid) {
+        pool.current = pool.resources.first().map(|resource| resource.id.clone());
+    }
+    true
+}
+
 fn target_from_resource(r: &ResourceRef) -> ComposerTarget {
     ComposerTarget::new(
         r.id.as_str().to_string(),
@@ -2567,6 +2661,37 @@ mod tests {
         assert_eq!(items[1].id.as_ref(), "ssh-b");
         assert!(!items[1].in_pool);
         assert!(!items[1].is_default);
+    }
+
+    #[test]
+    fn add_resource_to_pool_uses_catalog_resource() {
+        let mut pool = ResourceContext::new()
+            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"));
+        let catalog = vec![
+            ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
+            ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"),
+        ];
+
+        assert!(add_resource_to_pool(&mut pool, &catalog, "ssh-b"));
+        assert_eq!(2, pool.resources.len());
+        assert_eq!(
+            Some("prod-a"),
+            pool.current().map(|resource| resource.label.as_str())
+        );
+    }
+
+    #[test]
+    fn remove_default_resource_reassigns_default_target() {
+        let mut pool = ResourceContext::new()
+            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"))
+            .with_resource(ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"));
+
+        assert!(remove_resource_from_pool(&mut pool, "ssh-a"));
+        assert_eq!(1, pool.resources.len());
+        assert_eq!(
+            Some("prod-b"),
+            pool.current().map(|resource| resource.label.as_str())
+        );
     }
 
     #[test]

@@ -455,7 +455,7 @@ rtk git commit -m "feat(ai_chat): render resource pool membership actions"
 **Files:**
 - Modify: `crates/ai_chat_view/src/agent_view.rs`
 
-- [ ] **Step 1: Write failing pure mutation tests**
+- [x] **Step 1: Write failing pure mutation tests**
 
 Add tests in `agent_view.rs`:
 
@@ -493,7 +493,7 @@ cannot find function `add_resource_to_pool` in this scope
 cannot find function `remove_resource_from_pool` in this scope
 ```
 
-- [ ] **Step 2: Add mutation helpers**
+- [x] **Step 2: Add mutation helpers**
 
 Add helpers near `select_target`:
 
@@ -527,7 +527,7 @@ fn remove_resource_from_pool(pool: &mut ResourceContext, id: &str) -> bool {
 }
 ```
 
-- [ ] **Step 3: Wire events**
+- [x] **Step 3: Wire events**
 
 Extend `on_input_event`:
 
@@ -601,7 +601,7 @@ fn sync_resource_targets(&self, cx: &mut Context<Self>) {
 
 Use these helpers from `select_target` and `set_resource_context` where possible.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
@@ -613,7 +613,7 @@ rtk cargo test -p ai_chat_view resource_pool_items_mark_pool_membership_and_defa
 
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/agent_view.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5b-resource-pool-management.md
