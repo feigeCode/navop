@@ -279,7 +279,8 @@ pub struct CachedTextRun {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
-    pub char_count: usize,
+    pub cell_width_cols: usize,
+    pub column_count: usize,
 }
 
 /// 单个 cell 内的几何块字符渲染数据
@@ -587,7 +588,7 @@ impl RenderCache {
                 "[{idx}] bg={} text={} chars={}",
                 l.background_rects.len(),
                 l.text_runs.len(),
-                l.text_runs.iter().map(|r| r.char_count).sum::<usize>(),
+                l.text_runs.iter().map(|r| r.column_count).sum::<usize>(),
             ));
         }
         tracing::debug!(
@@ -874,11 +875,17 @@ impl RenderCache {
 
             let bold = cell.flags.contains(Flags::BOLD);
             let italic = cell.flags.contains(Flags::ITALIC);
+            let cell_width_cols = if cell.flags.contains(Flags::WIDE_CHAR) {
+                2
+            } else {
+                1
+            };
 
             // Check if we can merge with existing run
             let can_merge = if let Some(ref run) = text_run {
                 // Merge only if columns are consecutive
-                run.start_col + run.char_count == cell.column
+                run.start_col + run.column_count == cell.column
+                    && run.cell_width_cols == cell_width_cols
                     && hsla_eq(run.color, fg)
                     && run.bold == bold
                     && run.italic == italic
@@ -890,7 +897,7 @@ impl RenderCache {
             if can_merge {
                 let run = text_run.as_mut().unwrap();
                 run.text.push(cell.c);
-                run.char_count += 1;
+                run.column_count += cell_width_cols;
             } else {
                 if let Some(run) = text_run.take() {
                     line.text_runs.push(run);
@@ -902,7 +909,8 @@ impl RenderCache {
                     bold,
                     italic,
                     underline,
-                    char_count: 1,
+                    cell_width_cols,
+                    column_count: cell_width_cols,
                 });
             }
         }
@@ -1256,7 +1264,7 @@ impl Element for TerminalElementImpl {
                         underline,
                         strikethrough: None,
                     }],
-                    Some(tb.cell_width),
+                    Some(tb.cell_width * run.cell_width_cols as f32),
                 );
                 let _ = shaped.paint(
                     tb.cell_origin(line_idx, run.start_col),
@@ -1518,7 +1526,10 @@ fn indexed_color_to_hsla(idx: u8) -> Hsla {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlockRect, block_element_geometry};
+    use super::{BlockRect, CellData, RenderCache, block_element_geometry};
+    use alacritty_terminal::term::cell::Flags;
+    use alacritty_terminal::term::color::Colors;
+    use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
     fn approx_eq(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5
@@ -1532,6 +1543,46 @@ mod tests {
                 && approx_eq(actual.h, h),
             "expected ({x}, {y}, {w}, {h}) got {actual:?}"
         );
+    }
+
+    fn plain_cell(column: usize, c: char, flags: Flags) -> CellData {
+        CellData {
+            column,
+            c,
+            fg: Color::Named(NamedColor::Foreground),
+            bg: Color::Named(NamedColor::Background),
+            flags,
+            is_selected: false,
+        }
+    }
+
+    #[test]
+    fn text_run_tracks_terminal_columns_for_wide_characters() {
+        let mut cache = RenderCache::new(1, 8, Colors::default());
+        cache.build_line_cache(
+            0,
+            vec![
+                plain_cell(0, 'A', Flags::empty()),
+                plain_cell(1, '协', Flags::WIDE_CHAR),
+                plain_cell(3, '同', Flags::WIDE_CHAR),
+                plain_cell(5, 'B', Flags::empty()),
+            ],
+        );
+
+        let runs = &cache.lines[0].text_runs;
+        assert_eq!(3, runs.len());
+        assert_eq!("A", runs[0].text);
+        assert_eq!(0, runs[0].start_col);
+        assert_eq!(1, runs[0].cell_width_cols);
+        assert_eq!(1, runs[0].column_count);
+        assert_eq!("协同", runs[1].text);
+        assert_eq!(1, runs[1].start_col);
+        assert_eq!(2, runs[1].cell_width_cols);
+        assert_eq!(4, runs[1].column_count);
+        assert_eq!("B", runs[2].text);
+        assert_eq!(5, runs[2].start_col);
+        assert_eq!(1, runs[2].cell_width_cols);
+        assert_eq!(1, runs[2].column_count);
     }
 
     #[test]
