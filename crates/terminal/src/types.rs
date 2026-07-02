@@ -1,10 +1,32 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct TerminalInputHandle {
+    write_fn: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
+}
+
+impl TerminalInputHandle {
+    pub fn new(write_fn: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Self {
+        Self {
+            write_fn: Arc::new(write_fn),
+        }
+    }
+
+    pub fn write(&self, data: impl Into<Vec<u8>>) {
+        (self.write_fn)(data.into());
+    }
+}
 
 /// Terminal backend trait - abstracts local PTY and SSH backends
 pub trait TerminalBackend: Send {
     fn write(&self, data: Vec<u8>);
     fn resize(&self, size: TerminalSize);
     fn shutdown(&self);
+
+    fn input_handle(&self) -> Option<TerminalInputHandle> {
+        None
+    }
 }
 
 /// Local terminal configuration
@@ -16,6 +38,25 @@ pub struct LocalConfig {
     pub working_dir: Option<String>,
     /// Environment variables
     pub env: Vec<(String, String)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TerminalInputHandle;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn terminal_input_handle_forwards_bytes_to_writer() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = written.clone();
+        let handle = TerminalInputHandle::new(move |bytes| {
+            sink.lock().expect("written lock").push(bytes);
+        });
+
+        handle.write(b"df -h\n".to_vec());
+
+        assert_eq!(vec![b"df -h\n".to_vec()], *written.lock().unwrap());
+    }
 }
 
 impl Default for LocalConfig {

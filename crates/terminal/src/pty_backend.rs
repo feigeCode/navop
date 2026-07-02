@@ -11,7 +11,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::{TerminalBackend, TerminalSize};
+use crate::{TerminalBackend, TerminalInputHandle, TerminalSize};
 
 /// 终端事件类型
 #[derive(Debug, Clone)]
@@ -168,6 +168,13 @@ impl LocalPtyBackend {
 impl TerminalBackend for LocalPtyBackend {
     fn write(&self, data: Vec<u8>) {
         let _ = self.event_loop_sender.send(Msg::Input(Cow::Owned(data)));
+    }
+
+    fn input_handle(&self) -> Option<TerminalInputHandle> {
+        let sender = self.event_loop_sender.clone();
+        Some(TerminalInputHandle::new(move |data| {
+            let _ = sender.send(Msg::Input(Cow::Owned(data)));
+        }))
     }
 
     fn resize(&self, size: TerminalSize) {

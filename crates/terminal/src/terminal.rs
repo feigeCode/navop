@@ -48,7 +48,10 @@ use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 #[cfg(not(target_os = "windows"))]
 use crate::shell_integration::embedded_shell_integration_script;
 
-use crate::{LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalEvent, TerminalSize};
+use crate::{
+    LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalEvent, TerminalInputHandle,
+    TerminalSize,
+};
 use ssh::{
     ChannelEvent, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
     KeyboardInteractiveTarget, SshChannel, SshSessionManager,
@@ -1628,6 +1631,12 @@ impl Terminal {
     /// 写入来自外部集成的输入，例如 Public MCP。
     pub fn write_external_input(&self, data: &[u8]) {
         self.write(data);
+    }
+
+    pub fn external_input_handle(&self) -> Option<TerminalInputHandle> {
+        self.backend
+            .as_ref()
+            .and_then(|backend| backend.input_handle())
     }
 
     /// 调整终端大小

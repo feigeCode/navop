@@ -1,9 +1,11 @@
 use gpui::{App, Global};
 use public_mcp::registry::{
     ConnectionState as McpConnectionState, PublicMcpRegistry, TerminalConnectionKind as McpKind,
-    TerminalSessionHandle, TerminalSessionSnapshot,
+    TerminalExecSessionHandle, TerminalSessionHandle, TerminalSessionSnapshot,
 };
+use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, TerminalExecResult};
 use std::sync::{Arc, Mutex};
+use terminal::TerminalInputHandle;
 use terminal::terminal::{ConnectionState, Terminal, TerminalConnectionKind};
 use uuid::Uuid;
 
@@ -61,6 +63,12 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
     target_registry.register(ThreadSafeTerminalHandle {
         state: state.clone(),
     });
+    if let Some(input) = terminal.external_input_handle() {
+        target_registry.register_terminal_exec(ThreadSafeTerminalExecHandle {
+            state: state.clone(),
+            input,
+        });
+    }
 
     // 注册结构化远程操作桥。remote ops 与 terminal handle 共享同一份 state，一次 refresh 同步两者。
     if let Some(session_manager) = terminal.ssh_session_manager() {
@@ -86,6 +94,37 @@ impl TerminalSessionHandle for ThreadSafeTerminalHandle {
             .lock()
             .expect("public MCP state lock poisoned")
             .clone()
+    }
+}
+
+struct ThreadSafeTerminalExecHandle {
+    state: Arc<Mutex<TerminalSessionSnapshot>>,
+    input: TerminalInputHandle,
+}
+
+impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
+    fn snapshot(&self) -> TerminalSessionSnapshot {
+        self.state
+            .lock()
+            .expect("public MCP state lock poisoned")
+            .clone()
+    }
+
+    fn exec_in_terminal(&self, request: TerminalExecRequest) -> anyhow::Result<TerminalExecResult> {
+        let mut input = request.command.clone().into_bytes();
+        if request.submit {
+            input.push(b'\n');
+        }
+        self.input.write(input);
+        Ok(TerminalExecResult {
+            target: request.target,
+            command: request.command,
+            submitted: request.submit,
+            completion: TerminalExecCompletion::SubmittedOnly,
+            exit_code: None,
+            output: String::new(),
+            duration_ms: 0,
+        })
     }
 }
 
@@ -130,5 +169,48 @@ fn map_state(state: &ConnectionState) -> McpConnectionState {
         ConnectionState::Disconnected { error } => McpConnectionState::Disconnected {
             error: error.clone(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn terminal_exec_handle_writes_command_to_terminal_input() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = written.clone();
+        let handle = ThreadSafeTerminalExecHandle {
+            state: Arc::new(Mutex::new(TerminalSessionSnapshot {
+                session_id: "terminal-1".to_string(),
+                connection_id: Some(42),
+                title: "terminal".to_string(),
+                host_label: "prod-a".to_string(),
+                cwd: Some("/root".to_string()),
+                rows: 24,
+                cols: 120,
+                connection_kind: McpKind::Ssh,
+                connection_state: McpConnectionState::Connected,
+            })),
+            input: TerminalInputHandle::new(move |bytes| {
+                sink.lock().expect("written lock").push(bytes);
+            }),
+        };
+
+        let result = handle
+            .exec_in_terminal(TerminalExecRequest {
+                target: "terminal-1".to_string(),
+                command: "df -h".to_string(),
+                submit: true,
+                wait_for_output: true,
+                timeout_ms: None,
+            })
+            .expect("terminal exec should write input");
+
+        assert_eq!(vec![b"df -h\n".to_vec()], *written.lock().unwrap());
+        assert_eq!(TerminalExecCompletion::SubmittedOnly, result.completion);
+        assert_eq!(None, result.exit_code);
+        assert!(result.output.is_empty());
     }
 }

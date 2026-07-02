@@ -10,6 +10,63 @@
 
 ---
 
+## Tracking Status
+
+Last updated: 2026-07-02
+
+Current status: Provider checkpoint verified; Agent/UI integration not started.
+
+Committed checkpoints:
+
+| Commit | Scope |
+| --- | --- |
+| `95ed3e00 docs: add terminal exec tool migration plan` | Defines the additive `terminal.exec` plan and preserves existing SSH tools. |
+| `f0777d07 feat(public_mcp): add terminal exec runtime contract` | Adds the Public MCP/runtime contract, registry support, descriptor, handler, and contract tests. |
+
+Provider checkpoint:
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| `crates/terminal` input bridge | Done | Adds `TerminalInputHandle` so non-UI adapters can write bytes into the existing backend input path. |
+| Local PTY / SSH / serial backend input handles | Done | Each backend returns an input handle that forwards bytes to the same command channel used by terminal typing. |
+| `terminal_view` Public MCP provider | Done | Registers `TerminalExecSessionHandle` for terminal sessions that expose an input handle. |
+| Output/exit-code capture | Deferred | Provider returns `submitted_only` unless a reliable terminal completion/output-delta API exists. Do not fabricate exit codes. |
+| Agent/UI prompt and tool card changes | Not started | Keep separate from the provider checkpoint. |
+
+Verification completed for the provider checkpoint:
+
+```bash
+rtk cargo test -p terminal terminal_input_handle_forwards_bytes_to_writer
+rtk cargo test -p terminal_view terminal_exec_handle_writes_command_to_terminal_input
+rtk cargo test -p public_mcp --test terminal_exec
+rtk cargo test -p public_mcp
+rtk cargo test -p main public_mcp_runtime
+rtk cargo check -p terminal
+rtk cargo check -p terminal_view
+rtk cargo check -p public_mcp
+rtk cargo check -p main
+```
+
+Known warning:
+
+```bash
+block v0.1.6 future-incompat warning
+```
+
+Next handoff steps:
+
+1. Start Agent/UI integration:
+
+```bash
+rtk cargo test -p agent_runtime
+rtk cargo check -p ai_chat_view
+```
+
+2. Manually smoke the app after UI wiring:
+
+Open an SSH terminal, ask Agent to run `df -h` in the terminal, and verify the command
+appears in the terminal pane.
+
 ## Decision Record
 
 The user explicitly wants the "terminal execution effect":
@@ -213,22 +270,41 @@ Expected: contract tests pass.
 
 ## Task 3: Wire Terminal View As Provider
 
-- [ ] **Step 1: Locate terminal session registration**
+- [x] **Step 1: Locate terminal session registration**
 
 Find where `terminal_view::public_mcp::registry(cx)` registers terminal sessions.
 
-- [ ] **Step 2: Implement live terminal handle**
+- [x] **Step 2: Implement and validate live terminal handle**
 
 The live handle must:
 
 1. Insert command text into the terminal PTY/input buffer.
 2. Append Enter when `submit=true`.
-3. Capture output delta from the same terminal buffer when possible.
-4. Return `submitted_only` if reliable output capture is not available yet.
+3. Return `submitted_only` if reliable output capture is not available yet.
+4. Avoid storing GPUI `Entity<Terminal>` inside the public MCP handle.
+5. Use a thread-safe input bridge such as `TerminalInputHandle`.
 
-- [ ] **Step 3: Add targeted fake/contract tests**
+Current implementation note:
+
+1. `TerminalInputHandle` is being added to `crates/terminal/src/types.rs`.
+2. `Terminal::external_input_handle()` is being added so `terminal_view` can register
+   a provider without crossing GPUI entity/thread boundaries.
+3. Local PTY, SSH, and serial backends should forward the handle to their existing
+   input/write command channel.
+4. `ThreadSafeTerminalExecHandle` in `crates/terminal_view/src/public_mcp.rs` should
+   write `command` bytes and append `\n` when `submit=true`.
+
+- [x] **Step 3: Add targeted fake/contract tests**
 
 Use fake terminal components if available. Do not require a real SSH server or GUI window for unit tests.
+
+Required tests for this checkpoint:
+
+```bash
+rtk cargo test -p terminal terminal_input_handle_forwards_bytes_to_writer
+rtk cargo test -p terminal_view terminal_exec_handle_writes_command_to_terminal_input
+rtk cargo test -p public_mcp --test terminal_exec
+```
 
 ## Task 4: Agent/UI Integration
 
@@ -259,28 +335,53 @@ Approval card must show the exact command and target terminal before writing int
 
 ## Task 5: Verification
 
-- [ ] **Step 1: Targeted tests**
+- [x] **Step 1: Provider checkpoint tests**
 
 Run:
 
 ```bash
+rtk cargo test -p terminal terminal_input_handle_forwards_bytes_to_writer
+rtk cargo test -p terminal_view terminal_exec_handle_writes_command_to_terminal_input
 rtk cargo test -p public_mcp --test terminal_exec
-rtk cargo test -p public_mcp
-rtk cargo test -p main public_mcp_runtime
-rtk cargo test -p agent_runtime
 ```
 
-- [ ] **Step 2: Compile checks**
+Expected: all targeted provider and contract tests pass.
+
+- [x] **Step 2: Runtime regression tests**
 
 Run:
 
 ```bash
+rtk cargo test -p public_mcp
+rtk cargo test -p main public_mcp_runtime
+```
+
+Expected: existing Public MCP runtime behavior remains compatible.
+
+- [x] **Step 3: Compile checks**
+
+Run:
+
+```bash
+rtk cargo check -p terminal
+rtk cargo check -p terminal_view
 rtk cargo check -p public_mcp
 rtk cargo check -p main
+```
+
+Expected: no new compile errors. Existing unrelated warnings may remain, but must be
+called out in the handoff.
+
+- [ ] **Step 4: Agent/UI verification after UI wiring**
+
+Run after Task 4 starts:
+
+```bash
+rtk cargo test -p agent_runtime
 rtk cargo check -p ai_chat_view
 ```
 
-- [ ] **Step 3: Manual smoke after UI wiring**
+- [ ] **Step 5: Manual smoke after UI wiring**
 
 Scenario:
 
@@ -289,6 +390,30 @@ Scenario:
 3. Verify the command appears in the terminal pane.
 4. Verify terminal output appears in that same pane.
 5. Verify Agent tool card says `terminal.exec` and shows the same command/output summary.
+
+## Acceptance Matrix
+
+| Requirement | Status | Evidence |
+| --- | --- | --- |
+| Add `terminal.exec` without removing old tools | Done | `f0777d07` adds the runtime contract; old SSH tool ids remain. |
+| Public MCP/runtime descriptor exists | Done | `rtk cargo test -p public_mcp --test terminal_exec` passed before `f0777d07`. |
+| Live terminal input path is used | Done | `TerminalInputHandle` forwards bytes to backend input channels; `terminal_view` provider test verifies `df -h\n` is written. |
+| Terminal output/exit code are not fabricated | Done | Provider returns `submitted_only`, `exit_code: None`, and empty output until reliable capture exists. |
+| Agent chooses `terminal.exec` for visible terminal requests | Not started | Requires prompt/resource wiring in a later checkpoint. |
+| Tool/approval card labels terminal execution clearly | Not started | Requires UI work in a later checkpoint. |
+| Manual smoke proves command appears in terminal pane | Not started | Requires runnable app smoke after provider and UI wiring. |
+
+## Handoff Notes
+
+1. Treat `terminal.exec` as a live terminal mutation tool. It is high-risk/open-world
+   even for commands that look read-only, because it writes into an operator-visible
+   session.
+2. Keep `ssh.exec` and `ssh.remote_exec` unchanged for structured non-interactive
+   execution and compatibility.
+3. Until terminal output capture is reliable, the correct result is `submitted_only`
+   with no exit code.
+4. Commit provider wiring before starting Agent/UI prompt changes. This keeps failures
+   easy to bisect.
 
 ## Out Of Scope
 

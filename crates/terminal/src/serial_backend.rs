@@ -9,7 +9,7 @@ use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use one_core::storage::models::SerialParams;
 
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
-use crate::{TerminalBackend, TerminalSize};
+use crate::{TerminalBackend, TerminalInputHandle, TerminalSize};
 
 enum SerialCommand {
     Write(Vec<u8>),
@@ -128,6 +128,13 @@ impl SerialBackend {
 impl TerminalBackend for SerialBackend {
     fn write(&self, data: Vec<u8>) {
         let _ = self.command_tx.send(SerialCommand::Write(data));
+    }
+
+    fn input_handle(&self) -> Option<TerminalInputHandle> {
+        let tx = self.command_tx.clone();
+        Some(TerminalInputHandle::new(move |data| {
+            let _ = tx.send(SerialCommand::Write(data));
+        }))
     }
 
     fn resize(&self, _size: TerminalSize) {

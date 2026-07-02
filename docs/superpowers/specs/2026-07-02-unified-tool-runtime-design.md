@@ -39,6 +39,50 @@ Agent / ACP、Public MCP、CLI、UI 只作为入口适配器存在，不再拥�
 
 UI 侧的 `ResourceContext.current` 已接近默认目标语义，但产品文案仍是“上下文 / 当前资源”，不是“默认目标 / 资源池”。
 
+## Migration Tracking
+
+This section is the checkpoint for future workers. Update it whenever a phase is
+started, finished, split, or blocked.
+
+Last updated: 2026-07-02
+
+Status labels:
+
+```text
+Done        Code is committed and targeted verification passed.
+In progress Code exists or is being changed, but the checkpoint is not committed or fully verified.
+Planned     Scope is documented, but implementation has not started.
+Blocked     Work cannot continue without a product or technical decision.
+```
+
+| Area | Status | Evidence | Next checkpoint |
+| --- | --- | --- | --- |
+| Phase 1 core models | Done | `39fa5d7a feat(tool_runtime): add unified core models` | Keep compatibility while later phases consume the models. |
+| Phase 2 Agent adapter contracts | Done | `f08ea51d feat(agent_runtime): add tool runtime adapter contracts` | Continue replacing legacy Agent tool implementations by family. |
+| Phase 2b Agent registry bridge | Done | `7589fe89 feat(agent_runtime): bridge tool runtime registry` | Use the bridge for each migrated business tool family. |
+| Phase 3a DB read tools | Done | `bdc88e56 feat(agent): bridge database read tools through tool runtime` | Migrate write/high-risk DB operations only after unified approval is ready. |
+| Phase 3b SSH structured command tools | Done | `1be59bb2 feat(public_mcp): canonicalize ssh command tools` | Keep `ssh.exec` structured and non-interactive. |
+| Phase 3c `terminal.exec` runtime contract | Done | `f0777d07 feat(public_mcp): add terminal exec runtime contract` | Wire live terminal providers and validate terminal input behavior. |
+| Phase 3c live terminal provider | Done | `crates/terminal` exposes `TerminalInputHandle`; `crates/terminal_view` registers a `TerminalExecSessionHandle` that writes `command + "\n"` into the live terminal input path. Targeted provider tests and Public MCP/runtime checks passed on 2026-07-02. | Start Agent/UI prompt, approval-card, and tool-card integration. |
+| Phase 4 Public MCP adapter unification | Planned | Architecture scope below. | Derive MCP `tools/list` and `tools/call` from the unified runtime catalog. |
+| Phase 5 Resource Pool UI | Planned | Architecture scope below. | Rename context UI to resource pool/default target and add multi-resource selection. |
+| Phase 6 Multi-resource execution | Planned | Architecture scope below. | Add safe parallel routing and target-grouped result display. |
+
+Current product decision:
+
+1. `ssh.exec` remains the structured non-interactive SSH command tool.
+2. `terminal.exec` is the new live terminal-surface tool for “像在终端里输入一样执行”.
+3. Existing tools and aliases remain available during migration.
+4. Agent-facing prompts should expose canonical ids only after the relevant adapter can
+   route them safely.
+
+Next recommended checkpoint:
+
+1. Add Agent prompt/resource rules that choose `terminal.exec` for visible terminal
+   execution requests.
+2. Update approval and result cards to label live terminal execution clearly.
+3. Run a manual app smoke where a command appears in the visible terminal pane.
+
 ## Design Principles
 
 1. `tool_runtime` 是唯一真实执行层。
