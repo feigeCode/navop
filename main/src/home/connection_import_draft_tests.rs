@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
-use connection_importer::{
-    ImportSourceKind, ImportedConnection, ImportedSshAuthMethod, ImportedSshConnection,
-    PasswordImportStatus,
+use connection_import_protocol::{
+    DatabaseImportRecord, ImportDatabaseType, ImportRecord, ImportRecordKind, PasswordImportStatus,
+    SshImportAuthMethod, SshImportRecord,
 };
-use one_core::storage::{ConnectionType, DatabaseType, SshAuthMethod};
+use one_core::storage::{ConnectionType, SshAuthMethod};
 
 use super::connection_import_draft::{
     EditableImportDraft, ImportDraftEdit, ImportDraftField, selected_import_count,
@@ -14,8 +14,8 @@ use super::connection_import_draft::{
 #[test]
 fn imported_drafts_are_selected_by_default_and_can_be_unselected() {
     let mut drafts = vec![
-        EditableImportDraft::database(database_import("db")),
-        EditableImportDraft::ssh(ssh_import("ssh")),
+        EditableImportDraft::new(database_import("db")),
+        EditableImportDraft::new(ssh_import("ssh")),
     ];
 
     assert_eq!(2, selected_import_count(&drafts));
@@ -29,7 +29,7 @@ fn imported_drafts_are_selected_by_default_and_can_be_unselected() {
 
 #[test]
 fn edited_database_draft_is_converted_to_stored_connection() {
-    let mut draft = EditableImportDraft::database(database_import("prod"));
+    let mut draft = EditableImportDraft::new(database_import("prod"));
     draft
         .apply_edit(ImportDraftEdit::Text {
             field: ImportDraftField::Name,
@@ -59,8 +59,8 @@ fn edited_database_draft_is_converted_to_stored_connection() {
 
 #[test]
 fn only_selected_drafts_are_converted() {
-    let selected = EditableImportDraft::database(database_import("selected"));
-    let mut skipped = EditableImportDraft::database(database_import("skipped"));
+    let selected = EditableImportDraft::new(database_import("selected"));
+    let mut skipped = EditableImportDraft::new(database_import("skipped"));
     skipped
         .apply_edit(ImportDraftEdit::Selected(false))
         .unwrap();
@@ -73,7 +73,7 @@ fn only_selected_drafts_are_converted() {
 
 #[test]
 fn edited_ssh_private_key_path_is_converted_to_stored_connection() {
-    let mut draft = EditableImportDraft::ssh(ssh_import("jump"));
+    let mut draft = EditableImportDraft::new(ssh_import("jump"));
     draft
         .apply_edit(ImportDraftEdit::Text {
             field: ImportDraftField::PrivateKeyPath,
@@ -94,34 +94,48 @@ fn edited_ssh_private_key_path_is_converted_to_stored_connection() {
     ));
 }
 
-fn database_import(name: &str) -> ImportedConnection {
-    ImportedConnection {
-        source: ImportSourceKind::DataGrip,
-        source_id: name.to_string(),
-        name: name.to_string(),
-        database_type: DatabaseType::MySQL,
-        host: "mysql.example.test".to_string(),
-        port: Some(3306),
-        username: "root".to_string(),
-        password: Some("secret".to_string()),
-        database: Some("app".to_string()),
-        extra_params: HashMap::new(),
+fn database_import(name: &str) -> ImportRecord {
+    ImportRecord {
+        id: format!("datagrip:{name}"),
+        importer_id: "com.onetcli.importer.datagrip/datagrip".to_string(),
+        source_label: "DataGrip".to_string(),
+        kind: ImportRecordKind::Database,
+        display_name: name.to_string(),
+        database: Some(DatabaseImportRecord {
+            database_type: ImportDatabaseType::MySql,
+            name: name.to_string(),
+            host: "mysql.example.test".to_string(),
+            port: Some(3306),
+            username: "root".to_string(),
+            password: Some("secret".to_string()),
+            database: Some("app".to_string()),
+            extra_params: BTreeMap::new(),
+        }),
+        ssh: None,
         password_status: PasswordImportStatus::Included,
+        warnings: Vec::new(),
     }
 }
 
-fn ssh_import(name: &str) -> ImportedSshConnection {
-    ImportedSshConnection {
-        source: ImportSourceKind::Xshell,
-        source_id: name.to_string(),
-        name: name.to_string(),
-        host: "ssh.example.test".to_string(),
-        port: 2222,
-        username: "deploy".to_string(),
-        auth_method: ImportedSshAuthMethod::PrivateKey {
-            key_path: "~/.ssh/id_rsa".to_string(),
-            passphrase: None,
-        },
+fn ssh_import(name: &str) -> ImportRecord {
+    ImportRecord {
+        id: format!("xshell:{name}"),
+        importer_id: "com.onetcli.importer.xshell/xshell".to_string(),
+        source_label: "Xshell".to_string(),
+        kind: ImportRecordKind::Ssh,
+        display_name: name.to_string(),
+        database: None,
+        ssh: Some(SshImportRecord {
+            name: name.to_string(),
+            host: "ssh.example.test".to_string(),
+            port: Some(2222),
+            username: "deploy".to_string(),
+            auth_method: SshImportAuthMethod::PrivateKey {
+                key_path: "~/.ssh/id_rsa".to_string(),
+                passphrase: None,
+            },
+        }),
         password_status: PasswordImportStatus::Unsupported,
+        warnings: Vec::new(),
     }
 }

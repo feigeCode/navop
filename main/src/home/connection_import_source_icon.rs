@@ -1,19 +1,23 @@
-use connection_importer::ImportSourceKind;
+use connection_import_protocol::{ImportRecordKind, ImporterDescriptor};
 use gpui::{IntoElement, Styled};
 use gpui_component::{Icon, IconName};
 
-pub(super) fn source_icon(kind: ImportSourceKind) -> impl IntoElement {
+use super::connection_import_draft::ImportDraftKind;
+
+pub(super) fn source_icon(kind: ImportDraftKind, hint: &str) -> impl IntoElement {
     let icon = match kind {
-        ImportSourceKind::TablePlus => IconName::Table,
-        ImportSourceKind::BeekeeperStudio => IconName::Apps,
-        ImportSourceKind::Xshell | ImportSourceKind::FinalShell | ImportSourceKind::Termius => {
-            IconName::TerminalColor
-        }
-        ImportSourceKind::DBeaver
-        | ImportSourceKind::SequelAce
-        | ImportSourceKind::DataGrip
-        | ImportSourceKind::HeidiSQL
-        | ImportSourceKind::Navicat => IconName::Database,
+        ImportDraftKind::Database if hint.contains("tableplus") => IconName::Table,
+        ImportDraftKind::Database => IconName::Database,
+        ImportDraftKind::Ssh => IconName::TerminalColor,
+    };
+    Icon::new(icon).color().size_5()
+}
+
+pub(super) fn importer_icon(importer: &ImporterDescriptor) -> impl IntoElement {
+    let icon = if importer.output_kinds.contains(&ImportRecordKind::Ssh) {
+        IconName::TerminalColor
+    } else {
+        IconName::Database
     };
     Icon::new(icon).color().size_5()
 }

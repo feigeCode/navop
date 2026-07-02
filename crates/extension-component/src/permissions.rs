@@ -5,6 +5,7 @@ use crate::SqlAccess;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PermissionSet {
     db: BTreeSet<DbPermission>,
+    fs_read: BTreeSet<String>,
     ui: BTreeSet<String>,
     connection_list: bool,
 }
@@ -36,11 +37,17 @@ impl PermissionSet {
         self.connection_list
     }
 
+    pub fn allows_fs_read(&self, path: &str) -> bool {
+        self.fs_read.contains(path)
+    }
+
     fn add(&mut self, permission: &str) {
         if permission == "db:connections:list" {
             self.connection_list = true;
         } else if let Some(db) = DbPermission::parse(permission) {
             self.db.insert(db);
+        } else if let Some(path) = permission.strip_prefix("fs:read:") {
+            self.fs_read.insert(path.to_string());
         } else if permission.starts_with("ui:") {
             self.ui.insert(permission.to_string());
         }
@@ -138,5 +145,16 @@ mod tests {
 
         assert!(permissions.allows_connection_list());
         assert!(!PermissionSet::new(["db:read:conn1"]).allows_connection_list());
+    }
+
+    #[test]
+    fn fs_read_permission_is_explicit() {
+        let permissions = PermissionSet::new([
+            "fs:read:~/Library/Application Support/Navicat/conn.plist",
+            "db:read:conn1",
+        ]);
+
+        assert!(permissions.allows_fs_read("~/Library/Application Support/Navicat/conn.plist"));
+        assert!(!permissions.allows_fs_read("~/Library/Application Support/Navicat/other.plist"));
     }
 }

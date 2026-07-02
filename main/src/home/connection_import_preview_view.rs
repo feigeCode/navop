@@ -216,7 +216,7 @@ fn render_draft_header(
         .items_center()
         .gap_2()
         .min_w_0()
-        .child(source_icon(row.draft.source_kind()))
+        .child(source_icon(row.draft.kind(), row.draft.source_icon_hint()))
         .child(
             div()
                 .text_xs()

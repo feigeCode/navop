@@ -2,8 +2,9 @@ use super::connection_import_draft::{
     EditableImportDraft, selected_import_count, selected_import_drafts_to_connections,
 };
 use crate::setting_tab::GlobalCurrentUser;
-use connection_importer::{
-    ImportOptions, ImportSourceKind, preview_connections, preview_ssh_connections,
+use extension_runtime::{
+    connection_import_provider::preview_manifest_connection_importers,
+    extension::{ExtensionKind, extensions_root},
 };
 use gpui::App;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
@@ -11,21 +12,21 @@ use one_core::storage::{
     ConnectionRepository, GlobalStorageState, StoredConnection, traits::Repository,
 };
 
-fn is_ssh_source(kind: ImportSourceKind) -> bool {
-    matches!(
-        kind,
-        ImportSourceKind::Xshell | ImportSourceKind::FinalShell | ImportSourceKind::Termius
-    )
-}
-
 pub(crate) fn preview_import_drafts(
-    sources: &[ImportSourceKind],
+    importer_ids: &[String],
 ) -> Result<Vec<EditableImportDraft>, String> {
-    let mut drafts = Vec::new();
-    for source in sources {
-        drafts.extend(preview_source_import_drafts(*source)?);
+    if importer_ids.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(drafts)
+    let root = extensions_root().ok_or_else(|| "扩展目录不可用".to_string())?;
+    let composite_root = root.join(ExtensionKind::Composite.dir_name());
+    let records = futures::executor::block_on(preview_manifest_connection_importers(
+        &composite_root,
+        importer_ids,
+        true,
+    ))
+    .map_err(|error| error.to_string())?;
+    Ok(records.into_iter().map(EditableImportDraft::new).collect())
 }
 
 pub(crate) fn save_selected_import_drafts(
@@ -37,42 +38,6 @@ pub(crate) fn save_selected_import_drafts(
     }
     let connections = selected_import_drafts_to_connections(drafts)?;
     save_imported_connections(connections, cx)
-}
-
-fn preview_source_import_drafts(
-    kind: ImportSourceKind,
-) -> Result<Vec<EditableImportDraft>, String> {
-    if is_ssh_source(kind) {
-        return preview_ssh_import_drafts(kind);
-    }
-    preview_database_import_drafts(kind)
-}
-
-fn preview_database_import_drafts(
-    kind: ImportSourceKind,
-) -> Result<Vec<EditableImportDraft>, String> {
-    let imported = preview_connections(
-        kind,
-        ImportOptions {
-            include_passwords: true,
-        },
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(imported
-        .into_iter()
-        .map(EditableImportDraft::database)
-        .collect())
-}
-
-fn preview_ssh_import_drafts(kind: ImportSourceKind) -> Result<Vec<EditableImportDraft>, String> {
-    let imported = preview_ssh_connections(
-        kind,
-        ImportOptions {
-            include_passwords: true,
-        },
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(imported.into_iter().map(EditableImportDraft::ssh).collect())
 }
 
 fn save_imported_connections(

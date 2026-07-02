@@ -1,6 +1,7 @@
 #[cfg(feature = "wasm-components")]
 mod action;
 mod catalog;
+pub mod connection_import_provider;
 pub mod database_driver_install;
 mod database_driver_install_progress;
 pub mod extension;

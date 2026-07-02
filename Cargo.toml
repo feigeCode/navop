@@ -8,7 +8,7 @@ members = [
     "crates/webview",
     "crates/reqwest_client",
     "crates/db",
-    "crates/connection_importer",
+    "crates/connection-import-protocol",
     "crates/db_view",
     "crates/extension-runtime",
     "crates/extension_view",
@@ -92,7 +92,7 @@ agent-client-protocol = "0.14.0"
 public_mcp = { path = "crates/public_mcp" }
 tool_runtime = { path = "crates/tool_runtime" }
 db = { path = "crates/db" }
-connection_importer = { path = "crates/connection_importer" }
+connection-import-protocol = { path = "crates/connection-import-protocol" }
 db_view = { path = "crates/db_view" }
 redis_view = { path = "crates/redis_view" }
 one-ui = { path = "crates/one_ui" }

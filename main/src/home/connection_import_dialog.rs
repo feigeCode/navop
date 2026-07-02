@@ -1,16 +1,22 @@
 use super::connection_import_actions::{preview_import_drafts, save_selected_import_drafts};
 use super::connection_import_preview_view::ConnectionImportPreview;
 use super::connection_import_source_picker::ConnectionImportSourcePicker;
-#[cfg(test)]
-use super::connection_import_source_picker::source_availability_summary;
-use connection_importer::{ImportSourceKind, ImportSourceStatus, list_sources};
+use connection_import_protocol::ImporterDescriptor;
+use extension_runtime::{
+    connection_import_provider::list_manifest_connection_importers,
+    extension::{ExtensionKind, extensions_root},
+};
 use gpui::{App, AppContext, ParentElement, Window, px};
 use gpui_component::{WindowExt, dialog::DialogButtonProps};
 use rust_i18n::t;
 
 pub(crate) fn show_connection_import_dialog(window: &mut Window, cx: &mut App) {
-    let sources = list_sources();
-    let source_kinds = importable_source_kinds(&sources);
+    let sources = list_connection_importers();
+    if sources.is_empty() {
+        window.push_notification("未安装连接导入扩展".to_string(), cx);
+        return;
+    }
+
     let picker = cx.new(|_| ConnectionImportSourcePicker::new(sources));
     let picker_for_render = picker.clone();
     let picker_for_ok = picker.clone();
@@ -28,12 +34,11 @@ pub(crate) fn show_connection_import_dialog(window: &mut Window, cx: &mut App) {
                     .show_cancel(true),
             )
             .on_ok({
-                let source_kinds = source_kinds.clone();
                 let picker_for_ok = picker_for_ok.clone();
                 move |_, window, cx| {
-                    let selected = selected_source_kinds(&picker_for_ok, &source_kinds, cx);
+                    let selected = picker_for_ok.read(cx).selected_sources();
                     if selected.is_empty() {
-                        window.push_notification("请选择要扫描的应用".to_string(), cx);
+                        window.push_notification("请选择要扫描的导入扩展".to_string(), cx);
                         return false;
                     }
                     window.close_dialog(cx);
@@ -46,25 +51,29 @@ pub(crate) fn show_connection_import_dialog(window: &mut Window, cx: &mut App) {
     });
 }
 
-fn selected_source_kinds(
-    picker: &gpui::Entity<ConnectionImportSourcePicker>,
-    supported: &[ImportSourceKind],
-    cx: &App,
-) -> Vec<ImportSourceKind> {
-    picker
-        .read(cx)
-        .selected_sources()
-        .into_iter()
-        .filter(|kind| supported.contains(kind))
-        .collect()
+fn list_connection_importers() -> Vec<ImporterDescriptor> {
+    let Some(root) = extensions_root() else {
+        return Vec::new();
+    };
+    let composite_root = root.join(ExtensionKind::Composite.dir_name());
+    match list_manifest_connection_importers(&composite_root) {
+        Ok(importers) => importers
+            .into_iter()
+            .map(|importer| importer.descriptor)
+            .collect(),
+        Err(error) => {
+            tracing::warn!("加载连接导入扩展失败: {error:?}");
+            Vec::new()
+        }
+    }
 }
 
 fn show_connection_import_preview_dialog(
-    source_kinds: Vec<ImportSourceKind>,
+    importer_ids: Vec<String>,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let (drafts, preview_error) = match preview_import_drafts(&source_kinds) {
+    let (drafts, preview_error) = match preview_import_drafts(&importer_ids) {
         Ok(drafts) => (drafts, None),
         Err(error) => (Vec::new(), Some(error)),
     };
@@ -118,91 +127,5 @@ fn save_preview_drafts(
             window.push_notification(format!("导入失败：{}", error), cx);
             false
         }
-    }
-}
-
-fn importable_source_kinds(sources: &[ImportSourceStatus]) -> Vec<ImportSourceKind> {
-    sources
-        .iter()
-        .filter(|source| is_supported_source(source.kind))
-        .map(|source| source.kind)
-        .collect()
-}
-
-fn is_supported_source(kind: ImportSourceKind) -> bool {
-    matches!(
-        kind,
-        ImportSourceKind::DBeaver
-            | ImportSourceKind::TablePlus
-            | ImportSourceKind::SequelAce
-            | ImportSourceKind::BeekeeperStudio
-            | ImportSourceKind::DataGrip
-            | ImportSourceKind::HeidiSQL
-            | ImportSourceKind::Navicat
-            | ImportSourceKind::Xshell
-            | ImportSourceKind::FinalShell
-            | ImportSourceKind::Termius
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use connection_importer::{ImportSourceKind, ImportSourceStatus, SourceAvailability};
-
-    #[test]
-    fn source_availability_summary_formats_available_count() {
-        let summary = source_availability_summary(&SourceAvailability::Available {
-            connection_count: 3,
-        });
-
-        assert_eq!(summary, "找到 3 个连接");
-    }
-
-    #[test]
-    fn source_availability_summary_marks_reserved_sources() {
-        let summary = source_availability_summary(&SourceAvailability::Unsupported);
-
-        assert_eq!(summary, "暂不支持");
-    }
-
-    #[test]
-    fn importable_source_kinds_include_supported_sources() {
-        let sources = supported_source_statuses();
-
-        let kinds = importable_source_kinds(&sources);
-
-        assert_eq!(
-            vec![
-                ImportSourceKind::TablePlus,
-                ImportSourceKind::DBeaver,
-                ImportSourceKind::SequelAce,
-                ImportSourceKind::DataGrip,
-                ImportSourceKind::Xshell,
-                ImportSourceKind::HeidiSQL,
-                ImportSourceKind::Navicat,
-                ImportSourceKind::FinalShell,
-                ImportSourceKind::Termius
-            ],
-            kinds
-        );
-    }
-
-    fn supported_source_statuses() -> Vec<ImportSourceStatus> {
-        vec![
-            available(ImportSourceKind::TablePlus, 1),
-            available(ImportSourceKind::DBeaver, 2),
-            ImportSourceStatus::new(ImportSourceKind::SequelAce, SourceAvailability::Unsupported),
-            available(ImportSourceKind::DataGrip, 1),
-            available(ImportSourceKind::Xshell, 1),
-            available(ImportSourceKind::HeidiSQL, 1),
-            available(ImportSourceKind::Navicat, 1),
-            available(ImportSourceKind::FinalShell, 1),
-            available(ImportSourceKind::Termius, 1),
-        ]
-    }
-
-    fn available(kind: ImportSourceKind, connection_count: usize) -> ImportSourceStatus {
-        ImportSourceStatus::new(kind, SourceAvailability::Available { connection_count })
     }
 }
