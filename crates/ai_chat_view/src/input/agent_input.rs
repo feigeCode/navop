@@ -27,7 +27,7 @@ use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, 
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
     AgentComposerContext, ComposerMenuOption, ComposerModelOption, ComposerPlanItem, ComposerScope,
-    ComposerSubAgentItem, ComposerTarget,
+    ComposerResourceTypeFilter, ComposerSubAgentItem, ComposerTarget,
 };
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
 
@@ -134,6 +134,8 @@ pub struct AgentInput {
     context_search_input: Entity<InputState>,
     /// 上下文面板当前搜索关键字(每次打开面板时重置为空)。
     context_search_query: SharedString,
+    /// 当前资源类型筛选。`all` 表示显示全部资源。
+    selected_resource_kind_filter: SharedString,
     /// 打开上下文面板时置位,下次 render 时据此清空搜索框(需 &mut Window)。
     context_search_needs_reset: bool,
     /// 当前展开的下拉(受控开合)。
@@ -240,6 +242,7 @@ impl AgentInput {
             task_options: Vec::new(),
             context_search_input,
             context_search_query: SharedString::default(),
+            selected_resource_kind_filter: SharedString::from("all"),
             context_search_needs_reset: false,
             open_menu: None,
             expanded_plan_items: HashSet::new(),
@@ -271,6 +274,9 @@ impl AgentInput {
 
     /// 注入顶部目标下拉的选项。
     pub fn set_target_options(&mut self, options: Vec<ComposerTarget>, cx: &mut Context<Self>) {
+        if options.is_empty() {
+            self.selected_resource_kind_filter = SharedString::from("all");
+        }
         self.target_options = options;
         cx.notify();
     }
@@ -516,6 +522,17 @@ impl AgentInput {
         let scopes = self.context.scopes.clone();
         let search_input = self.context_search_input.clone();
         let search_query = self.context_search_query.clone();
+        let selected_kind = self.selected_resource_kind_filter.clone();
+        let filters = self
+            .context
+            .resource_type_filters
+            .iter()
+            .cloned()
+            .map(|mut filter| {
+                filter.selected = filter.id == selected_kind;
+                filter
+            })
+            .collect::<Vec<_>>();
 
         Popover::new("agent-context-mode-popover")
             .p_0()
@@ -545,6 +562,8 @@ impl AgentInput {
                         options.clone(),
                         current.clone(),
                         scopes.clone(),
+                        filters.clone(),
+                        selected_kind.clone(),
                         search_input.clone(),
                         search_query.clone(),
                         cx,
@@ -1361,6 +1380,8 @@ fn render_context_mode_content(
     options: Vec<ComposerTarget>,
     current: Option<ComposerTarget>,
     scopes: Vec<ComposerScope>,
+    filters: Vec<ComposerResourceTypeFilter>,
+    selected_kind: SharedString,
     search_input: Entity<InputState>,
     search_query: SharedString,
     cx: &mut Context<gpui_component::popover::PopoverState>,
@@ -1391,6 +1412,10 @@ fn render_context_mode_content(
         }
     }
 
+    if !filters.is_empty() {
+        col = col.child(render_resource_type_filters(view.clone(), filters, cx));
+    }
+
     // 搜索框:固定在列表上方,不参与滚动,避免长列表里输入框被滚出可视区。
     col = col.child(
         div()
@@ -1410,7 +1435,8 @@ fn render_context_mode_content(
 
     // 按关键字过滤目标(label / subtitle / kind 不区分大小写)。
     let needle = normalize_target_search_query(search_query.as_ref());
-    let filtered: Vec<ComposerTarget> = options
+    let kind_filtered = filter_targets_by_kind(options, selected_kind.as_ref());
+    let filtered: Vec<ComposerTarget> = kind_filtered
         .into_iter()
         .filter(|opt| needle.is_empty() || target_matches(opt, &needle))
         .collect();
@@ -1452,6 +1478,51 @@ fn render_context_mode_content(
     col.into_any_element()
 }
 
+fn render_resource_type_filters(
+    view: Entity<AgentInput>,
+    filters: Vec<ComposerResourceTypeFilter>,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let hover_bg = cx.theme().list_hover;
+    let selected_bg = cx.theme().accent;
+    let selected_fg = cx.theme().accent_foreground;
+    let muted = cx.theme().muted_foreground;
+    let mut row = h_flex().w_full().px_1().pb_1().gap(px(4.0));
+
+    for filter in filters {
+        let id = filter.id.clone();
+        let selected = filter.selected;
+        let view = view.clone();
+        row = row.child(
+            h_flex()
+                .id(filter.element_id())
+                .items_center()
+                .gap(px(4.0))
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .text_xs()
+                .when(selected, |this| {
+                    this.bg(selected_bg).text_color(selected_fg)
+                })
+                .when(!selected, |this| {
+                    this.text_color(muted).hover(move |s| s.bg(hover_bg))
+                })
+                .child(filter.label)
+                .child(format!("{}", filter.count))
+                .on_click(move |_, _window, cx| {
+                    let id = id.clone();
+                    view.update(cx, |this, cx| {
+                        this.selected_resource_kind_filter = id;
+                        cx.notify();
+                    });
+                }),
+        );
+    }
+
+    row.into_any_element()
+}
+
 /// 目标是否匹配搜索关键字(子串匹配,忽略大小写)。
 fn target_matches(opt: &ComposerTarget, needle: &str) -> bool {
     let needle = normalize_target_search_query(needle);
@@ -1462,6 +1533,16 @@ fn target_matches(opt: &ComposerTarget, needle: &str) -> bool {
 
 fn normalize_target_search_query(query: &str) -> String {
     query.trim().to_lowercase()
+}
+
+fn filter_targets_by_kind(targets: Vec<ComposerTarget>, kind: &str) -> Vec<ComposerTarget> {
+    if kind == "all" {
+        return targets;
+    }
+    targets
+        .into_iter()
+        .filter(|target| target.kind.as_ref() == kind)
+        .collect()
 }
 
 /// 列表结果计数文案:有关键字时展示匹配数,无关键字时展示总数。
@@ -1954,6 +2035,31 @@ mod tests {
         );
 
         assert!(target_matches(&opt, "  prod  "));
+    }
+
+    #[test]
+    fn resource_type_filter_keeps_all_resources_for_all() {
+        let targets = vec![
+            ComposerTarget::new("ssh-a", "prod-a", "SH", "ssh", "ssh · ssh-a"),
+            ComposerTarget::new("db-a", "prod-db", "DB", "postgres", "postgres · db-a"),
+        ];
+
+        let filtered = filter_targets_by_kind(targets.clone(), "all");
+
+        assert_eq!(filtered, targets);
+    }
+
+    #[test]
+    fn resource_type_filter_matches_target_kind() {
+        let targets = vec![
+            ComposerTarget::new("ssh-a", "prod-a", "SH", "ssh", "ssh · ssh-a"),
+            ComposerTarget::new("db-a", "prod-db", "DB", "postgres", "postgres · db-a"),
+        ];
+
+        let filtered = filter_targets_by_kind(targets, "ssh");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id.as_ref(), "ssh-a");
     }
 
     #[test]

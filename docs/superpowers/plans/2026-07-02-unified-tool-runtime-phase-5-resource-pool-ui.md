@@ -441,7 +441,7 @@ rtk git commit -m "feat(ai_chat): rename context selector to resource pool"
 - Modify: `crates/ai_chat_view/src/input/agent_input.rs`
 - Modify: `crates/ai_chat_view/src/input/context.rs`
 
-- [ ] **Step 1: Add failing pure filter tests**
+- [x] **Step 1: Add failing pure filter tests**
 
 Add tests in `agent_input.rs`:
 
@@ -478,7 +478,7 @@ Expected red result:
 cannot find function `filter_targets_by_kind` in this scope
 ```
 
-- [ ] **Step 2: Add selected kind state**
+- [x] **Step 2: Add selected kind state**
 
 Add to `AgentInput`:
 
@@ -500,7 +500,7 @@ if options.is_empty() {
 }
 ```
 
-- [ ] **Step 3: Add pure filter helper**
+- [x] **Step 3: Add pure filter helper**
 
 Add near search helpers:
 
@@ -516,7 +516,7 @@ fn filter_targets_by_kind(targets: Vec<ComposerTarget>, kind: &str) -> Vec<Compo
 }
 ```
 
-- [ ] **Step 4: Render filter controls above the search results**
+- [x] **Step 4: Render filter controls above the search results**
 
 Add a helper that renders compact filter rows:
 
@@ -590,7 +590,7 @@ let filtered: Vec<ComposerTarget> = kind_filtered
     .collect();
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run:
 
@@ -602,7 +602,7 @@ rtk cargo test -p ai_chat_view target_search_query_ignores_surrounding_whitespac
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/input/agent_input.rs crates/ai_chat_view/src/input/context.rs
