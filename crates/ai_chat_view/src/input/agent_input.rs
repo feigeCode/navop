@@ -27,8 +27,8 @@ use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, 
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
     AgentComposerContext, ComposerMenuOption, ComposerModelOption, ComposerPlanItem,
-    ComposerResourcePoolItem, ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem,
-    ComposerTarget,
+    ComposerResourcePoolItem, ComposerResourceSourceOption, ComposerResourceTypeFilter,
+    ComposerScope, ComposerSubAgentItem, ComposerTarget,
 };
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
 
@@ -528,6 +528,7 @@ impl AgentInput {
         let current = self.context.target.clone();
         let scopes = self.context.scopes.clone();
         let pool_items = self.context.resource_pool_items.clone();
+        let source_options = self.context.resource_source_options.clone();
         let search_input = self.context_search_input.clone();
         let search_query = self.context_search_query.clone();
         let selected_kind = self.selected_resource_kind_filter.clone();
@@ -571,6 +572,7 @@ impl AgentInput {
                         current.clone(),
                         scopes.clone(),
                         pool_items.clone(),
+                        source_options.clone(),
                         filters.clone(),
                         selected_kind.clone(),
                         search_input.clone(),
@@ -1393,6 +1395,7 @@ fn render_context_mode_content(
     current: Option<ComposerTarget>,
     scopes: Vec<ComposerScope>,
     pool_items: Vec<ComposerResourcePoolItem>,
+    source_options: Vec<ComposerResourceSourceOption>,
     filters: Vec<ComposerResourceTypeFilter>,
     selected_kind: SharedString,
     search_input: Entity<InputState>,
@@ -1423,6 +1426,14 @@ fn render_context_mode_content(
         if has_database_scope {
             col = col.child(context_database_hint(muted, cx));
         }
+    }
+
+    if !source_options.is_empty() {
+        col = col.child(render_resource_source_options(
+            view.clone(),
+            source_options,
+            cx,
+        ));
     }
 
     if !filters.is_empty() {
@@ -1505,6 +1516,59 @@ fn render_context_mode_content(
 
     col = col.child(list);
     col.into_any_element()
+}
+
+fn render_resource_source_options(
+    view: Entity<AgentInput>,
+    options: Vec<ComposerResourceSourceOption>,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let selected_bg = cx.theme().accent;
+    let selected_fg = cx.theme().accent_foreground;
+    let muted = cx.theme().muted_foreground;
+    let hover_bg = cx.theme().list_hover;
+    let mut row = h_flex().w_full().px_1().pb_1().gap(px(4.0)).flex_wrap();
+
+    for option in options.into_iter().filter(|option| option.enabled) {
+        let id = option.id.clone();
+        let selected = option.selected;
+        let enabled = option.enabled;
+        let label = resource_source_option_label(&option);
+        let view = view.clone();
+        row = row.child(
+            h_flex()
+                .id(option.element_id())
+                .items_center()
+                .gap(px(4.0))
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .text_xs()
+                .when(selected, |this| {
+                    this.bg(selected_bg).text_color(selected_fg)
+                })
+                .when(!selected, |this| this.text_color(muted))
+                .when(enabled && !selected, |this| {
+                    this.cursor_pointer().hover(move |s| s.bg(hover_bg))
+                })
+                .when(!enabled, |this| this.opacity(0.5))
+                .child(label)
+                .when(enabled, |this| {
+                    this.on_click(move |_, _window, cx| {
+                        let id = id.clone();
+                        view.update(cx, |this, cx| {
+                            if this.is_running {
+                                return;
+                            }
+                            cx.emit(AgentInputEvent::SelectResourceSource { id });
+                            cx.notify();
+                        });
+                    })
+                }),
+        );
+    }
+
+    row.into_any_element()
 }
 
 fn render_resource_type_filters(
@@ -1722,6 +1786,18 @@ fn resource_pool_action_label(item: &ComposerResourcePoolItem) -> &'static str {
     } else {
         "+"
     }
+}
+
+fn resource_source_option_label(option: &ComposerResourceSourceOption) -> SharedString {
+    if !option.enabled {
+        return option
+            .hint
+            .as_ref()
+            .map(|hint| format!("{} · {}", option.label, hint))
+            .unwrap_or_else(|| option.label.to_string())
+            .into();
+    }
+    SharedString::from(format!("{} {}", option.label, option.count))
 }
 
 /// 列表结果计数文案:有关键字时展示匹配数,无关键字时展示总数。
@@ -2274,6 +2350,25 @@ mod tests {
         assert_eq!(resource_pool_action_label(&add), "+");
         assert_eq!(resource_pool_action_label(&remove), "-");
         assert_eq!(resource_pool_action_label(&default), "默认");
+    }
+
+    #[test]
+    fn resource_source_option_label_includes_count_or_disabled_hint() {
+        let enabled =
+            crate::input::context::ComposerResourceSourceOption::new("all", "全部", 3, true);
+        let disabled = crate::input::context::ComposerResourceSourceOption::new(
+            "workspace",
+            "工作区",
+            0,
+            false,
+        )
+        .disabled("暂无工作区资源来源");
+
+        assert_eq!(resource_source_option_label(&enabled).as_ref(), "全部 3");
+        assert_eq!(
+            resource_source_option_label(&disabled).as_ref(),
+            "工作区 · 暂无工作区资源来源"
+        );
     }
 
     #[test]

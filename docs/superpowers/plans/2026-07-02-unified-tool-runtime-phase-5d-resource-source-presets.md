@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, GPUI, `ai_chat_view`, `agent_runtime::ResourceContext`, `agent_runtime::ResourceRef`.
 
-Current status: Task 3 verified; ready to commit.
+Current status: Task 4 verified; ready to commit.
 
 ---
 
@@ -346,7 +346,7 @@ rtk cargo test -p ai_chat_view resource_pool
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/agent_view.rs crates/ai_chat_view/src/input/agent_input.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5d-resource-source-presets.md
@@ -359,12 +359,12 @@ rtk git commit -m "feat(ai_chat): apply resource source presets"
 - Modify: `crates/ai_chat_view/src/input/agent_input.rs`
 - Modify: `docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md`
 
-- [ ] **Step 1: Add focused UI helper test**
+- [x] **Step 1: Add focused UI helper test**
 
 Add a pure helper test for labels or enabled state, matching the existing style of
 `resource_pool_action_labels_match_membership`.
 
-- [ ] **Step 2: Render source presets above type filters**
+- [x] **Step 2: Render source presets above type filters**
 
 Render a compact row of source preset buttons in the resource pool popover:
 
@@ -375,7 +375,7 @@ Render a compact row of source preset buttons in the resource pool popover:
 Disabled workspace/tag options are not rendered in this checkpoint; they stay in the
 context model until a real source exists.
 
-- [ ] **Step 3: Run focused tests and check**
+- [x] **Step 3: Run focused tests and check**
 
 Run:
 
