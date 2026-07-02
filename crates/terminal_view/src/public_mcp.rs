@@ -41,6 +41,7 @@ impl TerminalPublicMcpRegistration {
         if let Some(registry) = registry(cx) {
             registry.unregister(&self.session_id);
             registry.unregister_remote_ops(&self.session_id);
+            registry.unregister_terminal_exec(&self.session_id);
         }
     }
 }

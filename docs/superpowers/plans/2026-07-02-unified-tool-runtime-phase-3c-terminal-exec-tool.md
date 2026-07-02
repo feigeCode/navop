@@ -112,7 +112,7 @@ Rules:
 
 ## Task 1: Contract Tests For `terminal.exec`
 
-- [ ] **Step 1: Add failing registry/list test**
+- [x] **Step 1: Add failing registry/list test**
 
 Create `crates/public_mcp/tests/terminal_exec.rs` with a fake terminal execution handle. Assert:
 
@@ -122,7 +122,7 @@ assert!(names.contains(&"terminal.exec".to_string()));
 
 Expected red result: `terminal.exec` is not registered.
 
-- [ ] **Step 2: Add failing descriptor test**
+- [x] **Step 2: Add failing descriptor test**
 
 Assert:
 
@@ -136,7 +136,7 @@ assert_eq!(true, tool.annotations.open_world);
 
 Expected red result: descriptor does not exist.
 
-- [ ] **Step 3: Add failing execution test**
+- [x] **Step 3: Add failing execution test**
 
 Call:
 
@@ -155,7 +155,7 @@ Expected red result: unknown tool.
 
 ## Task 2: Add Runtime Handler Without UI Dependency
 
-- [ ] **Step 1: Define terminal execution trait**
+- [x] **Step 1: Define terminal execution trait**
 
 Add a small trait in `public_mcp::registry` or a nearby module:
 
@@ -168,7 +168,7 @@ pub trait TerminalExecSessionHandle: Send + Sync + 'static {
 
 Keep this separate from `RemoteOpsSessionHandle` so structured SSH execution and live terminal execution remain distinct.
 
-- [ ] **Step 2: Define request/result types**
+- [x] **Step 2: Define request/result types**
 
 Use fields from the tool contract:
 
@@ -184,11 +184,11 @@ pub struct TerminalExecRequest {
 
 Result must include completion state and optional exit code.
 
-- [ ] **Step 3: Register fake handles in `PublicMcpRegistry`**
+- [x] **Step 3: Register fake handles in `PublicMcpRegistry`**
 
 Add registry storage and lookup for terminal exec handles. Only expose connected terminal sessions.
 
-- [ ] **Step 4: Implement `terminal.exec` runtime tool**
+- [x] **Step 4: Implement `terminal.exec` runtime tool**
 
 Descriptor:
 
@@ -201,7 +201,7 @@ risk = High
 target = ResourceKind::Terminal required
 ```
 
-- [ ] **Step 5: Run green contract tests**
+- [x] **Step 5: Run green contract tests**
 
 Run:
 

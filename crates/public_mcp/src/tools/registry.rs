@@ -1,5 +1,6 @@
 use super::{
     PublicMcpToolContext, PublicMcpToolProvider, ToolRuntimeMcpProvider, remote_ops_tool_registry,
+    terminal_exec_tool_registry,
 };
 use crate::registry::PublicMcpRegistry;
 use rmcp::{
@@ -56,8 +57,13 @@ impl PublicMcpToolRegistry {
     }
 
     pub fn terminal(registry: PublicMcpRegistry) -> Self {
+        let runtime_registry = tool_runtime::ToolRegistry::merge(vec![
+            remote_ops_tool_registry(registry.clone()),
+            terminal_exec_tool_registry(registry),
+        ])
+        .expect("terminal runtime tool names must be unique");
         Self::new(vec![Arc::new(ToolRuntimeMcpProvider::new(
-            remote_ops_tool_registry(registry),
+            runtime_registry,
         ))])
     }
 
