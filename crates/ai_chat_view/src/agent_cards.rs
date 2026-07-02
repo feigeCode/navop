@@ -398,7 +398,7 @@ impl ChatCard for ToolConfirmCard {
                             .text_sm()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(cx.theme().foreground)
-                            .child("工具执行确认"),
+                            .child(confirm_card_header(&data)),
                     ),
             )
             .child(
@@ -505,19 +505,45 @@ fn tool_card_title(data: &ToolCardData, cx: &App) -> AnyElement {
         .text_color(cx.theme().foreground)
         .truncate()
         .child(if data.input_summary.is_empty() {
-            format!("工具 · {}", data.tool_name)
+            format!("{} · {}", tool_card_prefix(&data.tool_name), data.tool_name)
         } else {
-            format!("工具 · {} · {}", data.tool_name, data.input_summary)
+            format!(
+                "{} · {} · {}",
+                tool_card_prefix(&data.tool_name),
+                data.tool_name,
+                data.input_summary
+            )
         })
         .into_any_element()
 }
 
-fn confirm_card_title(data: &ToolConfirmCardData) -> String {
-    if data.input_summary.is_empty() || !data.input_json.is_empty() {
-        format!("工具 · {}", data.tool_name)
+fn confirm_card_header(data: &ToolConfirmCardData) -> &'static str {
+    if is_terminal_exec_tool(&data.tool_name) {
+        "终端执行确认"
     } else {
-        format!("工具 · {} · {}", data.tool_name, data.input_summary)
+        "工具执行确认"
     }
+}
+
+fn confirm_card_title(data: &ToolConfirmCardData) -> String {
+    let prefix = tool_card_prefix(&data.tool_name);
+    if data.input_summary.is_empty() || !data.input_json.is_empty() {
+        format!("{prefix} · {}", data.tool_name)
+    } else {
+        format!("{prefix} · {} · {}", data.tool_name, data.input_summary)
+    }
+}
+
+fn tool_card_prefix(tool_name: &str) -> &'static str {
+    if is_terminal_exec_tool(tool_name) {
+        "终端执行"
+    } else {
+        "工具"
+    }
+}
+
+fn is_terminal_exec_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "terminal_exec" | "terminal.exec")
 }
 
 fn tool_output_json(data: &ToolCardData) -> String {
@@ -984,6 +1010,25 @@ mod tests {
         };
 
         assert_eq!("工具 · db_schema · show tables", confirm_card_title(&data));
+    }
+
+    #[test]
+    fn terminal_exec_confirm_card_labels_terminal_execution() {
+        let data = ToolConfirmCardData {
+            call_id: "call_1".into(),
+            tool_name: "terminal_exec".into(),
+            input_summary: "df -h".into(),
+            input_json: String::new(),
+            question: "确认执行工具 `terminal_exec` 吗?".into(),
+            status: "pending".into(),
+        };
+
+        assert_eq!("终端执行确认", confirm_card_header(&data));
+        assert_eq!(
+            "终端执行 · terminal_exec · df -h",
+            confirm_card_title(&data)
+        );
+        assert_eq!("终端执行", tool_card_prefix("terminal.exec"));
     }
 
     #[test]

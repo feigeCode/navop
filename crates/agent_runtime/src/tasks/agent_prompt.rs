@@ -42,8 +42,36 @@ pub(super) fn build_system_prompt(
         prompt.push_str(
             "。只能调用这里列出的工具名;不要调用名为 `tool` 的通用伪工具。工具 arguments 必须是合法 JSON object。",
         );
+        append_terminal_tool_selection_rules(&mut prompt, tools);
     }
     prompt
+}
+
+fn append_terminal_tool_selection_rules(prompt: &mut String, tools: &[ToolSpec]) {
+    let terminal_exec = find_tool_name(tools, &["terminal_exec", "terminal.exec"]);
+    let ssh_exec = find_tool_name(tools, &["ssh_exec", "ssh.exec", "ssh_remote_exec"]);
+    if terminal_exec.is_none() && ssh_exec.is_none() {
+        return;
+    }
+
+    prompt.push_str("\n\n终端/SSH 工具选择规则:");
+    if let Some(name) = terminal_exec {
+        prompt.push_str(&format!(
+            " 当用户明确要求在可见终端、当前终端、右侧终端、像手动输入一样执行，或说“就在这个终端里执行”时，优先调用 `{name}`；`command` 必须保持用户要输入的命令文本，`target` 必须指向终端资源，通常设置 `submit=true`。`{name}` 会写入 live terminal，不要声称有 exit code，除非工具观测结果明确返回 exit_code。"
+        ));
+    }
+    if let Some(name) = ssh_exec {
+        prompt.push_str(&format!(
+            " 当用户只要求后台/结构化 SSH 命令执行、收集 stdout/stderr 或非交互检查时，使用 `{name}`；如果用户要求可见终端执行且可用工具里有终端执行工具，不要用 `{name}` 替代。"
+        ));
+    }
+}
+
+fn find_tool_name<'a>(tools: &'a [ToolSpec], candidates: &[&str]) -> Option<&'a str> {
+    tools.iter().find_map(|tool| {
+        let name = tool.name.as_str();
+        candidates.contains(&name).then_some(name)
+    })
 }
 
 fn append_system_instruction(prompt: &mut String, instruction: Option<&str>) {

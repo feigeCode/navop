@@ -14,7 +14,7 @@
 
 Last updated: 2026-07-02
 
-Current status: Provider checkpoint verified; Agent/UI integration not started.
+Current status: Provider and Agent/UI prompt/card checkpoints verified; manual app smoke not started.
 
 Committed checkpoints:
 
@@ -31,7 +31,8 @@ Provider checkpoint:
 | Local PTY / SSH / serial backend input handles | Done | Each backend returns an input handle that forwards bytes to the same command channel used by terminal typing. |
 | `terminal_view` Public MCP provider | Done | Registers `TerminalExecSessionHandle` for terminal sessions that expose an input handle. |
 | Output/exit-code capture | Deferred | Provider returns `submitted_only` unless a reliable terminal completion/output-delta API exists. Do not fabricate exit codes. |
-| Agent/UI prompt and tool card changes | Not started | Keep separate from the provider checkpoint. |
+| Agent/UI prompt and tool card changes | Done | Prompt distinguishes visible terminal execution from structured SSH execution; tool and confirmation cards label `terminal_exec` as terminal execution. |
+| Manual app smoke | Not started | Requires running the app with an SSH terminal tab and asking Agent to execute in the visible terminal. |
 
 Verification completed for the provider checkpoint:
 
@@ -45,6 +46,9 @@ rtk cargo check -p terminal
 rtk cargo check -p terminal_view
 rtk cargo check -p public_mcp
 rtk cargo check -p main
+rtk cargo test -p agent_runtime
+rtk cargo test -p ai_chat_view terminal_exec_confirm_card_labels_terminal_execution
+rtk cargo check -p ai_chat_view
 ```
 
 Known warning:
@@ -53,16 +57,7 @@ Known warning:
 block v0.1.6 future-incompat warning
 ```
 
-Next handoff steps:
-
-1. Start Agent/UI integration:
-
-```bash
-rtk cargo test -p agent_runtime
-rtk cargo check -p ai_chat_view
-```
-
-2. Manually smoke the app after UI wiring:
+Next handoff step:
 
 Open an SSH terminal, ask Agent to run `df -h` in the terminal, and verify the command
 appears in the terminal pane.
@@ -308,7 +303,7 @@ rtk cargo test -p public_mcp --test terminal_exec
 
 ## Task 4: Agent/UI Integration
 
-- [ ] **Step 1: Prompt/resource language**
+- [x] **Step 1: Prompt/resource language**
 
 Update Agent prompt rules:
 
@@ -316,7 +311,7 @@ Update Agent prompt rules:
 2. Use `ssh.exec` for structured background/non-interactive command execution.
 3. Never claim a `terminal.exec` result has an exit code unless the result contains one.
 
-- [ ] **Step 2: Tool cards**
+- [x] **Step 2: Tool cards**
 
 Display:
 
@@ -329,7 +324,7 @@ completion: <state>
 
 If output exists, show terminal-style monospace output in the tool card.
 
-- [ ] **Step 3: Approval details**
+- [x] **Step 3: Approval details**
 
 Approval card must show the exact command and target terminal before writing into the live terminal.
 
@@ -372,7 +367,7 @@ rtk cargo check -p main
 Expected: no new compile errors. Existing unrelated warnings may remain, but must be
 called out in the handoff.
 
-- [ ] **Step 4: Agent/UI verification after UI wiring**
+- [x] **Step 4: Agent/UI verification after UI wiring**
 
 Run after Task 4 starts:
 
@@ -399,8 +394,8 @@ Scenario:
 | Public MCP/runtime descriptor exists | Done | `rtk cargo test -p public_mcp --test terminal_exec` passed before `f0777d07`. |
 | Live terminal input path is used | Done | `TerminalInputHandle` forwards bytes to backend input channels; `terminal_view` provider test verifies `df -h\n` is written. |
 | Terminal output/exit code are not fabricated | Done | Provider returns `submitted_only`, `exit_code: None`, and empty output until reliable capture exists. |
-| Agent chooses `terminal.exec` for visible terminal requests | Not started | Requires prompt/resource wiring in a later checkpoint. |
-| Tool/approval card labels terminal execution clearly | Not started | Requires UI work in a later checkpoint. |
+| Agent chooses `terminal.exec` for visible terminal requests | Done | Prompt test verifies visible terminal requests are guided to `terminal_exec` and structured SSH to `ssh_exec`. |
+| Tool/approval card labels terminal execution clearly | Done | Card title test verifies `terminal_exec` confirmation cards render as terminal execution. |
 | Manual smoke proves command appears in terminal pane | Not started | Requires runnable app smoke after provider and UI wiring. |
 
 ## Handoff Notes

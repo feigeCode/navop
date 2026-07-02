@@ -68,6 +68,54 @@ impl Tool for WriteTool {
     }
 }
 
+struct PromptOnlyTool {
+    name: &'static str,
+    description: &'static str,
+    risk: RiskLevel,
+}
+
+impl PromptOnlyTool {
+    fn new(name: &'static str, description: &'static str, risk: RiskLevel) -> Self {
+        Self {
+            name,
+            description,
+            risk,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for PromptOnlyTool {
+    fn name(&self) -> ToolName {
+        ToolName::new(self.name)
+    }
+
+    fn spec(&self, _resources: &ResourceContext) -> ToolSpec {
+        ToolSpec::new(
+            self.name,
+            self.description,
+            json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "command": {"type": "string"}
+                },
+                "required": ["target", "command"]
+            }),
+        )
+        .with_risk(self.risk)
+    }
+
+    async fn execute(&self, invocation: ToolInvocation) -> Result<ToolObservation, ToolError> {
+        Ok(ToolObservation::success(
+            invocation.call_id,
+            invocation.tool_name,
+            "prompt only tool executed",
+            ObservationData::Text("ok".into()),
+        ))
+    }
+}
+
 fn drain_events(rx: &mut agent_runtime::RuntimeEventReceiver) -> Vec<RuntimeEvent> {
     let mut events = Vec::new();
     while let Ok(event) = rx.try_recv() {
@@ -1006,6 +1054,50 @@ async fn system_prompt_lists_available_tools_and_json_rule() {
     assert!(system.contains("delegate_task"));
     assert!(system.contains("arguments 必须是合法 JSON object"));
     assert!(system.contains("不要调用名为 `tool`"));
+}
+
+#[tokio::test]
+async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::text("ok")]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new()
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "terminal.exec",
+                    "Execute in a visible terminal.",
+                    RiskLevel::High,
+                )))
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "ssh.exec",
+                    "Execute a structured SSH command.",
+                    RiskLevel::Low,
+                ))),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new().with_resource(ResourceRef::new(
+        "terminal-1",
+        ResourceKind::Terminal,
+        "prod terminal",
+    )));
+
+    runtime
+        .run_turn_blocking(
+            session.id(),
+            "就在这个终端里执行 df -h".into(),
+            TaskKind::Agent,
+        )
+        .await
+        .expect("run agent turn");
+
+    let requests = model.received_requests();
+    let system = requests[0].messages[0].content_as_text();
+    assert!(system.contains("terminal_exec"));
+    assert!(system.contains("ssh_exec"));
+    assert!(system.contains("可见终端"));
+    assert!(system.contains("submit=true"));
+    assert!(system.contains("不要声称有 exit code"));
+    assert!(system.contains("不要用 `ssh_exec` 替代"));
 }
 
 #[tokio::test]

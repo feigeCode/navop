@@ -64,6 +64,7 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 3b SSH structured command tools | Done | `1be59bb2 feat(public_mcp): canonicalize ssh command tools` | Keep `ssh.exec` structured and non-interactive. |
 | Phase 3c `terminal.exec` runtime contract | Done | `f0777d07 feat(public_mcp): add terminal exec runtime contract` | Wire live terminal providers and validate terminal input behavior. |
 | Phase 3c live terminal provider | Done | `crates/terminal` exposes `TerminalInputHandle`; `crates/terminal_view` registers a `TerminalExecSessionHandle` that writes `command + "\n"` into the live terminal input path. Targeted provider tests and Public MCP/runtime checks passed on 2026-07-02. | Start Agent/UI prompt, approval-card, and tool-card integration. |
+| Phase 3c Agent/UI terminal exec selection | Done | Agent prompt tells the model to use `terminal_exec` for visible terminal execution and `ssh_exec` for structured SSH execution; tool and approval card titles label `terminal_exec` as terminal execution. `agent_runtime` tests and `ai_chat_view` checks passed on 2026-07-02. | Run manual app smoke for visible terminal execution. |
 | Phase 4 Public MCP adapter unification | Planned | Architecture scope below. | Derive MCP `tools/list` and `tools/call` from the unified runtime catalog. |
 | Phase 5 Resource Pool UI | Planned | Architecture scope below. | Rename context UI to resource pool/default target and add multi-resource selection. |
 | Phase 6 Multi-resource execution | Planned | Architecture scope below. | Add safe parallel routing and target-grouped result display. |
@@ -78,10 +79,9 @@ Current product decision:
 
 Next recommended checkpoint:
 
-1. Add Agent prompt/resource rules that choose `terminal.exec` for visible terminal
-   execution requests.
-2. Update approval and result cards to label live terminal execution clearly.
-3. Run a manual app smoke where a command appears in the visible terminal pane.
+1. Run a manual app smoke where a command appears in the visible terminal pane.
+2. If smoke passes, start Phase 4 Public MCP adapter unification.
+3. If smoke exposes a gap, fix the smallest provider, prompt, or card layer that owns it.
 
 ## Design Principles
 
