@@ -307,7 +307,7 @@ rtk git commit -m "feat(ai_chat): map resource context to pool display"
 **Files:**
 - Modify: `crates/ai_chat_view/src/input/agent_input.rs`
 
-- [ ] **Step 1: Add failing label tests**
+- [x] **Step 1: Add failing label tests**
 
 Add tests in `agent_input.rs`:
 
@@ -341,7 +341,7 @@ Expected red result:
 cannot find function `resource_pool_trigger_label` in this scope
 ```
 
-- [ ] **Step 2: Add trigger label helper**
+- [x] **Step 2: Add trigger label helper**
 
 Add near other label helpers:
 
@@ -354,7 +354,7 @@ fn resource_pool_trigger_label(context: &AgentComposerContext) -> SharedString {
 }
 ```
 
-- [ ] **Step 3: Update visible copy**
+- [x] **Step 3: Update visible copy**
 
 Change:
 
@@ -416,7 +416,7 @@ to:
 SharedString::from(format!("匹配到 {} 个资源", filtered.len()))
 ```
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -428,7 +428,7 @@ rtk cargo test -p ai_chat_view target_search_matches_label_subtitle_and_kind_cas
 
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/input/agent_input.rs

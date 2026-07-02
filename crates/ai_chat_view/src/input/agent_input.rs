@@ -573,7 +573,12 @@ impl AgentInput {
                     .gap_1()
                     .text_color(fg)
                     .child(Icon::new(IconName::File).xsmall())
-                    .child(div().text_sm().truncate().child("上下文")),
+                    .child(
+                        div()
+                            .text_sm()
+                            .truncate()
+                            .child(resource_pool_trigger_label(&self.context)),
+                    ),
             )
     }
 
@@ -1282,6 +1287,13 @@ fn subagent_trigger_label(subagents: &[ComposerSubAgentItem]) -> SharedString {
     }
 }
 
+fn resource_pool_trigger_label(context: &AgentComposerContext) -> SharedString {
+    if context.resource_pool.total_resources == 0 {
+        return SharedString::from("资源池");
+    }
+    SharedString::from(format!("资源池 · {}", context.resource_pool.total_resources))
+}
+
 fn subagent_item_row(
     item: ComposerSubAgentItem,
     muted: gpui::Hsla,
@@ -1365,7 +1377,7 @@ fn render_context_mode_content(
         col = col
             .px_1()
             .pt_1()
-            .child(context_group_label("当前上下文", cx))
+            .child(context_group_label("默认目标", cx))
             .child(context_summary_row(target, muted, cx));
     }
     let has_database_scope = scopes.iter().any(|scope| scope.key.as_ref() == "database");
@@ -1426,9 +1438,9 @@ fn render_context_mode_content(
     if filtered.is_empty() {
         list = list.child(div().px_2().py_2().text_sm().text_color(muted).child(
             if search_query.is_empty() {
-                "无可用目标"
+                "资源池为空"
             } else {
-                "未匹配到目标"
+                "未匹配到资源"
             },
         ));
     }
@@ -1457,7 +1469,7 @@ fn filter_result_label(filtered: &[ComposerTarget], query: &SharedString) -> Sha
     if query.is_empty() {
         return SharedString::default();
     }
-    SharedString::from(format!("匹配到 {} 个目标", filtered.len()))
+    SharedString::from(format!("匹配到 {} 个资源", filtered.len()))
 }
 
 fn context_database_hint(
@@ -1892,6 +1904,28 @@ mod tests {
         )];
 
         assert_eq!(subagent_trigger_label(&items).as_ref(), "子代理 · 1");
+    }
+
+    #[test]
+    fn resource_pool_trigger_label_uses_pool_wording() {
+        let context = AgentComposerContext {
+            resource_pool: crate::input::context::ComposerResourcePoolSummary::new(
+                Some(SharedString::from("ssh-a")),
+                "prod-a",
+                3,
+            ),
+            ..AgentComposerContext::default()
+        };
+
+        assert_eq!(resource_pool_trigger_label(&context).as_ref(), "资源池 · 3");
+    }
+
+    #[test]
+    fn resource_pool_trigger_label_handles_empty_pool() {
+        assert_eq!(
+            resource_pool_trigger_label(&AgentComposerContext::default()).as_ref(),
+            "资源池"
+        );
     }
 
     #[test]
