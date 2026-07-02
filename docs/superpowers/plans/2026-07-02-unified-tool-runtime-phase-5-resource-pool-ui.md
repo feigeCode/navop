@@ -8,6 +8,8 @@
 
 **Tech Stack:** Rust, GPUI, `ai_chat_view`, `agent_runtime::ResourceContext`, existing `tool_runtime::ResourcePool` bridge.
 
+Current status: Resource pool wording/default-target/type-filter checkpoint verified.
+
 ---
 
 ## File Structure
@@ -684,7 +686,7 @@ rtk git commit -m "test(ai_chat): document resource pool default target semantic
 - Modify: `docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md`
 - Modify: `docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5-resource-pool-ui.md`
 
-- [ ] **Step 1: Run focused UI and builder tests**
+- [x] **Step 1: Run focused UI and builder tests**
 
 Run:
 
@@ -697,7 +699,7 @@ rtk cargo test -p ai_chat_view target_search
 
 Expected: all pass.
 
-- [ ] **Step 2: Run crate check**
+- [x] **Step 2: Run crate check**
 
 Run:
 
@@ -707,7 +709,7 @@ rtk cargo check -p ai_chat_view
 
 Expected: exit 0. Existing workspace warnings outside this crate can remain if they are not introduced by this phase.
 
-- [ ] **Step 3: Update design tracking**
+- [x] **Step 3: Update design tracking**
 
 Update the Phase 5 row in `docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md`:
 
@@ -715,7 +717,7 @@ Update the Phase 5 row in `docs/superpowers/specs/2026-07-02-unified-tool-runtim
 Phase 5 Resource Pool UI | In progress | Resource pool wording, default target display, search, and type filtering are implemented in ai_chat_view. Focused ai_chat_view tests and cargo check passed on 2026-07-02. | Next checkpoint: add explicit add/remove resource pool management and workspace/tag/all source selection.
 ```
 
-- [ ] **Step 4: Mark this plan checkpoint**
+- [x] **Step 4: Mark this plan checkpoint**
 
 At the top of this plan, update a status line:
 
@@ -723,7 +725,7 @@ At the top of this plan, update a status line:
 Current status: Resource pool wording/default-target/type-filter checkpoint verified.
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 rtk git add docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5-resource-pool-ui.md
