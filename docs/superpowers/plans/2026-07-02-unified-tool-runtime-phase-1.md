@@ -4,7 +4,9 @@
 
 **Goal:** Add the core unified Tool Runtime contract to `crates/tool_runtime` while preserving current registry, handler, MCP, CLI, and business-tool compatibility.
 
-**Architecture:** Keep `tool_runtime` as a pure core crate with no Agent, MCP, UI, DB, SSH, or GPUI dependencies. Split the current monolithic `lib.rs` into focused modules for ids, resources, descriptors, invocation, permissions, audit, registry, result, and error. Existing `ToolRegistry::list/get/call` and `ToolHandler::call(input, ToolContext)` remain compatible, while new types model the final ResourcePool, PermissionPolicy, ToolInvocation, alias, and audit contracts.
+**Architecture:** Keep `tool_runtime` as a pure core crate with no Agent, MCP, UI, DB, SSH, or GPUI dependencies. Split the current monolithic `lib.rs` into focused modules for ids, resources, descriptors, invocation, permissions, audit, registry, result, and error. Existing `ToolRegistry::list/get/call`, `ToolDescriptor` struct literals, and `ToolHandler::call(input, ToolContext)` remain compatible, while new types model the final ResourcePool, PermissionPolicy, ToolInvocation, alias, and audit contracts.
+
+**Compatibility Amendment:** Do not add required fields to the existing `ToolDescriptor` struct in Phase 1. Many downstream crates construct it with struct literals. Add `RuntimeToolDescriptor` for the final descriptor shape and add default `ToolHandler` metadata methods (`aliases`, `target_spec`, `origin`) so existing handlers keep compiling. `ToolAnnotations` may gain default-compatible semantic fields because downstream code mostly uses constructors; update any explicit literal compile break mechanically without changing behavior.
 
 **Tech Stack:** Rust 2024, `serde`, `serde_json`, `thiserror`, current workspace `cargo test -p tool_runtime`.
 
@@ -17,7 +19,7 @@
 - Create: `crates/tool_runtime/src/resource.rs`
   - Defines `ResourcePool`, `ResourceRef`, `ResourceKind`, `ResourceScope`, `ResourceCapability`, `ResourceOrigin`, `ResourceTarget`, and target resolution.
 - Create: `crates/tool_runtime/src/descriptor.rs`
-  - Defines `RiskLevel`, `ToolAnnotations`, `ToolOrigin`, `ToolAlias`, `ToolTargetSpec`, `ToolDescriptor`, `ToolAdapter`, and `ToolMode`.
+  - Defines `RiskLevel`, existing-compatible `ToolAnnotations`, `ToolOrigin`, `ToolAlias`, `ToolTargetSpec`, existing-compatible `ToolDescriptor`, final-shape `RuntimeToolDescriptor`, `ToolAdapter`, and `ToolMode`.
 - Create: `crates/tool_runtime/src/invocation.rs`
   - Defines `ToolInvocation`, `ToolCaller`, and `AuditContext`.
 - Create: `crates/tool_runtime/src/permission.rs`
@@ -154,7 +156,7 @@ impl fmt::Display for ResourceKind {
 
 - [ ] **Step 2: Move existing descriptor-related types**
 
-Create `crates/tool_runtime/src/descriptor.rs` with the current public shapes plus new defaulted fields:
+Create `crates/tool_runtime/src/descriptor.rs` with current `ToolDescriptor` fields preserved and a separate final-shape descriptor:
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -243,11 +245,21 @@ pub struct ToolDescriptor {
     pub mode: ToolMode,
     pub adapters: Vec<ToolAdapter>,
     pub annotations: ToolAnnotations,
-    #[serde(default)]
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RuntimeToolDescriptor {
+    pub id: ToolId,
+    pub title: String,
+    pub description: String,
+    pub input_schema: Value,
+    pub output_schema: Value,
+    pub permissions: Vec<String>,
+    pub mode: ToolMode,
+    pub adapters: Vec<ToolAdapter>,
+    pub annotations: ToolAnnotations,
     pub target: ToolTargetSpec,
-    #[serde(default)]
     pub origin: ToolOrigin,
-    #[serde(default)]
     pub aliases: Vec<ToolAlias>,
 }
 ```
@@ -322,7 +334,13 @@ impl ToolDescriptor {
     }
 
     pub fn matches_id_or_alias(&self, value: &str) -> bool {
-        self.id == value || self.aliases.iter().any(|alias| alias.id == value)
+        self.id == value
+    }
+}
+
+impl RuntimeToolDescriptor {
+    pub fn matches_id_or_alias(&self, value: &str) -> bool {
+        self.id.as_str() == value || self.aliases.iter().any(|alias| alias.id == value)
     }
 }
 ```
@@ -333,7 +351,15 @@ Create `result.rs`, `error.rs`, and `registry.rs` by moving the existing code fr
 
 ```rust
 pub type ToolFuture = Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'static>>;
-pub trait ToolHandler: Send + Sync + 'static { ... }
+pub trait ToolHandler: Send + Sync + 'static {
+    fn descriptor(&self) -> ToolDescriptor;
+    fn aliases(&self) -> Vec<ToolAlias> { Vec::new() }
+    fn target_spec(&self) -> ToolTargetSpec { ToolTargetSpec::default() }
+    fn origin(&self) -> ToolOrigin { ToolOrigin::Builtin }
+    fn runtime_descriptor(&self) -> RuntimeToolDescriptor { ... }
+    fn call_annotations(&self, _input: &Value) -> ToolAnnotations { ... }
+    fn call(&self, input: Value, context: ToolContext) -> ToolFuture;
+}
 pub struct ToolRegistry { ... }
 pub struct ToolContext { ... }
 pub enum ToolError { ... }
@@ -382,15 +408,7 @@ Run:
 rtk cargo test -p tool_runtime --test registry
 ```
 
-Expected: tests compile or fail only because `ToolDescriptor` helper literals need new fields. If helper literals fail, add:
-
-```rust
-target: ToolTargetSpec::default(),
-origin: ToolOrigin::Builtin,
-aliases: Vec::new(),
-```
-
-to test helper descriptors.
+Expected: existing registry tests pass without adding fields to `ToolDescriptor` helper literals.
 
 ## Task 2: Add ResourcePool Core Model
 
@@ -723,17 +741,17 @@ Use the same `ToolHandler` helper style as `registry.rs`.
 In `registry.rs`, update duplicate detection to include canonical ids and aliases:
 
 ```rust
-fn descriptor_keys(descriptor: &ToolDescriptor) -> Vec<String> {
-    let mut keys = vec![descriptor.id.clone()];
+fn descriptor_keys(descriptor: &RuntimeToolDescriptor) -> Vec<String> {
+    let mut keys = vec![descriptor.id.as_str().to_string()];
     keys.extend(descriptor.aliases.iter().map(|alias| alias.id.clone()));
     keys
 }
 ```
 
-`ToolRegistry::get`, `call_annotations`, and `call` must use:
+`ToolRegistry::get`, `call_annotations`, and `call` must compare against `handler.runtime_descriptor()`:
 
 ```rust
-descriptor.matches_id_or_alias(id)
+runtime_descriptor.matches_id_or_alias(id)
 ```
 
 When `call` receives an alias, it still calls the canonical handler. `UnsupportedAdapter` and `UnknownTool` errors may report the requested id.
@@ -1013,3 +1031,4 @@ Type consistency:
 1. `ToolId`, `ResourceId`, and `ResourceKind` are introduced in Task 1 before descriptors use them.
 2. `RiskLevel` and expanded `ToolAnnotations` are introduced in Task 1 before permission tests use them.
 3. `ToolCaller` is introduced before audit tests use it.
+4. Existing `ToolDescriptor` struct literals remain compatible; final descriptor fields live on `RuntimeToolDescriptor` until later migration phases.

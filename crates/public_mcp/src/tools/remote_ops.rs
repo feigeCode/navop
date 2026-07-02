@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tool_runtime::{
-    ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext, ToolDescriptor, ToolError,
-    ToolHandler, ToolMode, ToolRegistry, ToolResult,
+    RiskLevel, ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext, ToolDescriptor,
+    ToolError, ToolHandler, ToolMode, ToolRegistry, ToolResult,
 };
 
 #[derive(Clone)]
@@ -185,6 +185,8 @@ impl RemoteOpsToolSpec {
                 destructive: true,
                 idempotent: false,
                 open_world: self.open_world,
+                supports_parallel: false,
+                risk: RiskLevel::High,
             }
         }
     }
