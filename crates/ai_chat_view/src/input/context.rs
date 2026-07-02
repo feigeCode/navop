@@ -106,6 +106,44 @@ impl ComposerResourceTypeFilter {
     }
 }
 
+/// 资源池候选行。`in_pool` 表示是否已授权进入本会话资源池。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerResourcePoolItem {
+    pub id: SharedString,
+    pub label: SharedString,
+    pub icon: SharedString,
+    pub kind: SharedString,
+    pub subtitle: SharedString,
+    pub in_pool: bool,
+    pub is_default: bool,
+}
+
+impl ComposerResourcePoolItem {
+    pub fn new(
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        icon: impl Into<SharedString>,
+        kind: impl Into<SharedString>,
+        subtitle: impl Into<SharedString>,
+        in_pool: bool,
+        is_default: bool,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            icon: icon.into(),
+            kind: kind.into(),
+            subtitle: subtitle.into(),
+            in_pool,
+            is_default,
+        }
+    }
+
+    pub fn element_id(&self) -> SharedString {
+        SharedString::from(format!("resource-pool-item-{}", self.id))
+    }
+}
+
 /// 派生上下文 chip(数量随目标类型动态变化)。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComposerScope {
@@ -344,6 +382,8 @@ pub struct AgentComposerContext {
     pub resource_pool: ComposerResourcePoolSummary,
     /// 资源池类型筛选项。
     pub resource_type_filters: Vec<ComposerResourceTypeFilter>,
+    /// 资源池成员与池外候选资源列表。
+    pub resource_pool_items: Vec<ComposerResourcePoolItem>,
     /// 派生上下文 chip(动态数量)。
     pub scopes: Vec<ComposerScope>,
     /// 右侧能力标签。
@@ -419,6 +459,34 @@ mod tests {
         assert_eq!(filter.label.as_ref(), "SSH");
         assert_eq!(filter.count, 3);
         assert!(filter.selected);
+    }
+
+    #[test]
+    fn resource_pool_item_exposes_add_and_remove_state() {
+        let in_pool = ComposerResourcePoolItem::new(
+            "ssh-a",
+            "prod-a",
+            "SH",
+            "ssh",
+            "ssh · ssh-a",
+            true,
+            true,
+        );
+        let out_pool = ComposerResourcePoolItem::new(
+            "ssh-b",
+            "prod-b",
+            "SH",
+            "ssh",
+            "ssh · ssh-b",
+            false,
+            false,
+        );
+
+        assert_eq!(in_pool.element_id().as_ref(), "resource-pool-item-ssh-a");
+        assert!(in_pool.in_pool);
+        assert!(in_pool.is_default);
+        assert!(!out_pool.in_pool);
+        assert!(!out_pool.is_default);
     }
 
     #[test]

@@ -1868,6 +1868,7 @@ fn build_context(
         target,
         resource_pool: resource_pool_summary(resources),
         resource_type_filters: resource_type_filters(resources),
+        resource_pool_items: Vec::new(),
         scopes,
         capabilities,
         plan_items: Vec::new(),

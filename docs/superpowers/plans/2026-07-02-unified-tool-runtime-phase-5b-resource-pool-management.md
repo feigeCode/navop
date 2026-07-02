@@ -51,7 +51,7 @@ Out of scope:
 **Files:**
 - Modify: `crates/ai_chat_view/src/input/context.rs`
 
-- [ ] **Step 1: Write failing display-model tests**
+- [x] **Step 1: Write failing display-model tests**
 
 Add these tests to the `context.rs` test module:
 
@@ -91,7 +91,7 @@ Expected red result:
 cannot find type `ComposerResourcePoolItem` in this scope
 ```
 
-- [ ] **Step 2: Add `ComposerResourcePoolItem`**
+- [x] **Step 2: Add `ComposerResourcePoolItem`**
 
 Insert after `ComposerResourceTypeFilter`:
 
@@ -143,7 +143,7 @@ pub resource_pool_items: Vec<ComposerResourcePoolItem>,
 
 Re-export `ComposerResourcePoolItem` in `crates/ai_chat_view/src/input/mod.rs`.
 
-- [ ] **Step 3: Run focused test**
+- [x] **Step 3: Run focused test**
 
 Run:
 
@@ -153,7 +153,7 @@ rtk cargo test -p ai_chat_view resource_pool_item_exposes_add_and_remove_state
 
 Expected: pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/input/context.rs crates/ai_chat_view/src/input/mod.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5b-resource-pool-management.md
