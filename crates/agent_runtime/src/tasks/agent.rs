@@ -283,29 +283,38 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
         for batch in executable_call_batches(executable_calls, |call| {
             ctx.services.tools.supports_parallel(call)
         }) {
-            let _parallel = batch.parallel;
-            for call in batch.calls {
-                tracing::info!(
-                    tool = %call.tool_name,
-                    args = %debug_json_redacted(&call.arguments),
-                    "Agent 执行工具调用"
-                );
-                let observation = execute_agent_tool(
-                    &ctx.session,
-                    &ctx.services,
-                    &dispatch_ctx,
-                    &ctx.turn_id,
-                    &ctx.goal,
-                    call,
-                    &cancellation,
-                )
-                .await;
-                tracing::debug!(
-                    tool = %observation.tool_name,
-                    success = observation.success,
-                    summary = %observation.summary,
-                    "Agent 工具观测"
-                );
+            let observations = if batch.parallel {
+                futures::future::join_all(batch.calls.into_iter().map(|call| {
+                    execute_logged_agent_tool(
+                        &ctx.session,
+                        &ctx.services,
+                        &dispatch_ctx,
+                        &ctx.turn_id,
+                        &ctx.goal,
+                        call,
+                        &cancellation,
+                    )
+                }))
+                .await
+            } else {
+                let mut observations = Vec::new();
+                for call in batch.calls {
+                    observations.push(
+                        execute_logged_agent_tool(
+                            &ctx.session,
+                            &ctx.services,
+                            &dispatch_ctx,
+                            &ctx.turn_id,
+                            &ctx.goal,
+                            call,
+                            &cancellation,
+                        )
+                        .await,
+                    );
+                }
+                observations
+            };
+            for observation in observations {
                 ctx.session.record_observation(&ctx.turn_id, observation);
             }
         }
@@ -347,6 +356,39 @@ async fn execute_agent_tool(
             .dispatch(dispatch_ctx, call, cancellation.clone())
             .await
     }
+}
+
+async fn execute_logged_agent_tool(
+    session: &Session,
+    services: &RuntimeServices,
+    dispatch_ctx: &ToolDispatchContext,
+    turn_id: &TurnId,
+    goal: &str,
+    call: ToolCall,
+    cancellation: &CancellationToken,
+) -> ToolObservation {
+    tracing::info!(
+        tool = %call.tool_name,
+        args = %debug_json_redacted(&call.arguments),
+        "Agent 执行工具调用"
+    );
+    let observation = execute_agent_tool(
+        session,
+        services,
+        dispatch_ctx,
+        turn_id,
+        goal,
+        call,
+        cancellation,
+    )
+    .await;
+    tracing::debug!(
+        tool = %observation.tool_name,
+        success = observation.success,
+        summary = %observation.summary,
+        "Agent 工具观测"
+    );
+    observation
 }
 
 fn rejected_tool_observation(call: &ToolCall) -> ToolObservation {

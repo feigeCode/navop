@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Tokio, `agent_runtime`, `ai_chat_view`, existing `Tool::supports_parallel` and `ToolRouter::supports_parallel`.
 
-Current status: Task 1 verified; ready to commit.
+Current status: Task 2 verified; ready to commit.
 
 ---
 
@@ -147,7 +147,7 @@ rtk cargo test -p agent_runtime executable_call_batches
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 rtk git add crates/agent_runtime/src/tasks/agent.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-6-multi-resource-execution.md
@@ -160,12 +160,12 @@ rtk git commit -m "feat(agent): batch executable tool calls"
 - Modify: `crates/agent_runtime/src/tasks/agent.rs`
 - Modify: `crates/agent_runtime/tests/integration.rs`
 
-- [ ] **Step 1: Add integration test with delayed parallel tools**
+- [x] **Step 1: Add integration test with delayed parallel tools**
 
 Create two fake tools that opt into `supports_parallel`, block on a barrier or delayed channel,
 and prove one turn can start both before either finishes.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -175,7 +175,7 @@ rtk cargo test -p agent_runtime parallel_tool_calls_start_before_first_finishes
 
 Expected: fail under current serial dispatch.
 
-- [ ] **Step 3: Dispatch each batch**
+- [x] **Step 3: Dispatch each batch**
 
 Replace the serial `for call in executable_calls` dispatch loop with:
 
@@ -186,13 +186,13 @@ Replace the serial `for call in executable_calls` dispatch loop with:
    `ToolDispatchContext`, goal, turn id, and cancellation token.
 5. Join all futures and record observations in original call order.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run:
 
 ```bash
 rtk cargo test -p agent_runtime parallel_tool_calls_start_before_first_finishes
-rtk cargo test -p agent_runtime integration
+rtk cargo test -p agent_runtime --test integration
 ```
 
 Expected: pass.

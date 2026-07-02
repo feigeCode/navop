@@ -26,7 +26,7 @@ use agent_runtime::{
 };
 use async_trait::async_trait;
 use serde_json::json;
-use tokio::sync::Notify;
+use tokio::sync::{Barrier, Notify};
 
 /// 用脚本化模型 + 给定工具注册表构造 Runtime。
 fn build_runtime(responses: Vec<ModelResponse>, registry: ToolRegistry) -> Runtime {
@@ -36,6 +36,22 @@ fn build_runtime(responses: Vec<ModelResponse>, registry: ToolRegistry) -> Runti
 }
 
 struct WriteTool;
+
+struct ParallelProbeTool {
+    name: &'static str,
+    barrier: Arc<Barrier>,
+    started: Arc<AtomicUsize>,
+}
+
+impl ParallelProbeTool {
+    fn new(name: &'static str, barrier: Arc<Barrier>, started: Arc<AtomicUsize>) -> Self {
+        Self {
+            name,
+            barrier,
+            started,
+        }
+    }
+}
 
 #[async_trait]
 impl Tool for WriteTool {
@@ -64,6 +80,40 @@ impl Tool for WriteTool {
             invocation.tool_name,
             "write executed",
             ObservationData::Text("executed".into()),
+        ))
+    }
+}
+
+#[async_trait]
+impl Tool for ParallelProbeTool {
+    fn name(&self) -> ToolName {
+        ToolName::new(self.name)
+    }
+
+    fn spec(&self, _resources: &ResourceContext) -> ToolSpec {
+        ToolSpec::new(
+            self.name,
+            "并发探测工具。",
+            json!({
+                "type": "object",
+                "properties": {}
+            }),
+        )
+        .with_risk(RiskLevel::Low)
+    }
+
+    fn supports_parallel(&self) -> bool {
+        true
+    }
+
+    async fn execute(&self, invocation: ToolInvocation) -> Result<ToolObservation, ToolError> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        self.barrier.wait().await;
+        Ok(ToolObservation::success(
+            invocation.call_id,
+            invocation.tool_name,
+            format!("{} executed", self.name),
+            ObservationData::Text("ok".into()),
         ))
     }
 }
@@ -745,6 +795,44 @@ async fn agent_calls_business_tool_then_finishes() {
             .any(|e| matches!(e, RuntimeEvent::PlanUpdated { .. })),
         "未调用 update_plan 不应产生计划"
     );
+}
+
+#[tokio::test]
+async fn parallel_tool_calls_start_before_first_finishes() {
+    let barrier = Arc::new(Barrier::new(2));
+    let started = Arc::new(AtomicUsize::new(0));
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_calls(vec![
+                function_tool_call("call_parallel_a", "parallel_a", json!({}).to_string()),
+                function_tool_call("call_parallel_b", "parallel_b", json!({}).to_string()),
+            ]),
+            ModelResponse::text("并发检查完成。"),
+        ],
+        ToolRegistry::new()
+            .with_tool(Arc::new(ParallelProbeTool::new(
+                "parallel_a",
+                barrier.clone(),
+                started.clone(),
+            )))
+            .with_tool(Arc::new(ParallelProbeTool::new(
+                "parallel_b",
+                barrier,
+                started.clone(),
+            ))),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(1),
+        runtime.run_turn_blocking(session.id(), "并发检查".into(), TaskKind::Agent),
+    )
+    .await
+    .expect("parallel-safe tool calls should both start before either finishes")
+    .expect("run agent turn");
+
+    assert!(matches!(outcome, TaskOutcome::Completed { .. }));
+    assert_eq!(2, started.load(Ordering::SeqCst));
 }
 
 #[tokio::test]
