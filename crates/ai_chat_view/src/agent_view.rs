@@ -116,6 +116,7 @@ impl RuntimeBinding {
 pub struct AgentChatViewConfig {
     pub runtime: Arc<Runtime>,
     pub resources: ResourceContext,
+    pub available_resources: Vec<ResourceRef>,
     pub mentions: Vec<MentionItem>,
     pub model_options: Vec<ComposerModelOption>,
     pub selected_model_id: Option<SharedString>,
@@ -136,9 +137,11 @@ impl AgentChatViewConfig {
         mentions: Vec<MentionItem>,
     ) -> Self {
         let option = static_runtime_model_option(&runtime);
+        let available_resources = resources.resources.clone();
         Self {
             runtime,
             resources,
+            available_resources,
             mentions,
             model_options: vec![option.clone()],
             selected_model_id: Some(option.id),
@@ -157,6 +160,11 @@ impl AgentChatViewConfig {
     /// 注入可接入的外部 ACP agent 列表。
     pub fn with_acp_agents(mut self, agents: Vec<AcpAgentConfig>) -> Self {
         self.acp_agents = agents;
+        self
+    }
+
+    pub fn with_available_resources(mut self, resources: Vec<ResourceRef>) -> Self {
+        self.available_resources = resources;
         self
     }
 
@@ -290,6 +298,7 @@ pub struct AgentChatView {
     runtime: Arc<Runtime>,
     session_id: SessionId,
     resources: ResourceContext,
+    available_resources: Vec<ResourceRef>,
     transcript: AgentTranscript,
     input: Entity<AgentInput>,
     sessions: Vec<SessionSummary>,
@@ -365,6 +374,7 @@ impl AgentChatView {
         let sidebar_mode = config.sidebar_mode;
         let acp_agents = config.acp_agents;
         let resources = config.resources;
+        let available_resources = config.available_resources;
         let mentions = config.mentions;
         let model_options = config.model_options;
         let binding = RuntimeBinding::new(
@@ -435,6 +445,7 @@ impl AgentChatView {
             runtime,
             session_id,
             resources,
+            available_resources,
             transcript: AgentTranscript::new(),
             input,
             sessions,
@@ -2475,6 +2486,32 @@ mod tests {
             vec![("all", 3), ("postgres", 1), ("redis", 1), ("ssh", 1)],
             filters
         );
+    }
+
+    #[test]
+    fn agent_config_defaults_available_resources_to_pool_resources() {
+        let resources = ResourceContext::new()
+            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"));
+
+        let config = AgentChatViewConfig::new(test_runtime("m"), resources.clone(), Vec::new());
+
+        assert_eq!(config.available_resources, resources.resources);
+    }
+
+    #[test]
+    fn agent_config_accepts_available_resource_catalog() {
+        let pool = ResourceContext::new()
+            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"));
+        let catalog = vec![
+            ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
+            ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"),
+        ];
+
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), pool, Vec::new())
+                .with_available_resources(catalog.clone());
+
+        assert_eq!(config.available_resources, catalog);
     }
 
     #[test]

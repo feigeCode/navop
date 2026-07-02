@@ -165,7 +165,7 @@ rtk git commit -m "feat(ai_chat): add resource pool item display model"
 **Files:**
 - Modify: `crates/ai_chat_view/src/agent_view.rs`
 
-- [ ] **Step 1: Write failing config tests**
+- [x] **Step 1: Write failing config tests**
 
 Add tests in `agent_view.rs` test module:
 
@@ -203,7 +203,7 @@ no field `available_resources` on type `AgentChatViewConfig`
 no method named `with_available_resources`
 ```
 
-- [ ] **Step 2: Add config field and builder**
+- [x] **Step 2: Add config field and builder**
 
 Add to `AgentChatViewConfig`:
 
@@ -244,7 +244,7 @@ Store it in `AgentChatView`:
 available_resources: Vec<ResourceRef>,
 ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run:
 
@@ -255,7 +255,7 @@ rtk cargo test -p ai_chat_view agent_config_accepts_available_resource_catalog
 
 Expected: both pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/agent_view.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5b-resource-pool-management.md
