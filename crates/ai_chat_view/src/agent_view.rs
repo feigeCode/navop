@@ -44,8 +44,8 @@ use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::input::{
     AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
-    ComposerModelOption, ComposerPlanItem, ComposerScope, ComposerSubAgentItem, ComposerTarget,
-    MentionItem,
+    ComposerModelOption, ComposerPlanItem, ComposerResourcePoolSummary, ComposerScope,
+    ComposerSubAgentItem, ComposerTarget, MentionItem,
 };
 use crate::message_view::render_messages_with_code_actions;
 use crate::persistence;
@@ -1866,6 +1866,8 @@ fn build_context(
         .unwrap_or_default();
     AgentComposerContext {
         target,
+        resource_pool: ComposerResourcePoolSummary::default(),
+        resource_type_filters: Vec::new(),
         scopes,
         capabilities,
         plan_items: Vec::new(),

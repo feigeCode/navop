@@ -51,7 +51,7 @@ These remain later Phase 5/6 checkpoints.
 **Files:**
 - Modify: `crates/ai_chat_view/src/input/context.rs`
 
-- [ ] **Step 1: Add failing tests for pool summary and type filters**
+- [x] **Step 1: Add failing tests for pool summary and type filters**
 
 Append these tests in `context.rs` test module:
 
@@ -83,7 +83,7 @@ cannot find type `ComposerResourcePoolSummary` in this scope
 cannot find type `ComposerResourceTypeFilter` in this scope
 ```
 
-- [ ] **Step 2: Add the display structs**
+- [x] **Step 2: Add the display structs**
 
 Insert after `ComposerTarget`:
 
@@ -159,7 +159,7 @@ pub resource_type_filters: Vec<ComposerResourceTypeFilter>,
 
 Update `Default` behavior by relying on `ComposerResourcePoolSummary::default()` and `Vec::new()`.
 
-- [ ] **Step 3: Run the focused test**
+- [x] **Step 3: Run the focused test**
 
 Run:
 
@@ -170,7 +170,7 @@ rtk cargo test -p ai_chat_view resource_type_filter_keeps_stable_element_ids
 
 Expected: both pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/input/context.rs
