@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, GPUI, `ai_chat_view`, `agent_runtime::ResourceContext`, `agent_runtime::ResourceRef`.
 
-Current status: Task 1 verified; ready to commit.
+Current status: Task 2 verified; ready to commit.
 
 ---
 
@@ -162,7 +162,7 @@ rtk cargo test -p ai_chat_view resource_source_option_has_stable_element_id_and_
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/input/context.rs crates/ai_chat_view/src/input/mod.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5d-resource-source-presets.md
@@ -175,7 +175,7 @@ rtk git commit -m "feat(ai_chat): add resource source option model"
 - Modify: `crates/ai_chat_view/src/agent_view.rs`
 - Modify: `docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5d-resource-source-presets.md`
 
-- [ ] **Step 1: Write failing derivation tests**
+- [x] **Step 1: Write failing derivation tests**
 
 Add tests near existing resource-pool helper tests in `agent_view.rs`:
 
@@ -226,7 +226,7 @@ Expected red result:
 cannot find function `resource_source_options` in this scope
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run:
 
@@ -236,7 +236,7 @@ rtk cargo test -p ai_chat_view resource_source_options_mark
 
 Expected: fail because `resource_source_options` is missing.
 
-- [ ] **Step 3: Implement source option derivation**
+- [x] **Step 3: Implement source option derivation**
 
 Add a pure helper near `resource_type_filters` that:
 
@@ -249,7 +249,7 @@ Add a pure helper near `resource_type_filters` that:
 
 Update `build_composer_context` to populate `resource_source_options`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run:
 

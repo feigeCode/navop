@@ -45,7 +45,8 @@ use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::input::{
     AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
     ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem, ComposerResourcePoolSummary,
-    ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem, ComposerTarget, MentionItem,
+    ComposerResourceSourceOption, ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem,
+    ComposerTarget, MentionItem,
 };
 use crate::message_view::render_messages_with_code_actions;
 use crate::persistence;
@@ -1830,6 +1831,7 @@ fn build_composer_context(
     available_resources: &[ResourceRef],
 ) -> AgentComposerContext {
     let mut context = build_context(resources, task_kind, tool_label, model);
+    context.resource_source_options = resource_source_options(resources, available_resources);
     context.resource_pool_items = resource_pool_items(resources, available_resources);
     context.plan_items = composer_plan_items(plan);
     context.subagent_items = composer_subagent_items(subagents);
@@ -2208,6 +2210,85 @@ fn resource_type_filters(resources: &ResourceContext) -> Vec<ComposerResourceTyp
         ComposerResourceTypeFilter::new(kind.clone(), kind.to_uppercase(), count, false)
     }));
     filters
+}
+
+fn resource_source_options(
+    pool: &ResourceContext,
+    catalog: &[ResourceRef],
+) -> Vec<ComposerResourceSourceOption> {
+    let pool_ids = resource_id_set(&pool.resources);
+    let catalog_ids = resource_id_set(catalog);
+    let current_selected = pool.resources.len() == 1
+        && pool
+            .current
+            .as_ref()
+            .is_some_and(|current| Some(current) == pool.resources.first().map(|r| &r.id));
+    let all_selected = !current_selected && !catalog_ids.is_empty() && pool_ids == catalog_ids;
+    let ssh_ids = source_ids(catalog, |kind| matches!(kind, ResourceKind::Ssh));
+    let db_ids = source_ids(catalog, is_database_kind);
+    let redis_ids = source_ids(catalog, |kind| matches!(kind, ResourceKind::Redis));
+    let terminal_ids = source_ids(catalog, |kind| matches!(kind, ResourceKind::Terminal));
+    let source_selected = |ids: &std::collections::HashSet<ResourceId>| {
+        !current_selected && !all_selected && !ids.is_empty() && pool_ids == *ids
+    };
+    let type_selected = source_selected(&ssh_ids)
+        || source_selected(&db_ids)
+        || source_selected(&redis_ids)
+        || source_selected(&terminal_ids);
+    let manual_selected = !current_selected && !all_selected && !type_selected;
+
+    vec![
+        ComposerResourceSourceOption::new("current", "当前", current_count(pool), current_selected),
+        ComposerResourceSourceOption::new("pool", "资源池", pool.resources.len(), false),
+        ComposerResourceSourceOption::new("all", "全部", catalog.len(), all_selected),
+        ComposerResourceSourceOption::new("ssh", "SSH", ssh_ids.len(), source_selected(&ssh_ids)),
+        ComposerResourceSourceOption::new("db", "DB", db_ids.len(), source_selected(&db_ids)),
+        ComposerResourceSourceOption::new(
+            "redis",
+            "Redis",
+            redis_ids.len(),
+            source_selected(&redis_ids),
+        ),
+        ComposerResourceSourceOption::new(
+            "terminal",
+            "Terminal",
+            terminal_ids.len(),
+            source_selected(&terminal_ids),
+        ),
+        ComposerResourceSourceOption::new("manual", "手动", pool.resources.len(), manual_selected),
+        ComposerResourceSourceOption::new("workspace", "工作区", 0, false)
+            .disabled("暂无工作区资源来源"),
+        ComposerResourceSourceOption::new("tag", "标签", 0, false).disabled("暂无标签资源来源"),
+    ]
+}
+
+fn resource_id_set(resources: &[ResourceRef]) -> std::collections::HashSet<ResourceId> {
+    resources
+        .iter()
+        .map(|resource| resource.id.clone())
+        .collect()
+}
+
+fn source_ids(
+    catalog: &[ResourceRef],
+    predicate: fn(&ResourceKind) -> bool,
+) -> std::collections::HashSet<ResourceId> {
+    catalog
+        .iter()
+        .filter(|resource| predicate(&resource.kind))
+        .map(|resource| resource.id.clone())
+        .collect()
+}
+
+fn is_database_kind(kind: &ResourceKind) -> bool {
+    matches!(
+        kind,
+        ResourceKind::Mysql | ResourceKind::Postgres | ResourceKind::Sqlite | ResourceKind::Mongo
+    )
+}
+
+fn current_count(pool: &ResourceContext) -> usize {
+    usize::from(pool.current().is_some())
 }
 
 fn resource_pool_items(
@@ -2680,6 +2761,48 @@ mod tests {
         assert_eq!(items[1].id.as_ref(), "ssh-b");
         assert!(!items[1].in_pool);
         assert!(!items[1].is_default);
+    }
+
+    #[test]
+    fn resource_source_options_mark_all_when_pool_matches_catalog() {
+        let pool = ResourceContext::new()
+            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"))
+            .with_resource(ResourceRef::new("redis-a", ResourceKind::Redis, "cache"));
+        let catalog = pool.resources.clone();
+
+        let options = resource_source_options(&pool, &catalog);
+
+        assert!(source_option(&options, "all").selected);
+        assert_eq!(source_option(&options, "all").count, 2);
+        assert!(!source_option(&options, "current").selected);
+    }
+
+    #[test]
+    fn resource_source_options_mark_manual_for_mixed_subset() {
+        let pool = ResourceContext::new()
+            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"))
+            .with_resource(ResourceRef::new("redis-a", ResourceKind::Redis, "cache"));
+        let catalog = vec![
+            ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
+            ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"),
+            ResourceRef::new("redis-a", ResourceKind::Redis, "cache"),
+        ];
+
+        let options = resource_source_options(&pool, &catalog);
+
+        assert!(source_option(&options, "manual").selected);
+        assert_eq!(source_option(&options, "ssh").count, 2);
+        assert_eq!(source_option(&options, "redis").count, 1);
+    }
+
+    fn source_option<'a>(
+        options: &'a [ComposerResourceSourceOption],
+        id: &str,
+    ) -> &'a ComposerResourceSourceOption {
+        options
+            .iter()
+            .find(|option| option.id.as_ref() == id)
+            .unwrap()
     }
 
     #[test]
