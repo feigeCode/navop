@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, GPUI, `ai_chat_view`, `agent_runtime::ResourceContext`, `agent_runtime::ResourceRef`.
 
-Current status: Planned.
+Current status: Resource pool membership add/remove checkpoint verified.
 
 ---
 
@@ -713,7 +713,7 @@ rtk git commit -m "feat(ai_chat): build resource catalog for pool management"
 - Modify: `docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md`
 - Modify: `docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5b-resource-pool-management.md`
 
-- [ ] **Step 1: Run focused tests**
+- [x] **Step 1: Run focused tests**
 
 Run:
 
@@ -727,7 +727,7 @@ rtk cargo test -p ai_chat_view remove_default_resource
 
 Expected: all pass.
 
-- [ ] **Step 2: Run crate check**
+- [x] **Step 2: Run crate check**
 
 Run:
 
@@ -738,7 +738,7 @@ rtk git diff --check
 
 Expected: `ai_chat_view` check exits 0. Existing `block v0.1.6` future-incompat warning can remain. `git diff --check` has no output.
 
-- [ ] **Step 3: Update tracking**
+- [x] **Step 3: Update tracking**
 
 Update Phase 5 row:
 
@@ -752,7 +752,7 @@ Update this plan status:
 Current status: Resource pool membership add/remove checkpoint verified.
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 rtk git add docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5b-resource-pool-management.md
