@@ -45,7 +45,7 @@ use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::input::{
     AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
     ComposerModelOption, ComposerPlanItem, ComposerResourcePoolSummary, ComposerScope,
-    ComposerSubAgentItem, ComposerTarget, MentionItem,
+    ComposerResourceTypeFilter, ComposerSubAgentItem, ComposerTarget, MentionItem,
 };
 use crate::message_view::render_messages_with_code_actions;
 use crate::persistence;
@@ -1866,8 +1866,8 @@ fn build_context(
         .unwrap_or_default();
     AgentComposerContext {
         target,
-        resource_pool: ComposerResourcePoolSummary::default(),
-        resource_type_filters: Vec::new(),
+        resource_pool: resource_pool_summary(resources),
+        resource_type_filters: resource_type_filters(resources),
         scopes,
         capabilities,
         plan_items: Vec::new(),
@@ -2084,6 +2084,35 @@ fn current_agent_icon_for_option(agent: &ComposerAgentOption) -> IconName {
     } else {
         IconName::AI
     }
+}
+
+fn resource_pool_summary(resources: &ResourceContext) -> ComposerResourcePoolSummary {
+    let current = resources.current();
+    ComposerResourcePoolSummary::new(
+        current.map(|resource| SharedString::from(resource.id.as_str().to_string())),
+        current
+            .map(|resource| resource.label.clone())
+            .unwrap_or_else(|| "无默认目标".to_string()),
+        resources.resources.len(),
+    )
+}
+
+fn resource_type_filters(resources: &ResourceContext) -> Vec<ComposerResourceTypeFilter> {
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for resource in &resources.resources {
+        *counts.entry(resource.kind.as_str().to_string()).or_default() += 1;
+    }
+
+    let mut filters = vec![ComposerResourceTypeFilter::new(
+        "all",
+        "全部",
+        resources.resources.len(),
+        true,
+    )];
+    filters.extend(counts.into_iter().map(|(kind, count)| {
+        ComposerResourceTypeFilter::new(kind.clone(), kind.to_uppercase(), count, false)
+    }));
+    filters
 }
 
 fn target_from_resource(r: &ResourceRef) -> ComposerTarget {
@@ -2394,6 +2423,57 @@ mod tests {
         assert_eq!(ctx.scopes[1].value.as_ref(), "public");
         assert_eq!(ctx.task_label.as_ref(), "Auto Mode");
         assert_eq!(ctx.tool_label.as_ref(), "只读");
+    }
+
+    #[test]
+    fn build_context_marks_current_resource_as_default_target() {
+        let resources = ResourceContext::new()
+            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"))
+            .with_resource(ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"));
+
+        let context = build_context(
+            &resources,
+            TaskKind::Agent,
+            &SharedString::from("自动"),
+            None,
+        );
+
+        assert_eq!(context.resource_pool.total_resources, 2);
+        assert_eq!(
+            context
+                .resource_pool
+                .default_target_id
+                .as_ref()
+                .map(|id| id.as_ref()),
+            Some("ssh-a")
+        );
+        assert_eq!(context.resource_pool.default_label.as_ref(), "prod-a");
+    }
+
+    #[test]
+    fn build_context_counts_resource_types_for_filters() {
+        let resources = ResourceContext::new()
+            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"))
+            .with_resource(ResourceRef::new("db-a", ResourceKind::Postgres, "prod-db"))
+            .with_resource(ResourceRef::new("redis-a", ResourceKind::Redis, "cache"));
+
+        let context = build_context(
+            &resources,
+            TaskKind::Agent,
+            &SharedString::from("自动"),
+            None,
+        );
+
+        let filters = context
+            .resource_type_filters
+            .iter()
+            .map(|filter| (filter.id.as_ref(), filter.count))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            vec![("all", 3), ("postgres", 1), ("redis", 1), ("ssh", 1)],
+            filters
+        );
     }
 
     #[test]

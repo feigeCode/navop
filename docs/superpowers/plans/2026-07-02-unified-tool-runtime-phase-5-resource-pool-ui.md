@@ -182,7 +182,7 @@ rtk git commit -m "feat(ai_chat): add resource pool display model"
 **Files:**
 - Modify: `crates/ai_chat_view/src/agent_view.rs`
 
-- [ ] **Step 1: Add failing tests for default target and type counts**
+- [x] **Step 1: Add failing tests for default target and type counts**
 
 Add tests near the existing `target_from_resource` tests in `agent_view.rs`:
 
@@ -242,7 +242,7 @@ no field `resource_pool` on type `AgentComposerContext`
 no field `resource_type_filters` on type `AgentComposerContext`
 ```
 
-- [ ] **Step 2: Add mapping helpers**
+- [x] **Step 2: Add mapping helpers**
 
 Add helpers near `target_from_resource`:
 
@@ -284,7 +284,7 @@ resource_pool: resource_pool_summary(resources),
 resource_type_filters: resource_type_filters(resources),
 ```
 
-- [ ] **Step 3: Run focused tests**
+- [x] **Step 3: Run focused tests**
 
 Run:
 
@@ -295,7 +295,7 @@ rtk cargo test -p ai_chat_view build_context_counts_resource_types_for_filters
 
 Expected: both pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/agent_view.rs crates/ai_chat_view/src/input/context.rs
