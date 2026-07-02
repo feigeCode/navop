@@ -103,6 +103,15 @@ impl ToolSpec {
         self
     }
 
+    pub fn from_runtime_descriptor(descriptor: &tool_runtime::RuntimeToolDescriptor) -> Self {
+        Self {
+            name: ToolName::new(descriptor.id.as_str()),
+            description: descriptor.description.clone(),
+            parameters: descriptor.input_schema.clone(),
+            risk: runtime_risk_to_agent(descriptor.annotations.risk),
+        }
+    }
+
     /// 转换为 `llm-connector` 工具定义。
     pub fn to_llm_tool(&self) -> LlmTool {
         LlmTool::function(
@@ -110,6 +119,16 @@ impl ToolSpec {
             Some(self.description.clone()),
             self.parameters.clone(),
         )
+    }
+}
+
+fn runtime_risk_to_agent(risk: tool_runtime::RiskLevel) -> RiskLevel {
+    match risk {
+        tool_runtime::RiskLevel::Read => RiskLevel::Read,
+        tool_runtime::RiskLevel::Low => RiskLevel::Low,
+        tool_runtime::RiskLevel::Medium => RiskLevel::Medium,
+        tool_runtime::RiskLevel::High => RiskLevel::High,
+        tool_runtime::RiskLevel::Critical => RiskLevel::Critical,
     }
 }
 

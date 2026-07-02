@@ -73,6 +73,19 @@ impl ResourceKind {
             ResourceKind::Other(s) => s,
         }
     }
+
+    pub fn to_runtime_resource_kind(&self) -> tool_runtime::ResourceKind {
+        match self {
+            ResourceKind::Ssh => tool_runtime::ResourceKind::Ssh,
+            ResourceKind::Mysql => tool_runtime::ResourceKind::Mysql,
+            ResourceKind::Postgres => tool_runtime::ResourceKind::Postgres,
+            ResourceKind::Sqlite => tool_runtime::ResourceKind::Sqlite,
+            ResourceKind::Redis => tool_runtime::ResourceKind::Redis,
+            ResourceKind::Mongo => tool_runtime::ResourceKind::Mongo,
+            ResourceKind::Terminal => tool_runtime::ResourceKind::Terminal,
+            ResourceKind::Other(value) => tool_runtime::ResourceKind::Other(value.clone()),
+        }
+    }
 }
 
 impl fmt::Display for ResourceKind {
@@ -115,6 +128,22 @@ impl ResourceRef {
             self.scopes.push(scope);
         }
     }
+
+    pub fn to_runtime_resource_ref(&self) -> tool_runtime::ResourceRef {
+        let mut resource = tool_runtime::ResourceRef::new(
+            self.id.as_str(),
+            self.kind.to_runtime_resource_kind(),
+            self.label.clone(),
+        );
+        for scope in &self.scopes {
+            resource = resource.with_scope(tool_runtime::ResourceScope::new(
+                scope.key.clone(),
+                scope.label.clone(),
+                scope.value.clone(),
+            ));
+        }
+        resource
+    }
 }
 
 /// 资源下的细分作用域。
@@ -147,6 +176,17 @@ pub struct ResourceContext {
 impl ResourceContext {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn to_runtime_resource_pool(&self) -> tool_runtime::ResourcePool {
+        let mut pool = tool_runtime::ResourcePool::new();
+        for resource in &self.resources {
+            pool = pool.with_resource(resource.to_runtime_resource_ref());
+        }
+        if let Some(current) = &self.current {
+            pool = pool.with_default_target(tool_runtime::ResourceId::new(current.as_str()));
+        }
+        pool
     }
 
     /// 追加一个资源;若是第一个资源,自动设为当前聚焦资源。
