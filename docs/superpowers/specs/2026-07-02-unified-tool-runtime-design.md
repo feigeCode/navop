@@ -81,36 +81,30 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 4 Public MCP settings profile wording | Done | `McpPermissionMode` keeps old persisted values but exposes profile ids `safe/confirm/auto`; Public MCP runtime config carries `permission_profile`; settings UI labels now show Safe / Confirm / Auto. Core settings and app runtime tests passed on 2026-07-02. | Later storage migration can replace `permission_mode` only when a broader settings migration is planned. |
 | Phase 5a Resource Pool UI wording/filtering | Done | `6010dad7 feat(ai_chat): add resource pool display model`, `e8985154 feat(ai_chat): rename context selector to resource pool`, `d7b82ab0 feat(ai_chat): filter resource pool by type`, `84d8fe65 test(ai_chat): document resource pool default target semantics`, `ad195aab docs: track resource pool ui checkpoint` | Keep wording and default-target semantics while wiring broader catalogs. |
 | Phase 5b Resource Pool membership | Done | `1e980c66 feat(ai_chat): add resource pool item display model`, `f271dc59 feat(ai_chat): add available resource catalog`, `07a8b217 feat(ai_chat): map resource catalog to pool rows`, `666b55a2 feat(ai_chat): render resource pool membership actions`, `f7099082 feat(ai_chat): handle resource pool membership changes`, `cf3babff feat(ai_chat): build resource catalog for pool management`, `00094e15 docs: track resource pool management checkpoint` | Wire real entry points so sidebars pass broader catalogs instead of only the selected pool. |
-| Phase 5c Sidebar catalog wiring | In progress | Worktree changes currently wire DB, Redis, and Mongo sidebars through `DefaultAgentChatPanel::new_with_context_and_catalog` / `set_resource_context_with_catalog`; terminal sidebar is intentionally not wired because it only receives the current `StoredConnection`. | Rerun focused verification, commit `feat(ai_chat): wire resource catalog into sidebars`, then update this row to `Done`. |
+| Phase 5c Sidebar catalog wiring | Done | `a2cd12e feat(ai_chat): wire resource catalog into sidebars` wires DB, Redis, and Mongo sidebars through catalog-aware default panel APIs. Focused `ai_chat_view` tests and checks for `ai_chat_view`, `db_view`, `redis_view`, and `mongodb_view` passed on 2026-07-02. | Start Phase 5d resource source presets or run manual resource-pool smoke. |
 | Phase 5d Resource source presets | Planned | Architecture scope below. | Add workspace/tag/all/manual source selector and persisted resource-pool presets. |
 | Phase 6 Multi-resource execution | Planned | Architecture scope below. | Add safe parallel routing and target-grouped result display. |
 
 ### Active Checkpoint
 
-Current checkpoint: Phase 5c sidebar catalog wiring.
+Current checkpoint: Phase 3c manual terminal-exec smoke and Phase 5d resource source presets.
 
 Purpose:
 
-1. Keep side-panel sessions single-resource by default.
-2. Pass a broader `available_resources` catalog to the resource pool popover for DB,
-   Redis, and Mongo sidebars.
-3. Preserve existing `set_resource_context` behavior for callers that do not have a
-   broader catalog.
+1. Verify `terminal.exec` writes into the visible terminal pane with real app behavior.
+2. Add resource source presets only after the sidebar catalog wiring is committed.
+3. Keep side-panel sessions single-resource by default while allowing explicit expansion
+   from a broader catalog.
 4. Avoid guessing a terminal catalog until `TerminalSidebar` has a real full-connection
    source.
 
-Current worktree files:
+Last completed checkpoint:
 
 ```text
-crates/ai_chat_view/src/agent_view.rs
-crates/ai_chat_view/src/default_panel.rs
-crates/ai_chat_view/src/default_panel_tests.rs
-crates/db_view/src/sidebar/mod.rs
-crates/mongodb_view/src/sidebar.rs
-crates/redis_view/src/sidebar.rs
+a2cd12e feat(ai_chat): wire resource catalog into sidebars
 ```
 
-Before committing the checkpoint, rerun:
+Phase 5c verification run:
 
 ```bash
 rtk cargo test -p ai_chat_view sidebar_config_preserves_available_resource_catalog
@@ -122,18 +116,8 @@ rtk cargo check -p mongodb_view
 rtk git diff --check
 ```
 
-Expected commit:
-
-```bash
-rtk git add \
-  crates/ai_chat_view/src/agent_view.rs \
-  crates/ai_chat_view/src/default_panel.rs \
-  crates/ai_chat_view/src/default_panel_tests.rs \
-  crates/db_view/src/sidebar/mod.rs \
-  crates/mongodb_view/src/sidebar.rs \
-  crates/redis_view/src/sidebar.rs
-rtk git commit -m "feat(ai_chat): wire resource catalog into sidebars"
-```
+Result: all commands exited 0. The existing `block v0.1.6` future-incompat warning can
+remain.
 
 Current product decision:
 
@@ -145,11 +129,10 @@ Current product decision:
 
 Next recommended checkpoints:
 
-1. Finish and commit Phase 5c sidebar catalog wiring.
-2. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
+1. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
    through `terminal.exec`.
-3. Start Phase 5d resource source presets only after Phase 5c is committed.
-4. Start Phase 6 only after at least one multi-resource UI path can produce explicit
+2. Start Phase 5d resource source presets.
+3. Start Phase 6 only after at least one multi-resource UI path can produce explicit
    targets from the resource pool.
 
 ## Design Principles

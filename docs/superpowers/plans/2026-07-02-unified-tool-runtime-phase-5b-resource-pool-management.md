@@ -8,8 +8,7 @@
 
 **Tech Stack:** Rust, GPUI, `ai_chat_view`, `agent_runtime::ResourceContext`, `agent_runtime::ResourceRef`.
 
-Current status: Resource pool membership add/remove checkpoint verified and committed.
-Follow-up sidebar catalog wiring is in progress in the worktree; see Task 8.
+Current status: Resource pool membership and sidebar catalog wiring checkpoints verified and committed.
 
 ---
 
@@ -801,7 +800,7 @@ rtk git commit -m "docs: track resource pool management checkpoint"
 - Modify: `crates/mongodb_view/src/sidebar.rs`
 - Modify: `crates/redis_view/src/sidebar.rs`
 
-Status: In progress in the worktree.
+Status: Verified and committed in `a2cd12e feat(ai_chat): wire resource catalog into sidebars`.
 
 - [x] **Step 1: Add catalog-aware default panel construction APIs**
 
@@ -864,7 +863,7 @@ Implemented behavior:
 Terminal sidebar is intentionally unchanged because its constructor currently receives
 only the current `StoredConnection`, not the full connection list.
 
-- [ ] **Step 5: Rerun focused verification before commit**
+- [x] **Step 5: Rerun focused verification before commit**
 
 Run:
 
@@ -885,7 +884,7 @@ Expected:
 3. `rtk git diff --check` has no output.
 4. Existing `block v0.1.6` future-incompat warning can remain.
 
-- [ ] **Step 6: Commit sidebar catalog wiring**
+- [x] **Step 6: Commit sidebar catalog wiring**
 
 Run:
 
@@ -902,7 +901,7 @@ rtk git add \
 rtk git commit -m "feat(ai_chat): wire resource catalog into sidebars"
 ```
 
-- [ ] **Step 7: Update global tracking after commit**
+- [x] **Step 7: Update global tracking after commit**
 
 Update `docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md`:
 
