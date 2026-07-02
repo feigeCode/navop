@@ -10,6 +10,7 @@ pub use attachment::ImageAttachment;
 pub use context::{
     AgentComposerContext, ComposerAgentOption, ComposerMenuOption, ComposerModel,
     ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem, ComposerResourcePoolSummary,
-    ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem, ComposerTarget,
+    ComposerResourceSourceOption, ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem,
+    ComposerTarget,
 };
 pub use mention::{MentionCompletionProvider, MentionItem};

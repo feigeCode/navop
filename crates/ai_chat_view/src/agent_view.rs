@@ -1959,6 +1959,7 @@ fn build_context(
         target,
         resource_pool: resource_pool_summary(resources),
         resource_type_filters: resource_type_filters(resources),
+        resource_source_options: Vec::new(),
         resource_pool_items: Vec::new(),
         scopes,
         capabilities,

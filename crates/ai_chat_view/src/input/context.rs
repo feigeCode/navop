@@ -106,6 +106,45 @@ impl ComposerResourceTypeFilter {
     }
 }
 
+/// 资源池来源预设。只描述候选来源,不直接持有业务资源。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerResourceSourceOption {
+    pub id: SharedString,
+    pub label: SharedString,
+    pub count: usize,
+    pub selected: bool,
+    pub enabled: bool,
+    pub hint: Option<SharedString>,
+}
+
+impl ComposerResourceSourceOption {
+    pub fn new(
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        count: usize,
+        selected: bool,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            count,
+            selected,
+            enabled: true,
+            hint: None,
+        }
+    }
+
+    pub fn disabled(mut self, hint: impl Into<SharedString>) -> Self {
+        self.enabled = false;
+        self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn element_id(&self) -> SharedString {
+        SharedString::from(format!("resource-source-{}", self.id))
+    }
+}
+
 /// 资源池候选行。`in_pool` 表示是否已授权进入本会话资源池。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComposerResourcePoolItem {
@@ -382,6 +421,8 @@ pub struct AgentComposerContext {
     pub resource_pool: ComposerResourcePoolSummary,
     /// 资源池类型筛选项。
     pub resource_type_filters: Vec<ComposerResourceTypeFilter>,
+    /// 资源池来源预设。
+    pub resource_source_options: Vec<ComposerResourceSourceOption>,
     /// 资源池成员与池外候选资源列表。
     pub resource_pool_items: Vec<ComposerResourcePoolItem>,
     /// 派生上下文 chip(动态数量)。
@@ -459,6 +500,23 @@ mod tests {
         assert_eq!(filter.label.as_ref(), "SSH");
         assert_eq!(filter.count, 3);
         assert!(filter.selected);
+    }
+
+    #[test]
+    fn resource_source_option_has_stable_element_id_and_selection_state() {
+        let selected = ComposerResourceSourceOption::new("all", "全部资源", 3, true);
+        let disabled = ComposerResourceSourceOption::new("workspace", "工作区", 0, false)
+            .disabled("暂无工作区资源来源");
+
+        assert_eq!(selected.element_id().as_ref(), "resource-source-all");
+        assert_eq!(selected.count, 3);
+        assert!(selected.selected);
+        assert!(selected.enabled);
+        assert!(!disabled.enabled);
+        assert_eq!(
+            disabled.hint.as_ref().map(|s| s.as_ref()),
+            Some("暂无工作区资源来源")
+        );
     }
 
     #[test]
