@@ -280,29 +280,34 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
             ctx.session.record_tool_call(&ctx.turn_id, call);
         }
 
-        for call in executable_calls {
-            tracing::info!(
-                tool = %call.tool_name,
-                args = %debug_json_redacted(&call.arguments),
-                "Agent 执行工具调用"
-            );
-            let observation = execute_agent_tool(
-                &ctx.session,
-                &ctx.services,
-                &dispatch_ctx,
-                &ctx.turn_id,
-                &ctx.goal,
-                call,
-                &cancellation,
-            )
-            .await;
-            tracing::debug!(
-                tool = %observation.tool_name,
-                success = observation.success,
-                summary = %observation.summary,
-                "Agent 工具观测"
-            );
-            ctx.session.record_observation(&ctx.turn_id, observation);
+        for batch in executable_call_batches(executable_calls, |call| {
+            ctx.services.tools.supports_parallel(call)
+        }) {
+            let _parallel = batch.parallel;
+            for call in batch.calls {
+                tracing::info!(
+                    tool = %call.tool_name,
+                    args = %debug_json_redacted(&call.arguments),
+                    "Agent 执行工具调用"
+                );
+                let observation = execute_agent_tool(
+                    &ctx.session,
+                    &ctx.services,
+                    &dispatch_ctx,
+                    &ctx.turn_id,
+                    &ctx.goal,
+                    call,
+                    &cancellation,
+                )
+                .await;
+                tracing::debug!(
+                    tool = %observation.tool_name,
+                    success = observation.success,
+                    summary = %observation.summary,
+                    "Agent 工具观测"
+                );
+                ctx.session.record_observation(&ctx.turn_id, observation);
+            }
         }
     }
 
@@ -692,6 +697,45 @@ fn llm_tool_call_id(call: &llm_connector::types::ToolCall) -> ToolCallId {
     }
 }
 
+struct ExecutableCallBatch {
+    parallel: bool,
+    calls: Vec<ToolCall>,
+}
+
+fn executable_call_batches(
+    calls: Vec<ToolCall>,
+    supports_parallel: impl Fn(&ToolCall) -> bool,
+) -> Vec<ExecutableCallBatch> {
+    let mut batches = Vec::new();
+    let mut current_parallel = Vec::new();
+
+    for call in calls {
+        if supports_parallel(&call) {
+            current_parallel.push(call);
+        } else {
+            if !current_parallel.is_empty() {
+                batches.push(ExecutableCallBatch {
+                    parallel: true,
+                    calls: std::mem::take(&mut current_parallel),
+                });
+            }
+            batches.push(ExecutableCallBatch {
+                parallel: false,
+                calls: vec![call],
+            });
+        }
+    }
+
+    if !current_parallel.is_empty() {
+        batches.push(ExecutableCallBatch {
+            parallel: true,
+            calls: current_parallel,
+        });
+    }
+
+    batches
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -753,6 +797,38 @@ mod tests {
 
         assert!(rendered.contains("<non-json arguments redacted"));
         assert!(!rendered.contains("plain-secret"));
+    }
+
+    #[test]
+    fn executable_call_batches_group_adjacent_parallel_safe_calls() {
+        let calls = vec![
+            ToolCall::new("read_a", json!({})),
+            ToolCall::new("read_b", json!({})),
+            ToolCall::new("write_a", json!({})),
+            ToolCall::new("read_c", json!({})),
+        ];
+        let batches =
+            executable_call_batches(calls, |call| call.tool_name.as_str().starts_with("read"));
+
+        assert_eq!(batches.len(), 3);
+        assert!(batches[0].parallel);
+        assert_eq!(batches[0].calls.len(), 2);
+        assert!(!batches[1].parallel);
+        assert_eq!(batches[1].calls.len(), 1);
+        assert!(batches[2].parallel);
+        assert_eq!(batches[2].calls.len(), 1);
+    }
+
+    #[test]
+    fn executable_call_batches_keep_serial_calls_separate() {
+        let calls = vec![
+            ToolCall::new("write_a", json!({})),
+            ToolCall::new("write_b", json!({})),
+        ];
+        let batches = executable_call_batches(calls, |_| false);
+
+        assert_eq!(batches.len(), 2);
+        assert!(batches.iter().all(|batch| !batch.parallel));
     }
 
     #[test]
