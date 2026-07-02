@@ -267,7 +267,7 @@ rtk git commit -m "feat(ai_chat): add available resource catalog"
 **Files:**
 - Modify: `crates/ai_chat_view/src/agent_view.rs`
 
-- [ ] **Step 1: Write failing mapping tests**
+- [x] **Step 1: Write failing mapping tests**
 
 Add tests in `agent_view.rs` test module:
 
@@ -299,7 +299,7 @@ Expected red result:
 cannot find function `resource_pool_items` in this scope
 ```
 
-- [ ] **Step 2: Add mapping helper**
+- [x] **Step 2: Add mapping helper**
 
 Add helper near `resource_type_filters`:
 
@@ -342,7 +342,7 @@ context.resource_pool_items = resource_pool_items(resources, available_resources
 
 Update all call sites to pass `&self.available_resources` or `&resources.resources` during initialization.
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run:
 
@@ -353,7 +353,7 @@ rtk cargo test -p ai_chat_view build_context_marks_current_resource_as_default_t
 
 Expected: both pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/agent_view.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5b-resource-pool-management.md

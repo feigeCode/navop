@@ -44,8 +44,8 @@ use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::input::{
     AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
-    ComposerModelOption, ComposerPlanItem, ComposerResourcePoolSummary, ComposerScope,
-    ComposerResourceTypeFilter, ComposerSubAgentItem, ComposerTarget, MentionItem,
+    ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem, ComposerResourcePoolSummary,
+    ComposerScope, ComposerResourceTypeFilter, ComposerSubAgentItem, ComposerTarget, MentionItem,
 };
 use crate::message_view::render_messages_with_code_actions;
 use crate::persistence;
@@ -411,6 +411,7 @@ impl AgentChatView {
             None,
             false,
             None,
+            &available_resources,
         );
         let target_options: Vec<ComposerTarget> = resources
             .resources
@@ -756,6 +757,7 @@ impl AgentChatView {
             self.current_acp_id.as_ref(),
             self.acp_connecting,
             self.acp.as_ref().map(|acp| acp.state()),
+            &self.available_resources,
         );
         self.input.update(cx, |inp, cx| inp.set_context(ctx, cx));
     }
@@ -1749,8 +1751,10 @@ fn build_composer_context(
     current_acp_id: Option<&SharedString>,
     acp_connecting: bool,
     acp_state: Option<AcpSessionState>,
+    available_resources: &[ResourceRef],
 ) -> AgentComposerContext {
     let mut context = build_context(resources, task_kind, tool_label, model);
+    context.resource_pool_items = resource_pool_items(resources, available_resources);
     context.plan_items = composer_plan_items(plan);
     context.subagent_items = composer_subagent_items(subagents);
     context.agent_options =
@@ -2125,6 +2129,35 @@ fn resource_type_filters(resources: &ResourceContext) -> Vec<ComposerResourceTyp
         ComposerResourceTypeFilter::new(kind.clone(), kind.to_uppercase(), count, false)
     }));
     filters
+}
+
+fn resource_pool_items(
+    pool: &ResourceContext,
+    catalog: &[ResourceRef],
+) -> Vec<ComposerResourcePoolItem> {
+    let pool_ids = pool
+        .resources
+        .iter()
+        .map(|resource| resource.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let default_id = pool.current.clone();
+
+    catalog
+        .iter()
+        .map(|resource| {
+            let in_pool = pool_ids.contains(&resource.id);
+            let is_default = default_id.as_ref() == Some(&resource.id);
+            ComposerResourcePoolItem::new(
+                resource.id.as_str().to_string(),
+                resource.label.clone(),
+                kind_icon(&resource.kind),
+                resource.kind.as_str().to_string(),
+                format!("{} · {}", resource.kind.as_str(), resource.id),
+                in_pool,
+                is_default,
+            )
+        })
+        .collect()
 }
 
 fn target_from_resource(r: &ResourceRef) -> ComposerTarget {
@@ -2515,6 +2548,26 @@ mod tests {
     }
 
     #[test]
+    fn resource_pool_items_mark_pool_membership_and_default_target() {
+        let pool = ResourceContext::new()
+            .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"));
+        let catalog = vec![
+            ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
+            ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"),
+        ];
+
+        let items = resource_pool_items(&pool, &catalog);
+
+        assert_eq!(2, items.len());
+        assert_eq!(items[0].id.as_ref(), "ssh-a");
+        assert!(items[0].in_pool);
+        assert!(items[0].is_default);
+        assert_eq!(items[1].id.as_ref(), "ssh-b");
+        assert!(!items[1].in_pool);
+        assert!(!items[1].is_default);
+    }
+
+    #[test]
     fn task_kind_round_trips() {
         assert_eq!(task_kind_from_id("agent"), Some(TaskKind::Agent));
         assert_eq!(task_kind_from_id("ask"), Some(TaskKind::Ask));
@@ -2582,6 +2635,7 @@ mod tests {
             None,
             false,
             None,
+            &[],
         );
         let acp = build_composer_context(
             &ResourceContext::new(),
@@ -2595,6 +2649,7 @@ mod tests {
             Some(&acp_id),
             false,
             None,
+            &[],
         );
 
         assert_eq!(local.plan_items, acp.plan_items);
@@ -2623,6 +2678,7 @@ mod tests {
             None,
             false,
             None,
+            &[],
         );
 
         assert_eq!(ctx.agent_options[0].label.as_ref(), "One Agent");
@@ -2661,6 +2717,7 @@ mod tests {
             None,
             false,
             None,
+            &[],
         );
 
         assert_eq!(ctx.subagent_items.len(), 2);
@@ -2738,6 +2795,7 @@ mod tests {
             None,
             false,
             Some(state),
+            &[],
         );
 
         assert_eq!(ctx.target.unwrap().label.as_ref(), "ACP 工作会话");
