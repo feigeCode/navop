@@ -127,7 +127,7 @@ fn plan_existing_item(
 
     let last_synced = item.last_synced_at.unwrap_or(0);
     let remote_updated = remote.updated_at / 1000;
-    let local_changed = item.updated_at > last_synced;
+    let local_changed = item.updated_at > last_synced || remote_updated <= last_synced;
     let remote_changed = remote_updated > last_synced;
 
     match (local_changed, remote_changed) {
@@ -203,6 +203,25 @@ mod tests {
 
         assert!(plan.conflicts.is_empty());
         assert_eq!(vec!["cloud-1"], plan.to_mark_synced_cloud_ids());
+    }
+
+    #[test]
+    fn planner_uploads_local_checksum_change_even_when_timestamp_matches_last_sync() {
+        let local = vec![local_item_with_sync(
+            "local-1",
+            "cloud-1",
+            100,
+            100,
+            "local-checksum",
+        )];
+        let mut remote = test_record("cloud-1", data_type::CONNECTION, 2, "remote-checksum");
+        remote.updated_at = 100_000;
+
+        let plan = PersonalSyncPlanner::new().plan(&local, &[remote], &HashSet::new());
+
+        assert_eq!(1, plan.to_update_cloud.len());
+        assert!(plan.to_update_local.is_empty());
+        assert!(plan.conflicts.is_empty());
     }
 
     fn local_item(

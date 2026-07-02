@@ -52,7 +52,8 @@ use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
     LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LargeTextCellEditorOpenMode,
-    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, effective_locale_for_setting,
+    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
+    effective_locale_for_setting,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_core::utils::auto_save_config::AutoSaveConfig;
@@ -831,9 +832,9 @@ impl SettingsPanel {
                 ]),
             SettingPage::new(t!("Settings.Sync.title"))
                 .resettable(true)
-                .group(personal_sync_setting_group(
+                .group(sync_setting_group(
+                    default_settings.sync_provider,
                     &default_settings.personal_sync,
-                    default_settings.supabase_auto_sync,
                 )),
             SettingPage::new(t!("TeamSync.manage_keys"))
                 .resettable(false)
@@ -861,15 +862,14 @@ impl SettingsPanel {
     }
 }
 
-fn personal_sync_setting_group(
+fn sync_setting_group(
+    sync_provider_default: SyncProvider,
     defaults: &PersonalSyncSettings,
-    supabase_auto_sync_default: bool,
 ) -> SettingGroup {
     SettingGroup::new()
         .title(t!("Settings.Sync.group_title"))
         .items(vec![
-            personal_sync_enabled_item(defaults.enabled),
-            supabase_auto_sync_item(supabase_auto_sync_default),
+            sync_provider_item(sync_provider_default),
             personal_sync_backend_item(defaults.backend),
             personal_sync_path_item(defaults.path.clone()),
             personal_sync_auto_sync_item(defaults.auto_sync),
@@ -880,32 +880,34 @@ fn personal_sync_setting_group(
         ])
 }
 
-fn supabase_auto_sync_item(default: bool) -> SettingItem {
+fn sync_provider_item(default: SyncProvider) -> SettingItem {
     SettingItem::new(
-        t!("Settings.Sync.supabase_auto_sync"),
-        SettingField::switch(
-            |cx: &App| AppSettings::global(cx).supabase_auto_sync,
-            |val: bool, cx: &mut App| {
-                AppSettings::update_and_save(cx, |settings| settings.supabase_auto_sync = val);
+        t!("Settings.Sync.provider"),
+        SettingField::dropdown(
+            sync_provider_options(),
+            |cx: &App| SharedString::from(AppSettings::global(cx).sync_provider.as_str()),
+            |val: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.sync_provider = SyncProvider::from_str(&val);
+                });
             },
         )
-        .default_value(default),
+        .default_value(SharedString::from(default.as_str())),
     )
-    .description(t!("Settings.Sync.supabase_auto_sync_desc").to_string())
+    .description(t!("Settings.Sync.provider_desc").to_string())
 }
 
-fn personal_sync_enabled_item(default: bool) -> SettingItem {
-    SettingItem::new(
-        t!("Settings.Sync.enabled"),
-        SettingField::switch(
-            |cx: &App| AppSettings::global(cx).personal_sync.enabled,
-            |val: bool, cx: &mut App| {
-                AppSettings::update_and_save(cx, |settings| settings.personal_sync.enabled = val);
-            },
-        )
-        .default_value(default),
-    )
-    .description(t!("Settings.Sync.enabled_desc").to_string())
+fn sync_provider_options() -> Vec<(SharedString, SharedString)> {
+    vec![
+        (
+            SharedString::from(SyncProvider::OnetCloud.as_str()),
+            SharedString::from(t!("Settings.Sync.Provider.onet_cloud").to_string()),
+        ),
+        (
+            SharedString::from(SyncProvider::Personal.as_str()),
+            SharedString::from(t!("Settings.Sync.Provider.personal").to_string()),
+        ),
+    ]
 }
 
 fn personal_sync_backend_item(default: PersonalSyncBackendKind) -> SettingItem {
@@ -1097,9 +1099,51 @@ pub(crate) fn personal_sync_status_label(health: &SyncStoreHealth) -> String {
     }
 }
 
+pub(crate) struct PersonalSyncStatusViewModel {
+    label: String,
+    detail: Option<String>,
+    syncing: bool,
+}
+
+pub(crate) fn personal_sync_status_view_model(
+    status: &crate::personal_sync_status::PersonalSyncRuntimeStatus,
+) -> PersonalSyncStatusViewModel {
+    match status {
+        crate::personal_sync_status::PersonalSyncRuntimeStatus::Disabled => {
+            PersonalSyncStatusViewModel {
+                label: personal_sync_status_label(&SyncStoreHealth::NotConfigured),
+                detail: None,
+                syncing: false,
+            }
+        }
+        crate::personal_sync_status::PersonalSyncRuntimeStatus::Ready { health, message } => {
+            PersonalSyncStatusViewModel {
+                label: personal_sync_status_label(health),
+                detail: message.clone(),
+                syncing: false,
+            }
+        }
+        crate::personal_sync_status::PersonalSyncRuntimeStatus::Syncing => {
+            PersonalSyncStatusViewModel {
+                label: t!("Settings.Sync.Status.syncing").to_string(),
+                detail: None,
+                syncing: true,
+            }
+        }
+        crate::personal_sync_status::PersonalSyncRuntimeStatus::Failed { health, message } => {
+            PersonalSyncStatusViewModel {
+                label: personal_sync_status_label(health),
+                detail: Some(message.clone()),
+                syncing: false,
+            }
+        }
+    }
+}
+
 fn render_personal_sync_actions(_window: &mut Window, cx: &mut App) -> gpui::AnyElement {
     let status = crate::personal_sync_runtime::runtime_status(cx);
-    let enabled = crate::personal_sync_runtime::actions_enabled(cx);
+    let status_view = personal_sync_status_view_model(&status);
+    let enabled = crate::personal_sync_runtime::actions_enabled(cx) && !status_view.syncing;
     h_flex()
         .w_full()
         .justify_between()
@@ -1118,8 +1162,16 @@ fn render_personal_sync_actions(_window: &mut Window, cx: &mut App) -> gpui::Any
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child(personal_sync_status_label(&status.health())),
-                ),
+                        .child(status_view.label),
+                )
+                .when_some(status_view.detail, |this, detail| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(detail),
+                    )
+                }),
         )
         .child(
             h_flex()
@@ -2989,8 +3041,9 @@ mod tests {
         AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, ProxyType,
         build_app_http_client, builtin_monospace_font_options, is_supported_font_file,
         merge_font_options_with_custom_fonts, parse_font_families, personal_sync_backend_options,
-        personal_sync_status_label,
+        personal_sync_status_label, personal_sync_status_view_model,
     };
+    use crate::personal_sync_status::PersonalSyncRuntimeStatus;
     use std::path::Path;
 
     #[test]
@@ -3207,6 +3260,30 @@ mod tests {
             t!("Settings.Sync.Status.git_auth_required").to_string(),
             personal_sync_status_label(&SyncStoreHealth::GitAuthRequired)
         );
+    }
+
+    #[test]
+    fn personal_sync_status_view_model_shows_syncing_feedback() {
+        let view = personal_sync_status_view_model(&PersonalSyncRuntimeStatus::Syncing);
+
+        assert_eq!(t!("Settings.Sync.Status.syncing").to_string(), view.label);
+        assert_eq!(None, view.detail);
+        assert!(view.syncing);
+    }
+
+    #[test]
+    fn personal_sync_status_view_model_shows_failure_detail() {
+        let view = personal_sync_status_view_model(&PersonalSyncRuntimeStatus::Failed {
+            health: SyncStoreHealth::DirectoryUnavailable,
+            message: "missing directory".to_string(),
+        });
+
+        assert_eq!(
+            t!("Settings.Sync.Status.directory_unavailable").to_string(),
+            view.label
+        );
+        assert_eq!(Some("missing directory".to_string()), view.detail);
+        assert!(!view.syncing);
     }
 }
 

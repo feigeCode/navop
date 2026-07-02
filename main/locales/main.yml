@@ -1452,25 +1452,17 @@ Settings:
       zh-CN: 同步
       zh-HK: 同步
     group_title:
-      en: Personal Sync
-      zh-CN: 个人同步
-      zh-HK: 個人同步
-    enabled:
-      en: Enable Sync
-      zh-CN: 启用同步
-      zh-HK: 啟用同步
-    enabled_desc:
-      en: Sync personal connections and workspaces through a user-managed backend.
-      zh-CN: 通过用户自定义后端同步个人连接和工作区。
-      zh-HK: 透過使用者自訂後端同步個人連線和工作區。
-    supabase_auto_sync:
-      en: Supabase Auto Sync
-      zh-CN: Supabase 自动同步
-      zh-HK: Supabase 自動同步
-    supabase_auto_sync_desc:
-      en: Automatically sync with Supabase when local connections or workspaces change. Manual sync remains available.
-      zh-CN: 本地连接或工作区变化时自动同步到 Supabase。关闭后仍可手动同步。
-      zh-HK: 本機連線或工作區變更時自動同步到 Supabase。關閉後仍可手動同步。
+      en: Sync
+      zh-CN: 同步
+      zh-HK: 同步
+    provider:
+      en: Sync Provider
+      zh-CN: 同步方式
+      zh-HK: 同步方式
+    provider_desc:
+      en: Choose one sync backend. Only the selected backend runs from the home sync action and automatic data changes.
+      zh-CN: 选择一套同步后端。主页同步和数据变更自动同步只会运行所选后端。
+      zh-HK: 選擇一套同步後端。主頁同步和資料變更自動同步只會執行所選後端。
     backend:
       en: Backend
       zh-CN: 后端
@@ -1528,6 +1520,15 @@ Settings:
         en: Git
         zh-CN: Git
         zh-HK: Git
+    Provider:
+      onet_cloud:
+        en: OnetCli Cloud Sync
+        zh-CN: OnetCli 云同步
+        zh-HK: OnetCli 雲同步
+      personal:
+        en: Personal Sync
+        zh-CN: 个人同步
+        zh-HK: 個人同步
     Status:
       ready:
         en: Ready

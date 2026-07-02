@@ -810,7 +810,7 @@ impl DbTreeView {
         cx: &mut Context<Self>,
     ) {
         match event {
-            ConnectionDataEvent::ConnectionDeleted { connection_id } => {
+            ConnectionDataEvent::ConnectionDeleted { connection_id, .. } => {
                 if self.tracked_connection_ids.contains(connection_id) {
                     self.remove_connection(&connection_id.to_string(), cx);
                 }
@@ -827,7 +827,7 @@ impl DbTreeView {
                     self.add_connection(connection, cx);
                 }
             }
-            ConnectionDataEvent::WorkspaceDeleted { workspace_id } => {
+            ConnectionDataEvent::WorkspaceDeleted { workspace_id, .. } => {
                 if self.workspace_id == Some(*workspace_id) {
                     info!(
                         "Workspace {} deleted, tree view may need to be closed",

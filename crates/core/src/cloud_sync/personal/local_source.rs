@@ -244,6 +244,14 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
             .update_cloud_id(id, Some(cloud_id.to_string()))
             .map_err(repository_error)
     }
+
+    async fn delete_item(&self, item: &PersonalSyncItemSnapshot) -> Result<(), SyncStoreError> {
+        if let Ok(id) = parse_prefixed_id(&item.local_id, CONNECTION_PREFIX) {
+            return self.connections.delete(id).map_err(repository_error);
+        }
+        let id = parse_prefixed_id(&item.local_id, WORKSPACE_PREFIX)?;
+        self.workspaces.delete(id).map_err(repository_error)
+    }
 }
 
 fn preserve_cloud_id(record: &mut CloudSyncData, cloud_id: Option<&str>) {

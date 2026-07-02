@@ -21,14 +21,6 @@ impl Default for PersonalSyncRuntimeStatus {
 }
 
 impl PersonalSyncRuntimeStatus {
-    pub fn health(&self) -> SyncStoreHealth {
-        match self {
-            Self::Disabled => SyncStoreHealth::NotConfigured,
-            Self::Ready { health, .. } | Self::Failed { health, .. } => *health,
-            Self::Syncing => SyncStoreHealth::Ready,
-        }
-    }
-
     pub fn from_error(error: SyncStoreError) -> Self {
         let health = health_from_error(&error);
         Self::Failed {

@@ -9,7 +9,6 @@ use crate::settings::PersonalSyncSettings;
 #[test]
 fn personal_sync_runtime_is_disabled_without_path() {
     let settings = PersonalSyncSettings {
-        enabled: true,
         path: String::new(),
         ..PersonalSyncSettings::default()
     };

@@ -14,6 +14,7 @@ use super::{
 pub enum PersonalSyncEvent {
     FullScan,
     LocalChanged { data_type: String, local_id: String },
+    LocalDeleted { data_type: String, cloud_id: String },
     RemoteChanged,
 }
 
@@ -54,6 +55,8 @@ pub trait PersonalSyncLocalSource: Send + Sync {
         cloud_id: &str,
         synced_at: i64,
     ) -> Result<(), SyncStoreError>;
+
+    async fn delete_item(&self, item: &PersonalSyncItemSnapshot) -> Result<(), SyncStoreError>;
 }
 
 #[async_trait]
@@ -138,24 +141,24 @@ where
     }
 
     pub async fn drain_once(&self) -> Result<(), SyncStoreError> {
-        if !self.begin_drain() {
+        let Some(events) = self.begin_drain() else {
             return Ok(());
-        }
+        };
 
-        let result = self.run_pass().await;
+        let result = self.run_pass(events).await;
         self.finish_drain();
         result
     }
 
-    fn begin_drain(&self) -> bool {
+    fn begin_drain(&self) -> Option<HashSet<PersonalSyncEvent>> {
         let mut state = self.state.lock().expect("personal sync worker state");
         if state.active || state.pending.is_empty() {
-            return false;
+            return None;
         }
 
-        state.pending.clear();
+        let events = std::mem::take(&mut state.pending);
         state.active = true;
-        true
+        Some(events)
     }
 
     fn finish_drain(&self) {
@@ -167,15 +170,58 @@ where
         }
     }
 
-    async fn run_pass(&self) -> Result<(), SyncStoreError> {
+    async fn run_pass(&self, events: HashSet<PersonalSyncEvent>) -> Result<(), SyncStoreError> {
         self.store.probe().await?;
         let _lock = self.store.acquire_lock(&self.config.device_id).await?;
         let local_items = self.local.list_items().await?;
         let remote_records = self.store.list_records(None, None).await?;
+        self.apply_local_delete_events(&events, &remote_records)
+            .await?;
+        self.apply_remote_tombstones(&local_items, &remote_records)
+            .await?;
+        let deleted = local_deleted_cloud_ids(&events);
+        let active_remote_records = remote_records
+            .into_iter()
+            .filter(|record| record.deleted_at.is_none() && !deleted.contains(&record.id))
+            .collect::<Vec<_>>();
         let paused = self.conflicts.paused_record_ids().await?;
-        let plan = self.planner.plan(&local_items, &remote_records, &paused);
+        let plan = self
+            .planner
+            .plan(&local_items, &active_remote_records, &paused);
 
-        self.apply_plan(&plan, &local_items, &remote_records).await
+        self.apply_plan(&plan, &local_items, &active_remote_records)
+            .await
+    }
+
+    async fn apply_local_delete_events(
+        &self,
+        events: &HashSet<PersonalSyncEvent>,
+        records: &[CloudSyncData],
+    ) -> Result<(), SyncStoreError> {
+        for cloud_id in local_deleted_cloud_ids(events) {
+            let Some(record) = find_remote_by_id(records, &cloud_id) else {
+                continue;
+            };
+            if record.deleted_at.is_none() {
+                self.store
+                    .tombstone_record(&cloud_id, Some(record.version))
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn apply_remote_tombstones(
+        &self,
+        items: &[PersonalSyncItemSnapshot],
+        records: &[CloudSyncData],
+    ) -> Result<(), SyncStoreError> {
+        for record in records.iter().filter(|record| record.deleted_at.is_some()) {
+            if let Some(item) = find_local_by_cloud_id(items, &record.id) {
+                self.local.delete_item(item).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn apply_plan(
@@ -287,4 +333,14 @@ fn find_local_by_id<'a>(
 
 fn find_remote_by_id<'a>(records: &'a [CloudSyncData], id: &str) -> Option<&'a CloudSyncData> {
     records.iter().find(|record| record.id == id)
+}
+
+fn local_deleted_cloud_ids(events: &HashSet<PersonalSyncEvent>) -> HashSet<String> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            PersonalSyncEvent::LocalDeleted { cloud_id, .. } => Some(cloud_id.clone()),
+            _ => None,
+        })
+        .collect()
 }

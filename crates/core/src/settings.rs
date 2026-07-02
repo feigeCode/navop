@@ -374,6 +374,30 @@ impl PersonalSyncBackendKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncProvider {
+    #[default]
+    OnetCloud,
+    Personal,
+}
+
+impl SyncProvider {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::OnetCloud => "onet_cloud",
+            Self::Personal => "personal",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "personal" => Self::Personal,
+            _ => Self::OnetCloud,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersonalGitSyncSettings {
     #[serde(default = "default_true")]
@@ -391,8 +415,6 @@ impl Default for PersonalGitSyncSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersonalSyncSettings {
     #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
     pub backend: PersonalSyncBackendKind,
     #[serde(default)]
     pub path: String,
@@ -405,7 +427,6 @@ pub struct PersonalSyncSettings {
 impl Default for PersonalSyncSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
             backend: PersonalSyncBackendKind::Folder,
             path: String::new(),
             auto_sync: default_true(),
@@ -459,8 +480,8 @@ pub struct AppSettings {
     pub log_file_path: String,
     #[serde(default = "default_true")]
     pub auto_update: bool,
-    #[serde(default = "default_true")]
-    pub supabase_auto_sync: bool,
+    #[serde(default)]
+    pub sync_provider: SyncProvider,
     #[serde(default)]
     pub global_proxy: GlobalProxySettings,
     #[serde(default)]
@@ -575,7 +596,7 @@ impl Default for AppSettings {
             terminal_confirm_high_risk_command: default_true(),
             log_file_path: String::new(),
             auto_update: true,
-            supabase_auto_sync: true,
+            sync_provider: SyncProvider::OnetCloud,
             global_proxy: GlobalProxySettings::default(),
             mcp: McpSettings::default(),
             ai_chat: AiChatSettings::default(),
@@ -724,7 +745,7 @@ impl AppSettings {
 mod tests {
     use super::{
         AppSettings, CustomFont, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, McpPermissionMode,
-        McpServerMode, PersonalSyncBackendKind,
+        McpServerMode, PersonalSyncBackendKind, SyncProvider,
     };
 
     #[test]
@@ -796,7 +817,6 @@ mod tests {
     fn app_settings_default_disables_personal_sync() {
         let settings = AppSettings::default();
 
-        assert!(!settings.personal_sync.enabled);
         assert_eq!(
             PersonalSyncBackendKind::Folder,
             settings.personal_sync.backend
@@ -814,16 +834,29 @@ mod tests {
         }))
         .expect("旧版 settings.json 应能读取");
 
-        assert!(!settings.personal_sync.enabled);
         assert!(settings.personal_sync.auto_sync);
-        assert!(settings.supabase_auto_sync);
+    }
+
+    #[test]
+    fn app_settings_default_uses_onet_cloud_sync_provider() {
+        let settings = AppSettings::default();
+
+        assert_eq!(SyncProvider::OnetCloud, settings.sync_provider);
+    }
+
+    #[test]
+    fn app_settings_deserializes_personal_sync_provider() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "sync_provider": "personal"
+        }))
+        .expect("应能读取个人同步模式");
+
+        assert_eq!(SyncProvider::Personal, settings.sync_provider);
     }
 
     #[test]
     fn app_settings_round_trip_preserves_personal_sync() {
         let mut settings = AppSettings::default();
-        settings.supabase_auto_sync = false;
-        settings.personal_sync.enabled = true;
         settings.personal_sync.backend = PersonalSyncBackendKind::Git;
         settings.personal_sync.path = "/tmp/repo".to_string();
         settings.personal_sync.git.auto_push = false;

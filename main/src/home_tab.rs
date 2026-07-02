@@ -34,6 +34,7 @@ use one_core::key_storage;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::license::Feature;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
+use one_core::settings::{AppSettings, SyncProvider};
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, ConnectionType, DatabaseType, GlobalStorageState,
@@ -130,6 +131,39 @@ fn home_default_shortcut(macos: &'static str, other: &'static str) -> &'static s
     } else {
         other
     }
+}
+
+fn refreshed_pending_conflicts(
+    previous: Vec<SyncConflict>,
+    current: Vec<SyncConflict>,
+    errors: &[String],
+) -> Vec<SyncConflict> {
+    if errors.is_empty() || !current.is_empty() {
+        current
+    } else {
+        previous
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HomeSyncRoute {
+    OnetCloud,
+    Personal,
+}
+
+fn sync_route_for_provider(provider: SyncProvider) -> HomeSyncRoute {
+    match provider {
+        SyncProvider::OnetCloud => HomeSyncRoute::OnetCloud,
+        SyncProvider::Personal => HomeSyncRoute::Personal,
+    }
+}
+
+fn sync_route(cx: &App) -> HomeSyncRoute {
+    sync_route_for_provider(AppSettings::global(cx).sync_provider)
+}
+
+fn should_auto_onet_cloud_sync(cx: &App, current_user_present: bool) -> bool {
+    sync_route(cx) == HomeSyncRoute::OnetCloud && current_user_present && crypto::has_master_key()
 }
 
 // HomePage Entity - 管理 home 页面的所有状态
@@ -292,6 +326,7 @@ fn external_driver_id_for_connection_form(
 #[cfg(test)]
 mod external_driver_form_tests {
     use super::*;
+    use one_core::cloud_sync::{CloudSyncData, ConflictType};
     use one_core::storage::DbConnectionConfig;
 
     fn stored_external_connection(driver_id: &str) -> StoredConnection {
@@ -356,6 +391,75 @@ mod external_driver_form_tests {
         };
 
         assert_eq!("10.0.0.9:5900", remote_desktop_connection_info(&params));
+    }
+
+    #[test]
+    fn refreshed_pending_conflicts_clears_stale_conflicts_after_clean_sync() {
+        let previous = vec![sync_conflict("cloud-1")];
+
+        let refreshed = refreshed_pending_conflicts(previous, Vec::new(), &[]);
+
+        assert!(refreshed.is_empty());
+    }
+
+    #[test]
+    fn refreshed_pending_conflicts_keeps_previous_when_sync_errors_without_fresh_conflicts() {
+        let previous = vec![sync_conflict("cloud-1")];
+        let errors = vec!["network failed".to_string()];
+
+        let refreshed = refreshed_pending_conflicts(previous.clone(), Vec::new(), &errors);
+
+        assert_eq!(1, refreshed.len());
+        assert_eq!(previous[0].cloud.id, refreshed[0].cloud.id);
+    }
+
+    #[test]
+    fn sync_route_uses_selected_provider() {
+        assert_eq!(
+            HomeSyncRoute::OnetCloud,
+            sync_route_for_provider(SyncProvider::OnetCloud)
+        );
+        assert_eq!(
+            HomeSyncRoute::Personal,
+            sync_route_for_provider(SyncProvider::Personal)
+        );
+    }
+
+    fn sync_conflict(cloud_id: &str) -> SyncConflict {
+        SyncConflict {
+            local: StoredConnection::new_database(
+                "demo".to_string(),
+                DbConnectionConfig {
+                    id: String::new(),
+                    database_type: DatabaseType::MySQL,
+                    name: "demo".to_string(),
+                    host: "localhost".to_string(),
+                    port: 3306,
+                    username: String::new(),
+                    password: String::new(),
+                    database: None,
+                    service_name: None,
+                    sid: None,
+                    workspace_id: None,
+                    extra_params: std::collections::HashMap::new(),
+                },
+                None,
+            ),
+            cloud: CloudSyncData {
+                id: cloud_id.to_string(),
+                owner_id: "owner".to_string(),
+                team_id: None,
+                data_type: one_core::cloud_sync::data_type::CONNECTION.to_string(),
+                encrypted_data: String::new(),
+                key_version: 1,
+                checksum: String::new(),
+                version: 1,
+                updated_at: 1,
+                deleted_at: None,
+            },
+            cloud_name: "demo".to_string(),
+            conflict_type: ConflictType::LocalModifiedCloudDeleted,
+        }
     }
 }
 
@@ -454,7 +558,7 @@ impl HomePage {
                         // 然后异步重新加载以确保数据一致性
                         this.load_connections(cx);
                         // 如果已登录且密钥已解锁，自动触发同步
-                        if this.current_user.is_some() && crypto::has_master_key() {
+                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("连接数据变化，自动触发云同步");
                             this.trigger_sync(cx);
                         }
@@ -473,19 +577,19 @@ impl HomePage {
                         // 然后异步重新加载以确保数据一致性
                         this.load_connections(cx);
                         // 如果已登录且密钥已解锁，自动触发同步
-                        if this.current_user.is_some() && crypto::has_master_key() {
+                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("连接数据变化，自动触发云同步");
                             this.trigger_sync(cx);
                         }
                     }
-                    ConnectionDataEvent::ConnectionDeleted { connection_id } => {
+                    ConnectionDataEvent::ConnectionDeleted { connection_id, .. } => {
                         // 立即从列表中移除连接
                         this.connections.retain(|c| c.id != Some(*connection_id));
                         cx.notify();
                         // 然后异步重新加载以确保数据一致性
                         this.load_connections(cx);
                         // 如果已登录且密钥已解锁，自动触发同步
-                        if this.current_user.is_some() && crypto::has_master_key() {
+                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("连接数据变化，自动触发云同步");
                             this.trigger_sync(cx);
                         }
@@ -495,7 +599,7 @@ impl HomePage {
                     | ConnectionDataEvent::WorkspaceDeleted { .. } => {
                         this.load_workspaces(cx);
                         // 如果已登录且密钥已解锁，自动触发同步
-                        if this.current_user.is_some() && crypto::has_master_key() {
+                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("工作区数据变化，自动触发云同步");
                             this.trigger_sync(cx);
                         }
@@ -635,6 +739,11 @@ impl HomePage {
     /// 3. 执行同步操作
     /// 4. 更新本地状态
     fn trigger_sync(&mut self, cx: &mut Context<Self>) {
+        if sync_route(cx) == HomeSyncRoute::Personal {
+            crate::personal_sync_runtime::sync_now(cx);
+            return;
+        }
+
         // 检查 License
         if !is_feature_enabled(Feature::CloudSync, cx) {
             tracing::debug!("云同步功能需要 Pro 订阅");
@@ -643,18 +752,6 @@ impl HomePage {
 
         if self.current_user.is_none() {
             self.cloud_error = Some(t!("Home.cloud_need_login").to_string());
-            cx.notify();
-            return;
-        }
-
-        if !self.pending_conflicts.is_empty() {
-            self.cloud_error = Some(
-                t!(
-                    "Home.conflict_tooltip",
-                    count = self.pending_conflicts.len()
-                )
-                .to_string(),
-            );
             cx.notify();
             return;
         }
@@ -702,11 +799,14 @@ impl HomePage {
                         );
                         this.cloud_error = None;
 
-                        // 如果有冲突，保存并显示冲突解决对话框
                         if !stats.conflicts.is_empty() {
                             tracing::warn!("同步存在 {} 个冲突需要处理", stats.conflicts.len());
-                            this.pending_conflicts = stats.conflicts;
                         }
+                        this.pending_conflicts = refreshed_pending_conflicts(
+                            std::mem::take(&mut this.pending_conflicts),
+                            stats.conflicts,
+                            &stats.errors,
+                        );
 
                         // 如果有错误，显示第一个错误
                         if !stats.errors.is_empty() {
@@ -1060,7 +1160,7 @@ impl HomePage {
                     cx.notify();
 
                     // 如果密钥已解锁，自动触发同步
-                    if crypto::has_master_key() {
+                    if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
                         tracing::info!("会话已恢复且密钥已解锁，自动触发云同步");
                         this.trigger_sync(cx);
                     }
@@ -1106,7 +1206,7 @@ impl HomePage {
 
                         this.auth_error = None;
                         // 登录成功后，如果密钥已解锁，自动触发同步
-                        if crypto::has_master_key() {
+                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("登录成功且密钥已解锁，自动触发云同步");
                             this.trigger_sync(cx);
                         }
@@ -1327,6 +1427,7 @@ impl HomePage {
                         emit_connection_event(
                             ConnectionDataEvent::ConnectionDeleted {
                                 connection_id: conn_id,
+                                cloud_id: cloud_id.clone(),
                             },
                             cx,
                         );
@@ -1507,7 +1608,7 @@ impl HomePage {
                         );
                     }
                     // 兜底触发一次自动同步，避免当前页对自身工作区事件未回流时漏同步。
-                    if this.current_user.is_some() && crypto::has_master_key() {
+                    if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
                         tracing::info!("本地工作区保存成功，自动触发云同步");
                         this.trigger_sync(cx);
                     }
@@ -1617,11 +1718,14 @@ impl HomePage {
                         this.workspaces.retain(|w| w.id != Some(workspace_id));
                         this.filtered_workspace_ids.remove(&workspace_id);
                         emit_connection_event(
-                            ConnectionDataEvent::WorkspaceDeleted { workspace_id },
+                            ConnectionDataEvent::WorkspaceDeleted {
+                                workspace_id,
+                                cloud_id: cloud_id.clone(),
+                            },
                             cx,
                         );
                         // 兜底触发一次自动同步，避免当前页对自身工作区事件未回流时漏同步。
-                        if this.current_user.is_some() && crypto::has_master_key() {
+                        if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
                             tracing::info!("本地工作区删除成功，自动触发云同步");
                             this.trigger_sync(cx);
                         }
@@ -2194,7 +2298,7 @@ impl HomePage {
                             if crypto::has_master_key() {
                                 // 密钥已就绪后刷新连接列表，修复启动时序导致的空密码回显
                                 this.load_connections(cx);
-                                if this.current_user.is_some() {
+                                if should_auto_onet_cloud_sync(cx, this.current_user.is_some()) {
                                     tracing::info!("密钥设置/解锁成功，自动触发云同步");
                                     this.trigger_sync(cx);
                                 }
@@ -2272,6 +2376,16 @@ impl HomePage {
         let is_syncing = self.syncing;
         let is_logged_in = self.current_user.is_some();
         let has_sync_license = is_feature_enabled(Feature::CloudSync, cx);
+        let route = sync_route(cx);
+        let personal_syncing = matches!(
+            crate::personal_sync_runtime::runtime_status(cx),
+            crate::personal_sync_status::PersonalSyncRuntimeStatus::Syncing
+        );
+        let personal_sync_ready = crate::personal_sync_runtime::actions_enabled(cx);
+        let sync_disabled = match route {
+            HomeSyncRoute::OnetCloud => (!is_logged_in && has_sync_license) || is_syncing,
+            HomeSyncRoute::Personal => !personal_sync_ready || personal_syncing,
+        };
         let has_master_key = crypto::has_master_key();
         let has_conflicts = !self.pending_conflicts.is_empty();
         let conflict_count = self.pending_conflicts.len();
@@ -2310,24 +2424,31 @@ impl HomePage {
                             } else {
                                 IconName::Key
                             })
-                            .label(if is_syncing {
+                            .label(if is_syncing || personal_syncing {
                                 t!("Home.syncing").to_string()
-                            } else if !has_sync_license {
+                            } else if route == HomeSyncRoute::OnetCloud && !has_sync_license {
                                 t!("License.upgrade_to_pro").to_string()
                             } else {
                                 t!("Home.sync").to_string()
                             })
                             .ghost()
-                            .disabled((!is_logged_in && has_sync_license) || is_syncing)
-                            .tooltip(if !is_logged_in && has_sync_license {
-                                t!("Home.cloud_need_login")
-                            } else if !has_sync_license {
-                                t!("License.pro_required")
-                            } else {
-                                t!("Home.sync_tooltip")
-                            })
+                            .disabled(sync_disabled)
+                            .tooltip(
+                                if route == HomeSyncRoute::Personal && !personal_sync_ready {
+                                    t!("Settings.Sync.Status.not_configured")
+                                } else if route == HomeSyncRoute::OnetCloud
+                                    && !is_logged_in
+                                    && has_sync_license
+                                {
+                                    t!("Home.cloud_need_login")
+                                } else if route == HomeSyncRoute::OnetCloud && !has_sync_license {
+                                    t!("License.pro_required")
+                                } else {
+                                    t!("Home.sync_tooltip")
+                                },
+                            )
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                if !has_sync_license {
+                                if sync_route(cx) == HomeSyncRoute::OnetCloud && !has_sync_license {
                                     show_upgrade_dialog(window, cx);
                                 } else {
                                     this.trigger_sync(cx);

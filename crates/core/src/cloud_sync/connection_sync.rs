@@ -82,12 +82,17 @@ impl SyncEngine {
         // 解密一次建立 cloud_id → name 映射
         let cloud_name_map = self.build_cloud_name_map(&cloud_sync_data);
 
-        let deleted_count =
+        let soft_deleted_cloud_ids =
             self.process_cloud_soft_deleted_sync_data(&cloud_sync_data, &local_connections)?;
-        if deleted_count > 0 {
-            tracing::info!("[同步] 处理云端软删除: 删除了 {} 个本地连接", deleted_count);
-            result.deleted += deleted_count;
+        if !soft_deleted_cloud_ids.is_empty() {
+            tracing::info!(
+                "[同步] 处理云端软删除: 删除了 {} 个本地连接",
+                soft_deleted_cloud_ids.len()
+            );
+            result.deleted += soft_deleted_cloud_ids.len();
         }
+        let local_connections =
+            Self::filter_soft_deleted_local_connections(local_connections, &soft_deleted_cloud_ids);
 
         let active_cloud_data: Vec<_> = cloud_sync_data
             .into_iter()
@@ -474,13 +479,13 @@ impl SyncEngine {
         &self,
         cloud_data_list: &[CloudSyncData],
         local_connections: &[StoredConnection],
-    ) -> Result<usize, SyncError> {
+    ) -> Result<Vec<String>, SyncError> {
         let repo = self
             .storage
             .get::<ConnectionRepository>()
             .ok_or_else(|| SyncError::StorageError("ConnectionRepository not found".to_string()))?;
 
-        let mut deleted_count = 0;
+        let mut deleted_cloud_ids = Vec::new();
 
         for cloud_data in cloud_data_list {
             if cloud_data.deleted_at.is_some() {
@@ -497,14 +502,34 @@ impl SyncEngine {
                         if let Err(e) = repo.delete(local_id) {
                             tracing::error!("[软删除] 删除本地连接失败: {} - {}", local_id, e);
                         } else {
-                            deleted_count += 1;
+                            deleted_cloud_ids.push(cloud_data.id.clone());
                         }
                     }
                 }
             }
         }
 
-        Ok(deleted_count)
+        Ok(deleted_cloud_ids)
+    }
+
+    fn filter_soft_deleted_local_connections(
+        local_connections: Vec<StoredConnection>,
+        soft_deleted_cloud_ids: &[String],
+    ) -> Vec<StoredConnection> {
+        if soft_deleted_cloud_ids.is_empty() {
+            return local_connections;
+        }
+        let soft_deleted: HashSet<&str> =
+            soft_deleted_cloud_ids.iter().map(String::as_str).collect();
+        local_connections
+            .into_iter()
+            .filter(|connection| {
+                connection
+                    .cloud_id
+                    .as_deref()
+                    .is_none_or(|cloud_id| !soft_deleted.contains(cloud_id))
+            })
+            .collect()
     }
 
     fn calculate_sync_plan(
@@ -1212,6 +1237,24 @@ mod tests {
         let target = SyncEngine::connection_cloud_write_target(&placeholder, Some(&deleted));
 
         assert!(target.is_none());
+    }
+
+    #[test]
+    fn soft_deleted_local_connections_are_removed_from_same_pass_snapshot() {
+        let mut deleted = stored_connection(100);
+        deleted.cloud_id = Some("deleted-cloud".to_string());
+
+        let mut active = stored_connection(100);
+        active.id = Some(2);
+        active.cloud_id = Some("active-cloud".to_string());
+
+        let filtered = SyncEngine::filter_soft_deleted_local_connections(
+            vec![deleted, active],
+            &[String::from("deleted-cloud")],
+        );
+
+        assert_eq!(1, filtered.len());
+        assert_eq!(Some("active-cloud"), filtered[0].cloud_id.as_deref());
     }
 
     #[test]

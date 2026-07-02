@@ -26,9 +26,6 @@ pub enum PersonalSyncRuntimeError {
 pub fn build_personal_sync_runtime_config(
     settings: &PersonalSyncSettings,
 ) -> Result<PersonalSyncRuntimeConfig, PersonalSyncRuntimeError> {
-    if !settings.enabled {
-        return Err(PersonalSyncRuntimeError::Disabled);
-    }
     let path = settings.path.trim();
     if path.is_empty() {
         return Err(PersonalSyncRuntimeError::NotConfigured);

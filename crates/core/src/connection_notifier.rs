@@ -9,13 +9,19 @@ pub enum ConnectionDataEvent {
     /// 连接被更新（名称、配置等）
     ConnectionUpdated { connection: StoredConnection },
     /// 连接被删除
-    ConnectionDeleted { connection_id: i64 },
+    ConnectionDeleted {
+        connection_id: i64,
+        cloud_id: Option<String>,
+    },
     /// 工作区被创建
     WorkspaceCreated { workspace_id: i64 },
     /// 工作区被更新
     WorkspaceUpdated { workspace_id: i64 },
     /// 工作区被删除
-    WorkspaceDeleted { workspace_id: i64 },
+    WorkspaceDeleted {
+        workspace_id: i64,
+        cloud_id: Option<String>,
+    },
     /// Schema 结构变更（DDL 执行后触发）
     SchemaChanged {
         connection_id: String,
