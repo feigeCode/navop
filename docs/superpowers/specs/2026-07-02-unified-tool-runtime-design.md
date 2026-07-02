@@ -130,6 +130,8 @@ ssh.command.poll
 ssh.command.output
 ssh.command.cancel
 
+terminal.exec
+
 sftp.list
 sftp.read
 sftp.write
@@ -176,9 +178,11 @@ ssh_file_stat         -> sftp.stat
 
 ### SSH Command Surface
 
-`ssh.exec` should match the way users type commands in the terminal. The Agent-facing
-schema keeps the command as one shell line and uses `target` only to select the
-resource:
+`ssh.exec` is the structured, non-interactive SSH command tool. It should keep the
+command text close to what users type in a terminal, but it does not write into the
+visible terminal PTY and does not claim that the right-side terminal pane executed
+the command. Its Agent-facing schema keeps the command as one shell line and uses
+`target` only to select the resource:
 
 ```json
 {
@@ -190,9 +194,9 @@ resource:
 ```
 
 The command string is displayed unchanged in approval cards and tool result cards.
-Adapter-specific details such as `session_id`, PTY management, command polling, and
-output collection stay behind the adapter boundary. Historical fields are still
-accepted by compatibility adapters in this precedence order:
+Adapter-specific details such as `session_id`, command polling, and output collection
+stay behind the adapter boundary. Historical fields are still accepted by compatibility
+adapters in this precedence order:
 
 ```text
 target > connection > connection_id > session_id > default_target
@@ -200,7 +204,57 @@ target > connection > connection_id > session_id > default_target
 
 This keeps Agent behavior consistent with terminal input: if a user can paste the
 same command into the terminal, the model should be able to call `ssh.exec` with that
-command text and an explicit resource target.
+command text and an explicit resource target. It does not provide the "executed in the
+visible terminal" product effect.
+
+### Terminal Execution Surface
+
+`terminal.exec` is a separate tool for the product effect where Agent actions execute
+inside an existing visible terminal session. This tool is additive: `ssh.exec`,
+`ssh.remote_exec`, and `ssh.command.*` remain available for structured remote execution
+and compatibility.
+
+`terminal.exec` writes the command into the target terminal session as if it were typed
+by an operator, submits it with Enter, and observes terminal output from that same PTY
+stream. The right-side terminal pane should show the command echo and output because the
+terminal session is the execution surface.
+
+Agent-facing schema:
+
+```json
+{
+  "target": "terminal-ssh-prod-a",
+  "command": "df -h && echo \"===INODE===\" && df -i",
+  "submit": true,
+  "wait_for_output": true,
+  "timeout_ms": 60000
+}
+```
+
+Semantics:
+
+1. `target` must resolve to a `ResourceKind::Terminal` resource that is backed by an
+   active terminal view/session.
+2. `command` is inserted into the terminal input exactly as provided.
+3. `submit=true` appends Enter after the command. If `submit=false`, the command is only
+   staged in the terminal input and the tool result reports that no command was run.
+4. `wait_for_output=true` waits for a bounded output snapshot or shell-integration
+   completion signal when available. If no reliable completion signal exists, the result
+   must say that the command was submitted and include the observed output delta, not
+   fabricate an exit code.
+5. Tool cards and audit records must clearly label the operation as "executed in
+   terminal" and show the target terminal plus command.
+
+Safety:
+
+1. `terminal.exec` is high-risk/open-world by default because it writes into a live
+   terminal session.
+2. Approval details must show the exact command and target terminal before submission.
+3. Audit must record that execution happened through the terminal surface, not the
+   structured SSH executor.
+
+This split avoids changing existing clients while supporting the requested terminal
+execution experience.
 
 ### ToolDescriptor
 
@@ -593,15 +647,18 @@ Migration order:
 1. DB read tools
 2. SFTP read tools
 3. SSH / remote read tools
-4. write and high-risk tools
-5. Redis tools
-6. Connections and workspaces tools
+4. `terminal.exec` live terminal execution tool
+5. write and high-risk tools
+6. Redis tools
+7. Connections and workspaces tools
 
 Scope:
 
 1. Move Agent-specific DB / SSH tools toward canonical `tool_runtime` descriptors.
 2. Add aliases for old Agent names.
 3. Normalize `target` to existing `connection` / `session_id` inputs internally.
+4. Add `terminal.exec` as a new terminal-surface tool instead of changing `ssh.exec`
+   into terminal UI execution.
 
 Acceptance:
 
@@ -609,6 +666,8 @@ Acceptance:
 2. New canonical tool names also call the same functionality.
 3. Agent prompt only exposes canonical names.
 4. High-risk tools produce unified approval requests.
+5. `terminal.exec` can execute through a visible terminal session without removing or
+   changing structured `ssh.exec`.
 
 ### Phase 4: Public MCP Adapter
 
@@ -667,19 +726,25 @@ Acceptance:
    - Agent calls the SSH tool with three explicit targets.
    - Final answer summarizes per-machine results.
 
-3. DB + SSH workflow
+3. Visible terminal execution
+   - User asks “就在这个终端里执行 df -h”.
+   - Agent uses `terminal.exec`, not `ssh.exec`.
+   - The command appears in the terminal pane and output is produced by the same terminal session.
+   - The tool card labels the call as terminal execution and does not hide that it wrote into a live terminal.
+
+4. DB + SSH workflow
    - User asks “查数据库慢查询，再去对应服务器看负载”.
    - Agent first targets DB, then targets SSH resources.
 
-4. Safe profile
+5. Safe profile
    - `df -h` and `SELECT` are allowed.
    - `rm`, `UPDATE`, and `sftp.write` are denied.
 
-5. Confirm profile
+6. Confirm profile
    - High-risk tools show approval cards.
    - Approved calls continue the original turn.
 
-6. Public MCP client
+7. Public MCP client
    - MCP calls use the same tool directory.
    - Permission outcome matches Agent behavior for the same policy.
 
@@ -725,6 +790,12 @@ Mitigation: Agent adapter derives transport-safe names while preserving canonica
 Risk: `target` migration conflicts with existing `connection` / `session_id` schemas.
 
 Mitigation: Use precedence `target > connection > connection_id > session_id > default_target` during migration. Prompt only exposes `target` after adapter support exists.
+
+Risk: Live terminal execution can be confused with structured SSH execution.
+
+Mitigation: Keep `terminal.exec` separate from `ssh.exec`. Tool cards, approvals, and audit
+events must label `terminal.exec` as writing into a live terminal session. `terminal.exec`
+must not fabricate an exit code when only terminal output was observed.
 
 Risk: Permission profiles are too broad for advanced users.
 
