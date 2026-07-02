@@ -365,7 +365,7 @@ rtk git commit -m "feat(ai_chat): map resource catalog to pool rows"
 **Files:**
 - Modify: `crates/ai_chat_view/src/input/agent_input.rs`
 
-- [ ] **Step 1: Write failing pure event tests**
+- [x] **Step 1: Write failing pure event tests**
 
 Add tests in `agent_input.rs`:
 
@@ -394,7 +394,7 @@ Expected red result:
 cannot find function `resource_pool_action_label` in this scope
 ```
 
-- [ ] **Step 2: Add events**
+- [x] **Step 2: Add events**
 
 Extend `AgentInputEvent`:
 
@@ -403,7 +403,7 @@ AddResourceToPool { id: SharedString },
 RemoveResourceFromPool { id: SharedString },
 ```
 
-- [ ] **Step 3: Add helper**
+- [x] **Step 3: Add helper**
 
 Add near label helpers:
 
@@ -419,7 +419,7 @@ fn resource_pool_action_label(item: &ComposerResourcePoolItem) -> &'static str {
 }
 ```
 
-- [ ] **Step 4: Render membership rows**
+- [x] **Step 4: Render membership rows**
 
 In `render_context_mode_content`, replace target list rows with `resource_pool_items` rows when `context.resource_pool_items` is not empty. Each row behavior:
 
@@ -432,7 +432,7 @@ default row button -> no-op label "默认"
 
 Keep existing `context_target_option` as a fallback for tests and contexts that do not provide pool rows.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run:
 
@@ -443,7 +443,7 @@ rtk cargo test -p ai_chat_view resource_pool_trigger_label_uses_pool_wording
 
 Expected: both pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 rtk git add crates/ai_chat_view/src/input/agent_input.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-5b-resource-pool-management.md

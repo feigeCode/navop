@@ -521,6 +521,8 @@ impl AgentChatView {
                     self.select_target(&id, cx);
                 }
             }
+            AgentInputEvent::AddResourceToPool { id: _ } => {}
+            AgentInputEvent::RemoveResourceFromPool { id: _ } => {}
             AgentInputEvent::PickScope { key: _ } => {}
             AgentInputEvent::SelectModel {
                 id,

@@ -27,7 +27,7 @@ use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, 
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
     AgentComposerContext, ComposerMenuOption, ComposerModelOption, ComposerPlanItem, ComposerScope,
-    ComposerResourceTypeFilter, ComposerSubAgentItem, ComposerTarget,
+    ComposerResourcePoolItem, ComposerResourceTypeFilter, ComposerSubAgentItem, ComposerTarget,
 };
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
 
@@ -47,6 +47,10 @@ pub enum AgentInputEvent {
     Stop,
     /// 在顶部目标下拉中选择了目标。
     SelectTarget { id: SharedString },
+    /// 将资源加入本会话资源池。
+    AddResourceToPool { id: SharedString },
+    /// 将资源移出本会话资源池。
+    RemoveResourceFromPool { id: SharedString },
     /// 点击某个派生上下文 chip —— 上层据 `key` 弹出对应选择器。
     PickScope { key: SharedString },
     /// 在内置下拉中选择了模型。
@@ -520,6 +524,7 @@ impl AgentInput {
         let options = self.target_options.clone();
         let current = self.context.target.clone();
         let scopes = self.context.scopes.clone();
+        let pool_items = self.context.resource_pool_items.clone();
         let search_input = self.context_search_input.clone();
         let search_query = self.context_search_query.clone();
         let selected_kind = self.selected_resource_kind_filter.clone();
@@ -562,6 +567,7 @@ impl AgentInput {
                         options.clone(),
                         current.clone(),
                         scopes.clone(),
+                        pool_items.clone(),
                         filters.clone(),
                         selected_kind.clone(),
                         search_input.clone(),
@@ -1380,6 +1386,7 @@ fn render_context_mode_content(
     options: Vec<ComposerTarget>,
     current: Option<ComposerTarget>,
     scopes: Vec<ComposerScope>,
+    pool_items: Vec<ComposerResourcePoolItem>,
     filters: Vec<ComposerResourceTypeFilter>,
     selected_kind: SharedString,
     search_input: Entity<InputState>,
@@ -1433,13 +1440,23 @@ fn render_context_mode_content(
             ),
     );
 
-    // 按关键字过滤目标(label / subtitle / kind 不区分大小写)。
+    // 按类型和关键字过滤资源(label / subtitle / kind 不区分大小写)。
     let needle = normalize_target_search_query(search_query.as_ref());
-    let kind_filtered = filter_targets_by_kind(options, selected_kind.as_ref());
-    let filtered: Vec<ComposerTarget> = kind_filtered
-        .into_iter()
-        .filter(|opt| needle.is_empty() || target_matches(opt, &needle))
-        .collect();
+    let filtered_pool_items = filter_pool_items(pool_items, selected_kind.as_ref(), &needle);
+    let filtered_targets = if filtered_pool_items.is_empty() {
+        let kind_filtered = filter_targets_by_kind(options, selected_kind.as_ref());
+        kind_filtered
+            .into_iter()
+            .filter(|opt| needle.is_empty() || target_matches(opt, &needle))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let filtered_count = if filtered_pool_items.is_empty() {
+        filtered_targets.len()
+    } else {
+        filtered_pool_items.len()
+    };
 
     col = col.child(
         div()
@@ -1448,7 +1465,7 @@ fn render_context_mode_content(
             .px_1()
             .text_xs()
             .text_color(muted)
-            .child(filter_result_label(&filtered, &search_query)),
+            .child(filter_result_label(filtered_count, &search_query)),
     );
 
     // 列表区:限定最大高度并内部滚动,避免目标多时撑爆 popover。
@@ -1461,7 +1478,7 @@ fn render_context_mode_content(
         .max_h(px(CONTEXT_TARGET_LIST_MAX_HEIGHT))
         .overflow_x_hidden()
         .overflow_y_scroll();
-    if filtered.is_empty() {
+    if filtered_pool_items.is_empty() && filtered_targets.is_empty() {
         list = list.child(div().px_2().py_2().text_sm().text_color(muted).child(
             if search_query.is_empty() {
                 "资源池为空"
@@ -1470,8 +1487,14 @@ fn render_context_mode_content(
             },
         ));
     }
-    for opt in filtered {
-        list = list.child(context_target_option(view.clone(), opt, muted, cx));
+    if filtered_pool_items.is_empty() {
+        for opt in filtered_targets {
+            list = list.child(context_target_option(view.clone(), opt, muted, cx));
+        }
+    } else {
+        for item in filtered_pool_items {
+            list = list.child(resource_pool_item_row(view.clone(), item, muted, cx));
+        }
     }
 
     col = col.child(list);
@@ -1523,6 +1546,122 @@ fn render_resource_type_filters(
     row.into_any_element()
 }
 
+fn resource_pool_item_row(
+    view: Entity<AgentInput>,
+    item: ComposerResourcePoolItem,
+    muted: gpui::Hsla,
+    cx: &mut Context<gpui_component::popover::PopoverState>,
+) -> gpui::AnyElement {
+    let hover_bg = cx.theme().list_hover;
+    let radius = cx.theme().radius;
+    let id = item.id.clone();
+    let action_id = item.id.clone();
+    let action_label = resource_pool_action_label(&item);
+    let action_view = view.clone();
+    let add_action_id = action_id.clone();
+    let add_action_view = action_view.clone();
+    let in_pool = item.in_pool;
+    let is_default = item.is_default;
+    let action_button = Button::new(SharedString::from(format!(
+        "resource-pool-action-{}",
+        action_id
+    )))
+    .ghost()
+    .xsmall()
+    .label(action_label)
+    .disabled(is_default);
+    let action_button = if in_pool && !is_default {
+        action_button.on_click(move |_, _window, cx| {
+            let id = action_id.clone();
+            action_view.update(cx, |this, cx| {
+                if this.is_running {
+                    return;
+                }
+                cx.emit(AgentInputEvent::RemoveResourceFromPool { id });
+                cx.notify();
+            });
+        })
+    } else if !in_pool {
+        action_button.on_click(move |_, _window, cx| {
+            let id = add_action_id.clone();
+            add_action_view.update(cx, |this, cx| {
+                if this.is_running {
+                    return;
+                }
+                cx.emit(AgentInputEvent::AddResourceToPool { id });
+                cx.notify();
+            });
+        })
+    } else {
+        action_button
+    };
+
+    h_flex()
+        .id(item.element_id())
+        .w_full()
+        .min_w_0()
+        .items_center()
+        .gap(px(8.0))
+        .px_2()
+        .py_1()
+        .rounded(radius)
+        .cursor_pointer()
+        .hover(move |s| s.bg(hover_bg))
+        .on_click(move |_, _window, cx| {
+            let id = id.clone();
+            view.update(cx, |this, cx| {
+                if this.is_running {
+                    return;
+                }
+                if in_pool {
+                    this.open_menu = None;
+                    cx.emit(AgentInputEvent::SelectTarget { id });
+                } else {
+                    cx.emit(AgentInputEvent::AddResourceToPool { id });
+                }
+                cx.notify();
+            });
+        })
+        .child(
+            h_flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .size(px(24.0))
+                .rounded(radius)
+                .bg(hover_bg)
+                .text_xs()
+                .child(item.icon),
+        )
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(1.0))
+                .child(div().w_full().min_w_0().text_sm().truncate().child(item.label))
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(muted)
+                        .truncate()
+                        .child(item.subtitle),
+                ),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .max_w(px(CONTEXT_KIND_MAX_WIDTH))
+                .text_xs()
+                .text_color(muted)
+                .truncate()
+                .child(item.kind),
+        )
+        .child(action_button)
+        .into_any_element()
+}
+
 /// 目标是否匹配搜索关键字(子串匹配,忽略大小写)。
 fn target_matches(opt: &ComposerTarget, needle: &str) -> bool {
     let needle = normalize_target_search_query(needle);
@@ -1545,12 +1684,39 @@ fn filter_targets_by_kind(targets: Vec<ComposerTarget>, kind: &str) -> Vec<Compo
         .collect()
 }
 
+fn filter_pool_items(
+    items: Vec<ComposerResourcePoolItem>,
+    kind: &str,
+    needle: &str,
+) -> Vec<ComposerResourcePoolItem> {
+    items
+        .into_iter()
+        .filter(|item| kind == "all" || item.kind.as_ref() == kind)
+        .filter(|item| {
+            needle.is_empty()
+                || item.label.to_lowercase().contains(needle)
+                || item.subtitle.to_lowercase().contains(needle)
+                || item.kind.to_lowercase().contains(needle)
+        })
+        .collect()
+}
+
+fn resource_pool_action_label(item: &ComposerResourcePoolItem) -> &'static str {
+    if item.is_default {
+        "默认"
+    } else if item.in_pool {
+        "-"
+    } else {
+        "+"
+    }
+}
+
 /// 列表结果计数文案:有关键字时展示匹配数,无关键字时展示总数。
-fn filter_result_label(filtered: &[ComposerTarget], query: &SharedString) -> SharedString {
+fn filter_result_label(filtered_count: usize, query: &SharedString) -> SharedString {
     if query.is_empty() {
         return SharedString::default();
     }
-    SharedString::from(format!("匹配到 {} 个资源", filtered.len()))
+    SharedString::from(format!("匹配到 {filtered_count} 个资源"))
 }
 
 fn context_database_hint(
@@ -2060,6 +2226,41 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id.as_ref(), "ssh-a");
+    }
+
+    #[test]
+    fn resource_pool_action_labels_match_membership() {
+        let add = crate::input::context::ComposerResourcePoolItem::new(
+            "ssh-b",
+            "prod-b",
+            "SH",
+            "ssh",
+            "ssh · ssh-b",
+            false,
+            false,
+        );
+        let remove = crate::input::context::ComposerResourcePoolItem::new(
+            "ssh-a",
+            "prod-a",
+            "SH",
+            "ssh",
+            "ssh · ssh-a",
+            true,
+            false,
+        );
+        let default = crate::input::context::ComposerResourcePoolItem::new(
+            "ssh-a",
+            "prod-a",
+            "SH",
+            "ssh",
+            "ssh · ssh-a",
+            true,
+            true,
+        );
+
+        assert_eq!(resource_pool_action_label(&add), "+");
+        assert_eq!(resource_pool_action_label(&remove), "-");
+        assert_eq!(resource_pool_action_label(&default), "默认");
     }
 
     #[test]
