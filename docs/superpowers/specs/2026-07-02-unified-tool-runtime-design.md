@@ -83,17 +83,16 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 5b Resource Pool membership | Done | `1e980c66 feat(ai_chat): add resource pool item display model`, `f271dc59 feat(ai_chat): add available resource catalog`, `07a8b217 feat(ai_chat): map resource catalog to pool rows`, `666b55a2 feat(ai_chat): render resource pool membership actions`, `f7099082 feat(ai_chat): handle resource pool membership changes`, `cf3babff feat(ai_chat): build resource catalog for pool management`, `00094e15 docs: track resource pool management checkpoint` | Wire real entry points so sidebars pass broader catalogs instead of only the selected pool. |
 | Phase 5c Sidebar catalog wiring | Done | `a2cd12e feat(ai_chat): wire resource catalog into sidebars` wires DB, Redis, and Mongo sidebars through catalog-aware default panel APIs. Focused `ai_chat_view` tests and checks for `ai_chat_view`, `db_view`, `redis_view`, and `mongodb_view` passed on 2026-07-02. | Start Phase 5d resource source presets or run manual resource-pool smoke. |
 | Phase 5d Resource source presets | Done | `9f10d13 feat(ai_chat): add resource source option model`, `cd8839d feat(ai_chat): derive resource source options`, `f90e41b feat(ai_chat): apply resource source presets`, and `a78388c feat(ai_chat): render resource source presets` add current/all/type/manual source presets while keeping workspace/tag disabled until real metadata exists. `resource_source`, `resource_pool`, and `cargo check -p ai_chat_view` passed on 2026-07-02. | Run manual resource-pool smoke and keep persisted workspace/tag presets for a later storage-backed checkpoint. |
-| Phase 6 Multi-resource execution | Planned | Architecture scope below. | Add safe parallel routing and target-grouped result display. |
+| Phase 6 Multi-resource execution | Done | `23cbec8 feat(agent): batch executable tool calls`, `29e6f01 feat(agent): dispatch parallel-safe tool batches`, and `4743915 test(agent): preserve parallel tool safety semantics` add safe parallel dispatch for tools that opt into `supports_parallel`, preserve approval gating, and keep observation order deterministic. `executable_call_batches`, `parallel_tool_calls_start_before_first_finishes`, `high_risk_approval`, and `cargo check -p agent_runtime` passed on 2026-07-02. | Add UI target-grouped result cards and batched high-risk approval in later checkpoints. |
 
 ### Active Checkpoint
 
-Current checkpoint: Phase 3c manual terminal-exec smoke and Phase 6 multi-resource execution planning.
+Current checkpoint: Phase 3c manual terminal-exec smoke and multi-resource execution UI follow-up.
 
 Purpose:
 
 1. Verify `terminal.exec` writes into the visible terminal pane with real app behavior.
-2. Start Phase 6 only after at least one UI path can produce explicit targets from the
-   resource pool.
+2. Add target-grouped tool result cards for multi-resource operations.
 3. Keep side-panel sessions single-resource by default while allowing explicit expansion
    from a broader catalog.
 4. Keep persisted workspace/tag presets deferred until a real workspace/tag resource
@@ -104,15 +103,16 @@ Purpose:
 Last completed checkpoint:
 
 ```text
-a78388c feat(ai_chat): render resource source presets
+4743915 test(agent): preserve parallel tool safety semantics
 ```
 
-Phase 5d verification run:
+Phase 6 verification run:
 
 ```bash
-rtk cargo test -p ai_chat_view resource_source
-rtk cargo test -p ai_chat_view resource_pool
-rtk cargo check -p ai_chat_view
+rtk cargo test -p agent_runtime executable_call_batches
+rtk cargo test -p agent_runtime parallel_tool_calls_start_before_first_finishes
+rtk cargo test -p agent_runtime --test high_risk_approval
+rtk cargo check -p agent_runtime
 rtk git diff --check
 ```
 
@@ -132,8 +132,7 @@ Next recommended checkpoints:
 1. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
    through `terminal.exec`.
 2. Run manual resource-pool smoke for source presets.
-3. Start Phase 6 multi-resource execution planning now that at least one UI path can
-   produce explicit targets from the resource pool.
+3. Add UI target-grouped result cards for multi-resource operations.
 
 ## Design Principles
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust, Tokio, `agent_runtime`, `ai_chat_view`, existing `Tool::supports_parallel` and `ToolRouter::supports_parallel`.
 
-Current status: Task 3 verified; ready to commit.
+Current status: Phase 6 parallel-safe execution checkpoint verified; tracking ready to commit.
 
 ---
 
@@ -229,7 +229,7 @@ rtk cargo test -p agent_runtime parallel_tool_observations_preserve_original_cal
 rtk cargo test -p agent_runtime manual_mode_pauses_parallel_safe_tool_before_dispatch
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 rtk git add crates/agent_runtime/src/tasks/agent.rs crates/agent_runtime/tests/high_risk_approval.rs crates/agent_runtime/tests/integration.rs docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-6-multi-resource-execution.md
@@ -242,19 +242,19 @@ rtk git commit -m "test(agent): preserve approval and observation ordering"
 - Modify: `docs/superpowers/specs/2026-07-02-unified-tool-runtime-design.md`
 - Modify: `docs/superpowers/plans/2026-07-02-unified-tool-runtime-phase-6-multi-resource-execution.md`
 
-- [ ] **Step 1: Run verification**
+- [x] **Step 1: Run verification**
 
 Run:
 
 ```bash
 rtk cargo test -p agent_runtime executable_call_batches
 rtk cargo test -p agent_runtime parallel_tool_calls_start_before_first_finishes
-rtk cargo test -p agent_runtime high_risk_approval
+rtk cargo test -p agent_runtime --test high_risk_approval
 rtk cargo check -p agent_runtime
 rtk git diff --check
 ```
 
-- [ ] **Step 2: Update tracking**
+- [x] **Step 2: Update tracking**
 
 Update Phase 6 in the design doc with commit hashes and verification results.
 
