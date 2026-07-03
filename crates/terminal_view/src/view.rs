@@ -54,7 +54,7 @@ use one_core::sidebar_contribution::{
     SidebarPanelPolicy, SidebarPanelSize, SidebarPanelStyle, SidebarPlacement, SidebarPlacementSet,
 };
 use one_core::storage::models::{ActiveConnections, StoredConnection};
-use one_core::tab_container::{TabContent, TabContentEvent};
+use one_core::tab_container::{TabContent, TabContentEvent, TabContentView};
 use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient};
@@ -706,10 +706,31 @@ struct SshMfaInput {
     input: Entity<InputState>,
 }
 
+#[derive(Clone)]
+enum TerminalDuplicateSource {
+    Local(LocalConfig),
+    Ssh {
+        connection: StoredConnection,
+        working_dir: Option<String>,
+        sync_path_with_terminal: bool,
+    },
+    Serial(StoredConnection),
+}
+
+fn terminal_tab_duplicate_supported(source: &TerminalDuplicateSource) -> bool {
+    matches!(
+        source,
+        TerminalDuplicateSource::Local(_)
+            | TerminalDuplicateSource::Ssh { .. }
+            | TerminalDuplicateSource::Serial(_)
+    )
+}
+
 /// Terminal view component - supports both Local and SSH backends
 pub struct TerminalView {
     /// Terminal model entity
     terminal: Entity<Terminal>,
+    duplicate_source: TerminalDuplicateSource,
     /// 本地终端工作目录
     local_working_dir: Option<PathBuf>,
     /// 光标闪烁管理器
@@ -975,6 +996,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         // 创建 Terminal Entity
+        let duplicate_source = TerminalDuplicateSource::Local(config.clone());
         let local_working_dir = resolve_local_working_dir(config.working_dir.clone());
         let init_error = Rc::new(RefCell::new(None));
         let init_error_clone = init_error.clone();
@@ -990,6 +1012,7 @@ impl TerminalView {
             true,
             local_working_dir,
             tab_index,
+            duplicate_source,
             window,
             cx,
         );
@@ -1019,6 +1042,11 @@ impl TerminalView {
         // 创建 SSH Terminal Entity
         let connection_id = conn.id;
         let stored_conn = conn.clone();
+        let duplicate_source = TerminalDuplicateSource::Ssh {
+            connection: stored_conn.clone(),
+            working_dir: working_dir.map(str::to_string),
+            sync_path_with_terminal,
+        };
         let terminal =
             cx.new(|cx| Terminal::new_ssh(conn, cx, working_dir, sync_path_with_terminal));
         Self::new_with_terminal(
@@ -1028,6 +1056,7 @@ impl TerminalView {
             sync_path_with_terminal,
             None,
             tab_index,
+            duplicate_source,
             window,
             cx,
         )
@@ -1044,6 +1073,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         let connection_id = conn.id;
+        let duplicate_source = TerminalDuplicateSource::Serial(conn.clone());
         let terminal = cx.new(|cx| Terminal::new_serial(conn, cx));
         // 串口不传 stored_connection，避免创建文件管理器面板
         Self::new_with_terminal(
@@ -1053,6 +1083,7 @@ impl TerminalView {
             true,
             None,
             tab_index,
+            duplicate_source,
             window,
             cx,
         )
@@ -1065,6 +1096,7 @@ impl TerminalView {
         sync_path_enabled: bool,
         local_working_dir: Option<PathBuf>,
         tab_index: Option<usize>,
+        duplicate_source: TerminalDuplicateSource,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -1163,6 +1195,7 @@ impl TerminalView {
 
         let mut this = Self {
             terminal,
+            duplicate_source,
             local_working_dir: if is_local_terminal {
                 local_working_dir
             } else {
@@ -4111,6 +4144,47 @@ impl TabContent for TerminalView {
         true
     }
 
+    fn can_duplicate(&self, _cx: &App) -> bool {
+        terminal_tab_duplicate_supported(&self.duplicate_source)
+    }
+
+    fn duplicate(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<dyn TabContentView>> {
+        let source = self.duplicate_source.clone();
+        let sidebar_mode = self.sidebar_render_mode;
+        let duplicate = cx.new(|cx| {
+            let view = match source {
+                TerminalDuplicateSource::Local(config) => {
+                    TerminalView::new_with_index(config, None, window, cx)
+                }
+                TerminalDuplicateSource::Ssh {
+                    connection,
+                    working_dir,
+                    sync_path_with_terminal,
+                } => TerminalView::new_ssh_with_index(
+                    connection,
+                    None,
+                    window,
+                    cx,
+                    working_dir.as_deref(),
+                    sync_path_with_terminal,
+                ),
+                TerminalDuplicateSource::Serial(connection) => {
+                    TerminalView::new_serial_with_index(connection, None, window, cx)
+                }
+            };
+            if sidebar_mode == TerminalSidebarRenderMode::External {
+                view.with_external_sidebar()
+            } else {
+                view
+            }
+        });
+        Some(Arc::new(duplicate))
+    }
+
     fn sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution> {
         if self.sidebar_render_mode != TerminalSidebarRenderMode::External {
             return Vec::new();
@@ -4697,22 +4771,25 @@ impl Element for ResizeEventHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        UnbracketedPasteHazard, detect_unbracketed_paste_hazard, encode_mouse_modifiers,
-        has_trailing_line_continuation, has_unterminated_shell_quote, history_prompt_available,
-        history_prompt_dropdown_origin, history_prompt_overlay_bounds, mouse_button_code,
-        multiline_non_empty_line_count, sgr_mouse_button_report, sgr_mouse_mode_enabled,
-        sgr_mouse_wheel_report, should_confirm_local_terminal_close,
+        TerminalDuplicateSource, UnbracketedPasteHazard, detect_unbracketed_paste_hazard,
+        encode_mouse_modifiers, has_trailing_line_continuation, has_unterminated_shell_quote,
+        history_prompt_available, history_prompt_dropdown_origin, history_prompt_overlay_bounds,
+        mouse_button_code, multiline_non_empty_line_count, sgr_mouse_button_report,
+        sgr_mouse_mode_enabled, sgr_mouse_wheel_report, should_confirm_local_terminal_close,
         should_defer_inline_history_prompt_input_to_text_system, should_defer_sgr_left_press,
         should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
         should_dismiss_history_prompt_for_scroll, should_extend_selection_on_shift_click,
         should_reset_history_prompt_for_terminal_event, should_scroll_to_bottom_on_user_input,
         should_start_selection_from_pending_sgr_press, take_whole_scroll_lines,
+        terminal_tab_duplicate_supported,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
     use alacritty_terminal::term::TermMode;
     use gpui::{Bounds, Keystroke, Modifiers, MouseButton, Point, px, size};
+    use one_core::storage::models::{SerialParams, SshAuthMethod, SshParams, StoredConnection};
     use std::cell::Cell as StdCell;
+    use terminal::LocalConfig;
     use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
 
     #[test]
@@ -4742,6 +4819,50 @@ mod tests {
             false,
             TermMode::empty(),
             None,
+        ));
+    }
+
+    #[test]
+    fn tab_duplicate_is_supported_for_local_ssh_and_serial_terminals() {
+        let ssh = StoredConnection::new_ssh(
+            "ssh".to_string(),
+            SshParams {
+                host: "localhost".to_string(),
+                port: 22,
+                username: "user".to_string(),
+                auth_method: SshAuthMethod::Agent,
+                connect_timeout: None,
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                jump_server: None,
+                proxy: None,
+            },
+            None,
+        );
+        let serial = StoredConnection::new_serial(
+            "serial".to_string(),
+            SerialParams {
+                port_name: "/dev/ttyS0".to_string(),
+                ..Default::default()
+            },
+            None,
+        );
+
+        assert!(terminal_tab_duplicate_supported(
+            &TerminalDuplicateSource::Local(LocalConfig::default())
+        ));
+        assert!(terminal_tab_duplicate_supported(
+            &TerminalDuplicateSource::Ssh {
+                connection: ssh,
+                working_dir: None,
+                sync_path_with_terminal: true,
+            },
+        ));
+        assert!(terminal_tab_duplicate_supported(
+            &TerminalDuplicateSource::Serial(serial)
         ));
     }
 

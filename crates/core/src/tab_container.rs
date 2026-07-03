@@ -3,6 +3,9 @@ use crate::sidebar_contribution::{
     SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPlacement,
     sidebar_panel_renders_header,
 };
+use crate::tab_actions::{
+    TAB_TITLE_METADATA_KEY, duplicate_tab_id, normalize_title, resolve_tab_title,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, AnyElement, AnyView, App, AppContext as _, Bounds, Context, Decorations, DragMoveEvent,
@@ -13,6 +16,7 @@ use gpui::{
 };
 use gpui::{ScrollHandle, StatefulInteractiveElement as _};
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::list::{List, ListDelegate, ListState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::popover::Popover;
@@ -20,6 +24,7 @@ use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, InteractiveElementExt as _, Placement,
     Selectable, Sizable, Size, h_flex, v_flex,
 };
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -249,6 +254,30 @@ pub trait TabContent: EventEmitter<TabContentEvent> + Render + Focusable {
         true
     }
 
+    /// Whether this tab can be renamed from the tab bar.
+    fn can_rename(&self, cx: &App) -> bool {
+        true
+    }
+
+    /// Called when the tab bar applies a custom title.
+    fn rename(&mut self, title: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        true
+    }
+
+    /// Whether this tab can be duplicated from the tab bar menu.
+    fn can_duplicate(&self, cx: &App) -> bool {
+        false
+    }
+
+    /// Build a new content view for a duplicated tab.
+    fn duplicate(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<dyn TabContentView>> {
+        None
+    }
+
     /// Called when tab becomes active
     fn on_activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {}
 
@@ -299,6 +328,10 @@ pub trait TabContentView: 'static + Send + Sync {
     fn title(&self, cx: &App) -> SharedString;
     fn icon(&self, cx: &App) -> Option<Icon>;
     fn closeable(&self, cx: &App) -> bool;
+    fn can_rename(&self, cx: &App) -> bool;
+    fn rename(&self, title: &str, window: &mut Window, cx: &mut App) -> bool;
+    fn can_duplicate(&self, cx: &App) -> bool;
+    fn duplicate(&self, window: &mut Window, cx: &mut App) -> Option<Arc<dyn TabContentView>>;
     fn on_activate(&self, window: &mut Window, cx: &mut App);
     fn on_deactivate(&self, window: &mut Window, cx: &mut App);
     fn try_close(&self, tab_id: &str, window: &mut Window, cx: &mut App) -> Task<bool>;
@@ -332,6 +365,22 @@ impl<T: TabContent> TabContentView for Entity<T> {
 
     fn closeable(&self, cx: &App) -> bool {
         self.read(cx).closeable(cx)
+    }
+
+    fn can_rename(&self, cx: &App) -> bool {
+        self.read(cx).can_rename(cx)
+    }
+
+    fn rename(&self, title: &str, window: &mut Window, cx: &mut App) -> bool {
+        self.update(cx, |this, cx| this.rename(title, window, cx))
+    }
+
+    fn can_duplicate(&self, cx: &App) -> bool {
+        self.read(cx).can_duplicate(cx)
+    }
+
+    fn duplicate(&self, window: &mut Window, cx: &mut App) -> Option<Arc<dyn TabContentView>> {
+        self.update(cx, |this, cx| this.duplicate(window, cx))
     }
 
     fn on_activate(&self, window: &mut Window, cx: &mut App) {
@@ -442,6 +491,33 @@ impl TabItem {
 
     pub fn metadata(&self) -> &HashMap<String, String> {
         &self.metadata
+    }
+
+    pub fn title(&self, cx: &App) -> SharedString {
+        resolve_tab_title(
+            self.metadata
+                .get(TAB_TITLE_METADATA_KEY)
+                .map(String::as_str),
+            self.content().title(cx),
+        )
+    }
+
+    fn set_title_override(&mut self, title: &str) -> bool {
+        match normalize_title(title) {
+            Some(title) => {
+                if self
+                    .metadata
+                    .get(TAB_TITLE_METADATA_KEY)
+                    .is_some_and(|current| current == &title)
+                {
+                    return false;
+                }
+                self.metadata
+                    .insert(TAB_TITLE_METADATA_KEY.to_string(), title);
+                true
+            }
+            None => self.metadata.remove(TAB_TITLE_METADATA_KEY).is_some(),
+        }
     }
 }
 
@@ -699,7 +775,7 @@ impl RenderOnce for TabListItem {
                             .map(|(idx, tab)| {
                                 (
                                     idx,
-                                    tab.content().title(cx),
+                                    tab.title(cx),
                                     tab.content().icon(cx),
                                     tab.content().closeable(cx),
                                 )
@@ -871,6 +947,9 @@ pub struct TabContainer {
     tab_list: Option<Entity<ListState<TabListDelegate>>>,
     closing_tabs: HashSet<SharedString>,
     tab_content_subscriptions: Vec<Subscription>,
+    renaming_tab_id: Option<SharedString>,
+    rename_input: Option<Entity<InputState>>,
+    rename_input_subscription: Option<Subscription>,
     show_window_controls: bool,
     /// 窗口置顶切换回调，由上层注入；为 None 时不渲染置顶按钮
     on_toggle_always_on_top: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
@@ -913,6 +992,9 @@ impl TabContainer {
             tab_list: None,
             closing_tabs: HashSet::new(),
             tab_content_subscriptions: Vec::new(),
+            renaming_tab_id: None,
+            rename_input: None,
+            rename_input_subscription: None,
             show_window_controls: false,
             on_toggle_always_on_top: None,
             is_always_on_top: None,
@@ -1595,6 +1677,105 @@ impl TabContainer {
 
     pub fn active_index(&self) -> usize {
         self.active_index
+    }
+
+    fn start_rename_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        if !tab.content().can_rename(cx) {
+            return;
+        }
+
+        let tab_id = tab.id();
+        let current_title = tab.title(cx).to_string();
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(current_title)
+                .placeholder(t!("TabContextMenu.tab_name_placeholder").to_string())
+        });
+        let input_for_focus = input.clone();
+        let rename_tab_id = tab_id.clone();
+
+        self.renaming_tab_id = Some(tab_id);
+        self.rename_input = Some(input.clone());
+        self.rename_input_subscription = Some(cx.subscribe_in(
+            &input,
+            window,
+            move |container, input, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                    let title = input.read(cx).value().to_string();
+                    container.commit_rename_tab_by_id(&rename_tab_id, title, window, cx);
+                }
+                InputEvent::Change | InputEvent::Focus => {}
+            },
+        ));
+        input_for_focus.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    fn commit_rename_tab_by_id(
+        &mut self,
+        tab_id: &str,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.renaming_tab_id.as_ref().map(SharedString::as_ref) != Some(tab_id) {
+            return;
+        }
+        self.renaming_tab_id = None;
+        self.rename_input = None;
+        self.rename_input_subscription = None;
+
+        let Some(index) = self.tabs.iter().position(|tab| tab.id() == tab_id) else {
+            cx.notify();
+            return;
+        };
+        if !self.tabs[index].content().rename(&title, window, cx) {
+            cx.notify();
+            return;
+        }
+        if self.tabs[index].set_title_override(&title) {
+            cx.emit(TabContainerEvent::LayoutChanged);
+        }
+        cx.notify();
+    }
+
+    fn duplicate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() {
+            return;
+        }
+
+        let content = self.tabs[index].content().clone();
+        if !content.can_duplicate(cx) {
+            return;
+        }
+
+        let Some(duplicate_content) = content.duplicate(window, cx) else {
+            return;
+        };
+
+        let source_id = self.tabs[index].id();
+        let duplicate_id = duplicate_tab_id(source_id.as_ref(), |candidate| {
+            self.tabs.iter().any(|tab| tab.id() == candidate)
+        });
+        let from = self.tabs[index].from();
+        let metadata = self.tabs[index].metadata().clone();
+        let duplicate = TabItem {
+            id: SharedString::from(duplicate_id.clone()),
+            from,
+            metadata,
+            content: duplicate_content,
+        };
+        self.subscribe_tab_content(&duplicate, window, cx);
+
+        let insert_index = (index + 1).min(self.tabs.len());
+        if insert_index <= self.active_index {
+            self.active_index += 1;
+        }
+        self.tabs.insert(insert_index, duplicate);
+        self.set_active_index(insert_index, window, cx);
     }
 
     pub fn dump(&self, cx: &App) -> TabContainerState {
@@ -2909,7 +3090,7 @@ impl TabContainer {
             })
             // Pinned tab (fixed, not scrollable)
             .when_some(self.pinned_tab.as_ref(), |this, pinned| {
-                let pinned_title = pinned.content().title(cx);
+                let pinned_title = pinned.title(cx);
                 let pinned_icon = pinned.content().icon(cx);
                 let is_pinned_active = self.pinned_tab_active;
                 let view_for_pinned = view.clone();
@@ -3026,13 +3207,18 @@ impl TabContainer {
                         },
                     )
                     .children(self.tabs.iter().enumerate().map(|(idx, tab)| {
-                        let title = tab.content().title(cx);
+                        let title = tab.title(cx);
                         let icon = tab.content().icon(cx);
                         let closeable = tab.content().closeable(cx);
                         let is_active = idx == active_index;
                         let view_clone = view.clone();
                         let title_clone = title.clone();
                         let tab_width = self.get_tab_width(tab, cx);
+                        let rename_input_for_tab = self
+                            .renaming_tab_id
+                            .as_ref()
+                            .filter(|renaming_id| *renaming_id == &tab.id())
+                            .and_then(|_| self.rename_input.clone());
 
                         div()
                             .id(idx)
@@ -3111,16 +3297,22 @@ impl TabContainer {
                             .when_some(icon, |el, icon| {
                                 el.child(div().flex_shrink_0().flex().items_center().child(icon))
                             })
-                            .child(
-                                div()
+                            .child(match rename_input_for_tab {
+                                Some(input) => div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(Input::new(&input).small().w_full())
+                                    .into_any_element(),
+                                None => div()
                                     .flex_1()
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .text_sm()
                                     .text_color(text_color)
                                     .text_ellipsis()
-                                    .child(title_clone.to_string()),
-                            )
+                                    .child(title_clone.to_string())
+                                    .into_any_element(),
+                            })
                             .when(closeable, |el| {
                                 let view_clone = view_clone.clone();
                                 el.child(
@@ -3154,6 +3346,18 @@ impl TabContainer {
                                 let tab_count = view_for_menu.read(cx).tabs.len();
                                 let has_tabs_left = idx > 0;
                                 let has_tabs_right = idx < tab_count - 1;
+                                let can_rename = view_for_menu
+                                    .read(cx)
+                                    .tabs
+                                    .get(idx)
+                                    .map(|tab| tab.content().can_rename(cx))
+                                    .unwrap_or(false);
+                                let can_duplicate = view_for_menu
+                                    .read(cx)
+                                    .tabs
+                                    .get(idx)
+                                    .map(|tab| tab.content().can_duplicate(cx))
+                                    .unwrap_or(false);
                                 let can_split = view_for_menu
                                     .read(cx)
                                     .tabs
@@ -3173,9 +3377,36 @@ impl TabContainer {
                                     .unwrap_or(false);
 
                                 menu.item(
-                                    PopupMenuItem::new("Split Right")
-                                        .disabled(!split_enabled)
+                                    PopupMenuItem::new(t!("TabContextMenu.rename_tab").to_string())
+                                        .disabled(!can_rename)
                                         .on_click(window.listener_for(
+                                            &view_for_menu,
+                                            move |this, _, window, cx| {
+                                                this.start_rename_tab(idx, window, cx);
+                                            },
+                                        )),
+                                )
+                                .item(
+                                    PopupMenuItem::new(
+                                        t!("TabContextMenu.duplicate_tab").to_string(),
+                                    )
+                                    .disabled(!can_duplicate)
+                                    .on_click(
+                                        window.listener_for(
+                                            &view_for_menu,
+                                            move |this, _, window, cx| {
+                                                this.duplicate_tab(idx, window, cx);
+                                            },
+                                        ),
+                                    ),
+                                )
+                                .item(
+                                    PopupMenuItem::new(
+                                        t!("TabContextMenu.split_right").to_string(),
+                                    )
+                                    .disabled(!split_enabled)
+                                    .on_click(
+                                        window.listener_for(
                                             &view_for_menu,
                                             move |_this, _, _window, cx| {
                                                 cx.emit(TabContainerEvent::SplitRequested {
@@ -3184,10 +3415,11 @@ impl TabContainer {
                                                     tab_index: idx,
                                                 });
                                             },
-                                        )),
+                                        ),
+                                    ),
                                 )
                                 .item(
-                                    PopupMenuItem::new("Split Down")
+                                    PopupMenuItem::new(t!("TabContextMenu.split_down").to_string())
                                         .disabled(!split_enabled)
                                         .on_click(window.listener_for(
                                             &view_for_menu,
@@ -3200,51 +3432,70 @@ impl TabContainer {
                                             },
                                         )),
                                 )
-                                .item(PopupMenuItem::new("Close").disabled(!closeable).on_click(
-                                    window.listener_for(
-                                        &view_for_menu,
-                                        move |this, _, window, cx| {
-                                            this.close_tab(idx, window, cx).detach();
-                                        },
-                                    ),
-                                ))
-                                .item(PopupMenuItem::new("Close All").on_click(
-                                    window.listener_for(
-                                        &view_for_menu,
-                                        move |this, _, window, cx| {
-                                            this.close_all_tabs(window, cx).detach();
-                                        },
-                                    ),
-                                ))
                                 .item(
-                                    PopupMenuItem::new("Close Others")
-                                        .disabled(tab_count <= 1)
+                                    PopupMenuItem::new(t!("TabContextMenu.close_tab").to_string())
+                                        .disabled(!closeable)
                                         .on_click(window.listener_for(
+                                            &view_for_menu,
+                                            move |this, _, window, cx| {
+                                                this.close_tab(idx, window, cx).detach();
+                                            },
+                                        )),
+                                )
+                                .item(
+                                    PopupMenuItem::new(
+                                        t!("TabContextMenu.close_all_tabs").to_string(),
+                                    )
+                                    .on_click(
+                                        window.listener_for(
+                                            &view_for_menu,
+                                            move |this, _, window, cx| {
+                                                this.close_all_tabs(window, cx).detach();
+                                            },
+                                        ),
+                                    ),
+                                )
+                                .item(
+                                    PopupMenuItem::new(
+                                        t!("TabContextMenu.close_other_tabs").to_string(),
+                                    )
+                                    .disabled(tab_count <= 1)
+                                    .on_click(
+                                        window.listener_for(
                                             &view_for_menu,
                                             move |this, _, window, cx| {
                                                 this.close_other_tabs(idx, window, cx).detach();
                                             },
-                                        )),
+                                        ),
+                                    ),
                                 )
                                 .item(
-                                    PopupMenuItem::new("Close Tabs To The Left")
-                                        .disabled(!has_tabs_left)
-                                        .on_click(window.listener_for(
+                                    PopupMenuItem::new(
+                                        t!("TabContextMenu.close_tabs_to_left").to_string(),
+                                    )
+                                    .disabled(!has_tabs_left)
+                                    .on_click(
+                                        window.listener_for(
                                             &view_for_menu,
                                             move |this, _, window, cx| {
                                                 this.close_tabs_to_left(idx, window, cx).detach();
                                             },
-                                        )),
+                                        ),
+                                    ),
                                 )
                                 .item(
-                                    PopupMenuItem::new("Close Tabs To The Right")
-                                        .disabled(!has_tabs_right)
-                                        .on_click(window.listener_for(
+                                    PopupMenuItem::new(
+                                        t!("TabContextMenu.close_tabs_to_right").to_string(),
+                                    )
+                                    .disabled(!has_tabs_right)
+                                    .on_click(
+                                        window.listener_for(
                                             &view_for_menu,
                                             move |this, _, window, cx| {
                                                 this.close_tabs_to_right(idx, window, cx).detach();
                                             },
-                                        )),
+                                        ),
+                                    ),
                                 )
                             })
                     })),
@@ -3264,7 +3515,7 @@ impl TabContainer {
                                 .map(|(idx, tab)| {
                                     (
                                         idx,
-                                        tab.content().title(cx),
+                                        tab.title(cx),
                                         tab.content().icon(cx),
                                         tab.content().closeable(cx),
                                     )

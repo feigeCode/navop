@@ -14,6 +14,48 @@ Common:
     zh-CN: "搜索..."
     zh-HK: "搜尋..."
 
+TabContextMenu:
+  rename_tab:
+    en: "Rename Tab"
+    zh-CN: "重命名标签页"
+    zh-HK: "重命名標籤頁"
+  duplicate_tab:
+    en: "Duplicate Tab"
+    zh-CN: "复制标签页"
+    zh-HK: "複製標籤頁"
+  split_right:
+    en: "Split Right"
+    zh-CN: "向右分屏"
+    zh-HK: "向右分屏"
+  split_down:
+    en: "Split Down"
+    zh-CN: "向下分屏"
+    zh-HK: "向下分屏"
+  close_tab:
+    en: "Close Tab"
+    zh-CN: "关闭标签页"
+    zh-HK: "關閉標籤頁"
+  close_all_tabs:
+    en: "Close All Tabs"
+    zh-CN: "关闭全部标签页"
+    zh-HK: "關閉全部標籤頁"
+  close_other_tabs:
+    en: "Close Other Tabs"
+    zh-CN: "关闭其他标签页"
+    zh-HK: "關閉其他標籤頁"
+  close_tabs_to_left:
+    en: "Close Tabs to the Left"
+    zh-CN: "关闭左侧标签页"
+    zh-HK: "關閉左側標籤頁"
+  close_tabs_to_right:
+    en: "Close Tabs to the Right"
+    zh-CN: "关闭右侧标签页"
+    zh-HK: "關閉右側標籤頁"
+  tab_name_placeholder:
+    en: "Tab name"
+    zh-CN: "标签页名称"
+    zh-HK: "標籤頁名稱"
+
 AiChat:
   title:
     en: "AI Assistant"
