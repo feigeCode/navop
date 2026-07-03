@@ -3,7 +3,7 @@ use super::{
     TableSchema,
 };
 use crate::plugin::DatabasePlugin;
-use crate::types::{ColumnDefinition, IndexDefinition, TableDesign};
+use crate::types::{ColumnDefinition, ForeignKeyDefinition, IndexDefinition, TableDesign};
 use serde::{Deserialize, Serialize};
 
 /// 同步计划类型
@@ -537,6 +537,10 @@ fn foreign_key_action_sql(value: Option<&str>) -> Option<String> {
     }
 }
 
+fn sync_supports_foreign_keys(target_db_type: &str) -> bool {
+    !target_db_type.to_lowercase().contains("clickhouse")
+}
+
 fn generate_drop_foreign_key_sql(
     target_db_type: &str,
     table_name: &str,
@@ -736,7 +740,8 @@ fn build_schema_sync_plan_with_dialect(
             DiffStatus::Added => {
                 if let Some(source_table) = &table_diff.source {
                     let stmt_id = uuid::Uuid::new_v4().to_string();
-                    let design = table_schema_to_design(target_database, source_table);
+                    let mut design = table_schema_to_design(target_database, source_table);
+                    design.foreign_keys.clear();
                     statements.push(SyncStatement {
                         id: stmt_id,
                         sql: dialect.build_create_table_sql(&design),
@@ -749,29 +754,31 @@ fn build_schema_sync_plan_with_dialect(
                         warnings: vec![],
                     });
 
-                    let table_ref = dialect.format_table_reference(
-                        target_database,
-                        target_schema,
-                        &source_table.name,
-                    );
-                    for foreign_key in &source_table.foreign_keys {
-                        deferred_foreign_key_adds.push(SyncStatement {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            sql: generate_add_foreign_key_sql(
-                                &table_ref,
-                                foreign_key,
-                                target_database,
-                                target_schema,
-                                dialect,
-                            ),
-                            kind: SyncStatementKind::AlterTable,
-                            object_name: Some(foreign_key.name.clone()),
-                            row_key: None,
-                            destructive: false,
-                            transactional_safe: true,
-                            selected_by_default: true,
-                            warnings: vec![],
-                        });
+                    if sync_supports_foreign_keys(target_db_type) {
+                        let table_ref = dialect.format_table_reference(
+                            target_database,
+                            target_schema,
+                            &source_table.name,
+                        );
+                        for foreign_key in &source_table.foreign_keys {
+                            deferred_foreign_key_adds.push(SyncStatement {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                sql: generate_add_foreign_key_sql(
+                                    &table_ref,
+                                    foreign_key,
+                                    target_database,
+                                    target_schema,
+                                    dialect,
+                                ),
+                                kind: SyncStatementKind::AlterTable,
+                                object_name: Some(foreign_key.name.clone()),
+                                row_key: None,
+                                destructive: false,
+                                transactional_safe: true,
+                                selected_by_default: true,
+                                warnings: vec![],
+                            });
+                        }
                     }
                 }
             }
@@ -801,43 +808,50 @@ fn build_schema_sync_plan_with_dialect(
                     target_schema,
                     &table_diff.name,
                 );
-
-                for fk_diff in &table_diff.foreign_key_diffs {
-                    if matches!(fk_diff.status, DiffStatus::Removed | DiffStatus::Modified) {
-                        let fk_name = fk_diff
-                            .target
-                            .as_ref()
-                            .map(|foreign_key| foreign_key.name.as_str())
-                            .unwrap_or(&fk_diff.name);
-                        foreign_key_drops.push(SyncStatement {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            sql: generate_drop_foreign_key_sql(
-                                target_db_type,
-                                &table_ref,
-                                fk_name,
-                                dialect,
-                            ),
-                            kind: SyncStatementKind::AlterTable,
-                            object_name: Some(fk_diff.name.clone()),
-                            row_key: None,
-                            destructive: false,
-                            transactional_safe: true,
-                            selected_by_default: fk_diff.status == DiffStatus::Removed,
-                            warnings: if fk_diff.status == DiffStatus::Modified {
-                                vec!["此操作会重建目标外键，请先确认现有外键可被替换".to_string()]
-                            } else {
-                                vec![]
-                            },
-                        });
-                    }
-                }
-
-                if let Some(statement) = table_designer_sync_statement(
+                let table_designer_statement = table_designer_sync_statement(
                     table_diff,
                     target_database,
                     target_db_type,
                     dialect,
-                ) {
+                );
+                let table_designer_handles_table = table_designer_statement.is_some();
+
+                if !table_designer_handles_table && sync_supports_foreign_keys(target_db_type) {
+                    for fk_diff in &table_diff.foreign_key_diffs {
+                        if matches!(fk_diff.status, DiffStatus::Removed | DiffStatus::Modified) {
+                            let fk_name = fk_diff
+                                .target
+                                .as_ref()
+                                .map(|foreign_key| foreign_key.name.as_str())
+                                .unwrap_or(&fk_diff.name);
+                            foreign_key_drops.push(SyncStatement {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                sql: generate_drop_foreign_key_sql(
+                                    target_db_type,
+                                    &table_ref,
+                                    fk_name,
+                                    dialect,
+                                ),
+                                kind: SyncStatementKind::AlterTable,
+                                object_name: Some(fk_diff.name.clone()),
+                                row_key: None,
+                                destructive: false,
+                                transactional_safe: true,
+                                selected_by_default: fk_diff.status == DiffStatus::Removed,
+                                warnings: if fk_diff.status == DiffStatus::Modified {
+                                    vec![
+                                        "此操作会重建目标外键，请先确认现有外键可被替换"
+                                            .to_string(),
+                                    ]
+                                } else {
+                                    vec![]
+                                },
+                            });
+                        }
+                    }
+                }
+
+                if let Some(statement) = table_designer_statement {
                     statements.push(statement);
                 } else {
                     for col_diff in &table_diff.column_diffs {
@@ -1102,33 +1116,35 @@ fn build_schema_sync_plan_with_dialect(
                     }
                 }
 
-                for fk_diff in &table_diff.foreign_key_diffs {
-                    if matches!(fk_diff.status, DiffStatus::Added | DiffStatus::Modified) {
-                        if let Some(foreign_key) = &fk_diff.source {
-                            deferred_foreign_key_adds.push(SyncStatement {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                sql: generate_add_foreign_key_sql(
-                                    &table_ref,
-                                    foreign_key,
-                                    target_database,
-                                    target_schema,
-                                    dialect,
-                                ),
-                                kind: SyncStatementKind::AlterTable,
-                                object_name: Some(fk_diff.name.clone()),
-                                row_key: None,
-                                destructive: false,
-                                transactional_safe: true,
-                                selected_by_default: fk_diff.status == DiffStatus::Added,
-                                warnings: if fk_diff.status == DiffStatus::Modified {
-                                    vec![
-                                        "此操作会重建目标外键，请先确认现有外键可被替换"
-                                            .to_string(),
-                                    ]
-                                } else {
-                                    vec![]
-                                },
-                            });
+                if !table_designer_handles_table && sync_supports_foreign_keys(target_db_type) {
+                    for fk_diff in &table_diff.foreign_key_diffs {
+                        if matches!(fk_diff.status, DiffStatus::Added | DiffStatus::Modified) {
+                            if let Some(foreign_key) = &fk_diff.source {
+                                deferred_foreign_key_adds.push(SyncStatement {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    sql: generate_add_foreign_key_sql(
+                                        &table_ref,
+                                        foreign_key,
+                                        target_database,
+                                        target_schema,
+                                        dialect,
+                                    ),
+                                    kind: SyncStatementKind::AlterTable,
+                                    object_name: Some(fk_diff.name.clone()),
+                                    row_key: None,
+                                    destructive: false,
+                                    transactional_safe: true,
+                                    selected_by_default: fk_diff.status == DiffStatus::Added,
+                                    warnings: if fk_diff.status == DiffStatus::Modified {
+                                        vec![
+                                            "此操作会重建目标外键，请先确认现有外键可被替换"
+                                                .to_string(),
+                                        ]
+                                    } else {
+                                        vec![]
+                                    },
+                                });
+                            }
                         }
                     }
                 }
@@ -1196,6 +1212,18 @@ fn table_schema_to_design(database: &str, table: &TableSchema) -> TableDesign {
             IndexDefinition::new(index.name.clone())
                 .columns(index.columns.clone())
                 .unique(index.unique)
+        })
+        .collect();
+    design.foreign_keys = table
+        .foreign_keys
+        .iter()
+        .map(|foreign_key| ForeignKeyDefinition {
+            name: foreign_key.name.clone(),
+            columns: foreign_key.columns.clone(),
+            ref_table: foreign_key.ref_table.clone(),
+            ref_columns: foreign_key.ref_columns.clone(),
+            on_delete: foreign_key.on_delete.clone().unwrap_or_default(),
+            on_update: foreign_key.on_update.clone().unwrap_or_default(),
         })
         .collect();
     design.options.comment = table.comment.clone().unwrap_or_default();
@@ -2019,19 +2047,40 @@ mod tests {
             TableSchema,
         };
 
-        let table = TableSchema {
+        let source_table = TableSchema {
             name: "order_items".to_string(),
             columns: vec![],
             indexes: vec![],
-            foreign_keys: vec![],
+            foreign_keys: vec![ForeignKeySchema {
+                name: "fk_order_items_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: None,
+                on_update: None,
+            }],
+            comment: None,
+        };
+        let target_table = TableSchema {
+            name: "order_items".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeySchema {
+                name: "fk_order_items_legacy".to_string(),
+                columns: vec!["legacy_order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: None,
+                on_update: None,
+            }],
             comment: None,
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {
                 name: "order_items".to_string(),
                 status: DiffStatus::Modified,
-                source: Some(table.clone()),
-                target: Some(table),
+                source: Some(source_table),
+                target: Some(target_table),
                 column_diffs: vec![],
                 index_diffs: vec![],
                 foreign_key_diffs: vec![
@@ -2080,8 +2129,7 @@ mod tests {
         assert_eq!(
             sql,
             vec![
-                "ALTER TABLE `app`.`order_items` DROP FOREIGN KEY `fk_order_items_legacy`;",
-                "ALTER TABLE `app`.`order_items` ADD CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `app`.`orders` (`id`);",
+                "ALTER TABLE `order_items` DROP FOREIGN KEY `fk_order_items_legacy`;\nALTER TABLE `order_items` ADD CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`);",
             ]
         );
     }
@@ -2236,5 +2284,70 @@ mod tests {
             sql[1],
             "ALTER TABLE `app`.`order_items` ADD CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `app`.`orders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT;"
         );
+    }
+
+    #[test]
+    fn test_clickhouse_schema_sync_plan_ignores_foreign_keys() {
+        use super::super::{
+            ColumnSchema, DiffStatus, ForeignKeySchema, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let source = TableSchema {
+            name: "events".to_string(),
+            columns: vec![
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: "UInt64".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+                ColumnSchema {
+                    name: "order_id".to_string(),
+                    data_type: "UInt64".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeySchema {
+                name: "fk_events_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: Some("CASCADE".to_string()),
+                on_update: None,
+            }],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "events".to_string(),
+                status: DiffStatus::Added,
+                source: Some(source),
+                target: None,
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 1,
+            removed_count: 0,
+            modified_count: 0,
+        };
+        let plugin = crate::clickhouse::ClickHousePlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "analytics", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(1, sql.len());
+        assert!(sql[0].contains("CREATE TABLE `events`"));
+        assert!(!plan.sql_text.contains("FOREIGN KEY"));
+        assert!(!plan.sql_text.contains("fk_events_order"));
     }
 }

@@ -1494,16 +1494,21 @@ impl DatabasePlugin for ExternalDatabasePlugin {
     }
 
     fn build_create_table_sql(&self, design: &TableDesign) -> String {
-        let columns = design
+        let mut definitions = design
             .columns
             .iter()
             .map(|column| self.build_column_def(column))
-            .collect::<Vec<_>>()
-            .join(", ");
+            .collect::<Vec<_>>();
+        definitions.extend(
+            design
+                .foreign_keys
+                .iter()
+                .map(|foreign_key| self.build_foreign_key_def(foreign_key)),
+        );
         format!(
             "CREATE TABLE {} ({})",
             self.quote_identifier(&design.table_name),
-            columns
+            definitions.join(", ")
         )
     }
 
@@ -1519,9 +1524,26 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             .iter()
             .map(|column| (column.name.as_str(), column))
             .collect();
+        let original_foreign_keys: HashMap<&str, &ForeignKeyDefinition> = original
+            .foreign_keys
+            .iter()
+            .map(|foreign_key| (foreign_key.name.as_str(), foreign_key))
+            .collect();
+        let new_foreign_keys: HashMap<&str, &ForeignKeyDefinition> = new
+            .foreign_keys
+            .iter()
+            .map(|foreign_key| (foreign_key.name.as_str(), foreign_key))
+            .collect();
         let mut statements = Vec::new();
         let (index_drops, index_creates) = self.build_index_change_sql(&table, original, new);
 
+        for (name, original_foreign_key) in &original_foreign_keys {
+            match new_foreign_keys.get(name) {
+                Some(new_foreign_key)
+                    if !self.foreign_key_changed(original_foreign_key, new_foreign_key) => {}
+                _ => statements.push(self.build_drop_foreign_key_sql(&new.table_name, name)),
+            }
+        }
         statements.extend(index_drops);
         for column in &new.columns {
             if !original_cols.contains_key(column.name.as_str()) {
@@ -1545,6 +1567,14 @@ impl DatabasePlugin for ExternalDatabasePlugin {
             }
         }
         statements.extend(index_creates);
+        for (name, new_foreign_key) in &new_foreign_keys {
+            match original_foreign_keys.get(name) {
+                Some(original_foreign_key)
+                    if !self.foreign_key_changed(original_foreign_key, new_foreign_key) => {}
+                _ => statements
+                    .push(self.build_add_foreign_key_sql(&new.table_name, new_foreign_key)),
+            }
+        }
 
         if statements.is_empty() {
             "-- No changes detected".to_string()
@@ -2986,5 +3016,70 @@ mod tests {
 
         assert!(sql.contains("DROP INDEX IF EXISTS \"idx_payload\";"));
         assert!(sql.contains("CREATE UNIQUE INDEX \"idx_id\" ON \"events\" (\"id\");"));
+    }
+
+    #[test]
+    fn sync_create_table_builder_includes_foreign_keys() {
+        let plugin = ExternalDatabasePlugin::new();
+        let mut design = TableDesign::new("main", "order_items");
+        design.add_column(ColumnDefinition::new("id").data_type("INTEGER"));
+        design.add_column(ColumnDefinition::new("order_id").data_type("INTEGER"));
+        design.foreign_keys.push(ForeignKeyDefinition {
+            name: "fk_order_items_order".to_string(),
+            columns: vec!["order_id".to_string()],
+            ref_table: "orders".to_string(),
+            ref_columns: vec!["id".to_string()],
+            on_delete: "CASCADE".to_string(),
+            on_update: "NO ACTION".to_string(),
+        });
+
+        let sql = plugin.build_create_table_sql(&design);
+
+        assert!(sql.contains(
+            "CONSTRAINT \"fk_order_items_order\" FOREIGN KEY (\"order_id\") REFERENCES \"orders\" (\"id\") ON DELETE CASCADE ON UPDATE NO ACTION"
+        ));
+    }
+
+    #[test]
+    fn sync_alter_table_builder_includes_foreign_key_changes() {
+        let plugin = ExternalDatabasePlugin::new();
+        let mut original = TableDesign::new("main", "order_items");
+        original.add_column(ColumnDefinition::new("id").data_type("INTEGER"));
+        original.add_column(ColumnDefinition::new("order_id").data_type("INTEGER"));
+        original.add_column(ColumnDefinition::new("legacy_order_id").data_type("INTEGER"));
+        original.foreign_keys.push(ForeignKeyDefinition {
+            name: "fk_order_items_legacy".to_string(),
+            columns: vec!["legacy_order_id".to_string()],
+            ref_table: "orders".to_string(),
+            ref_columns: vec!["id".to_string()],
+            on_delete: String::new(),
+            on_update: String::new(),
+        });
+
+        let mut current = TableDesign::new("main", "order_items");
+        current.add_column(ColumnDefinition::new("id").data_type("INTEGER"));
+        current.add_column(ColumnDefinition::new("order_id").data_type("INTEGER"));
+        current.foreign_keys.push(ForeignKeyDefinition {
+            name: "fk_order_items_order".to_string(),
+            columns: vec!["order_id".to_string()],
+            ref_table: "orders".to_string(),
+            ref_columns: vec!["id".to_string()],
+            on_delete: "CASCADE".to_string(),
+            on_update: "NO ACTION".to_string(),
+        });
+
+        let sql = plugin.build_alter_table_sql(&original, &current);
+
+        assert!(
+            sql.contains("ALTER TABLE \"order_items\" DROP CONSTRAINT \"fk_order_items_legacy\";")
+        );
+        assert!(
+            sql.find("DROP CONSTRAINT \"fk_order_items_legacy\"")
+                .unwrap()
+                < sql.find("DROP COLUMN \"legacy_order_id\"").unwrap()
+        );
+        assert!(sql.contains(
+            "ALTER TABLE \"order_items\" ADD CONSTRAINT \"fk_order_items_order\" FOREIGN KEY (\"order_id\") REFERENCES \"orders\" (\"id\") ON DELETE CASCADE ON UPDATE NO ACTION;"
+        ));
     }
 }
