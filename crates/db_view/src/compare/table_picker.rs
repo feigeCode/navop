@@ -26,6 +26,7 @@ pub(super) fn table_selection_list_state<T: 'static>(
 ) -> TableSelectionListState {
     cx.new(|cx| {
         ListState::new(TableSelectionListDelegate::new(selected_tables), window, cx)
+            .searchable(true)
             .selectable(false)
     })
 }
@@ -116,7 +117,7 @@ pub(super) fn table_selection_panel(
     selected_tables: Entity<HashSet<String>>,
     cx: &App,
 ) -> impl IntoElement {
-    let all_tables = list_state.read(cx).delegate().tables().to_vec();
+    let visible_tables = list_state.read(cx).delegate().visible_tables().to_vec();
     let button_scope = title.to_lowercase().replace(' ', "-");
 
     v_flex()
@@ -136,10 +137,10 @@ pub(super) fn table_selection_panel(
                                 .child(t!("Common.select_all").to_string())
                                 .on_click({
                                     let selected_tables = selected_tables.clone();
-                                    let all_tables = all_tables.clone();
+                                    let visible_tables = visible_tables.clone();
                                     move |_, _, cx| {
                                         selected_tables.update(cx, |selected, cx| {
-                                            *selected = all_tables.iter().cloned().collect();
+                                            *selected = visible_tables.iter().cloned().collect();
                                             cx.notify();
                                         });
                                     }
@@ -169,12 +170,18 @@ pub(super) fn table_selection_panel(
                 .border_color(cx.theme().border)
                 .rounded_md()
                 .overflow_hidden()
-                .child(List::new(&list_state).size_full()),
+                .child(
+                    List::new(&list_state)
+                        .search_placeholder(t!("Common.search").to_string())
+                        .size_full(),
+                ),
         )
 }
 
 pub(super) struct TableSelectionListDelegate {
     tables: Vec<String>,
+    filtered_tables: Vec<String>,
+    search_query: String,
     selected_tables: Entity<HashSet<String>>,
     selected_index: Option<IndexPath>,
 }
@@ -183,6 +190,8 @@ impl TableSelectionListDelegate {
     fn new(selected_tables: Entity<HashSet<String>>) -> Self {
         Self {
             tables: Vec::new(),
+            filtered_tables: Vec::new(),
+            search_query: String::new(),
             selected_tables,
             selected_index: None,
         }
@@ -190,11 +199,34 @@ impl TableSelectionListDelegate {
 
     fn set_tables(&mut self, tables: Vec<String>) {
         self.tables = tables;
+        self.apply_filter();
         self.selected_index = None;
     }
 
     fn tables(&self) -> &[String] {
         &self.tables
+    }
+
+    fn visible_tables(&self) -> &[String] {
+        &self.filtered_tables
+    }
+
+    fn set_search_query(&mut self, query: &str) {
+        self.search_query = query.trim().to_lowercase();
+        self.apply_filter();
+    }
+
+    fn apply_filter(&mut self) {
+        if self.search_query.is_empty() {
+            self.filtered_tables = self.tables.clone();
+        } else {
+            self.filtered_tables = self
+                .tables
+                .iter()
+                .filter(|table| table.to_lowercase().contains(&self.search_query))
+                .cloned()
+                .collect();
+        }
     }
 }
 
@@ -202,7 +234,7 @@ impl ListDelegate for TableSelectionListDelegate {
     type Item = ListItem;
 
     fn items_count(&self, _section: usize, _cx: &App) -> usize {
-        self.tables.len()
+        self.filtered_tables.len()
     }
 
     fn render_item(
@@ -211,7 +243,7 @@ impl ListDelegate for TableSelectionListDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
-        let table = self.tables.get(ix.row)?;
+        let table = self.filtered_tables.get(ix.row)?;
         let checked = self.selected_tables.read(cx).contains(table);
         Some(table_row(table, checked, self.selected_tables.clone(), cx))
     }
@@ -231,10 +263,12 @@ impl ListDelegate for TableSelectionListDelegate {
 
     fn perform_search(
         &mut self,
-        _query: &str,
+        query: &str,
         _window: &mut Window,
-        _cx: &mut Context<ListState<Self>>,
+        cx: &mut Context<ListState<Self>>,
     ) -> Task<()> {
+        self.set_search_query(query);
+        cx.notify();
         Task::ready(())
     }
 
@@ -328,6 +362,7 @@ mod tests {
     use std::collections::HashSet;
 
     use gpui::{AppContext, Context, Entity, IntoElement, Render, TestAppContext, Window, div};
+    use gpui_component::list::ListDelegate;
 
     use super::{TableSelectionListState, table_selection_list_state};
 
@@ -385,6 +420,49 @@ mod tests {
         assert_eq!(
             HashSet::from(["orders".to_string(), "users".to_string()]),
             selected
+        );
+    }
+
+    #[gpui::test]
+    fn table_selection_list_search_filters_visible_tables_case_insensitively(
+        cx: &mut TestAppContext,
+    ) {
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let selected_tables = cx.new(|_| HashSet::new());
+            TableSelectionTestRoot {
+                list_state: table_selection_list_state(selected_tables.clone(), window, cx),
+                selected_tables,
+            }
+        });
+
+        root.update_in(cx, |root, window, cx| {
+            super::replace_table_selection_list(
+                &root.list_state,
+                &root.selected_tables,
+                vec![
+                    "users".to_string(),
+                    "orders".to_string(),
+                    "user_profiles".to_string(),
+                ],
+                HashSet::new(),
+                cx,
+            );
+            root.list_state.update(cx, |list, cx| {
+                let search = list.delegate_mut().perform_search("USER", window, cx);
+                search.detach();
+            });
+        });
+
+        let visible = root.read_with(cx, |root, cx| {
+            root.list_state
+                .read(cx)
+                .delegate()
+                .visible_tables()
+                .to_vec()
+        });
+        assert_eq!(
+            vec!["users".to_string(), "user_profiles".to_string()],
+            visible
         );
     }
 }

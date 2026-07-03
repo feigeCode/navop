@@ -688,7 +688,11 @@ impl Render for DataCompareWindow {
         let is_executing = *self.is_executing.read(cx);
         let has_sync_sql = self.has_editor_sql(cx);
         let sync_sql_blocked = self.sync_sql_blocked(cx);
-        let status = self.status.read(cx).clone();
+        let status = if self.current_step == CompareStep::SqlExecute {
+            String::new()
+        } else {
+            self.status.read(cx).clone()
+        };
         let editor_sql = self.sync_sql_editor.read(cx).text().to_string();
 
         v_flex()
@@ -785,6 +789,8 @@ impl Render for DataCompareWindow {
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(status),

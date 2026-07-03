@@ -543,7 +543,11 @@ impl Render for SchemaCompareWindow {
         let is_running = *self.is_running.read(cx);
         let is_executing = *self.is_executing.read(cx);
         let has_sync_sql = self.has_editor_sql(cx);
-        let status = self.status.read(cx).clone();
+        let status = if self.current_step == CompareStep::SqlExecute {
+            String::new()
+        } else {
+            self.status.read(cx).clone()
+        };
         let editor_sql = self.sync_sql_editor.read(cx).text().to_string();
 
         v_flex()
@@ -640,6 +644,8 @@ impl Render for SchemaCompareWindow {
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(status),
