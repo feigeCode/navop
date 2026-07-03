@@ -3,7 +3,7 @@ use super::{
     TableSchema,
 };
 use crate::plugin::DatabasePlugin;
-use crate::types::{ColumnDefinition, IndexDefinition, TableDesign};
+use crate::types::{ColumnDefinition, ForeignKeyDefinition, IndexDefinition, TableDesign};
 use serde::{Deserialize, Serialize};
 
 /// 同步计划类型
@@ -83,6 +83,7 @@ trait SyncSqlDialect {
     fn drop_table(&self, database: &str, schema: Option<&str>, table: &str) -> String;
     fn build_column_def(&self, column: &ColumnDefinition) -> String;
     fn build_create_table_sql(&self, design: &TableDesign) -> String;
+    fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> Option<String>;
 }
 
 impl<T> SyncSqlDialect for T
@@ -107,6 +108,10 @@ where
 
     fn build_create_table_sql(&self, design: &TableDesign) -> String {
         DatabasePlugin::build_create_table_sql(self, design)
+    }
+
+    fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> Option<String> {
+        Some(DatabasePlugin::build_alter_table_sql(self, original, new))
     }
 }
 
@@ -133,6 +138,10 @@ impl SyncSqlDialect for PluginSyncSqlDialect<'_> {
 
     fn build_create_table_sql(&self, design: &TableDesign) -> String {
         self.0.build_create_table_sql(design)
+    }
+
+    fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> Option<String> {
+        Some(self.0.build_alter_table_sql(original, new))
     }
 }
 
@@ -177,6 +186,10 @@ impl SyncSqlDialect for RawSyncSqlDialect {
             .collect::<Vec<_>>()
             .join(",\n");
         format!("CREATE TABLE {} (\n{}\n);", design.table_name, columns)
+    }
+
+    fn build_alter_table_sql(&self, _original: &TableDesign, _new: &TableDesign) -> Option<String> {
+        None
     }
 }
 
@@ -407,6 +420,225 @@ fn generate_create_index_sql(
     )
 }
 
+fn generate_drop_index_sql(
+    target_db_type: &str,
+    table_name: &str,
+    index_name: &str,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let index_name = dialect.quote_identifier(index_name);
+    let db_type = target_db_type.to_lowercase();
+    if db_type.contains("mysql") || db_type.contains("mariadb") {
+        format!("ALTER TABLE {} DROP INDEX {};", table_name, index_name)
+    } else if db_type.contains("mssql") || db_type.contains("sql server") {
+        format!("DROP INDEX {} ON {};", index_name, table_name)
+    } else if db_type.contains("oracle") {
+        format!("DROP INDEX {};", index_name)
+    } else if db_type.contains("clickhouse") {
+        format!("ALTER TABLE {} DROP INDEX {};", table_name, index_name)
+    } else {
+        format!("DROP INDEX IF EXISTS {};", index_name)
+    }
+}
+
+fn is_primary_index_name(index_name: &str) -> bool {
+    index_name.eq_ignore_ascii_case("PRIMARY")
+}
+
+fn is_primary_index(index: &super::IndexSchema) -> bool {
+    is_primary_index_name(&index.name)
+}
+
+fn generate_add_primary_key_sql(
+    table_name: &str,
+    index: &super::IndexSchema,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let columns = index
+        .columns
+        .iter()
+        .map(|column| dialect.quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("ALTER TABLE {} ADD PRIMARY KEY ({});", table_name, columns)
+}
+
+fn generate_drop_primary_key_sql(
+    target_db_type: &str,
+    table_name: &str,
+    primary_key_name: &str,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let db_type = target_db_type.to_lowercase();
+    if db_type.contains("mysql") || db_type.contains("mariadb") {
+        format!("ALTER TABLE {} DROP PRIMARY KEY;", table_name)
+    } else {
+        format!(
+            "ALTER TABLE {} DROP CONSTRAINT {};",
+            table_name,
+            dialect.quote_identifier(primary_key_name)
+        )
+    }
+}
+
+fn generate_add_foreign_key_sql(
+    table_name: &str,
+    foreign_key: &super::ForeignKeySchema,
+    target_database: &str,
+    target_schema: Option<&str>,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let columns = foreign_key
+        .columns
+        .iter()
+        .map(|column| dialect.quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ref_table =
+        dialect.format_table_reference(target_database, target_schema, &foreign_key.ref_table);
+    let ref_columns = foreign_key
+        .ref_columns
+        .iter()
+        .map(|column| dialect.quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut sql = format!(
+        "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
+        table_name,
+        dialect.quote_identifier(&foreign_key.name),
+        columns,
+        ref_table,
+        ref_columns
+    );
+    if let Some(on_delete) = foreign_key_action_sql(foreign_key.on_delete.as_deref()) {
+        sql.push_str(&format!(" ON DELETE {on_delete}"));
+    }
+    if let Some(on_update) = foreign_key_action_sql(foreign_key.on_update.as_deref()) {
+        sql.push_str(&format!(" ON UPDATE {on_update}"));
+    }
+    sql.push(';');
+    sql
+}
+
+fn foreign_key_action_sql(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let action = value
+        .split_whitespace()
+        .map(str::to_ascii_uppercase)
+        .collect::<Vec<_>>()
+        .join(" ");
+    match action.as_str() {
+        "CASCADE" | "RESTRICT" | "NO ACTION" | "SET NULL" | "SET DEFAULT" => Some(action),
+        _ => None,
+    }
+}
+
+fn sync_supports_foreign_keys(target_db_type: &str) -> bool {
+    !target_db_type.to_lowercase().contains("clickhouse")
+}
+
+fn generate_drop_foreign_key_sql(
+    target_db_type: &str,
+    table_name: &str,
+    foreign_key_name: &str,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let foreign_key_name = dialect.quote_identifier(foreign_key_name);
+    let db_type = target_db_type.to_lowercase();
+    if db_type.contains("mysql") || db_type.contains("mariadb") {
+        format!(
+            "ALTER TABLE {} DROP FOREIGN KEY {};",
+            table_name, foreign_key_name
+        )
+    } else {
+        format!(
+            "ALTER TABLE {} DROP CONSTRAINT {};",
+            table_name, foreign_key_name
+        )
+    }
+}
+
+fn table_designer_sync_statement(
+    table_diff: &super::TableDiff,
+    target_database: &str,
+    target_db_type: &str,
+    dialect: &dyn SyncSqlDialect,
+) -> Option<SyncStatement> {
+    let source = table_diff.source.as_ref()?;
+    let target = table_diff.target.as_ref()?;
+    let original = table_schema_to_design(target_database, target);
+    let new = table_schema_to_design(target_database, source);
+    let sql = dialect.build_alter_table_sql(&original, &new)?;
+    if !has_executable_sync_sql(&sql) {
+        return None;
+    }
+    let safety = table_designer_statement_safety(table_diff, target_db_type);
+    Some(SyncStatement {
+        id: uuid::Uuid::new_v4().to_string(),
+        sql,
+        kind: SyncStatementKind::AlterTable,
+        object_name: Some(table_diff.name.clone()),
+        row_key: None,
+        destructive: safety.destructive,
+        transactional_safe: true,
+        selected_by_default: safety.selected_by_default,
+        warnings: safety.warnings,
+    })
+}
+
+fn has_executable_sync_sql(sql: &str) -> bool {
+    let sql = sql.trim();
+    !sql.is_empty() && !sql.starts_with("-- No changes detected")
+}
+
+struct SyncStatementSafety {
+    destructive: bool,
+    selected_by_default: bool,
+    warnings: Vec<String>,
+}
+
+fn table_designer_statement_safety(
+    table_diff: &super::TableDiff,
+    target_db_type: &str,
+) -> SyncStatementSafety {
+    let destructive = table_diff
+        .column_diffs
+        .iter()
+        .any(|diff| matches!(diff.status, DiffStatus::Removed | DiffStatus::Modified))
+        || table_diff.index_diffs.iter().any(|diff| {
+            matches!(diff.status, DiffStatus::Removed | DiffStatus::Modified)
+                && diff
+                    .target
+                    .as_ref()
+                    .is_some_and(|index| is_primary_index(index))
+        });
+    let rebuilds_sqlite_table = destructive && target_db_type.to_lowercase().contains("sqlite");
+    let modified_indexes = table_diff
+        .index_diffs
+        .iter()
+        .any(|diff| matches!(diff.status, DiffStatus::Modified));
+    let selected_by_default = !destructive && !modified_indexes;
+    let warnings = if rebuilds_sqlite_table {
+        vec!["SQLite 将通过重建表来同步此结构变更，请先确认数据备份".to_string()]
+    } else if destructive {
+        vec!["此操作会修改或删除目标表结构，请先确认数据备份".to_string()]
+    } else if modified_indexes {
+        vec!["此操作会重建目标索引，请先确认现有索引可被替换".to_string()]
+    } else {
+        vec![]
+    };
+
+    SyncStatementSafety {
+        destructive,
+        selected_by_default,
+        warnings,
+    }
+}
+
 /// 格式化值为 SQL 字面量
 fn format_value(value: CellValue) -> String {
     match value {
@@ -498,7 +730,9 @@ fn build_schema_sync_plan_with_dialect(
     target_db_type: &str,
     dialect: &dyn SyncSqlDialect,
 ) -> SyncPlan {
+    let mut foreign_key_drops = Vec::new();
     let mut statements = Vec::new();
+    let mut deferred_foreign_key_adds = Vec::new();
     let plan_id = uuid::Uuid::new_v4().to_string();
 
     for table_diff in &result.table_diffs {
@@ -506,7 +740,8 @@ fn build_schema_sync_plan_with_dialect(
             DiffStatus::Added => {
                 if let Some(source_table) = &table_diff.source {
                     let stmt_id = uuid::Uuid::new_v4().to_string();
-                    let design = table_schema_to_design(target_database, source_table);
+                    let mut design = table_schema_to_design(target_database, source_table);
+                    design.foreign_keys.clear();
                     statements.push(SyncStatement {
                         id: stmt_id,
                         sql: dialect.build_create_table_sql(&design),
@@ -518,6 +753,33 @@ fn build_schema_sync_plan_with_dialect(
                         selected_by_default: true,
                         warnings: vec![],
                     });
+
+                    if sync_supports_foreign_keys(target_db_type) {
+                        let table_ref = dialect.format_table_reference(
+                            target_database,
+                            target_schema,
+                            &source_table.name,
+                        );
+                        for foreign_key in &source_table.foreign_keys {
+                            deferred_foreign_key_adds.push(SyncStatement {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                sql: generate_add_foreign_key_sql(
+                                    &table_ref,
+                                    foreign_key,
+                                    target_database,
+                                    target_schema,
+                                    dialect,
+                                ),
+                                kind: SyncStatementKind::AlterTable,
+                                object_name: Some(foreign_key.name.clone()),
+                                row_key: None,
+                                destructive: false,
+                                transactional_safe: true,
+                                selected_by_default: true,
+                                warnings: vec![],
+                            });
+                        }
+                    }
                 }
             }
             DiffStatus::Removed => {
@@ -541,58 +803,105 @@ fn build_schema_sync_plan_with_dialect(
             }
             DiffStatus::Modified => {
                 // 修改表
-                for col_diff in &table_diff.column_diffs {
-                    let stmt_id = uuid::Uuid::new_v4().to_string();
-                    let table_ref = dialect.format_table_reference(
-                        target_database,
-                        target_schema,
-                        &table_diff.name,
-                    );
+                let table_ref = dialect.format_table_reference(
+                    target_database,
+                    target_schema,
+                    &table_diff.name,
+                );
+                let table_designer_statement = table_designer_sync_statement(
+                    table_diff,
+                    target_database,
+                    target_db_type,
+                    dialect,
+                );
+                let table_designer_handles_table = table_designer_statement.is_some();
 
-                    match col_diff.status {
-                        DiffStatus::Added => {
-                            if let Some(src) = &col_diff.source {
-                                let column = column_schema_to_definition(src);
+                if !table_designer_handles_table && sync_supports_foreign_keys(target_db_type) {
+                    for fk_diff in &table_diff.foreign_key_diffs {
+                        if matches!(fk_diff.status, DiffStatus::Removed | DiffStatus::Modified) {
+                            let fk_name = fk_diff
+                                .target
+                                .as_ref()
+                                .map(|foreign_key| foreign_key.name.as_str())
+                                .unwrap_or(&fk_diff.name);
+                            foreign_key_drops.push(SyncStatement {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                sql: generate_drop_foreign_key_sql(
+                                    target_db_type,
+                                    &table_ref,
+                                    fk_name,
+                                    dialect,
+                                ),
+                                kind: SyncStatementKind::AlterTable,
+                                object_name: Some(fk_diff.name.clone()),
+                                row_key: None,
+                                destructive: false,
+                                transactional_safe: true,
+                                selected_by_default: fk_diff.status == DiffStatus::Removed,
+                                warnings: if fk_diff.status == DiffStatus::Modified {
+                                    vec![
+                                        "此操作会重建目标外键，请先确认现有外键可被替换"
+                                            .to_string(),
+                                    ]
+                                } else {
+                                    vec![]
+                                },
+                            });
+                        }
+                    }
+                }
+
+                if let Some(statement) = table_designer_statement {
+                    statements.push(statement);
+                } else {
+                    for col_diff in &table_diff.column_diffs {
+                        let stmt_id = uuid::Uuid::new_v4().to_string();
+
+                        match col_diff.status {
+                            DiffStatus::Added => {
+                                if let Some(src) = &col_diff.source {
+                                    let column = column_schema_to_definition(src);
+                                    statements.push(SyncStatement {
+                                        id: stmt_id,
+                                        sql: format!(
+                                            "ALTER TABLE {} ADD COLUMN {};",
+                                            table_ref,
+                                            dialect.build_column_def(&column)
+                                        ),
+                                        kind: SyncStatementKind::AlterTable,
+                                        object_name: Some(table_diff.name.clone()),
+                                        row_key: None,
+                                        destructive: false,
+                                        transactional_safe: true,
+                                        selected_by_default: true,
+                                        warnings: vec![],
+                                    });
+                                }
+                            }
+                            DiffStatus::Removed => {
+                                // 删除列 - P0 安全保护：默认不选中
                                 statements.push(SyncStatement {
                                     id: stmt_id,
                                     sql: format!(
-                                        "ALTER TABLE {} ADD COLUMN {};",
+                                        "ALTER TABLE {} DROP COLUMN {};",
                                         table_ref,
-                                        dialect.build_column_def(&column)
+                                        dialect.quote_identifier(&col_diff.name)
                                     ),
                                     kind: SyncStatementKind::AlterTable,
                                     object_name: Some(table_diff.name.clone()),
                                     row_key: None,
-                                    destructive: false,
+                                    destructive: true,
                                     transactional_safe: true,
-                                    selected_by_default: true,
-                                    warnings: vec![],
+                                    selected_by_default: false,
+                                    warnings: vec!["此操作将删除列及其所有数据".to_string()],
                                 });
                             }
-                        }
-                        DiffStatus::Removed => {
-                            // 删除列 - P0 安全保护：默认不选中
-                            statements.push(SyncStatement {
-                                id: stmt_id,
-                                sql: format!(
-                                    "ALTER TABLE {} DROP COLUMN {};",
-                                    table_ref,
-                                    dialect.quote_identifier(&col_diff.name)
-                                ),
-                                kind: SyncStatementKind::AlterTable,
-                                object_name: Some(table_diff.name.clone()),
-                                row_key: None,
-                                destructive: true,
-                                transactional_safe: true,
-                                selected_by_default: false,
-                                warnings: vec!["此操作将删除列及其所有数据".to_string()],
-                            });
-                        }
-                        DiffStatus::Modified => {
-                            // 修改列 - P0 安全保护：默认不选中（可能导致数据丢失）
-                            if let Some(src) = &col_diff.source {
-                                let sql =
-                                    if target_db_type == "mysql" || target_db_type == "mariadb" {
+                            DiffStatus::Modified => {
+                                // 修改列 - P0 安全保护：默认不选中（可能导致数据丢失）
+                                if let Some(src) = &col_diff.source {
+                                    let sql = if target_db_type == "mysql"
+                                        || target_db_type == "mariadb"
+                                    {
                                         let column = column_schema_to_definition(src);
                                         format!(
                                             "ALTER TABLE {} MODIFY COLUMN {};",
@@ -608,85 +917,232 @@ fn build_schema_sync_plan_with_dialect(
                                         )
                                     };
 
-                                statements.push(SyncStatement {
-                                    id: stmt_id,
-                                    sql,
-                                    kind: SyncStatementKind::AlterTable,
-                                    object_name: Some(table_diff.name.clone()),
-                                    row_key: None,
-                                    destructive: true,
-                                    transactional_safe: true,
-                                    selected_by_default: false,
-                                    warnings: vec![
-                                        "此操作可能导致数据类型转换失败或数据丢失".to_string(),
-                                    ],
-                                });
+                                    statements.push(SyncStatement {
+                                        id: stmt_id,
+                                        sql,
+                                        kind: SyncStatementKind::AlterTable,
+                                        object_name: Some(table_diff.name.clone()),
+                                        row_key: None,
+                                        destructive: true,
+                                        transactional_safe: true,
+                                        selected_by_default: false,
+                                        warnings: vec![
+                                            "此操作可能导致数据类型转换失败或数据丢失".to_string(),
+                                        ],
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // 索引差异
+                    for idx_diff in &table_diff.index_diffs {
+                        let stmt_id = uuid::Uuid::new_v4().to_string();
+
+                        match idx_diff.status {
+                            DiffStatus::Added => {
+                                if let Some(index) = &idx_diff.source {
+                                    let table_ref = dialect.format_table_reference(
+                                        target_database,
+                                        target_schema,
+                                        &table_diff.name,
+                                    );
+                                    if is_primary_index(index) {
+                                        statements.push(SyncStatement {
+                                            id: stmt_id,
+                                            sql: generate_add_primary_key_sql(
+                                                &table_ref, index, dialect,
+                                            ),
+                                            kind: SyncStatementKind::AlterTable,
+                                            object_name: Some(idx_diff.name.clone()),
+                                            row_key: None,
+                                            destructive: false,
+                                            transactional_safe: true,
+                                            selected_by_default: true,
+                                            warnings: vec![],
+                                        });
+                                    } else {
+                                        statements.push(SyncStatement {
+                                            id: stmt_id,
+                                            sql: generate_create_index_sql(
+                                                &table_ref, index, dialect,
+                                            ),
+                                            kind: SyncStatementKind::CreateIndex,
+                                            object_name: Some(idx_diff.name.clone()),
+                                            row_key: None,
+                                            destructive: false,
+                                            transactional_safe: true,
+                                            selected_by_default: true,
+                                            warnings: vec![],
+                                        });
+                                    }
+                                }
+                            }
+                            DiffStatus::Removed => {
+                                let table_ref = dialect.format_table_reference(
+                                    target_database,
+                                    target_schema,
+                                    &table_diff.name,
+                                );
+                                let index_name = idx_diff
+                                    .target
+                                    .as_ref()
+                                    .map(|index| index.name.as_str())
+                                    .unwrap_or(&idx_diff.name);
+                                if is_primary_index_name(index_name) {
+                                    statements.push(SyncStatement {
+                                        id: stmt_id,
+                                        sql: generate_drop_primary_key_sql(
+                                            target_db_type,
+                                            &table_ref,
+                                            index_name,
+                                            dialect,
+                                        ),
+                                        kind: SyncStatementKind::AlterTable,
+                                        object_name: Some(idx_diff.name.clone()),
+                                        row_key: None,
+                                        destructive: false,
+                                        transactional_safe: true,
+                                        selected_by_default: false,
+                                        warnings: vec![
+                                            "此操作会删除目标主键约束，请先确认依赖关系"
+                                                .to_string(),
+                                        ],
+                                    });
+                                } else {
+                                    statements.push(SyncStatement {
+                                        id: stmt_id,
+                                        sql: generate_drop_index_sql(
+                                            target_db_type,
+                                            &table_ref,
+                                            index_name,
+                                            dialect,
+                                        ),
+                                        kind: SyncStatementKind::DropIndex,
+                                        object_name: Some(idx_diff.name.clone()),
+                                        row_key: None,
+                                        destructive: false,
+                                        transactional_safe: true,
+                                        selected_by_default: true,
+                                        warnings: vec![],
+                                    });
+                                }
+                            }
+                            DiffStatus::Modified => {
+                                if let Some(index) = &idx_diff.source {
+                                    let drop_index_name = idx_diff
+                                        .target
+                                        .as_ref()
+                                        .map(|index| index.name.as_str())
+                                        .unwrap_or(&idx_diff.name);
+                                    if is_primary_index(index)
+                                        || is_primary_index_name(drop_index_name)
+                                    {
+                                        statements.push(SyncStatement {
+                                            id: stmt_id,
+                                            sql: generate_drop_primary_key_sql(
+                                                target_db_type,
+                                                &table_ref,
+                                                drop_index_name,
+                                                dialect,
+                                            ),
+                                            kind: SyncStatementKind::AlterTable,
+                                            object_name: Some(idx_diff.name.clone()),
+                                            row_key: None,
+                                            destructive: false,
+                                            transactional_safe: true,
+                                            selected_by_default: false,
+                                            warnings: vec![
+                                                "此操作会重建目标主键约束，请先确认依赖关系"
+                                                    .to_string(),
+                                            ],
+                                        });
+                                        statements.push(SyncStatement {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            sql: generate_add_primary_key_sql(
+                                                &table_ref, index, dialect,
+                                            ),
+                                            kind: SyncStatementKind::AlterTable,
+                                            object_name: Some(idx_diff.name.clone()),
+                                            row_key: None,
+                                            destructive: false,
+                                            transactional_safe: true,
+                                            selected_by_default: false,
+                                            warnings: vec![
+                                                "此操作会重建目标主键约束，请先确认依赖关系"
+                                                    .to_string(),
+                                            ],
+                                        });
+                                    } else {
+                                        statements.push(SyncStatement {
+                                            id: stmt_id,
+                                            sql: generate_drop_index_sql(
+                                                target_db_type,
+                                                &table_ref,
+                                                drop_index_name,
+                                                dialect,
+                                            ),
+                                            kind: SyncStatementKind::DropIndex,
+                                            object_name: Some(idx_diff.name.clone()),
+                                            row_key: None,
+                                            destructive: false,
+                                            transactional_safe: true,
+                                            selected_by_default: false,
+                                            warnings: vec![
+                                                "此操作会重建目标索引，请先确认现有索引可被替换"
+                                                    .to_string(),
+                                            ],
+                                        });
+                                        statements.push(SyncStatement {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            sql: generate_create_index_sql(
+                                                &table_ref, index, dialect,
+                                            ),
+                                            kind: SyncStatementKind::CreateIndex,
+                                            object_name: Some(idx_diff.name.clone()),
+                                            row_key: None,
+                                            destructive: false,
+                                            transactional_safe: true,
+                                            selected_by_default: false,
+                                            warnings: vec![
+                                                "此操作会重建目标索引，请先确认现有索引可被替换"
+                                                    .to_string(),
+                                            ],
+                                        });
+                                    }
+                                }
                             }
                         }
                     }
                 }
 
-                // 索引差异
-                for idx_diff in &table_diff.index_diffs {
-                    let stmt_id = uuid::Uuid::new_v4().to_string();
-
-                    match idx_diff.status {
-                        DiffStatus::Added => {
-                            if let Some(index) = &idx_diff.source {
-                                let table_ref = dialect.format_table_reference(
-                                    target_database,
-                                    target_schema,
-                                    &table_diff.name,
-                                );
-                                statements.push(SyncStatement {
-                                    id: stmt_id,
-                                    sql: generate_create_index_sql(&table_ref, index, dialect),
-                                    kind: SyncStatementKind::CreateIndex,
-                                    object_name: Some(idx_diff.name.clone()),
+                if !table_designer_handles_table && sync_supports_foreign_keys(target_db_type) {
+                    for fk_diff in &table_diff.foreign_key_diffs {
+                        if matches!(fk_diff.status, DiffStatus::Added | DiffStatus::Modified) {
+                            if let Some(foreign_key) = &fk_diff.source {
+                                deferred_foreign_key_adds.push(SyncStatement {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    sql: generate_add_foreign_key_sql(
+                                        &table_ref,
+                                        foreign_key,
+                                        target_database,
+                                        target_schema,
+                                        dialect,
+                                    ),
+                                    kind: SyncStatementKind::AlterTable,
+                                    object_name: Some(fk_diff.name.clone()),
                                     row_key: None,
                                     destructive: false,
                                     transactional_safe: true,
-                                    selected_by_default: true,
-                                    warnings: vec![],
-                                });
-                            }
-                        }
-                        DiffStatus::Removed => {
-                            statements.push(SyncStatement {
-                                id: stmt_id,
-                                sql: format!(
-                                    "DROP INDEX IF EXISTS {};",
-                                    dialect.quote_identifier(&idx_diff.name)
-                                ),
-                                kind: SyncStatementKind::DropIndex,
-                                object_name: Some(idx_diff.name.clone()),
-                                row_key: None,
-                                destructive: false,
-                                transactional_safe: true,
-                                selected_by_default: true,
-                                warnings: vec![],
-                            });
-                        }
-                        DiffStatus::Modified => {
-                            if let Some(index) = &idx_diff.source {
-                                let table_ref = dialect.format_table_reference(
-                                    target_database,
-                                    target_schema,
-                                    &table_diff.name,
-                                );
-                                statements.push(SyncStatement {
-                                    id: stmt_id,
-                                    sql: generate_create_index_sql(&table_ref, index, dialect),
-                                    kind: SyncStatementKind::CreateIndex,
-                                    object_name: Some(idx_diff.name.clone()),
-                                    row_key: None,
-                                    destructive: false,
-                                    transactional_safe: true,
-                                    selected_by_default: false,
-                                    warnings: vec![
-                                        "此操作会重建目标索引，请先确认现有索引可被替换"
-                                            .to_string(),
-                                    ],
+                                    selected_by_default: fk_diff.status == DiffStatus::Added,
+                                    warnings: if fk_diff.status == DiffStatus::Modified {
+                                        vec![
+                                            "此操作会重建目标外键，请先确认现有外键可被替换"
+                                                .to_string(),
+                                        ]
+                                    } else {
+                                        vec![]
+                                    },
                                 });
                             }
                         }
@@ -695,6 +1151,13 @@ fn build_schema_sync_plan_with_dialect(
             }
         }
     }
+
+    if !foreign_key_drops.is_empty() {
+        let mut ordered_statements = foreign_key_drops;
+        ordered_statements.extend(statements);
+        statements = ordered_statements;
+    }
+    statements.extend(deferred_foreign_key_adds);
 
     let ddl_count = statements.len();
     let sql_text = statements
@@ -721,18 +1184,46 @@ fn build_schema_sync_plan_with_dialect(
 
 fn table_schema_to_design(database: &str, table: &TableSchema) -> TableDesign {
     let mut design = TableDesign::new(database, table.name.clone());
+    let primary_columns = table
+        .indexes
+        .iter()
+        .find(|index| is_primary_index(index))
+        .map(|index| index.columns.clone())
+        .unwrap_or_default();
     design.columns = table
         .columns
         .iter()
-        .map(column_schema_to_definition)
+        .map(|column| {
+            let mut definition = column_schema_to_definition(column);
+            if primary_columns
+                .iter()
+                .any(|primary_column| primary_column.eq_ignore_ascii_case(&column.name))
+            {
+                definition = definition.primary_key(true);
+            }
+            definition
+        })
         .collect();
     design.indexes = table
         .indexes
         .iter()
+        .filter(|index| !is_primary_index(index))
         .map(|index| {
             IndexDefinition::new(index.name.clone())
                 .columns(index.columns.clone())
                 .unique(index.unique)
+        })
+        .collect();
+    design.foreign_keys = table
+        .foreign_keys
+        .iter()
+        .map(|foreign_key| ForeignKeyDefinition {
+            name: foreign_key.name.clone(),
+            columns: foreign_key.columns.clone(),
+            ref_table: foreign_key.ref_table.clone(),
+            ref_columns: foreign_key.ref_columns.clone(),
+            on_delete: foreign_key.on_delete.clone().unwrap_or_default(),
+            on_update: foreign_key.on_update.clone().unwrap_or_default(),
         })
         .collect();
     design.options.comment = table.comment.clone().unwrap_or_default();
@@ -1127,5 +1618,736 @@ mod tests {
             plan.statements.first().unwrap().sql,
             "CREATE UNIQUE INDEX idx_users_email ON users (email);"
         );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_drops_index_with_table_name() {
+        use super::super::{
+            DiffStatus, IndexDiff, IndexSchema, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let table = TableSchema {
+            name: "users".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(table.clone()),
+                target: Some(table),
+                column_diffs: vec![],
+                index_diffs: vec![IndexDiff {
+                    name: "UK89mj1edq3g8hfxqea6pts53lr".to_string(),
+                    status: DiffStatus::Removed,
+                    source: None,
+                    target: Some(IndexSchema {
+                        name: "UK89mj1edq3g8hfxqea6pts53lr".to_string(),
+                        columns: vec!["email".to_string()],
+                        unique: true,
+                    }),
+                }],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+
+        assert_eq!(
+            plan.statements.first().unwrap().sql,
+            "ALTER TABLE `app`.`users` DROP INDEX `UK89mj1edq3g8hfxqea6pts53lr`;"
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_rebuilds_modified_index() {
+        use super::super::{
+            DiffStatus, IndexDiff, IndexSchema, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let table = TableSchema {
+            name: "users".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(table.clone()),
+                target: Some(table),
+                column_diffs: vec![],
+                index_diffs: vec![IndexDiff {
+                    name: "idx_users_email".to_string(),
+                    status: DiffStatus::Modified,
+                    source: Some(IndexSchema {
+                        name: "idx_users_email".to_string(),
+                        columns: vec!["email".to_string()],
+                        unique: true,
+                    }),
+                    target: Some(IndexSchema {
+                        name: "idx_users_email".to_string(),
+                        columns: vec!["legacy_email".to_string()],
+                        unique: false,
+                    }),
+                }],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            sql,
+            vec![
+                "ALTER TABLE `app`.`users` DROP INDEX `idx_users_email`;",
+                "CREATE UNIQUE INDEX `idx_users_email` ON `app`.`users` (`email`);",
+            ]
+        );
+        assert!(
+            plan.statements
+                .iter()
+                .all(|statement| !statement.selected_by_default)
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_rebuilds_modified_primary_key() {
+        use super::super::{
+            DiffStatus, IndexDiff, IndexSchema, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let table = TableSchema {
+            name: "users".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(table.clone()),
+                target: Some(table),
+                column_diffs: vec![],
+                index_diffs: vec![IndexDiff {
+                    name: "PRIMARY".to_string(),
+                    status: DiffStatus::Modified,
+                    source: Some(IndexSchema {
+                        name: "PRIMARY".to_string(),
+                        columns: vec!["uuid".to_string()],
+                        unique: true,
+                    }),
+                    target: Some(IndexSchema {
+                        name: "PRIMARY".to_string(),
+                        columns: vec!["id".to_string()],
+                        unique: true,
+                    }),
+                }],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            sql,
+            vec![
+                "ALTER TABLE `app`.`users` DROP PRIMARY KEY;",
+                "ALTER TABLE `app`.`users` ADD PRIMARY KEY (`uuid`);",
+            ]
+        );
+        assert!(
+            plan.statements
+                .iter()
+                .all(|statement| !statement.selected_by_default)
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_reuses_table_designer_alter_sql() {
+        use super::super::{
+            ColumnDiff, ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let target = TableSchema {
+            name: "users".to_string(),
+            columns: vec![ColumnSchema {
+                name: "id".to_string(),
+                data_type: "int".to_string(),
+                nullable: false,
+                default_value: None,
+                comment: None,
+            }],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let source = TableSchema {
+            name: "users".to_string(),
+            columns: vec![
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: "int".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+                ColumnSchema {
+                    name: "email".to_string(),
+                    data_type: "varchar(255)".to_string(),
+                    nullable: true,
+                    default_value: None,
+                    comment: None,
+                },
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(source),
+                target: Some(target),
+                column_diffs: vec![ColumnDiff {
+                    name: "email".to_string(),
+                    status: DiffStatus::Added,
+                    source: Some(ColumnSchema {
+                        name: "email".to_string(),
+                        data_type: "varchar(255)".to_string(),
+                        nullable: true,
+                        default_value: None,
+                        comment: None,
+                    }),
+                    target: None,
+                }],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+
+        assert_eq!(1, plan.statements.len());
+        assert_eq!(
+            plan.statements.first().unwrap().sql,
+            "ALTER TABLE `users` ADD COLUMN `email` varchar(255) AFTER `id`;"
+        );
+        assert!(plan.statements.first().unwrap().selected_by_default);
+    }
+
+    #[test]
+    fn test_sqlite_schema_sync_plan_reuses_table_designer_recreate_sql() {
+        use super::super::{
+            ColumnDiff, ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let source = TableSchema {
+            name: "users".to_string(),
+            columns: vec![ColumnSchema {
+                name: "id".to_string(),
+                data_type: "INTEGER".to_string(),
+                nullable: false,
+                default_value: None,
+                comment: None,
+            }],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let target = TableSchema {
+            name: "users".to_string(),
+            columns: vec![
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: "INTEGER".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+                ColumnSchema {
+                    name: "legacy".to_string(),
+                    data_type: "TEXT".to_string(),
+                    nullable: true,
+                    default_value: None,
+                    comment: None,
+                },
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(source),
+                target: Some(target),
+                column_diffs: vec![ColumnDiff {
+                    name: "legacy".to_string(),
+                    status: DiffStatus::Removed,
+                    source: None,
+                    target: Some(ColumnSchema {
+                        name: "legacy".to_string(),
+                        data_type: "TEXT".to_string(),
+                        nullable: true,
+                        default_value: None,
+                        comment: None,
+                    }),
+                }],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::sqlite::SqlitePlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "main", None, &plugin);
+
+        assert_eq!(1, plan.statements.len());
+        let statement = plan.statements.first().unwrap();
+        assert!(statement.sql.contains("create table \"users_dg_tmp\""));
+        assert!(
+            statement
+                .sql
+                .contains("insert into \"users_dg_tmp\"(\"id\")")
+        );
+        assert!(statement.sql.contains("drop table \"users\";"));
+        assert!(statement.sql.contains("rename to \"users\";"));
+        assert!(!statement.selected_by_default);
+        assert!(statement.destructive);
+    }
+
+    #[test]
+    fn test_sqlite_schema_sync_plan_keeps_simple_add_column_selected() {
+        use super::super::{
+            ColumnDiff, ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let target = TableSchema {
+            name: "users".to_string(),
+            columns: vec![ColumnSchema {
+                name: "id".to_string(),
+                data_type: "INTEGER".to_string(),
+                nullable: false,
+                default_value: None,
+                comment: None,
+            }],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let source = TableSchema {
+            name: "users".to_string(),
+            columns: vec![
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: "INTEGER".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+                ColumnSchema {
+                    name: "email".to_string(),
+                    data_type: "TEXT".to_string(),
+                    nullable: true,
+                    default_value: None,
+                    comment: None,
+                },
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(source),
+                target: Some(target),
+                column_diffs: vec![ColumnDiff {
+                    name: "email".to_string(),
+                    status: DiffStatus::Added,
+                    source: Some(ColumnSchema {
+                        name: "email".to_string(),
+                        data_type: "TEXT".to_string(),
+                        nullable: true,
+                        default_value: None,
+                        comment: None,
+                    }),
+                    target: None,
+                }],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::sqlite::SqlitePlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "main", None, &plugin);
+
+        assert_eq!(1, plan.statements.len());
+        let statement = plan.statements.first().unwrap();
+        assert_eq!(
+            statement.sql,
+            "ALTER TABLE \"users\" ADD COLUMN \"email\" TEXT;"
+        );
+        assert!(statement.selected_by_default);
+        assert!(!statement.destructive);
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_generates_foreign_key_sync_sql() {
+        use super::super::{
+            DiffStatus, ForeignKeyDiff, ForeignKeySchema, SchemaCompareResult, TableDiff,
+            TableSchema,
+        };
+
+        let source_table = TableSchema {
+            name: "order_items".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeySchema {
+                name: "fk_order_items_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: None,
+                on_update: None,
+            }],
+            comment: None,
+        };
+        let target_table = TableSchema {
+            name: "order_items".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeySchema {
+                name: "fk_order_items_legacy".to_string(),
+                columns: vec!["legacy_order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: None,
+                on_update: None,
+            }],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "order_items".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(source_table),
+                target: Some(target_table),
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![
+                    ForeignKeyDiff {
+                        name: "fk_order_items_order".to_string(),
+                        status: DiffStatus::Added,
+                        source: Some(ForeignKeySchema {
+                            name: "fk_order_items_order".to_string(),
+                            columns: vec!["order_id".to_string()],
+                            ref_table: "orders".to_string(),
+                            ref_columns: vec!["id".to_string()],
+                            on_delete: None,
+                            on_update: None,
+                        }),
+                        target: None,
+                    },
+                    ForeignKeyDiff {
+                        name: "fk_order_items_legacy".to_string(),
+                        status: DiffStatus::Removed,
+                        source: None,
+                        target: Some(ForeignKeySchema {
+                            name: "fk_order_items_legacy".to_string(),
+                            columns: vec!["legacy_order_id".to_string()],
+                            ref_table: "orders".to_string(),
+                            ref_columns: vec!["id".to_string()],
+                            on_delete: None,
+                            on_update: None,
+                        }),
+                    },
+                ],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            sql,
+            vec![
+                "ALTER TABLE `order_items` DROP FOREIGN KEY `fk_order_items_legacy`;\nALTER TABLE `order_items` ADD CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`);",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_drops_foreign_keys_before_tables() {
+        use super::super::{
+            DiffStatus, ForeignKeyDiff, ForeignKeySchema, SchemaCompareResult, TableDiff,
+            TableSchema,
+        };
+
+        let orders = TableSchema {
+            name: "orders".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let order_items = TableSchema {
+            name: "order_items".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![
+                TableDiff {
+                    name: "orders".to_string(),
+                    status: DiffStatus::Removed,
+                    source: None,
+                    target: Some(orders),
+                    column_diffs: vec![],
+                    index_diffs: vec![],
+                    foreign_key_diffs: vec![],
+                    comment_changed: false,
+                },
+                TableDiff {
+                    name: "order_items".to_string(),
+                    status: DiffStatus::Modified,
+                    source: Some(order_items.clone()),
+                    target: Some(order_items),
+                    column_diffs: vec![],
+                    index_diffs: vec![],
+                    foreign_key_diffs: vec![ForeignKeyDiff {
+                        name: "fk_order_items_order".to_string(),
+                        status: DiffStatus::Removed,
+                        source: None,
+                        target: Some(ForeignKeySchema {
+                            name: "fk_order_items_order".to_string(),
+                            columns: vec!["order_id".to_string()],
+                            ref_table: "orders".to_string(),
+                            ref_columns: vec!["id".to_string()],
+                            on_delete: None,
+                            on_update: None,
+                        }),
+                    }],
+                    comment_changed: false,
+                },
+            ],
+            added_count: 0,
+            removed_count: 1,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            sql,
+            vec![
+                "ALTER TABLE `app`.`order_items` DROP FOREIGN KEY `fk_order_items_order`;",
+                "DROP TABLE IF EXISTS `app`.`orders`;",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_adds_foreign_keys_after_added_table() {
+        use super::super::{
+            ColumnSchema, DiffStatus, ForeignKeySchema, IndexSchema, SchemaCompareResult,
+            TableDiff, TableSchema,
+        };
+
+        let source = TableSchema {
+            name: "order_items".to_string(),
+            columns: vec![
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: "bigint".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+                ColumnSchema {
+                    name: "order_id".to_string(),
+                    data_type: "bigint".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+            ],
+            indexes: vec![IndexSchema {
+                name: "PRIMARY".to_string(),
+                columns: vec!["id".to_string()],
+                unique: true,
+            }],
+            foreign_keys: vec![ForeignKeySchema {
+                name: "fk_order_items_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: Some("CASCADE".to_string()),
+                on_update: Some("RESTRICT".to_string()),
+            }],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "order_items".to_string(),
+                status: DiffStatus::Added,
+                source: Some(source),
+                target: None,
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 1,
+            removed_count: 0,
+            modified_count: 0,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(2, sql.len());
+        assert!(sql[0].starts_with("CREATE TABLE `order_items`"));
+        assert!(sql[0].contains("PRIMARY KEY (`id`)"));
+        assert!(!sql[0].contains("UNIQUE INDEX `PRIMARY`"));
+        assert_eq!(
+            sql[1],
+            "ALTER TABLE `app`.`order_items` ADD CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `app`.`orders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT;"
+        );
+    }
+
+    #[test]
+    fn test_clickhouse_schema_sync_plan_ignores_foreign_keys() {
+        use super::super::{
+            ColumnSchema, DiffStatus, ForeignKeySchema, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let source = TableSchema {
+            name: "events".to_string(),
+            columns: vec![
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: "UInt64".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+                ColumnSchema {
+                    name: "order_id".to_string(),
+                    data_type: "UInt64".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeySchema {
+                name: "fk_events_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: Some("CASCADE".to_string()),
+                on_update: None,
+            }],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "events".to_string(),
+                status: DiffStatus::Added,
+                source: Some(source),
+                target: None,
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 1,
+            removed_count: 0,
+            modified_count: 0,
+        };
+        let plugin = crate::clickhouse::ClickHousePlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "analytics", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(1, sql.len());
+        assert!(sql[0].contains("CREATE TABLE `events`"));
+        assert!(!plan.sql_text.contains("FOREIGN KEY"));
+        assert!(!plan.sql_text.contains("fk_events_order"));
     }
 }

@@ -259,6 +259,14 @@ impl McpPermissionMode {
             _ => McpPermissionMode::Deny,
         }
     }
+
+    pub fn profile_id(&self) -> &'static str {
+        match self {
+            McpPermissionMode::Deny => "safe",
+            McpPermissionMode::Ask => "confirm",
+            McpPermissionMode::Allow => "auto",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -957,6 +965,13 @@ mod tests {
         assert!(!settings.mcp.toolsets.database);
         assert!(!settings.mcp.toolsets.redis);
         assert!(!settings.mcp.toolsets.sftp);
+    }
+
+    #[test]
+    fn mcp_permission_modes_expose_unified_profile_ids() {
+        assert_eq!("safe", McpPermissionMode::Deny.profile_id());
+        assert_eq!("confirm", McpPermissionMode::Ask.profile_id());
+        assert_eq!("auto", McpPermissionMode::Allow.profile_id());
     }
 
     #[test]

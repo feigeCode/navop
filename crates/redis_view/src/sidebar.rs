@@ -1,6 +1,6 @@
 use ai_chat_view::{
     AskAiEvent, DefaultAgentChatPanel, DefaultAgentChatPanelEvent, build_agent_context_all,
-    get_ask_ai_notifier,
+    build_resource_catalog, get_ask_ai_notifier,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -50,8 +50,12 @@ impl RedisSidebar {
             .and_then(|id| connections.iter().find(|conn| conn.id == Some(id)))
             .or_else(|| connections.first());
         let (resources, mentions) = build_agent_context_all(active_connection, &connections);
-        let ai_chat_panel =
-            cx.new(|cx| DefaultAgentChatPanel::new_with_context(resources, mentions, window, cx));
+        let catalog = build_resource_catalog(&connections);
+        let ai_chat_panel = cx.new(|cx| {
+            DefaultAgentChatPanel::new_with_context_and_catalog(
+                resources, mentions, catalog, window, cx,
+            )
+        });
 
         let mut subs = Vec::new();
 

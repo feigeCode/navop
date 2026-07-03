@@ -27,8 +27,11 @@ use crate::compare::target_picker::{
 };
 use crate::compare::window_params::{SchemaCompareSelection, schema_compare_params};
 use crate::compare::window_ui::{
-    ConnectionSelectItem, close_button, connection_select_state, register_connection_for_compare,
-    selected_connection_id, sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
+    CompareStep, ConnectionSelectItem, SyncSqlExecutionLogEntry, clear_sync_sql_execution_log,
+    close_button, connection_select_state, ignore_identifier_case_option,
+    register_connection_for_compare, reset_sync_sql_execution_log, selected_connection_id,
+    sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
+    sync_sql_execution_log_panel, sync_sql_execution_start_log_entries,
 };
 use crate::compare::{
     CompareProgress, CompareTargetScope, SchemaCompareParams, execute_schema_compare,
@@ -54,14 +57,17 @@ pub struct SchemaCompareWindow {
     pub(super) target_database_select: StringSelect,
     pub(super) target_schema: Entity<InputState>,
     pub(super) target_schema_select: StringSelect,
+    pub(super) ignore_identifier_case: Entity<bool>,
     pub(super) result: Entity<Option<SchemaCompareResult>>,
     pub(super) sync_plan: Entity<Option<SyncPlan>>,
     pub(super) selected_statement_ids: Entity<HashSet<String>>,
     pub(super) sync_statement_list: SyncStatementListState,
     pub(super) sync_sql_editor: Entity<InputState>,
+    pub(super) execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
     pub(super) progress: Entity<Option<CompareProgress>>,
     compare_target: Entity<Option<CompareTargetScope>>,
     pub(super) status: Entity<String>,
+    current_step: CompareStep,
     is_running: Entity<bool>,
     is_executing: Entity<bool>,
     compare_task: Option<Task<()>>,
@@ -105,6 +111,7 @@ impl SchemaCompareWindow {
         let target_schema =
             cx.new(|cx| InputState::new(window, cx).default_value(default_schema.clone()));
         let target_schema_select = string_select_state(default_schema.clone(), window, cx);
+        let ignore_identifier_case = cx.new(|_| true);
         let sync_sql_editor = sync_sql_editor_state(window, cx);
 
         let view = cx.new(|cx: &mut Context<Self>| {
@@ -124,14 +131,17 @@ impl SchemaCompareWindow {
                 target_database_select,
                 target_schema,
                 target_schema_select,
+                ignore_identifier_case,
                 sync_sql_editor,
                 result: cx.new(|_| None),
                 sync_plan: cx.new(|_| None),
                 selected_statement_ids,
                 sync_statement_list,
+                execution_log: cx.new(|_| Vec::new()),
                 progress: cx.new(|_| None),
                 compare_target: cx.new(|_| None),
                 status: cx.new(|_| t!("Compare.ready").to_string()),
+                current_step: CompareStep::Objects,
                 is_running: cx.new(|_| false),
                 is_executing: cx.new(|_| false),
                 compare_task: None,
@@ -186,6 +196,7 @@ impl SchemaCompareWindow {
             .is_empty()
             {
                 this.load_source_databases(cx);
+                this.load_source_schemas(cx);
             }
             if !selected_connection_id(
                 &this.target_connection_select,
@@ -196,6 +207,7 @@ impl SchemaCompareWindow {
             .is_empty()
             {
                 this.load_target_databases(cx);
+                this.load_target_schemas(cx);
             }
         });
         view
@@ -218,6 +230,7 @@ impl SchemaCompareWindow {
             }
         };
         let compare_target = CompareTargetScope::from_schema_params(&params);
+        clear_sync_sql_execution_log(&self.execution_log, cx);
         register_connection_for_compare(&params.source_connection_id, cx);
         register_connection_for_compare(&params.target_connection_id, cx);
         let target_connection_id = params.target_connection_id.clone();
@@ -290,6 +303,7 @@ impl SchemaCompareWindow {
                             *slot = Some(compare_target);
                             cx.notify();
                         });
+                        view.current_step = CompareStep::SqlPreview;
                         view.set_status(t!("Compare.schema_compare_complete").to_string(), cx);
                     }
                     Err(error) => view.set_status(
@@ -309,12 +323,14 @@ impl SchemaCompareWindow {
 
         set_connection_select(
             &self.source_connection_select,
+            &self.source_connection_id,
             &target.connection_id,
             window,
             cx,
         );
         set_connection_select(
             &self.target_connection_select,
+            &self.target_connection_id,
             &source.connection_id,
             window,
             cx,
@@ -360,6 +376,8 @@ impl SchemaCompareWindow {
             *slot = None;
             cx.notify();
         });
+        clear_sync_sql_execution_log(&self.execution_log, cx);
+        self.current_step = CompareStep::Objects;
         self.set_status(t!("Compare.swapped_source_target").to_string(), cx);
     }
 
@@ -384,17 +402,42 @@ impl SchemaCompareWindow {
     }
 
     fn build_params(&self, cx: &mut Context<Self>) -> Result<SchemaCompareParams, &'static str> {
-        schema_compare_params(self.source_selection(cx), self.target_selection(cx))
+        schema_compare_params(
+            self.source_selection(cx),
+            self.target_selection(cx),
+            !*self.ignore_identifier_case.read(cx),
+        )
     }
 
-    fn start_execute_sync_sql(&mut self, cx: &mut Context<Self>) {
+    fn start_execute_sync_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         start_sync_sql_execution(
             self.compare_target.read(cx).clone(),
             self.editor_sql(cx),
             self.status.clone(),
             self.is_executing.clone(),
+            self.execution_log.clone(),
+            window,
             cx,
         );
+    }
+
+    fn go_previous_step(&mut self, cx: &mut Context<Self>) {
+        if let Some(step) = self.current_step.previous() {
+            self.current_step = step;
+            cx.notify();
+        }
+    }
+
+    fn go_execute_step(&mut self, cx: &mut Context<Self>) {
+        if self.current_step == CompareStep::SqlPreview {
+            reset_sync_sql_execution_log(
+                &self.execution_log,
+                sync_sql_execution_start_log_entries(&self.editor_sql(cx)),
+                cx,
+            );
+            self.current_step = CompareStep::SqlExecute;
+            cx.notify();
+        }
     }
 
     /// 编辑器中实际待执行的 SQL(用户可能已手动修改)
@@ -500,7 +543,11 @@ impl Render for SchemaCompareWindow {
         let is_running = *self.is_running.read(cx);
         let is_executing = *self.is_executing.read(cx);
         let has_sync_sql = self.has_editor_sql(cx);
-        let status = self.status.read(cx).clone();
+        let status = if self.current_step == CompareStep::SqlExecute {
+            String::new()
+        } else {
+            self.status.read(cx).clone()
+        };
         let editor_sql = self.sync_sql_editor.read(cx).text().to_string();
 
         v_flex()
@@ -517,43 +564,77 @@ impl Render for SchemaCompareWindow {
                     .flex_1()
                     .min_h_0()
                     .gap_4()
-                    .child(
-                        // 第一排:源和目标并排
-                        h_flex()
-                            .gap_4()
-                            .child(div().flex_1().child(self.render_source(cx)))
-                            .child(
-                                div().pt_10().child(
-                                    Button::new("swap-schema-compare-source-target")
-                                        .icon(IconName::Replace)
-                                        .tooltip(t!("Compare.swap_source_target").to_string())
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.swap_source_target(window, cx);
-                                        })),
-                                ),
-                            )
-                            .child(div().flex_1().child(self.render_target(cx))),
-                    )
-                    .child(
-                        // 第二排:结构结果和 SQL 并排,各自内部滚动
-                        h_flex()
-                            .flex_1()
-                            .min_h_0()
-                            .gap_4()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .h_full()
-                                    .min_h_0()
-                                    .child(self.render_result_meta(cx)),
-                            )
-                            .child(div().flex_1().h_full().min_h_0().child(sql_editor_panel(
-                                "schema-compare-copy-sql",
-                                &self.sync_sql_editor,
-                                editor_sql,
-                                cx,
-                            ))),
-                    ),
+                    .when(self.current_step == CompareStep::Objects, |this| {
+                        this.child(
+                            v_flex()
+                                .flex_1()
+                                .min_h_0()
+                                .gap_3()
+                                .child(
+                                    h_flex().justify_center().child(
+                                        Button::new("swap-schema-compare-source-target")
+                                            .icon(IconName::Replace)
+                                            .tooltip(t!("Compare.swap_source_target").to_string())
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.swap_source_target(window, cx);
+                                            })),
+                                    ),
+                                )
+                                .child(
+                                    h_flex()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .gap_4()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .h_full()
+                                                .min_h_0()
+                                                .child(self.render_source(cx)),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .h_full()
+                                                .min_h_0()
+                                                .child(self.render_target(cx)),
+                                        ),
+                                )
+                                .child(ignore_identifier_case_option(
+                                    "schema-compare-ignore-identifier-case",
+                                    self.ignore_identifier_case.clone(),
+                                    cx,
+                                )),
+                        )
+                    })
+                    .when(self.current_step == CompareStep::SqlPreview, |this| {
+                        this.child(
+                            h_flex()
+                                .flex_1()
+                                .min_h_0()
+                                .gap_4()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .h_full()
+                                        .min_h_0()
+                                        .child(self.render_result_meta(cx)),
+                                )
+                                .child(div().flex_1().h_full().min_h_0().child(sql_editor_panel(
+                                    "schema-compare-copy-sql",
+                                    &self.sync_sql_editor,
+                                    editor_sql,
+                                    cx,
+                                ))),
+                        )
+                    })
+                    .when(self.current_step == CompareStep::SqlExecute, |this| {
+                        this.child(sync_sql_execution_log_panel(
+                            &self.execution_log,
+                            is_executing,
+                            cx,
+                        ))
+                    }),
             )
             .child(
                 h_flex()
@@ -563,6 +644,8 @@ impl Render for SchemaCompareWindow {
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(status),
@@ -581,25 +664,57 @@ impl Render for SchemaCompareWindow {
                                         })),
                                 )
                             })
-                            .child(
-                                Button::new("execute-sync-sql")
-                                    .child(t!("Compare.execute_sql").to_string())
-                                    .loading(is_executing)
-                                    .disabled(is_running || is_executing || !has_sync_sql)
-                                    .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.start_execute_sync_sql(cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("compare")
-                                    .primary()
-                                    .loading(is_running)
-                                    .disabled(is_running || is_executing)
-                                    .child(t!("Compare.start_compare").to_string())
-                                    .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.start_compare(cx);
-                                    })),
-                            ),
+                            .when(self.current_step == CompareStep::Objects, |this| {
+                                this.child(
+                                    Button::new("compare-next")
+                                        .primary()
+                                        .loading(is_running)
+                                        .disabled(is_running || is_executing)
+                                        .child(t!("Common.next").to_string())
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.start_compare(cx);
+                                        })),
+                                )
+                            })
+                            .when(self.current_step == CompareStep::SqlPreview, |this| {
+                                this.child(
+                                    Button::new("compare-prev")
+                                        .child(t!("Common.previous").to_string())
+                                        .disabled(is_running || is_executing)
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.go_previous_step(cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("compare-preview-next")
+                                        .primary()
+                                        .disabled(is_running || is_executing || !has_sync_sql)
+                                        .child(t!("Common.next").to_string())
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.go_execute_step(cx);
+                                        })),
+                                )
+                            })
+                            .when(self.current_step == CompareStep::SqlExecute, |this| {
+                                this.child(
+                                    Button::new("compare-execute-prev")
+                                        .child(t!("Common.previous").to_string())
+                                        .disabled(is_running || is_executing)
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.go_previous_step(cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("execute-sync-sql")
+                                        .primary()
+                                        .child(t!("Compare.execute_sql").to_string())
+                                        .loading(is_executing)
+                                        .disabled(is_running || is_executing || !has_sync_sql)
+                                        .on_click(cx.listener(move |view, _, window, cx| {
+                                            view.start_execute_sync_sql(window, cx);
+                                        })),
+                                )
+                            }),
                     ),
             )
     }

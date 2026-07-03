@@ -1235,6 +1235,23 @@ impl GlobalDbState {
             .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
+    pub async fn switch_session_schema(
+        &self,
+        session_id: String,
+        schema: String,
+    ) -> anyhow::Result<()> {
+        let mut guard = self
+            .connection_manager
+            .get_session_connection(&session_id)
+            .await?;
+        let conn = guard
+            .connection()
+            .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
+        conn.switch_schema(&schema)
+            .await
+            .map_err(|error| anyhow::anyhow!("{}", error))
+    }
+
     pub async fn list_databases_direct(
         &self,
         connection_id: String,
@@ -2860,6 +2877,7 @@ mod tests {
         healthy: bool,
         disconnect_count: Arc<AtomicUsize>,
         executed_sql: Option<Arc<StdMutex<Vec<String>>>>,
+        switched_schemas: Option<Arc<StdMutex<Vec<String>>>>,
     }
 
     impl MockConnection {
@@ -2869,6 +2887,7 @@ mod tests {
                 healthy,
                 disconnect_count: Arc::new(AtomicUsize::new(0)),
                 executed_sql: None,
+                switched_schemas: None,
             }
         }
 
@@ -2882,6 +2901,7 @@ mod tests {
                 healthy,
                 disconnect_count,
                 executed_sql: None,
+                switched_schemas: None,
             }
         }
 
@@ -2894,6 +2914,20 @@ mod tests {
                 healthy: true,
                 disconnect_count: Arc::new(AtomicUsize::new(0)),
                 executed_sql: Some(executed_sql),
+                switched_schemas: None,
+            }
+        }
+
+        fn with_switched_schemas(
+            config: DbConnectionConfig,
+            switched_schemas: Arc<StdMutex<Vec<String>>>,
+        ) -> Self {
+            Self {
+                config,
+                healthy: true,
+                disconnect_count: Arc::new(AtomicUsize::new(0)),
+                executed_sql: None,
+                switched_schemas: Some(switched_schemas),
             }
         }
     }
@@ -3284,6 +3318,13 @@ mod tests {
             Ok(())
         }
 
+        async fn switch_schema(&self, schema: &str) -> Result<(), DbError> {
+            if let Some(switched_schemas) = &self.switched_schemas {
+                switched_schemas.lock().unwrap().push(schema.to_string());
+            }
+            Ok(())
+        }
+
         async fn execute_streaming(
             &self,
             _plugin: &dyn DatabasePlugin,
@@ -3497,6 +3538,41 @@ mod tests {
                 .get_session_config(&session_id)
                 .await
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_session_schema_uses_existing_connection_session() {
+        let state = GlobalDbState::new();
+        let config = test_config("conn1");
+        let session_id = "conn1:session:test".to_string();
+        let switched_schemas = Arc::new(StdMutex::new(Vec::new()));
+        let mut session = ConnectionSession::new(
+            Box::new(MockConnection::with_switched_schemas(
+                config.clone(),
+                switched_schemas.clone(),
+            )),
+            session_id.clone(),
+            false,
+        );
+        session.mark_in_use();
+        state
+            .connection_manager
+            .sessions
+            .write()
+            .await
+            .entry(config.id.clone())
+            .or_default()
+            .push(session);
+
+        state
+            .switch_session_schema(session_id, "analytics".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            vec!["analytics".to_string()],
+            *switched_schemas.lock().unwrap()
         );
     }
 

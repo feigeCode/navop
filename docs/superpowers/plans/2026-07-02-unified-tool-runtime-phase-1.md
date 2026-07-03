@@ -4,7 +4,9 @@
 
 **Goal:** Add the core unified Tool Runtime contract to `crates/tool_runtime` while preserving current registry, handler, MCP, CLI, and business-tool compatibility.
 
-**Architecture:** Keep `tool_runtime` as a pure core crate with no Agent, MCP, UI, DB, SSH, or GPUI dependencies. Split the current monolithic `lib.rs` into focused modules for ids, resources, descriptors, invocation, permissions, audit, registry, result, and error. Existing `ToolRegistry::list/get/call` and `ToolHandler::call(input, ToolContext)` remain compatible, while new types model the final ResourcePool, PermissionPolicy, ToolInvocation, alias, and audit contracts.
+**Architecture:** Keep `tool_runtime` as a pure core crate with no Agent, MCP, UI, DB, SSH, or GPUI dependencies. Split the current monolithic `lib.rs` into focused modules for ids, resources, descriptors, invocation, permissions, audit, registry, result, and error. Existing `ToolRegistry::list/get/call`, `ToolDescriptor` struct literals, and `ToolHandler::call(input, ToolContext)` remain compatible, while new types model the final ResourcePool, PermissionPolicy, ToolInvocation, alias, and audit contracts.
+
+**Compatibility Amendment:** Do not add required fields to the existing `ToolDescriptor` struct in Phase 1. Many downstream crates construct it with struct literals. Add `RuntimeToolDescriptor` for the final descriptor shape and add default `ToolHandler` metadata methods (`aliases`, `target_spec`, `origin`) so existing handlers keep compiling. `ToolAnnotations` may gain default-compatible semantic fields because downstream code mostly uses constructors; update any explicit literal compile break mechanically without changing behavior.
 
 **Tech Stack:** Rust 2024, `serde`, `serde_json`, `thiserror`, current workspace `cargo test -p tool_runtime`.
 
@@ -17,7 +19,7 @@
 - Create: `crates/tool_runtime/src/resource.rs`
   - Defines `ResourcePool`, `ResourceRef`, `ResourceKind`, `ResourceScope`, `ResourceCapability`, `ResourceOrigin`, `ResourceTarget`, and target resolution.
 - Create: `crates/tool_runtime/src/descriptor.rs`
-  - Defines `RiskLevel`, `ToolAnnotations`, `ToolOrigin`, `ToolAlias`, `ToolTargetSpec`, `ToolDescriptor`, `ToolAdapter`, and `ToolMode`.
+  - Defines `RiskLevel`, existing-compatible `ToolAnnotations`, `ToolOrigin`, `ToolAlias`, `ToolTargetSpec`, existing-compatible `ToolDescriptor`, final-shape `RuntimeToolDescriptor`, `ToolAdapter`, and `ToolMode`.
 - Create: `crates/tool_runtime/src/invocation.rs`
   - Defines `ToolInvocation`, `ToolCaller`, and `AuditContext`.
 - Create: `crates/tool_runtime/src/permission.rs`
@@ -154,7 +156,7 @@ impl fmt::Display for ResourceKind {
 
 - [ ] **Step 2: Move existing descriptor-related types**
 
-Create `crates/tool_runtime/src/descriptor.rs` with the current public shapes plus new defaulted fields:
+Create `crates/tool_runtime/src/descriptor.rs` with current `ToolDescriptor` fields preserved and a separate final-shape descriptor:
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -229,6 +231,7 @@ pub struct ToolAlias {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ToolTargetSpec {
     pub supported_kinds: Vec<ResourceKind>,
+    pub required_capabilities: Vec<ResourceCapability>,
     pub required: bool,
 }
 
@@ -243,11 +246,21 @@ pub struct ToolDescriptor {
     pub mode: ToolMode,
     pub adapters: Vec<ToolAdapter>,
     pub annotations: ToolAnnotations,
-    #[serde(default)]
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct RuntimeToolDescriptor {
+    pub id: ToolId,
+    pub title: String,
+    pub description: String,
+    pub input_schema: Value,
+    pub output_schema: Value,
+    pub permissions: Vec<String>,
+    pub mode: ToolMode,
+    pub adapters: Vec<ToolAdapter>,
+    pub annotations: ToolAnnotations,
     pub target: ToolTargetSpec,
-    #[serde(default)]
     pub origin: ToolOrigin,
-    #[serde(default)]
     pub aliases: Vec<ToolAlias>,
 }
 ```
@@ -307,6 +320,18 @@ impl ToolTargetSpec {
     pub fn required(supported_kinds: Vec<ResourceKind>) -> Self {
         Self {
             supported_kinds,
+            required_capabilities: Vec::new(),
+            required: true,
+        }
+    }
+
+    pub fn required_with_capabilities(
+        supported_kinds: Vec<ResourceKind>,
+        required_capabilities: Vec<ResourceCapability>,
+    ) -> Self {
+        Self {
+            supported_kinds,
+            required_capabilities,
             required: true,
         }
     }
@@ -322,10 +347,67 @@ impl ToolDescriptor {
     }
 
     pub fn matches_id_or_alias(&self, value: &str) -> bool {
-        self.id == value || self.aliases.iter().any(|alias| alias.id == value)
+        self.id == value
+    }
+}
+
+impl RuntimeToolDescriptor {
+    pub fn matches_id_or_alias(&self, value: &str) -> bool {
+        self.id.as_str() == value || self.aliases.iter().any(|alias| alias.id == value)
     }
 }
 ```
+
+Target resolution must apply both `supported_kinds` and `required_capabilities`.
+This matters for active terminal sessions: a visible SSH terminal may be present in
+the resource pool for diagnostics, but `terminal.exec` must only resolve to resources
+with `ResourceCapability::TerminalExec`, and `ssh.exec` must only resolve to resources
+with `ResourceCapability::RemoteExec`.
+
+Active terminal providers must keep execution capabilities synchronized with terminal
+lifecycle. `Terminal::new_ssh` starts with `backend: None`, so `terminal_view` can
+register the Public MCP session before `external_input_handle()` is available. The
+refresh path must update the shared terminal input handle and register
+`TerminalExecSessionHandle` when the handle appears after connection. Otherwise the
+resource pool can contain an active terminal linked to the saved SSH connection but
+without `ResourceCapability::TerminalExec`, causing `terminal.exec` to fail with
+`target ... lacks required resource capabilities: [TerminalExec]`.
+
+`terminal.exec` output capture must be implemented at the terminal backend stream
+boundary, not by diffing visible text, scrollback, or alacritty grid snapshots. For SSH
+terminals, capture `ChannelEvent::Data/ExtendedData` bytes in `SshBackend` while still
+feeding the same bytes into `processor.advance(...)`. This keeps the visible terminal
+pane and tool result synchronized and avoids failures when long output scrolls off the
+viewport, commands clear/redraw the screen, or prompt text changes. Shell integration
+`CommandFinished` should be used as the preferred completion signal; without it, the
+tool may return observed stream output after a quiet interval or partial output on
+timeout, but must not fabricate an exit code.
+
+The synchronous terminal execution bridge must not block the async runtime worker that
+drives the SSH backend task. Public MCP/runtime tool entry points should run this bridge
+inside `tokio::task::spawn_blocking` or an equivalent blocking boundary. Otherwise the
+tool can wait for output while preventing the queued terminal write and PTY receive loop
+from running, producing the symptom `completion: "timed_out", output: ""` followed by
+the command output appearing in the visible terminal only after the tool card completes.
+The implementation default timeout must also match the schema default (`60000ms`), not a
+short UI polling timeout.
+
+For fallback completion without shell integration, do not treat stream quietness as
+command completion. Long commands such as `systemctl list-units` may pause between output
+chunks; completing on quietness truncates the result. Complete on shell integration
+`CommandFinished`, detected prompt return, or timeout with partial output.
+
+Command echo stripping must tolerate terminal soft/hard wraps. Remote PTYs can echo a long
+input command with line breaks inserted by the terminal width, for example splitting
+`"\.service"` into `"\.serv\nice"`. Stripping must match the submitted command while
+ignoring echo-inserted newlines; exact `output.find(command)` is not sufficient and can
+leave the user input inside the captured output.
+
+The UI card path must not discard terminal output before rendering. `terminal_exec`
+observations need a larger card payload limit than normal tools, and the card should render
+the structured `output` field as multiline terminal text instead of a JSON string with
+escaped `\n`; otherwise the right panel can appear to show only a slice of the output even
+when the backend captured more.
 
 - [ ] **Step 4: Move result, error, and registry code**
 
@@ -333,7 +415,15 @@ Create `result.rs`, `error.rs`, and `registry.rs` by moving the existing code fr
 
 ```rust
 pub type ToolFuture = Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'static>>;
-pub trait ToolHandler: Send + Sync + 'static { ... }
+pub trait ToolHandler: Send + Sync + 'static {
+    fn descriptor(&self) -> ToolDescriptor;
+    fn aliases(&self) -> Vec<ToolAlias> { Vec::new() }
+    fn target_spec(&self) -> ToolTargetSpec { ToolTargetSpec::default() }
+    fn origin(&self) -> ToolOrigin { ToolOrigin::Builtin }
+    fn runtime_descriptor(&self) -> RuntimeToolDescriptor { ... }
+    fn call_annotations(&self, _input: &Value) -> ToolAnnotations { ... }
+    fn call(&self, input: Value, context: ToolContext) -> ToolFuture;
+}
 pub struct ToolRegistry { ... }
 pub struct ToolContext { ... }
 pub enum ToolError { ... }
@@ -382,15 +472,7 @@ Run:
 rtk cargo test -p tool_runtime --test registry
 ```
 
-Expected: tests compile or fail only because `ToolDescriptor` helper literals need new fields. If helper literals fail, add:
-
-```rust
-target: ToolTargetSpec::default(),
-origin: ToolOrigin::Builtin,
-aliases: Vec::new(),
-```
-
-to test helper descriptors.
+Expected: existing registry tests pass without adding fields to `ToolDescriptor` helper literals.
 
 ## Task 2: Add ResourcePool Core Model
 
@@ -487,7 +569,21 @@ Create resource types with these public names and methods:
 
 ```rust
 pub enum ResourceKind { Ssh, Sftp, Mysql, Postgres, Sqlite, Redis, Mongo, Terminal, Other(String) }
-pub enum ResourceCapability { Query, Execute, ReadFile, WriteFile, ExecCommand, List, OpenSession, Other(String) }
+pub enum ResourceCapability {
+    Query,
+    Execute,
+    DatabaseQuery,
+    DatabaseExecute,
+    ManageConnection,
+    ReadFile,
+    WriteFile,
+    ExecCommand,
+    TerminalExec,
+    RemoteExec,
+    List,
+    OpenSession,
+    Other(String),
+}
 pub enum ResourceOrigin { SavedConnection, ActiveSession, Workspace, PublicMcp, ExternalMcp, Acp, Cli, Other(String) }
 pub struct ResourceScope { pub key: String, pub label: String, pub value: String }
 pub struct ResourceRef { ... }
@@ -723,17 +819,17 @@ Use the same `ToolHandler` helper style as `registry.rs`.
 In `registry.rs`, update duplicate detection to include canonical ids and aliases:
 
 ```rust
-fn descriptor_keys(descriptor: &ToolDescriptor) -> Vec<String> {
-    let mut keys = vec![descriptor.id.clone()];
+fn descriptor_keys(descriptor: &RuntimeToolDescriptor) -> Vec<String> {
+    let mut keys = vec![descriptor.id.as_str().to_string()];
     keys.extend(descriptor.aliases.iter().map(|alias| alias.id.clone()));
     keys
 }
 ```
 
-`ToolRegistry::get`, `call_annotations`, and `call` must use:
+`ToolRegistry::get`, `call_annotations`, and `call` must compare against `handler.runtime_descriptor()`:
 
 ```rust
-descriptor.matches_id_or_alias(id)
+runtime_descriptor.matches_id_or_alias(id)
 ```
 
 When `call` receives an alias, it still calls the canonical handler. `UnsupportedAdapter` and `UnknownTool` errors may report the requested id.
@@ -1013,3 +1109,4 @@ Type consistency:
 1. `ToolId`, `ResourceId`, and `ResourceKind` are introduced in Task 1 before descriptors use them.
 2. `RiskLevel` and expanded `ToolAnnotations` are introduced in Task 1 before permission tests use them.
 3. `ToolCaller` is introduced before audit tests use it.
+4. Existing `ToolDescriptor` struct literals remain compatible; final descriptor fields live on `RuntimeToolDescriptor` until later migration phases.

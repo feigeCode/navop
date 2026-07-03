@@ -31,7 +31,11 @@ pub struct DefaultAgentChatPanel {
     view_subscription: Option<Subscription>,
     pending_message: Option<String>,
     pending_system_instruction: Option<String>,
-    pending_resource_context: Option<(agent_runtime::ResourceContext, Vec<MentionItem>)>,
+    pending_resource_context: Option<(
+        agent_runtime::ResourceContext,
+        Vec<MentionItem>,
+        Vec<agent_runtime::ResourceRef>,
+    )>,
     pending_code_block_actions: Vec<CodeBlockAction>,
     error: Option<String>,
 }
@@ -52,6 +56,17 @@ impl DefaultAgentChatPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let available_resources = resources.resources.clone();
+        Self::new_with_context_and_catalog(resources, mentions, available_resources, window, cx)
+    }
+
+    pub fn new_with_context_and_catalog(
+        resources: agent_runtime::ResourceContext,
+        mentions: Vec<MentionItem>,
+        available_resources: Vec<agent_runtime::ResourceRef>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let panel = Self {
             focus_handle: cx.focus_handle(),
             view: None,
@@ -62,7 +77,7 @@ impl DefaultAgentChatPanel {
             pending_code_block_actions: Vec::new(),
             error: None,
         };
-        Self::spawn_build_view(resources, mentions, window, cx);
+        Self::spawn_build_view(resources, mentions, available_resources, window, cx);
         panel
     }
 
@@ -90,12 +105,28 @@ impl DefaultAgentChatPanel {
         mentions: Vec<MentionItem>,
         cx: &mut Context<Self>,
     ) {
+        let available_resources = resources.resources.clone();
+        self.set_resource_context_with_catalog(resources, mentions, available_resources, cx);
+    }
+
+    pub fn set_resource_context_with_catalog(
+        &mut self,
+        resources: agent_runtime::ResourceContext,
+        mentions: Vec<MentionItem>,
+        available_resources: Vec<agent_runtime::ResourceRef>,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(view) = &self.view {
             view.update(cx, |view, cx| {
-                view.set_resource_context(resources, mentions, cx);
+                view.set_resource_context_with_catalog(
+                    resources,
+                    mentions,
+                    available_resources,
+                    cx,
+                );
             });
         } else {
-            self.pending_resource_context = Some((resources, mentions));
+            self.pending_resource_context = Some((resources, mentions, available_resources));
             cx.notify();
         }
     }
@@ -112,6 +143,7 @@ impl DefaultAgentChatPanel {
     fn spawn_build_view(
         resources: agent_runtime::ResourceContext,
         mentions: Vec<MentionItem>,
+        available_resources: Vec<agent_runtime::ResourceRef>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -137,7 +169,12 @@ impl DefaultAgentChatPanel {
                 provider_state,
             )
             .await
-            .map(|config| build_sidebar_config(config, acp_agents));
+            .map(|config| {
+                build_sidebar_config(
+                    config.with_available_resources(available_resources),
+                    acp_agents,
+                )
+            });
 
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 if let Some(panel) = this.upgrade() {
@@ -157,11 +194,16 @@ impl DefaultAgentChatPanel {
                                     view.set_system_instruction(Some(instruction), cx);
                                 });
                             }
-                            if let Some((resources, mentions)) =
+                            if let Some((resources, mentions, available_resources)) =
                                 panel.pending_resource_context.take()
                             {
                                 view.update(cx, |view, cx| {
-                                    view.set_resource_context(resources, mentions, cx);
+                                    view.set_resource_context_with_catalog(
+                                        resources,
+                                        mentions,
+                                        available_resources,
+                                        cx,
+                                    );
                                 });
                             }
                             for action in panel.pending_code_block_actions.drain(..) {

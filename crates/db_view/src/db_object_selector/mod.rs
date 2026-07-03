@@ -3,7 +3,7 @@ mod parts;
 mod state;
 mod view;
 
-pub(crate) use loader::{clear_string_select, load_databases, load_schemas, load_tables};
+pub(crate) use loader::{clear_string_select, load_databases, load_schemas};
 #[cfg(test)]
 pub(crate) use parts::selector_parts;
 pub(crate) use parts::{

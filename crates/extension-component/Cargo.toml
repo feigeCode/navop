@@ -9,5 +9,6 @@ async-trait = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
+connection-import-protocol = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

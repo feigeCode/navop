@@ -30,12 +30,15 @@ pub use history::{HistoryItem, RuntimeHistory};
 pub use ids::{PlanId, PlanStepId, SessionId, SubAgentId, ToolCallId, TurnId};
 pub use model::{ModelClient, ModelRequest, ModelResponse, ModelStream, ModelStreamEvent};
 pub use planner::{Plan, PlanSource, PlanStatus, PlanStep, StepStatus};
-pub use resource::{ResourceContext, ResourceId, ResourceKind, ResourceRef, ResourceScope};
+pub use resource::{
+    ResourceCapability, ResourceContext, ResourceId, ResourceKind, ResourceRef, ResourceScope,
+};
 pub use risk::RiskLevel;
 pub use runtime::{InputImage, TurnInput};
 pub use runtime::{
-    Runtime, RuntimeCommand, RuntimeEvent, RuntimeEventReceiver, RuntimeServices, Session,
-    SessionSnapshot, TaskKind, TaskOutcome, ToolExecutionMode, TurnContext, UserInput,
+    PendingToolCallSummary, Runtime, RuntimeCommand, RuntimeEvent, RuntimeEventReceiver,
+    RuntimeServices, Session, SessionSnapshot, TaskKind, TaskOutcome, ToolExecutionMode,
+    TurnContext, UserInput,
 };
 pub use tasks::AgentTask;
 pub use tools::{

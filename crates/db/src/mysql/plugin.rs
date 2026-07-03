@@ -76,6 +76,32 @@ impl MySqlPlugin {
         Self
     }
 
+    fn foreign_key_action_sql(action: &str) -> Option<String> {
+        let action = action.trim();
+        if action.is_empty() {
+            return None;
+        }
+        let action = action
+            .split_whitespace()
+            .map(str::to_ascii_uppercase)
+            .collect::<Vec<_>>()
+            .join(" ");
+        match action.as_str() {
+            "CASCADE" | "RESTRICT" | "NO ACTION" | "SET NULL" | "SET DEFAULT" => Some(action),
+            _ => None,
+        }
+    }
+
+    fn foreign_key_changed(left: &ForeignKeyDefinition, right: &ForeignKeyDefinition) -> bool {
+        left.columns != right.columns
+            || left.ref_table != right.ref_table
+            || left.ref_columns != right.ref_columns
+            || Self::foreign_key_action_sql(&left.on_delete)
+                != Self::foreign_key_action_sql(&right.on_delete)
+            || Self::foreign_key_action_sql(&left.on_update)
+                != Self::foreign_key_action_sql(&right.on_update)
+    }
+
     fn column_change_reasons(
         original: &ColumnDefinition,
         new: &ColumnDefinition,
@@ -2520,6 +2546,10 @@ impl DatabasePlugin for MySqlPlugin {
             ));
         }
 
+        for foreign_key in &design.foreign_keys {
+            definitions.push(format!("  {}", self.build_foreign_key_def(foreign_key)));
+        }
+
         sql.push_str(&definitions.join(",\n"));
         sql.push_str("\n)");
 
@@ -2586,6 +2616,27 @@ impl DatabasePlugin for MySqlPlugin {
                 ?new_existing,
                 "[table_designer_diag][mysql] detected existing-column order change"
             );
+        }
+
+        let original_foreign_keys: HashMap<&str, &ForeignKeyDefinition> = original
+            .foreign_keys
+            .iter()
+            .map(|foreign_key| (foreign_key.name.as_str(), foreign_key))
+            .collect();
+        let new_foreign_keys: HashMap<&str, &ForeignKeyDefinition> = new
+            .foreign_keys
+            .iter()
+            .map(|foreign_key| (foreign_key.name.as_str(), foreign_key))
+            .collect();
+
+        for (name, original_foreign_key) in &original_foreign_keys {
+            match new_foreign_keys.get(name) {
+                Some(new_foreign_key)
+                    if !Self::foreign_key_changed(original_foreign_key, new_foreign_key) => {}
+                _ => {
+                    statements.push(self.build_drop_foreign_key_sql(&new.table_name, name));
+                }
+            }
         }
 
         for name in original_cols.keys() {
@@ -2727,6 +2778,17 @@ impl DatabasePlugin for MySqlPlugin {
             }
         }
 
+        for (name, new_foreign_key) in &new_foreign_keys {
+            match original_foreign_keys.get(name) {
+                Some(original_foreign_key)
+                    if !Self::foreign_key_changed(original_foreign_key, new_foreign_key) => {}
+                _ => {
+                    statements
+                        .push(self.build_add_foreign_key_sql(&new.table_name, new_foreign_key));
+                }
+            }
+        }
+
         let mut options_changed = false;
         let mut option_parts: Vec<String> = Vec::new();
 
@@ -2784,6 +2846,14 @@ impl DatabasePlugin for MySqlPlugin {
         } else {
             statements.join("\n")
         }
+    }
+
+    fn build_drop_foreign_key_sql(&self, table_name: &str, foreign_key_name: &str) -> String {
+        format!(
+            "ALTER TABLE {} DROP FOREIGN KEY {};",
+            self.quote_identifier(table_name),
+            self.quote_identifier(foreign_key_name)
+        )
     }
 
     /// MySQL 使用 CHANGE COLUMN 语法进行列重命名，需要完整列定义。
@@ -3260,6 +3330,37 @@ mod tests {
         assert!(sql.contains("UNIQUE INDEX `idx_email`"));
     }
 
+    #[test]
+    fn test_build_create_table_sql_with_foreign_keys() {
+        let plugin = create_plugin();
+        let design = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "order_items".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id").data_type("INT").nullable(false),
+                ColumnDefinition::new("order_id")
+                    .data_type("INT")
+                    .nullable(false),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_order_items_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: "CASCADE".to_string(),
+                on_update: "RESTRICT".to_string(),
+            }],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_create_table_sql(&design);
+
+        assert!(sql.contains(
+            "CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT"
+        ));
+    }
+
     // ==================== ALTER TABLE Tests ====================
 
     #[test]
@@ -3401,6 +3502,63 @@ mod tests {
         assert!(sql.contains("MODIFY COLUMN"));
         assert!(sql.contains("`name`"));
         assert!(sql.contains("VARCHAR(100)"));
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_add_and_drop_foreign_keys() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "order_items".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id").data_type("INT"),
+                ColumnDefinition::new("order_id").data_type("INT"),
+                ColumnDefinition::new("legacy_order_id").data_type("INT"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_order_items_legacy".to_string(),
+                columns: vec!["legacy_order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: String::new(),
+                on_update: String::new(),
+            }],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "order_items".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id").data_type("INT"),
+                ColumnDefinition::new("order_id").data_type("INT"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_order_items_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: "CASCADE".to_string(),
+                on_update: "RESTRICT".to_string(),
+            }],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+
+        assert!(
+            sql.contains("ALTER TABLE `order_items` DROP FOREIGN KEY `fk_order_items_legacy`;")
+        );
+        assert!(
+            sql.find("DROP FOREIGN KEY `fk_order_items_legacy`")
+                .unwrap()
+                < sql.find("DROP COLUMN `legacy_order_id`").unwrap()
+        );
+        assert!(sql.contains(
+            "ALTER TABLE `order_items` ADD CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `orders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT;"
+        ));
     }
 
     #[test]

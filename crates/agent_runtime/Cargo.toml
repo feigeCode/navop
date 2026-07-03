@@ -21,6 +21,7 @@ tokio-util.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["v4", "serde"] }
 llm-connector = { workspace = true, features = ["streaming"] }
+tool_runtime = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }

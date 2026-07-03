@@ -5,6 +5,7 @@
 
 use crate::ids::{SessionId, SubAgentId, ToolCallId, TurnId};
 use crate::planner::Plan;
+use crate::runtime::PendingToolCallSummary;
 use crate::tools::{ToolName, ToolObservation};
 use serde_json::Value;
 
@@ -110,6 +111,7 @@ pub enum RuntimeEvent {
         pending_tool_call_id: Option<ToolCallId>,
         tool_name: Option<ToolName>,
         arguments: Option<Value>,
+        pending_tool_calls: Vec<PendingToolCallSummary>,
     },
     /// 用户已处理工具执行审批。
     ToolApprovalResolved {

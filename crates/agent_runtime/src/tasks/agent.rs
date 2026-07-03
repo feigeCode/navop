@@ -16,8 +16,8 @@ use crate::model::{ModelRequest, ModelResponse, ModelStreamEvent};
 use crate::planner::history_to_messages;
 use crate::resource::ResourceContext;
 use crate::runtime::{
-    PendingToolApproval, RuntimeServices, RuntimeTask, Session, TaskContext, TaskKind, TaskOutcome,
-    ToolExecutionMode,
+    PendingToolApproval, PendingToolCallSummary, RuntimeServices, RuntimeTask, Session,
+    TaskContext, TaskKind, TaskOutcome, ToolExecutionMode,
 };
 use crate::tasks::agent_prompt::build_system_prompt;
 use crate::tasks::agent_tool_validation::{
@@ -102,22 +102,28 @@ pub(crate) async fn continue_after_tool_decision(
     cancellation: CancellationToken,
 ) -> TaskOutcome {
     let turn_id = pending.turn_id.clone();
-    session.record_tool_call(&turn_id, &pending.call);
-    let observation = if approved {
-        execute_agent_tool(
-            &session,
-            &services,
-            &dispatch_context(&session, &turn_id, &pending.resources),
-            &turn_id,
-            &pending.goal,
-            pending.call.clone(),
-            &cancellation,
-        )
-        .await
-    } else {
-        rejected_tool_observation(&pending.call)
-    };
-    session.record_observation(&turn_id, observation);
+    let calls = pending.calls();
+    for call in &calls {
+        session.record_tool_call(&turn_id, call);
+    }
+    let dispatch_ctx = dispatch_context(&session, &turn_id, &pending.resources);
+    for call in calls {
+        let observation = if approved {
+            execute_agent_tool(
+                &session,
+                &services,
+                &dispatch_ctx,
+                &turn_id,
+                &pending.goal,
+                call,
+                &cancellation,
+            )
+            .await
+        } else {
+            rejected_tool_observation(&call)
+        };
+        session.record_observation(&turn_id, observation);
+    }
 
     run_agent_loop(
         AgentLoopContext {
@@ -229,6 +235,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
         // 先写入同一轮模型返回的所有合法工具调用,再写观测结果。OpenAI thinking
         // mode 要求 assistant tool_calls 消息原样带回对应 reasoning_content。
         let mut executable_calls = Vec::new();
+        let mut approval_calls = Vec::new();
         for llm_call in &response.tool_calls {
             log_llm_tool_call("agent_dispatch", llm_call);
             let call_id = llm_tool_call_id(llm_call);
@@ -254,55 +261,84 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
             };
 
             if requires_tool_approval(ctx.tool_mode, &call, &tool_specs) {
-                let pending_tool_call_id = call.call_id.clone();
-                let tool_name = call.tool_name.clone();
-                let arguments = call.arguments.clone();
-                ctx.session.set_pending_tool_approval(PendingToolApproval {
-                    turn_id: ctx.turn_id.clone(),
-                    task_kind: ctx.task_kind,
-                    tool_mode: ctx.tool_mode,
-                    goal: ctx.goal.clone(),
-                    call,
-                    resources: ctx.resources.clone(),
-                });
-                return TaskOutcome::NeedUserInput {
-                    question: format!("确认执行工具 `{tool_name}` 吗?"),
-                    pending_tool_call_id: Some(pending_tool_call_id),
-                    tool_name: Some(tool_name),
-                    arguments: Some(arguments),
-                };
+                approval_calls.push(call);
+                continue;
             }
 
             executable_calls.push(call);
+        }
+
+        if !approval_calls.is_empty() {
+            let first = approval_calls.remove(0);
+            let pending_tool_call_id = first.call_id.clone();
+            let tool_name = first.tool_name.clone();
+            let arguments = first.arguments.clone();
+            let pending = PendingToolApproval {
+                turn_id: ctx.turn_id.clone(),
+                task_kind: ctx.task_kind,
+                tool_mode: ctx.tool_mode,
+                goal: ctx.goal.clone(),
+                call: first,
+                additional_calls: approval_calls,
+                resources: ctx.resources.clone(),
+            };
+            let question = approval_question(&pending);
+            let pending_tool_calls = pending
+                .calls()
+                .iter()
+                .map(PendingToolCallSummary::from_call)
+                .collect();
+            ctx.session.set_pending_tool_approval(pending);
+            return TaskOutcome::NeedUserInput {
+                question,
+                pending_tool_call_id: Some(pending_tool_call_id),
+                tool_name: Some(tool_name),
+                arguments: Some(arguments),
+                pending_tool_calls,
+            };
         }
 
         for call in &executable_calls {
             ctx.session.record_tool_call(&ctx.turn_id, call);
         }
 
-        for call in executable_calls {
-            tracing::info!(
-                tool = %call.tool_name,
-                args = %debug_json_redacted(&call.arguments),
-                "Agent 执行工具调用"
-            );
-            let observation = execute_agent_tool(
-                &ctx.session,
-                &ctx.services,
-                &dispatch_ctx,
-                &ctx.turn_id,
-                &ctx.goal,
-                call,
-                &cancellation,
-            )
-            .await;
-            tracing::debug!(
-                tool = %observation.tool_name,
-                success = observation.success,
-                summary = %observation.summary,
-                "Agent 工具观测"
-            );
-            ctx.session.record_observation(&ctx.turn_id, observation);
+        for batch in executable_call_batches(executable_calls, |call| {
+            ctx.services.tools.supports_parallel(call)
+        }) {
+            let observations = if batch.parallel {
+                futures::future::join_all(batch.calls.into_iter().map(|call| {
+                    execute_logged_agent_tool(
+                        &ctx.session,
+                        &ctx.services,
+                        &dispatch_ctx,
+                        &ctx.turn_id,
+                        &ctx.goal,
+                        call,
+                        &cancellation,
+                    )
+                }))
+                .await
+            } else {
+                let mut observations = Vec::new();
+                for call in batch.calls {
+                    observations.push(
+                        execute_logged_agent_tool(
+                            &ctx.session,
+                            &ctx.services,
+                            &dispatch_ctx,
+                            &ctx.turn_id,
+                            &ctx.goal,
+                            call,
+                            &cancellation,
+                        )
+                        .await,
+                    );
+                }
+                observations
+            };
+            for observation in observations {
+                ctx.session.record_observation(&ctx.turn_id, observation);
+            }
         }
     }
 
@@ -344,6 +380,39 @@ async fn execute_agent_tool(
     }
 }
 
+async fn execute_logged_agent_tool(
+    session: &Session,
+    services: &RuntimeServices,
+    dispatch_ctx: &ToolDispatchContext,
+    turn_id: &TurnId,
+    goal: &str,
+    call: ToolCall,
+    cancellation: &CancellationToken,
+) -> ToolObservation {
+    tracing::info!(
+        tool = %call.tool_name,
+        args = %debug_json_redacted(&call.arguments),
+        "Agent 执行工具调用"
+    );
+    let observation = execute_agent_tool(
+        session,
+        services,
+        dispatch_ctx,
+        turn_id,
+        goal,
+        call,
+        cancellation,
+    )
+    .await;
+    tracing::debug!(
+        tool = %observation.tool_name,
+        success = observation.success,
+        summary = %observation.summary,
+        "Agent 工具观测"
+    );
+    observation
+}
+
 fn rejected_tool_observation(call: &ToolCall) -> ToolObservation {
     ToolObservation::failure(
         call.call_id.clone(),
@@ -371,6 +440,13 @@ fn requires_tool_approval(
         .iter()
         .find(|spec| spec.name == call.tool_name)
         .is_some_and(|spec| spec.risk.requires_confirmation())
+}
+
+fn approval_question(pending: &PendingToolApproval) -> String {
+    if pending.call_count() == 1 {
+        return format!("确认执行工具 `{}` 吗?", pending.call.tool_name);
+    }
+    format!("确认执行 {} 个工具吗?", pending.call_count())
 }
 
 /// 执行一次流式采样:把文本增量作为事件推送,聚合出完整 [`ModelResponse`]。
@@ -692,6 +768,45 @@ fn llm_tool_call_id(call: &llm_connector::types::ToolCall) -> ToolCallId {
     }
 }
 
+struct ExecutableCallBatch {
+    parallel: bool,
+    calls: Vec<ToolCall>,
+}
+
+fn executable_call_batches(
+    calls: Vec<ToolCall>,
+    supports_parallel: impl Fn(&ToolCall) -> bool,
+) -> Vec<ExecutableCallBatch> {
+    let mut batches = Vec::new();
+    let mut current_parallel = Vec::new();
+
+    for call in calls {
+        if supports_parallel(&call) {
+            current_parallel.push(call);
+        } else {
+            if !current_parallel.is_empty() {
+                batches.push(ExecutableCallBatch {
+                    parallel: true,
+                    calls: std::mem::take(&mut current_parallel),
+                });
+            }
+            batches.push(ExecutableCallBatch {
+                parallel: false,
+                calls: vec![call],
+            });
+        }
+    }
+
+    if !current_parallel.is_empty() {
+        batches.push(ExecutableCallBatch {
+            parallel: true,
+            calls: current_parallel,
+        });
+    }
+
+    batches
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -753,6 +868,38 @@ mod tests {
 
         assert!(rendered.contains("<non-json arguments redacted"));
         assert!(!rendered.contains("plain-secret"));
+    }
+
+    #[test]
+    fn executable_call_batches_group_adjacent_parallel_safe_calls() {
+        let calls = vec![
+            ToolCall::new("read_a", json!({})),
+            ToolCall::new("read_b", json!({})),
+            ToolCall::new("write_a", json!({})),
+            ToolCall::new("read_c", json!({})),
+        ];
+        let batches =
+            executable_call_batches(calls, |call| call.tool_name.as_str().starts_with("read"));
+
+        assert_eq!(batches.len(), 3);
+        assert!(batches[0].parallel);
+        assert_eq!(batches[0].calls.len(), 2);
+        assert!(!batches[1].parallel);
+        assert_eq!(batches[1].calls.len(), 1);
+        assert!(batches[2].parallel);
+        assert_eq!(batches[2].calls.len(), 1);
+    }
+
+    #[test]
+    fn executable_call_batches_keep_serial_calls_separate() {
+        let calls = vec![
+            ToolCall::new("write_a", json!({})),
+            ToolCall::new("write_b", json!({})),
+        ];
+        let batches = executable_call_batches(calls, |_| false);
+
+        assert_eq!(batches.len(), 2);
+        assert!(batches.iter().all(|batch| !batch.parallel));
     }
 
     #[test]

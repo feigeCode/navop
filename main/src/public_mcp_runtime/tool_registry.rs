@@ -1,9 +1,9 @@
-use super::{internal_functions, redis};
+use super::{internal_functions, redis, resource_pool};
 use gpui::App;
 use one_core::settings::McpToolsetSettings;
 use public_mcp::tools::{
     PublicMcpToolProvider, PublicMcpToolRegistry, ToolRuntimeMcpProvider,
-    internal_function_tool_registry, remote_ops_tool_registry,
+    internal_function_tool_registry, remote_ops_tool_registry, terminal_exec_tool_registry,
 };
 use std::sync::Arc;
 
@@ -12,22 +12,22 @@ pub(super) fn build_tool_registry(
     toolsets: &McpToolsetSettings,
 ) -> anyhow::Result<PublicMcpToolRegistry> {
     let mut providers: Vec<Arc<dyn PublicMcpToolProvider>> = Vec::new();
+    let mut runtime_registries = Vec::new();
     if toolsets.terminal {
         if let Some(registry) = terminal_view::public_mcp::registry(cx) {
-            providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-                remote_ops_tool_registry(registry),
-            )));
+            runtime_registries.push(remote_ops_tool_registry(registry.clone()));
+            runtime_registries.push(terminal_exec_tool_registry(registry));
         } else {
             tracing::warn!("Public MCP terminal registry is not initialized");
         }
     }
     if toolsets.internal_functions {
-        providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-            onetcli_runtime::builtin_tool_registry_with_version(env!("CARGO_PKG_VERSION")),
+        runtime_registries.push(onetcli_runtime::builtin_tool_registry_with_version(env!(
+            "CARGO_PKG_VERSION"
         )));
-        providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-            internal_function_tool_registry(internal_functions::definitions(cx)),
-        )));
+        runtime_registries.push(internal_function_tool_registry(
+            internal_functions::definitions(cx),
+        ));
     }
     if toolsets.connections {
         if let Some(storage) = cx.try_global::<one_core::storage::GlobalStorageState>() {
@@ -39,17 +39,17 @@ pub(super) fn build_tool_registry(
                     .storage
                     .get::<one_core::storage::WorkspaceRepository>();
                 let session_opener = super::connection_sessions::connection_session_opener(cx);
-                providers.push(Arc::new(ToolRuntimeMcpProvider::new(
+                runtime_registries.push(
                     onetcli_runtime::connections::connection_tool_registry_with_workspaces_and_session_opener(
                         repo,
                         workspace_repo.clone(),
                         Some(session_opener),
                     ),
-                )));
+                );
                 if let Some(workspace_repo) = workspace_repo {
-                    providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-                        onetcli_runtime::workspaces::workspace_tool_registry(workspace_repo),
-                    )));
+                    runtime_registries.push(onetcli_runtime::workspaces::workspace_tool_registry(
+                        workspace_repo,
+                    ));
                 } else {
                     tracing::warn!(
                         "Public MCP connection tools enabled without WorkspaceRepository"
@@ -68,9 +68,7 @@ pub(super) fn build_tool_registry(
                 .storage
                 .get::<one_core::storage::ConnectionRepository>()
             {
-                providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-                    onetcli_runtime::sftp_tools::sftp_tool_registry(repo),
-                )));
+                runtime_registries.push(onetcli_runtime::sftp_tools::sftp_tool_registry(repo));
             } else {
                 tracing::warn!("Public MCP SFTP tools enabled without ConnectionRepository");
             }
@@ -84,9 +82,9 @@ pub(super) fn build_tool_registry(
                 .storage
                 .get::<one_core::storage::ConnectionRepository>()
             {
-                providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-                    onetcli_runtime::database_tools::database_tool_registry(repo),
-                )));
+                runtime_registries.push(onetcli_runtime::database_tools::database_tool_registry(
+                    repo,
+                ));
             } else {
                 tracing::warn!("Public MCP database tools enabled without ConnectionRepository");
             }
@@ -95,9 +93,17 @@ pub(super) fn build_tool_registry(
         }
     }
     if toolsets.redis {
-        providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-            tool_runtime::ToolRegistry::new(redis::redis_tool_handlers(cx)),
+        runtime_registries.push(tool_runtime::ToolRegistry::new(redis::redis_tool_handlers(
+            cx,
         )));
+    }
+    if !runtime_registries.is_empty() {
+        let mut provider =
+            ToolRuntimeMcpProvider::new(tool_runtime::ToolRegistry::merge(runtime_registries)?);
+        if let Some(resource_pool_provider) = resource_pool::app_resource_pool_provider(cx) {
+            provider = provider.with_resource_pool_provider(resource_pool_provider);
+        }
+        providers.push(Arc::new(provider));
     }
     if providers.is_empty() {
         tracing::warn!("Public MCP runtime enabled without any tool providers");
@@ -113,12 +119,26 @@ mod tests {
     use one_core::settings::McpToolsetSettings;
     use one_core::storage::connection::SqliteConnection;
     use one_core::storage::migration::run_migrations;
+    use one_core::storage::traits::Repository;
     use one_core::storage::{
-        ConnectionRepository, GlobalStorageState, StorageManager, WorkspaceRepository,
+        ConnectionRepository, DatabaseType, DbConnectionConfig, GlobalStorageState, SshAuthMethod,
+        SshParams, StorageManager, StoredConnection, WorkspaceRepository,
+    };
+    use public_mcp::approval::{
+        PublicMcpApprovalFuture, PublicMcpApprovalManager, PublicMcpApprovalOutcome,
+        PublicMcpApprovalRequest, PublicMcpApprover,
     };
     use public_mcp::permissions::PermissionMode;
+    use public_mcp::registry::{
+        ConnectionState, TerminalConnectionKind, TerminalExecSessionHandle, TerminalSessionHandle,
+        TerminalSessionSnapshot,
+    };
+    use public_mcp::terminal_exec::{
+        TerminalExecCompletion, TerminalExecRequest, TerminalExecResult,
+    };
     use public_mcp::tools::{InternalFunctionDefinition, PublicMcpToolContext};
     use serde_json::json;
+    use std::sync::{Arc, Mutex};
 
     #[gpui::test]
     fn build_tool_registry_includes_internal_function_tools(cx: &mut TestAppContext) {
@@ -162,11 +182,10 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name == "redis.list_connections")
         );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "redis.execute_command")
-        );
+        assert!(tools.iter().any(|tool| tool.name == "redis.command"));
+        assert!(tools.iter().any(|tool| tool.name == "redis.keys"));
+        assert!(tools.iter().any(|tool| tool.name == "redis.get"));
+        assert!(tools.iter().any(|tool| tool.name == "redis.set"));
     }
 
     #[gpui::test]
@@ -251,6 +270,145 @@ mod tests {
     }
 
     #[gpui::test]
+    fn build_tool_registry_resolves_saved_connection_target_alias(cx: &mut TestAppContext) {
+        let toolsets = McpToolsetSettings {
+            terminal: false,
+            connections: false,
+            database: true,
+            ..Default::default()
+        };
+
+        let registry = cx.update(|cx| {
+            let repo = register_connection_repository(cx);
+            insert_database_connection(&repo, "prod-db", "127.0.0.1");
+            build_tool_registry(cx, &toolsets).expect("database registry should build")
+        });
+
+        let error = futures::executor::block_on(registry.call_tool(
+            "db.query",
+            Some(serde_json::Map::from_iter([
+                ("target".to_string(), json!("127.0.0.1")),
+                (
+                    "sql".to_string(),
+                    json!("create table unsafe_write(id integer)"),
+                ),
+            ])),
+            PublicMcpToolContext {
+                permission_mode: PermissionMode::Deny,
+                approver: Default::default(),
+            },
+        ))
+        .expect_err("resolved target should reach db.query validation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("db.query only accepts query statements"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[gpui::test]
+    fn build_tool_registry_terminal_toolset_includes_terminal_exec(cx: &mut TestAppContext) {
+        let toolsets = McpToolsetSettings {
+            terminal: true,
+            connections: false,
+            internal_functions: false,
+            ..Default::default()
+        };
+
+        let tools = cx.update(|cx| {
+            terminal_view::public_mcp::init(cx);
+            build_tool_registry(cx, &toolsets)
+                .expect("terminal registry should build")
+                .tools()
+        });
+
+        assert!(tools.iter().any(|tool| tool.name == "ssh.exec"));
+        assert!(tools.iter().any(|tool| tool.name == "terminal.exec"));
+    }
+
+    #[gpui::test]
+    fn build_tool_registry_resolves_active_terminal_target_alias(cx: &mut TestAppContext) {
+        let toolsets = McpToolsetSettings {
+            terminal: true,
+            connections: false,
+            internal_functions: false,
+            database: true,
+            ..Default::default()
+        };
+
+        let (registry, terminal) = cx.update(|cx| {
+            terminal_view::public_mcp::init(cx);
+            let terminal_registry =
+                terminal_view::public_mcp::registry(cx).expect("terminal registry should exist");
+            let repo = register_connection_repository(cx);
+            let connection_id = insert_ssh_connection(&repo, "prod-a", "10.2.4.54");
+            let terminal = FakeTerminalSession::new(
+                "ssh-terminal-prod-a",
+                Some(connection_id),
+                "prod-a",
+                "root@zn-54:~",
+            );
+            terminal_registry.register(terminal.clone());
+            terminal_registry.register_terminal_exec(terminal.clone());
+            insert_database_connection(&repo, "prod-db", "10.2.4.54");
+            (
+                build_tool_registry(cx, &toolsets).expect("terminal registry should build"),
+                terminal,
+            )
+        });
+
+        for target in ["10.2.4.54", "root@zn-54:~"] {
+            let content = call_terminal_exec(&registry, target);
+            assert_eq!(json!("ssh-terminal-prod-a"), content["target"]);
+        }
+
+        assert_eq!(
+            vec!["df -h\n".to_string(), "df -h\n".to_string()],
+            terminal.inserted()
+        );
+    }
+
+    #[gpui::test]
+    fn build_tool_registry_uses_live_resource_pool_for_new_terminal_targets(
+        cx: &mut TestAppContext,
+    ) {
+        let toolsets = McpToolsetSettings {
+            terminal: true,
+            connections: false,
+            internal_functions: false,
+            database: true,
+            ..Default::default()
+        };
+
+        let (registry, terminal, connection_id) = cx.update(|cx| {
+            terminal_view::public_mcp::init(cx);
+            let terminal_registry =
+                terminal_view::public_mcp::registry(cx).expect("terminal registry should exist");
+            let repo = register_connection_repository(cx);
+            let registry =
+                build_tool_registry(cx, &toolsets).expect("terminal registry should build");
+            let connection_id = insert_ssh_connection(&repo, "prod-a", "10.2.4.54");
+            let terminal = FakeTerminalSession::new(
+                "ssh-terminal-prod-a",
+                Some(connection_id),
+                "prod-a",
+                "root@zn-54:~",
+            );
+            terminal_registry.register(terminal.clone());
+            terminal_registry.register_terminal_exec(terminal.clone());
+            insert_database_connection(&repo, "prod-db", "10.2.4.54");
+            (registry, terminal, connection_id)
+        });
+
+        let content = call_terminal_exec(&registry, &connection_id.to_string());
+
+        assert_eq!(json!("ssh-terminal-prod-a"), content["target"]);
+        assert_eq!(vec!["df -h\n".to_string()], terminal.inserted());
+    }
+
+    #[gpui::test]
     fn build_tool_registry_uses_registered_internal_functions(cx: &mut TestAppContext) {
         let toolsets = internal_function_toolsets();
         let registry = cx.update(|cx| {
@@ -329,11 +487,169 @@ mod tests {
         )
     }
 
-    fn register_connection_repository(cx: &mut gpui::App) {
+    #[derive(Clone)]
+    struct FakeTerminalSession {
+        session_id: String,
+        connection_id: Option<i64>,
+        host_label: String,
+        title: String,
+        inserted: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl FakeTerminalSession {
+        fn new(
+            session_id: &str,
+            connection_id: Option<i64>,
+            host_label: &str,
+            title: &str,
+        ) -> Self {
+            Self {
+                session_id: session_id.to_string(),
+                connection_id,
+                host_label: host_label.to_string(),
+                title: title.to_string(),
+                inserted: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn inserted(&self) -> Vec<String> {
+            self.inserted.lock().expect("inserted lock").clone()
+        }
+
+        fn snapshot(&self) -> TerminalSessionSnapshot {
+            TerminalSessionSnapshot {
+                session_id: self.session_id.clone(),
+                connection_id: self.connection_id,
+                title: self.title.clone(),
+                host_label: self.host_label.clone(),
+                cwd: Some("/root".to_string()),
+                rows: 24,
+                cols: 120,
+                connection_kind: TerminalConnectionKind::Ssh,
+                connection_state: ConnectionState::Connected,
+            }
+        }
+    }
+
+    impl TerminalSessionHandle for FakeTerminalSession {
+        fn snapshot(&self) -> TerminalSessionSnapshot {
+            self.snapshot()
+        }
+    }
+
+    impl TerminalExecSessionHandle for FakeTerminalSession {
+        fn snapshot(&self) -> TerminalSessionSnapshot {
+            self.snapshot()
+        }
+
+        fn exec_in_terminal(
+            &self,
+            request: TerminalExecRequest,
+        ) -> anyhow::Result<TerminalExecResult> {
+            let suffix = if request.submit { "\n" } else { "" };
+            self.inserted
+                .lock()
+                .expect("inserted lock")
+                .push(format!("{}{suffix}", request.command));
+            Ok(TerminalExecResult {
+                target: request.target,
+                command: request.command,
+                submitted: request.submit,
+                completion: TerminalExecCompletion::SubmittedOnly,
+                exit_code: None,
+                output: String::new(),
+                duration_ms: 0,
+            })
+        }
+    }
+
+    fn call_terminal_exec(
+        registry: &public_mcp::tools::PublicMcpToolRegistry,
+        target: &str,
+    ) -> serde_json::Value {
+        futures::executor::block_on(registry.call_tool(
+            "terminal.exec",
+            Some(serde_json::Map::from_iter([
+                ("target".to_string(), json!(target)),
+                ("command".to_string(), json!("df -h")),
+                ("submit".to_string(), json!(true)),
+            ])),
+            PublicMcpToolContext {
+                permission_mode: PermissionMode::Allow,
+                approver: PublicMcpApprovalManager::new(Arc::new(AlwaysApprove)),
+            },
+        ))
+        .expect("terminal target alias should resolve to active terminal session")
+        .structured_content
+        .expect("terminal.exec should return structured content")
+    }
+
+    struct AlwaysApprove;
+
+    impl PublicMcpApprover for AlwaysApprove {
+        fn request_approval(&self, _request: PublicMcpApprovalRequest) -> PublicMcpApprovalFuture {
+            Box::pin(async { PublicMcpApprovalOutcome::Approved })
+        }
+    }
+
+    fn register_connection_repository(cx: &mut gpui::App) -> Arc<ConnectionRepository> {
         let storage = StorageManager::new_with_connection(test_connection());
-        storage.register(ConnectionRepository::new(storage.connection()));
+        let repo = ConnectionRepository::new(storage.connection());
+        let repo_for_insert = Arc::new(repo.clone());
+        storage.register(repo);
         storage.register(WorkspaceRepository::new(storage.connection()));
         cx.set_global(GlobalStorageState { storage });
+        repo_for_insert
+    }
+
+    fn insert_database_connection(repo: &ConnectionRepository, name: &str, host: &str) {
+        let mut connection =
+            StoredConnection::new_database(name.to_string(), db_config(host), None);
+        repo.insert(&mut connection)
+            .expect("database connection should insert");
+    }
+
+    fn insert_ssh_connection(repo: &ConnectionRepository, name: &str, host: &str) -> i64 {
+        let mut connection = StoredConnection::new_ssh(name.to_string(), ssh_params(host), None);
+        repo.insert(&mut connection)
+            .expect("ssh connection should insert");
+        connection
+            .id
+            .expect("inserted ssh connection should have id")
+    }
+
+    fn db_config(host: &str) -> DbConnectionConfig {
+        DbConnectionConfig {
+            id: String::new(),
+            database_type: DatabaseType::SQLite,
+            name: String::new(),
+            host: host.to_string(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params: Default::default(),
+        }
+    }
+
+    fn ssh_params(host: &str) -> SshParams {
+        SshParams {
+            host: host.to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth_method: SshAuthMethod::Agent,
+            connect_timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            default_directory: None,
+            init_script: None,
+            disable_shell_integration: None,
+            jump_server: None,
+            proxy: None,
+        }
     }
 
     fn test_connection() -> SqliteConnection {

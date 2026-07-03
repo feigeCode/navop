@@ -10,12 +10,16 @@ use ssh::{
     ChannelEvent, PtyConfig, ShellIntegrationSetup, SshChannel, SshClient, SshSessionManager,
 };
 
+use crate::exec_capture::SshTerminalExecCapture;
 use crate::osc::{OscEvent, extract_osc_events};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
 use crate::shell_integration::{
     embedded_shell_integration_script, normalized_shell_integration_script,
 };
-use crate::{TerminalBackend, TerminalSize};
+use crate::{
+    TerminalBackend, TerminalExecCompletion, TerminalExecHandle, TerminalExecOutput,
+    TerminalExecRequest, TerminalInputHandle, TerminalSize,
+};
 
 /// 整个 shell integration 安装流程的硬超时，避免远端受限或挂死卡住连接。
 const SHELL_INTEGRATION_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -188,6 +192,7 @@ enum SshCommand {
 
 pub struct SshBackend {
     command_tx: UnboundedSender<SshCommand>,
+    exec_capture: SshTerminalExecCapture,
 }
 
 impl SshBackend {
@@ -218,6 +223,8 @@ impl SshBackend {
         let pending_init = init_commands;
 
         let (command_tx, mut command_rx) = unbounded_channel::<SshCommand>();
+        let exec_capture = SshTerminalExecCapture::new();
+        let task_exec_capture = exec_capture.clone();
 
         // 创建 PtyWrite 回写通道
         let (pty_write_tx, mut pty_write_rx) = unbounded_channel::<Vec<u8>>();
@@ -267,7 +274,9 @@ impl SshBackend {
                         match event {
                             Some(ChannelEvent::Data(data)) | Some(ChannelEvent::ExtendedData { data, .. }) => {
                                 // 解析所有 OSC 事件
-                                for osc_event in extract_osc_events(&data) {
+                                let osc_events = extract_osc_events(&data);
+                                task_exec_capture.record_chunk(&data, &osc_events);
+                                for osc_event in &osc_events {
                                     tracing::debug!(
                                         target: "terminal.history_prompt.osc",
                                         event = ?osc_event,
@@ -275,7 +284,7 @@ impl SshBackend {
                                     );
                                     match osc_event {
                                         OscEvent::WorkingDirChanged(path) => {
-                                            let _ = event_tx.send(TerminalEvent::WorkingDirChanged(path));
+                                            let _ = event_tx.send(TerminalEvent::WorkingDirChanged(path.clone()));
                                         }
                                         OscEvent::PromptStart => {
                                             let _ = event_tx.send(TerminalEvent::PromptStart);
@@ -294,12 +303,12 @@ impl SshBackend {
                                         OscEvent::CommandFinished { exit_code } => {
                                             // 133;D: 命令执行完毕
                                             let _ = event_tx.send(
-                                                TerminalEvent::CommandFinished { exit_code }
+                                                TerminalEvent::CommandFinished { exit_code: *exit_code }
                                             );
                                         }
                                         OscEvent::CommandRecorded(command) => {
                                             let _ = event_tx.send(
-                                                TerminalEvent::CommandRecorded(command)
+                                                TerminalEvent::CommandRecorded(command.clone())
                                             );
                                         }
                                     }
@@ -323,6 +332,7 @@ impl SshBackend {
                                 let _ = notify_tx.send(());
                             }
                             Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
+                                task_exec_capture.finish_active_on_disconnect();
                                 break;
                             }
                             _ => {}
@@ -339,7 +349,10 @@ impl SshBackend {
             }
         });
 
-        Ok(Self { command_tx })
+        Ok(Self {
+            command_tx,
+            exec_capture,
+        })
     }
 
     /// 获取一个 interactive channel，封装了"channel open 失败时 invalidate 并重试一次"的重连逻辑。
@@ -1474,6 +1487,21 @@ impl TerminalBackend for SshBackend {
         let _ = self.command_tx.send(SshCommand::Write(data));
     }
 
+    fn input_handle(&self) -> Option<TerminalInputHandle> {
+        let tx = self.command_tx.clone();
+        Some(TerminalInputHandle::new(move |data| {
+            let _ = tx.send(SshCommand::Write(data));
+        }))
+    }
+
+    fn exec_handle(&self) -> Option<TerminalExecHandle> {
+        let tx = self.command_tx.clone();
+        let capture = self.exec_capture.clone();
+        Some(TerminalExecHandle::new(move |request| {
+            exec_in_ssh_terminal(tx.clone(), capture.clone(), request)
+        }))
+    }
+
     fn resize(&self, size: TerminalSize) {
         tracing::info!(
             "SshBackend::resize: 发送 resize 命令到远程 PTY: {}x{}",
@@ -1486,4 +1514,40 @@ impl TerminalBackend for SshBackend {
     fn shutdown(&self) {
         let _ = self.command_tx.send(SshCommand::Shutdown);
     }
+}
+
+fn exec_in_ssh_terminal(
+    tx: UnboundedSender<SshCommand>,
+    capture: SshTerminalExecCapture,
+    request: TerminalExecRequest,
+) -> anyhow::Result<TerminalExecOutput> {
+    let mut input = request.command.clone().into_bytes();
+    if request.submit {
+        input.push(b'\n');
+    }
+
+    if !request.submit || !request.wait_for_output {
+        tx.send(SshCommand::Write(input))
+            .map_err(|_| anyhow::anyhow!("terminal input handle is not ready"))?;
+        return Ok(TerminalExecOutput {
+            completion: TerminalExecCompletion::SubmittedOnly,
+            exit_code: None,
+            output: String::new(),
+            duration_ms: 0,
+        });
+    }
+
+    let session = capture.start(request.command, request.timeout)?;
+    if tx.send(SshCommand::Write(input)).is_err() {
+        capture.cancel(session.id());
+        return Err(anyhow::anyhow!("terminal input handle is not ready"));
+    }
+    let result = session.wait();
+
+    Ok(TerminalExecOutput {
+        completion: result.completion,
+        exit_code: result.exit_code,
+        output: result.output,
+        duration_ms: result.duration_ms,
+    })
 }

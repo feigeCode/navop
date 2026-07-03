@@ -55,6 +55,13 @@ impl ToolRegistry {
         self
     }
 
+    pub fn extend(&mut self, other: ToolRegistry) -> &mut Self {
+        for (name, tool) in other.tools {
+            self.tools.insert(name, tool);
+        }
+        self
+    }
+
     pub fn get(&self, name: &ToolName) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
     }

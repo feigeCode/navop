@@ -111,6 +111,86 @@ async fn auto_tool_mode_requires_confirmation_for_high_risk_tools() {
     );
 }
 
+#[tokio::test]
+async fn auto_tool_mode_batches_sibling_high_risk_approvals() {
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_calls(vec![
+                function_tool_call(
+                    "c_drop_users",
+                    "dangerous_write",
+                    json!({"sql": "drop table users"}).to_string(),
+                ),
+                function_tool_call(
+                    "c_drop_orders",
+                    "dangerous_write",
+                    json!({"sql": "drop table orders"}).to_string(),
+                ),
+            ]),
+            ModelResponse::text("危险 SQL 已执行。"),
+        ],
+        ToolRegistry::new().with_tool(Arc::new(HighRiskTool)),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking_with_tool_mode(
+            session.id(),
+            "删除 users 和 orders 表".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Auto,
+        )
+        .await
+        .expect("run auto turn");
+
+    let call_id = match outcome {
+        TaskOutcome::NeedUserInput {
+            pending_tool_call_id: Some(call_id),
+            question,
+            ..
+        } => {
+            assert!(question.contains("2 个工具"));
+            call_id
+        }
+        other => panic!("high risk batch should pause for approval, got {other:?}"),
+    };
+    let events = drain_events(&mut rx);
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::NeedUserInput {
+                pending_tool_calls,
+                ..
+            } if pending_tool_calls.len() == 2
+                && pending_tool_calls[0].call_id.as_str() == "c_drop_users"
+                && pending_tool_calls[1].call_id.as_str() == "c_drop_orders"
+        )
+    }));
+
+    let outcome = runtime
+        .approve_pending_tool(session.id(), &call_id)
+        .await
+        .expect("approve pending high risk tool batch");
+
+    assert!(
+        matches!(outcome, TaskOutcome::Completed { answer: Some(answer) } if answer == "危险 SQL 已执行。")
+    );
+    let observations = session
+        .history_snapshot()
+        .items()
+        .iter()
+        .filter_map(|item| match item {
+            agent_runtime::HistoryItem::Observation(obs) => Some(obs.summary.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        vec!["dangerous write executed", "dangerous write executed"],
+        observations
+    );
+}
+
 fn build_runtime(responses: Vec<ModelResponse>, registry: ToolRegistry) -> Runtime {
     let model: Arc<dyn ModelClient> = Arc::new(MockModelClient::new(responses));
     let tools = Arc::new(ToolRouter::new(registry));

@@ -28,6 +28,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 const MAX_TOOL_OUTPUT_JSON_CHARS: usize = 4000;
+const MAX_TERMINAL_TOOL_OUTPUT_CHARS: usize = 64_000;
 const TOOL_JSON_MIN_ROWS: usize = 6;
 const TOOL_JSON_MAX_ROWS: usize = 14;
 const TOOL_JSON_LINE_HEIGHT_PX: f32 = 18.0;
@@ -75,6 +76,12 @@ pub struct PlanStepData {
 pub struct ToolCardData {
     pub call_id: String,
     pub tool_name: String,
+    /// 目标资源 id,用于多资源任务分组展示。
+    #[serde(default)]
+    pub target_id: Option<String>,
+    /// 目标资源展示名。缺失时 UI 可回退到 `target_id`。
+    #[serde(default)]
+    pub target_label: Option<String>,
     /// 工具入参摘要,用于卡片头部。
     #[serde(default)]
     pub input_summary: String,
@@ -115,6 +122,9 @@ pub struct SubAgentCardData {
 pub struct ToolConfirmCardData {
     pub call_id: String,
     pub tool_name: String,
+    /// 批量审批中的每个工具调用。为空表示旧的单工具确认卡。
+    #[serde(default)]
+    pub items: Vec<ToolConfirmItemData>,
     /// 工具入参摘要,用于确认卡片头部。
     #[serde(default)]
     pub input_summary: String,
@@ -124,6 +134,17 @@ pub struct ToolConfirmCardData {
     pub question: String,
     #[serde(default = "default_tool_confirm_status")]
     pub status: String,
+}
+
+/// 批量工具确认卡片中的单个待执行项。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolConfirmItemData {
+    pub call_id: String,
+    pub tool_name: String,
+    #[serde(default)]
+    pub input_summary: String,
+    #[serde(default)]
+    pub input_json: String,
 }
 
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]
@@ -309,19 +330,57 @@ impl ChatCard for ToolCard {
             ));
         }
 
-        let output = distinct_tool_output_json(&data);
-        if expanded && !output.is_empty() {
-            card = card.child(tool_card_json_block(
-                "output",
-                SharedString::from(format!("agent-tool-output-{}", data.call_id)),
-                output,
-                window,
-                cx,
-            ));
+        if expanded {
+            let terminal_output = terminal_exec_output_text(&data);
+            if !terminal_output.is_empty() {
+                card = card.child(tool_card_text_block(
+                    "output",
+                    SharedString::from(format!("agent-tool-output-{}", data.call_id)),
+                    terminal_output,
+                    window,
+                    cx,
+                ));
+            } else {
+                let output = distinct_tool_output_json(&data);
+                if !output.is_empty() {
+                    card = card.child(tool_card_json_block(
+                        "output",
+                        SharedString::from(format!("agent-tool-output-{}", data.call_id)),
+                        output,
+                        window,
+                        cx,
+                    ));
+                }
+            }
         }
 
         card.into_any_element()
     }
+}
+
+fn terminal_exec_output_text(data: &ToolCardData) -> String {
+    if !is_terminal_exec_tool(&data.tool_name) {
+        return String::new();
+    }
+    let source = if data.data_text.trim().is_empty() {
+        data.summary.trim()
+    } else {
+        data.data_text.trim()
+    };
+    let output = serde_json::from_str::<serde_json::Value>(source)
+        .ok()
+        .and_then(|value| {
+            value
+                .as_object()
+                .and_then(|object| object.get("output"))
+                .and_then(|output| output.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    if output.trim().is_empty() {
+        return String::new();
+    }
+    truncate_chars(&output, MAX_TERMINAL_TOOL_OUTPUT_CHARS)
 }
 
 /// 子代理任务卡片渲染器。
@@ -398,7 +457,7 @@ impl ChatCard for ToolConfirmCard {
                             .text_sm()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(cx.theme().foreground)
-                            .child("工具执行确认"),
+                            .child(confirm_card_header(&data)),
                     ),
             )
             .child(
@@ -427,11 +486,15 @@ impl ChatCard for ToolConfirmCard {
                 div().text_sm().text_color(cx.theme().foreground).child(
                     TextView::markdown(
                         SharedString::from(format!("agent-tool-confirm-{}", msg.id)),
-                        data.question,
+                        data.question.clone(),
                     )
                     .selectable(true),
                 ),
             );
+
+        if data.items.len() > 1 {
+            card = card.child(render_confirm_batch_items(&data, cx));
+        }
 
         if !data.input_json.is_empty() {
             card = card.child(tool_card_json_block(
@@ -504,20 +567,98 @@ fn tool_card_title(data: &ToolCardData, cx: &App) -> AnyElement {
         .text_sm()
         .text_color(cx.theme().foreground)
         .truncate()
-        .child(if data.input_summary.is_empty() {
-            format!("工具 · {}", data.tool_name)
-        } else {
-            format!("工具 · {} · {}", data.tool_name, data.input_summary)
-        })
+        .child(tool_card_title_text(data))
         .into_any_element()
 }
 
-fn confirm_card_title(data: &ToolConfirmCardData) -> String {
-    if data.input_summary.is_empty() || !data.input_json.is_empty() {
-        format!("工具 · {}", data.tool_name)
-    } else {
-        format!("工具 · {} · {}", data.tool_name, data.input_summary)
+fn tool_card_title_text(data: &ToolCardData) -> String {
+    let mut parts = vec![
+        tool_card_prefix(&data.tool_name).to_string(),
+        data.tool_name.clone(),
+    ];
+    if let Some(target) = tool_card_target_label(data) {
+        parts.push(format!("@{target}"));
     }
+    if !data.input_summary.is_empty() {
+        parts.push(data.input_summary.clone());
+    }
+    parts.join(" · ")
+}
+
+fn tool_card_target_label(data: &ToolCardData) -> Option<&str> {
+    data.target_label
+        .as_deref()
+        .filter(|label| !label.is_empty())
+        .or_else(|| data.target_id.as_deref().filter(|id| !id.is_empty()))
+}
+
+fn confirm_card_header(data: &ToolConfirmCardData) -> &'static str {
+    if data.items.len() > 1 {
+        return "批量工具执行确认";
+    }
+    if is_terminal_exec_tool(&data.tool_name) {
+        "终端执行确认"
+    } else {
+        "工具执行确认"
+    }
+}
+
+fn confirm_card_title(data: &ToolConfirmCardData) -> String {
+    if data.items.len() > 1 {
+        return format!("工具 · {} 个待执行", data.items.len());
+    }
+    let prefix = tool_card_prefix(&data.tool_name);
+    if data.input_summary.is_empty() || !data.input_json.is_empty() {
+        format!("{prefix} · {}", data.tool_name)
+    } else {
+        format!("{prefix} · {} · {}", data.tool_name, data.input_summary)
+    }
+}
+
+fn render_confirm_batch_items(data: &ToolConfirmCardData, cx: &App) -> AnyElement {
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_1()
+        .children(data.items.iter().map(|item| {
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .bg(cx.theme().background)
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(item.tool_name.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(cx.theme().foreground)
+                        .child(item.input_summary.clone()),
+                )
+        }))
+        .into_any_element()
+}
+
+fn tool_card_prefix(tool_name: &str) -> &'static str {
+    if is_terminal_exec_tool(tool_name) {
+        "终端执行"
+    } else {
+        "工具"
+    }
+}
+
+fn is_terminal_exec_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "terminal_exec" | "terminal.exec")
 }
 
 fn tool_output_json(data: &ToolCardData) -> String {
@@ -609,12 +750,76 @@ fn tool_card_json_block(
         .into_any_element()
 }
 
+fn tool_card_text_block(
+    label: &'static str,
+    id: SharedString,
+    content: String,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let height = tool_json_height(&content);
+    let input = tool_text_input(id.clone(), content, window, cx);
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_1()
+        .px_1()
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
+        )
+        .child(
+            div()
+                .w_full()
+                .h(height)
+                .child(Input::new(&input).bare().h_full().disabled(true).text_xs()),
+        )
+        .into_any_element()
+}
+
 fn tool_json_height(content: &str) -> gpui::Pixels {
     let rows = content
         .lines()
         .count()
         .clamp(TOOL_JSON_MIN_ROWS, TOOL_JSON_MAX_ROWS);
     px(rows as f32 * TOOL_JSON_LINE_HEIGHT_PX + TOOL_JSON_VERTICAL_PADDING_PX)
+}
+
+fn tool_text_input(
+    id: SharedString,
+    content: String,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<InputState> {
+    let state = window.use_keyed_state(
+        SharedString::from(format!("{}-text-input", id)),
+        cx,
+        |window, cx| {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .code_editor("text")
+                    .line_number(false)
+                    .rows(TOOL_JSON_MAX_ROWS)
+                    .soft_wrap(false)
+                    .default_value(content.clone())
+            });
+            ToolJsonInputState {
+                input,
+                value: content.clone(),
+            }
+        },
+    );
+    state.update(cx, |data, cx| {
+        if data.value != content {
+            data.value = content.clone();
+            data.input.update(cx, |input, cx| {
+                input.set_value(content, window, cx);
+            });
+        }
+        data.input.clone()
+    })
 }
 
 fn tool_json_input(
@@ -908,6 +1113,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            target_id: Some("ssh-b".into()),
+            target_label: Some("prod-b".into()),
             input_summary: "hi".into(),
             input_json: "{\"text\":\"hi\"}".into(),
             running: false,
@@ -920,6 +1127,29 @@ mod tests {
         assert_eq!(back.input_summary, "hi");
         assert_eq!(back.input_json, "{\"text\":\"hi\"}");
         assert_eq!(back.success, Some(true));
+        assert_eq!(back.target_id.as_deref(), Some("ssh-b"));
+        assert_eq!(back.target_label.as_deref(), Some("prod-b"));
+    }
+
+    #[test]
+    fn tool_card_title_includes_target_label_for_multi_resource_results() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "ssh.exec".into(),
+            target_id: Some("ssh-b".into()),
+            target_label: Some("prod-b".into()),
+            input_summary: "df -h".into(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: "ok".into(),
+            data_text: "ok".into(),
+        };
+
+        assert_eq!(
+            "工具 · ssh.exec · @prod-b · df -h",
+            tool_card_title_text(&data)
+        );
     }
 
     #[test]
@@ -943,6 +1173,7 @@ mod tests {
         let data = ToolConfirmCardData {
             call_id: "call_1".into(),
             tool_name: "db_schema".into(),
+            items: Vec::new(),
             input_summary: "show tables".into(),
             input_json: "{\"sql\":\"show tables\"}".into(),
             question: "确认执行工具 `db_schema` 吗?".into(),
@@ -952,6 +1183,7 @@ mod tests {
 
         assert_eq!(back.call_id, "call_1");
         assert_eq!(back.tool_name, "db_schema");
+        assert!(back.items.is_empty());
         assert_eq!(back.input_summary, "show tables");
         assert_eq!(back.input_json, "{\"sql\":\"show tables\"}");
         assert_eq!(back.question, "确认执行工具 `db_schema` 吗?");
@@ -959,10 +1191,43 @@ mod tests {
     }
 
     #[test]
+    fn batch_tool_confirm_card_data_roundtrips_and_titles_as_batch() {
+        let data = ToolConfirmCardData {
+            call_id: "call_a".into(),
+            tool_name: "ssh_exec".into(),
+            items: vec![
+                ToolConfirmItemData {
+                    call_id: "call_a".into(),
+                    tool_name: "ssh_exec".into(),
+                    input_summary: "rm -rf /tmp/a".into(),
+                    input_json: String::new(),
+                },
+                ToolConfirmItemData {
+                    call_id: "call_b".into(),
+                    tool_name: "ssh_exec".into(),
+                    input_summary: "rm -rf /tmp/b".into(),
+                    input_json: String::new(),
+                },
+            ],
+            input_summary: "rm -rf /tmp/a".into(),
+            input_json: String::new(),
+            question: "确认执行 2 个工具吗?".into(),
+            status: "pending".into(),
+        };
+        let back = ToolConfirmCardData::from_json(&data.to_json()).expect("parse");
+
+        assert_eq!(2, back.items.len());
+        assert_eq!("call_b", back.items[1].call_id);
+        assert_eq!("批量工具执行确认", confirm_card_header(&back));
+        assert_eq!("工具 · 2 个待执行", confirm_card_title(&back));
+    }
+
+    #[test]
     fn confirm_card_title_omits_summary_when_input_details_are_visible() {
         let data = ToolConfirmCardData {
             call_id: "call_1".into(),
             tool_name: "db_schema".into(),
+            items: Vec::new(),
             input_summary: "{\"connection\":\"8\",\"database\":\"ai_app3\"}".into(),
             input_json: "{\n  \"connection\": \"8\",\n  \"database\": \"ai_app3\"\n}".into(),
             question: "确认执行工具 `db_schema` 吗?".into(),
@@ -977,6 +1242,7 @@ mod tests {
         let data = ToolConfirmCardData {
             call_id: "call_1".into(),
             tool_name: "db_schema".into(),
+            items: Vec::new(),
             input_summary: "show tables".into(),
             input_json: String::new(),
             question: "确认执行工具 `db_schema` 吗?".into(),
@@ -984,6 +1250,26 @@ mod tests {
         };
 
         assert_eq!("工具 · db_schema · show tables", confirm_card_title(&data));
+    }
+
+    #[test]
+    fn terminal_exec_confirm_card_labels_terminal_execution() {
+        let data = ToolConfirmCardData {
+            call_id: "call_1".into(),
+            tool_name: "terminal_exec".into(),
+            items: Vec::new(),
+            input_summary: "df -h".into(),
+            input_json: String::new(),
+            question: "确认执行工具 `terminal_exec` 吗?".into(),
+            status: "pending".into(),
+        };
+
+        assert_eq!("终端执行确认", confirm_card_header(&data));
+        assert_eq!(
+            "终端执行 · terminal_exec · df -h",
+            confirm_card_title(&data)
+        );
+        assert_eq!("终端执行", tool_card_prefix("terminal.exec"));
     }
 
     #[test]
@@ -998,6 +1284,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            target_id: None,
+            target_label: None,
             input_summary: String::new(),
             input_json: String::new(),
             running: false,
@@ -1017,6 +1305,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            target_id: None,
+            target_label: None,
             input_summary: String::new(),
             input_json: String::new(),
             running: false,
@@ -1029,6 +1319,50 @@ mod tests {
             "{\n  \"output\": \"plain output\"\n}",
             tool_output_json(&data)
         );
+    }
+
+    #[test]
+    fn terminal_exec_output_text_extracts_multiline_output() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "terminal_exec".into(),
+            target_id: None,
+            target_label: None,
+            input_summary: String::new(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: String::new(),
+            data_text: serde_json::json!({
+                "completion": "observed_output",
+                "output": "line 1\nline 2\nline 3"
+            })
+            .to_string(),
+        };
+
+        assert_eq!("line 1\nline 2\nline 3", terminal_exec_output_text(&data));
+    }
+
+    #[test]
+    fn terminal_exec_output_text_keeps_more_than_generic_json_limit() {
+        let output = "a".repeat(MAX_TOOL_OUTPUT_JSON_CHARS + 100);
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "terminal_exec".into(),
+            target_id: None,
+            target_label: None,
+            input_summary: String::new(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: String::new(),
+            data_text: serde_json::json!({ "output": output }).to_string(),
+        };
+
+        let rendered = terminal_exec_output_text(&data);
+
+        assert_eq!(MAX_TOOL_OUTPUT_JSON_CHARS + 100, rendered.len());
+        assert!(!rendered.contains("已截断"));
     }
 
     #[test]
@@ -1049,6 +1383,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            target_id: None,
+            target_label: None,
             input_summary: String::new(),
             input_json: "{\n  \"rows\": [\n    1\n  ]\n}".into(),
             running: false,
@@ -1065,6 +1401,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "echo".into(),
+            target_id: None,
+            target_label: None,
             input_summary: "hello".into(),
             input_json: "{\n  \"text\": \"hello\"\n}".into(),
             running: false,
@@ -1081,6 +1419,8 @@ mod tests {
         let data = ToolCardData {
             call_id: "call_1".into(),
             tool_name: "query".into(),
+            target_id: None,
+            target_label: None,
             input_summary: "select 1".into(),
             input_json: "{\n  \"sql\": \"select 1\"\n}".into(),
             running: false,

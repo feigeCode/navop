@@ -49,6 +49,7 @@ one-ui.workspace = true
 onetcli_runtime.workspace = true
 reqwest_client.workspace = true
 db.workspace = true
+connection-import-protocol.workspace = true
 global-hotkey.workspace = true
 sha2 = { workspace = true }
 flate2 = "1"
@@ -70,7 +71,6 @@ tempfile = "3"
 [features]
 default = ["wasm-components"]
 builtin-duckdb = ["db/builtin-duckdb", "db_view/builtin-duckdb", "onetcli_runtime/builtin-duckdb"]
-compare = ["db/compare", "db_view/compare"]
 github-distribution = ["github-updates", "github-marketplace"]
 github-marketplace = ["extension-runtime/github-marketplace"]
 github-updates = []

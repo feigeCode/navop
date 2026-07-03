@@ -1,3 +1,4 @@
+mod metadata;
 mod schema;
 
 use one_core::storage::traits::Repository;
@@ -5,8 +6,8 @@ use one_core::storage::{ConnectionRepository, ConnectionType, DbConnectionConfig
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    ToolAdapter, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode, ToolRegistry,
-    ToolResult,
+    ResourceCapability, ToolAdapter, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode,
+    ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
 use schema::descriptor_parts;
@@ -14,6 +15,9 @@ use schema::descriptor_parts;
 #[derive(Clone, Copy)]
 enum DatabaseTool {
     Schema,
+    Tables,
+    DescribeTable,
+    SampleRows,
     Query,
     Exec,
 }
@@ -27,8 +31,33 @@ struct DatabaseToolHandler {
 pub fn database_tool_registry(repo: Arc<ConnectionRepository>) -> ToolRegistry {
     ToolRegistry::new(vec![
         Arc::new(DatabaseToolHandler::new(repo.clone(), DatabaseTool::Schema)),
+        Arc::new(DatabaseToolHandler::new(repo.clone(), DatabaseTool::Tables)),
+        Arc::new(DatabaseToolHandler::new(
+            repo.clone(),
+            DatabaseTool::DescribeTable,
+        )),
+        Arc::new(DatabaseToolHandler::new(
+            repo.clone(),
+            DatabaseTool::SampleRows,
+        )),
         Arc::new(DatabaseToolHandler::new(repo.clone(), DatabaseTool::Query)),
         Arc::new(DatabaseToolHandler::new(repo, DatabaseTool::Exec)),
+    ])
+}
+
+pub fn database_read_tool_registry(repo: Arc<ConnectionRepository>) -> ToolRegistry {
+    ToolRegistry::new(vec![
+        Arc::new(DatabaseToolHandler::new(repo.clone(), DatabaseTool::Schema)),
+        Arc::new(DatabaseToolHandler::new(repo.clone(), DatabaseTool::Tables)),
+        Arc::new(DatabaseToolHandler::new(
+            repo.clone(),
+            DatabaseTool::DescribeTable,
+        )),
+        Arc::new(DatabaseToolHandler::new(
+            repo.clone(),
+            DatabaseTool::SampleRows,
+        )),
+        Arc::new(DatabaseToolHandler::new(repo, DatabaseTool::Query)),
     ])
 }
 
@@ -40,6 +69,9 @@ impl DatabaseToolHandler {
     async fn call_tool(&self, input: Value) -> Result<ToolResult, ToolError> {
         match self.tool {
             DatabaseTool::Schema => self.schema(input).await,
+            DatabaseTool::Tables => metadata::tables(self, input).await,
+            DatabaseTool::DescribeTable => metadata::describe_table(self, input).await,
+            DatabaseTool::SampleRows => metadata::sample_rows(self, input).await,
             DatabaseTool::Query => self.query(input).await,
             DatabaseTool::Exec => self.exec(input).await,
         }
@@ -121,6 +153,33 @@ impl DatabaseToolHandler {
         }
         stored.to_db_connection().map_err(tool_error)
     }
+
+    pub(super) async fn open_database(&self, input: &Value) -> Result<OpenedDatabase, ToolError> {
+        let connection = required_str(input, "connection")?;
+        let config = scoped_database_config(self.database_config(&connection)?, input)?;
+        let plugin = db::DbManager::new()
+            .get_plugin(&config.database_type)
+            .map_err(tool_error)?;
+        let database = config.database.clone();
+        let mut db_connection = plugin.create_connection(config).await.map_err(tool_error)?;
+        db_connection.connect().await.map_err(tool_error)?;
+        let database = database.or(db_connection.current_database().await.map_err(tool_error)?);
+        Ok(OpenedDatabase {
+            connection,
+            database: database.unwrap_or_default(),
+            schema: optional_str(input, "schema")?,
+            plugin,
+            db_connection,
+        })
+    }
+}
+
+pub(super) struct OpenedDatabase {
+    pub connection: String,
+    pub database: String,
+    pub schema: Option<String>,
+    pub plugin: Arc<dyn db::DatabasePlugin>,
+    pub db_connection: Box<dyn db::DbConnection + Send + Sync>,
 }
 
 impl ToolHandler for DatabaseToolHandler {
@@ -147,9 +206,17 @@ impl ToolHandler for DatabaseToolHandler {
         let handler = self.clone();
         Box::pin(async move { handler.call_tool(input).await })
     }
+
+    fn target_spec(&self) -> ToolTargetSpec {
+        let capability = match self.tool {
+            DatabaseTool::Exec => ResourceCapability::DatabaseExecute,
+            _ => ResourceCapability::DatabaseQuery,
+        };
+        ToolTargetSpec::required_with_capabilities(Vec::new(), vec![capability])
+    }
 }
 
-async fn execute_sql(
+pub(super) async fn execute_sql(
     plugin: Arc<dyn db::DatabasePlugin>,
     config: DbConnectionConfig,
     sql: &str,
@@ -202,13 +269,13 @@ fn scoped_database_config(
     Ok(config)
 }
 
-fn required_str(input: &Value, key: &str) -> Result<String, ToolError> {
+pub(super) fn required_str(input: &Value, key: &str) -> Result<String, ToolError> {
     optional_str(input, key)?.ok_or_else(|| ToolError::Failed {
         message: format!("missing required string field `{key}`"),
     })
 }
 
-fn optional_str(input: &Value, key: &str) -> Result<Option<String>, ToolError> {
+pub(super) fn optional_str(input: &Value, key: &str) -> Result<Option<String>, ToolError> {
     match input.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value.clone())),
@@ -224,7 +291,7 @@ fn unknown_connection(connection: &str) -> ToolError {
     }
 }
 
-fn tool_error(error: impl std::fmt::Display) -> ToolError {
+pub(super) fn tool_error(error: impl std::fmt::Display) -> ToolError {
     ToolError::Failed {
         message: error.to_string(),
     }

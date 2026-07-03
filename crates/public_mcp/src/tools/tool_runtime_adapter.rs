@@ -1,6 +1,9 @@
-use super::{PublicMcpToolContext, PublicMcpToolFuture, PublicMcpToolProvider};
+use super::{
+    PublicMcpToolContext, PublicMcpToolFuture, PublicMcpToolProvider,
+    target_adapter::{mcp_target_schema, normalize_mcp_arguments},
+};
 use crate::approval::PublicMcpApprovalOutcome;
-use crate::permissions::{ApprovalDecision, PublicMcpOperationKind, decide_permission};
+use crate::permissions::{PublicMcpOperationKind, permission_policy_for_mode};
 use rmcp::{
     ErrorData as McpError,
     model::{CallToolResult, JsonObject, Tool, ToolAnnotations},
@@ -8,18 +11,34 @@ use rmcp::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext, ToolDescriptor, ToolError,
-    ToolRegistry, ToolResult,
+    ResourcePool, ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext,
+    ToolDescriptor, ToolError, ToolRegistry, ToolResult,
 };
+
+pub type ResourcePoolProvider = Arc<dyn Fn() -> Option<ResourcePool> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct ToolRuntimeMcpProvider {
     registry: ToolRegistry,
+    resource_pool_provider: Option<ResourcePoolProvider>,
 }
 
 impl ToolRuntimeMcpProvider {
     pub fn new(registry: ToolRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            resource_pool_provider: None,
+        }
+    }
+
+    pub fn with_resource_pool(mut self, resource_pool: ResourcePool) -> Self {
+        self.resource_pool_provider = Some(Arc::new(move || Some(resource_pool.clone())));
+        self
+    }
+
+    pub fn with_resource_pool_provider(mut self, provider: ResourcePoolProvider) -> Self {
+        self.resource_pool_provider = Some(provider);
+        self
     }
 }
 
@@ -38,10 +57,25 @@ impl PublicMcpToolProvider for ToolRuntimeMcpProvider {
         arguments: Option<JsonObject>,
         context: PublicMcpToolContext,
     ) -> Option<PublicMcpToolFuture> {
-        let descriptor = self.registry.get(name, ToolAdapter::Mcp)?;
+        let runtime_descriptor = self.registry.get_runtime(name, ToolAdapter::Mcp)?;
+        let target_spec = runtime_descriptor.target.clone();
+        let descriptor = runtime_descriptor.legacy_descriptor();
         let registry = self.registry.clone();
+        let resource_pool = self
+            .resource_pool_provider
+            .as_ref()
+            .and_then(|provider| provider());
         let name = name.to_string();
-        let input = Value::Object(arguments.unwrap_or_default());
+        let raw_input = Value::Object(arguments.unwrap_or_default());
+        let input = match normalize_mcp_arguments(
+            &descriptor.input_schema,
+            raw_input,
+            resource_pool.as_ref(),
+            Some(&target_spec),
+        ) {
+            Ok(input) => input,
+            Err(error) => return Some(Box::pin(async move { Err(error) })),
+        };
         Some(Box::pin(async move {
             let call_annotations = registry
                 .call_annotations(&name, ToolAdapter::Mcp, &input)
@@ -59,19 +93,13 @@ async fn call_runtime_tool(
     input: Value,
     context: PublicMcpToolContext,
 ) -> Result<CallToolResult, McpError> {
-    if call_annotations.read_only {
-        return run_runtime_tool(registry, name, input).await;
-    }
-
-    match decide_permission(
-        context.permission_mode,
-        PublicMcpOperationKind::CallToolRuntimeTool,
-    ) {
-        ApprovalDecision::Allow => run_runtime_tool(registry, name, input).await,
-        ApprovalDecision::Ask => {
+    let policy = permission_policy_for_mode(context.permission_mode);
+    match policy.decide(&descriptor.tool_id(), None, &call_annotations) {
+        tool_runtime::PermissionDecision::Allow => run_runtime_tool(registry, name, input).await,
+        tool_runtime::PermissionDecision::Ask => {
             ask_then_run_runtime_tool(registry, descriptor, name, input, context).await
         }
-        ApprovalDecision::Deny => Ok(permission_denied_result(
+        tool_runtime::PermissionDecision::Deny => Ok(permission_denied_result(
             "tool runtime call denied by permission mode",
         )),
     }
@@ -122,7 +150,7 @@ fn runtime_tool_to_mcp_tool(descriptor: ToolDescriptor) -> Tool {
     Tool::new(
         descriptor.id,
         descriptor.description,
-        schema_object(descriptor.input_schema),
+        schema_object(mcp_target_schema(descriptor.input_schema)),
     )
     .with_annotations(runtime_annotations_to_mcp_annotations(
         descriptor.annotations,

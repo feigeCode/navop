@@ -1,4 +1,7 @@
-use crate::approval::PublicMcpApprovalManager;
+use crate::approval::{
+    PublicMcpApprovalFuture, PublicMcpApprovalManager, PublicMcpApprovalOutcome,
+    PublicMcpApprovalRequest, PublicMcpApprover,
+};
 use crate::permissions::PermissionMode;
 use crate::tools::{PublicMcpToolContext, PublicMcpToolRegistry};
 use agent_runtime::tools::{
@@ -7,30 +10,30 @@ use agent_runtime::tools::{
 };
 use agent_runtime::{RiskLevel, ToolError};
 use async_trait::async_trait;
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, Tool};
 use serde_json::Value;
 use std::sync::Arc;
 
 pub fn agent_runtime_tool_registry(
     registry: PublicMcpToolRegistry,
-    permission_mode: PermissionMode,
-    approver: PublicMcpApprovalManager,
+    _permission_mode: PermissionMode,
+    _approver: PublicMcpApprovalManager,
 ) -> ToolRegistry {
     let mut agent_registry = ToolRegistry::new();
+    let context = agent_approved_public_mcp_context();
     for tool in registry.tools() {
         let adapter = PublicMcpAgentTool {
             name: ToolName::new(tool.name.to_string()),
             original_name: tool.name.to_string(),
             description: tool
                 .description
+                .as_ref()
                 .map(|desc| desc.to_string())
                 .unwrap_or_default(),
             parameters: Value::Object(tool.input_schema.as_ref().clone()),
+            risk: risk_from_mcp_tool(&tool),
             registry: registry.clone(),
-            context: PublicMcpToolContext {
-                permission_mode,
-                approver: approver.clone(),
-            },
+            context: context.clone(),
         };
         agent_registry.register(Arc::new(adapter));
     }
@@ -42,6 +45,7 @@ struct PublicMcpAgentTool {
     original_name: String,
     description: String,
     parameters: Value,
+    risk: RiskLevel,
     registry: PublicMcpToolRegistry,
     context: PublicMcpToolContext,
 }
@@ -58,7 +62,7 @@ impl AgentTool for PublicMcpAgentTool {
             self.description.clone(),
             self.parameters.clone(),
         )
-        .with_risk(RiskLevel::Medium)
+        .with_risk(self.risk)
     }
 
     async fn execute(&self, invocation: ToolInvocation) -> Result<ToolObservation, ToolError> {
@@ -69,6 +73,35 @@ impl AgentTool for PublicMcpAgentTool {
             .await
             .map_err(|error| ToolError::Execution(error.to_string()))?;
         Ok(observation_from_result(invocation, result))
+    }
+}
+
+fn agent_approved_public_mcp_context() -> PublicMcpToolContext {
+    PublicMcpToolContext {
+        permission_mode: PermissionMode::Allow,
+        approver: PublicMcpApprovalManager::new(Arc::new(AgentApprovedApprover)),
+    }
+}
+
+fn risk_from_mcp_tool(tool: &Tool) -> RiskLevel {
+    let Some(annotations) = &tool.annotations else {
+        return RiskLevel::Medium;
+    };
+    if annotations.read_only_hint.unwrap_or(false) {
+        return RiskLevel::Read;
+    }
+    if annotations.destructive_hint.unwrap_or(false) || annotations.open_world_hint.unwrap_or(false)
+    {
+        return RiskLevel::High;
+    }
+    RiskLevel::Medium
+}
+
+struct AgentApprovedApprover;
+
+impl PublicMcpApprover for AgentApprovedApprover {
+    fn request_approval(&self, _request: PublicMcpApprovalRequest) -> PublicMcpApprovalFuture {
+        Box::pin(async { PublicMcpApprovalOutcome::Approved })
     }
 }
 

@@ -219,9 +219,9 @@ async fn remote_exec_rejects_when_permission_mode_denies() {
             "id": 3,
             "method": "tools/call",
             "params": {
-                "name": "ssh.remote_exec",
+                "name": "ssh.exec",
                 "arguments": {
-                    "session_id": "ssh-1",
+                    "target": "ssh-1",
                     "command": "pwd"
                 }
             }
@@ -258,9 +258,9 @@ async fn remote_exec_uses_updated_permission_mode() {
             "id": 30,
             "method": "tools/call",
             "params": {
-                "name": "ssh.remote_exec",
+                "name": "ssh.exec",
                 "arguments": {
-                    "session_id": "ssh-1",
+                    "target": "ssh-1",
                     "command": "pwd"
                 }
             }
@@ -273,23 +273,30 @@ async fn remote_exec_uses_updated_permission_mode() {
     );
     permission.set(PermissionMode::Allow);
 
-    let allowed = client
+    let still_requires_approval = client
         .request(json!({
             "jsonrpc": "2.0",
             "id": 31,
             "method": "tools/call",
             "params": {
-                "name": "ssh.remote_exec",
+                "name": "ssh.exec",
                 "arguments": {
-                    "session_id": "ssh-1",
+                    "target": "ssh-1",
                     "command": "pwd"
                 }
             }
         }))
         .await;
 
-    assert_eq!(0, allowed["result"]["structuredContent"]["exit_code"]);
-    assert_eq!(vec!["pwd".to_string()], *executed_commands.lock().unwrap());
+    assert_eq!(
+        "permission_denied",
+        still_requires_approval["result"]["structuredContent"]["code"]
+    );
+    assert_eq!(
+        "no public MCP approval handler is configured",
+        still_requires_approval["result"]["structuredContent"]["message"]
+    );
+    assert!(executed_commands.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -315,9 +322,9 @@ async fn remote_exec_asks_and_runs_when_approved() {
             "id": 4,
             "method": "tools/call",
             "params": {
-                "name": "ssh.remote_exec",
+                "name": "ssh.exec",
                 "arguments": {
-                    "session_id": "ssh-1",
+                    "target": "ssh-1",
                     "command": "pwd"
                 }
             }
@@ -328,7 +335,7 @@ async fn remote_exec_asks_and_runs_when_approved() {
     assert_eq!(vec!["pwd".to_string()], *executed_commands.lock().unwrap());
     let requests = approver.requests();
     assert_eq!(1, requests.len());
-    assert_eq!("ssh.remote_exec", requests[0].tool_name);
+    assert_eq!("ssh.exec", requests[0].tool_name);
 }
 
 #[tokio::test]
@@ -356,9 +363,9 @@ async fn remote_exec_asks_and_does_not_run_when_denied() {
             "id": 5,
             "method": "tools/call",
             "params": {
-                "name": "ssh.remote_exec",
+                "name": "ssh.exec",
                 "arguments": {
-                    "session_id": "ssh-1",
+                    "target": "ssh-1",
                     "command": "pwd"
                 }
             }

@@ -9,6 +9,7 @@ pub mod schema_compare_window;
 pub mod sync_execute;
 pub mod sync_plan_view;
 mod sync_statement_picker;
+mod table_picker;
 mod target_picker;
 mod window_params;
 #[cfg(test)]

@@ -26,7 +26,7 @@ use agent_runtime::{
 };
 use async_trait::async_trait;
 use serde_json::json;
-use tokio::sync::Notify;
+use tokio::sync::{Barrier, Notify};
 
 /// 用脚本化模型 + 给定工具注册表构造 Runtime。
 fn build_runtime(responses: Vec<ModelResponse>, registry: ToolRegistry) -> Runtime {
@@ -36,6 +36,33 @@ fn build_runtime(responses: Vec<ModelResponse>, registry: ToolRegistry) -> Runti
 }
 
 struct WriteTool;
+
+struct ParallelProbeTool {
+    name: &'static str,
+    barrier: Arc<Barrier>,
+    started: Arc<AtomicUsize>,
+    delay_after_barrier: Duration,
+}
+
+impl ParallelProbeTool {
+    fn new(name: &'static str, barrier: Arc<Barrier>, started: Arc<AtomicUsize>) -> Self {
+        Self::new_with_delay(name, barrier, started, Duration::ZERO)
+    }
+
+    fn new_with_delay(
+        name: &'static str,
+        barrier: Arc<Barrier>,
+        started: Arc<AtomicUsize>,
+        delay_after_barrier: Duration,
+    ) -> Self {
+        Self {
+            name,
+            barrier,
+            started,
+            delay_after_barrier,
+        }
+    }
+}
 
 #[async_trait]
 impl Tool for WriteTool {
@@ -64,6 +91,91 @@ impl Tool for WriteTool {
             invocation.tool_name,
             "write executed",
             ObservationData::Text("executed".into()),
+        ))
+    }
+}
+
+#[async_trait]
+impl Tool for ParallelProbeTool {
+    fn name(&self) -> ToolName {
+        ToolName::new(self.name)
+    }
+
+    fn spec(&self, _resources: &ResourceContext) -> ToolSpec {
+        ToolSpec::new(
+            self.name,
+            "并发探测工具。",
+            json!({
+                "type": "object",
+                "properties": {}
+            }),
+        )
+        .with_risk(RiskLevel::Low)
+    }
+
+    fn supports_parallel(&self) -> bool {
+        true
+    }
+
+    async fn execute(&self, invocation: ToolInvocation) -> Result<ToolObservation, ToolError> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        self.barrier.wait().await;
+        if !self.delay_after_barrier.is_zero() {
+            tokio::time::sleep(self.delay_after_barrier).await;
+        }
+        Ok(ToolObservation::success(
+            invocation.call_id,
+            invocation.tool_name,
+            format!("{} executed", self.name),
+            ObservationData::Text("ok".into()),
+        ))
+    }
+}
+
+struct PromptOnlyTool {
+    name: &'static str,
+    description: &'static str,
+    risk: RiskLevel,
+}
+
+impl PromptOnlyTool {
+    fn new(name: &'static str, description: &'static str, risk: RiskLevel) -> Self {
+        Self {
+            name,
+            description,
+            risk,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for PromptOnlyTool {
+    fn name(&self) -> ToolName {
+        ToolName::new(self.name)
+    }
+
+    fn spec(&self, _resources: &ResourceContext) -> ToolSpec {
+        ToolSpec::new(
+            self.name,
+            self.description,
+            json!({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "command": {"type": "string"}
+                },
+                "required": ["target", "command"]
+            }),
+        )
+        .with_risk(self.risk)
+    }
+
+    async fn execute(&self, invocation: ToolInvocation) -> Result<ToolObservation, ToolError> {
+        Ok(ToolObservation::success(
+            invocation.call_id,
+            invocation.tool_name,
+            "prompt only tool executed",
+            ObservationData::Text("ok".into()),
         ))
     }
 }
@@ -700,6 +812,134 @@ async fn agent_calls_business_tool_then_finishes() {
 }
 
 #[tokio::test]
+async fn parallel_tool_calls_start_before_first_finishes() {
+    let barrier = Arc::new(Barrier::new(2));
+    let started = Arc::new(AtomicUsize::new(0));
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_calls(vec![
+                function_tool_call("call_parallel_a", "parallel_a", json!({}).to_string()),
+                function_tool_call("call_parallel_b", "parallel_b", json!({}).to_string()),
+            ]),
+            ModelResponse::text("并发检查完成。"),
+        ],
+        ToolRegistry::new()
+            .with_tool(Arc::new(ParallelProbeTool::new(
+                "parallel_a",
+                barrier.clone(),
+                started.clone(),
+            )))
+            .with_tool(Arc::new(ParallelProbeTool::new(
+                "parallel_b",
+                barrier,
+                started.clone(),
+            ))),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(1),
+        runtime.run_turn_blocking(session.id(), "并发检查".into(), TaskKind::Agent),
+    )
+    .await
+    .expect("parallel-safe tool calls should both start before either finishes")
+    .expect("run agent turn");
+
+    assert!(matches!(outcome, TaskOutcome::Completed { .. }));
+    assert_eq!(2, started.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn parallel_tool_observations_preserve_original_call_order() {
+    let barrier = Arc::new(Barrier::new(2));
+    let started = Arc::new(AtomicUsize::new(0));
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_calls(vec![
+                function_tool_call("call_parallel_slow", "parallel_slow", json!({}).to_string()),
+                function_tool_call("call_parallel_fast", "parallel_fast", json!({}).to_string()),
+            ]),
+            ModelResponse::text("并发检查完成。"),
+        ],
+        ToolRegistry::new()
+            .with_tool(Arc::new(ParallelProbeTool::new_with_delay(
+                "parallel_slow",
+                barrier.clone(),
+                started.clone(),
+                Duration::from_millis(40),
+            )))
+            .with_tool(Arc::new(ParallelProbeTool::new(
+                "parallel_fast",
+                barrier,
+                started.clone(),
+            ))),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    runtime
+        .run_turn_blocking(session.id(), "并发顺序检查".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    let observed_tools = drain_events(&mut rx)
+        .into_iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::ObservationAdded { observation, .. }
+                if observation.tool_name.as_str().starts_with("parallel_") =>
+            {
+                Some(observation.tool_name.to_string())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(vec!["parallel_slow", "parallel_fast"], observed_tools);
+    assert_eq!(2, started.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn manual_mode_pauses_parallel_safe_tool_before_dispatch() {
+    let barrier = Arc::new(Barrier::new(1));
+    let started = Arc::new(AtomicUsize::new(0));
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_call(function_tool_call(
+                "call_parallel_manual",
+                "parallel_manual",
+                json!({}).to_string(),
+            )),
+            ModelResponse::text("并发手动工具完成。"),
+        ],
+        ToolRegistry::new().with_tool(Arc::new(ParallelProbeTool::new(
+            "parallel_manual",
+            barrier,
+            started.clone(),
+        ))),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+
+    let outcome = runtime
+        .run_turn_blocking_with_tool_mode(
+            session.id(),
+            "手动并发工具".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Manual,
+        )
+        .await
+        .expect("run manual turn");
+
+    assert!(matches!(
+        outcome,
+        TaskOutcome::NeedUserInput {
+            tool_name: Some(name),
+            ..
+        } if name.as_str() == "parallel_manual"
+    ));
+    assert_eq!(0, started.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
 async fn ask_mode_does_not_send_tools_or_tool_choice() {
     let model = Arc::new(MockModelClient::new([ModelResponse::text("直接回答。")]));
     let runtime = Runtime::new(RuntimeServices::new(
@@ -1009,6 +1249,93 @@ async fn system_prompt_lists_available_tools_and_json_rule() {
 }
 
 #[tokio::test]
+async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::text("ok")]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new()
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "terminal.exec",
+                    "Execute in a visible terminal.",
+                    RiskLevel::High,
+                )))
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "ssh.exec",
+                    "Execute a structured SSH command.",
+                    RiskLevel::Low,
+                ))),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new().with_resource(ResourceRef::new(
+        "terminal-1",
+        ResourceKind::Terminal,
+        "prod terminal",
+    )));
+
+    runtime
+        .run_turn_blocking(
+            session.id(),
+            "就在这个终端里执行 df -h".into(),
+            TaskKind::Agent,
+        )
+        .await
+        .expect("run agent turn");
+
+    let requests = model.received_requests();
+    let system = requests[0].messages[0].content_as_text();
+    assert!(system.contains("terminal_exec"));
+    assert!(system.contains("ssh_exec"));
+    assert!(system.contains("可见终端"));
+    assert!(system.contains("submit=true"));
+    assert!(system.contains("不要声称有 exit code"));
+    assert!(system.contains("不要用 `ssh_exec` 替代"));
+}
+
+#[tokio::test]
+async fn system_prompt_prefers_canonical_runtime_tool_names() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::text("ok")]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new()
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "db.exec",
+                    "Execute database script.",
+                    RiskLevel::High,
+                )))
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "sftp.read",
+                    "Read SFTP file.",
+                    RiskLevel::Read,
+                )))
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "redis.get",
+                    "Get Redis key.",
+                    RiskLevel::Low,
+                ))),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    runtime
+        .run_turn_blocking(session.id(), "检查资源".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    let requests = model.received_requests();
+    let system = requests[0].messages[0].content_as_text();
+    assert!(system.contains("统一工具命名规则"));
+    assert!(system.contains("数据库写入使用 `db_exec`"));
+    assert!(system.contains("SFTP 文件操作使用 `sftp_read`"));
+    assert!(system.contains("Redis 操作使用 `redis_get`"));
+    assert!(!system.contains("兼容"));
+    assert!(!system.contains("db_execute_sql"));
+    assert!(!system.contains("ssh_read_file"));
+    assert!(!system.contains("redis_execute_command"));
+}
+
+#[tokio::test]
 async fn system_prompt_includes_current_resource_context() {
     let model = Arc::new(MockModelClient::new([ModelResponse::text("ok")]));
     let runtime = Runtime::new(RuntimeServices::new(
@@ -1031,11 +1358,13 @@ async fn system_prompt_includes_current_resource_context() {
 
     let requests = model.received_requests();
     let system = requests[0].messages[0].content_as_text();
-    assert!(system.contains("当前可操作资源"));
+    assert!(system.contains("资源池"));
+    assert!(system.contains("target 参数"));
     assert!(system.contains("prod analytics"));
     assert!(system.contains("类型=postgres"));
     assert!(system.contains("id=db-1"));
     assert!(system.contains("[当前]"));
     assert!(system.contains("database=ai_app"));
     assert!(system.contains("schema=public"));
+    assert!(!system.contains("connection、connection_id、session_id"));
 }

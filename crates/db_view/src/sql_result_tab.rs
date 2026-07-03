@@ -30,7 +30,7 @@ use crate::table_data::data_grid::{DataGrid, DataGridConfig, DataGridUsage};
 use ai_chat_view::AskAiButton;
 use one_core::settings::AppSettings;
 // 3. 当前 crate 导入（按模块分组）
-use db::{GlobalDbState, SqlResult, SqlSource};
+use db::{GlobalDbState, SqlErrorInfo, SqlResult, SqlSource};
 use gpui_component::checkbox::Checkbox;
 use rust_i18n::t;
 
@@ -78,6 +78,14 @@ struct ResultsBatchUpdate {
     connection_id: String,
     database: Option<String>,
     database_type: one_core::storage::DatabaseType,
+}
+
+pub(crate) struct SessionSqlRun {
+    pub sql: String,
+    pub session_id: String,
+    pub connection_id: String,
+    pub database: Option<String>,
+    pub database_type: one_core::storage::DatabaseType,
 }
 
 impl StatementListData {
@@ -443,6 +451,108 @@ impl SqlResultTabContainer {
                         });
                         clone_self.tab_scroll_handle.scroll_to_item(active_idx);
                     }
+                }
+            });
+            Some(())
+        })
+        .detach();
+    }
+
+    pub(crate) fn handle_run_query_with_session(&mut self, request: SessionSqlRun, cx: &mut App) {
+        let clone_self = self.clone();
+        let execution_start = Instant::now();
+
+        self.clear_results(cx);
+        self.timer_stop_flag.store(true, Ordering::SeqCst);
+        self.execution_start.update(cx, |start, cx| {
+            *start = Some(execution_start);
+            cx.notify();
+        });
+        self.total_elapsed_ms.update(cx, |elapsed, cx| {
+            *elapsed = 0.0;
+            cx.notify();
+        });
+        self.execution_state.update(cx, |state, cx| {
+            *state = ExecutionState::Executing {
+                current: 0,
+                total: 0,
+            };
+            cx.notify();
+        });
+        self.active_result_tab.update(cx, |active, cx| {
+            *active = 0;
+            cx.notify();
+        });
+        self.is_visible.update(cx, |visible, cx| {
+            *visible = true;
+            cx.notify();
+        });
+
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            let (global_state, max_rows) = cx.update(|cx| {
+                let global_state = cx.global::<GlobalDbState>().clone();
+                let sql_query_max_rows = AppSettings::current(cx).sql_query_max_rows;
+                let max_rows = (sql_query_max_rows > 0).then_some(sql_query_max_rows as usize);
+                (global_state, max_rows)
+            });
+            let exec_opts = db::ExecOptions {
+                stop_on_error: false,
+                max_rows,
+                ..Default::default()
+            };
+            let results = match global_state
+                .execute_session(
+                    request.session_id.clone(),
+                    request.sql.clone(),
+                    Some(exec_opts),
+                )
+                .await
+            {
+                Ok(results) => results,
+                Err(error) => vec![SqlResult::Error(SqlErrorInfo {
+                    sql: request.sql.clone(),
+                    message: error.to_string(),
+                })],
+            };
+            let has_query_result = results
+                .iter()
+                .any(|result| matches!(result, SqlResult::Query(_)));
+            let total_elapsed = execution_start.elapsed().as_secs_f64();
+
+            cx.update(|cx| {
+                if let Some(window_id) = cx.active_window() {
+                    if let Err(err) = cx.update_window(window_id, |_entity, window, cx| {
+                        clone_self.add_streaming_results_batch(
+                            results,
+                            request.connection_id,
+                            request.database,
+                            request.database_type,
+                            window,
+                            cx,
+                        );
+                    }) {
+                        error!("Failed to update manual transaction results: {:?}", err);
+                    }
+                }
+
+                clone_self.execution_start.update(cx, |start, cx| {
+                    *start = None;
+                    cx.notify();
+                });
+                clone_self.execution_state.update(cx, |state, cx| {
+                    *state = ExecutionState::Completed;
+                    cx.notify();
+                });
+                clone_self.total_elapsed_ms.update(cx, |time, cx| {
+                    *time = total_elapsed * 1000.0;
+                    cx.notify();
+                });
+                if has_query_result {
+                    clone_self.active_result_tab.update(cx, |active, cx| {
+                        *active = 1;
+                        cx.notify();
+                    });
+                    clone_self.tab_scroll_handle.scroll_to_item(1);
                 }
             });
             Some(())

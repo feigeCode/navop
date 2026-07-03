@@ -64,9 +64,9 @@ mod tests {
     fn request() -> PublicMcpApprovalRequest {
         PublicMcpApprovalRequest {
             operation: PublicMcpOperationKind::ExecuteRemoteCommand,
-            tool_name: "ssh.remote_exec".to_string(),
+            tool_name: "ssh.exec".to_string(),
             summary: "Execute remote command".to_string(),
-            details: json!({ "session_id": "ssh-1" }),
+            details: json!({ "target": "ssh-1" }),
         }
     }
 
@@ -76,7 +76,7 @@ mod tests {
         let approval = tokio::spawn(async move { approver.request_approval(request()).await });
 
         let envelope = receiver.recv().await.expect("request should be queued");
-        assert_eq!("ssh.remote_exec", envelope.request.tool_name);
+        assert_eq!("ssh.exec", envelope.request.tool_name);
         envelope.approve();
 
         assert_eq!(

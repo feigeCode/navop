@@ -1,12 +1,9 @@
-//! `ai_chat_view` 消息列表渲染。
-//!
-//! 保持业务逻辑在 transcript / runtime 层,这里只负责 Agent/Chat 视图内的输出排版。
-//! `MessageVariant::Card { kind }` 通过 [`CardRegistry`] 按 `kind` 分发到注册的卡片,
-//! 未注册时回退占位符。
-
 use crate::card::{CardMessage, CardRegistry};
 use crate::code_block::CodeBlockActionRegistry;
 use crate::message_code_actions::apply_code_block_features;
+use crate::message_tool_group::{
+    MessageRenderItem, message_render_items, render_tool_target_group,
+};
 use crate::{
     ChatMessageUI, ChatMessageUIGeneric, ChatRole, MessageExtension, MessageVariant,
     render_reasoning_block,
@@ -20,7 +17,6 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, h_flex, scroll::Scrollbar, text::TextView, v_flex,
 };
 
-/// 把消息列表渲染为可滚动区域。
 pub fn render_messages(
     messages: &[ChatMessageUI],
     scroll_handle: &ScrollHandle,
@@ -30,7 +26,6 @@ pub fn render_messages(
     render_messages_with_code_actions(messages, scroll_handle, None, window, cx)
 }
 
-/// 把消息列表渲染为可滚动区域，并在助手代码块下方显示可用操作。
 pub fn render_messages_with_code_actions(
     messages: &[ChatMessageUI],
     scroll_handle: &ScrollHandle,
@@ -38,9 +33,9 @@ pub fn render_messages_with_code_actions(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let items: Vec<AnyElement> = messages
-        .iter()
-        .map(|m| render_one(m, code_actions, window, cx))
+    let items: Vec<AnyElement> = message_render_items(messages)
+        .into_iter()
+        .map(|item| render_item(item, code_actions, window, cx))
         .collect();
 
     div()
@@ -77,7 +72,25 @@ pub fn render_messages_with_code_actions(
         .into_any_element()
 }
 
-/// 渲染单条消息（通用路由）。
+fn render_item(
+    item: MessageRenderItem<'_>,
+    code_actions: Option<&CodeBlockActionRegistry>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    match item {
+        MessageRenderItem::Single(msg) => render_one(msg, code_actions, window, cx),
+        MessageRenderItem::ToolTargetGroup(group) => {
+            let children = group
+                .messages()
+                .iter()
+                .map(|msg| render_one(msg, code_actions, window, cx))
+                .collect();
+            render_tool_target_group(group, children, cx)
+        }
+    }
+}
+
 fn render_one(
     msg: &ChatMessageUI,
     code_actions: Option<&CodeBlockActionRegistry>,
@@ -100,7 +113,6 @@ fn render_one(
     }
 }
 
-/// 渲染用户消息:右侧紧凑气泡,避免占满整行。
 pub fn render_user_message<E: MessageExtension>(
     msg: &ChatMessageUIGeneric<E>,
     cx: &App,
@@ -130,7 +142,6 @@ pub fn render_user_message<E: MessageExtension>(
         .into_any_element()
 }
 
-/// 渲染系统消息:作为轻量提示行,不参与正文视觉重量。
 pub fn render_system_message<E: MessageExtension>(
     msg: &ChatMessageUIGeneric<E>,
     cx: &App,
@@ -162,7 +173,6 @@ pub fn render_system_message<E: MessageExtension>(
         .into_any_element()
 }
 
-/// 渲染状态消息:Codex 风格的行内进度,不做大卡片。
 pub fn render_status_message<E: MessageExtension>(
     msg: &ChatMessageUIGeneric<E>,
     title: &str,
@@ -200,7 +210,6 @@ pub fn render_status_message<E: MessageExtension>(
         .into_any_element()
 }
 
-/// 渲染助手文本消息（markdown）。
 pub fn render_assistant_text<E: MessageExtension>(
     msg: &ChatMessageUIGeneric<E>,
     window: &mut Window,
@@ -257,7 +266,6 @@ pub fn render_thinking(cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// 渲染卡片消息：查全局注册表，未注册回退占位符。
 fn render_card(msg: &ChatMessageUI, kind: &str, window: &mut Window, cx: &mut App) -> AnyElement {
     let card_msg = CardMessage {
         id: &msg.id,
@@ -268,19 +276,14 @@ fn render_card(msg: &ChatMessageUI, kind: &str, window: &mut Window, cx: &mut Ap
     if let Some(element) = CardRegistry::render_global(&card_msg, window, cx) {
         return div().w_full().child(element).into_any_element();
     }
-    div()
-        .w_full()
-        .py_2()
-        .child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(format!("[未注册卡片: {kind}]")),
-        )
-        .into_any_element()
+    render_placeholder(format!("[未注册卡片: {kind}]"), cx)
 }
 
 fn render_sql_result_placeholder(cx: &App) -> AnyElement {
+    render_placeholder("[SQL 结果卡片需要业务渲染器]", cx)
+}
+
+fn render_placeholder(text: impl Into<String>, cx: &App) -> AnyElement {
     div()
         .w_full()
         .py_2()
@@ -288,7 +291,7 @@ fn render_sql_result_placeholder(cx: &App) -> AnyElement {
             div()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("[SQL 结果卡片需要业务渲染器]"),
+                .child(text.into()),
         )
         .into_any_element()
 }

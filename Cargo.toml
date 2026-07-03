@@ -8,6 +8,7 @@ members = [
     "crates/webview",
     "crates/reqwest_client",
     "crates/db",
+    "crates/connection-import-protocol",
     "crates/db_view",
     "crates/extension-runtime",
     "crates/extension_view",
@@ -66,6 +67,7 @@ clap = { version = "4.5", features = ["derive"] }
 log = "0.4"
 lsp-types = { version = "0.97.0", features = ["proposed"] }
 notify = "7.0.0"
+plist = "1"
 raw-window-handle = "0.6.2"
 ropey = { version = "=2.0.0-beta.1", features = [
     "metric_lines_lf",
@@ -74,7 +76,7 @@ ropey = { version = "=2.0.0-beta.1", features = [
 rust-i18n = "4"
 schemars = "1"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["arbitrary_precision"] }
 serde_yaml = "0.9"
 serde_repr = "0.1"
 smallvec = "1"
@@ -90,6 +92,7 @@ agent-client-protocol = "0.14.0"
 public_mcp = { path = "crates/public_mcp" }
 tool_runtime = { path = "crates/tool_runtime" }
 db = { path = "crates/db" }
+connection-import-protocol = { path = "crates/connection-import-protocol" }
 db_view = { path = "crates/db_view" }
 redis_view = { path = "crates/redis_view" }
 one-ui = { path = "crates/one_ui" }
@@ -122,6 +125,7 @@ extension-wasm = { path = "crates/extension-wasm" }
 json5 = "1.3.0"
 semver = "1.0.22"
 regex = "1.10.0"
+roxmltree = "0.20"
 futures = "0.3.32"
 image = "0.25.6"
 rustls = "0.23.35"
@@ -130,9 +134,12 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tokio-util = "0.7.17"
 dirs = "6.0"
+aes = "0.8"
+cbc = "0.1"
 chrono = {version = "0.4.23", features = ["serde"]}
 rust_decimal = { version = "1.19.0" }
 hex = "0.4"
+hmac = "0.12"
 tiberius = { version = "0.12.3", default-features = false, features = ["chrono", "rustls", "tds73", "winauth"] }
 oracle = {version = "0.6.3", features = ["chrono"]}
 once_cell = "1.21"

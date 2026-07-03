@@ -1,8 +1,6 @@
 //! 把会话历史转换为模型消息。
-//!
 //! 使用 llm-connector 原生 tool_call / tool_result 协议表达工具调用与观测,
-//! 确保模型在历史中看到工具调用时能正确驱动 function calling 循环,而非将
-//! 观测文本误解为用户输入并跳过工具调用。
+//! 避免模型把观测文本误解为用户输入并跳过 function calling 循环。
 
 use crate::history::{HistoryItem, RuntimeHistory};
 use crate::tools::ToolCall;
@@ -201,7 +199,7 @@ mod tests {
             call_id: call_id.clone(),
             tool_name: ToolName::new("db_query"),
             arguments: serde_json::json!({
-                "connection": "5",
+                "target": "5",
                 "database": "ai_app",
                 "sql": "SELECT COUNT(*) AS total FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'ai_app'"
             }),
@@ -275,7 +273,7 @@ mod tests {
             call_id: call_id.clone(),
             tool_name: ToolName::new("db_query"),
             arguments: serde_json::json!({
-                "connection": "5",
+                "target": "5",
                 "database": "ai_app",
                 "sql": "SELECT COUNT(*) AS total FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'ai_app'"
             }),

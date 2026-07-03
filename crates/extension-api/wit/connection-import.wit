@@ -1,0 +1,200 @@
+package onet:extension;
+
+interface connection-import {
+    enum platform {
+        macos,
+        windows,
+        linux,
+    }
+
+    enum import-record-kind {
+        database,
+        ssh,
+    }
+
+    record importer-capabilities {
+        supports-scan: bool,
+        supports-password-import: bool,
+        supports-manual-file-pick: bool,
+        supports-incremental-preview: bool,
+    }
+
+    record importer-descriptor {
+        id: string,
+        display-name: string,
+        description: option<string>,
+        icon: option<string>,
+        vendor: option<string>,
+        supported-platforms: list<platform>,
+        output-kinds: list<import-record-kind>,
+        capabilities: importer-capabilities,
+    }
+
+    enum importer-availability-kind {
+        available,
+        installed,
+        not-installed,
+        no-data,
+        permission-required,
+        unsupported-platform,
+        error,
+    }
+
+    record importer-availability {
+        kind: importer-availability-kind,
+        estimated-count: option<u32>,
+        message: option<string>,
+    }
+
+    record import-warning {
+        code: string,
+        message: string,
+    }
+
+    record discovered-file {
+        candidate-id: string,
+        display-path: string,
+    }
+
+    record scan-report {
+        importer-id: string,
+        availability: importer-availability,
+        discovered-files: list<discovered-file>,
+        warnings: list<import-warning>,
+    }
+
+    enum import-database-type {
+        mysql,
+        postgresql,
+        sqlite,
+        duckdb,
+        sqlserver,
+        oracle,
+        clickhouse,
+        external,
+    }
+
+    record key-value {
+        key: string,
+        value: string,
+    }
+
+    record database-import-record {
+        database-type: import-database-type,
+        external-database-id: option<string>,
+        name: string,
+        host: string,
+        port: option<u16>,
+        username: string,
+        password: option<string>,
+        database: option<string>,
+        extra-params: list<key-value>,
+    }
+
+    enum ssh-auth-kind {
+        password,
+        private-key,
+        agent,
+        auto-public-key,
+    }
+
+    record ssh-import-auth-method {
+        kind: ssh-auth-kind,
+        password: option<string>,
+        key-path: option<string>,
+        passphrase: option<string>,
+    }
+
+    record ssh-import-record {
+        name: string,
+        host: string,
+        port: option<u16>,
+        username: string,
+        auth-method: ssh-import-auth-method,
+    }
+
+    enum password-import-status {
+        included,
+        missing,
+        unsupported,
+        permission-denied,
+    }
+
+    record import-record {
+        id: string,
+        importer-id: string,
+        source-label: string,
+        kind: import-record-kind,
+        display-name: string,
+        database: option<database-import-record>,
+        ssh: option<ssh-import-record>,
+        password-status: password-import-status,
+        warnings: list<import-warning>,
+    }
+
+    record import-options {
+        include-passwords: bool,
+    }
+
+    record import-error {
+        code: string,
+        message: string,
+    }
+
+    record candidate-file {
+        id: string,
+        platform: option<platform>,
+        path: string,
+    }
+
+    record directory-entry {
+        candidate-id: string,
+        name: string,
+        is-dir: bool,
+    }
+
+    record secret-query {
+        service: string,
+        account: string,
+    }
+
+    variant secret-result {
+        included(string),
+        missing,
+        permission-denied,
+        unsupported,
+    }
+
+    record host-error {
+        code: string,
+        message: string,
+    }
+}
+
+interface connection-import-host {
+    use connection-import.{
+        candidate-file,
+        directory-entry,
+        host-error,
+        platform,
+        secret-query,
+        secret-result
+    };
+
+    current-platform: func() -> platform;
+    list-candidate-files: func(importer-id: string) -> list<candidate-file>;
+    read-file: func(candidate-id: string) -> result<list<u8>, host-error>;
+    read-directory: func(candidate-id: string) -> result<list<directory-entry>, host-error>;
+    read-secret: func(query: secret-query) -> secret-result;
+    log: func(level: string, message: string);
+}
+
+world connection-importer {
+    use connection-import.{import-options};
+
+    import connection-import-host;
+
+    export descriptor: func() -> string;
+    export scan: func() -> string;
+    export preview: func(options: import-options) -> string;
+}

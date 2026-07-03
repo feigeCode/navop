@@ -1092,13 +1092,25 @@ Settings:
         zh-CN: 持久
         zh-HK: 持久
       permission_mode:
-        en: Permission Mode
-        zh-CN: 权限模式
-        zh-HK: 權限模式
+        en: Permission Profile
+        zh-CN: 权限档位
+        zh-HK: 權限檔位
       permission_mode_desc:
-        en: Control how sensitive MCP tool calls are handled by default
-        zh-CN: 控制敏感 MCP 工具调用的默认处理方式
-        zh-HK: 控制敏感 MCP 工具調用的默認處理方式
+        en: Map MCP access to the unified tool runtime permission profile
+        zh-CN: 将 MCP 访问映射到统一工具运行时权限档位
+        zh-HK: 將 MCP 訪問映射到統一工具運行時權限檔位
+      permission_profile_safe:
+        en: Safe
+        zh-CN: 安全模式
+        zh-HK: 安全模式
+      permission_profile_confirm:
+        en: Confirm
+        zh-CN: 确认模式
+        zh-HK: 確認模式
+      permission_profile_auto:
+        en: Auto
+        zh-CN: 自动模式
+        zh-HK: 自動模式
       permission_mode_deny:
         en: Deny
         zh-CN: 拒绝

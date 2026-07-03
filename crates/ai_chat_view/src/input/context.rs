@@ -45,6 +45,144 @@ impl ComposerTarget {
     }
 }
 
+/// 资源池摘要。`default_target_id` 只是默认目标,不是资源池边界。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerResourcePoolSummary {
+    pub default_target_id: Option<SharedString>,
+    pub default_label: SharedString,
+    pub total_resources: usize,
+}
+
+impl Default for ComposerResourcePoolSummary {
+    fn default() -> Self {
+        Self {
+            default_target_id: None,
+            default_label: SharedString::from("无默认目标"),
+            total_resources: 0,
+        }
+    }
+}
+
+impl ComposerResourcePoolSummary {
+    pub fn new(
+        default_target_id: Option<SharedString>,
+        default_label: impl Into<SharedString>,
+        total_resources: usize,
+    ) -> Self {
+        Self {
+            default_target_id,
+            default_label: default_label.into(),
+            total_resources,
+        }
+    }
+}
+
+/// 资源类型筛选项。`id == "all"` 表示全部资源。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerResourceTypeFilter {
+    pub id: SharedString,
+    pub label: SharedString,
+    pub count: usize,
+    pub selected: bool,
+}
+
+impl ComposerResourceTypeFilter {
+    pub fn new(
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        count: usize,
+        selected: bool,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            count,
+            selected,
+        }
+    }
+
+    pub fn element_id(&self) -> SharedString {
+        SharedString::from(format!("resource-filter-{}", self.id))
+    }
+}
+
+/// 资源池来源预设。只描述候选来源,不直接持有业务资源。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerResourceSourceOption {
+    pub id: SharedString,
+    pub label: SharedString,
+    pub count: usize,
+    pub selected: bool,
+    pub enabled: bool,
+    pub hint: Option<SharedString>,
+}
+
+impl ComposerResourceSourceOption {
+    pub fn new(
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        count: usize,
+        selected: bool,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            count,
+            selected,
+            enabled: true,
+            hint: None,
+        }
+    }
+
+    pub fn disabled(mut self, hint: impl Into<SharedString>) -> Self {
+        self.enabled = false;
+        self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn element_id(&self) -> SharedString {
+        SharedString::from(format!("resource-source-{}", self.id))
+    }
+}
+
+/// 资源池候选行。`in_pool` 表示是否已授权进入本会话资源池。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComposerResourcePoolItem {
+    pub id: SharedString,
+    pub label: SharedString,
+    pub icon: SharedString,
+    pub kind: SharedString,
+    pub subtitle: SharedString,
+    pub in_pool: bool,
+    pub is_default: bool,
+}
+
+impl ComposerResourcePoolItem {
+    pub fn new(
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        icon: impl Into<SharedString>,
+        kind: impl Into<SharedString>,
+        subtitle: impl Into<SharedString>,
+        in_pool: bool,
+        is_default: bool,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            icon: icon.into(),
+            kind: kind.into(),
+            subtitle: subtitle.into(),
+            in_pool,
+            is_default,
+        }
+    }
+
+    pub fn element_id(&self) -> SharedString {
+        SharedString::from(format!("resource-pool-item-{}", self.id))
+    }
+}
+
 /// 派生上下文 chip(数量随目标类型动态变化)。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComposerScope {
@@ -279,6 +417,14 @@ impl ComposerAgentOption {
 pub struct AgentComposerContext {
     /// 当前目标;`None` 时顶部显示「选择目标」占位 chip。
     pub target: Option<ComposerTarget>,
+    /// 资源池摘要。当前迁移期由 `ResourceContext.current` 派生默认目标。
+    pub resource_pool: ComposerResourcePoolSummary,
+    /// 资源池类型筛选项。
+    pub resource_type_filters: Vec<ComposerResourceTypeFilter>,
+    /// 资源池来源预设。
+    pub resource_source_options: Vec<ComposerResourceSourceOption>,
+    /// 资源池成员与池外候选资源列表。
+    pub resource_pool_items: Vec<ComposerResourcePoolItem>,
     /// 派生上下文 chip(动态数量)。
     pub scopes: Vec<ComposerScope>,
     /// 右侧能力标签。
@@ -335,6 +481,70 @@ mod tests {
         assert!(ctx.target.is_none());
         assert!(ctx.scopes.is_empty());
         assert!(ctx.model.is_none());
+    }
+
+    #[test]
+    fn resource_pool_summary_defaults_to_empty_pool() {
+        let summary = ComposerResourcePoolSummary::default();
+
+        assert_eq!(summary.default_label.as_ref(), "无默认目标");
+        assert_eq!(summary.total_resources, 0);
+        assert_eq!(summary.default_target_id, None);
+    }
+
+    #[test]
+    fn resource_type_filter_keeps_stable_element_ids() {
+        let filter = ComposerResourceTypeFilter::new("ssh", "SSH", 3, true);
+
+        assert_eq!(filter.element_id().as_ref(), "resource-filter-ssh");
+        assert_eq!(filter.label.as_ref(), "SSH");
+        assert_eq!(filter.count, 3);
+        assert!(filter.selected);
+    }
+
+    #[test]
+    fn resource_source_option_has_stable_element_id_and_selection_state() {
+        let selected = ComposerResourceSourceOption::new("all", "全部资源", 3, true);
+        let disabled = ComposerResourceSourceOption::new("workspace", "工作区", 0, false)
+            .disabled("暂无工作区资源来源");
+
+        assert_eq!(selected.element_id().as_ref(), "resource-source-all");
+        assert_eq!(selected.count, 3);
+        assert!(selected.selected);
+        assert!(selected.enabled);
+        assert!(!disabled.enabled);
+        assert_eq!(
+            disabled.hint.as_ref().map(|s| s.as_ref()),
+            Some("暂无工作区资源来源")
+        );
+    }
+
+    #[test]
+    fn resource_pool_item_exposes_add_and_remove_state() {
+        let in_pool = ComposerResourcePoolItem::new(
+            "ssh-a",
+            "prod-a",
+            "SH",
+            "ssh",
+            "ssh · ssh-a",
+            true,
+            true,
+        );
+        let out_pool = ComposerResourcePoolItem::new(
+            "ssh-b",
+            "prod-b",
+            "SH",
+            "ssh",
+            "ssh · ssh-b",
+            false,
+            false,
+        );
+
+        assert_eq!(in_pool.element_id().as_ref(), "resource-pool-item-ssh-a");
+        assert!(in_pool.in_pool);
+        assert!(in_pool.is_default);
+        assert!(!out_pool.in_pool);
+        assert!(!out_pool.is_default);
     }
 
     #[test]

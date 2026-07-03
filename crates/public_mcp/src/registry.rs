@@ -5,10 +5,12 @@ use crate::remote_ops::{
     RemoteExecRequest, RemoteExecResult, RemoteFileWriteRequest, RemoteFileWriteResult,
     SessionDiagnosticsRequest, SessionDiagnosticsResult,
 };
+use crate::terminal_exec::{TerminalExecRequest, TerminalExecResult};
 use anyhow::{Result, anyhow};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use tool_runtime::ResourceCapability;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,6 +51,7 @@ pub struct PublicMcpSessionInfo {
     pub rows: usize,
     pub cols: usize,
     pub connected: bool,
+    pub capabilities: Vec<ResourceCapability>,
 }
 
 pub trait TerminalSessionHandle: Send + Sync + 'static {
@@ -68,10 +71,19 @@ pub trait RemoteOpsSessionHandle: Send + Sync + 'static {
     fn diagnostics(&self, request: SessionDiagnosticsRequest) -> Result<SessionDiagnosticsResult>;
 }
 
+/// Live terminal execution ability. This is intentionally separate from
+/// `RemoteOpsSessionHandle`: terminal execution writes into the visible terminal
+/// session, while remote ops execute structured non-interactive commands.
+pub trait TerminalExecSessionHandle: Send + Sync + 'static {
+    fn snapshot(&self) -> TerminalSessionSnapshot;
+    fn exec_in_terminal(&self, request: TerminalExecRequest) -> Result<TerminalExecResult>;
+}
+
 #[derive(Clone, Default)]
 pub struct PublicMcpRegistry {
     sessions: Arc<Mutex<HashMap<String, Arc<dyn TerminalSessionHandle>>>>,
     remote_ops_sessions: Arc<Mutex<HashMap<String, Arc<dyn RemoteOpsSessionHandle>>>>,
+    terminal_exec_sessions: Arc<Mutex<HashMap<String, Arc<dyn TerminalExecSessionHandle>>>>,
     command_store: RemoteCommandStore,
 }
 
@@ -99,10 +111,17 @@ impl PublicMcpRegistry {
             .values()
             .cloned()
             .collect::<Vec<_>>();
+        let terminal_exec_ids = self.terminal_exec_session_ids();
+        let remote_ops_ids = self.remote_ops_session_ids();
 
         sessions
             .iter()
-            .filter_map(|handle| exposed_session_info(handle.snapshot()))
+            .filter_map(|handle| {
+                let snapshot = handle.snapshot();
+                let capabilities =
+                    session_capabilities(&snapshot.session_id, &terminal_exec_ids, &remote_ops_ids);
+                exposed_session_info(snapshot, capabilities)
+            })
             .collect()
     }
 
@@ -117,6 +136,21 @@ impl PublicMcpRegistry {
 
     pub fn unregister_remote_ops(&self, session_id: &str) {
         self.remote_ops_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .remove(session_id);
+    }
+
+    pub fn register_terminal_exec(&self, handle: impl TerminalExecSessionHandle) {
+        let snapshot = handle.snapshot();
+        self.terminal_exec_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .insert(snapshot.session_id, Arc::new(handle));
+    }
+
+    pub fn unregister_terminal_exec(&self, session_id: &str) {
+        self.terminal_exec_sessions
             .lock()
             .expect("public MCP registry lock poisoned")
             .remove(session_id);
@@ -140,6 +174,16 @@ impl PublicMcpRegistry {
         let handle = self.remote_ops_handle(session_id)?;
         ensure_exposed_session(&handle.snapshot())?;
         handle.write_file(request)
+    }
+
+    pub fn terminal_exec(
+        &self,
+        target: &str,
+        request: TerminalExecRequest,
+    ) -> Result<TerminalExecResult> {
+        let handle = self.terminal_exec_handle(target)?;
+        ensure_exposed_session(&handle.snapshot())?;
+        handle.exec_in_terminal(request)
     }
 
     /// background 命令存储。执行桥用它注册命令，MCP 工具用它 poll/output/cancel。
@@ -200,6 +244,15 @@ impl PublicMcpRegistry {
             .ok_or_else(|| anyhow!(unknown_session_error(session_id)))
     }
 
+    fn terminal_exec_handle(&self, target: &str) -> Result<Arc<dyn TerminalExecSessionHandle>> {
+        self.terminal_exec_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .get(target)
+            .cloned()
+            .ok_or_else(|| anyhow!(unknown_session_error(target)))
+    }
+
     fn handle(&self, session_id: &str) -> Result<Arc<dyn TerminalSessionHandle>> {
         self.sessions
             .lock()
@@ -208,9 +261,30 @@ impl PublicMcpRegistry {
             .cloned()
             .ok_or_else(|| anyhow!("unknown public MCP terminal session: {session_id}"))
     }
+
+    fn terminal_exec_session_ids(&self) -> HashSet<String> {
+        self.terminal_exec_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    fn remote_ops_session_ids(&self) -> HashSet<String> {
+        self.remote_ops_sessions
+            .lock()
+            .expect("public MCP registry lock poisoned")
+            .keys()
+            .cloned()
+            .collect()
+    }
 }
 
-fn exposed_session_info(snapshot: TerminalSessionSnapshot) -> Option<PublicMcpSessionInfo> {
+fn exposed_session_info(
+    snapshot: TerminalSessionSnapshot,
+    capabilities: Vec<ResourceCapability>,
+) -> Option<PublicMcpSessionInfo> {
     if !is_exposed(&snapshot) {
         return None;
     }
@@ -224,7 +298,28 @@ fn exposed_session_info(snapshot: TerminalSessionSnapshot) -> Option<PublicMcpSe
         rows: snapshot.rows,
         cols: snapshot.cols,
         connected: true,
+        capabilities,
     })
+}
+
+fn session_capabilities(
+    session_id: &str,
+    terminal_exec_ids: &HashSet<String>,
+    remote_ops_ids: &HashSet<String>,
+) -> Vec<ResourceCapability> {
+    let has_terminal_exec = terminal_exec_ids.contains(session_id);
+    let has_remote_exec = remote_ops_ids.contains(session_id);
+    let mut capabilities = Vec::new();
+    if has_terminal_exec || has_remote_exec {
+        capabilities.push(ResourceCapability::ExecCommand);
+    }
+    if has_terminal_exec {
+        capabilities.push(ResourceCapability::TerminalExec);
+    }
+    if has_remote_exec {
+        capabilities.push(ResourceCapability::RemoteExec);
+    }
+    capabilities
 }
 
 fn ensure_exposed_session(snapshot: &TerminalSessionSnapshot) -> Result<()> {

@@ -1,12 +1,14 @@
 use public_mcp::registry::{
     ConnectionState, PublicMcpRegistry, RemoteOpsSessionHandle, TerminalConnectionKind,
-    TerminalSessionHandle, TerminalSessionSnapshot,
+    TerminalExecSessionHandle, TerminalSessionHandle, TerminalSessionSnapshot,
 };
 use public_mcp::remote_ops::{
     RemoteCommandMode, RemoteExecRequest, RemoteExecResult, RemoteFileWriteRequest,
     RemoteFileWriteResult, SessionDiagnosticsRequest, SessionDiagnosticsResult,
 };
+use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, TerminalExecResult};
 use std::collections::BTreeMap;
+use tool_runtime::ResourceCapability;
 
 #[derive(Clone)]
 struct FakeTerminal {
@@ -28,6 +30,24 @@ impl TerminalSessionHandle for FakeTerminal {
             connection_kind: self.kind,
             connection_state: self.state.clone(),
         }
+    }
+}
+
+impl TerminalExecSessionHandle for FakeTerminal {
+    fn snapshot(&self) -> TerminalSessionSnapshot {
+        <Self as TerminalSessionHandle>::snapshot(self)
+    }
+
+    fn exec_in_terminal(&self, request: TerminalExecRequest) -> anyhow::Result<TerminalExecResult> {
+        Ok(TerminalExecResult {
+            target: request.target,
+            command: request.command,
+            submitted: request.submit,
+            completion: TerminalExecCompletion::SubmittedOnly,
+            exit_code: None,
+            output: String::new(),
+            duration_ms: 0,
+        })
     }
 }
 
@@ -71,6 +91,42 @@ fn unregister_removes_session() {
     assert!(registry.list_sessions().is_empty());
 }
 
+#[test]
+fn list_sessions_reports_registered_execution_capabilities() {
+    let registry = PublicMcpRegistry::default();
+    let terminal = FakeTerminal {
+        id: "ssh-ready".to_string(),
+        kind: TerminalConnectionKind::Ssh,
+        state: ConnectionState::Connected,
+    };
+    registry.register(terminal.clone());
+
+    let sessions = registry.list_sessions();
+    assert_eq!(1, sessions.len());
+    assert!(sessions[0].capabilities.is_empty());
+
+    registry.register_terminal_exec(terminal.clone());
+    registry.register_remote_ops(FakeRemoteOps { terminal });
+
+    let sessions = registry.list_sessions();
+    assert_eq!(1, sessions.len());
+    assert!(
+        sessions[0]
+            .capabilities
+            .contains(&ResourceCapability::TerminalExec)
+    );
+    assert!(
+        sessions[0]
+            .capabilities
+            .contains(&ResourceCapability::RemoteExec)
+    );
+    assert!(
+        sessions[0]
+            .capabilities
+            .contains(&ResourceCapability::ExecCommand)
+    );
+}
+
 #[derive(Clone)]
 struct FakeRemoteOps {
     terminal: FakeTerminal,
@@ -78,7 +134,7 @@ struct FakeRemoteOps {
 
 impl RemoteOpsSessionHandle for FakeRemoteOps {
     fn snapshot(&self) -> TerminalSessionSnapshot {
-        self.terminal.snapshot()
+        TerminalSessionHandle::snapshot(&self.terminal)
     }
 
     fn exec(&self, request: RemoteExecRequest) -> anyhow::Result<RemoteExecResult> {

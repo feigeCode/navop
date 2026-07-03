@@ -8,7 +8,7 @@ pub(crate) mod cell_preview_panel;
 
 use ai_chat_view::{
     AskAiEvent, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent, ResourceId,
-    build_agent_context_all, get_ask_ai_notifier,
+    build_agent_context_all, build_resource_catalog, get_ask_ai_notifier,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -65,8 +65,12 @@ impl DatabaseSidebar {
             .and_then(|id| connections.iter().find(|conn| conn.id == Some(id)))
             .or_else(|| connections.first());
         let (resources, mentions) = build_agent_context_all(active_connection, &connections);
-        let chat_panel =
-            cx.new(|cx| DefaultAgentChatPanel::new_with_context(resources, mentions, window, cx));
+        let catalog = build_resource_catalog(&connections);
+        let chat_panel = cx.new(|cx| {
+            DefaultAgentChatPanel::new_with_context_and_catalog(
+                resources, mentions, catalog, window, cx,
+            )
+        });
 
         let mut subs = Vec::new();
         subs.push(cx.subscribe(
@@ -173,7 +177,12 @@ impl DatabaseSidebar {
             mentions: mentions.clone(),
         });
         self.chat_panel.update(cx, |panel, cx| {
-            panel.set_resource_context(resources.clone(), mentions.clone(), cx);
+            panel.set_resource_context_with_catalog(
+                resources.clone(),
+                mentions.clone(),
+                build_resource_catalog(&self.connections),
+                cx,
+            );
         });
         self.load_table_mentions(load, cx);
         cx.notify();

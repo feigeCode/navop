@@ -158,9 +158,9 @@ async fn approval_context_allows_requested_operations_when_approved() {
     }
     .request_approval(
         PublicMcpOperationKind::ExecuteRemoteCommand,
-        "ssh.remote_exec",
+        "ssh.exec",
         "Execute remote command",
-        json!({ "session_id": "terminal-1" }),
+        json!({ "target": "terminal-1" }),
     )
     .await;
 
@@ -171,7 +171,7 @@ async fn approval_context_allows_requested_operations_when_approved() {
         PublicMcpOperationKind::ExecuteRemoteCommand,
         requests[0].operation
     );
-    assert_eq!("ssh.remote_exec", requests[0].tool_name);
+    assert_eq!("ssh.exec", requests[0].tool_name);
 }
 
 #[tokio::test]
@@ -183,9 +183,9 @@ async fn approval_context_denies_requested_operations_when_denied() {
     }
     .request_approval(
         PublicMcpOperationKind::ExecuteRemoteCommand,
-        "ssh.remote_exec",
+        "ssh.exec",
         "Execute remote command",
-        json!({ "session_id": "terminal-1" }),
+        json!({ "target": "terminal-1" }),
     )
     .await;
 

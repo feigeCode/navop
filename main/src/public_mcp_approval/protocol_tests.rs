@@ -114,9 +114,9 @@ async fn channel_approval_bridges_mcp_remote_exec_until_resolved() {
                 "id": 2,
                 "method": "tools/call",
                 "params": {
-                    "name": "ssh.remote_exec",
+                    "name": "ssh.exec",
                     "arguments": {
-                        "session_id": "ssh-1",
+                        "target": "ssh-1",
                         "command": "pwd"
                     }
                 }
@@ -125,7 +125,7 @@ async fn channel_approval_bridges_mcp_remote_exec_until_resolved() {
     });
 
     let envelope = receiver.recv().await.expect("approval should be queued");
-    assert_eq!("ssh.remote_exec", envelope.request.tool_name);
+    assert_eq!("ssh.exec", envelope.request.tool_name);
     assert_eq!("Call Execute remote command", envelope.request.summary);
     envelope.approve();
 

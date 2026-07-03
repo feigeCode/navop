@@ -11,8 +11,9 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tool_runtime::{
-    ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext, ToolDescriptor, ToolError,
-    ToolHandler, ToolMode, ToolRegistry, ToolResult,
+    ResourceCapability, ResourceKind, RiskLevel, ToolAdapter,
+    ToolAnnotations as RuntimeToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler,
+    ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
 #[derive(Clone)]
@@ -140,6 +141,17 @@ impl ToolHandler for RemoteOpsRuntimeTool {
                 .and_then(call_tool_result_to_runtime_result)
         })
     }
+
+    fn target_spec(&self) -> ToolTargetSpec {
+        match self.spec.id {
+            "ssh.exec" => ToolTargetSpec::required_with_capabilities(
+                vec![ResourceKind::Terminal],
+                vec![ResourceCapability::RemoteExec],
+            ),
+            "ssh.session_diagnostics" => ToolTargetSpec::required(vec![ResourceKind::Terminal]),
+            _ => ToolTargetSpec::none(),
+        }
+    }
 }
 
 impl RemoteOpsRuntimeTool {
@@ -148,10 +160,10 @@ impl RemoteOpsRuntimeTool {
         match self.spec.id {
             "ssh.list_sessions" => self.provider.list_sessions(),
             "ssh.session_diagnostics" => self.provider.session_diagnostics(Some(arguments)),
-            "ssh.remote_command_poll" => self.provider.remote_command_poll(Some(arguments)),
-            "ssh.remote_command_output" => self.provider.remote_command_output(Some(arguments)),
-            "ssh.remote_command_cancel" => self.provider.run_cancel(Some(&arguments)),
-            "ssh.remote_exec" => self.provider.run_remote_exec(Some(&arguments)),
+            "ssh.command.poll" => self.provider.remote_command_poll(Some(arguments)),
+            "ssh.command.output" => self.provider.remote_command_output(Some(arguments)),
+            "ssh.command.cancel" => self.provider.run_cancel(Some(&arguments)),
+            "ssh.exec" => self.provider.run_remote_exec(Some(&arguments)),
             _ => Err(McpError::invalid_params(
                 format!("unknown remote ops tool: {}", self.spec.id),
                 None,
@@ -185,6 +197,8 @@ impl RemoteOpsToolSpec {
                 destructive: true,
                 idempotent: false,
                 open_world: self.open_world,
+                supports_parallel: false,
+                risk: RiskLevel::High,
             }
         }
     }
@@ -205,7 +219,7 @@ fn list_sessions_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
         id: "ssh.list_sessions",
         title: "List terminal sessions",
-        description: "List active SSH terminal sessions that OnetCli can expose to MCP. Use this first to find the session_id for ssh.remote_exec, ssh.session_diagnostics, or background command tools. This does not list saved connection profiles; use connections.list for saved profiles.",
+        description: "List active SSH terminal sessions that OnetCli can expose to MCP. Use this first to find the target for ssh.exec, ssh.session_diagnostics, or background command tools. This does not list saved connection profiles; use connections.list for saved profiles.",
         schema: empty_schema_value,
         read_only: true,
         open_world: false,
@@ -225,9 +239,9 @@ fn session_diagnostics_spec() -> RemoteOpsToolSpec {
 
 fn command_poll_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
-        id: "ssh.remote_command_poll",
+        id: "ssh.command.poll",
         title: "Poll remote command",
-        description: "Check the status of a background SSH command previously started by ssh.remote_exec with mode=\"background\". Returns running/exited/failed state, exit code when available, elapsed duration, and stdout/stderr byte counts.",
+        description: "Check the status of a background SSH command previously started by ssh.exec with mode=\"background\". Returns running/exited/failed state, exit code when available, elapsed duration, and stdout/stderr byte counts.",
         schema: poll_schema_value,
         read_only: true,
         open_world: false,
@@ -236,7 +250,7 @@ fn command_poll_spec() -> RemoteOpsToolSpec {
 
 fn command_output_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
-        id: "ssh.remote_command_output",
+        id: "ssh.command.output",
         title: "Read remote command output",
         description: "Read buffered stdout and stderr from a background SSH command by command_id. Use stdout_offset and stderr_offset from the previous response to page through output without rereading old bytes.",
         schema: output_schema_value,
@@ -247,7 +261,7 @@ fn command_output_spec() -> RemoteOpsToolSpec {
 
 fn command_cancel_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
-        id: "ssh.remote_command_cancel",
+        id: "ssh.command.cancel",
         title: "Cancel remote command",
         description: "Request cancellation of a background SSH command by command_id. Use signal=\"sigint\" for graceful interrupt or signal=\"sigterm\" for termination. This only applies to commands started in background mode.",
         schema: cancel_schema_value,
@@ -258,9 +272,9 @@ fn command_cancel_spec() -> RemoteOpsToolSpec {
 
 fn remote_exec_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
-        id: "ssh.remote_exec",
+        id: "ssh.exec",
         title: "Execute remote command",
-        description: "Run a non-interactive shell command on an active SSH session by session_id. Use for remote command execution, diagnostics, package checks, and shell automation. It returns structured stdout, stderr, exit_code, duration_ms, and timeout state. For remote file read/write, use sftp.read or sftp.write instead of shell commands.",
+        description: "Run a non-interactive shell command on an active SSH target. The command should be the same shell line a user would type in the terminal. It returns structured stdout, stderr, exit_code, duration_ms, and timeout state. For remote file read/write, use sftp.read or sftp.write instead of shell commands.",
         schema: exec_schema_value,
         read_only: false,
         open_world: true,
@@ -319,8 +333,11 @@ fn exec_schema_value() -> Value {
 
 fn exec_schema() -> Arc<JsonObject> {
     let mut props = JsonObject::new();
-    props.insert("session_id".to_string(), string_schema());
+    props.insert("target".to_string(), string_schema());
     props.insert("command".to_string(), string_schema());
+    props.insert("connection".to_string(), string_schema());
+    props.insert("connection_id".to_string(), string_schema());
+    props.insert("session_id".to_string(), string_schema());
     props.insert("cwd".to_string(), json!({ "type": ["string", "null"] }));
     props.insert(
         "env".to_string(),
@@ -340,7 +357,7 @@ fn exec_schema() -> Arc<JsonObject> {
     schema.insert(
         "required".to_string(),
         Value::Array(vec![
-            Value::String("session_id".to_string()),
+            Value::String("target".to_string()),
             Value::String("command".to_string()),
         ]),
     );
@@ -409,7 +426,7 @@ fn string_schema() -> Value {
 fn parse_exec_args(
     arguments: Option<&JsonObject>,
 ) -> Result<(String, RemoteExecRequest), McpError> {
-    let session_id = required_string(arguments, "session_id")?.to_string();
+    let session_id = required_target(arguments)?.to_string();
     let command = required_string(arguments, "command")?.to_string();
     let cwd = optional_string(arguments, "cwd").map(str::to_string);
     let env = optional_string_map(arguments, "env").unwrap_or_default();
@@ -420,15 +437,27 @@ fn parse_exec_args(
         .unwrap_or_default();
 
     Ok((
-        session_id,
+        session_id.clone(),
         RemoteExecRequest {
-            session_id: String::new(),
+            session_id,
             command,
             cwd,
             env,
             timeout_ms,
             mode,
         },
+    ))
+}
+
+fn required_target(arguments: Option<&JsonObject>) -> Result<&str, McpError> {
+    for field in ["target", "connection", "connection_id", "session_id"] {
+        if let Some(value) = optional_string(arguments, field) {
+            return Ok(value);
+        }
+    }
+    Err(McpError::invalid_params(
+        "missing string argument: target",
+        None,
     ))
 }
 

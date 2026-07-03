@@ -1,6 +1,8 @@
 //! 从应用连接数据构建 AgentChatView 的 ResourceContext。
 
-use agent_runtime::{ResourceContext, ResourceId, ResourceKind, ResourceRef, ResourceScope};
+use agent_runtime::{
+    ResourceCapability, ResourceContext, ResourceId, ResourceKind, ResourceRef, ResourceScope,
+};
 use one_core::storage::{ConnectionType, StoredConnection};
 use serde_json::Value;
 
@@ -22,7 +24,21 @@ pub fn build_agent_context_single(
     )
 }
 
-/// 从所有连接构建 ResourceContext，并设置当前连接（用于非侧边栏模式）。
+/// 从连接列表构建可添加到资源池的资源 catalog。
+pub fn build_resource_catalog(connections: &[StoredConnection]) -> Vec<ResourceRef> {
+    connections.iter().map(connection_to_resource_ref).collect()
+}
+
+/// 从单个连接构建侧边栏默认资源池,并附带全部连接 catalog。
+pub fn build_agent_context_single_with_catalog(
+    connection: &StoredConnection,
+    connections: &[StoredConnection],
+) -> (ResourceContext, Vec<MentionItem>, Vec<ResourceRef>) {
+    let (pool, mentions) = build_agent_context_single(connection);
+    (pool, mentions, build_resource_catalog(connections))
+}
+
+/// 从所有连接构建 ResourceContext，并设置默认目标（用于非侧边栏模式）。
 pub fn build_resource_context_all(
     current_connection: Option<&StoredConnection>,
     all_connections: Vec<StoredConnection>,
@@ -47,7 +63,7 @@ pub fn build_resource_context_all(
     ctx
 }
 
-/// 从所有连接构建 Agent 视图所需的资源上下文与 `@` 提及项。
+/// 从所有连接构建 Agent 视图所需的资源池与 `@` 提及项。
 pub fn build_agent_context_all(
     current_connection: Option<&StoredConnection>,
     connections: &[StoredConnection],
@@ -88,10 +104,63 @@ fn connection_to_resource_ref(connection: &StoredConnection) -> ResourceRef {
         kind,
         label,
     );
+    for alias in connection_aliases(connection) {
+        resource = resource.with_alias(alias);
+    }
     for scope in connection_scopes(connection) {
         resource.set_scope(scope);
     }
+    for capability in connection_capabilities(connection) {
+        resource = resource.with_capability(capability);
+    }
     resource
+}
+
+fn connection_capabilities(connection: &StoredConnection) -> Vec<ResourceCapability> {
+    let mut capabilities = vec![
+        ResourceCapability::ManageConnection,
+        ResourceCapability::OpenSession,
+    ];
+    capabilities.extend(match connection.connection_type {
+        ConnectionType::Database => vec![
+            ResourceCapability::DatabaseQuery,
+            ResourceCapability::DatabaseExecute,
+        ],
+        ConnectionType::SshSftp => vec![
+            ResourceCapability::List,
+            ResourceCapability::ReadFile,
+            ResourceCapability::WriteFile,
+        ],
+        ConnectionType::Redis => vec![ResourceCapability::Execute],
+        ConnectionType::MongoDB => vec![ResourceCapability::Query, ResourceCapability::Execute],
+        ConnectionType::Serial => Vec::new(),
+        _ => Vec::new(),
+    });
+    capabilities
+}
+
+fn connection_aliases(connection: &StoredConnection) -> Vec<String> {
+    let mut aliases = Vec::new();
+    if let Some(cloud_id) = connection
+        .cloud_id
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
+        aliases.push(cloud_id.clone());
+    }
+    aliases.extend(params_aliases(&connection.params));
+    aliases
+}
+
+fn params_aliases(params: &str) -> Vec<String> {
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(params) else {
+        return Vec::new();
+    };
+    ["host", "hostname", "path"]
+        .into_iter()
+        .filter_map(|key| string_field(&map, &[key]))
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 fn string_field(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {

@@ -5,12 +5,14 @@
 //! [`AgentTranscript::apply`],再渲染 `messages`。
 
 use agent_runtime::{
-    HistoryItem, Plan, PlanStatus, RuntimeEvent, StepStatus, ToolObservation, ids::ToolCallId,
+    HistoryItem, PendingToolCallSummary, Plan, PlanStatus, ResourceContext, RuntimeEvent,
+    StepStatus, ToolObservation, ids::ToolCallId,
 };
+use std::collections::HashMap;
 
 use crate::agent_cards::{
     PlanCardData, PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD,
-    ToolCardData, ToolConfirmCardData,
+    ToolCardData, ToolConfirmCardData, ToolConfirmItemData,
 };
 use crate::agent_tool_input::build_tool_input_display;
 use crate::code_block::extract_fenced_code_blocks;
@@ -18,6 +20,7 @@ use crate::{ChatMessageUI, MessageVariant, parse_chart_json_block};
 
 /// 观测数据文本入卡片时的最大字符数(渲染时还会再截断展示)。
 const MAX_DATA_CHARS: usize = 2000;
+const MAX_TERMINAL_EXEC_DATA_CHARS: usize = 64_000;
 const DELEGATE_TASK_TOOL: &str = "delegate_task";
 
 /// Agent 对话转录状态。
@@ -33,11 +36,22 @@ pub struct AgentTranscript {
     latest_plan: Option<PlanCardData>,
     /// 当前会话最近的子代理(渲染到输入框上方的子代理面板,不进消息流)。
     active_subagents: Vec<SubAgentCardData>,
+    /// 当前资源池 id -> label 快照,用于工具结果卡片展示目标资源。
+    resource_labels: HashMap<String, String>,
 }
 
 impl AgentTranscript {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 更新当前会话资源池快照,供后续工具 observation 展示目标资源。
+    pub fn set_resource_context(&mut self, resources: &ResourceContext) {
+        self.resource_labels = resources
+            .resources
+            .iter()
+            .map(|resource| (resource.id.as_str().to_string(), resource.label.clone()))
+            .collect();
     }
 
     /// 清空(切换 / 新建会话)。
@@ -185,6 +199,7 @@ impl AgentTranscript {
                 pending_tool_call_id,
                 tool_name,
                 arguments,
+                pending_tool_calls,
                 ..
             } => {
                 let tool_name_text = tool_name
@@ -202,6 +217,7 @@ impl AgentTranscript {
                         .map(ToString::to_string)
                         .unwrap_or_default(),
                     tool_name: tool_name_text,
+                    items: self.confirm_items_display(pending_tool_calls),
                     input_summary: input.summary,
                     input_json: input.json,
                     question: question.clone(),
@@ -334,6 +350,8 @@ impl AgentTranscript {
         let data = ToolCardData {
             call_id: call_id.to_string(),
             tool_name: tool_name.to_string(),
+            target_id: None,
+            target_label: None,
             input_summary: input.summary,
             input_json: input.json,
             running: true,
@@ -348,10 +366,19 @@ impl AgentTranscript {
     fn apply_observation(&mut self, obs: &ToolObservation) {
         let call_id = obs.call_id.to_string();
         let summary = obs.summary.clone();
-        let data_text = truncate_chars(&obs.data.to_text(), MAX_DATA_CHARS);
+        let data_text = truncate_chars(&obs.data.to_text(), max_data_chars_for_tool(obs));
         let success = obs.success;
+        let target_id = obs.resource_id.as_ref().map(|id| id.as_str().to_string());
+        let target_label = target_id.as_ref().map(|id| {
+            self.resource_labels
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| id.clone())
+        });
 
         if let Some(mut data) = self.find_tool_card(&call_id) {
+            data.target_id = target_id;
+            data.target_label = target_label;
             data.summary = summary;
             data.data_text = data_text;
             data.success = Some(success);
@@ -361,6 +388,8 @@ impl AgentTranscript {
             let data = ToolCardData {
                 call_id,
                 tool_name: obs.tool_name.to_string(),
+                target_id,
+                target_label,
                 input_summary: String::new(),
                 input_json: String::new(),
                 running: false,
@@ -408,6 +437,24 @@ impl AgentTranscript {
                 json: data.input_json,
             })
             .unwrap_or_default()
+    }
+
+    fn confirm_items_display(
+        &self,
+        pending_tool_calls: &[PendingToolCallSummary],
+    ) -> Vec<ToolConfirmItemData> {
+        pending_tool_calls
+            .iter()
+            .map(|call| {
+                let input = build_tool_input_display(call.tool_name.as_str(), &call.arguments);
+                ToolConfirmItemData {
+                    call_id: call.call_id.to_string(),
+                    tool_name: call.tool_name.to_string(),
+                    input_summary: input.summary,
+                    input_json: input.json,
+                }
+            })
+            .collect()
     }
 
     /// 按 call_id 查找工具卡片数据。
@@ -568,6 +615,18 @@ fn history_subagent_summary(obs: &ToolObservation) -> String {
     }
 }
 
+fn max_data_chars_for_tool(obs: &ToolObservation) -> usize {
+    if is_terminal_exec_tool(obs.tool_name.as_str()) {
+        MAX_TERMINAL_EXEC_DATA_CHARS
+    } else {
+        MAX_DATA_CHARS
+    }
+}
+
+fn is_terminal_exec_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "terminal_exec" | "terminal.exec")
+}
+
 fn plan_to_card(plan: &Plan) -> PlanCardData {
     PlanCardData {
         goal: plan.goal.clone(),
@@ -645,7 +704,10 @@ mod tests {
     use super::*;
     use agent_runtime::ids::{SubAgentId, ToolCallId, TurnId};
     use agent_runtime::tools::{ObservationData, ToolCall, ToolName};
-    use agent_runtime::{PlanSource, PlanStep, SessionId};
+    use agent_runtime::{
+        PendingToolCallSummary, PlanSource, PlanStep, ResourceContext, ResourceId, ResourceKind,
+        ResourceRef, SessionId,
+    };
 
     fn sid() -> SessionId {
         SessionId::from_string("s1")
@@ -885,6 +947,101 @@ mod tests {
     }
 
     #[test]
+    fn terminal_exec_observation_keeps_long_output_for_card_display() {
+        let mut tr = AgentTranscript::new();
+        let call = ToolCallId::from_string("call_terminal");
+        tr.apply(&RuntimeEvent::ToolCallStarted {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call.clone(),
+            tool_name: ToolName::new("terminal_exec"),
+            arguments: serde_json::json!({"command": "systemctl list-units"}),
+        });
+        let output = "x".repeat(MAX_DATA_CHARS + 100);
+        let obs = ToolObservation::success(
+            call,
+            ToolName::new("terminal_exec"),
+            "ok",
+            ObservationData::Json(serde_json::json!({ "output": output })),
+        );
+
+        tr.apply(&RuntimeEvent::ObservationAdded {
+            session_id: sid(),
+            turn_id: tid(),
+            observation: obs,
+        });
+
+        let data = ToolCardData::from_json(&tr.messages[0].content).unwrap();
+        assert!(
+            data.data_text.len() > MAX_DATA_CHARS,
+            "terminal output should not be truncated at the generic card limit"
+        );
+    }
+
+    #[test]
+    fn non_terminal_observation_still_uses_generic_card_limit() {
+        let mut tr = AgentTranscript::new();
+        let call = ToolCallId::from_string("call_echo");
+        tr.apply(&RuntimeEvent::ToolCallStarted {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call.clone(),
+            tool_name: ToolName::new("echo"),
+            arguments: serde_json::json!({"text": "hi"}),
+        });
+        let obs = ToolObservation::success(
+            call,
+            ToolName::new("echo"),
+            "ok",
+            ObservationData::Text("x".repeat(MAX_DATA_CHARS + 100)),
+        );
+
+        tr.apply(&RuntimeEvent::ObservationAdded {
+            session_id: sid(),
+            turn_id: tid(),
+            observation: obs,
+        });
+
+        let data = ToolCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!(MAX_DATA_CHARS, data.data_text.len());
+    }
+
+    #[test]
+    fn tool_observation_records_target_resource_label_on_card() {
+        let mut tr = AgentTranscript::new();
+        tr.set_resource_context(
+            &ResourceContext::new()
+                .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"))
+                .with_resource(ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b")),
+        );
+        let call = ToolCallId::from_string("call_target");
+        tr.apply(&RuntimeEvent::ToolCallStarted {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call.clone(),
+            tool_name: ToolName::new("ssh.exec"),
+            arguments: serde_json::json!({"command": "df -h"}),
+        });
+        let obs = ToolObservation::success(
+            call,
+            ToolName::new("ssh.exec"),
+            "ok",
+            ObservationData::Text("disk ok".into()),
+        )
+        .with_resource(Some(ResourceId::new("ssh-b")));
+
+        tr.apply(&RuntimeEvent::ObservationAdded {
+            session_id: sid(),
+            turn_id: tid(),
+            observation: obs,
+        });
+
+        let data = ToolCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!(data.target_id.as_deref(), Some("ssh-b"));
+        assert_eq!(data.target_label.as_deref(), Some("prod-b"));
+    }
+
+    #[test]
     fn need_user_input_renders_as_tool_confirm_card() {
         let mut tr = AgentTranscript::new();
 
@@ -895,6 +1052,7 @@ mod tests {
             pending_tool_call_id: Some(ToolCallId::from_string("call_confirm")),
             tool_name: Some(ToolName::new("db_schema")),
             arguments: Some(serde_json::json!({"sql": "show tables"})),
+            pending_tool_calls: Vec::new(),
         });
 
         assert_eq!(1, tr.messages.len());
@@ -906,6 +1064,41 @@ mod tests {
         assert!(data.input_json.contains("\"sql\": \"show tables\""));
         assert_eq!(data.question, "确认执行工具 `db_schema` 吗?");
         assert_eq!(data.status, "pending");
+    }
+
+    #[test]
+    fn need_user_input_renders_batch_tool_confirm_items() {
+        let mut tr = AgentTranscript::new();
+
+        tr.apply(&RuntimeEvent::NeedUserInput {
+            session_id: sid(),
+            turn_id: tid(),
+            question: "确认执行 2 个工具吗?".into(),
+            pending_tool_call_id: Some(ToolCallId::from_string("call_a")),
+            tool_name: Some(ToolName::new("ssh.exec")),
+            arguments: Some(serde_json::json!({"command": "rm -rf /tmp/a"})),
+            pending_tool_calls: vec![
+                PendingToolCallSummary {
+                    call_id: ToolCallId::from_string("call_a"),
+                    tool_name: ToolName::new("ssh.exec"),
+                    arguments: serde_json::json!({"command": "rm -rf /tmp/a"}),
+                },
+                PendingToolCallSummary {
+                    call_id: ToolCallId::from_string("call_b"),
+                    tool_name: ToolName::new("ssh.exec"),
+                    arguments: serde_json::json!({"command": "rm -rf /tmp/b"}),
+                },
+            ],
+        });
+
+        let data = ToolConfirmCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!("call_a", data.call_id);
+        assert_eq!(2, data.items.len());
+        assert_eq!("call_a", data.items[0].call_id);
+        assert_eq!("ssh_exec", data.items[0].tool_name);
+        assert_eq!("rm -rf /tmp/a", data.items[0].input_summary);
+        assert_eq!("call_b", data.items[1].call_id);
+        assert_eq!("rm -rf /tmp/b", data.items[1].input_summary);
     }
 
     #[test]
@@ -927,6 +1120,7 @@ mod tests {
             pending_tool_call_id: Some(call_id),
             tool_name: Some(ToolName::new("db_query")),
             arguments: None,
+            pending_tool_calls: Vec::new(),
         });
 
         assert_eq!(2, tr.messages.len());
@@ -951,6 +1145,7 @@ mod tests {
             pending_tool_call_id: Some(call_id.clone()),
             tool_name: Some(ToolName::new("db_schema")),
             arguments: Some(serde_json::json!({"sql": "show tables"})),
+            pending_tool_calls: Vec::new(),
         });
         tr.apply(&RuntimeEvent::ToolApprovalResolved {
             session_id: sid(),

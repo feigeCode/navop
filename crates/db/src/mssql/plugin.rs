@@ -2358,6 +2358,10 @@ impl DatabasePlugin for MsSqlPlugin {
             definitions.push(format!("  PRIMARY KEY ({})", pk_cols.join(", ")));
         }
 
+        for foreign_key in &design.foreign_keys {
+            definitions.push(format!("  {}", self.build_foreign_key_def(foreign_key)));
+        }
+
         sql.push_str(&definitions.join(",\n"));
         sql.push_str("\n);");
 
@@ -2412,6 +2416,24 @@ impl DatabasePlugin for MsSqlPlugin {
             .collect();
         let new_cols: HashMap<&str, &ColumnDefinition> =
             new.columns.iter().map(|c| (c.name.as_str(), c)).collect();
+        let original_foreign_keys: HashMap<&str, &ForeignKeyDefinition> = original
+            .foreign_keys
+            .iter()
+            .map(|foreign_key| (foreign_key.name.as_str(), foreign_key))
+            .collect();
+        let new_foreign_keys: HashMap<&str, &ForeignKeyDefinition> = new
+            .foreign_keys
+            .iter()
+            .map(|foreign_key| (foreign_key.name.as_str(), foreign_key))
+            .collect();
+
+        for (name, original_foreign_key) in &original_foreign_keys {
+            match new_foreign_keys.get(name) {
+                Some(new_foreign_key)
+                    if !self.foreign_key_changed(original_foreign_key, new_foreign_key) => {}
+                _ => statements.push(self.build_drop_foreign_key_sql(&new.table_name, name)),
+            }
+        }
 
         for name in original_cols.keys() {
             if !new_cols.contains_key(name) {
@@ -2494,6 +2516,15 @@ impl DatabasePlugin for MsSqlPlugin {
             }
         }
 
+        for (name, new_foreign_key) in &new_foreign_keys {
+            match original_foreign_keys.get(name) {
+                Some(original_foreign_key)
+                    if !self.foreign_key_changed(original_foreign_key, new_foreign_key) => {}
+                _ => statements
+                    .push(self.build_add_foreign_key_sql(&new.table_name, new_foreign_key)),
+            }
+        }
+
         if statements.is_empty() {
             "-- No changes detected".to_string()
         } else {
@@ -2536,7 +2567,9 @@ mod tests {
     use super::*;
     use crate::plugin::DatabasePlugin;
     use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
-    use crate::types::{ColumnDefinition, IndexDefinition, TableDesign, TableOptions};
+    use crate::types::{
+        ColumnDefinition, ForeignKeyDefinition, IndexDefinition, TableDesign, TableOptions,
+    };
     use std::collections::HashMap;
 
     fn create_plugin() -> MsSqlPlugin {
@@ -2856,6 +2889,37 @@ mod tests {
         assert!(sql.contains("UNIQUE INDEX [idx_email]"));
     }
 
+    #[test]
+    fn test_build_create_table_sql_with_foreign_keys() {
+        let plugin = create_plugin();
+        let design = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "order_items".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id").data_type("INT").nullable(false),
+                ColumnDefinition::new("order_id")
+                    .data_type("INT")
+                    .nullable(false),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_order_items_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: "CASCADE".to_string(),
+                on_update: "NO ACTION".to_string(),
+            }],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_create_table_sql(&design);
+
+        assert!(sql.contains(
+            "CONSTRAINT [fk_order_items_order] FOREIGN KEY ([order_id]) REFERENCES [orders] ([id]) ON DELETE CASCADE ON UPDATE NO ACTION"
+        ));
+    }
+
     // ==================== ALTER TABLE Tests ====================
 
     #[test]
@@ -2999,6 +3063,60 @@ mod tests {
         assert!(sql.contains("CREATE UNIQUE INDEX"));
         assert!(sql.contains("[idx_name]"));
         assert!(sql.contains("[name]"));
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_add_and_drop_foreign_keys() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "order_items".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id").data_type("INT"),
+                ColumnDefinition::new("order_id").data_type("INT"),
+                ColumnDefinition::new("legacy_order_id").data_type("INT"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_order_items_legacy".to_string(),
+                columns: vec!["legacy_order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: String::new(),
+                on_update: String::new(),
+            }],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "order_items".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id").data_type("INT"),
+                ColumnDefinition::new("order_id").data_type("INT"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_order_items_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: "CASCADE".to_string(),
+                on_update: "NO ACTION".to_string(),
+            }],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+
+        assert!(sql.contains("ALTER TABLE [order_items] DROP CONSTRAINT [fk_order_items_legacy];"));
+        assert!(
+            sql.find("DROP CONSTRAINT [fk_order_items_legacy]").unwrap()
+                < sql.find("DROP COLUMN [legacy_order_id]").unwrap()
+        );
+        assert!(sql.contains(
+            "ALTER TABLE [order_items] ADD CONSTRAINT [fk_order_items_order] FOREIGN KEY ([order_id]) REFERENCES [orders] ([id]) ON DELETE CASCADE ON UPDATE NO ACTION;"
+        ));
     }
 
     // ==================== Completion Info Tests ====================
