@@ -186,10 +186,13 @@ CLI 工具：
 
 - `tools/list` 会把 provider-specific target 字段改写成 `target`。
 - `tools/call` 会拒绝 `connection` / `connection_id` / `session_id`。
+- 如果 `ToolRuntimeMcpProvider` 配置了 `ResourcePool`，`target` 会先按资源
+  `id` / `label` / `alias` 解析为资源 id；歧义 target 会失败。
 - 当底层 runtime handler 还没迁移为 target-native 时，adapter 在内部把
   `target` 映射回 handler 需要的 provider 字段。
-- 当前 Public MCP 还没有完整 `ResourcePool`，所以 `target` 值会直接传给
-  provider 字段；后续再补 id / label / alias 解析。
+- 当前真实 App registry 还没有把完整 `ResourcePool` 接入
+  `ToolRuntimeMcpProvider`；未配置 pool 的 provider 仍会把显式 `target` 值直接
+  传给 provider 字段，后续需要接入真实资源池快照。
 
 ## 3. Agent Runtime 工具集
 
@@ -339,6 +342,8 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
   provider 字段；如果模型直接传 provider 字段，Agent adapter 会拒绝。
 - runtime-backed Public MCP 工具 schema 同样暴露 `target`，MCP client 直接传
   provider 字段也会被拒绝。
+- runtime-backed Public MCP provider 支持可选 `ResourcePool`，配置后按资源
+  id / label / alias 解析 target。
 
 关键类型：
 
@@ -364,6 +369,7 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 - Agent prompt 的资源段使用“资源池 / 默认目标”语义，并要求工具调用使用
   `target` 参数。
 - runtime-backed Public MCP tools 使用 `target` 参数，并拒绝旧 provider 字段。
+- `ToolRuntimeMcpProvider` 支持 provider-level `ResourcePool` target 解析。
 - `db.tables`、`db.describe_table`、`db.sample_rows` 已作为 canonical DB metadata
   工具补齐，并通过 Agent bridge 暴露为 `db_tables`、`db_describe_table`、
   `db_sample_rows`。
@@ -371,6 +377,8 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 
 暂未做：
 
+- 真实 Public MCP app registry 还没有把资源池快照传给
+  `ToolRuntimeMcpProvider`。
 - 底层 runtime handler、CLI 和部分非 runtime-backed Public MCP provider 仍使用 `connection`、
   `connection_id` 或 `session_id`，后续需要继续收敛到 runtime-core target
   resolution。

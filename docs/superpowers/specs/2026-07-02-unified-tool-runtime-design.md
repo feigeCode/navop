@@ -89,6 +89,7 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 4b Public MCP Redis canonical command tool | Done | `6c99c8e feat(public_mcp): canonicalize redis command tool` made Public MCP Redis `tools/list` expose `redis.command`. It initially accepted `redis.execute_command`; that alias was later removed by Phase 3i. `public_mcp` Redis tests, main registry Redis test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep Public MCP Redis surface canonical-only. |
 | Phase 4c Public MCP Redis convenience tools | Done | `6d5fc34 feat(public_mcp): add redis convenience tools` exposes `redis.keys`, `redis.get`, and `redis.set` through Public MCP and the real app registry path. `redis.keys/get` are read-only and `redis.set` is mutating and approval-gated. The old `redis.execute_command` alias was later removed by Phase 3i. Red/green Public MCP convenience tests, `cargo test -p public_mcp`, main Redis registry test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep Public MCP Redis surface canonical-only. |
 | Phase 4d Public MCP target adapter | Done | `3a558e6 feat(public_mcp): expose runtime targets through target` makes runtime-backed MCP tools expose `target` instead of provider fields such as `connection`, `connection_id`, and `session_id`; rejects those provider fields at the MCP adapter boundary; and maps `target` back to the current handler field only as an internal migration adapter. `cargo test -p public_mcp --test tool_runtime_target_adapter`, `tool_runtime_adapter`, `redis_tools`, `redis_convenience_tools`, `remote_ops`, `internal_functions`, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Add MCP resource-pool id/label/alias resolution and continue moving CLI/runtime-core invocation paths toward first-class `target`. |
+| Phase 4e Public MCP resource-pool target resolution | Done | `f1f92f7 feat(public_mcp): resolve runtime targets from resource pool` adds an optional `ResourcePool` snapshot to `ToolRuntimeMcpProvider`, resolves MCP `target` by resource id / label / alias before mapping to the handler field, and rejects ambiguous resource targets. `cargo test -p public_mcp --test tool_runtime_target_adapter`, `tool_runtime_adapter`, `redis_tools`, `redis_convenience_tools`, `remote_ops`, `internal_functions`, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Wire real Public MCP app registries with resource pools; current providers without a pool still pass explicit `target` values through unchanged. |
 | Phase 4 Public MCP runtime permission policy | Done | `PermissionMode` now maps to `tool_runtime::PermissionPolicy` for runtime-backed MCP tools. `Allow` maps to Auto, so high-risk/destructive/open-world tools such as `ssh.exec`, `terminal.exec`, and generic Redis command execution still require approval. Public MCP and app runtime tests passed on 2026-07-02. | Migrate settings/UI terminology from MCP permission mode to unified permission profile. |
 | Phase 4 Public MCP settings profile wording | Done | `McpPermissionMode` keeps old persisted values but exposes profile ids `safe/confirm/auto`; Public MCP runtime config carries `permission_profile`; settings UI labels now show Safe / Confirm / Auto. Core settings and app runtime tests passed on 2026-07-02. | Later storage migration can replace `permission_mode` only when a broader settings migration is planned. |
 | Phase 5a Resource Pool UI wording/filtering | Done | `6010dad7 feat(ai_chat): add resource pool display model`, `e8985154 feat(ai_chat): rename context selector to resource pool`, `d7b82ab0 feat(ai_chat): filter resource pool by type`, `84d8fe65 test(ai_chat): document resource pool default target semantics`, `ad195aab docs: track resource pool ui checkpoint` | Keep wording and default-target semantics while wiring broader catalogs. |
@@ -115,7 +116,7 @@ Purpose:
 Last completed checkpoint:
 
 ```text
-3a558e6 feat(public_mcp): expose runtime targets through target
+f1f92f7 feat(public_mcp): resolve runtime targets from resource pool
 ```
 
 Last checkpoint verification run:
@@ -168,7 +169,12 @@ Current product decision:
    fields. The MCP adapter rejects provider fields from clients and maps `target`
    back to the provider field only inside the adapter while handlers are still being
    migrated.
-12. Agent-facing prompts should expose canonical ids only after the relevant adapter can
+12. `ToolRuntimeMcpProvider` can carry a `ResourcePool` snapshot. When present, MCP
+   `target` is resolved by resource id, label, or alias before being passed to the
+   current runtime handler field. Ambiguous targets are rejected. When no pool is
+   configured, explicit `target` values still pass through unchanged until the real
+   app registry can provide a pool.
+13. Agent-facing prompts should expose canonical ids only after the relevant adapter can
    route them safely.
 
 Next recommended checkpoints:
@@ -176,8 +182,8 @@ Next recommended checkpoints:
 1. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
    through `terminal.exec`.
 2. Run manual resource-pool smoke for source presets.
-3. Add MCP resource-pool id/label/alias target resolution; current MCP target mapping
-   passes the provided target value directly to provider handlers.
+3. Wire real Public MCP app registries with `ResourcePool` snapshots so external MCP
+   clients can target by resource id / label / alias against the actual app resource set.
 4. Continue moving CLI and runtime-core invocation paths toward first-class `target`
    resolution rather than provider-specific fields.
 
