@@ -1,6 +1,6 @@
 use tool_runtime::{
     ResourceCapability, ResourceId, ResourceKind, ResourcePool, ResourceRef, ResourceScope,
-    TargetResolutionError,
+    TargetResolutionError, ToolTargetSpec,
 };
 
 #[test]
@@ -94,6 +94,66 @@ fn kind_target_can_resolve_through_linked_saved_connection() {
         .expect("prompt-like target should resolve through saved SSH connection");
 
     assert_eq!(ResourceId::new("ssh-terminal-prod-a"), target.id);
+}
+
+#[test]
+fn target_spec_filters_linked_targets_by_required_capability() {
+    let pool = ResourcePool::new()
+        .with_resource(
+            ResourceRef::new("21", ResourceKind::Ssh, "prod-a")
+                .with_alias("10.2.4.54")
+                .with_alias("zn-54"),
+        )
+        .with_resource(
+            ResourceRef::new("terminal-input", ResourceKind::Terminal, "prod-a")
+                .with_alias("21")
+                .with_capability(ResourceCapability::TerminalExec),
+        )
+        .with_resource(
+            ResourceRef::new("terminal-remote", ResourceKind::Terminal, "prod-a")
+                .with_alias("21")
+                .with_capability(ResourceCapability::RemoteExec),
+        );
+
+    let target = pool
+        .resolve_target_for_spec(
+            "root@zn-54:~",
+            &ToolTargetSpec::required_with_capabilities(
+                vec![ResourceKind::Terminal],
+                vec![ResourceCapability::TerminalExec],
+            ),
+        )
+        .expect("terminal.exec target should resolve to terminal exec capable resource");
+
+    assert_eq!(ResourceId::new("terminal-input"), target.id);
+}
+
+#[test]
+fn target_spec_reports_matched_target_without_required_capability() {
+    let pool = ResourcePool::new()
+        .with_resource(
+            ResourceRef::new("21", ResourceKind::Ssh, "prod-a")
+                .with_alias("10.2.4.54")
+                .with_alias("zn-54"),
+        )
+        .with_resource(
+            ResourceRef::new("terminal-visible", ResourceKind::Terminal, "prod-a").with_alias("21"),
+        );
+
+    let error = pool
+        .resolve_target_for_spec(
+            "root@zn-54:~",
+            &ToolTargetSpec::required_with_capabilities(
+                vec![ResourceKind::Terminal],
+                vec![ResourceCapability::TerminalExec],
+            ),
+        )
+        .expect_err("visible terminal without terminal exec capability should be rejected");
+
+    assert!(matches!(
+        error,
+        TargetResolutionError::TargetLacksCapabilities { .. }
+    ));
 }
 
 #[test]

@@ -7,7 +7,7 @@ use serde_json::json;
 use std::fs;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tool_runtime::{ToolAdapter, ToolContext};
+use tool_runtime::{ResourceCapability, ToolAdapter, ToolContext};
 
 #[test]
 fn sftp_registry_exposes_file_transfer_tools() {
@@ -67,6 +67,30 @@ fn sftp_registry_exposes_file_transfer_tools() {
         .expect("stat tool should be registered");
     assert_eq!(json!(["connection", "path"]), stat.input_schema["required"]);
     assert!(stat.description.contains("exists"));
+}
+
+#[test]
+fn sftp_tools_target_ssh_sftp_resources_by_capability() {
+    let registry = sftp_tool_registry(repo());
+
+    for (tool_id, capability) in [
+        ("sftp.list", ResourceCapability::List),
+        ("sftp.read", ResourceCapability::ReadFile),
+        ("sftp.write", ResourceCapability::WriteFile),
+        ("sftp.stat", ResourceCapability::ReadFile),
+        ("sftp.upload", ResourceCapability::WriteFile),
+        ("sftp.download", ResourceCapability::ReadFile),
+    ] {
+        let tool = registry
+            .get_runtime(tool_id, ToolAdapter::FunctionCalling)
+            .expect("sftp tool should be registered");
+        assert!(tool.target.required, "{tool_id} should require target");
+        assert_eq!(
+            vec![capability],
+            tool.target.required_capabilities,
+            "{tool_id} should target resources with the expected file capability"
+        );
+    }
 }
 
 #[test]

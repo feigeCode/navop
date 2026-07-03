@@ -3,8 +3,8 @@ use crate::terminal_exec::{TerminalExecRequest, TerminalExecResult};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    ResourceKind, RiskLevel, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError,
-    ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
+    ResourceCapability, ResourceKind, RiskLevel, ToolAdapter, ToolAnnotations, ToolContext,
+    ToolDescriptor, ToolError, ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
 #[derive(Clone)]
@@ -58,7 +58,10 @@ impl ToolHandler for TerminalExecRuntime {
     }
 
     fn target_spec(&self) -> ToolTargetSpec {
-        ToolTargetSpec::required(vec![ResourceKind::Terminal])
+        ToolTargetSpec::required_with_capabilities(
+            vec![ResourceKind::Terminal],
+            vec![ResourceCapability::TerminalExec],
+        )
     }
 
     fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {

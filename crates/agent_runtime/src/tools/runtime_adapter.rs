@@ -274,7 +274,7 @@ fn resolve_named_target(
         return Ok(Some(ResourceId::new(target)));
     }
     let pool = resources.to_runtime_resource_pool();
-    pool.resolve_target_for_kinds(target, &target_spec.supported_kinds)
+    pool.resolve_target_for_spec(target, target_spec)
         .map(|resource| Some(ResourceId::new(resource.id.as_str())))
         .map_err(|error| ToolError::InvalidArguments(error.to_string()))
 }

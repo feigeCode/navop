@@ -7,7 +7,7 @@ use one_core::storage::{ConnectionRepository, DatabaseType};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tool_runtime::{ToolAdapter, ToolContext};
+use tool_runtime::{ResourceCapability, ToolAdapter, ToolContext};
 
 mod create_extended;
 mod management;
@@ -86,6 +86,32 @@ fn open_session_is_exposed_to_mcp_function_calling_and_cli() {
         assert_eq!(json!(["connection"]), tool.input_schema["required"]);
         assert!(!tool.annotations.read_only);
     }
+}
+
+#[test]
+fn connection_reference_tools_target_saved_connection_resources() {
+    let registry = connection_tool_registry(repo());
+
+    for tool_id in ["connections.show", "connections.test"] {
+        let tool = registry
+            .get_runtime(tool_id, ToolAdapter::FunctionCalling)
+            .expect("connection reference tool should be registered");
+        assert!(tool.target.required, "{tool_id} should require target");
+        assert_eq!(
+            vec![ResourceCapability::ManageConnection],
+            tool.target.required_capabilities,
+            "{tool_id} should target saved connection resources"
+        );
+    }
+
+    let open_session = registry
+        .get_runtime("connections.open_session", ToolAdapter::FunctionCalling)
+        .expect("connections.open_session should be registered");
+    assert!(open_session.target.required);
+    assert_eq!(
+        vec![ResourceCapability::OpenSession],
+        open_session.target.required_capabilities
+    );
 }
 
 #[test]

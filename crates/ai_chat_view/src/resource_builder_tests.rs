@@ -1,4 +1,4 @@
-use agent_runtime::{ResourceKind, ResourceScope};
+use agent_runtime::{ResourceCapability, ResourceKind, ResourceScope};
 use one_core::storage::{ConnectionType, StoredConnection};
 
 use crate::{
@@ -47,6 +47,75 @@ fn single_connection_builds_context_with_one_resource() {
     assert_eq!(ctx.resources.len(), 1);
     assert_eq!(ctx.resources[0].label, "test-db");
     assert_eq!(ctx.resources[0].kind, ResourceKind::Postgres);
+}
+
+#[test]
+fn database_connection_resource_has_database_capabilities() {
+    let conn = stored_connection(
+        42,
+        "test-db",
+        ConnectionType::Database,
+        r#"{"type":"postgres"}"#,
+    );
+
+    let ctx = build_resource_context_single(&conn);
+
+    assert!(
+        ctx.resources[0]
+            .capabilities
+            .contains(&ResourceCapability::DatabaseQuery)
+    );
+    assert!(
+        ctx.resources[0]
+            .capabilities
+            .contains(&ResourceCapability::DatabaseExecute)
+    );
+}
+
+#[test]
+fn saved_connection_resource_has_management_and_open_session_capabilities() {
+    let conn = stored_connection(
+        42,
+        "test-db",
+        ConnectionType::Database,
+        r#"{"type":"postgres"}"#,
+    );
+
+    let ctx = build_resource_context_single(&conn);
+
+    assert!(
+        ctx.resources[0]
+            .capabilities
+            .contains(&ResourceCapability::ManageConnection)
+    );
+    assert!(
+        ctx.resources[0]
+            .capabilities
+            .contains(&ResourceCapability::OpenSession)
+    );
+}
+
+#[test]
+fn ssh_sftp_connection_resource_has_file_capabilities() {
+    let conn = stored_connection(42, "prod-a", ConnectionType::SshSftp, "{}");
+
+    let ctx = build_resource_context_single(&conn);
+
+    assert!(
+        ctx.resources[0]
+            .capabilities
+            .contains(&ResourceCapability::ReadFile)
+    );
+    assert!(
+        ctx.resources[0]
+            .capabilities
+            .contains(&ResourceCapability::WriteFile)
+    );
+    assert!(
+        ctx.resources[0]
+            .capabilities
+            .contains(&ResourceCapability::List)
+    );
 }
 
 #[test]

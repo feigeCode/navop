@@ -8,6 +8,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+pub type ResourceCapability = tool_runtime::ResourceCapability;
+
 /// 资源的唯一标识(通常对应 onetcli 中的 connection_id)。
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ResourceId(String);
@@ -107,6 +109,9 @@ pub struct ResourceRef {
     /// 资源下的当前细分作用域,如 database/schema/cwd。
     #[serde(default)]
     pub scopes: Vec<ResourceScope>,
+    /// 资源能力,用于 runtime target 解析时避免同名/同 host 的不同资源互相匹配。
+    #[serde(default)]
+    pub capabilities: Vec<ResourceCapability>,
 }
 
 impl ResourceRef {
@@ -117,6 +122,7 @@ impl ResourceRef {
             label: label.into(),
             aliases: Vec::new(),
             scopes: Vec::new(),
+            capabilities: Vec::new(),
         }
     }
 
@@ -130,6 +136,13 @@ impl ResourceRef {
 
     pub fn with_scope(mut self, scope: ResourceScope) -> Self {
         self.set_scope(scope);
+        self
+    }
+
+    pub fn with_capability(mut self, capability: ResourceCapability) -> Self {
+        if !self.capabilities.contains(&capability) {
+            self.capabilities.push(capability);
+        }
         self
     }
 
@@ -156,6 +169,9 @@ impl ResourceRef {
                 scope.label.clone(),
                 scope.value.clone(),
             ));
+        }
+        for capability in &self.capabilities {
+            resource = resource.with_capability(capability.clone());
         }
         resource
     }
@@ -311,5 +327,22 @@ mod tests {
 
         assert_eq!("prod-a", pool.resolve_target("10.2.4.54").unwrap().label);
         assert!(ctx.describe().contains("aliases=10.2.4.54"));
+    }
+
+    #[test]
+    fn runtime_resource_pool_includes_capabilities() {
+        let ctx = ResourceContext::new().with_resource(
+            ResourceRef::new("c1", ResourceKind::Mysql, "prod-db")
+                .with_capability(tool_runtime::ResourceCapability::DatabaseQuery),
+        );
+
+        let pool = ctx.to_runtime_resource_pool();
+        let resource = pool.resolve_target("prod-db").unwrap();
+
+        assert!(
+            resource
+                .capabilities
+                .contains(&tool_runtime::ResourceCapability::DatabaseQuery)
+        );
     }
 }

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{ResourceKind, ToolId};
+use crate::{ResourceCapability, ResourceKind, ToolId};
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -111,6 +111,8 @@ impl ToolAlias {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ToolTargetSpec {
     pub supported_kinds: Vec<ResourceKind>,
+    #[serde(default)]
+    pub required_capabilities: Vec<ResourceCapability>,
     pub required: bool,
 }
 
@@ -122,6 +124,18 @@ impl ToolTargetSpec {
     pub fn required(supported_kinds: Vec<ResourceKind>) -> Self {
         Self {
             supported_kinds,
+            required_capabilities: Vec::new(),
+            required: true,
+        }
+    }
+
+    pub fn required_with_capabilities(
+        supported_kinds: Vec<ResourceKind>,
+        required_capabilities: Vec<ResourceCapability>,
+    ) -> Self {
+        Self {
+            supported_kinds,
+            required_capabilities,
             required: true,
         }
     }

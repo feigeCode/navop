@@ -7,8 +7,8 @@ use one_core::storage::{ConnectionRepository, ConnectionType, RedisMode, RedisPa
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    RiskLevel, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler,
-    ToolMode, ToolRegistry, ToolResult,
+    ResourceKind, RiskLevel, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError,
+    ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
 use command_io::run_command;
@@ -169,6 +169,10 @@ impl ToolHandler for RedisToolHandler {
     fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
         let handler = self.clone();
         Box::pin(async move { handler.execute(input).await })
+    }
+
+    fn target_spec(&self) -> ToolTargetSpec {
+        ToolTargetSpec::required(vec![ResourceKind::Redis])
     }
 }
 

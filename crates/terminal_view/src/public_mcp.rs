@@ -4,6 +4,7 @@ use public_mcp::registry::{
     TerminalExecSessionHandle, TerminalSessionHandle, TerminalSessionSnapshot,
 };
 use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, TerminalExecResult};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use terminal::TerminalInputHandle;
 use terminal::terminal::{ConnectionState, Terminal, TerminalConnectionKind};
@@ -27,6 +28,9 @@ pub fn registry(cx: &App) -> Option<PublicMcpRegistry> {
 pub struct TerminalPublicMcpRegistration {
     session_id: String,
     state: Arc<Mutex<TerminalSessionSnapshot>>,
+    registry: PublicMcpRegistry,
+    input: Arc<Mutex<Option<TerminalInputHandle>>>,
+    terminal_exec_registered: AtomicBool,
 }
 
 impl TerminalPublicMcpRegistration {
@@ -35,8 +39,37 @@ impl TerminalPublicMcpRegistration {
     }
 
     pub fn refresh(&self, terminal: &Terminal) {
+        self.refresh_parts(
+            snapshot_for_terminal(self.session_id.clone(), terminal),
+            terminal.external_input_handle(),
+        );
+    }
+
+    fn refresh_parts(&self, snapshot: TerminalSessionSnapshot, input: Option<TerminalInputHandle>) {
+        {
+            let mut input_slot = self.input.lock().expect("public MCP input lock poisoned");
+            *input_slot = input;
+        }
         let mut state = self.state.lock().expect("public MCP state lock poisoned");
-        *state = snapshot_for_terminal(self.session_id.clone(), terminal);
+        *state = snapshot;
+        drop(state);
+        self.ensure_terminal_exec_registered();
+    }
+
+    fn ensure_terminal_exec_registered(&self) {
+        let has_input = self
+            .input
+            .lock()
+            .expect("public MCP input lock poisoned")
+            .is_some();
+        if !has_input || self.terminal_exec_registered.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.registry
+            .register_terminal_exec(ThreadSafeTerminalExecHandle {
+                state: self.state.clone(),
+                input: self.input.clone(),
+            });
     }
 
     pub fn unregister(&self, cx: &App) {
@@ -63,12 +96,7 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
     target_registry.register(ThreadSafeTerminalHandle {
         state: state.clone(),
     });
-    if let Some(input) = terminal.external_input_handle() {
-        target_registry.register_terminal_exec(ThreadSafeTerminalExecHandle {
-            state: state.clone(),
-            input,
-        });
-    }
+    let input = Arc::new(Mutex::new(terminal.external_input_handle()));
 
     // 注册结构化远程操作桥。remote ops 与 terminal handle 共享同一份 state，一次 refresh 同步两者。
     if let Some(session_manager) = terminal.ssh_session_manager() {
@@ -81,7 +109,15 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
         target_registry.register_remote_ops(remote_ops);
     }
 
-    Some(TerminalPublicMcpRegistration { session_id, state })
+    let registration = TerminalPublicMcpRegistration {
+        session_id,
+        state,
+        registry: target_registry,
+        input,
+        terminal_exec_registered: AtomicBool::new(false),
+    };
+    registration.ensure_terminal_exec_registered();
+    Some(registration)
 }
 
 struct ThreadSafeTerminalHandle {
@@ -99,7 +135,7 @@ impl TerminalSessionHandle for ThreadSafeTerminalHandle {
 
 struct ThreadSafeTerminalExecHandle {
     state: Arc<Mutex<TerminalSessionSnapshot>>,
-    input: TerminalInputHandle,
+    input: Arc<Mutex<Option<TerminalInputHandle>>>,
 }
 
 impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
@@ -115,7 +151,13 @@ impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
         if request.submit {
             input.push(b'\n');
         }
-        self.input.write(input);
+        let input_handle = self
+            .input
+            .lock()
+            .expect("public MCP input lock poisoned")
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("terminal input handle is not ready"))?;
+        input_handle.write(input);
         Ok(TerminalExecResult {
             target: request.target,
             command: request.command,
@@ -177,25 +219,29 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    fn snapshot(state: McpConnectionState) -> TerminalSessionSnapshot {
+        TerminalSessionSnapshot {
+            session_id: "terminal-1".to_string(),
+            connection_id: Some(42),
+            title: "terminal".to_string(),
+            host_label: "prod-a".to_string(),
+            cwd: Some("/root".to_string()),
+            rows: 24,
+            cols: 120,
+            connection_kind: McpKind::Ssh,
+            connection_state: state,
+        }
+    }
+
     #[test]
     fn terminal_exec_handle_writes_command_to_terminal_input() {
         let written = Arc::new(Mutex::new(Vec::new()));
         let sink = written.clone();
         let handle = ThreadSafeTerminalExecHandle {
-            state: Arc::new(Mutex::new(TerminalSessionSnapshot {
-                session_id: "terminal-1".to_string(),
-                connection_id: Some(42),
-                title: "terminal".to_string(),
-                host_label: "prod-a".to_string(),
-                cwd: Some("/root".to_string()),
-                rows: 24,
-                cols: 120,
-                connection_kind: McpKind::Ssh,
-                connection_state: McpConnectionState::Connected,
-            })),
-            input: TerminalInputHandle::new(move |bytes| {
+            state: Arc::new(Mutex::new(snapshot(McpConnectionState::Connected))),
+            input: Arc::new(Mutex::new(Some(TerminalInputHandle::new(move |bytes| {
                 sink.lock().expect("written lock").push(bytes);
-            }),
+            })))),
         };
 
         let result = handle
@@ -212,5 +258,55 @@ mod tests {
         assert_eq!(TerminalExecCompletion::SubmittedOnly, result.completion);
         assert_eq!(None, result.exit_code);
         assert!(result.output.is_empty());
+    }
+
+    #[test]
+    fn refresh_registers_terminal_exec_when_input_handle_appears_after_initial_registration() {
+        let registry = PublicMcpRegistry::default();
+        let state = Arc::new(Mutex::new(snapshot(McpConnectionState::Connecting)));
+        registry.register(ThreadSafeTerminalHandle {
+            state: state.clone(),
+        });
+
+        let registration = TerminalPublicMcpRegistration {
+            session_id: "terminal-1".to_string(),
+            state,
+            registry: registry.clone(),
+            input: Arc::new(Mutex::new(None)),
+            terminal_exec_registered: std::sync::atomic::AtomicBool::new(false),
+        };
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = written.clone();
+
+        registration.refresh_parts(
+            snapshot(McpConnectionState::Connected),
+            Some(TerminalInputHandle::new(move |bytes| {
+                sink.lock().expect("written lock").push(bytes);
+            })),
+        );
+
+        let sessions = registry.list_sessions();
+        assert_eq!(1, sessions.len());
+        assert!(
+            sessions[0]
+                .capabilities
+                .iter()
+                .any(|capability| format!("{capability:?}") == "TerminalExec")
+        );
+
+        registry
+            .terminal_exec(
+                "terminal-1",
+                TerminalExecRequest {
+                    target: "terminal-1".to_string(),
+                    command: "df -h".to_string(),
+                    submit: true,
+                    wait_for_output: true,
+                    timeout_ms: None,
+                },
+            )
+            .expect("terminal exec should use the input handle registered during refresh");
+
+        assert_eq!(vec![b"df -h\n".to_vec()], *written.lock().unwrap());
     }
 }

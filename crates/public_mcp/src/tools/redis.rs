@@ -4,8 +4,8 @@ mod schema;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    RiskLevel, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler,
-    ToolMode, ToolResult,
+    ResourceKind, RiskLevel, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError,
+    ToolHandler, ToolMode, ToolResult, ToolTargetSpec,
 };
 
 use input::{optional_u8, redis_arg, required_string};
@@ -189,6 +189,13 @@ impl ToolHandler for RedisToolProvider {
                 RedisTool::Set => handler.execute_set(input).await,
             }
         })
+    }
+
+    fn target_spec(&self) -> ToolTargetSpec {
+        if matches!(self.tool, RedisTool::ListConnections) {
+            return ToolTargetSpec::none();
+        }
+        ToolTargetSpec::required(vec![ResourceKind::Redis])
     }
 }
 

@@ -10,7 +10,7 @@ use public_mcp::tools::{
 };
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
-use tool_runtime::ToolRegistry;
+use tool_runtime::{ResourceKind, ResourcePool, ResourceRef, ToolRegistry};
 
 #[tokio::test]
 async fn redis_provider_lists_runtime_connections() {
@@ -80,6 +80,49 @@ async fn redis_provider_executes_runtime_command() {
     let requests = approver.requests();
     assert_eq!(1, requests.len());
     assert_eq!("redis.command", requests[0].tool_name);
+}
+
+#[tokio::test]
+async fn redis_provider_resolves_target_with_redis_resource_kind() {
+    let runtime_registry =
+        ToolRegistry::new(RedisToolProvider::handlers(Arc::new(FakeRedisRuntime {
+            connections: vec![RedisConnectionSnapshot {
+                connection_id: "redis-a".to_string(),
+            }],
+            execution: RedisCommandExecution {
+                connection_id: "redis-a".to_string(),
+                db: None,
+                command: "PING".to_string(),
+                result: json!({ "type": "status", "value": "PONG" }),
+                display: "OK: PONG".to_string(),
+            },
+        })));
+    let resource_pool = ResourcePool::new()
+        .with_resource(ResourceRef::new("db-prod", ResourceKind::Mysql, "prod"))
+        .with_resource(ResourceRef::new("redis-a", ResourceKind::Redis, "prod"));
+    let registry = PublicMcpToolRegistry::new(vec![Arc::new(
+        ToolRuntimeMcpProvider::new(runtime_registry).with_resource_pool(resource_pool),
+    )]);
+
+    let result = registry
+        .call_tool(
+            "redis.command",
+            Some(serde_json::Map::from_iter([
+                ("target".to_string(), json!("prod")),
+                ("command".to_string(), json!("PING")),
+            ])),
+            PublicMcpToolContext {
+                permission_mode: PermissionMode::Allow,
+                approver: PublicMcpApprovalManager::new(Arc::new(RecordingApprover::approved())),
+            },
+        )
+        .await
+        .expect("redis target kind should disambiguate resource pool");
+
+    assert_eq!(
+        Some(redis_command_result(Value::Null)),
+        result.structured_content
+    );
 }
 
 #[test]

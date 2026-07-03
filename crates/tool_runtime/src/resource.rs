@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
 
-use crate::ResourceId;
+use crate::{ResourceId, ToolTargetSpec};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,9 +45,14 @@ impl fmt::Display for ResourceKind {
 pub enum ResourceCapability {
     Query,
     Execute,
+    DatabaseQuery,
+    DatabaseExecute,
+    ManageConnection,
     ReadFile,
     WriteFile,
     ExecCommand,
+    TerminalExec,
+    RemoteExec,
     List,
     OpenSession,
     Other(String),
@@ -198,50 +203,104 @@ impl ResourcePool {
         value: &str,
         supported_kinds: &[ResourceKind],
     ) -> Result<&ResourceRef, TargetResolutionError> {
-        if supported_kinds.is_empty() {
-            return self.resolve_target(value);
-        }
-        let matches = self.matches_for_kinds(value, supported_kinds);
-        if !matches.is_empty() {
-            return resolved_target(value, matches);
-        }
-        let matches = self.linked_matches_for_kinds(value, supported_kinds);
-        resolved_target(value, matches)
+        self.resolve_target_for_filter(value, supported_kinds, &[])
     }
 
-    fn matches_for_kinds(
+    pub fn resolve_target_for_spec(
+        &self,
+        value: &str,
+        target_spec: &ToolTargetSpec,
+    ) -> Result<&ResourceRef, TargetResolutionError> {
+        self.resolve_target_for_filter(
+            value,
+            &target_spec.supported_kinds,
+            &target_spec.required_capabilities,
+        )
+    }
+
+    fn resolve_target_for_filter(
         &self,
         value: &str,
         supported_kinds: &[ResourceKind],
+        required_capabilities: &[ResourceCapability],
+    ) -> Result<&ResourceRef, TargetResolutionError> {
+        if supported_kinds.is_empty() && required_capabilities.is_empty() {
+            return self.resolve_target(value);
+        }
+        let matches = self.matches_for_filter(value, supported_kinds, required_capabilities);
+        if !matches.is_empty() {
+            return resolved_target(value, matches);
+        }
+        let matches = self.linked_matches_for_filter(value, supported_kinds, required_capabilities);
+        if !matches.is_empty() {
+            return resolved_target(value, matches);
+        }
+        let misses = self.capability_miss_matches(value, supported_kinds, required_capabilities);
+        if !misses.is_empty() {
+            return Err(TargetResolutionError::TargetLacksCapabilities {
+                target: value.to_string(),
+                matches: misses.iter().map(|resource| resource.id.clone()).collect(),
+                required: required_capabilities.to_vec(),
+            });
+        }
+        resolved_target(value, matches)
+    }
+
+    fn matches_for_filter(
+        &self,
+        value: &str,
+        supported_kinds: &[ResourceKind],
+        required_capabilities: &[ResourceCapability],
     ) -> Vec<&ResourceRef> {
         self.resources
             .iter()
-            .filter(|resource| supported_kinds.contains(&resource.kind))
+            .filter(|resource| {
+                resource_matches_filter(resource, supported_kinds, required_capabilities)
+            })
             .filter(|resource| resource.matches_target(value))
             .collect()
     }
 
-    fn linked_matches_for_kinds(
+    fn linked_matches_for_filter(
         &self,
         value: &str,
         supported_kinds: &[ResourceKind],
+        required_capabilities: &[ResourceCapability],
     ) -> Vec<&ResourceRef> {
         let link_ids = self
             .resources
             .iter()
-            .filter(|resource| !supported_kinds.contains(&resource.kind))
+            .filter(|resource| {
+                !resource_matches_filter(resource, supported_kinds, required_capabilities)
+            })
             .filter(|resource| resource.matches_target(value))
             .map(|resource| resource.id.as_str().to_string())
             .collect::<Vec<_>>();
         self.resources
             .iter()
-            .filter(|resource| supported_kinds.contains(&resource.kind))
+            .filter(|resource| {
+                resource_matches_filter(resource, supported_kinds, required_capabilities)
+            })
             .filter(|resource| {
                 link_ids
                     .iter()
                     .any(|link_id| resource.matches_target(link_id))
             })
             .collect()
+    }
+
+    fn capability_miss_matches(
+        &self,
+        value: &str,
+        supported_kinds: &[ResourceKind],
+        required_capabilities: &[ResourceCapability],
+    ) -> Vec<&ResourceRef> {
+        if required_capabilities.is_empty() {
+            return Vec::new();
+        }
+        let mut matches = self.matches_for_filter(value, supported_kinds, &[]);
+        matches.extend(self.linked_matches_for_filter(value, supported_kinds, &[]));
+        unique_missing_capability_matches(matches, required_capabilities)
     }
 
     pub fn resolve_resource_target(
@@ -284,6 +343,43 @@ fn resolved_target<'a>(
             matches: matches.iter().map(|resource| resource.id.clone()).collect(),
         }),
     }
+}
+
+fn resource_matches_filter(
+    resource: &ResourceRef,
+    supported_kinds: &[ResourceKind],
+    required_capabilities: &[ResourceCapability],
+) -> bool {
+    let kind_matches = supported_kinds.is_empty() || supported_kinds.contains(&resource.kind);
+    kind_matches && resource_has_capabilities(resource, required_capabilities)
+}
+
+fn resource_has_capabilities(
+    resource: &ResourceRef,
+    required_capabilities: &[ResourceCapability],
+) -> bool {
+    required_capabilities
+        .iter()
+        .all(|capability| resource.capabilities.contains(capability))
+}
+
+fn unique_missing_capability_matches<'a>(
+    matches: Vec<&'a ResourceRef>,
+    required_capabilities: &[ResourceCapability],
+) -> Vec<&'a ResourceRef> {
+    let mut unique = Vec::new();
+    for resource in matches {
+        if resource_has_capabilities(resource, required_capabilities) {
+            continue;
+        }
+        if !unique
+            .iter()
+            .any(|item: &&ResourceRef| item.id == resource.id)
+        {
+            unique.push(resource);
+        }
+    }
+    unique
 }
 
 fn target_variants(value: &str) -> Vec<String> {
@@ -354,6 +450,12 @@ pub enum TargetResolutionError {
     MissingTarget,
     #[error("target is not in resource pool: {target}")]
     TargetNotInPool { target: String },
+    #[error("target `{target}` lacks required resource capabilities: {required:?}")]
+    TargetLacksCapabilities {
+        target: String,
+        matches: Vec<ResourceId>,
+        required: Vec<ResourceCapability>,
+    },
     #[error("target `{target}` is ambiguous")]
     AmbiguousTarget {
         target: String,

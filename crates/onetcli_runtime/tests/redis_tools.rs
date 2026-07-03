@@ -6,7 +6,7 @@ use onetcli_cli::{OutputFormat, ToolCommand};
 use onetcli_runtime::cli_host::run_tool_command;
 use serde_json::json;
 use std::sync::Arc;
-use tool_runtime::ToolAdapter;
+use tool_runtime::{ResourceKind, ToolAdapter};
 
 #[test]
 fn onetcli_tool_registry_exposes_redis_command_to_cli() {
@@ -68,6 +68,20 @@ fn onetcli_tool_registry_exposes_redis_read_and_write_convenience_tools() {
     );
     assert!(!set.annotations.read_only);
     assert!(set.annotations.destructive);
+}
+
+#[test]
+fn onetcli_redis_tools_target_saved_redis_resources() {
+    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+        .expect("tool registry should build");
+
+    for tool_id in ["redis.command", "redis.keys", "redis.get", "redis.set"] {
+        let tool = registry
+            .get_runtime(tool_id, ToolAdapter::FunctionCalling)
+            .expect("redis tool should be registered");
+        assert_eq!(vec![ResourceKind::Redis], tool.target.supported_kinds);
+        assert!(tool.target.required, "{tool_id} should require target");
+    }
 }
 
 #[test]

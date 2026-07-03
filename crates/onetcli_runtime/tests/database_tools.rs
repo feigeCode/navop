@@ -7,7 +7,7 @@ use one_core::storage::{
 };
 use serde_json::json;
 use std::sync::Arc;
-use tool_runtime::{ToolAdapter, ToolContext};
+use tool_runtime::{ResourceCapability, ToolAdapter, ToolContext};
 
 #[test]
 fn database_tool_registry_exposes_schema_query_and_exec_tools() {
@@ -71,6 +71,38 @@ fn database_read_tool_registry_exposes_only_schema_and_query() {
         ids
     );
     assert!(tools.iter().all(|tool| tool.annotations.read_only));
+}
+
+#[test]
+fn database_tools_target_database_resources_by_capability() {
+    let registry = onetcli_runtime::database_tools::database_tool_registry(repo());
+
+    for tool_id in [
+        "db.schema",
+        "db.tables",
+        "db.describe_table",
+        "db.sample_rows",
+        "db.query",
+    ] {
+        let tool = registry
+            .get_runtime(tool_id, ToolAdapter::FunctionCalling)
+            .expect("database read tool should be registered");
+        assert!(tool.target.required, "{tool_id} should require target");
+        assert_eq!(
+            vec![ResourceCapability::DatabaseQuery],
+            tool.target.required_capabilities,
+            "{tool_id} should target database query resources"
+        );
+    }
+
+    let exec = registry
+        .get_runtime("db.exec", ToolAdapter::FunctionCalling)
+        .expect("db.exec should be registered");
+    assert!(exec.target.required);
+    assert_eq!(
+        vec![ResourceCapability::DatabaseExecute],
+        exec.target.required_capabilities
+    );
 }
 
 #[test]

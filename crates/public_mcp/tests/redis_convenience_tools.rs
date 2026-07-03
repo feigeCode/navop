@@ -10,7 +10,7 @@ use public_mcp::tools::{
 };
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
-use tool_runtime::ToolRegistry;
+use tool_runtime::{ResourceKind, ResourcePool, ResourceRef, ToolRegistry};
 
 #[test]
 fn redis_convenience_tools_are_registered_with_expected_risk() {
@@ -73,6 +73,36 @@ async fn redis_get_calls_runtime_without_approval_in_safe_mode() {
 }
 
 #[tokio::test]
+async fn redis_get_resolves_target_with_redis_resource_kind() {
+    let runtime = Arc::new(RecordingRedisRuntime::new());
+    let resource_pool = ResourcePool::new()
+        .with_resource(ResourceRef::new("db-prod", ResourceKind::Mysql, "prod"))
+        .with_resource(ResourceRef::new("redis-a", ResourceKind::Redis, "prod"));
+    let registry = registry_with_pool(runtime.clone(), resource_pool);
+
+    let result = registry
+        .call_tool(
+            "redis.get",
+            Some(serde_json::Map::from_iter([
+                ("target".to_string(), json!("prod")),
+                ("key".to_string(), json!("user:1")),
+            ])),
+            PublicMcpToolContext {
+                permission_mode: PermissionMode::Deny,
+                approver: Default::default(),
+            },
+        )
+        .await
+        .expect("redis.get target kind should disambiguate resource pool");
+
+    assert_eq!(Some(result_for("GET user:1")), result.structured_content);
+    assert_eq!(
+        vec![RecordedCommand::new("redis-a", None, "GET user:1")],
+        runtime.commands()
+    );
+}
+
+#[tokio::test]
 async fn redis_set_requests_approval_before_calling_runtime() {
     let runtime = Arc::new(RecordingRedisRuntime::new());
     let approver = Arc::new(RecordingApprover::approved());
@@ -110,6 +140,16 @@ fn registry(runtime: Arc<RecordingRedisRuntime>) -> PublicMcpToolRegistry {
     PublicMcpToolRegistry::new(vec![Arc::new(ToolRuntimeMcpProvider::new(
         runtime_registry,
     ))])
+}
+
+fn registry_with_pool(
+    runtime: Arc<RecordingRedisRuntime>,
+    resource_pool: ResourcePool,
+) -> PublicMcpToolRegistry {
+    let runtime_registry = ToolRegistry::new(RedisToolProvider::handlers(runtime));
+    PublicMcpToolRegistry::new(vec![Arc::new(
+        ToolRuntimeMcpProvider::new(runtime_registry).with_resource_pool(resource_pool),
+    )])
 }
 
 fn result_for(command: &str) -> Value {

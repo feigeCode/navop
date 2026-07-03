@@ -13,8 +13,8 @@ use one_core::storage::{ConnectionRepository, StoredConnection, WorkspaceReposit
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolFuture, ToolHandler,
-    ToolMode, ToolRegistry, ToolResult,
+    ResourceCapability, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError,
+    ToolFuture, ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
 #[derive(Clone, Copy)]
@@ -326,6 +326,22 @@ impl ToolHandler for ConnectionToolHandler {
     fn call(&self, input: Value, context: ToolContext) -> tool_runtime::ToolFuture {
         let handler = self.clone();
         Box::pin(async move { handler.call_tool(input, context).await })
+    }
+
+    fn target_spec(&self) -> ToolTargetSpec {
+        match self.tool {
+            ConnectionTool::Show | ConnectionTool::Test => {
+                ToolTargetSpec::required_with_capabilities(
+                    Vec::new(),
+                    vec![ResourceCapability::ManageConnection],
+                )
+            }
+            ConnectionTool::OpenSession => ToolTargetSpec::required_with_capabilities(
+                Vec::new(),
+                vec![ResourceCapability::OpenSession],
+            ),
+            _ => ToolTargetSpec::none(),
+        }
     }
 }
 

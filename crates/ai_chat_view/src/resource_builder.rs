@@ -1,6 +1,8 @@
 //! 从应用连接数据构建 AgentChatView 的 ResourceContext。
 
-use agent_runtime::{ResourceContext, ResourceId, ResourceKind, ResourceRef, ResourceScope};
+use agent_runtime::{
+    ResourceCapability, ResourceContext, ResourceId, ResourceKind, ResourceRef, ResourceScope,
+};
 use one_core::storage::{ConnectionType, StoredConnection};
 use serde_json::Value;
 
@@ -108,7 +110,33 @@ fn connection_to_resource_ref(connection: &StoredConnection) -> ResourceRef {
     for scope in connection_scopes(connection) {
         resource.set_scope(scope);
     }
+    for capability in connection_capabilities(connection) {
+        resource = resource.with_capability(capability);
+    }
     resource
+}
+
+fn connection_capabilities(connection: &StoredConnection) -> Vec<ResourceCapability> {
+    let mut capabilities = vec![
+        ResourceCapability::ManageConnection,
+        ResourceCapability::OpenSession,
+    ];
+    capabilities.extend(match connection.connection_type {
+        ConnectionType::Database => vec![
+            ResourceCapability::DatabaseQuery,
+            ResourceCapability::DatabaseExecute,
+        ],
+        ConnectionType::SshSftp => vec![
+            ResourceCapability::List,
+            ResourceCapability::ReadFile,
+            ResourceCapability::WriteFile,
+        ],
+        ConnectionType::Redis => vec![ResourceCapability::Execute],
+        ConnectionType::MongoDB => vec![ResourceCapability::Query, ResourceCapability::Execute],
+        ConnectionType::Serial => Vec::new(),
+        _ => Vec::new(),
+    });
+    capabilities
 }
 
 fn connection_aliases(connection: &StoredConnection) -> Vec<String> {

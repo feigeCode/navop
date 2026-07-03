@@ -133,13 +133,12 @@ fn resolve_target_value(
     let Some(resource_pool) = resource_pool else {
         return Ok(target.to_string());
     };
-    let supported_kinds = target_spec
-        .map(|spec| spec.supported_kinds.as_slice())
-        .unwrap_or_default();
-    resource_pool
-        .resolve_target_for_kinds(target, supported_kinds)
-        .map(|resource| resource.id.as_str().to_string())
-        .map_err(target_resolution_error)
+    match target_spec {
+        Some(spec) => resource_pool.resolve_target_for_spec(target, spec),
+        None => resource_pool.resolve_target(target),
+    }
+    .map(|resource| resource.id.as_str().to_string())
+    .map_err(target_resolution_error)
 }
 
 fn target_resolution_error(error: TargetResolutionError) -> McpError {

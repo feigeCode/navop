@@ -5,8 +5,8 @@ use public_mcp::{
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tool_runtime::{
-    ResourceKind, ResourcePool, ResourceRef, ToolAdapter, ToolAnnotations, ToolContext,
-    ToolDescriptor, ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
+    ResourceCapability, ResourceKind, ResourcePool, ResourceRef, ToolAdapter, ToolAnnotations,
+    ToolContext, ToolDescriptor, ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
 #[test]
@@ -126,6 +126,68 @@ fn runtime_provider_resolves_target_with_tool_resource_kind() {
 }
 
 #[test]
+fn runtime_provider_resolves_target_with_tool_required_capability() {
+    let handler = Arc::new(
+        RuntimeConnectionTool::new("terminal.exec")
+            .with_target_kinds(vec![ResourceKind::Terminal])
+            .with_target_capabilities(vec![ResourceCapability::TerminalExec]),
+    );
+    let registry = registry_with_pool(
+        handler.clone(),
+        ResourcePool::new()
+            .with_resource(terminal_resource("terminal-visible", "prod"))
+            .with_resource(
+                terminal_resource("terminal-exec", "prod")
+                    .with_capability(ResourceCapability::TerminalExec),
+            ),
+    );
+
+    futures::executor::block_on(registry.call_tool(
+        "terminal.exec",
+        Some(rmcp::model::JsonObject::from_iter([
+            ("target".to_string(), json!("prod")),
+            ("sql".to_string(), json!("select 1")),
+        ])),
+        context(),
+    ))
+    .expect("tool target capability should disambiguate terminal resources");
+
+    assert_eq!(
+        json!({ "connection": "terminal-exec", "sql": "select 1" }),
+        handler.last_input()
+    );
+}
+
+#[test]
+fn runtime_provider_rejects_target_without_tool_required_capability() {
+    let handler = Arc::new(
+        RuntimeConnectionTool::new("terminal.exec")
+            .with_target_kinds(vec![ResourceKind::Terminal])
+            .with_target_capabilities(vec![ResourceCapability::TerminalExec]),
+    );
+    let registry = registry_with_pool(
+        handler,
+        ResourcePool::new().with_resource(terminal_resource("terminal-visible", "prod")),
+    );
+
+    let error = futures::executor::block_on(registry.call_tool(
+        "terminal.exec",
+        Some(rmcp::model::JsonObject::from_iter([
+            ("target".to_string(), json!("prod")),
+            ("sql".to_string(), json!("select 1")),
+        ])),
+        context(),
+    ))
+    .expect_err("target without required capability should be rejected before tool execution");
+
+    assert!(
+        error
+            .to_string()
+            .contains("lacks required resource capabilities")
+    );
+}
+
+#[test]
 fn runtime_provider_reads_resource_pool_at_call_time() {
     let handler = Arc::new(RuntimeConnectionTool::new("db.query"));
     let pool = Arc::new(Mutex::new(ResourcePool::new()));
@@ -236,6 +298,7 @@ struct RuntimeConnectionTool {
     id: &'static str,
     last_input: Arc<Mutex<Option<serde_json::Value>>>,
     target_kinds: Vec<ResourceKind>,
+    target_capabilities: Vec<ResourceCapability>,
 }
 
 impl RuntimeConnectionTool {
@@ -244,11 +307,17 @@ impl RuntimeConnectionTool {
             id,
             last_input: Arc::new(Mutex::new(None)),
             target_kinds: Vec::new(),
+            target_capabilities: Vec::new(),
         }
     }
 
     fn with_target_kinds(mut self, target_kinds: Vec<ResourceKind>) -> Self {
         self.target_kinds = target_kinds;
+        self
+    }
+
+    fn with_target_capabilities(mut self, target_capabilities: Vec<ResourceCapability>) -> Self {
+        self.target_capabilities = target_capabilities;
         self
     }
 
@@ -295,6 +364,9 @@ impl ToolHandler for RuntimeConnectionTool {
         if self.target_kinds.is_empty() {
             return ToolTargetSpec::none();
         }
-        ToolTargetSpec::required(self.target_kinds.clone())
+        ToolTargetSpec::required_with_capabilities(
+            self.target_kinds.clone(),
+            self.target_capabilities.clone(),
+        )
     }
 }

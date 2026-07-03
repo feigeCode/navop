@@ -30,7 +30,9 @@ pub use history::{HistoryItem, RuntimeHistory};
 pub use ids::{PlanId, PlanStepId, SessionId, SubAgentId, ToolCallId, TurnId};
 pub use model::{ModelClient, ModelRequest, ModelResponse, ModelStream, ModelStreamEvent};
 pub use planner::{Plan, PlanSource, PlanStatus, PlanStep, StepStatus};
-pub use resource::{ResourceContext, ResourceId, ResourceKind, ResourceRef, ResourceScope};
+pub use resource::{
+    ResourceCapability, ResourceContext, ResourceId, ResourceKind, ResourceRef, ResourceScope,
+};
 pub use risk::RiskLevel;
 pub use runtime::{InputImage, TurnInput};
 pub use runtime::{

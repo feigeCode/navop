@@ -6,8 +6,8 @@ use one_core::storage::{ConnectionRepository, ConnectionType, DbConnectionConfig
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    ToolAdapter, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode, ToolRegistry,
-    ToolResult,
+    ResourceCapability, ToolAdapter, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode,
+    ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
 use schema::descriptor_parts;
@@ -205,6 +205,14 @@ impl ToolHandler for DatabaseToolHandler {
     fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
         let handler = self.clone();
         Box::pin(async move { handler.call_tool(input).await })
+    }
+
+    fn target_spec(&self) -> ToolTargetSpec {
+        let capability = match self.tool {
+            DatabaseTool::Exec => ResourceCapability::DatabaseExecute,
+            _ => ResourceCapability::DatabaseQuery,
+        };
+        ToolTargetSpec::required_with_capabilities(Vec::new(), vec![capability])
     }
 }
 

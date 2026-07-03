@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, UNIX_EPOCH};
 use tool_runtime::{
-    ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode,
-    ToolRegistry, ToolResult,
+    ResourceCapability, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError,
+    ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
 const DEFAULT_MAX_READ_BYTES: usize = 1024 * 1024;
@@ -225,6 +225,20 @@ impl ToolHandler for SftpToolHandler {
     fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
         let handler = self.clone();
         Box::pin(async move { handler.call_tool(input).await })
+    }
+
+    fn target_spec(&self) -> ToolTargetSpec {
+        ToolTargetSpec::required_with_capabilities(Vec::new(), vec![self.tool.capability()])
+    }
+}
+
+impl SftpTool {
+    fn capability(self) -> ResourceCapability {
+        match self {
+            SftpTool::List => ResourceCapability::List,
+            SftpTool::Read | SftpTool::Stat | SftpTool::Download => ResourceCapability::ReadFile,
+            SftpTool::Write | SftpTool::Upload => ResourceCapability::WriteFile,
+        }
     }
 }
 
