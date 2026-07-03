@@ -620,9 +620,20 @@ fn table_schema_from_metadata(
                 columns: foreign_key.columns,
                 ref_table: foreign_key.ref_table,
                 ref_columns: foreign_key.ref_columns,
+                on_delete: non_empty_string(foreign_key.on_delete),
+                on_update: non_empty_string(foreign_key.on_update),
             })
             .collect(),
         comment: table.comment,
+    }
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
     }
 }
 
@@ -1083,6 +1094,11 @@ mod tests {
         assert_eq!(schema.indexes[0].name, "idx_orders_id");
         assert_eq!(schema.indexes[0].unique, true);
         assert_eq!(schema.foreign_keys[0].name, "fk_orders_user");
+        assert_eq!(schema.foreign_keys[0].on_delete.as_deref(), Some("CASCADE"));
+        assert_eq!(
+            schema.foreign_keys[0].on_update.as_deref(),
+            Some("NO ACTION")
+        );
     }
 
     #[test]

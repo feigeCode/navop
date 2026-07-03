@@ -428,6 +428,83 @@ fn generate_drop_index_sql(
     }
 }
 
+fn generate_add_foreign_key_sql(
+    table_name: &str,
+    foreign_key: &super::ForeignKeySchema,
+    target_database: &str,
+    target_schema: Option<&str>,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let columns = foreign_key
+        .columns
+        .iter()
+        .map(|column| dialect.quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let ref_table =
+        dialect.format_table_reference(target_database, target_schema, &foreign_key.ref_table);
+    let ref_columns = foreign_key
+        .ref_columns
+        .iter()
+        .map(|column| dialect.quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut sql = format!(
+        "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
+        table_name,
+        dialect.quote_identifier(&foreign_key.name),
+        columns,
+        ref_table,
+        ref_columns
+    );
+    if let Some(on_delete) = foreign_key_action_sql(foreign_key.on_delete.as_deref()) {
+        sql.push_str(&format!(" ON DELETE {on_delete}"));
+    }
+    if let Some(on_update) = foreign_key_action_sql(foreign_key.on_update.as_deref()) {
+        sql.push_str(&format!(" ON UPDATE {on_update}"));
+    }
+    sql.push(';');
+    sql
+}
+
+fn foreign_key_action_sql(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let action = value
+        .split_whitespace()
+        .map(str::to_ascii_uppercase)
+        .collect::<Vec<_>>()
+        .join(" ");
+    match action.as_str() {
+        "CASCADE" | "RESTRICT" | "NO ACTION" | "SET NULL" | "SET DEFAULT" => Some(action),
+        _ => None,
+    }
+}
+
+fn generate_drop_foreign_key_sql(
+    target_db_type: &str,
+    table_name: &str,
+    foreign_key_name: &str,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let foreign_key_name = dialect.quote_identifier(foreign_key_name);
+    let db_type = target_db_type.to_lowercase();
+    if db_type.contains("mysql") || db_type.contains("mariadb") {
+        format!(
+            "ALTER TABLE {} DROP FOREIGN KEY {};",
+            table_name, foreign_key_name
+        )
+    } else {
+        format!(
+            "ALTER TABLE {} DROP CONSTRAINT {};",
+            table_name, foreign_key_name
+        )
+    }
+}
+
 /// 格式化值为 SQL 字面量
 fn format_value(value: CellValue) -> String {
     match value {
@@ -519,7 +596,9 @@ fn build_schema_sync_plan_with_dialect(
     target_db_type: &str,
     dialect: &dyn SyncSqlDialect,
 ) -> SyncPlan {
+    let mut foreign_key_drops = Vec::new();
     let mut statements = Vec::new();
+    let mut deferred_foreign_key_adds = Vec::new();
     let plan_id = uuid::Uuid::new_v4().to_string();
 
     for table_diff in &result.table_diffs {
@@ -539,6 +618,31 @@ fn build_schema_sync_plan_with_dialect(
                         selected_by_default: true,
                         warnings: vec![],
                     });
+
+                    let table_ref = dialect.format_table_reference(
+                        target_database,
+                        target_schema,
+                        &source_table.name,
+                    );
+                    for foreign_key in &source_table.foreign_keys {
+                        deferred_foreign_key_adds.push(SyncStatement {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            sql: generate_add_foreign_key_sql(
+                                &table_ref,
+                                foreign_key,
+                                target_database,
+                                target_schema,
+                                dialect,
+                            ),
+                            kind: SyncStatementKind::AlterTable,
+                            object_name: Some(foreign_key.name.clone()),
+                            row_key: None,
+                            destructive: false,
+                            transactional_safe: true,
+                            selected_by_default: true,
+                            warnings: vec![],
+                        });
+                    }
                 }
             }
             DiffStatus::Removed => {
@@ -562,13 +666,44 @@ fn build_schema_sync_plan_with_dialect(
             }
             DiffStatus::Modified => {
                 // 修改表
+                let table_ref = dialect.format_table_reference(
+                    target_database,
+                    target_schema,
+                    &table_diff.name,
+                );
+
+                for fk_diff in &table_diff.foreign_key_diffs {
+                    if matches!(fk_diff.status, DiffStatus::Removed | DiffStatus::Modified) {
+                        let fk_name = fk_diff
+                            .target
+                            .as_ref()
+                            .map(|foreign_key| foreign_key.name.as_str())
+                            .unwrap_or(&fk_diff.name);
+                        foreign_key_drops.push(SyncStatement {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            sql: generate_drop_foreign_key_sql(
+                                target_db_type,
+                                &table_ref,
+                                fk_name,
+                                dialect,
+                            ),
+                            kind: SyncStatementKind::AlterTable,
+                            object_name: Some(fk_diff.name.clone()),
+                            row_key: None,
+                            destructive: false,
+                            transactional_safe: true,
+                            selected_by_default: fk_diff.status == DiffStatus::Removed,
+                            warnings: if fk_diff.status == DiffStatus::Modified {
+                                vec!["此操作会重建目标外键，请先确认现有外键可被替换".to_string()]
+                            } else {
+                                vec![]
+                            },
+                        });
+                    }
+                }
+
                 for col_diff in &table_diff.column_diffs {
                     let stmt_id = uuid::Uuid::new_v4().to_string();
-                    let table_ref = dialect.format_table_reference(
-                        target_database,
-                        target_schema,
-                        &table_diff.name,
-                    );
 
                     match col_diff.status {
                         DiffStatus::Added => {
@@ -697,13 +832,32 @@ fn build_schema_sync_plan_with_dialect(
                         }
                         DiffStatus::Modified => {
                             if let Some(index) = &idx_diff.source {
-                                let table_ref = dialect.format_table_reference(
-                                    target_database,
-                                    target_schema,
-                                    &table_diff.name,
-                                );
+                                let drop_index_name = idx_diff
+                                    .target
+                                    .as_ref()
+                                    .map(|index| index.name.as_str())
+                                    .unwrap_or(&idx_diff.name);
                                 statements.push(SyncStatement {
                                     id: stmt_id,
+                                    sql: generate_drop_index_sql(
+                                        target_db_type,
+                                        &table_ref,
+                                        drop_index_name,
+                                        dialect,
+                                    ),
+                                    kind: SyncStatementKind::DropIndex,
+                                    object_name: Some(idx_diff.name.clone()),
+                                    row_key: None,
+                                    destructive: false,
+                                    transactional_safe: true,
+                                    selected_by_default: false,
+                                    warnings: vec![
+                                        "此操作会重建目标索引，请先确认现有索引可被替换"
+                                            .to_string(),
+                                    ],
+                                });
+                                statements.push(SyncStatement {
+                                    id: uuid::Uuid::new_v4().to_string(),
                                     sql: generate_create_index_sql(&table_ref, index, dialect),
                                     kind: SyncStatementKind::CreateIndex,
                                     object_name: Some(idx_diff.name.clone()),
@@ -720,9 +874,47 @@ fn build_schema_sync_plan_with_dialect(
                         }
                     }
                 }
+
+                for fk_diff in &table_diff.foreign_key_diffs {
+                    if matches!(fk_diff.status, DiffStatus::Added | DiffStatus::Modified) {
+                        if let Some(foreign_key) = &fk_diff.source {
+                            deferred_foreign_key_adds.push(SyncStatement {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                sql: generate_add_foreign_key_sql(
+                                    &table_ref,
+                                    foreign_key,
+                                    target_database,
+                                    target_schema,
+                                    dialect,
+                                ),
+                                kind: SyncStatementKind::AlterTable,
+                                object_name: Some(fk_diff.name.clone()),
+                                row_key: None,
+                                destructive: false,
+                                transactional_safe: true,
+                                selected_by_default: fk_diff.status == DiffStatus::Added,
+                                warnings: if fk_diff.status == DiffStatus::Modified {
+                                    vec![
+                                        "此操作会重建目标外键，请先确认现有外键可被替换"
+                                            .to_string(),
+                                    ]
+                                } else {
+                                    vec![]
+                                },
+                            });
+                        }
+                    }
+                }
             }
         }
     }
+
+    if !foreign_key_drops.is_empty() {
+        let mut ordered_statements = foreign_key_drops;
+        ordered_statements.extend(statements);
+        statements = ordered_statements;
+    }
+    statements.extend(deferred_foreign_key_adds);
 
     let ddl_count = statements.len();
     let sql_text = statements
@@ -1201,6 +1393,289 @@ mod tests {
         assert_eq!(
             plan.statements.first().unwrap().sql,
             "ALTER TABLE `app`.`users` DROP INDEX `UK89mj1edq3g8hfxqea6pts53lr`;"
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_rebuilds_modified_index() {
+        use super::super::{
+            DiffStatus, IndexDiff, IndexSchema, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let table = TableSchema {
+            name: "users".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(table.clone()),
+                target: Some(table),
+                column_diffs: vec![],
+                index_diffs: vec![IndexDiff {
+                    name: "idx_users_email".to_string(),
+                    status: DiffStatus::Modified,
+                    source: Some(IndexSchema {
+                        name: "idx_users_email".to_string(),
+                        columns: vec!["email".to_string()],
+                        unique: true,
+                    }),
+                    target: Some(IndexSchema {
+                        name: "idx_users_email".to_string(),
+                        columns: vec!["legacy_email".to_string()],
+                        unique: false,
+                    }),
+                }],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            sql,
+            vec![
+                "ALTER TABLE `app`.`users` DROP INDEX `idx_users_email`;",
+                "CREATE UNIQUE INDEX `idx_users_email` ON `app`.`users` (`email`);",
+            ]
+        );
+        assert!(
+            plan.statements
+                .iter()
+                .all(|statement| !statement.selected_by_default)
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_generates_foreign_key_sync_sql() {
+        use super::super::{
+            DiffStatus, ForeignKeyDiff, ForeignKeySchema, SchemaCompareResult, TableDiff,
+            TableSchema,
+        };
+
+        let table = TableSchema {
+            name: "order_items".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "order_items".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(table.clone()),
+                target: Some(table),
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![
+                    ForeignKeyDiff {
+                        name: "fk_order_items_order".to_string(),
+                        status: DiffStatus::Added,
+                        source: Some(ForeignKeySchema {
+                            name: "fk_order_items_order".to_string(),
+                            columns: vec!["order_id".to_string()],
+                            ref_table: "orders".to_string(),
+                            ref_columns: vec!["id".to_string()],
+                            on_delete: None,
+                            on_update: None,
+                        }),
+                        target: None,
+                    },
+                    ForeignKeyDiff {
+                        name: "fk_order_items_legacy".to_string(),
+                        status: DiffStatus::Removed,
+                        source: None,
+                        target: Some(ForeignKeySchema {
+                            name: "fk_order_items_legacy".to_string(),
+                            columns: vec!["legacy_order_id".to_string()],
+                            ref_table: "orders".to_string(),
+                            ref_columns: vec!["id".to_string()],
+                            on_delete: None,
+                            on_update: None,
+                        }),
+                    },
+                ],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            sql,
+            vec![
+                "ALTER TABLE `app`.`order_items` DROP FOREIGN KEY `fk_order_items_legacy`;",
+                "ALTER TABLE `app`.`order_items` ADD CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `app`.`orders` (`id`);",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_drops_foreign_keys_before_tables() {
+        use super::super::{
+            DiffStatus, ForeignKeyDiff, ForeignKeySchema, SchemaCompareResult, TableDiff,
+            TableSchema,
+        };
+
+        let orders = TableSchema {
+            name: "orders".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let order_items = TableSchema {
+            name: "order_items".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![
+                TableDiff {
+                    name: "orders".to_string(),
+                    status: DiffStatus::Removed,
+                    source: None,
+                    target: Some(orders),
+                    column_diffs: vec![],
+                    index_diffs: vec![],
+                    foreign_key_diffs: vec![],
+                    comment_changed: false,
+                },
+                TableDiff {
+                    name: "order_items".to_string(),
+                    status: DiffStatus::Modified,
+                    source: Some(order_items.clone()),
+                    target: Some(order_items),
+                    column_diffs: vec![],
+                    index_diffs: vec![],
+                    foreign_key_diffs: vec![ForeignKeyDiff {
+                        name: "fk_order_items_order".to_string(),
+                        status: DiffStatus::Removed,
+                        source: None,
+                        target: Some(ForeignKeySchema {
+                            name: "fk_order_items_order".to_string(),
+                            columns: vec!["order_id".to_string()],
+                            ref_table: "orders".to_string(),
+                            ref_columns: vec!["id".to_string()],
+                            on_delete: None,
+                            on_update: None,
+                        }),
+                    }],
+                    comment_changed: false,
+                },
+            ],
+            added_count: 0,
+            removed_count: 1,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            sql,
+            vec![
+                "ALTER TABLE `app`.`order_items` DROP FOREIGN KEY `fk_order_items_order`;",
+                "DROP TABLE IF EXISTS `app`.`orders`;",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_adds_foreign_keys_after_added_table() {
+        use super::super::{
+            ColumnSchema, DiffStatus, ForeignKeySchema, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let source = TableSchema {
+            name: "order_items".to_string(),
+            columns: vec![
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: "bigint".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+                ColumnSchema {
+                    name: "order_id".to_string(),
+                    data_type: "bigint".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                },
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeySchema {
+                name: "fk_order_items_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: Some("CASCADE".to_string()),
+                on_update: Some("RESTRICT".to_string()),
+            }],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "order_items".to_string(),
+                status: DiffStatus::Added,
+                source: Some(source),
+                target: None,
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 1,
+            removed_count: 0,
+            modified_count: 0,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(2, sql.len());
+        assert!(sql[0].starts_with("CREATE TABLE `order_items`"));
+        assert_eq!(
+            sql[1],
+            "ALTER TABLE `app`.`order_items` ADD CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `app`.`orders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT;"
         );
     }
 }

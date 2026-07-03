@@ -352,6 +352,26 @@ fn foreign_key_eq(
         && identifier_list_eq(&left.columns, &right.columns, options)
         && identifier_key(&left.ref_table, options) == identifier_key(&right.ref_table, options)
         && identifier_list_eq(&left.ref_columns, &right.ref_columns, options)
+        && foreign_key_action_eq(left.on_delete.as_deref(), right.on_delete.as_deref())
+        && foreign_key_action_eq(left.on_update.as_deref(), right.on_update.as_deref())
+}
+
+fn foreign_key_action_eq(left: Option<&str>, right: Option<&str>) -> bool {
+    normalized_foreign_key_action(left) == normalized_foreign_key_action(right)
+}
+
+fn normalized_foreign_key_action(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(
+        value
+            .split_whitespace()
+            .map(str::to_ascii_uppercase)
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 fn identifier_list_eq(left: &[String], right: &[String], options: &SchemaCompareOptions) -> bool {
@@ -602,6 +622,8 @@ mod tests {
             columns: vec!["user_id".to_string()],
             ref_table: "users".to_string(),
             ref_columns: vec!["id".to_string()],
+            on_delete: Some("CASCADE".to_string()),
+            on_update: Some("NO ACTION".to_string()),
         }];
 
         let mut target = source.clone();
@@ -621,6 +643,36 @@ mod tests {
                 .iter()
                 .any(|d| d.name == "idx_orders_user" && d.status == DiffStatus::Modified)
         );
+        assert!(
+            diff.foreign_key_diffs
+                .iter()
+                .any(|d| d.name == "fk_orders_user" && d.status == DiffStatus::Modified)
+        );
+    }
+
+    #[test]
+    fn test_foreign_key_action_changes_are_modified() {
+        let mut source = table("orders", vec![column("id", "int", false)]);
+        source.foreign_keys = vec![ForeignKeySchema {
+            name: "fk_orders_user".to_string(),
+            columns: vec!["user_id".to_string()],
+            ref_table: "users".to_string(),
+            ref_columns: vec!["id".to_string()],
+            on_delete: Some("CASCADE".to_string()),
+            on_update: Some("NO ACTION".to_string()),
+        }];
+
+        let mut target = source.clone();
+        target.foreign_keys[0].on_delete = Some("RESTRICT".to_string());
+
+        let result =
+            compare_schemas(vec![source], vec![target], SchemaCompareOptions::default()).unwrap();
+
+        let diff = result
+            .table_diffs
+            .iter()
+            .find(|d| d.name == "orders")
+            .unwrap();
         assert!(
             diff.foreign_key_diffs
                 .iter()
