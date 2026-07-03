@@ -6,10 +6,10 @@ use crate::sidebar_contribution::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, AnyElement, AnyView, App, AppContext as _, Bounds, Context, Decorations, DragMoveEvent,
-    Element, ElementId, Empty, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
-    GlobalElementId, InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, RenderOnce, SharedString,
-    Style, Styled, Subscription, Task, Window, WindowControlArea, div, px, relative,
+    Element, ElementId, Entity, EntityId, EventEmitter, FocusHandle, Focusable, GlobalElementId,
+    InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, Point, Render, RenderOnce, SharedString, Style, Styled,
+    Subscription, Task, Window, WindowControlArea, div, px, relative,
 };
 use gpui::{ScrollHandle, StatefulInteractiveElement as _};
 use gpui_component::button::{Button, ButtonVariants as _};
@@ -2157,7 +2157,7 @@ impl TabContainer {
                     .h(SIDEBAR_HANDLE_SIZE)
                     .py(SIDEBAR_HANDLE_PADDING),
             })
-            .on_drag(SidebarResizeDrag, move |_, _, window, cx| {
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 window.prevent_default();
                 cx.stop_propagation();
                 container.update(cx, |container, cx| {
@@ -2167,7 +2167,6 @@ impl TabContainer {
                     });
                     cx.notify();
                 });
-                cx.new(|_| SidebarResizePanel)
             })
             .child(
                 div()
@@ -3481,17 +3480,6 @@ fn normalize_sidebar_placement(
     }
 }
 
-#[derive(Clone)]
-struct SidebarResizeDrag;
-
-struct SidebarResizePanel;
-
-impl Render for SidebarResizePanel {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        Empty
-    }
-}
-
 struct SidebarResizeEventHandler {
     container: Entity<TabContainer>,
 }
@@ -3530,13 +3518,17 @@ impl Element for SidebarResizeEventHandler {
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
+        _: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        let bounds = window.bounds();
         self.container.update(cx, |container, _| {
-            container.sidebar_bounds = bounds;
+            container.sidebar_bounds = Bounds {
+                origin: Point::default(),
+                size: bounds.size,
+            };
         });
     }
 
