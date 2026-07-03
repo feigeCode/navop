@@ -166,6 +166,9 @@ mod tests {
                 .any(|tool| tool.name == "redis.list_connections")
         );
         assert!(tools.iter().any(|tool| tool.name == "redis.command"));
+        assert!(tools.iter().any(|tool| tool.name == "redis.keys"));
+        assert!(tools.iter().any(|tool| tool.name == "redis.get"));
+        assert!(tools.iter().any(|tool| tool.name == "redis.set"));
     }
 
     #[gpui::test]
