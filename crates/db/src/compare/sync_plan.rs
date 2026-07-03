@@ -407,6 +407,27 @@ fn generate_create_index_sql(
     )
 }
 
+fn generate_drop_index_sql(
+    target_db_type: &str,
+    table_name: &str,
+    index_name: &str,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let index_name = dialect.quote_identifier(index_name);
+    let db_type = target_db_type.to_lowercase();
+    if db_type.contains("mysql") || db_type.contains("mariadb") {
+        format!("ALTER TABLE {} DROP INDEX {};", table_name, index_name)
+    } else if db_type.contains("mssql") || db_type.contains("sql server") {
+        format!("DROP INDEX {} ON {};", index_name, table_name)
+    } else if db_type.contains("oracle") {
+        format!("DROP INDEX {};", index_name)
+    } else if db_type.contains("clickhouse") {
+        format!("ALTER TABLE {} DROP INDEX {};", table_name, index_name)
+    } else {
+        format!("DROP INDEX IF EXISTS {};", index_name)
+    }
+}
+
 /// 格式化值为 SQL 字面量
 fn format_value(value: CellValue) -> String {
     match value {
@@ -652,11 +673,18 @@ fn build_schema_sync_plan_with_dialect(
                             }
                         }
                         DiffStatus::Removed => {
+                            let table_ref = dialect.format_table_reference(
+                                target_database,
+                                target_schema,
+                                &table_diff.name,
+                            );
                             statements.push(SyncStatement {
                                 id: stmt_id,
-                                sql: format!(
-                                    "DROP INDEX IF EXISTS {};",
-                                    dialect.quote_identifier(&idx_diff.name)
+                                sql: generate_drop_index_sql(
+                                    target_db_type,
+                                    &table_ref,
+                                    &idx_diff.name,
+                                    dialect,
                                 ),
                                 kind: SyncStatementKind::DropIndex,
                                 object_name: Some(idx_diff.name.clone()),
@@ -1126,6 +1154,53 @@ mod tests {
         assert_eq!(
             plan.statements.first().unwrap().sql,
             "CREATE UNIQUE INDEX idx_users_email ON users (email);"
+        );
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_drops_index_with_table_name() {
+        use super::super::{
+            DiffStatus, IndexDiff, IndexSchema, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let table = TableSchema {
+            name: "users".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(table.clone()),
+                target: Some(table),
+                column_diffs: vec![],
+                index_diffs: vec![IndexDiff {
+                    name: "UK89mj1edq3g8hfxqea6pts53lr".to_string(),
+                    status: DiffStatus::Removed,
+                    source: None,
+                    target: Some(IndexSchema {
+                        name: "UK89mj1edq3g8hfxqea6pts53lr".to_string(),
+                        columns: vec!["email".to_string()],
+                        unique: true,
+                    }),
+                }],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+
+        assert_eq!(
+            plan.statements.first().unwrap().sql,
+            "ALTER TABLE `app`.`users` DROP INDEX `UK89mj1edq3g8hfxqea6pts53lr`;"
         );
     }
 }
