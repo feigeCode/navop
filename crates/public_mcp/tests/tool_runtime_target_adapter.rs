@@ -5,8 +5,8 @@ use public_mcp::{
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tool_runtime::{
-    ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolHandler, ToolMode, ToolRegistry,
-    ToolResult,
+    ResourceKind, ResourcePool, ResourceRef, ToolAdapter, ToolAnnotations, ToolContext,
+    ToolDescriptor, ToolHandler, ToolMode, ToolRegistry, ToolResult,
 };
 
 #[test]
@@ -50,6 +50,76 @@ fn runtime_provider_maps_target_to_provider_field() {
 }
 
 #[test]
+fn runtime_provider_resolves_resource_label_to_provider_target_id() {
+    let handler = Arc::new(RuntimeConnectionTool::new("db.query"));
+    let registry = registry_with_pool(
+        handler.clone(),
+        ResourcePool::new().with_resource(resource("db-prod", "prod database", "primary-db")),
+    );
+
+    futures::executor::block_on(registry.call_tool(
+        "db.query",
+        Some(rmcp::model::JsonObject::from_iter([
+            ("target".to_string(), json!("prod database")),
+            ("sql".to_string(), json!("select 1")),
+        ])),
+        context(),
+    ))
+    .expect("resource label target should resolve");
+
+    assert_eq!(
+        json!({ "connection": "db-prod", "sql": "select 1" }),
+        handler.last_input()
+    );
+}
+
+#[test]
+fn runtime_provider_resolves_resource_alias_to_provider_target_id() {
+    let handler = Arc::new(RuntimeConnectionTool::new("db.query"));
+    let registry = registry_with_pool(
+        handler.clone(),
+        ResourcePool::new().with_resource(resource("db-prod", "prod database", "primary-db")),
+    );
+
+    futures::executor::block_on(registry.call_tool(
+        "db.query",
+        Some(rmcp::model::JsonObject::from_iter([
+            ("target".to_string(), json!("primary-db")),
+            ("sql".to_string(), json!("select 1")),
+        ])),
+        context(),
+    ))
+    .expect("resource alias target should resolve");
+
+    assert_eq!(
+        json!({ "connection": "db-prod", "sql": "select 1" }),
+        handler.last_input()
+    );
+}
+
+#[test]
+fn runtime_provider_rejects_ambiguous_resource_target() {
+    let registry = registry_with_pool(
+        Arc::new(RuntimeConnectionTool::new("db.query")),
+        ResourcePool::new()
+            .with_resource(resource("db-prod-a", "prod", "primary"))
+            .with_resource(resource("db-prod-b", "prod", "replica")),
+    );
+
+    let error = futures::executor::block_on(registry.call_tool(
+        "db.query",
+        Some(rmcp::model::JsonObject::from_iter([
+            ("target".to_string(), json!("prod")),
+            ("sql".to_string(), json!("select 1")),
+        ])),
+        context(),
+    ))
+    .expect_err("ambiguous resource target should be rejected");
+
+    assert!(error.to_string().contains("ambiguous"));
+}
+
+#[test]
 fn runtime_provider_rejects_provider_target_fields() {
     let registry = registry_with(RuntimeConnectionTool::new("db.query"));
 
@@ -70,6 +140,19 @@ fn registry_with(tool: RuntimeConnectionTool) -> PublicMcpToolRegistry {
     PublicMcpToolRegistry::new(vec![Arc::new(ToolRuntimeMcpProvider::new(
         ToolRegistry::new(vec![Arc::new(tool)]),
     ))])
+}
+
+fn registry_with_pool(
+    tool: Arc<RuntimeConnectionTool>,
+    resource_pool: ResourcePool,
+) -> PublicMcpToolRegistry {
+    let provider = ToolRuntimeMcpProvider::new(ToolRegistry::new(vec![tool]))
+        .with_resource_pool(resource_pool);
+    PublicMcpToolRegistry::new(vec![Arc::new(provider)])
+}
+
+fn resource(id: &str, label: &str, alias: &str) -> ResourceRef {
+    ResourceRef::new(id, ResourceKind::Mysql, label).with_alias(alias)
 }
 
 fn context() -> PublicMcpToolContext {

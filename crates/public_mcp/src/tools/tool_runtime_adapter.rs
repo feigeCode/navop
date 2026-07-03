@@ -11,18 +11,27 @@ use rmcp::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext, ToolDescriptor, ToolError,
-    ToolRegistry, ToolResult,
+    ResourcePool, ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext,
+    ToolDescriptor, ToolError, ToolRegistry, ToolResult,
 };
 
 #[derive(Clone)]
 pub struct ToolRuntimeMcpProvider {
     registry: ToolRegistry,
+    resource_pool: Option<ResourcePool>,
 }
 
 impl ToolRuntimeMcpProvider {
     pub fn new(registry: ToolRegistry) -> Self {
-        Self { registry }
+        Self {
+            registry,
+            resource_pool: None,
+        }
+    }
+
+    pub fn with_resource_pool(mut self, resource_pool: ResourcePool) -> Self {
+        self.resource_pool = Some(resource_pool);
+        self
     }
 }
 
@@ -43,9 +52,14 @@ impl PublicMcpToolProvider for ToolRuntimeMcpProvider {
     ) -> Option<PublicMcpToolFuture> {
         let descriptor = self.registry.get(name, ToolAdapter::Mcp)?;
         let registry = self.registry.clone();
+        let resource_pool = self.resource_pool.clone();
         let name = name.to_string();
         let raw_input = Value::Object(arguments.unwrap_or_default());
-        let input = match normalize_mcp_arguments(&descriptor.input_schema, raw_input) {
+        let input = match normalize_mcp_arguments(
+            &descriptor.input_schema,
+            raw_input,
+            resource_pool.as_ref(),
+        ) {
             Ok(input) => input,
             Err(error) => return Some(Box::pin(async move { Err(error) })),
         };

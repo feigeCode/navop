@@ -1,5 +1,6 @@
 use rmcp::{ErrorData as McpError, model::JsonObject};
 use serde_json::{Map, Value, json};
+use tool_runtime::{ResourcePool, TargetResolutionError};
 
 const PROVIDER_TARGET_FIELDS: [&str; 3] = ["connection", "connection_id", "session_id"];
 
@@ -16,19 +17,27 @@ pub(super) fn mcp_target_schema(schema: Value) -> Value {
     schema
 }
 
-pub(super) fn normalize_mcp_arguments(schema: &Value, input: Value) -> Result<Value, McpError> {
+pub(super) fn normalize_mcp_arguments(
+    schema: &Value,
+    input: Value,
+    resource_pool: Option<&ResourcePool>,
+) -> Result<Value, McpError> {
     let Value::Object(mut input) = input else {
         return Ok(input);
     };
     reject_provider_target_fields(&input)?;
     if descriptor_has_target(schema) {
+        resolve_target_argument(&mut input, resource_pool)?;
         return Ok(Value::Object(input));
     }
     let Some(field) = descriptor_provider_target_field(schema) else {
         return Ok(Value::Object(input));
     };
     if let Some(target) = take_target(&mut input)? {
-        input.insert(field.to_string(), Value::String(target));
+        input.insert(
+            field.to_string(),
+            Value::String(resolve_target_value(&target, resource_pool)?),
+        );
     }
     Ok(Value::Object(input))
 }
@@ -94,6 +103,41 @@ fn take_target(input: &mut JsonObject) -> Result<Option<String>, McpError> {
             None,
         )),
     }
+}
+
+fn resolve_target_argument(
+    input: &mut JsonObject,
+    resource_pool: Option<&ResourcePool>,
+) -> Result<(), McpError> {
+    let Some(target) = input.get("target") else {
+        return Ok(());
+    };
+    let Some(target) = target.as_str() else {
+        return Err(McpError::invalid_params(
+            "field `target` must be a string".to_string(),
+            None,
+        ));
+    };
+    let target = resolve_target_value(target, resource_pool)?;
+    input.insert("target".to_string(), Value::String(target));
+    Ok(())
+}
+
+fn resolve_target_value(
+    target: &str,
+    resource_pool: Option<&ResourcePool>,
+) -> Result<String, McpError> {
+    let Some(resource_pool) = resource_pool else {
+        return Ok(target.to_string());
+    };
+    resource_pool
+        .resolve_target(target)
+        .map(|resource| resource.id.as_str().to_string())
+        .map_err(target_resolution_error)
+}
+
+fn target_resolution_error(error: TargetResolutionError) -> McpError {
+    McpError::invalid_params(error.to_string(), None)
 }
 
 fn rewrite_required_targets(schema: &mut Value) {
