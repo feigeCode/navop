@@ -2779,6 +2779,18 @@ Compare:
     en: Result
     zh-CN: 结果
     zh-HK: 結果
+  step_objects:
+    en: Objects
+    zh-CN: 对象
+    zh-HK: 物件
+  step_sql_preview:
+    en: SQL Preview
+    zh-CN: SQL 预览
+    zh-HK: SQL 預覽
+  step_sql_execute:
+    en: SQL Execute
+    zh-CN: SQL 执行
+    zh-HK: SQL 執行
   data_compare:
     en: Data Compare
     zh-CN: 数据比较
@@ -2799,6 +2811,22 @@ Compare:
     en: Key Columns
     zh-CN: 主键列
     zh-HK: 主鍵欄位
+  source_tables:
+    en: Source Tables
+    zh-CN: 源表
+    zh-HK: 來源表
+  target_tables:
+    en: Target Tables
+    zh-CN: 目标表
+    zh-HK: 目標表
+  no_tables:
+    en: No tables
+    zh-CN: 暂无表
+    zh-HK: 暫無表
+  ignore_identifier_case:
+    en: Ignore identifier case
+    zh-CN: 忽略标识符大小写
+    zh-HK: 忽略識別符大小寫
   swap_source_target:
     en: Swap source and target
     zh-CN: 交换源和目标
@@ -2835,6 +2863,10 @@ Compare:
     en: Data compare complete
     zh-CN: 数据比较完成
     zh-HK: 資料比較完成
+  data_compare_truncated_no_sql:
+    en: Data compare result was truncated; sync SQL generation and execution are disabled.
+    zh-CN: 数据比较结果已截断，已禁止生成和执行同步 SQL
+    zh-HK: 資料比較結果已截斷，已禁止產生和執行同步 SQL
   schema_compare_complete:
     en: Schema compare complete
     zh-CN: 结构比较完成

@@ -8,6 +8,7 @@ use crate::compare::window_params::{
     DataCompareSelection, SchemaCompareSelection, data_compare_params, schema_compare_params,
     split_columns,
 };
+use crate::compare::window_ui::CompareStep;
 use crate::compare::{DataCompareWindow, SchemaCompareWindow};
 
 #[test]
@@ -63,12 +64,34 @@ fn schema_compare_params_use_editable_source_selection() {
             database: "target_db".to_string(),
             schema: "target_schema".to_string(),
         },
+        false,
     )
     .unwrap();
 
     assert_eq!(params.source_connection_id, "source-2");
     assert_eq!(params.source_database, "source_db");
     assert_eq!(params.source_schema.as_deref(), Some("source_schema"));
+    assert!(!params.case_sensitive_identifiers);
+}
+
+#[test]
+fn schema_compare_params_can_enable_case_sensitive_identifiers() {
+    let params = schema_compare_params(
+        SchemaCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+        },
+        SchemaCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+        },
+        true,
+    )
+    .unwrap();
+
+    assert!(params.case_sensitive_identifiers);
 }
 
 #[test]
@@ -78,23 +101,98 @@ fn data_compare_params_use_editable_source_selection() {
             connection_id: "source-2".to_string(),
             database: "source_db".to_string(),
             schema: "source_schema".to_string(),
-            table: "source_table".to_string(),
+            tables: vec!["source_table".to_string()],
         },
         DataCompareSelection {
             connection_id: "target-1".to_string(),
             database: "target_db".to_string(),
             schema: "target_schema".to_string(),
-            table: "target_table".to_string(),
+            tables: vec!["target_table".to_string()],
         },
         "id, tenant_id".to_string(),
+        false,
     )
     .unwrap();
 
     assert_eq!(params.source_connection_id, "source-2");
     assert_eq!(params.source_database, "source_db");
     assert_eq!(params.source_schema.as_deref(), Some("source_schema"));
-    assert_eq!(params.source_table, "source_table");
+    assert_eq!(params.table_pairs[0].source_table, "source_table");
+    assert_eq!(params.table_pairs[0].target_table, "target_table");
     assert_eq!(params.key_columns, vec!["id", "tenant_id"]);
+}
+
+#[test]
+fn data_compare_params_build_multiple_case_insensitive_table_pairs() {
+    let params = data_compare_params(
+        DataCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+            tables: vec!["Users".to_string(), "Order_Items".to_string()],
+        },
+        DataCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+            tables: vec!["order_items".to_string(), "users".to_string()],
+        },
+        "id".to_string(),
+        false,
+    )
+    .unwrap();
+
+    let pairs = params
+        .table_pairs
+        .iter()
+        .map(|pair| (pair.source_table.as_str(), pair.target_table.as_str()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        pairs,
+        vec![("Users", "users"), ("Order_Items", "order_items")]
+    );
+}
+
+#[test]
+fn data_compare_params_can_match_table_names_case_sensitively() {
+    let result = data_compare_params(
+        DataCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+            tables: vec!["Users".to_string(), "Orders".to_string()],
+        },
+        DataCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+            tables: vec!["users".to_string(), "Orders".to_string()],
+        },
+        "id".to_string(),
+        true,
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn compare_steps_follow_object_preview_execute_order() {
+    assert_eq!(CompareStep::Objects.next(), Some(CompareStep::SqlPreview));
+    assert_eq!(
+        CompareStep::SqlPreview.next(),
+        Some(CompareStep::SqlExecute)
+    );
+    assert_eq!(CompareStep::SqlExecute.next(), None);
+    assert_eq!(
+        CompareStep::SqlExecute.previous(),
+        Some(CompareStep::SqlPreview)
+    );
+    assert_eq!(
+        CompareStep::SqlPreview.previous(),
+        Some(CompareStep::Objects)
+    );
+    assert_eq!(CompareStep::Objects.previous(), None);
 }
 
 #[test]

@@ -99,12 +99,14 @@ pub struct SchemaCompareResult {
 #[derive(Debug, Clone)]
 pub struct SchemaCompareOptions {
     pub ignore_comments: bool,
+    pub case_sensitive_identifiers: bool,
 }
 
 impl Default for SchemaCompareOptions {
     fn default() -> Self {
         Self {
             ignore_comments: false,
+            case_sensitive_identifiers: false,
         }
     }
 }
@@ -114,4 +116,7 @@ impl Default for SchemaCompareOptions {
 pub enum SchemaCompareError {
     #[error("无效的表结构")]
     InvalidSchema,
+
+    #[error("存在重复标识符: {0}")]
+    DuplicateIdentifier(String),
 }

@@ -1,12 +1,12 @@
-use db::{GlobalDbState, TableInfo};
+use db::GlobalDbState;
 use gpui::{AppContext, AsyncApp, Context, Entity};
 use gpui_component::{IndexPath, select::SearchableVec};
 use rust_i18n::t;
 
 use crate::compare::window_ui::register_connection_for_compare;
 use crate::db_object_selector::state::{
-    DbObjectSelectorPolicy, StringSelect, TargetConnectionControls, TargetStringControls,
-    policy_for_connection, selected_string,
+    StringSelect, TargetConnectionControls, TargetStringControls, policy_for_connection,
+    selected_string,
 };
 
 pub(crate) fn load_databases<T: 'static>(
@@ -84,44 +84,6 @@ pub(crate) fn load_schemas<T: 'static>(
     .detach();
 }
 
-pub(crate) fn load_tables<T: 'static>(
-    connection: TargetConnectionControls,
-    database: TargetStringControls,
-    schema: TargetStringControls,
-    table: TargetStringControls,
-    status: Entity<String>,
-    cx: &mut Context<T>,
-) {
-    let connection_id = selected_connection(&connection, cx);
-    let policy = policy_for_connection(&connection, cx);
-    let database_name = selected_select_string(&database.select, cx);
-    let preferred = selected_string(&table.select, &table.fallback, cx);
-    clear_string_select(&table.select, cx);
-    if connection_id.trim().is_empty() || database_name.trim().is_empty() {
-        return set_status(
-            &status,
-            t!("DbObjectSelector.select_connection_database").to_string(),
-            cx,
-        );
-    }
-    let schema_name = table_schema_name(&database_name, &schema, policy, cx);
-    prepare_load(
-        &connection_id,
-        &status,
-        "DbObjectSelector.loading_tables",
-        cx,
-    );
-    let db_state = cx.global::<GlobalDbState>().clone();
-    cx.spawn(async move |_, cx: &mut AsyncApp| {
-        let result = db_state
-            .list_tables(cx, connection_id, database_name, schema_name)
-            .await
-            .map(table_names);
-        update_string_select_async(result, table.select, preferred, status, cx);
-    })
-    .detach();
-}
-
 pub(crate) fn clear_string_select<T: 'static>(select: &StringSelect, cx: &mut Context<T>) {
     let Some(window_id) = cx.active_window() else {
         return;
@@ -160,22 +122,6 @@ fn selected_select_string<T>(select: &StringSelect, cx: &Context<T>) -> String {
         .selected_value()
         .cloned()
         .unwrap_or_default()
-}
-
-fn table_schema_name<T>(
-    database_name: &str,
-    schema: &TargetStringControls,
-    policy: DbObjectSelectorPolicy,
-    cx: &Context<T>,
-) -> Option<String> {
-    if policy.schema_as_database {
-        return Some(database_name.to_string());
-    }
-    if policy.show_schema {
-        empty_to_none(selected_select_string(&schema.select, cx))
-    } else {
-        None
-    }
 }
 
 fn update_string_select_async(
@@ -224,14 +170,6 @@ fn preferred_index(items: &[String], preferred: &str) -> Option<IndexPath> {
         .position(|item| item == preferred)
         .or((!items.is_empty()).then_some(0))
         .map(IndexPath::new)
-}
-
-fn table_names(tables: Vec<TableInfo>) -> Vec<String> {
-    tables.into_iter().map(|table| table.name).collect()
-}
-
-fn empty_to_none(value: String) -> Option<String> {
-    (!value.trim().is_empty()).then(|| value.trim().to_string())
 }
 
 fn set_status<T>(status: &Entity<String>, message: String, cx: &mut Context<T>) {

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use db::GlobalDbState;
-use db::compare::DataCompareResult;
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, Hsla, IntoElement, ParentElement, Styled, Window,
     div, px,
@@ -9,6 +8,7 @@ use gpui::{
 use gpui_component::{
     ActiveTheme, IndexPath, Sizable, StyledExt,
     button::Button,
+    checkbox::Checkbox,
     clipboard::Clipboard,
     h_flex,
     highlighter::Language,
@@ -23,6 +23,48 @@ use one_core::storage::{
 use rust_i18n::t;
 
 use crate::compare::{CompareProgress, CompareTargetScope, execute_sync_sql};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompareStep {
+    Objects,
+    SqlPreview,
+    SqlExecute,
+}
+
+impl CompareStep {
+    #[cfg(test)]
+    pub(crate) fn next(self) -> Option<Self> {
+        match self {
+            Self::Objects => Some(Self::SqlPreview),
+            Self::SqlPreview => Some(Self::SqlExecute),
+            Self::SqlExecute => None,
+        }
+    }
+
+    pub(crate) fn previous(self) -> Option<Self> {
+        match self {
+            Self::Objects => None,
+            Self::SqlPreview => Some(Self::Objects),
+            Self::SqlExecute => Some(Self::SqlPreview),
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Objects => 0,
+            Self::SqlPreview => 1,
+            Self::SqlExecute => 2,
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            Self::Objects => t!("Compare.step_objects").to_string(),
+            Self::SqlPreview => t!("Compare.step_sql_preview").to_string(),
+            Self::SqlExecute => t!("Compare.step_sql_execute").to_string(),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct ConnectionSelectItem {
@@ -122,13 +164,43 @@ pub(crate) fn register_connection_for_compare<T>(connection_id: &str, cx: &mut C
     db_state.register_connection(config);
 }
 
-pub(super) fn data_truncation_note(result: &DataCompareResult) -> Option<String> {
-    match (result.source_truncated, result.target_truncated) {
+pub(super) fn data_truncation_note(
+    source_truncated: bool,
+    target_truncated: bool,
+) -> Option<String> {
+    match (source_truncated, target_truncated) {
         (true, true) => Some(t!("Compare.data_truncated_both").to_string()),
         (true, false) => Some(t!("Compare.data_truncated_source").to_string()),
         (false, true) => Some(t!("Compare.data_truncated_target").to_string()),
         (false, false) => None,
     }
+}
+
+pub(super) fn ignore_identifier_case_option<T: 'static>(
+    checkbox_id: &'static str,
+    checked: Entity<bool>,
+    cx: &mut Context<T>,
+) -> impl IntoElement {
+    let is_checked = *checked.read(cx);
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(
+            Checkbox::new(checkbox_id)
+                .checked(is_checked)
+                .on_click(move |_, _, cx| {
+                    checked.update(cx, |value, cx| {
+                        *value = !*value;
+                        cx.notify();
+                    });
+                }),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().foreground)
+                .child(t!("Compare.ignore_identifier_case").to_string()),
+        )
 }
 
 /// 比较结果统计卡片(新增/删除/修改)
@@ -199,6 +271,40 @@ pub(super) fn compare_progress_view(progress: &CompareProgress, cx: &App) -> imp
         col = col.child(Progress::new("compare-progress").value(value));
     }
     col
+}
+
+pub(super) fn compare_stepper(current: CompareStep, cx: &App) -> impl IntoElement {
+    let steps = [
+        CompareStep::Objects,
+        CompareStep::SqlPreview,
+        CompareStep::SqlExecute,
+    ];
+    h_flex().gap_2().children(steps.into_iter().map(|step| {
+        let active = step == current;
+        let complete = step.index() < current.index();
+        let color = if active || complete {
+            cx.theme().primary
+        } else {
+            cx.theme().muted_foreground
+        };
+        h_flex()
+            .gap_1()
+            .items_center()
+            .text_sm()
+            .text_color(color)
+            .child(
+                div()
+                    .w(px(22.0))
+                    .h(px(22.0))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(color)
+                    .items_center()
+                    .justify_center()
+                    .child((step.index() + 1).to_string()),
+            )
+            .child(div().child(step.label()))
+    }))
 }
 
 pub(super) fn start_sync_sql_execution<T: 'static>(
