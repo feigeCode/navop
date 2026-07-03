@@ -24,6 +24,8 @@
 2. `public_mcp::tools::PublicMcpToolRegistry`
    - MCP Server 的协议入口。
    - 通过 `ToolRuntimeMcpProvider` 或 runtime-backed provider 暴露 canonical tools。
+   - runtime-backed MCP tools 的入口 schema 暴露 `target`，不接受
+     `connection` / `connection_id` / `session_id` 作为兼容字段。
 
 3. `agent_runtime::ToolRegistry`
    - Agent function calling 入口。
@@ -169,6 +171,25 @@ CLI 工具：
 | `redis.set` | 写入保存 Redis 连接中的单个 string value；需要写权限 |
 
 `redis.execute_command` 已不再作为 alias 接受。
+
+### 2.6 MCP-facing target 参数
+
+通过 `ToolRuntimeMcpProvider` 暴露的 runtime-backed MCP tools 使用统一入口参数：
+
+```json
+{
+  "target": "resource-id-or-label"
+}
+```
+
+当前 adapter 行为：
+
+- `tools/list` 会把 provider-specific target 字段改写成 `target`。
+- `tools/call` 会拒绝 `connection` / `connection_id` / `session_id`。
+- 当底层 runtime handler 还没迁移为 target-native 时，adapter 在内部把
+  `target` 映射回 handler 需要的 provider 字段。
+- 当前 Public MCP 还没有完整 `ResourcePool`，所以 `target` 值会直接传给
+  provider 字段；后续再补 id / label / alias 解析。
 
 ## 3. Agent Runtime 工具集
 
@@ -316,6 +337,8 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
   `connection` / `connection_id` / `session_id`。
 - Agent adapter 会把 `target` 或默认目标映射回当前 runtime handler 仍需要的
   provider 字段；如果模型直接传 provider 字段，Agent adapter 会拒绝。
+- runtime-backed Public MCP 工具 schema 同样暴露 `target`，MCP client 直接传
+  provider 字段也会被拒绝。
 
 关键类型：
 
@@ -340,6 +363,7 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 - Agent prompt 会在可用时提示使用统一工具命名规则。
 - Agent prompt 的资源段使用“资源池 / 默认目标”语义，并要求工具调用使用
   `target` 参数。
+- runtime-backed Public MCP tools 使用 `target` 参数，并拒绝旧 provider 字段。
 - `db.tables`、`db.describe_table`、`db.sample_rows` 已作为 canonical DB metadata
   工具补齐，并通过 Agent bridge 暴露为 `db_tables`、`db_describe_table`、
   `db_sample_rows`。
@@ -347,7 +371,7 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 
 暂未做：
 
-- 底层 runtime handler、CLI 和部分 Public MCP provider 仍使用 `connection`、
+- 底层 runtime handler、CLI 和部分非 runtime-backed Public MCP provider 仍使用 `connection`、
   `connection_id` 或 `session_id`，后续需要继续收敛到 runtime-core target
   resolution。
 - Public MCP adapter 的风险仍有部分路径不是直接由 runtime annotations 精细映射。
@@ -360,6 +384,8 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 | Public MCP runtime | `main/src/public_mcp_runtime.rs` | MCP runtime 生命周期、Agent registry 构建入口 |
 | Public MCP toolset 拼装 | `main/src/public_mcp_runtime/tool_registry.rs` | 根据 settings 注册 Public MCP providers |
 | Runtime -> Agent adapter | `crates/agent_runtime/src/tools/runtime_adapter.rs` | 把 runtime descriptor/call 转成 Agent tool |
+| Runtime -> MCP adapter | `crates/public_mcp/src/tools/tool_runtime_adapter.rs` | 把 runtime descriptor/call 转成 MCP tool |
+| MCP target adapter | `crates/public_mcp/src/tools/target_adapter.rs` | MCP-facing `target` schema 改写与旧 provider 字段拒绝 |
 | Agent prompt | `crates/agent_runtime/src/tasks/agent_prompt.rs` | 工具命名、资源上下文、终端选择规则 |
 | DB runtime tools | `crates/onetcli_runtime/src/database_tools.rs` | `db.schema` / `db.tables` / `db.describe_table` / `db.sample_rows` / `db.query` / `db.exec` |
 | SFTP runtime tools | `crates/onetcli_runtime/src/sftp_tools.rs` | `sftp.*` 文件工具 |
@@ -376,6 +402,7 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 ```bash
 rtk cargo test -p agent_runtime system_prompt_prefers_canonical_runtime_tool_names
 rtk cargo test -p agent_runtime --test tool_runtime_target_adapter
+rtk cargo test -p public_mcp --test tool_runtime_target_adapter
 rtk cargo test -p agent_runtime
 rtk cargo test -p main agent_runtime_tool_registry
 rtk cargo test -p onetcli_runtime --test database_tools

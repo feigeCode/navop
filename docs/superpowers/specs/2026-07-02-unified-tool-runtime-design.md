@@ -88,6 +88,7 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 4 Public MCP app registry merge | Done | `main/src/public_mcp_runtime/tool_registry.rs` collects enabled `tool_runtime::ToolRegistry` values, merges them, and exposes one `ToolRuntimeMcpProvider`. Terminal toolset now exposes both `ssh.exec` and `terminal.exec` through the real app registry path. Public MCP runtime tests passed on 2026-07-02. | Continue replacing remaining Public MCP-specific permission settings with unified `PermissionPolicy`. |
 | Phase 4b Public MCP Redis canonical command tool | Done | `6c99c8e feat(public_mcp): canonicalize redis command tool` made Public MCP Redis `tools/list` expose `redis.command`. It initially accepted `redis.execute_command`; that alias was later removed by Phase 3i. `public_mcp` Redis tests, main registry Redis test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep Public MCP Redis surface canonical-only. |
 | Phase 4c Public MCP Redis convenience tools | Done | `6d5fc34 feat(public_mcp): add redis convenience tools` exposes `redis.keys`, `redis.get`, and `redis.set` through Public MCP and the real app registry path. `redis.keys/get` are read-only and `redis.set` is mutating and approval-gated. The old `redis.execute_command` alias was later removed by Phase 3i. Red/green Public MCP convenience tests, `cargo test -p public_mcp`, main Redis registry test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep Public MCP Redis surface canonical-only. |
+| Phase 4d Public MCP target adapter | Done | `3a558e6 feat(public_mcp): expose runtime targets through target` makes runtime-backed MCP tools expose `target` instead of provider fields such as `connection`, `connection_id`, and `session_id`; rejects those provider fields at the MCP adapter boundary; and maps `target` back to the current handler field only as an internal migration adapter. `cargo test -p public_mcp --test tool_runtime_target_adapter`, `tool_runtime_adapter`, `redis_tools`, `redis_convenience_tools`, `remote_ops`, `internal_functions`, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Add MCP resource-pool id/label/alias resolution and continue moving CLI/runtime-core invocation paths toward first-class `target`. |
 | Phase 4 Public MCP runtime permission policy | Done | `PermissionMode` now maps to `tool_runtime::PermissionPolicy` for runtime-backed MCP tools. `Allow` maps to Auto, so high-risk/destructive/open-world tools such as `ssh.exec`, `terminal.exec`, and generic Redis command execution still require approval. Public MCP and app runtime tests passed on 2026-07-02. | Migrate settings/UI terminology from MCP permission mode to unified permission profile. |
 | Phase 4 Public MCP settings profile wording | Done | `McpPermissionMode` keeps old persisted values but exposes profile ids `safe/confirm/auto`; Public MCP runtime config carries `permission_profile`; settings UI labels now show Safe / Confirm / Auto. Core settings and app runtime tests passed on 2026-07-02. | Later storage migration can replace `permission_mode` only when a broader settings migration is planned. |
 | Phase 5a Resource Pool UI wording/filtering | Done | `6010dad7 feat(ai_chat): add resource pool display model`, `e8985154 feat(ai_chat): rename context selector to resource pool`, `d7b82ab0 feat(ai_chat): filter resource pool by type`, `84d8fe65 test(ai_chat): document resource pool default target semantics`, `ad195aab docs: track resource pool ui checkpoint` | Keep wording and default-target semantics while wiring broader catalogs. |
@@ -114,24 +115,25 @@ Purpose:
 Last completed checkpoint:
 
 ```text
-edc2e2c feat(agent): expose runtime targets through target
+3a558e6 feat(public_mcp): expose runtime targets through target
 ```
 
 Last checkpoint verification run:
 
 ```bash
-rtk cargo test -p agent_runtime
-rtk cargo test -p main agent_runtime_tool_registry
-rtk cargo check -p agent_runtime
+rtk cargo test -p public_mcp --test tool_runtime_target_adapter
+rtk cargo test -p public_mcp --test tool_runtime_adapter
+rtk cargo test -p public_mcp --test redis_tools
+rtk cargo test -p public_mcp --test redis_convenience_tools
+rtk cargo test -p public_mcp --test remote_ops
+rtk cargo test -p public_mcp --test internal_functions
+rtk cargo check -p public_mcp
 rtk cargo check -p main
 rtk git diff --check
 ```
 
 Result: all commands exited 0. `cargo check -p main` still reports the existing
-`block v0.1.6` future-incompat warning, which can remain. During verification,
-`cargo test -p main agent_runtime_tool_registry` first failed with `No space left
-on device`; `cargo clean -p main` removed 4.4GiB of rebuildable artifacts, and the
-same test passed after rerun.
+`block v0.1.6` future-incompat warning, which can remain.
 
 Current product decision:
 
@@ -162,7 +164,11 @@ Current product decision:
    fields such as `connection`, `connection_id`, or `session_id`. The Agent adapter
    maps `target` or the default resource back to the provider field before calling
    the runtime handler, and rejects those provider fields if the model sends them.
-11. Agent-facing prompts should expose canonical ids only after the relevant adapter can
+11. Runtime-backed Public MCP tool schemas expose `target` instead of provider-specific
+   fields. The MCP adapter rejects provider fields from clients and maps `target`
+   back to the provider field only inside the adapter while handlers are still being
+   migrated.
+12. Agent-facing prompts should expose canonical ids only after the relevant adapter can
    route them safely.
 
 Next recommended checkpoints:
@@ -170,8 +176,10 @@ Next recommended checkpoints:
 1. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
    through `terminal.exec`.
 2. Run manual resource-pool smoke for source presets.
-3. Continue moving Public MCP, CLI, and runtime-core invocation paths toward first-class
-   `target` resolution rather than provider-specific fields.
+3. Add MCP resource-pool id/label/alias target resolution; current MCP target mapping
+   passes the provided target value directly to provider handlers.
+4. Continue moving CLI and runtime-core invocation paths toward first-class `target`
+   resolution rather than provider-specific fields.
 
 ## Design Principles
 
@@ -515,13 +523,13 @@ Agent-facing tools should use `target` as the unified target parameter:
 }
 ```
 
-Compatibility target resolution:
+Entry adapters must expose `target` only. They must reject provider-specific target
+fields such as `connection`, `connection_id`, and `session_id` instead of accepting
+them as compatibility aliases.
 
-```text
-target > connection > connection_id > session_id > default_target
-```
-
-The adapter normalizes legacy parameters into `ResourceTarget` before execution. Business tool handlers can still receive legacy fields during migration, but Agent prompt should only expose `target`.
+During migration, an adapter may map `target` back to the provider field required by
+an existing handler, but that mapping is internal and must not be visible in Agent or
+MCP-facing schemas.
 
 ### PermissionPolicy
 
@@ -892,8 +900,8 @@ Phase 1 tests:
 1. `cargo test -p tool_runtime`
 2. Resource pool unit tests.
 3. Permission policy unit tests.
-4. Alias resolution unit tests.
-5. Compatibility tests for existing registry behavior.
+4. Removed-alias rejection tests.
+5. Existing registry behavior tests.
 
 Later phase tests:
 
@@ -928,7 +936,9 @@ Mitigation: Agent adapter derives transport-safe names while preserving canonica
 
 Risk: `target` migration conflicts with existing `connection` / `session_id` schemas.
 
-Mitigation: Use precedence `target > connection > connection_id > session_id > default_target` during migration. Prompt only exposes `target` after adapter support exists.
+Mitigation: Entry adapters expose and accept `target` only. They reject
+provider-specific target fields at the boundary, then map `target` to the current
+handler field internally until the handler is target-native.
 
 Risk: Live terminal execution can be confused with structured SSH execution.
 
