@@ -8,7 +8,7 @@ use public_mcp::tools::{
     RedisCommandExecutionProvider, RedisConnectionSnapshot, RedisConnectionSnapshotProvider,
     RedisToolProvider, ToolRuntimeMcpProvider,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use tool_runtime::ToolRegistry;
 
@@ -54,30 +54,12 @@ async fn redis_provider_lists_runtime_connections() {
 
 #[tokio::test]
 async fn redis_provider_executes_runtime_command() {
-    let runtime_registry =
-        ToolRegistry::new(RedisToolProvider::handlers(Arc::new(FakeRedisRuntime {
-            connections: vec![RedisConnectionSnapshot {
-                connection_id: "redis-a".to_string(),
-            }],
-            execution: RedisCommandExecution {
-                connection_id: "redis-a".to_string(),
-                db: Some(2),
-                command: "PING".to_string(),
-                result: json!({
-                    "type": "status",
-                    "value": "PONG"
-                }),
-                display: "OK: PONG".to_string(),
-            },
-        })));
-    let registry = PublicMcpToolRegistry::new(vec![Arc::new(ToolRuntimeMcpProvider::new(
-        runtime_registry,
-    ))]);
+    let registry = redis_command_registry(Some(2));
     let approver = Arc::new(RecordingApprover::approved());
 
     let result = registry
         .call_tool(
-            "redis.execute_command",
+            "redis.command",
             Some(serde_json::Map::from_iter([
                 ("connection_id".to_string(), json!("redis-a")),
                 ("db".to_string(), json!(2)),
@@ -92,16 +74,52 @@ async fn redis_provider_executes_runtime_command() {
         .expect("redis execute command tool should run");
 
     assert_eq!(
-        Some(json!({
-            "connection_id": "redis-a",
-            "db": 2,
-            "command": "PING",
-            "result": {
-                "type": "status",
-                "value": "PONG"
+        Some(redis_command_result(json!(2))),
+        result.structured_content
+    );
+    let requests = approver.requests();
+    assert_eq!(1, requests.len());
+    assert_eq!("redis.command", requests[0].tool_name);
+}
+
+#[test]
+fn redis_command_is_registered_as_mutating() {
+    let registry = ToolRegistry::new(RedisToolProvider::empty());
+    let tool = registry
+        .get("redis.command", tool_runtime::ToolAdapter::Mcp)
+        .expect("redis.command tool should be registered");
+
+    assert_eq!(
+        json!(["connection_id", "command"]),
+        tool.input_schema["required"]
+    );
+    assert_eq!("redis.command", tool.id);
+    assert!(!tool.annotations.read_only);
+    assert!(tool.annotations.destructive);
+}
+
+#[tokio::test]
+async fn redis_execute_command_alias_still_calls_runtime_command() {
+    let registry = redis_command_registry(None);
+    let approver = Arc::new(RecordingApprover::approved());
+
+    let result = registry
+        .call_tool(
+            "redis.execute_command",
+            Some(serde_json::Map::from_iter([
+                ("connection_id".to_string(), json!("redis-a")),
+                ("command".to_string(), json!("PING")),
+            ])),
+            PublicMcpToolContext {
+                permission_mode: PermissionMode::Allow,
+                approver: PublicMcpApprovalManager::new(approver.clone()),
             },
-            "display": "OK: PONG"
-        })),
+        )
+        .await
+        .expect("legacy redis.execute_command alias should run");
+
+    assert_eq!(
+        Some(redis_command_result(Value::Null)),
         result.structured_content
     );
     let requests = approver.requests();
@@ -109,19 +127,36 @@ async fn redis_provider_executes_runtime_command() {
     assert_eq!("redis.execute_command", requests[0].tool_name);
 }
 
-#[test]
-fn redis_execute_command_is_registered_as_mutating() {
-    let registry = ToolRegistry::new(RedisToolProvider::empty());
-    let tool = registry
-        .get("redis.execute_command", tool_runtime::ToolAdapter::Mcp)
-        .expect("execute command tool should be registered");
+fn redis_command_registry(db: Option<u8>) -> PublicMcpToolRegistry {
+    let runtime_registry =
+        ToolRegistry::new(RedisToolProvider::handlers(Arc::new(FakeRedisRuntime {
+            connections: vec![RedisConnectionSnapshot {
+                connection_id: "redis-a".to_string(),
+            }],
+            execution: RedisCommandExecution {
+                connection_id: "redis-a".to_string(),
+                db,
+                command: "PING".to_string(),
+                result: json!({ "type": "status", "value": "PONG" }),
+                display: "OK: PONG".to_string(),
+            },
+        })));
+    PublicMcpToolRegistry::new(vec![Arc::new(ToolRuntimeMcpProvider::new(
+        runtime_registry,
+    ))])
+}
 
-    assert_eq!(
-        json!(["connection_id", "command"]),
-        tool.input_schema["required"]
-    );
-    assert!(!tool.annotations.read_only);
-    assert!(tool.annotations.destructive);
+fn redis_command_result(db: Value) -> Value {
+    json!({
+        "connection_id": "redis-a",
+        "db": db,
+        "command": "PING",
+        "result": {
+            "type": "status",
+            "value": "PONG"
+        },
+        "display": "OK: PONG"
+    })
 }
 
 #[derive(Clone)]

@@ -1,12 +1,13 @@
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode,
-    ToolResult,
+    ToolAdapter, ToolAlias, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler,
+    ToolMode, ToolResult,
 };
 
 const REDIS_LIST_CONNECTIONS_TOOL: &str = "redis.list_connections";
-const REDIS_EXECUTE_COMMAND_TOOL: &str = "redis.execute_command";
+const REDIS_COMMAND_TOOL: &str = "redis.command";
+const REDIS_EXECUTE_COMMAND_ALIAS: &str = "redis.execute_command";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RedisConnectionSnapshot {
@@ -124,7 +125,7 @@ impl ToolHandler for RedisToolProvider {
                 ToolAnnotations::read_only("List Redis connections"),
             ),
             RedisTool::ExecuteCommand => (
-                REDIS_EXECUTE_COMMAND_TOOL,
+                REDIS_COMMAND_TOOL,
                 "Execute Redis command",
                 "Execute one Redis command against an active Redis connection in the running OnetCli app. Use redis.list_connections first to discover connection_id. Pass db to target a specific logical database. The command may mutate Redis data and therefore requires write approval.",
                 execute_command_schema("connection_id"),
@@ -141,6 +142,13 @@ impl ToolHandler for RedisToolProvider {
             mode: ToolMode::Deterministic,
             adapters: vec![ToolAdapter::Mcp, ToolAdapter::FunctionCalling],
             annotations,
+        }
+    }
+
+    fn aliases(&self) -> Vec<ToolAlias> {
+        match self.tool {
+            RedisTool::ListConnections => Vec::new(),
+            RedisTool::ExecuteCommand => vec![ToolAlias::new(REDIS_EXECUTE_COMMAND_ALIAS)],
         }
     }
 
