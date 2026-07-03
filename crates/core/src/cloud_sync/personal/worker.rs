@@ -301,6 +301,12 @@ where
             let remote = find_remote_by_id(records, &conflict.cloud_id);
             self.conflicts.pause_record(conflict, local, remote).await?;
         }
+        if !plan.conflicts.is_empty() {
+            return Err(SyncStoreError::Conflict(format!(
+                "{} personal sync conflict(s) paused",
+                plan.conflicts.len()
+            )));
+        }
         Ok(())
     }
 

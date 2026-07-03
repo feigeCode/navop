@@ -1,11 +1,19 @@
 use gpui::TestAppContext;
-use one_core::cloud_sync::personal::PersonalSyncEvent;
+use one_core::cloud_sync::ConflictResolution;
+use one_core::cloud_sync::personal::{
+    PersonalConflictType, PersonalSyncConflict, PersonalSyncConflictRepository, PersonalSyncEvent,
+};
 use one_core::connection_notifier::ConnectionDataEvent;
 use one_core::settings::{AppSettings, PersonalSyncBackendKind, SyncProvider};
+use one_core::storage::connection::SqliteConnection;
+use one_core::storage::migration::run_migrations;
 use one_core::storage::{DatabaseType, DbConnectionConfig, StoredConnection};
+use one_core::storage::{GlobalStorageState, StorageManager};
 
 use crate::personal_sync_runtime::{
-    actions_enabled, personal_sync_event_from_connection_event, runtime_status,
+    actions_enabled, build_conflict_sink, list_personal_conflicts,
+    personal_sync_event_from_connection_event, resolve_personal_conflict, runtime_status,
+    should_start_drain_after_enqueue,
 };
 use crate::personal_sync_status::PersonalSyncRuntimeStatus;
 
@@ -140,6 +148,73 @@ fn personal_sync_ignores_non_data_change_events() {
         None,
         personal_sync_event_from_connection_event(&ConnectionDataEvent::CloudSyncRequested)
     );
+}
+
+#[test]
+fn personal_sync_enqueue_while_syncing_marks_pending_drain_path() {
+    assert!(!should_start_drain_after_enqueue(
+        &PersonalSyncRuntimeStatus::Syncing
+    ));
+    assert!(should_start_drain_after_enqueue(
+        &PersonalSyncRuntimeStatus::Ready {
+            health: one_core::cloud_sync::personal::SyncStoreHealth::Ready,
+            message: None,
+        }
+    ));
+}
+
+#[gpui::test]
+fn personal_sync_builds_sqlite_conflict_sink_when_repository_registered(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let conn = SqliteConnection::open(temp.path().join("test.db")).expect("sqlite");
+    conn.with_connection(|conn| run_migrations(conn))
+        .expect("migrations run");
+    let storage = StorageManager::new_with_connection(conn);
+
+    cx.update(|cx| {
+        cx.set_global(GlobalStorageState { storage });
+        one_core::storage::repository::init(cx);
+        assert!(build_conflict_sink(cx).is_some());
+    });
+}
+
+#[gpui::test]
+fn personal_sync_lists_registered_conflicts(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let conn = SqliteConnection::open(temp.path().join("test.db")).expect("sqlite");
+    conn.with_connection(|conn| run_migrations(conn))
+        .expect("migrations run");
+    let storage = StorageManager::new_with_connection(conn);
+
+    cx.update(|cx| {
+        cx.set_global(GlobalStorageState { storage });
+        one_core::storage::repository::init(cx);
+        let repo = cx
+            .global::<GlobalStorageState>()
+            .storage
+            .get::<PersonalSyncConflictRepository>()
+            .expect("conflict repository registered");
+        repo.upsert(&PersonalSyncConflict {
+            backend_profile_id: "personal".to_string(),
+            record_id: "cloud-1".to_string(),
+            data_type: one_core::cloud_sync::data_type::CONNECTION.to_string(),
+            conflict_type: PersonalConflictType::BothModified,
+            local_snapshot: Some("local".to_string()),
+            remote_snapshot: Some("remote".to_string()),
+            detected_at: 100,
+        })
+        .expect("conflict stored");
+
+        let conflicts = list_personal_conflicts(cx).expect("conflicts list");
+
+        assert_eq!(1, conflicts.len());
+        assert_eq!("cloud-1", conflicts[0].record_id);
+    });
+}
+
+#[test]
+fn personal_sync_resolve_entrypoint_uses_conflict_resolution_strategy() {
+    let _entrypoint: fn(String, ConflictResolution, &mut gpui::App) = resolve_personal_conflict;
 }
 
 fn test_connection(id: i64) -> StoredConnection {

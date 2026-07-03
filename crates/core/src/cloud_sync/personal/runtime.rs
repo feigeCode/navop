@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -91,8 +92,10 @@ impl PersonalSyncWatcher {
         })
         .map_err(|error| SyncStoreError::Io(error.to_string()))?;
 
-        watch_if_exists(&mut watcher, &layout.records_dir())?;
-        watch_if_exists(&mut watcher, &layout.tombstones_dir())?;
+        fs::create_dir_all(layout.records_dir())?;
+        fs::create_dir_all(layout.tombstones_dir())?;
+        watch_required(&mut watcher, &layout.records_dir())?;
+        watch_required(&mut watcher, &layout.tombstones_dir())?;
         Ok(Self {
             _watcher: watcher,
             guard,
@@ -133,11 +136,8 @@ fn all_paths_ignored(paths: &[PathBuf], guard: &Arc<Mutex<SelfWriteGuard>>) -> b
     paths.iter().all(|path| guard.should_ignore(path, now))
 }
 
-fn watch_if_exists(watcher: &mut RecommendedWatcher, path: &Path) -> Result<(), SyncStoreError> {
-    if path.exists() {
-        watcher
-            .watch(path, RecursiveMode::Recursive)
-            .map_err(|error| SyncStoreError::Io(error.to_string()))?;
-    }
-    Ok(())
+fn watch_required(watcher: &mut RecommendedWatcher, path: &Path) -> Result<(), SyncStoreError> {
+    watcher
+        .watch(path, RecursiveMode::Recursive)
+        .map_err(|error| SyncStoreError::Io(error.to_string()))
 }

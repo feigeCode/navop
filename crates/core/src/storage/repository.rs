@@ -913,6 +913,10 @@ pub fn init(cx: &mut App) {
     let sftp_favorite_path_repo = SftpFavoritePathRepository::new(conn.clone());
     let pending_deletion_repo = PendingCloudDeletionRepository::new(conn.clone());
     let team_key_cache_repo = TeamKeyCacheRepository::new(conn.clone());
+    let personal_conflict_repo =
+        crate::cloud_sync::personal::PersonalSyncConflictRepository::new(conn.clone());
+    let personal_status_repo =
+        crate::cloud_sync::personal::PersonalSyncStatusRepository::new(conn.clone());
 
     storage.register(workspace_repo);
     storage.register(conn_repo);
@@ -920,4 +924,6 @@ pub fn init(cx: &mut App) {
     storage.register(sftp_favorite_path_repo);
     storage.register(pending_deletion_repo);
     storage.register(team_key_cache_repo);
+    storage.register(personal_conflict_repo);
+    storage.register(personal_status_repo);
 }

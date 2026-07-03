@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::cloud_sync::personal::{
-    PersonalSyncRuntimeError, SelfWriteGuard, build_personal_sync_runtime_config,
+    PersonalSyncRuntimeError, PersonalSyncWatcher, SelfWriteGuard,
+    build_personal_sync_runtime_config,
 };
 use crate::settings::PersonalSyncSettings;
 
@@ -29,4 +30,16 @@ fn watcher_ignores_self_written_path_within_window() {
 
     assert!(guard.should_ignore(&path, now + Duration::from_millis(500)));
     assert!(!guard.should_ignore(&path, now + Duration::from_secs(3)));
+}
+
+#[test]
+fn watcher_start_creates_missing_record_directories() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let watcher =
+        PersonalSyncWatcher::start(temp.path().to_path_buf(), Duration::from_secs(2), |_| {})
+            .expect("watcher starts");
+
+    assert!(temp.path().join(".onetcli-sync/records").is_dir());
+    assert!(temp.path().join(".onetcli-sync/tombstones").is_dir());
+    drop(watcher);
 }

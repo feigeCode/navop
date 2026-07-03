@@ -104,12 +104,14 @@ impl PersonalSyncStore for DirectorySyncStore {
         expected_version: Option<u32>,
     ) -> Result<CloudSyncData, SyncStoreError> {
         self.initialize_package()?;
+        let existing = self.existing_record(&record.id)?;
         self.ensure_expected_version(&record.id, expected_version)?;
+        let stored = next_stored_record(record.clone(), existing.as_ref());
         write_json_atomically(
-            &self.layout.record_path(&record.data_type, &record.id),
-            record,
+            &self.layout.record_path(&stored.data_type, &stored.id),
+            &stored,
         )?;
-        Ok(record.clone())
+        Ok(stored)
     }
 
     async fn tombstone_record(
@@ -124,6 +126,8 @@ impl PersonalSyncStore for DirectorySyncStore {
         };
 
         record.deleted_at = Some(now_millis());
+        record.updated_at = now_millis();
+        record.version = record.version.saturating_add(1);
         write_json_atomically(&self.layout.record_path(&record.data_type, id), &record)?;
         write_json_atomically(&self.layout.tombstone_path(id), &tombstone_from(&record))?;
         Ok(())
@@ -152,6 +156,19 @@ fn now_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn next_stored_record(
+    mut record: CloudSyncData,
+    existing: Option<&CloudSyncData>,
+) -> CloudSyncData {
+    if let Some(existing) = existing {
+        record.version = existing.version.saturating_add(1);
+    } else {
+        record.version = record.version.max(1);
+    }
+    record.updated_at = now_millis();
+    record
 }
 
 fn record_type_dirs(layout: &SyncPackageLayout) -> Result<Vec<PathBuf>, SyncStoreError> {

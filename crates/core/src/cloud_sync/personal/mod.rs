@@ -1,6 +1,8 @@
 //! Personal sync backends for encrypted user-owned sync records.
 
 mod configured_store;
+mod conflict_resolver;
+mod conflict_sink;
 mod directory_store;
 #[cfg(test)]
 mod directory_store_tests;
@@ -17,6 +19,8 @@ mod worker;
 #[cfg(test)]
 mod configured_store_tests;
 #[cfg(test)]
+mod conflict_resolver_tests;
+#[cfg(test)]
 mod git_store_tests;
 #[cfg(test)]
 mod local_source_tests;
@@ -28,6 +32,8 @@ pub(crate) mod test_support;
 mod worker_tests;
 
 pub use configured_store::*;
+pub use conflict_resolver::*;
+pub use conflict_sink::*;
 pub use directory_store::*;
 pub use file_format::*;
 pub use git_store::*;

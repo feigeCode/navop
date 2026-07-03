@@ -56,6 +56,27 @@ async fn upsert_rejects_stale_expected_version() {
 }
 
 #[tokio::test]
+async fn upsert_advances_version_after_expected_write() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = DirectorySyncStore::new(temp.path().to_path_buf());
+    let record = test_record("connection-1", data_type::CONNECTION, 1, "checksum-1");
+    let first = store
+        .upsert_record(&record, None)
+        .await
+        .expect("seed succeeds");
+
+    let mut changed = first.clone();
+    changed.checksum = "checksum-2".to_string();
+    let second = store
+        .upsert_record(&changed, Some(first.version))
+        .await
+        .expect("expected write succeeds");
+
+    assert_eq!(first.version + 1, second.version);
+    assert!(second.updated_at >= first.updated_at);
+}
+
+#[tokio::test]
 async fn tombstone_marks_record_deleted() {
     let temp = tempfile::tempdir().expect("tempdir");
     let store = DirectorySyncStore::new(temp.path().to_path_buf());
@@ -76,5 +97,28 @@ async fn tombstone_marks_record_deleted() {
         .expect("list succeeds");
 
     assert_eq!(1, records.len());
+    assert!(records[0].deleted_at.is_some());
+}
+
+#[tokio::test]
+async fn tombstone_advances_version() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = DirectorySyncStore::new(temp.path().to_path_buf());
+    let record = test_record("connection-1", data_type::CONNECTION, 1, "checksum-1");
+    let stored = store
+        .upsert_record(&record, None)
+        .await
+        .expect("seed succeeds");
+
+    store
+        .tombstone_record("connection-1", Some(stored.version))
+        .await
+        .expect("tombstone succeeds");
+    let records = store
+        .list_records(Some(data_type::CONNECTION), None)
+        .await
+        .expect("list succeeds");
+
+    assert_eq!(stored.version + 1, records[0].version);
     assert!(records[0].deleted_at.is_some());
 }

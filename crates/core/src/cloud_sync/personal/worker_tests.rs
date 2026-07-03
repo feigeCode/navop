@@ -42,8 +42,12 @@ async fn worker_pauses_conflicting_record() {
     );
 
     worker.enqueue(PersonalSyncEvent::FullScan);
-    worker.drain_once().await.expect("drain succeeds");
+    let error = worker
+        .drain_once()
+        .await
+        .expect_err("conflict pauses sync pass");
 
+    assert!(matches!(error, SyncStoreError::Conflict(_)));
     assert_eq!(vec!["cloud-1"], conflicts.paused_record_ids());
 }
 

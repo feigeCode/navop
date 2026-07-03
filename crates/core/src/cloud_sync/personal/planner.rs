@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::cloud_sync::models::CloudSyncData;
+use serde::{Deserialize, Serialize};
 
 use super::PersonalConflictType;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PersonalSyncItemSnapshot {
     pub local_id: String,
     pub cloud_id: Option<String>,

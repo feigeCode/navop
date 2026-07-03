@@ -3,11 +3,13 @@ use std::time::Duration;
 
 use gpui::{App, AsyncApp, Global, Subscription};
 use one_core::cloud_sync::CloudSyncService;
+use one_core::cloud_sync::ConflictResolution;
 use one_core::cloud_sync::personal::{
-    ConfiguredPersonalSyncStore, PersonalSyncEvent, PersonalSyncLocalRepositorySource,
+    ConfiguredPersonalSyncStore, PersonalSyncConflict, PersonalSyncConflictRepository,
+    PersonalSyncConflictResolver, PersonalSyncEvent, PersonalSyncLocalRepositorySource,
     PersonalSyncRuntimeConfig, PersonalSyncRuntimeError, PersonalSyncStore, PersonalSyncWatcher,
-    PersonalSyncWorker, SyncDeviceId, SyncStoreError, SyncStoreHealth,
-    build_personal_sync_runtime_config,
+    PersonalSyncWorker, SqlitePersonalSyncConflictSink, SyncDeviceId, SyncStoreError,
+    SyncStoreHealth, WorkerConfig, build_personal_sync_runtime_config,
 };
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::crypto;
@@ -25,6 +27,7 @@ pub struct GlobalPersonalSyncRuntime {
     service: Arc<RwLock<CloudSyncService>>,
     status: PersonalSyncRuntimeStatus,
     generation: u64,
+    pending_auto_drain: bool,
     _settings_subscription: Subscription,
     _local_event_subscription: Option<Subscription>,
 }
@@ -33,9 +36,15 @@ impl Global for GlobalPersonalSyncRuntime {}
 
 struct RunningPersonalSyncRuntime {
     store: ConfiguredPersonalSyncStore,
-    worker: PersonalSyncWorker<ConfiguredPersonalSyncStore, PersonalSyncLocalRepositorySource>,
+    worker: RunningPersonalSyncWorker,
     _watcher: Option<PersonalSyncWatcher>,
 }
+
+type RunningPersonalSyncWorker = PersonalSyncWorker<
+    ConfiguredPersonalSyncStore,
+    PersonalSyncLocalRepositorySource,
+    SqlitePersonalSyncConflictSink,
+>;
 
 pub fn init(cx: &mut App) {
     let settings_subscription = cx.observe_global::<AppSettings>(reconcile_runtime);
@@ -46,6 +55,7 @@ pub fn init(cx: &mut App) {
         service: Arc::new(RwLock::new(CloudSyncService::new())),
         status: PersonalSyncRuntimeStatus::Disabled,
         generation: 0,
+        pending_auto_drain: false,
         _settings_subscription: settings_subscription,
         _local_event_subscription: local_event_subscription,
     });
@@ -91,6 +101,16 @@ pub fn test_connection(cx: &mut App) {
 }
 
 pub fn sync_now(cx: &mut App) {
+    sync_master_key_and_user(cx);
+    if let Some(runtime) = cx
+        .try_global::<GlobalPersonalSyncRuntime>()
+        .and_then(|state| state.runtime.as_ref())
+    {
+        runtime.worker.enqueue(PersonalSyncEvent::FullScan);
+        start_runtime_drain(cx);
+        return;
+    }
+
     let Some(config) = active_or_current_config(cx) else {
         set_status(cx, PersonalSyncRuntimeStatus::Disabled);
         return;
@@ -102,19 +122,69 @@ pub fn sync_now(cx: &mut App) {
         );
         return;
     };
+    let Some(conflict_sink) = build_conflict_sink(cx) else {
+        set_status(
+            cx,
+            PersonalSyncRuntimeStatus::failed("personal sync conflict storage is unavailable"),
+        );
+        return;
+    };
+    run_temporary_full_scan(cx, config, source, conflict_sink);
+}
+
+pub(crate) fn list_personal_conflicts(
+    cx: &App,
+) -> Result<Vec<PersonalSyncConflict>, SyncStoreError> {
+    let conflicts = build_conflict_repository(cx).ok_or(SyncStoreError::NotConfigured)?;
+    conflicts
+        .list("personal")
+        .map_err(|error| SyncStoreError::Io(error.to_string()))
+}
+
+pub fn resolve_personal_conflict(record_id: String, strategy: ConflictResolution, cx: &mut App) {
     sync_master_key_and_user(cx);
-    let service = cx.global::<GlobalPersonalSyncRuntime>().service.clone();
+    let Some(config) = active_or_current_config(cx) else {
+        set_status(cx, PersonalSyncRuntimeStatus::Disabled);
+        return;
+    };
+    let Some(source) = build_local_source(cx) else {
+        set_status(
+            cx,
+            PersonalSyncRuntimeStatus::failed("personal sync storage is unavailable"),
+        );
+        return;
+    };
+    let Some(conflicts) = build_conflict_repository(cx) else {
+        set_status(
+            cx,
+            PersonalSyncRuntimeStatus::failed("personal sync conflict storage is unavailable"),
+        );
+        return;
+    };
+
     let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
-    let task = Tokio::spawn(cx, run_sync(config, source, service));
+    let task = Tokio::spawn(cx, async move {
+        resolve_personal_conflict_once(config, source, (*conflicts).clone(), record_id, strategy)
+            .await
+    });
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let status = match task.await {
-            Ok(Ok(())) => PersonalSyncRuntimeStatus::Ready {
-                health: SyncStoreHealth::Ready,
-                message: None,
-            },
-            Ok(Err(error)) => PersonalSyncRuntimeStatus::from_error(error),
-            Err(error) => PersonalSyncRuntimeStatus::failed(&error.to_string()),
-        };
+        let status = personal_sync_status_from_task(task.await);
+        let _ = cx.update(move |cx| finish_operation(cx, generation, status));
+        Ok::<(), anyhow::Error>(())
+    })
+    .detach();
+}
+
+fn run_temporary_full_scan(
+    cx: &mut App,
+    config: PersonalSyncRuntimeConfig,
+    source: PersonalSyncLocalRepositorySource,
+    conflict_sink: SqlitePersonalSyncConflictSink,
+) {
+    let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
+    let task = Tokio::spawn(cx, run_sync(config, source, conflict_sink));
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let status = personal_sync_status_from_task(task.await);
         let _ = cx.update(move |cx| finish_operation(cx, generation, status));
         Ok::<(), anyhow::Error>(())
     })
@@ -171,11 +241,13 @@ fn start_running_runtime(
     config: &PersonalSyncRuntimeConfig,
 ) -> Result<RunningPersonalSyncRuntime, SyncStoreError> {
     let source = build_local_source(cx).ok_or(SyncStoreError::NotConfigured)?;
+    let conflict_sink = build_conflict_sink(cx).ok_or(SyncStoreError::NotConfigured)?;
     let store = ConfiguredPersonalSyncStore::from_runtime_config(config);
-    let worker = PersonalSyncWorker::new(
+    let worker = PersonalSyncWorker::with_conflict_sink(
         store.clone(),
         source,
-        one_core::cloud_sync::personal::WorkerConfig {
+        conflict_sink,
+        WorkerConfig {
             backend_profile_id: "personal".to_string(),
             device_id: SyncDeviceId("local-device".to_string()),
         },
@@ -258,6 +330,26 @@ fn enqueue_auto_sync_event(event: PersonalSyncEvent, cx: &mut App) {
         return;
     }
     sync_master_key_and_user(cx);
+    let Some(runtime) = cx
+        .try_global::<GlobalPersonalSyncRuntime>()
+        .and_then(|state| state.runtime.as_ref())
+    else {
+        return;
+    };
+    runtime.worker.enqueue(event);
+    if !should_start_drain_after_enqueue(&runtime_status(cx)) {
+        cx.global_mut::<GlobalPersonalSyncRuntime>()
+            .pending_auto_drain = true;
+        return;
+    }
+    start_runtime_drain(cx);
+}
+
+pub(crate) fn should_start_drain_after_enqueue(status: &PersonalSyncRuntimeStatus) -> bool {
+    !matches!(status, PersonalSyncRuntimeStatus::Syncing)
+}
+
+fn start_runtime_drain(cx: &mut App) {
     let Some(state) = cx.try_global::<GlobalPersonalSyncRuntime>() else {
         return;
     };
@@ -269,26 +361,18 @@ fn enqueue_auto_sync_event(event: PersonalSyncEvent, cx: &mut App) {
     };
     let worker = runtime.worker.clone();
     let store = runtime.store.clone();
-    worker.enqueue(event);
     let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
     let task = Tokio::spawn(cx, drain_and_flush(worker, store));
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let status = match task.await {
-            Ok(Ok(())) => PersonalSyncRuntimeStatus::Ready {
-                health: SyncStoreHealth::Ready,
-                message: None,
-            },
-            Ok(Err(error)) => PersonalSyncRuntimeStatus::from_error(error),
-            Err(error) => PersonalSyncRuntimeStatus::failed(&error.to_string()),
-        };
-        let _ = cx.update(move |cx| finish_operation(cx, generation, status));
+        let status = personal_sync_status_from_task(task.await);
+        let _ = cx.update(move |cx| finish_operation_and_maybe_drain(cx, generation, status));
         Ok::<(), anyhow::Error>(())
     })
     .detach();
 }
 
 async fn drain_and_flush(
-    worker: PersonalSyncWorker<ConfiguredPersonalSyncStore, PersonalSyncLocalRepositorySource>,
+    worker: RunningPersonalSyncWorker,
     store: ConfiguredPersonalSyncStore,
 ) -> Result<(), SyncStoreError> {
     worker.drain_once().await?;
@@ -313,7 +397,7 @@ fn start_periodic_auto_sync(cx: &mut App) {
 fn start_watcher(
     cx: &App,
     root: std::path::PathBuf,
-    worker: PersonalSyncWorker<ConfiguredPersonalSyncStore, PersonalSyncLocalRepositorySource>,
+    worker: RunningPersonalSyncWorker,
     store: ConfiguredPersonalSyncStore,
 ) -> Result<PersonalSyncWatcher, SyncStoreError> {
     let handle = Tokio::handle(cx);
@@ -336,19 +420,54 @@ fn start_watcher(
 async fn run_sync(
     config: PersonalSyncRuntimeConfig,
     source: PersonalSyncLocalRepositorySource,
-    _service: Arc<RwLock<CloudSyncService>>,
+    conflict_sink: SqlitePersonalSyncConflictSink,
 ) -> Result<(), SyncStoreError> {
     let store = ConfiguredPersonalSyncStore::from_runtime_config(&config);
-    let worker = PersonalSyncWorker::new(
+    let worker = PersonalSyncWorker::with_conflict_sink(
         store.clone(),
         source,
-        one_core::cloud_sync::personal::WorkerConfig {
+        conflict_sink,
+        WorkerConfig {
             backend_profile_id: "personal".to_string(),
             device_id: SyncDeviceId("local-device".to_string()),
         },
     );
     worker.enqueue(PersonalSyncEvent::FullScan);
     worker.drain_once().await?;
+    store.flush().await
+}
+
+pub(crate) fn build_conflict_sink(cx: &App) -> Option<SqlitePersonalSyncConflictSink> {
+    let conflicts = build_conflict_repository(cx)?;
+    Some(SqlitePersonalSyncConflictSink::new(
+        "personal".to_string(),
+        conflicts,
+    ))
+}
+
+fn build_conflict_repository(cx: &App) -> Option<Arc<PersonalSyncConflictRepository>> {
+    let storage = cx.try_global::<GlobalStorageState>()?.storage.clone();
+    storage.get::<PersonalSyncConflictRepository>()
+}
+
+async fn resolve_personal_conflict_once(
+    config: PersonalSyncRuntimeConfig,
+    source: PersonalSyncLocalRepositorySource,
+    conflicts: PersonalSyncConflictRepository,
+    record_id: String,
+    strategy: ConflictResolution,
+) -> Result<(), SyncStoreError> {
+    let conflict = conflicts
+        .list("personal")
+        .map_err(|error| SyncStoreError::Io(error.to_string()))?
+        .into_iter()
+        .find(|conflict| conflict.record_id == record_id)
+        .ok_or_else(|| {
+            SyncStoreError::Parse(format!("personal sync conflict not found: {record_id}"))
+        })?;
+    let store = ConfiguredPersonalSyncStore::from_runtime_config(&config);
+    let resolver = PersonalSyncConflictResolver::new(store.clone(), source, conflicts);
+    resolver.resolve(&conflict, strategy).await?;
     store.flush().await
 }
 
@@ -408,6 +527,38 @@ fn finish_operation(cx: &mut App, generation: u64, status: PersonalSyncRuntimeSt
     let state = cx.global_mut::<GlobalPersonalSyncRuntime>();
     if state.generation == generation {
         state.status = status;
+    }
+}
+
+fn finish_operation_and_maybe_drain(
+    cx: &mut App,
+    generation: u64,
+    status: PersonalSyncRuntimeStatus,
+) {
+    let should_drain = {
+        let state = cx.global_mut::<GlobalPersonalSyncRuntime>();
+        if state.generation == generation {
+            state.status = status;
+        }
+        let pending = state.pending_auto_drain;
+        state.pending_auto_drain = false;
+        pending
+    };
+    if should_drain {
+        start_runtime_drain(cx);
+    }
+}
+
+fn personal_sync_status_from_task(
+    result: Result<Result<(), SyncStoreError>, tokio::task::JoinError>,
+) -> PersonalSyncRuntimeStatus {
+    match result {
+        Ok(Ok(())) => PersonalSyncRuntimeStatus::Ready {
+            health: SyncStoreHealth::Ready,
+            message: None,
+        },
+        Ok(Err(error)) => PersonalSyncRuntimeStatus::from_error(error),
+        Err(error) => PersonalSyncRuntimeStatus::failed(&error.to_string()),
     }
 }
 

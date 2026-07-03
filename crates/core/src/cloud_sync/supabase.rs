@@ -1940,6 +1940,8 @@ impl CloudApiClient for SupabaseClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::FutureExt;
+    use std::sync::Mutex;
 
     #[test]
     fn team_member_row_preserves_admin_role() {
@@ -1964,5 +1966,119 @@ mod tests {
         assert_eq!(SupabaseClient::url_encode("hello"), "hello");
         assert_eq!(SupabaseClient::url_encode("hello world"), "hello%20world");
         assert_eq!(SupabaseClient::url_encode("a+b=c"), "a%2Bb%3Dc");
+    }
+
+    #[tokio::test]
+    async fn update_sync_data_uses_id_and_version_filter() {
+        let http = Arc::new(RecordingHttpClient::respond_json(
+            200,
+            r#"[{"id":"cloud-1","owner_id":"user-1","team_id":null,"data_type":"connection","encrypted_data":"enc","key_version":1,"checksum":"b","version":8,"updated_at":"2026-07-03T00:00:00Z","deleted_at":null}]"#,
+        ));
+        let client = SupabaseClient::new(test_config(), http.clone());
+        client.set_auth(
+            "access".to_string(),
+            "refresh".to_string(),
+            "user-1".to_string(),
+        );
+
+        let mut data = test_cloud_sync_data();
+        data.id = "cloud-1".to_string();
+        data.version = 7;
+        data.checksum = "b".to_string();
+        let updated = client
+            .update_sync_data(&data)
+            .await
+            .expect("update succeeds");
+        let url = http.last_url();
+
+        assert_eq!(8, updated.version);
+        assert!(url.contains("id=eq.cloud-1"));
+        assert!(url.contains("version=eq.7"));
+    }
+
+    #[tokio::test]
+    async fn update_sync_data_empty_patch_response_is_conflict() {
+        let http = Arc::new(RecordingHttpClient::respond_json(200, "[]"));
+        let client = SupabaseClient::new(test_config(), http);
+        client.set_auth(
+            "access".to_string(),
+            "refresh".to_string(),
+            "user-1".to_string(),
+        );
+
+        let error = client
+            .update_sync_data(&test_cloud_sync_data())
+            .await
+            .expect_err("empty response means version filter matched no rows");
+
+        assert!(matches!(error, CloudApiError::Conflict(_)));
+    }
+
+    struct RecordingHttpClient {
+        status: u16,
+        body: &'static str,
+        last_url: Mutex<Option<String>>,
+    }
+
+    impl RecordingHttpClient {
+        fn respond_json(status: u16, body: &'static str) -> Self {
+            Self {
+                status,
+                body,
+                last_url: Mutex::new(None),
+            }
+        }
+
+        fn last_url(&self) -> String {
+            self.last_url
+                .lock()
+                .expect("last_url lock")
+                .clone()
+                .expect("request captured")
+        }
+    }
+
+    impl HttpClient for RecordingHttpClient {
+        fn user_agent(&self) -> Option<&gpui::http_client::http::HeaderValue> {
+            None
+        }
+
+        fn send(
+            &self,
+            req: Request<AsyncBody>,
+        ) -> futures::future::BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
+            *self.last_url.lock().expect("last_url lock") = Some(req.uri().to_string());
+            let response = Response::builder()
+                .status(self.status)
+                .body(AsyncBody::from(self.body.as_bytes().to_vec()))
+                .map_err(|error| anyhow!("build response failed: {error}"));
+            async move { response }.boxed()
+        }
+
+        fn proxy(&self) -> Option<&gpui::http_client::Url> {
+            None
+        }
+    }
+
+    fn test_config() -> SupabaseConfig {
+        SupabaseConfig {
+            project_url: "https://project.supabase.co".to_string(),
+            api_key: "anon".to_string(),
+        }
+    }
+
+    fn test_cloud_sync_data() -> CloudSyncData {
+        CloudSyncData {
+            id: "cloud-1".to_string(),
+            owner_id: "user-1".to_string(),
+            team_id: None,
+            data_type: data_type::CONNECTION.to_string(),
+            encrypted_data: "enc".to_string(),
+            key_version: 1,
+            checksum: "a".to_string(),
+            version: 7,
+            updated_at: 1_000,
+            deleted_at: None,
+        }
     }
 }
