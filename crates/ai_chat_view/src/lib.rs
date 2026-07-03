@@ -37,6 +37,7 @@ mod default_panel_tests;
 mod input;
 mod message;
 mod message_code_actions;
+mod message_tool_group;
 mod message_view;
 mod model_settings;
 mod persistence;
