@@ -190,9 +190,11 @@ CLI 工具：
   `id` / `label` / `alias` 解析为资源 id；歧义 target 会失败。
 - 当底层 runtime handler 还没迁移为 target-native 时，adapter 在内部把
   `target` 映射回 handler 需要的 provider 字段。
-- 当前真实 App registry 还没有把完整 `ResourcePool` 接入
-  `ToolRuntimeMcpProvider`；未配置 pool 的 provider 仍会把显式 `target` 值直接
-  传给 provider 字段，后续需要接入真实资源池快照。
+- 真实 Public MCP App registry 已经把 saved connections 转成 `ResourcePool`
+  并接入 `ToolRuntimeMcpProvider`。saved connection 的 id、name、`cloud_id`
+  以及 host/path alias 可用于解析 `target`。
+- active terminal sessions 和 active Redis snapshots 尚未进入这个 app resource
+  pool；这些后续需要继续补齐。
 
 ## 3. Agent Runtime 工具集
 
@@ -344,6 +346,7 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
   provider 字段也会被拒绝。
 - runtime-backed Public MCP provider 支持可选 `ResourcePool`，配置后按资源
   id / label / alias 解析 target。
+- 真实 Public MCP app registry 已接入 saved-connection `ResourcePool`。
 
 关键类型：
 
@@ -370,6 +373,8 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
   `target` 参数。
 - runtime-backed Public MCP tools 使用 `target` 参数，并拒绝旧 provider 字段。
 - `ToolRuntimeMcpProvider` 支持 provider-level `ResourcePool` target 解析。
+- 真实 Public MCP app registry 已把 saved connections 作为资源池传给
+  `ToolRuntimeMcpProvider`。
 - `db.tables`、`db.describe_table`、`db.sample_rows` 已作为 canonical DB metadata
   工具补齐，并通过 Agent bridge 暴露为 `db_tables`、`db_describe_table`、
   `db_sample_rows`。
@@ -377,8 +382,8 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 
 暂未做：
 
-- 真实 Public MCP app registry 还没有把资源池快照传给
-  `ToolRuntimeMcpProvider`。
+- active terminal sessions 和 active Redis snapshots 还没有进入真实 Public MCP
+  app resource pool。
 - 底层 runtime handler、CLI 和部分非 runtime-backed Public MCP provider 仍使用 `connection`、
   `connection_id` 或 `session_id`，后续需要继续收敛到 runtime-core target
   resolution。
