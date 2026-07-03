@@ -83,16 +83,16 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 5b Resource Pool membership | Done | `1e980c66 feat(ai_chat): add resource pool item display model`, `f271dc59 feat(ai_chat): add available resource catalog`, `07a8b217 feat(ai_chat): map resource catalog to pool rows`, `666b55a2 feat(ai_chat): render resource pool membership actions`, `f7099082 feat(ai_chat): handle resource pool membership changes`, `cf3babff feat(ai_chat): build resource catalog for pool management`, `00094e15 docs: track resource pool management checkpoint` | Wire real entry points so sidebars pass broader catalogs instead of only the selected pool. |
 | Phase 5c Sidebar catalog wiring | Done | `a2cd12e feat(ai_chat): wire resource catalog into sidebars` wires DB, Redis, and Mongo sidebars through catalog-aware default panel APIs. Focused `ai_chat_view` tests and checks for `ai_chat_view`, `db_view`, `redis_view`, and `mongodb_view` passed on 2026-07-02. | Start Phase 5d resource source presets or run manual resource-pool smoke. |
 | Phase 5d Resource source presets | Done | `9f10d13 feat(ai_chat): add resource source option model`, `cd8839d feat(ai_chat): derive resource source options`, `f90e41b feat(ai_chat): apply resource source presets`, and `a78388c feat(ai_chat): render resource source presets` add current/all/type/manual source presets while keeping workspace/tag disabled until real metadata exists. `resource_source`, `resource_pool`, and `cargo check -p ai_chat_view` passed on 2026-07-02. | Run manual resource-pool smoke and keep persisted workspace/tag presets for a later storage-backed checkpoint. |
-| Phase 6 Multi-resource execution | Done | `23cbec8 feat(agent): batch executable tool calls`, `29e6f01 feat(agent): dispatch parallel-safe tool batches`, `4743915 test(agent): preserve parallel tool safety semantics`, `2172776 feat(ai_chat): show tool result target resources`, `d51e7a2 feat(ai_chat): group tool results by target`, and `16ab3e3 feat(agent): batch sibling high risk approvals` add safe parallel dispatch, preserve approval gating, keep observation order deterministic, show target resource labels on tool result cards, fold consecutive same-target tool results under a target header, and let one approval resume same-response sibling high-risk tool calls. `agent_runtime` Phase 6 checks passed on 2026-07-02; `ai_chat_view` target grouping and `agent_runtime` batched approval checks passed on 2026-07-03. | Add a dedicated UI batch approval card in a later checkpoint. |
+| Phase 6 Multi-resource execution | Done | `23cbec8 feat(agent): batch executable tool calls`, `29e6f01 feat(agent): dispatch parallel-safe tool batches`, `4743915 test(agent): preserve parallel tool safety semantics`, `2172776 feat(ai_chat): show tool result target resources`, `d51e7a2 feat(ai_chat): group tool results by target`, `16ab3e3 feat(agent): batch sibling high risk approvals`, and `a6bc8cf feat(ai_chat): render batched tool approvals` add safe parallel dispatch, preserve approval gating, keep observation order deterministic, show target resource labels on tool result cards, fold consecutive same-target tool results under a target header, let one approval resume same-response sibling high-risk tool calls, and render batched approval cards with per-call summaries. `agent_runtime` Phase 6 checks passed on 2026-07-02; `ai_chat_view` target grouping, batched approval UI, and `agent_runtime` batched approval checks passed on 2026-07-03. | Run manual terminal/resource-pool smoke and continue migrating remaining tool families through `tool_runtime`. |
 
 ### Active Checkpoint
 
-Current checkpoint: Phase 3c manual terminal-exec smoke and batched approval UI follow-up.
+Current checkpoint: Phase 3c manual terminal-exec smoke and remaining tool-runtime migration.
 
 Purpose:
 
 1. Verify `terminal.exec` writes into the visible terminal pane with real app behavior.
-2. Add a dedicated batch approval card for multi-resource high-risk operations.
+2. Run manual resource-pool smoke for source presets.
 3. Keep side-panel sessions single-resource by default while allowing explicit expansion
    from a broader catalog.
 4. Keep persisted workspace/tag presets deferred until a real workspace/tag resource
@@ -103,16 +103,18 @@ Purpose:
 Last completed checkpoint:
 
 ```text
-16ab3e3 feat(agent): batch sibling high risk approvals
+a6bc8cf feat(ai_chat): render batched tool approvals
 ```
 
 Last checkpoint verification run:
 
 ```bash
+rtk cargo test -p ai_chat_view need_user_input_renders_batch_tool_confirm_items
+rtk cargo test -p ai_chat_view batch_tool_confirm_card_data_roundtrips_and_titles_as_batch
 rtk cargo test -p agent_runtime auto_tool_mode_batches_sibling_high_risk_approvals
 rtk cargo test -p agent_runtime --test high_risk_approval
-rtk cargo test -p agent_runtime manual_mode_pauses_parallel_safe_tool_before_dispatch
 rtk cargo check -p agent_runtime
+rtk cargo check -p ai_chat_view
 rtk git diff --check
 ```
 
@@ -132,7 +134,7 @@ Next recommended checkpoints:
 1. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
    through `terminal.exec`.
 2. Run manual resource-pool smoke for source presets.
-3. Add a dedicated UI batch approval card for multi-resource high-risk operations.
+3. Continue migrating remaining business tool families through `tool_runtime`.
 
 ## Design Principles
 
