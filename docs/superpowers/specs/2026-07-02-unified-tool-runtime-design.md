@@ -18,6 +18,39 @@ Agent / ACP、Public MCP、CLI、UI 只作为入口适配器存在，不再拥�
 4. 操作风险多高。
 5. 是否需要确认。
 
+## Tracking Guide
+
+本文档是 Unified Tool Runtime 迁移的架构事实来源。后续每个实现检查点都应同步更新本节，确保下一个执行者不需要重新翻完整对话也能继续推进。
+
+跟踪规则：
+
+1. 产品语义保持稳定：唯一产品级工具内核是 `OnetCli Tool Runtime`。
+2. 每完成一个检查点，都更新下方阶段表。
+3. 架构决策写入 Decision Log，不埋在临时实现计划里。
+4. 兼容承诺必须显式记录，尤其是旧工具名和旧设置值。
+5. 只有记录了验收项和验证命令后，阶段状态才能标记为 `Accepted`。
+
+状态值：
+
+```text
+Planned      范围已定义，但尚无已验收实现。
+In Progress  实现或迁移已经开始。
+Accepted     验收项已记录，验证已通过。
+Deferred     有明确原因的延后。
+Blocked      缺少产品或技术决策，无法继续推进。
+```
+
+当前检查点摘要：
+
+| Area | Status | Tracking note |
+| --- | --- | --- |
+| Target architecture | Accepted | `tool_runtime` 是唯一执行内核；Agent / MCP / CLI / UI 是入口适配器。 |
+| Resource terminology | Accepted | 使用 `default_target` 和 `resource_pool`，避免把“当前上下文”误解为能力边界。 |
+| Canonical tool naming | Accepted | Agent 只看到 canonical id；旧工具名作为 alias 兼容。 |
+| Terminal execution semantics | Accepted | 新增 `terminal.exec` 表示可见终端输入执行；保留 `ssh.exec` 表示结构化远程执行。 |
+| Permission product model | Accepted | 产品档位是 `Safe`、`Confirm`、`Auto`、`Unrestricted`；旧 MCP / Agent 设置在迁移期映射到这些档位。 |
+| Phase implementation state | In Progress | 每个迁移检查点落地时都要更新阶段表。 |
+
 ## Current State
 
 当前仓库已经具备部分统一基础，但仍存在三套工具边界：
@@ -153,6 +186,8 @@ connections.show
 connections.open_session
 workspaces.list
 workspaces.show
+
+terminal.exec
 ```
 
 Compatibility aliases:
@@ -173,6 +208,15 @@ ssh_read_file         -> sftp.read
 ssh_write_file        -> sftp.write
 ssh_file_stat         -> sftp.stat
 ```
+
+终端工具命名决策：
+
+1. `ssh.exec` 表示结构化、非交互式 SSH 命令执行。provider 支持时，它可以返回捕获到的 stdout / stderr / exit status。
+2. `terminal.exec` 表示“把命令输入到可见终端并提交”，效果应和用户在终端 UI 手动输入一致。
+3. 除非后续实现真实的终端输出捕获 contract，否则 `terminal.exec` 不能伪造进程输出或退出码。
+4. 现有 SSH 工具和 alias 继续保留。新的终端工具是新增能力，不替代旧工具。
+5. 用户表达“在当前终端执行 / 就在这个终端里执行 / 和终端输入一样”时，Agent guidance 应优先选择 `terminal.exec`。
+6. 用户需要结构化后台远程执行、输出捕获，或不要求命令出现在可见终端面板时，Agent guidance 应优先选择 `ssh.exec`。
 
 ### ToolDescriptor
 
@@ -520,6 +564,46 @@ Target resolution must fail closed:
 
 ## Migration Strategy
 
+### Phase Tracking Table
+
+每个检查点都要更新这张表。只有验收项已验证，并且验证证据写入阶段计划或提交说明后，阶段状态才能标记为 `Accepted`。
+
+| Phase | Status | Primary files | Acceptance evidence |
+| --- | --- | --- | --- |
+| Phase 1: Core Models | In Progress | `crates/tool_runtime/*`, `crates/tool_runtime/tests/*` | 覆盖核心模型、权限、alias、目标解析测试。 |
+| Phase 2: Agent Adapter | Planned | `crates/agent_runtime/*`, prompt builders, adapter tests | Agent 能看到 canonical tools，并发出 runtime invocation。 |
+| Phase 3: Business Tool Migration | Planned | DB / SFTP / SSH / Redis / terminal tool providers | 旧 alias 和新 canonical id 调用同一行为。 |
+| Phase 3a: Terminal Execution Tool | Planned | `terminal_view`, Agent tool prompt, runtime provider registration | `terminal.exec` 通过可见终端输入提交命令，旧 SSH 工具保持不变。 |
+| Phase 4: Public MCP Adapter | Planned | `crates/public_mcp/*`, `main/src/public_mcp_runtime/*`, settings mapping | MCP tools/list 和 tools/call 使用 runtime catalog 与 runtime permission policy。 |
+| Phase 5: Resource Pool UI | Planned | `ai_chat_view`, settings/resource selectors | UI 暴露资源池、默认目标、多选和筛选。 |
+| Phase 6: Multi-Resource Execution | Planned | `ToolRouter`, Agent planning, result cards | 多目标只读任务使用显式 target 执行，并按 target 分组展示结果。 |
+
+### Checkpoint Template
+
+每个阶段计划或提交摘要应包含：
+
+```text
+Checkpoint:
+  Phase:
+  Scope:
+  Compatibility kept:
+  User-visible behavior:
+  Verification:
+  Follow-up:
+```
+
+终端执行检查点示例：
+
+```text
+Checkpoint:
+  Phase: Phase 3a: Terminal Execution Tool
+  Scope: 新增 runtime-backed terminal.exec，通过可见终端 input handle 提交文本。
+  Compatibility kept: 保持 ssh.exec 和历史 SSH alias 行为不变。
+  User-visible behavior: “就在这个终端里执行 df -h” 使用终端面板，不走后台 SSH command。
+  Verification: descriptor / registration 单元测试，加 SSH terminal tab 手动冒烟。
+  Follow-up: 只有实现终端输出捕获 contract 后，才增加真实输出同步。
+```
+
 ### Phase 1: Core Models
 
 Scope:
@@ -679,6 +763,78 @@ Manual smoke scenarios after UI migration:
 2. Multi-SSH Agent tab checks disk usage on three resources.
 3. Confirm profile blocks and resumes a high-risk operation.
 4. MCP client calls a compatibility alias and canonical id.
+5. Visible terminal execution:
+   - Open an SSH terminal tab.
+   - Ask Agent: “就在这个终端里执行 df -h”.
+   - Confirm the command appears in the visible terminal pane.
+   - Confirm the tool card uses `terminal.exec` semantics, not `ssh.exec`.
+   - Confirm the result does not fabricate stdout, stderr, or exit status when no capture contract exists.
+
+## Decision Log
+
+### 2026-07-02: Use Tool Runtime As The Only Tool Kernel
+
+Decision:
+
+所有业务工具能力都收敛到 `tool_runtime::ToolRegistry`。Agent、MCP、CLI、UI 都是同一个 registry 之上的入口适配器。
+
+Reason:
+
+这样可以移除重复产品语义，避免 Agent 和 MCP 在权限、目标资源、审计结果上出现分歧。
+
+Compatibility:
+
+旧 Agent 和 MCP 工具名继续作为 alias 保留，直到可以安全移除外部兼容路径。
+
+### 2026-07-02: Rename Context Semantics To Resource Pool
+
+Decision:
+
+使用 `default_target` 表示默认资源，使用 `resource_pool` 表示本任务允许操作的全部资源。
+
+Reason:
+
+默认目标只是便利入口，不能被理解为能力边界。否则多机器协作会变得不自然，并诱导 Agent 在目标推断上做危险猜测。
+
+Compatibility:
+
+现有 `ResourceContext.current` 可以迁移为 `default_target`；已列出的资源集合迁移为 `resources`。
+
+### 2026-07-02: Add `terminal.exec` Instead Of Replacing `ssh.exec`
+
+Decision:
+
+保留 `ssh.exec` 作为结构化远程命令工具，新增 `terminal.exec` 表示可见终端输入执行。
+
+Reason:
+
+用户要求的是终端执行效果：命令应像用户手动输入一样进入终端。结构化 SSH 执行和可见终端执行在输出、取消、审计 contract 上不同，所以不应让一个工具假装同时提供两种行为。
+
+Compatibility:
+
+之前的 SSH 工具和 alias 继续可用。Agent selection guidance 负责决定什么时候使用新的终端工具。
+
+### 2026-07-02: Map Old Permission Settings Into Runtime Profiles
+
+Decision:
+
+迁移期间保留旧持久化设置值，但将它们映射到 runtime `PermissionProfile`。
+
+Mapping:
+
+```text
+MCP deny  -> Safe
+MCP ask   -> Confirm
+MCP allow -> Auto
+
+Agent readonly -> Safe
+Agent manual   -> Confirm
+Agent auto     -> Auto
+```
+
+Reason:
+
+这样可以避免破坏性设置迁移，同时确保 runtime-backed tools 使用同一套权限决策模型。
 
 ## Risks And Mitigations
 
