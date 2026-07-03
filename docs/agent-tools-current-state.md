@@ -186,15 +186,22 @@ CLI 工具：
 
 - `tools/list` 会把 provider-specific target 字段改写成 `target`。
 - `tools/call` 会拒绝 `connection` / `connection_id` / `session_id`。
-- 如果 `ToolRuntimeMcpProvider` 配置了 `ResourcePool`，`target` 会先按资源
-  `id` / `label` / `alias` 解析为资源 id；歧义 target 会失败。
+- 如果 `ToolRuntimeMcpProvider` 配置了 `ResourcePoolProvider`，`target` 会在每次
+  调用时按最新资源池解析，而不是使用 server 启动时的资源快照。
+- `target` 解析按资源 `id` / `label` / `alias`、工具支持的 `ResourceKind`、
+  以及 linked resource 规则执行；歧义或未知 target 会失败。
 - 当底层 runtime handler 还没迁移为 target-native 时，adapter 在内部把
   `target` 映射回 handler 需要的 provider 字段。
 - 真实 Public MCP App registry 已经把 saved connections 转成 `ResourcePool`
-  并接入 `ToolRuntimeMcpProvider`。saved connection 的 id、name、`cloud_id`
-  以及 host/path alias 可用于解析 `target`。
-- active terminal sessions 和 active Redis snapshots 尚未进入这个 app resource
-  pool；这些后续需要继续补齐。
+  provider 并接入 `ToolRuntimeMcpProvider`。saved connection 的 id、name、
+  `cloud_id` 以及 host/path alias 可用于解析 `target`。
+- active terminal sessions 也会进入 app resource pool。`terminal.exec`、`ssh.exec`
+  和 `ssh.session_diagnostics` 按 `ResourceKind::Terminal` 解析 target。
+- 对终端工具，如果模型传 saved SSH connection id（例如 `21`）、host/IP
+  alias（例如 `10.2.4.54`）、或终端 prompt 形态（例如 `root@zn-54:~`），adapter
+  会先在资源池中定位 saved SSH/terminal 资源，再通过连接 id alias 映射到实际
+  active terminal session id。
+- active Redis snapshots 尚未进入这个 app resource pool；后续需要继续补齐。
 
 ## 3. Agent Runtime 工具集
 
@@ -357,9 +364,13 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
   provider 字段；如果模型直接传 provider 字段，Agent adapter 会拒绝。
 - runtime-backed Public MCP 工具 schema 同样暴露 `target`，MCP client 直接传
   provider 字段也会被拒绝。
-- runtime-backed Public MCP provider 支持可选 `ResourcePool`，配置后按资源
-  id / label / alias 解析 target。
-- 真实 Public MCP app registry 已接入 saved-connection `ResourcePool`。
+- runtime-backed Public MCP provider 支持 call-time `ResourcePoolProvider`，配置后按
+  资源 id / label / alias / tool target kind / linked resource 解析 target。
+- 真实 Public MCP app registry 已接入 saved connections 和 active terminal
+  sessions。终端工具可以接受 linked saved SSH target，例如连接 id、host/IP alias
+  或 `root@host:~` prompt-like target。
+- `agent_runtime::ResourceRef` 已支持 aliases；`ai_chat_view` 构建 Agent resource
+  pool 时会把连接 `cloud_id`、host/hostname/path 参数加入 alias。
 
 关键类型：
 
@@ -385,9 +396,13 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 - Agent prompt 的资源段使用“资源池 / 默认目标”语义，并要求工具调用使用
   `target` 参数。
 - runtime-backed Public MCP tools 使用 `target` 参数，并拒绝旧 provider 字段。
-- `ToolRuntimeMcpProvider` 支持 provider-level `ResourcePool` target 解析。
+- `ToolRuntimeMcpProvider` 支持 provider-level dynamic `ResourcePoolProvider`
+  target 解析。
 - 真实 Public MCP app registry 已把 saved connections 作为资源池传给
   `ToolRuntimeMcpProvider`。
+- 真实 Public MCP app registry 已把 active terminal sessions 作为资源池的一部分，
+  终端工具可通过 saved SSH id、host/IP alias、terminal label/session id 或 prompt-like
+  target 解析到实际 active terminal session。
 - `db.tables`、`db.describe_table`、`db.sample_rows` 已作为 canonical DB metadata
   工具补齐，并通过 Agent bridge 暴露为 `db_tables`、`db_describe_table`、
   `db_sample_rows`。
@@ -395,8 +410,7 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 
 暂未做：
 
-- active terminal sessions 和 active Redis snapshots 还没有进入真实 Public MCP
-  app resource pool。
+- active Redis snapshots 还没有进入真实 Public MCP app resource pool。
 - 底层 runtime handler、CLI 和部分非 runtime-backed Public MCP provider 仍使用 `connection`、
   `connection_id` 或 `session_id`，后续需要继续收敛到 runtime-core target
   resolution。

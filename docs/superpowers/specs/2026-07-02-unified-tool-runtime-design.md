@@ -92,6 +92,7 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 4e Public MCP resource-pool target resolution | Done | `f1f92f7 feat(public_mcp): resolve runtime targets from resource pool` adds an optional `ResourcePool` snapshot to `ToolRuntimeMcpProvider`, resolves MCP `target` by resource id / label / alias before mapping to the handler field, and rejects ambiguous resource targets. `cargo test -p public_mcp --test tool_runtime_target_adapter`, `tool_runtime_adapter`, `redis_tools`, `redis_convenience_tools`, `remote_ops`, `internal_functions`, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Real app saved-connection pool wiring is covered by Phase 4f; next expand active session resources. |
 | Phase 4f Public MCP app resource pool | Done | `f6611e2 feat(public_mcp): build app resource pool` builds a saved-connection `ResourcePool` from the real app `ConnectionRepository`, attaches it to the merged `ToolRuntimeMcpProvider`, maps saved connection ids/names/host aliases to runtime targets, and proves a DB tool can be called through a host alias. `cargo test -p main public_mcp_runtime::tool_registry`, `cargo test -p public_mcp --test tool_runtime_target_adapter`, `tool_runtime_adapter`, `redis_tools`, `redis_convenience_tools`, `remote_ops`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Extend app resource pools to active terminal sessions and active Redis connection snapshots, not only saved connections. |
 | Phase 4g Agent approval for Public MCP runtime tools | Done | `62e696a fix(agent): require approval for public mcp runtime tools` makes the Public MCP -> Agent adapter derive Agent risk from MCP annotations, so destructive/open-world runtime tools such as `ssh.exec` and `terminal.exec` produce Agent approval requests in Auto mode. After the user approves, the adapter calls the underlying Public MCP/runtime tool with an internal approved context instead of letting the external MCP permission mode silently deny the already-approved Agent call. `cargo test -p public_mcp --test agent_runtime_adapter`, `cargo test -p public_mcp agent_runtime_adapter`, `cargo test -p public_mcp --test tool_runtime_adapter`, `cargo test -p agent_runtime high_risk`, `cargo test -p public_mcp --test protocol remote_exec`, `cargo test -p main agent_runtime_tool_registry`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Run manual UI smoke that `ssh_exec` / `terminal_exec` show confirmation cards and continue after approval. |
+| Phase 4h Live terminal target resolution | Done | `d1709b4 fix(public_mcp): resolve live terminal targets` changes `ToolRuntimeMcpProvider` from a startup resource-pool snapshot to a call-time `ResourcePoolProvider`, adds active terminal sessions to the real app resource pool, marks `ssh.exec`, `ssh.session_diagnostics`, and `terminal.exec` as `ResourceKind::Terminal` targets, and resolves saved SSH ids, host/IP aliases, and prompt-like strings such as `root@zn-54:~` through linked active terminal sessions. Agent `ResourceContext` now carries aliases and the Agent runtime adapter uses `ToolTargetSpec` for kind-aware resolution. `cargo test -p public_mcp --test tool_runtime_target_adapter`, `cargo test -p agent_runtime --test tool_runtime_target_adapter`, `cargo test -p main public_mcp_runtime::tool_registry`, `cargo test -p tool_runtime`, `cargo test -p ai_chat_view resource_builder`, `cargo test -p public_mcp --test tool_runtime_adapter`, `cargo test -p public_mcp --test remote_ops`, `cargo test -p agent_runtime --test tool_runtime_adapter`, `cargo test -p public_mcp --test agent_runtime_adapter`, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Extend the same dynamic resource-pool provider pattern to active Redis snapshots and any future app-local resources. |
 | Phase 4 Public MCP runtime permission policy | Done | `PermissionMode` now maps to `tool_runtime::PermissionPolicy` for runtime-backed MCP tools. `Allow` maps to Auto, so high-risk/destructive/open-world tools such as `ssh.exec`, `terminal.exec`, and generic Redis command execution still require approval. Public MCP and app runtime tests passed on 2026-07-02. | Migrate settings/UI terminology from MCP permission mode to unified permission profile. |
 | Phase 4 Public MCP settings profile wording | Done | `McpPermissionMode` keeps old persisted values but exposes profile ids `safe/confirm/auto`; Public MCP runtime config carries `permission_profile`; settings UI labels now show Safe / Confirm / Auto. Core settings and app runtime tests passed on 2026-07-02. | Later storage migration can replace `permission_mode` only when a broader settings migration is planned. |
 | Phase 5a Resource Pool UI wording/filtering | Done | `6010dad7 feat(ai_chat): add resource pool display model`, `e8985154 feat(ai_chat): rename context selector to resource pool`, `d7b82ab0 feat(ai_chat): filter resource pool by type`, `84d8fe65 test(ai_chat): document resource pool default target semantics`, `ad195aab docs: track resource pool ui checkpoint` | Keep wording and default-target semantics while wiring broader catalogs. |
@@ -120,19 +121,22 @@ Purpose:
 Last completed checkpoint:
 
 ```text
-62e696a fix(agent): require approval for public mcp runtime tools
+d1709b4 fix(public_mcp): resolve live terminal targets
 ```
 
 Last checkpoint verification run:
 
 ```bash
 rtk cargo test -p public_mcp --test tool_runtime_target_adapter
+rtk cargo test -p agent_runtime --test tool_runtime_target_adapter
+rtk cargo test -p main public_mcp_runtime::tool_registry
+rtk cargo test -p tool_runtime
+rtk cargo test -p ai_chat_view resource_builder
 rtk cargo test -p public_mcp --test tool_runtime_adapter
+rtk cargo test -p public_mcp --test remote_ops
+rtk cargo test -p agent_runtime --test tool_runtime_adapter
 rtk cargo test -p public_mcp --test agent_runtime_adapter
-rtk cargo test -p public_mcp agent_runtime_adapter
-rtk cargo test -p agent_runtime high_risk
-rtk cargo test -p public_mcp --test protocol remote_exec
-rtk cargo test -p main agent_runtime_tool_registry
+rtk cargo check -p public_mcp
 rtk cargo check -p main
 rtk git diff --check
 ```
@@ -173,14 +177,16 @@ Current product decision:
    fields. The MCP adapter rejects provider fields from clients and maps `target`
    back to the provider field only inside the adapter while handlers are still being
    migrated.
-12. `ToolRuntimeMcpProvider` can carry a `ResourcePool` snapshot. When present, MCP
-   `target` is resolved by resource id, label, or alias before being passed to the
-   current runtime handler field. Ambiguous targets are rejected. When no pool is
-   configured, explicit `target` values still pass through unchanged until the real
-   app registry can provide a pool.
-13. The real Public MCP app registry now attaches a saved-connection resource pool to
-   the merged runtime provider. Saved connection ids, names, `cloud_id`, and host/path
-   aliases can resolve MCP `target` for saved-connection-backed tools.
+12. `ToolRuntimeMcpProvider` can carry a call-time `ResourcePoolProvider`. MCP
+   `target` is resolved by resource id, label, alias, tool-supported resource kind,
+   and linked resources before being passed to the current runtime handler field.
+   Ambiguous or unknown targets are rejected instead of guessed. Static snapshots
+   are still supported only for tests and non-app adapters.
+13. The real Public MCP app registry now attaches a dynamic app resource pool to the
+   merged runtime provider. Saved connection ids, names, `cloud_id`, host/path aliases,
+   and active terminal sessions can resolve MCP `target`. For terminal tools, a saved
+   SSH connection target such as `21` or `10.2.4.54` resolves through the linked active
+   terminal session when that terminal resource has the saved connection id as an alias.
 14. Agent-facing prompts should expose canonical ids only after the relevant adapter can
    route them safely.
 15. Agent-facing Public MCP adapter tools derive Agent approval risk from MCP
@@ -194,8 +200,8 @@ Next recommended checkpoints:
    through `terminal.exec`.
 2. Run manual Agent approval smoke for `ssh_exec` and `terminal_exec`.
 3. Run manual resource-pool smoke for source presets.
-4. Extend the real Public MCP app resource pool beyond saved connections to include
-   active terminal sessions and active Redis connection snapshots.
+4. Extend the real Public MCP app resource pool beyond saved connections and active
+   terminal sessions to include active Redis connection snapshots.
 5. Continue moving CLI and runtime-core invocation paths toward first-class `target`
    resolution rather than provider-specific fields.
 
