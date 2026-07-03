@@ -61,7 +61,7 @@ async fn redis_provider_executes_runtime_command() {
         .call_tool(
             "redis.command",
             Some(serde_json::Map::from_iter([
-                ("connection_id".to_string(), json!("redis-a")),
+                ("target".to_string(), json!("redis-a")),
                 ("db".to_string(), json!(2)),
                 ("command".to_string(), json!("PING")),
             ])),
@@ -107,7 +107,7 @@ async fn redis_execute_command_alias_is_rejected() {
         .call_tool(
             "redis.execute_command",
             Some(serde_json::Map::from_iter([
-                ("connection_id".to_string(), json!("redis-a")),
+                ("target".to_string(), json!("redis-a")),
                 ("command".to_string(), json!("PING")),
             ])),
             PublicMcpToolContext {

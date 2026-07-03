@@ -1,4 +1,7 @@
-use super::{PublicMcpToolContext, PublicMcpToolFuture, PublicMcpToolProvider};
+use super::{
+    PublicMcpToolContext, PublicMcpToolFuture, PublicMcpToolProvider,
+    target_adapter::{mcp_target_schema, normalize_mcp_arguments},
+};
 use crate::approval::PublicMcpApprovalOutcome;
 use crate::permissions::{PublicMcpOperationKind, permission_policy_for_mode};
 use rmcp::{
@@ -41,7 +44,11 @@ impl PublicMcpToolProvider for ToolRuntimeMcpProvider {
         let descriptor = self.registry.get(name, ToolAdapter::Mcp)?;
         let registry = self.registry.clone();
         let name = name.to_string();
-        let input = Value::Object(arguments.unwrap_or_default());
+        let raw_input = Value::Object(arguments.unwrap_or_default());
+        let input = match normalize_mcp_arguments(&descriptor.input_schema, raw_input) {
+            Ok(input) => input,
+            Err(error) => return Some(Box::pin(async move { Err(error) })),
+        };
         Some(Box::pin(async move {
             let call_annotations = registry
                 .call_annotations(&name, ToolAdapter::Mcp, &input)
@@ -116,7 +123,7 @@ fn runtime_tool_to_mcp_tool(descriptor: ToolDescriptor) -> Tool {
     Tool::new(
         descriptor.id,
         descriptor.description,
-        schema_object(descriptor.input_schema),
+        schema_object(mcp_target_schema(descriptor.input_schema)),
     )
     .with_annotations(runtime_annotations_to_mcp_annotations(
         descriptor.annotations,

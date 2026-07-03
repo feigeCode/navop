@@ -54,7 +54,7 @@ async fn redis_get_calls_runtime_without_approval_in_safe_mode() {
         .call_tool(
             "redis.get",
             Some(serde_json::Map::from_iter([
-                ("connection_id".to_string(), json!("redis-a")),
+                ("target".to_string(), json!("redis-a")),
                 ("key".to_string(), json!("user:1")),
             ])),
             PublicMcpToolContext {
@@ -82,7 +82,7 @@ async fn redis_set_requests_approval_before_calling_runtime() {
         .call_tool(
             "redis.set",
             Some(serde_json::Map::from_iter([
-                ("connection_id".to_string(), json!("redis-a")),
+                ("target".to_string(), json!("redis-a")),
                 ("key".to_string(), json!("user:1")),
                 ("value".to_string(), json!("Ada")),
             ])),

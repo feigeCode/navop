@@ -3,6 +3,7 @@ mod internal;
 mod redis;
 mod registry;
 mod remote_ops;
+mod target_adapter;
 mod terminal_exec;
 mod tool_runtime_adapter;
 
