@@ -70,6 +70,9 @@ use remote_desktop_view::remote_desktop_form::{
 
 actions!(home_tab, [OpenConnectionQuickOpen, NewConnectionShortcut]);
 
+const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(200.0);
+const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(64.0);
+
 pub fn init(cx: &mut App) {
     cx.bind_keys(init_keybindings(cx));
 }
@@ -302,6 +305,7 @@ pub struct HomePage {
     master_key_unlock_prompt_pending: bool,
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
+    sidebar_collapsed: bool,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
 }
 
@@ -521,6 +525,7 @@ impl HomePage {
             auth_error: None,
             master_key_unlock_prompt_pending: false,
             master_key_dialog_open: false,
+            sidebar_collapsed: false,
             port_forwarding_runtime: Arc::new(
                 tokio::sync::Mutex::new(PortForwardingRuntime::new()),
             ),
@@ -2392,6 +2397,9 @@ impl HomePage {
         let conflict_count = self.pending_conflicts.len();
 
         h_flex()
+            .w_full()
+            .min_w_0()
+            .flex_wrap()
             .gap_3()
             .px_4()
             .py_2()
@@ -2399,9 +2407,12 @@ impl HomePage {
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
             .items_center()
+            .justify_between()
             // ===== 左侧功能区 =====
             .child(
                 h_flex()
+                    .min_w_0()
+                    .flex_wrap()
                     .gap_2()
                     .items_center()
                     // 新建连接按钮（主要操作）
@@ -2513,11 +2524,11 @@ impl HomePage {
                             })),
                     ),
             )
-            // ===== 中间弹性空间 =====
-            .child(div().flex_1())
             // ===== 右侧操作区 =====
             .child(
                 h_flex()
+                    .min_w_0()
+                    .flex_wrap()
                     .gap_1()
                     .items_center()
                     // 搜索框
@@ -2738,6 +2749,11 @@ impl HomePage {
         cx.notify();
     }
 
+    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        cx.notify();
+    }
+
     fn render_sidebar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 同步全局用户状态：如果设置页面执行了登出，同步清空本地状态
         let global_user = GlobalCurrentUser::get_user(cx);
@@ -2746,10 +2762,18 @@ impl HomePage {
         }
 
         let filter_types = ConnectionType::all();
+        let collapsed = self.sidebar_collapsed;
+        let sidebar_width = if collapsed {
+            HOME_SIDEBAR_COLLAPSED_WIDTH
+        } else {
+            HOME_SIDEBAR_EXPANDED_WIDTH
+        };
 
         v_flex()
-            .w(px(200.0))
+            .relative()
+            .w(sidebar_width)
             .h_full()
+            .flex_shrink_0()
             .bg(cx.theme().sidebar)
             .border_r_1()
             .border_color(cx.theme().border)
@@ -2760,6 +2784,7 @@ impl HomePage {
                     .w_full()
                     .p_2()
                     .gap_2()
+                    .when(collapsed, |this| this.items_center())
                     .children(filter_types.into_iter().map(|filter_type| {
                         let is_selected = self.selected_filter == filter_type;
                         let filter_type_clone = filter_type;
@@ -2770,7 +2795,8 @@ impl HomePage {
                             .items_center()
                             .gap_3()
                             .w_full()
-                            .px_3()
+                            .when(collapsed, |this| this.justify_center().px_0())
+                            .when(!collapsed, |this| this.px_3())
                             .py_2()
                             .cursor_pointer()
                             .rounded_lg()
@@ -2789,29 +2815,39 @@ impl HomePage {
                                 cx.notify();
                             }))
                             .child(Icon::new(filter_type.icon()).color().with_size(Size::Large))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().foreground)
-                                    .when(is_selected, |this| this.font_weight(FontWeight::MEDIUM))
-                                    .child(filter_type.label()),
-                            )
+                            .when(!collapsed, |this| {
+                                this.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().foreground)
+                                        .when(is_selected, |this| {
+                                            this.font_weight(FontWeight::MEDIUM)
+                                        })
+                                        .child(filter_type.label()),
+                                )
+                            })
                     })),
             )
             .child(
                 // 底部区域：主题切换、设置和用户头像
                 v_flex()
                     .w_full()
-                    .p_4()
+                    .when(collapsed, |this| this.items_center().p_2())
+                    .when(!collapsed, |this| this.p_4())
                     .gap_3()
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .child(
                         Button::new("open_team_management")
                             .icon(IconName::Building2)
-                            .label(t!("TeamManagement.title").to_string())
-                            .w_full()
-                            .justify_start()
+                            .tooltip(t!("TeamManagement.title").to_string())
+                            .when(collapsed, |button| button.ghost().small())
+                            .when(!collapsed, |button| {
+                                button
+                                    .label(t!("TeamManagement.title").to_string())
+                                    .w_full()
+                                    .justify_start()
+                            })
                             .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
                                 this.open_team_management(window, cx);
                             })),
@@ -2819,9 +2855,14 @@ impl HomePage {
                     .child(
                         Button::new("open_extensions")
                             .icon(IconName::GalleryVerticalEnd)
-                            .label(t!("Home.extensions").to_string())
-                            .w_full()
-                            .justify_start()
+                            .tooltip(t!("Home.extensions").to_string())
+                            .when(collapsed, |button| button.ghost().small())
+                            .when(!collapsed, |button| {
+                                button
+                                    .label(t!("Home.extensions").to_string())
+                                    .w_full()
+                                    .justify_start()
+                            })
                             .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
                                 this.add_extensions_tab(window, cx);
                             })),
@@ -2829,9 +2870,11 @@ impl HomePage {
                     .child(
                         Button::new("open_settings")
                             .icon(IconName::Settings)
-                            .label(t!("Common.settings"))
-                            .w_full()
-                            .justify_start()
+                            .tooltip(t!("Common.settings").to_string())
+                            .when(collapsed, |button| button.ghost().small())
+                            .when(!collapsed, |button| {
+                                button.label(t!("Common.settings")).w_full().justify_start()
+                            })
                             .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
                                 this.add_settings_tab(window, cx);
                             })),
@@ -2847,17 +2890,82 @@ impl HomePage {
                             .pt_2()
                             .border_t_1()
                             .border_color(cx.theme().border)
-                            .child(render_user_avatar(
-                                user,
-                                view.clone(),
-                                |this: &mut HomePage, window, cx| {
-                                    if this.current_user.is_none() {
-                                        this.show_login_dialog(window, cx);
-                                    }
-                                },
-                                cx,
-                            ))
+                            .when(collapsed, |this| {
+                                this.items_center().child(
+                                    Button::new("home-sidebar-user-collapsed")
+                                        .icon(IconName::User)
+                                        .ghost()
+                                        .small()
+                                        .tooltip(if user.is_some() {
+                                            "账号".to_string()
+                                        } else {
+                                            t!("Auth.login").to_string()
+                                        })
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            if this.current_user.is_none() {
+                                                this.show_login_dialog(window, cx);
+                                            }
+                                        })),
+                                )
+                            })
+                            .when(!collapsed, |this| {
+                                this.child(render_user_avatar(
+                                    user,
+                                    view.clone(),
+                                    |this: &mut HomePage, window, cx| {
+                                        if this.current_user.is_none() {
+                                            this.show_login_dialog(window, cx);
+                                        }
+                                    },
+                                    cx,
+                                ))
+                            })
                     }),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(24.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .occlude()
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.toggle_sidebar(cx);
+                        }),
+                    )
+                    .child(
+                        div()
+                            .id("home-sidebar-toggle")
+                            .w(px(18.0))
+                            .h(px(52.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(9.0))
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().background)
+                            .shadow_sm()
+                            .hover(|this| this.bg(cx.theme().muted))
+                            .child(
+                                Icon::new(if collapsed {
+                                    IconName::ChevronRight
+                                } else {
+                                    IconName::ChevronLeft
+                                })
+                                .with_size(Size::Small)
+                                .text_color(cx.theme().muted_foreground),
+                            ),
+                    ),
             )
     }
 
@@ -3052,6 +3160,7 @@ impl HomePage {
             return div()
                 .id("home-content")
                 .size_full()
+                .min_w_0()
                 .p_6()
                 .child(self.render_connection_uniform_list(unassigned_connections, selected_id, cx))
                 .into_any_element();
@@ -3060,10 +3169,11 @@ impl HomePage {
         div()
             .id("home-content")
             .size_full()
+            .min_w_0()
             .overflow_y_scroll()
             .p_6()
             .child({
-                let mut container = v_flex().gap_8().w_full();
+                let mut container = v_flex().gap_8().w_full().min_w_0();
 
                 // 过滤掉空的工作区
                 for (workspace, connections) in workspaces_with_connections {
@@ -3114,6 +3224,8 @@ impl HomePage {
     ) -> impl IntoElement {
         let workspace_id = workspace.id;
         v_flex()
+            .w_full()
+            .min_w_0()
             .gap_3()
             .child(
                 h_flex()
@@ -3149,8 +3261,8 @@ impl HomePage {
             )
             .when(!connections.is_empty(), |this| {
                 let mut container = match layout {
-                    ConnectionLayout::List => v_flex().w_full().gap_1(),
-                    ConnectionLayout::Card => div().flex().flex_wrap().w_full().gap_3(),
+                    ConnectionLayout::List => v_flex().w_full().min_w_0().gap_1(),
+                    ConnectionLayout::Card => div().flex().flex_wrap().w_full().min_w_0().gap_3(),
                 };
 
                 for (idx, conn) in connections.iter().enumerate() {
@@ -3181,7 +3293,7 @@ impl HomePage {
             return self.render_connection_uniform_list(connections, selected_id, cx);
         }
 
-        let mut container = div().flex().flex_wrap().w_full().gap_3();
+        let mut container = div().flex().flex_wrap().w_full().min_w_0().gap_3();
         for (idx, conn) in connections.into_iter().enumerate() {
             container = container.child(
                 div()
@@ -3224,6 +3336,8 @@ impl HomePage {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         v_flex()
+            .w_full()
+            .min_w_0()
             .gap_3()
             .child(
                 h_flex()
@@ -3253,8 +3367,8 @@ impl HomePage {
             )
             .child({
                 let mut container = match layout {
-                    ConnectionLayout::List => v_flex().w_full().gap_1(),
-                    ConnectionLayout::Card => div().flex().flex_wrap().w_full().gap_3(),
+                    ConnectionLayout::List => v_flex().w_full().min_w_0().gap_1(),
+                    ConnectionLayout::Card => div().flex().flex_wrap().w_full().min_w_0().gap_3(),
                 };
 
                 for (idx, conn) in connections.into_iter().enumerate() {
@@ -4356,26 +4470,35 @@ impl Render for HomePage {
             });
         }
 
-        div().size_full().track_focus(&self.focus_handle).child(
-            h_flex()
-                .size_full()
-                .child(self.render_sidebar(window, cx))
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .h_full()
-                        .bg(cx.theme().background)
-                        .child(self.render_toolbar(window, cx))
-                        .child(
-                            div()
-                                .flex_1()
-                                .w_full()
-                                .overflow_hidden()
-                                .bg(cx.theme().muted)
-                                .child(self.render_content_area(cx)),
-                        ),
-                ),
-        )
+        div()
+            .size_full()
+            .min_w_0()
+            .track_focus(&self.focus_handle)
+            .child(
+                h_flex()
+                    .size_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.render_sidebar(window, cx))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .overflow_hidden()
+                            .bg(cx.theme().background)
+                            .child(self.render_toolbar(window, cx))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .w_full()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .bg(cx.theme().muted)
+                                    .child(self.render_content_area(cx)),
+                            ),
+                    ),
+            )
     }
 }
 
