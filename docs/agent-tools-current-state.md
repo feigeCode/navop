@@ -312,8 +312,10 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 
 - default resource 是默认目标，不是能力边界。
 - 可操作资源来自当前 Agent 会话的 resource pool。
-- 工具 schema 当前仍多使用 `connection` / `connection_id` / `target` 等字段，
-  后续需要统一成 Agent-facing `target`。
+- runtime-backed Agent 工具 schema 已统一暴露 `target`，不再向模型暴露
+  `connection` / `connection_id` / `session_id`。
+- Agent adapter 会把 `target` 或默认目标映射回当前 runtime handler 仍需要的
+  provider 字段；如果模型直接传 provider 字段，Agent adapter 会拒绝。
 
 关键类型：
 
@@ -336,6 +338,8 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 - `redis.execute_command` 不再作为 `redis.command` alias 解析。
 - `ssh.remote_exec` 和 `ssh.remote_command_*` 不再作为 `ssh.*` alias 解析。
 - Agent prompt 会在可用时提示使用统一工具命名规则。
+- Agent prompt 的资源段使用“资源池 / 默认目标”语义，并要求工具调用使用
+  `target` 参数。
 - `db.tables`、`db.describe_table`、`db.sample_rows` 已作为 canonical DB metadata
   工具补齐，并通过 Agent bridge 暴露为 `db_tables`、`db_describe_table`、
   `db_sample_rows`。
@@ -343,7 +347,9 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 
 暂未做：
 
-- Agent-facing schema 尚未统一为 `target` 字段；部分 runtime 工具仍使用 `connection`。
+- 底层 runtime handler、CLI 和部分 Public MCP provider 仍使用 `connection`、
+  `connection_id` 或 `session_id`，后续需要继续收敛到 runtime-core target
+  resolution。
 - Public MCP adapter 的风险仍有部分路径不是直接由 runtime annotations 精细映射。
 - 旧 `redis_view::agent_tools` 代码仍存在于 `redis_view` crate，但主 Agent registry 不再调用。
 
@@ -369,6 +375,8 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 
 ```bash
 rtk cargo test -p agent_runtime system_prompt_prefers_canonical_runtime_tool_names
+rtk cargo test -p agent_runtime --test tool_runtime_target_adapter
+rtk cargo test -p agent_runtime
 rtk cargo test -p main agent_runtime_tool_registry
 rtk cargo test -p onetcli_runtime --test database_tools
 rtk cargo test -p onetcli_runtime --test redis_tools
