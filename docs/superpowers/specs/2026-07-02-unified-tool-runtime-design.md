@@ -77,6 +77,7 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 3c live terminal provider | Done | `crates/terminal` exposes `TerminalInputHandle`; `crates/terminal_view` registers a `TerminalExecSessionHandle` that writes `command + "\n"` into the live terminal input path. Targeted provider tests and Public MCP/runtime checks passed on 2026-07-02. | Start Agent/UI prompt, approval-card, and tool-card integration. |
 | Phase 3c Agent/UI terminal exec selection | Done | Agent prompt tells the model to use `terminal_exec` for visible terminal execution and `ssh_exec` for structured SSH execution; tool and approval card titles label `terminal_exec` as terminal execution. `agent_runtime` tests and `ai_chat_view` checks passed on 2026-07-02. | Run manual app smoke for visible terminal execution. |
 | Phase 3d Redis canonical command tool | Done | `0573668 feat(onetcli_runtime): canonicalize redis command tool` makes `redis.command` the canonical `onetcli_runtime` Redis tool id and keeps `redis.execute_command` as a runtime alias. Red/green Redis tests, `cargo check -p onetcli_runtime`, and `git diff --check` passed on 2026-07-03. | Add read-oriented Redis convenience tools such as `redis.keys`, `redis.get`, and `redis.set` only when their schemas and permission/risk contracts are explicit. |
+| Phase 3e Redis convenience tools | Done | `0623ec8 feat(onetcli_runtime): add redis convenience tools` adds canonical `redis.keys`, `redis.get`, and `redis.set` to `onetcli_runtime`, keeps `redis.keys/get` read-only, requires write permission for `redis.set`, and splits Redis runtime implementation into submodules under 300 lines each. Red/green Redis tests, `cargo test -p onetcli_runtime`, `cargo check -p onetcli_runtime`, and `git diff --check` passed on 2026-07-03. | Consider Public MCP convenience Redis tools only after deciding whether external clients should get the same high-level commands or only the generic `redis.command`. |
 | Phase 4 Public MCP app registry merge | Done | `main/src/public_mcp_runtime/tool_registry.rs` collects enabled `tool_runtime::ToolRegistry` values, merges them, and exposes one `ToolRuntimeMcpProvider`. Terminal toolset now exposes both `ssh.exec` and `terminal.exec` through the real app registry path. Public MCP runtime tests passed on 2026-07-02. | Continue replacing remaining Public MCP-specific permission settings with unified `PermissionPolicy`. |
 | Phase 4b Public MCP Redis canonical command tool | Done | `6c99c8e feat(public_mcp): canonicalize redis command tool` makes Public MCP Redis `tools/list` expose `redis.command` while `tools/call` still accepts `redis.execute_command` through a runtime alias. `public_mcp` Redis tests, main registry Redis test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Continue replacing remaining legacy MCP tool ids with canonical ids only when old clients keep a tested alias path. |
 | Phase 4 Public MCP runtime permission policy | Done | `PermissionMode` now maps to `tool_runtime::PermissionPolicy` for runtime-backed MCP tools. `Allow` maps to Auto, so high-risk/destructive/open-world tools such as `ssh.exec`, `terminal.exec`, and generic Redis command execution still require approval. Public MCP and app runtime tests passed on 2026-07-02. | Migrate settings/UI terminology from MCP permission mode to unified permission profile. |
@@ -105,20 +106,19 @@ Purpose:
 Last completed checkpoint:
 
 ```text
-6c99c8e feat(public_mcp): canonicalize redis command tool
+0623ec8 feat(onetcli_runtime): add redis convenience tools
 ```
 
 Last checkpoint verification run:
 
 ```bash
-rtk cargo test -p public_mcp --test redis_tools
-rtk cargo test -p main build_tool_registry_includes_redis_tools
-rtk cargo check -p public_mcp
-rtk cargo check -p main
+rtk cargo test -p onetcli_runtime --test redis_tools
+rtk cargo check -p onetcli_runtime
+rtk cargo test -p onetcli_runtime
 rtk git diff --check
 ```
 
-Result: all commands exited 0. `cargo check -p main` still reports the
+Result: all commands exited 0. `cargo check -p onetcli_runtime` still reports the
 existing `block v0.1.6` future-incompat warning, which can remain.
 
 Current product decision:
@@ -128,7 +128,9 @@ Current product decision:
 3. Existing tools and aliases remain available during migration.
 4. `redis.command` is the canonical Redis command tool in `onetcli_runtime` and
    Public MCP; `redis.execute_command` is a compatibility alias.
-5. Agent-facing prompts should expose canonical ids only after the relevant adapter can
+5. `redis.keys` and `redis.get` are read-only `onetcli_runtime` tools; `redis.set`
+   is mutating and requires write permission.
+6. Agent-facing prompts should expose canonical ids only after the relevant adapter can
    route them safely.
 
 Next recommended checkpoints:

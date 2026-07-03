@@ -161,6 +161,9 @@ CLI 工具：
 | 工具名 | 说明 |
 |---|---|
 | `redis.command` | 对保存的 Redis 连接执行命令；当前 CLI 侧主要支持 standalone Redis |
+| `redis.keys` | 按 pattern 读取保存 Redis 连接中的 key；只读但可能较重 |
+| `redis.get` | 读取保存 Redis 连接中的单个 key；只读 |
+| `redis.set` | 写入保存 Redis 连接中的单个 string value；需要写权限 |
 | `redis.execute_command` | `redis.command` 的兼容 alias |
 
 ## 3. Agent Runtime 工具集
@@ -397,6 +400,9 @@ Agent 工具依赖 `ResourceContext` 来获取当前资源。
   - `db.exec`
   - `sftp.write`
   - `redis.command`
+  - `redis.keys`
+  - `redis.get`
+  - `redis.set`
   - `redis.execute_command` alias
   - `ssh.remote_exec`
 - Agent 仍可能通过 adapter 使用 connections / workspaces / internal functions / terminal remote ops。
