@@ -102,22 +102,28 @@ pub(crate) async fn continue_after_tool_decision(
     cancellation: CancellationToken,
 ) -> TaskOutcome {
     let turn_id = pending.turn_id.clone();
-    session.record_tool_call(&turn_id, &pending.call);
-    let observation = if approved {
-        execute_agent_tool(
-            &session,
-            &services,
-            &dispatch_context(&session, &turn_id, &pending.resources),
-            &turn_id,
-            &pending.goal,
-            pending.call.clone(),
-            &cancellation,
-        )
-        .await
-    } else {
-        rejected_tool_observation(&pending.call)
-    };
-    session.record_observation(&turn_id, observation);
+    let calls = pending.calls();
+    for call in &calls {
+        session.record_tool_call(&turn_id, call);
+    }
+    let dispatch_ctx = dispatch_context(&session, &turn_id, &pending.resources);
+    for call in calls {
+        let observation = if approved {
+            execute_agent_tool(
+                &session,
+                &services,
+                &dispatch_ctx,
+                &turn_id,
+                &pending.goal,
+                call,
+                &cancellation,
+            )
+            .await
+        } else {
+            rejected_tool_observation(&call)
+        };
+        session.record_observation(&turn_id, observation);
+    }
 
     run_agent_loop(
         AgentLoopContext {
@@ -229,6 +235,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
         // 先写入同一轮模型返回的所有合法工具调用,再写观测结果。OpenAI thinking
         // mode 要求 assistant tool_calls 消息原样带回对应 reasoning_content。
         let mut executable_calls = Vec::new();
+        let mut approval_calls = Vec::new();
         for llm_call in &response.tool_calls {
             log_llm_tool_call("agent_dispatch", llm_call);
             let call_id = llm_tool_call_id(llm_call);
@@ -254,26 +261,35 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
             };
 
             if requires_tool_approval(ctx.tool_mode, &call, &tool_specs) {
-                let pending_tool_call_id = call.call_id.clone();
-                let tool_name = call.tool_name.clone();
-                let arguments = call.arguments.clone();
-                ctx.session.set_pending_tool_approval(PendingToolApproval {
-                    turn_id: ctx.turn_id.clone(),
-                    task_kind: ctx.task_kind,
-                    tool_mode: ctx.tool_mode,
-                    goal: ctx.goal.clone(),
-                    call,
-                    resources: ctx.resources.clone(),
-                });
-                return TaskOutcome::NeedUserInput {
-                    question: format!("确认执行工具 `{tool_name}` 吗?"),
-                    pending_tool_call_id: Some(pending_tool_call_id),
-                    tool_name: Some(tool_name),
-                    arguments: Some(arguments),
-                };
+                approval_calls.push(call);
+                continue;
             }
 
             executable_calls.push(call);
+        }
+
+        if !approval_calls.is_empty() {
+            let first = approval_calls.remove(0);
+            let pending_tool_call_id = first.call_id.clone();
+            let tool_name = first.tool_name.clone();
+            let arguments = first.arguments.clone();
+            let pending = PendingToolApproval {
+                turn_id: ctx.turn_id.clone(),
+                task_kind: ctx.task_kind,
+                tool_mode: ctx.tool_mode,
+                goal: ctx.goal.clone(),
+                call: first,
+                additional_calls: approval_calls,
+                resources: ctx.resources.clone(),
+            };
+            let question = approval_question(&pending);
+            ctx.session.set_pending_tool_approval(pending);
+            return TaskOutcome::NeedUserInput {
+                question,
+                pending_tool_call_id: Some(pending_tool_call_id),
+                tool_name: Some(tool_name),
+                arguments: Some(arguments),
+            };
         }
 
         for call in &executable_calls {
@@ -418,6 +434,13 @@ fn requires_tool_approval(
         .iter()
         .find(|spec| spec.name == call.tool_name)
         .is_some_and(|spec| spec.risk.requires_confirmation())
+}
+
+fn approval_question(pending: &PendingToolApproval) -> String {
+    if pending.call_count() == 1 {
+        return format!("确认执行工具 `{}` 吗?", pending.call.tool_name);
+    }
+    format!("确认执行 {} 个工具吗?", pending.call_count())
 }
 
 /// 执行一次流式采样:把文本增量作为事件推送,聚合出完整 [`ModelResponse`]。

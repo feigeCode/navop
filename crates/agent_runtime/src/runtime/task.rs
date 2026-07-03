@@ -66,7 +66,21 @@ pub struct PendingToolApproval {
     pub tool_mode: ToolExecutionMode,
     pub goal: String,
     pub call: ToolCall,
+    pub additional_calls: Vec<ToolCall>,
     pub resources: ResourceContext,
+}
+
+impl PendingToolApproval {
+    pub fn call_count(&self) -> usize {
+        1 + self.additional_calls.len()
+    }
+
+    pub fn calls(&self) -> Vec<ToolCall> {
+        let mut calls = Vec::with_capacity(self.call_count());
+        calls.push(self.call.clone());
+        calls.extend(self.additional_calls.iter().cloned());
+        calls
+    }
 }
 
 /// 任务执行所需的上下文。
