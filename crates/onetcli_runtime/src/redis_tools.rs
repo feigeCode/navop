@@ -1,38 +1,130 @@
-use base64::{Engine as _, engine::general_purpose};
+mod command_io;
+mod input;
+mod schema;
+
 use one_core::storage::traits::Repository;
 use one_core::storage::{ConnectionRepository, ConnectionType, RedisMode, RedisParams};
-use redis_client::aio::{ConnectionManager, ConnectionManagerConfig};
-use redis_client::{Client, ConnectionAddr, ConnectionInfo, RedisConnectionInfo};
 use serde_json::{Value, json};
 use std::sync::Arc;
-use std::time::Duration;
 use tool_runtime::{
-    ToolAdapter, ToolAlias, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler,
-    ToolMode, ToolRegistry, ToolResult,
+    RiskLevel, ToolAdapter, ToolAlias, ToolAnnotations, ToolContext, ToolDescriptor, ToolError,
+    ToolHandler, ToolMode, ToolRegistry, ToolResult,
 };
 
+use command_io::run_command;
+use input::{optional_u8, parse_command_args, required_str};
+use schema::{command_schema, get_schema, keys_schema, set_schema};
+
 const REDIS_COMMAND_TOOL: &str = "redis.command";
+const REDIS_KEYS_TOOL: &str = "redis.keys";
+const REDIS_GET_TOOL: &str = "redis.get";
+const REDIS_SET_TOOL: &str = "redis.set";
 const REDIS_EXECUTE_COMMAND_ALIAS: &str = "redis.execute_command";
-const DEFAULT_TIMEOUT_SECS: u64 = 10;
-const MAX_DB_INDEX: u64 = 255;
+
+#[derive(Clone, Copy)]
+enum RedisTool {
+    Command,
+    Keys,
+    Get,
+    Set,
+}
 
 #[derive(Clone)]
-struct RedisExecuteCommandTool {
+struct RedisToolHandler {
     repo: Arc<ConnectionRepository>,
+    tool: RedisTool,
 }
 
 pub fn redis_tool_registry(repo: Arc<ConnectionRepository>) -> ToolRegistry {
-    ToolRegistry::new(vec![Arc::new(RedisExecuteCommandTool { repo })])
+    let handlers = [
+        RedisTool::Command,
+        RedisTool::Keys,
+        RedisTool::Get,
+        RedisTool::Set,
+    ]
+    .into_iter()
+    .map(|tool| Arc::new(RedisToolHandler::new(repo.clone(), tool)) as Arc<dyn ToolHandler>)
+    .collect();
+    ToolRegistry::new(handlers)
 }
 
-impl RedisExecuteCommandTool {
+impl RedisToolHandler {
+    fn new(repo: Arc<ConnectionRepository>, tool: RedisTool) -> Self {
+        Self { repo, tool }
+    }
+
     async fn execute(&self, input: Value) -> Result<ToolResult, ToolError> {
+        match self.tool {
+            RedisTool::Command => self.execute_command(input).await,
+            RedisTool::Keys => self.execute_keys(input).await,
+            RedisTool::Get => self.execute_get(input).await,
+            RedisTool::Set => self.execute_set(input).await,
+        }
+    }
+
+    async fn execute_command(&self, input: Value) -> Result<ToolResult, ToolError> {
         let connection = required_str(&input, "connection")?;
         let command = required_str(&input, "command")?;
+        let db = optional_u8(&input, "db")?;
+        self.execute_parts(
+            connection,
+            db,
+            command.clone(),
+            parse_command_args(&command),
+        )
+        .await
+    }
+
+    async fn execute_keys(&self, input: Value) -> Result<ToolResult, ToolError> {
+        let connection = required_str(&input, "connection")?;
+        let pattern = required_str(&input, "pattern")?;
+        let db = optional_u8(&input, "db")?;
+        self.execute_parts(
+            connection,
+            db,
+            format!("KEYS {pattern}"),
+            vec!["KEYS".into(), pattern],
+        )
+        .await
+    }
+
+    async fn execute_get(&self, input: Value) -> Result<ToolResult, ToolError> {
+        let connection = required_str(&input, "connection")?;
+        let key = required_str(&input, "key")?;
+        let db = optional_u8(&input, "db")?;
+        self.execute_parts(
+            connection,
+            db,
+            format!("GET {key}"),
+            vec!["GET".into(), key],
+        )
+        .await
+    }
+
+    async fn execute_set(&self, input: Value) -> Result<ToolResult, ToolError> {
+        let connection = required_str(&input, "connection")?;
+        let key = required_str(&input, "key")?;
+        let value = required_str(&input, "value")?;
+        let db = optional_u8(&input, "db")?;
+        self.execute_parts(
+            connection,
+            db,
+            format!("SET {key} <value>"),
+            vec!["SET".into(), key, value],
+        )
+        .await
+    }
+
+    async fn execute_parts(
+        &self,
+        connection: String,
+        db_override: Option<u8>,
+        command: String,
+        parts: Vec<String>,
+    ) -> Result<ToolResult, ToolError> {
         let mut params = self.redis_params(&connection)?;
-        let db = optional_u8(&input, "db")?.unwrap_or(params.db_index);
+        let db = db_override.unwrap_or(params.db_index);
         params.db_index = db;
-        let parts = parse_command_args(&command);
         validate_command(&parts, db, params.mode.clone())?;
         let result = run_command(params, &parts).await?;
 
@@ -56,13 +148,13 @@ impl RedisExecuteCommandTool {
     }
 }
 
-impl ToolHandler for RedisExecuteCommandTool {
+impl ToolHandler for RedisToolHandler {
     fn descriptor(&self) -> ToolDescriptor {
         ToolDescriptor {
-            id: REDIS_COMMAND_TOOL.to_string(),
-            title: "Execute Redis command".to_string(),
-            description: "Execute one Redis command through a saved Redis connection. The connection argument accepts a saved connection id or exact saved connection name. Pass db to target a specific logical database. The command may mutate Redis data and therefore requires --allow-write when called through onetcli tool call.".to_string(),
-            input_schema: execute_schema(),
+            id: self.tool.id().to_string(),
+            title: self.tool.title().to_string(),
+            description: self.tool.description().to_string(),
+            input_schema: self.tool.input_schema(),
             output_schema: json!({ "type": "object" }),
             permissions: Vec::new(),
             mode: ToolMode::Deterministic,
@@ -71,12 +163,15 @@ impl ToolHandler for RedisExecuteCommandTool {
                 ToolAdapter::FunctionCalling,
                 ToolAdapter::Cli,
             ],
-            annotations: ToolAnnotations::mutating("Execute Redis command"),
+            annotations: self.tool.annotations(),
         }
     }
 
     fn aliases(&self) -> Vec<ToolAlias> {
-        vec![ToolAlias::new(REDIS_EXECUTE_COMMAND_ALIAS)]
+        match self.tool {
+            RedisTool::Command => vec![ToolAlias::new(REDIS_EXECUTE_COMMAND_ALIAS)],
+            RedisTool::Keys | RedisTool::Get | RedisTool::Set => Vec::new(),
+        }
     }
 
     fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
@@ -85,145 +180,60 @@ impl ToolHandler for RedisExecuteCommandTool {
     }
 }
 
-struct RedisCommandOutput {
-    value: Value,
-    display: String,
-}
-
-async fn run_command(
-    params: RedisParams,
-    parts: &[String],
-) -> Result<RedisCommandOutput, ToolError> {
-    let mut conn = open_connection(&params).await?;
-    let mut cmd = redis_client::cmd(parts[0].as_str());
-    for arg in &parts[1..] {
-        cmd.arg(arg.as_str());
-    }
-    let value = cmd
-        .query_async::<redis_client::Value>(&mut conn)
-        .await
-        .map_err(tool_error)?;
-    Ok(redis_value_output(value))
-}
-
-async fn open_connection(params: &RedisParams) -> Result<ConnectionManager, ToolError> {
-    reject_unsupported_redis_config(params)?;
-    let client = Client::open(connection_info(params)).map_err(tool_error)?;
-    let timeout = Duration::from_secs(params.connect_timeout.unwrap_or(DEFAULT_TIMEOUT_SECS));
-    let config = ConnectionManagerConfig::new()
-        .set_connection_timeout(timeout)
-        .set_response_timeout(timeout)
-        .set_number_of_retries(1)
-        .set_max_delay(500);
-    ConnectionManager::new_with_config(client, config)
-        .await
-        .map_err(tool_error)
-}
-
-fn connection_info(params: &RedisParams) -> ConnectionInfo {
-    let addr = if params.use_tls {
-        ConnectionAddr::TcpTls {
-            host: params.host.clone(),
-            port: params.port,
-            insecure: false,
-            tls_params: None,
+impl RedisTool {
+    fn id(self) -> &'static str {
+        match self {
+            RedisTool::Command => REDIS_COMMAND_TOOL,
+            RedisTool::Keys => REDIS_KEYS_TOOL,
+            RedisTool::Get => REDIS_GET_TOOL,
+            RedisTool::Set => REDIS_SET_TOOL,
         }
-    } else {
-        ConnectionAddr::Tcp(params.host.clone(), params.port)
-    };
-    ConnectionInfo {
-        addr,
-        redis: RedisConnectionInfo {
-            db: i64::from(params.db_index),
-            username: params.username.clone(),
-            password: params.password.clone(),
-            ..Default::default()
-        },
     }
-}
 
-fn reject_unsupported_redis_config(params: &RedisParams) -> Result<(), ToolError> {
-    if params
-        .ssh_tunnel
-        .as_ref()
-        .is_some_and(|tunnel| tunnel.enabled)
-    {
-        return Err(ToolError::Failed {
-            message: "redis.command does not support Redis SSH tunnels in onetcli CLI yet"
-                .to_string(),
-        });
-    }
-    if params.mode != RedisMode::Standalone {
-        return Err(ToolError::Failed {
-            message: "redis.command currently supports standalone Redis connections".to_string(),
-        });
-    }
-    Ok(())
-}
-
-fn redis_value_output(value: redis_client::Value) -> RedisCommandOutput {
-    match value {
-        redis_client::Value::Nil => output(json!({ "type": "nil", "value": null }), "(nil)"),
-        redis_client::Value::Int(value) => {
-            output(json!({ "type": "integer", "value": value }), value)
+    fn title(self) -> &'static str {
+        match self {
+            RedisTool::Command => "Execute Redis command",
+            RedisTool::Keys => "List Redis keys",
+            RedisTool::Get => "Get Redis key",
+            RedisTool::Set => "Set Redis key",
         }
-        redis_client::Value::BulkString(bytes) => bytes_output(bytes),
-        redis_client::Value::Array(items) => array_output(items),
-        redis_client::Value::SimpleString(value) => {
-            output(json!({ "type": "status", "value": value }), value)
-        }
-        redis_client::Value::Okay => output(json!({ "type": "status", "value": "OK" }), "OK"),
-        redis_client::Value::Double(value) => {
-            output(json!({ "type": "float", "value": value }), value)
-        }
-        redis_client::Value::Boolean(value) => {
-            let integer = if value { 1 } else { 0 };
-            output(json!({ "type": "integer", "value": integer }), integer)
-        }
-        _ => output(json!({ "type": "nil", "value": null }), "(nil)"),
     }
-}
 
-fn bytes_output(bytes: Vec<u8>) -> RedisCommandOutput {
-    match String::from_utf8(bytes.clone()) {
-        Ok(value) => output(json!({ "type": "string", "value": value }), value),
-        Err(_) => RedisCommandOutput {
-            value: json!({
-                "type": "binary",
-                "base64": general_purpose::STANDARD.encode(&bytes),
-                "bytes": bytes.len()
-            }),
-            display: format!("<binary: {} bytes>", bytes.len()),
-        },
+    fn description(self) -> &'static str {
+        match self {
+            RedisTool::Command => {
+                "Execute one Redis command through a saved Redis connection. The connection argument accepts a saved connection id or exact saved connection name. Pass db to target a specific logical database. The command may mutate Redis data and therefore requires --allow-write when called through onetcli tool call."
+            }
+            RedisTool::Keys => {
+                "List Redis keys matching a pattern through a saved Redis connection. This is read-only but may be expensive on large databases."
+            }
+            RedisTool::Get => {
+                "Read the string value for one Redis key through a saved Redis connection."
+            }
+            RedisTool::Set => {
+                "Set the string value for one Redis key through a saved Redis connection. This mutates Redis data and requires --allow-write when called through onetcli tool call."
+            }
+        }
     }
-}
 
-fn array_output(items: Vec<redis_client::Value>) -> RedisCommandOutput {
-    let outputs = items
-        .into_iter()
-        .map(redis_value_output)
-        .collect::<Vec<_>>();
-    let display = format!(
-        "[{}]",
-        outputs
-            .iter()
-            .map(|item| item.display.clone())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    RedisCommandOutput {
-        value: json!({
-            "type": "array",
-            "value": outputs.into_iter().map(|item| item.value).collect::<Vec<_>>()
-        }),
-        display,
+    fn input_schema(self) -> Value {
+        match self {
+            RedisTool::Command => command_schema(),
+            RedisTool::Keys => keys_schema(),
+            RedisTool::Get => get_schema(),
+            RedisTool::Set => set_schema(),
+        }
     }
-}
 
-fn output(value: Value, display: impl ToString) -> RedisCommandOutput {
-    RedisCommandOutput {
-        value,
-        display: display.to_string(),
+    fn annotations(self) -> ToolAnnotations {
+        match self {
+            RedisTool::Command => ToolAnnotations::mutating(self.title()),
+            RedisTool::Keys => {
+                ToolAnnotations::read_only(self.title()).with_risk(RiskLevel::Medium)
+            }
+            RedisTool::Get => ToolAnnotations::read_only(self.title()).with_risk(RiskLevel::Low),
+            RedisTool::Set => ToolAnnotations::mutating(self.title()),
+        }
     }
 }
 
@@ -244,29 +254,6 @@ fn find_connection(
         .ok_or_else(|| unknown_connection(connection))
 }
 
-fn execute_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "connection": {
-                "type": "string",
-                "description": "Saved Redis connection id or exact saved connection name."
-            },
-            "command": {
-                "type": "string",
-                "description": "Single Redis command, for example `PING` or `GET user:1`."
-            },
-            "db": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": MAX_DB_INDEX,
-                "description": "Optional Redis logical database index."
-            }
-        },
-        "required": ["connection", "command"]
-    })
-}
-
 fn validate_command(parts: &[String], db: u8, mode: RedisMode) -> Result<(), ToolError> {
     if parts.is_empty() {
         return Err(ToolError::Failed {
@@ -284,67 +271,6 @@ fn validate_command(parts: &[String], db: u8, mode: RedisMode) -> Result<(), Too
         });
     }
     Ok(())
-}
-
-fn required_str(input: &Value, field: &'static str) -> Result<String, ToolError> {
-    input
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| ToolError::Failed {
-            message: format!("missing required string field `{field}`"),
-        })
-}
-
-fn optional_u8(input: &Value, field: &'static str) -> Result<Option<u8>, ToolError> {
-    match input.get(field) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .filter(|value| *value <= MAX_DB_INDEX)
-            .map(|value| value as u8)
-            .map(Some)
-            .ok_or_else(|| ToolError::Failed {
-                message: format!("field `{field}` must be an integer from 0 to {MAX_DB_INDEX}"),
-            }),
-    }
-}
-
-fn parse_command_args(command: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut escaped = false;
-
-    for ch in command.chars() {
-        if escaped {
-            current.push(match (in_single || in_double, ch) {
-                (true, 'n') => '\n',
-                (true, 'r') => '\r',
-                (true, 't') => '\t',
-                _ => ch,
-            });
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' => escaped = true,
-            '\'' if !in_double => in_single = !in_single,
-            '"' if !in_single => in_double = !in_double,
-            value if value.is_whitespace() && !in_single && !in_double => {
-                if !current.is_empty() {
-                    args.push(std::mem::take(&mut current));
-                }
-            }
-            value => current.push(value),
-        }
-    }
-    if !current.is_empty() {
-        args.push(current);
-    }
-    args
 }
 
 fn unknown_connection(connection: &str) -> ToolError {

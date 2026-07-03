@@ -39,6 +39,38 @@ fn onetcli_tool_registry_keeps_redis_execute_command_as_alias() {
 }
 
 #[test]
+fn onetcli_tool_registry_exposes_redis_read_and_write_convenience_tools() {
+    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+        .expect("tool registry should build");
+
+    let keys = registry
+        .get("redis.keys", ToolAdapter::FunctionCalling)
+        .expect("redis.keys should be CLI-callable");
+    let get = registry
+        .get("redis.get", ToolAdapter::FunctionCalling)
+        .expect("redis.get should be CLI-callable");
+    let set = registry
+        .get("redis.set", ToolAdapter::FunctionCalling)
+        .expect("redis.set should be CLI-callable");
+
+    assert_eq!(
+        json!(["connection", "pattern"]),
+        keys.input_schema["required"]
+    );
+    assert!(keys.annotations.read_only);
+    assert!(!keys.annotations.destructive);
+    assert_eq!(json!(["connection", "key"]), get.input_schema["required"]);
+    assert!(get.annotations.read_only);
+    assert!(!get.annotations.destructive);
+    assert_eq!(
+        json!(["connection", "key", "value"]),
+        set.input_schema["required"]
+    );
+    assert!(!set.annotations.read_only);
+    assert!(set.annotations.destructive);
+}
+
+#[test]
 fn onetcli_tool_call_requires_allow_write_for_redis_commands() {
     let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
@@ -60,6 +92,59 @@ fn onetcli_tool_call_requires_allow_write_for_redis_commands() {
         registry,
     )
     .expect_err("redis command should require explicit write permission");
+
+    assert!(error.to_string().contains("write_not_allowed"));
+}
+
+#[test]
+fn onetcli_tool_call_allows_redis_read_convenience_tools_without_allow_write() {
+    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+        .expect("tool registry should build");
+
+    let error = run_tool_command(
+        ToolCommand::Call {
+            tool_id: "redis.get".to_string(),
+            input: Some(
+                json!({
+                    "connection": "missing redis",
+                    "key": "user:1"
+                })
+                .to_string(),
+            ),
+            positional_input: None,
+            allow_write: false,
+            format: OutputFormat::Json,
+        },
+        registry,
+    )
+    .expect_err("read redis tool should reach connection resolution without allow-write");
+
+    assert!(error.to_string().contains("unknown Redis connection"));
+}
+
+#[test]
+fn onetcli_tool_call_requires_allow_write_for_redis_set() {
+    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+        .expect("tool registry should build");
+
+    let error = run_tool_command(
+        ToolCommand::Call {
+            tool_id: "redis.set".to_string(),
+            input: Some(
+                json!({
+                    "connection": "prod redis",
+                    "key": "user:1",
+                    "value": "Ada"
+                })
+                .to_string(),
+            ),
+            positional_input: None,
+            allow_write: false,
+            format: OutputFormat::Json,
+        },
+        registry,
+    )
+    .expect_err("redis.set should require explicit write permission");
 
     assert!(error.to_string().contains("write_not_allowed"));
 }
