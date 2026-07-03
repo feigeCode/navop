@@ -186,6 +186,8 @@ Agent registry 构建入口：
 3. 用剩余 toolsets 构建 Public MCP registry。
 4. 通过 `public_mcp::tools::agent_runtime_tool_registry(...)` 转成 Agent 工具。
 5. 再额外注册 DB / Redis / SSH-SFTP 原生 Agent 工具。
+6. 已迁移到 `tool_runtime` 的工具族，再通过
+   `agent_runtime::tools::tool_runtime_agent_tool_registry(...)` 桥接回 Agent。
 
 这样做的原因：
 
@@ -222,6 +224,9 @@ Agent registry 构建入口：
 - `database` / `redis` / `sftp` 在 Agent registry 中被关闭，不走 adapter。
 - 因此 Agent 不应再看到旧的 `db_exec`、`redis_execute_command` adapter 版本或 `sftp_write` adapter 版本。
 - `redis_execute_command` 这个名字仍存在，但现在来自 Redis 原生 Agent 工具，并且风险为 `High`。
+- Redis canonical runtime 工具也会通过 Agent bridge 暴露，模型侧 function 名会归一化成
+  `redis_command`、`redis_keys`、`redis_get`、`redis_set`。
+- `redis.execute_command` 是 `redis.command` 的 runtime alias，不作为单独 Agent 工具暴露。
 
 ### 3.2 DB 原生 Agent 工具
 
@@ -263,16 +268,23 @@ Agent registry 构建入口：
 位置：
 
 - `crates/redis_view/src/agent_tools.rs`
+- `crates/onetcli_runtime/src/redis_tools.rs`
 
 注册入口：
 
 - `redis_view::agent_tools::register_agent_redis_tools(cx, registry)`
+- `onetcli_runtime::redis_tools::redis_tool_registry(repo)` 通过
+  `agent_runtime::tools::tool_runtime_agent_tool_registry(...)` 桥接
 
 工具：
 
 | 工具名 | 风险 | 说明 |
 |---|---:|---|
 | `redis_execute_command` | `High` | 对当前运行中的 Redis connection 执行一条 Redis command。Auto 模式也会要求用户审批。 |
+| `redis_command` | `High` | Agent function-calling 名；canonical runtime id 是 `redis.command`，对保存的 Redis 连接执行一条命令。 |
+| `redis_keys` | `Medium` | Agent function-calling 名；canonical runtime id 是 `redis.keys`，按 pattern 读取保存 Redis 连接中的 key，只读但可能较重。 |
+| `redis_get` | `Low` | Agent function-calling 名；canonical runtime id 是 `redis.get`，读取保存 Redis 连接中的单个 key。 |
+| `redis_set` | `High` | Agent function-calling 名；canonical runtime id 是 `redis.set`，写入保存 Redis 连接中的单个 string value。 |
 
 默认资源解析：
 
@@ -285,12 +297,16 @@ Agent registry 构建入口：
 
 - `redis_view::GlobalRedisState`
 - 运行中的 Redis connection。
+- `one_core::storage::ConnectionRepository`
+- 保存的 `ConnectionType::Redis`
 
 限制：
 
-- 目前 Agent Redis 只有一个通用 command 工具。
-- 因为 Redis command 可能包含写入、删除、flush、eval 等危险操作，所以整个工具标记为 `High`。
-- 后续如果需要更细粒度体验，可以再拆只读工具，例如 `redis_get_key`、`redis_scan_keys`、`redis_key_info`。
+- `redis_execute_command` 面向当前运行中的 Redis connection；runtime-backed
+  `redis_command` / `redis_keys` / `redis_get` / `redis_set` 面向保存连接 repo。
+- `redis.command` 可能包含写入、删除、flush、eval 等危险操作，所以标记为 `High`。
+- `redis.keys` 只读但可能在大库上较重，所以标记为 `Medium`。后续如需更安全的大库体验，
+  应增加 `redis.scan` 或带 limit/cursor 的工具，而不是继续扩大 `KEYS` 语义。
 
 ### 3.4 SSH/SFTP 原生 Agent 工具
 

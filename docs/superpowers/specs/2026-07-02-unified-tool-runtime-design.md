@@ -78,6 +78,7 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 3c Agent/UI terminal exec selection | Done | Agent prompt tells the model to use `terminal_exec` for visible terminal execution and `ssh_exec` for structured SSH execution; tool and approval card titles label `terminal_exec` as terminal execution. `agent_runtime` tests and `ai_chat_view` checks passed on 2026-07-02. | Run manual app smoke for visible terminal execution. |
 | Phase 3d Redis canonical command tool | Done | `0573668 feat(onetcli_runtime): canonicalize redis command tool` makes `redis.command` the canonical `onetcli_runtime` Redis tool id and keeps `redis.execute_command` as a runtime alias. Red/green Redis tests, `cargo check -p onetcli_runtime`, and `git diff --check` passed on 2026-07-03. | Add read-oriented Redis convenience tools such as `redis.keys`, `redis.get`, and `redis.set` only when their schemas and permission/risk contracts are explicit. |
 | Phase 3e Redis convenience tools | Done | `0623ec8 feat(onetcli_runtime): add redis convenience tools` adds canonical `redis.keys`, `redis.get`, and `redis.set` to `onetcli_runtime`, keeps `redis.keys/get` read-only, requires write permission for `redis.set`, and splits Redis runtime implementation into submodules under 300 lines each. Red/green Redis tests, `cargo test -p onetcli_runtime`, `cargo check -p onetcli_runtime`, and `git diff --check` passed on 2026-07-03. | Consider Public MCP convenience Redis tools only after deciding whether external clients should get the same high-level commands or only the generic `redis.command`. |
+| Phase 3f Agent Redis runtime bridge | Done | `9073061 feat(agent): bridge redis runtime tools` registers `onetcli_runtime::redis_tools::redis_tool_registry(repo)` through the Agent `tool_runtime` bridge. Agent keeps legacy `redis_execute_command` for active Redis sessions and also exposes canonical runtime tools as `redis_command`, `redis_keys`, `redis_get`, and `redis_set`; `redis.execute_command` stays an alias and is not exposed as a separate Agent tool. TDD red/green registry tests, Agent runtime adapter tests, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Migrate remaining Agent tool families such as SFTP and DB write/high-risk tools through `tool_runtime` without removing compatibility tools until aliases are covered. |
 | Phase 4 Public MCP app registry merge | Done | `main/src/public_mcp_runtime/tool_registry.rs` collects enabled `tool_runtime::ToolRegistry` values, merges them, and exposes one `ToolRuntimeMcpProvider`. Terminal toolset now exposes both `ssh.exec` and `terminal.exec` through the real app registry path. Public MCP runtime tests passed on 2026-07-02. | Continue replacing remaining Public MCP-specific permission settings with unified `PermissionPolicy`. |
 | Phase 4b Public MCP Redis canonical command tool | Done | `6c99c8e feat(public_mcp): canonicalize redis command tool` makes Public MCP Redis `tools/list` expose `redis.command` while `tools/call` still accepts `redis.execute_command` through a runtime alias. `public_mcp` Redis tests, main registry Redis test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Continue replacing remaining legacy MCP tool ids with canonical ids only when old clients keep a tested alias path. |
 | Phase 4c Public MCP Redis convenience tools | Done | `6d5fc34 feat(public_mcp): add redis convenience tools` exposes `redis.keys`, `redis.get`, and `redis.set` through Public MCP and the real app registry path. `redis.keys/get` are read-only, `redis.set` is mutating and approval-gated, and `redis.execute_command` remains a compatibility alias for `redis.command`. Red/green Public MCP convenience tests, `cargo test -p public_mcp`, main Redis registry test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Continue replacing remaining legacy MCP tool ids with canonical ids only when old clients keep a tested alias path. |
@@ -107,18 +108,16 @@ Purpose:
 Last completed checkpoint:
 
 ```text
-6d5fc34 feat(public_mcp): add redis convenience tools
+9073061 feat(agent): bridge redis runtime tools
 ```
 
 Last checkpoint verification run:
 
 ```bash
-rtk cargo test -p public_mcp --test redis_convenience_tools
-rtk cargo test -p public_mcp --test redis_tools
-rtk cargo test -p main build_tool_registry_includes_redis_tools
-rtk cargo check -p public_mcp
+rtk cargo test -p main agent_runtime_tool_registry_uses_native_redis_tools
+rtk cargo test -p main agent_runtime_tool_registry
+rtk cargo test -p agent_runtime --test tool_runtime_adapter
 rtk cargo check -p main
-rtk cargo test -p public_mcp
 rtk git diff --check
 ```
 
@@ -134,7 +133,11 @@ Current product decision:
    Public MCP; `redis.execute_command` is a compatibility alias.
 5. `redis.keys` and `redis.get` are read-only Redis tools in `onetcli_runtime` and
    Public MCP; `redis.set` is mutating and requires write permission / approval.
-6. Agent-facing prompts should expose canonical ids only after the relevant adapter can
+6. Agent registry now includes runtime-backed Redis tools through the `tool_runtime`
+   bridge. The model-facing function names are normalized as `redis_command`,
+   `redis_keys`, `redis_get`, and `redis_set`; the canonical runtime ids remain
+   `redis.command`, `redis.keys`, `redis.get`, and `redis.set`.
+7. Agent-facing prompts should expose canonical ids only after the relevant adapter can
    route them safely.
 
 Next recommended checkpoints:
@@ -142,7 +145,9 @@ Next recommended checkpoints:
 1. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
    through `terminal.exec`.
 2. Run manual resource-pool smoke for source presets.
-3. Continue migrating remaining business tool families through `tool_runtime`.
+3. Bridge remaining Agent tool families through `tool_runtime`, starting with SFTP
+   canonical `sftp.*` read tools or DB write/high-risk tools once approval contracts
+   are aligned.
 
 ## Design Principles
 
