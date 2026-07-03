@@ -2362,6 +2362,71 @@ pub trait DatabasePlugin: Send + Sync {
     /// Build column definition from ColumnDefinition (for table designer)
     fn build_column_def(&self, col: &ColumnDefinition) -> String;
 
+    /// Build FOREIGN KEY constraint definition from ForeignKeyDefinition.
+    fn build_foreign_key_def(&self, foreign_key: &ForeignKeyDefinition) -> String {
+        let columns = foreign_key
+            .columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ref_columns = foreign_key
+            .ref_columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut definition = format!(
+            "CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
+            self.quote_identifier(&foreign_key.name),
+            columns,
+            self.quote_identifier(&foreign_key.ref_table),
+            ref_columns
+        );
+        if let Some(action) = foreign_key_action_sql(&foreign_key.on_delete) {
+            definition.push_str(&format!(" ON DELETE {action}"));
+        }
+        if let Some(action) = foreign_key_action_sql(&foreign_key.on_update) {
+            definition.push_str(&format!(" ON UPDATE {action}"));
+        }
+        definition
+    }
+
+    /// Compare two foreign keys for SQL-relevant differences.
+    fn foreign_key_changed(
+        &self,
+        left: &ForeignKeyDefinition,
+        right: &ForeignKeyDefinition,
+    ) -> bool {
+        left.columns != right.columns
+            || left.ref_table != right.ref_table
+            || left.ref_columns != right.ref_columns
+            || foreign_key_action_sql(&left.on_delete) != foreign_key_action_sql(&right.on_delete)
+            || foreign_key_action_sql(&left.on_update) != foreign_key_action_sql(&right.on_update)
+    }
+
+    /// Build SQL for adding a foreign key to an existing table.
+    fn build_add_foreign_key_sql(
+        &self,
+        table_name: &str,
+        foreign_key: &ForeignKeyDefinition,
+    ) -> String {
+        format!(
+            "ALTER TABLE {} ADD {};",
+            self.quote_identifier(table_name),
+            self.build_foreign_key_def(foreign_key)
+        )
+    }
+
+    /// Build SQL for dropping a foreign key from an existing table.
+    fn build_drop_foreign_key_sql(&self, table_name: &str, foreign_key_name: &str) -> String {
+        format!(
+            "ALTER TABLE {} DROP CONSTRAINT {};",
+            self.quote_identifier(table_name),
+            self.quote_identifier(foreign_key_name)
+        )
+    }
+
     /// Build CREATE TABLE SQL from TableDesign
     fn build_create_table_sql(&self, design: &TableDesign) -> String;
 
@@ -2534,6 +2599,22 @@ pub trait DatabasePlugin: Send + Sync {
         config: &ExportConfig,
         progress_tx: Option<ExportProgressSender>,
     ) -> Result<ExportResult>;
+}
+
+fn foreign_key_action_sql(action: &str) -> Option<String> {
+    let action = action.trim();
+    if action.is_empty() {
+        return None;
+    }
+    let action = action
+        .split_whitespace()
+        .map(str::to_ascii_uppercase)
+        .collect::<Vec<_>>()
+        .join(" ");
+    match action.as_str() {
+        "CASCADE" | "RESTRICT" | "NO ACTION" | "SET NULL" | "SET DEFAULT" => Some(action),
+        _ => None,
+    }
 }
 
 /// 将 design 中被重命名的列名回退为旧名，以便与 original 做 diff 时不会产生误删/误增。

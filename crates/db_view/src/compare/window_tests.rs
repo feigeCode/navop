@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use db::compare::{SyncPlan, SyncPlanSummary, SyncStatement, SyncStatementKind};
 use db::{DbNode, DbNodeType};
 use one_core::storage::DatabaseType;
@@ -7,6 +9,10 @@ use crate::compare::sync_statement_picker::selected_sync_sql_text_for_ids;
 use crate::compare::window_params::{
     DataCompareSelection, SchemaCompareSelection, data_compare_params, schema_compare_params,
     split_columns,
+};
+use crate::compare::window_ui::{
+    CompareStep, sync_sql_execution_error_log_entry, sync_sql_execution_start_log_entries,
+    sync_sql_execution_success_log_entry,
 };
 use crate::compare::{DataCompareWindow, SchemaCompareWindow};
 
@@ -24,6 +30,35 @@ fn data_compare_popup_title_uses_source_table() {
         DataCompareWindow::popup_title_for(&node),
         t!("Compare.data_compare_title", name = "users").to_string()
     );
+}
+
+#[test]
+fn data_compare_table_node_defaults_to_selected_table() {
+    let node = DbNode::new(
+        "table-1",
+        "users",
+        DbNodeType::Table,
+        "conn-1".to_string(),
+        DatabaseType::PostgreSQL,
+    );
+
+    assert_eq!(
+        DataCompareWindow::initial_selected_tables_for_node(&node),
+        HashSet::from(["users".to_string()])
+    );
+}
+
+#[test]
+fn data_compare_database_node_does_not_fake_table_selection() {
+    let node = DbNode::new(
+        "database-1",
+        "app",
+        DbNodeType::Database,
+        "conn-1".to_string(),
+        DatabaseType::PostgreSQL,
+    );
+
+    assert!(DataCompareWindow::initial_selected_tables_for_node(&node).is_empty());
 }
 
 #[test]
@@ -63,12 +98,34 @@ fn schema_compare_params_use_editable_source_selection() {
             database: "target_db".to_string(),
             schema: "target_schema".to_string(),
         },
+        false,
     )
     .unwrap();
 
     assert_eq!(params.source_connection_id, "source-2");
     assert_eq!(params.source_database, "source_db");
     assert_eq!(params.source_schema.as_deref(), Some("source_schema"));
+    assert!(!params.case_sensitive_identifiers);
+}
+
+#[test]
+fn schema_compare_params_can_enable_case_sensitive_identifiers() {
+    let params = schema_compare_params(
+        SchemaCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+        },
+        SchemaCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+        },
+        true,
+    )
+    .unwrap();
+
+    assert!(params.case_sensitive_identifiers);
 }
 
 #[test]
@@ -78,23 +135,116 @@ fn data_compare_params_use_editable_source_selection() {
             connection_id: "source-2".to_string(),
             database: "source_db".to_string(),
             schema: "source_schema".to_string(),
-            table: "source_table".to_string(),
+            tables: vec!["source_table".to_string()],
         },
         DataCompareSelection {
             connection_id: "target-1".to_string(),
             database: "target_db".to_string(),
             schema: "target_schema".to_string(),
-            table: "target_table".to_string(),
+            tables: vec!["target_table".to_string()],
         },
         "id, tenant_id".to_string(),
+        false,
     )
     .unwrap();
 
     assert_eq!(params.source_connection_id, "source-2");
     assert_eq!(params.source_database, "source_db");
     assert_eq!(params.source_schema.as_deref(), Some("source_schema"));
-    assert_eq!(params.source_table, "source_table");
+    assert_eq!(params.table_pairs[0].source_table, "source_table");
+    assert_eq!(params.table_pairs[0].target_table, "target_table");
     assert_eq!(params.key_columns, vec!["id", "tenant_id"]);
+}
+
+#[test]
+fn data_compare_params_build_multiple_case_insensitive_table_pairs() {
+    let params = data_compare_params(
+        DataCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+            tables: vec!["Users".to_string(), "Order_Items".to_string()],
+        },
+        DataCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+            tables: vec!["order_items".to_string(), "users".to_string()],
+        },
+        "id".to_string(),
+        false,
+    )
+    .unwrap();
+
+    let pairs = params
+        .table_pairs
+        .iter()
+        .map(|pair| (pair.source_table.as_str(), pair.target_table.as_str()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        pairs,
+        vec![("Users", "users"), ("Order_Items", "order_items")]
+    );
+}
+
+#[test]
+fn data_compare_params_can_match_table_names_case_sensitively() {
+    let result = data_compare_params(
+        DataCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+            tables: vec!["Users".to_string(), "Orders".to_string()],
+        },
+        DataCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+            tables: vec!["users".to_string(), "Orders".to_string()],
+        },
+        "id".to_string(),
+        true,
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn compare_steps_follow_object_preview_execute_order() {
+    assert_eq!(CompareStep::Objects.next(), Some(CompareStep::SqlPreview));
+    assert_eq!(
+        CompareStep::SqlPreview.next(),
+        Some(CompareStep::SqlExecute)
+    );
+    assert_eq!(CompareStep::SqlExecute.next(), None);
+    assert_eq!(
+        CompareStep::SqlExecute.previous(),
+        Some(CompareStep::SqlPreview)
+    );
+    assert_eq!(
+        CompareStep::SqlPreview.previous(),
+        Some(CompareStep::Objects)
+    );
+    assert_eq!(CompareStep::Objects.previous(), None);
+}
+
+#[test]
+fn sync_sql_execution_log_entries_describe_start_success_and_failure() {
+    let start_entries = sync_sql_execution_start_log_entries(
+        "INSERT INTO users (id) VALUES (1);\n\nUPDATE users SET name = 'A';",
+    );
+    assert_eq!(1, start_entries.len());
+    assert!(!start_entries[0].is_error);
+    assert!(start_entries[0].message.contains('2'));
+
+    let success = sync_sql_execution_success_log_entry(3);
+    assert!(!success.is_error);
+    assert!(success.message.contains('3'));
+
+    let failure = sync_sql_execution_error_log_entry("permission denied");
+    assert!(failure.is_error);
+    assert!(failure.message.contains("permission denied"));
 }
 
 #[test]

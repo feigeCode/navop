@@ -1564,7 +1564,9 @@ mod tests {
     use super::*;
     use crate::plugin::DatabasePlugin;
     use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
-    use crate::types::{ColumnDefinition, IndexDefinition, TableDesign, TableOptions};
+    use crate::types::{
+        ColumnDefinition, ForeignKeyDefinition, IndexDefinition, TableDesign, TableOptions,
+    };
     use std::collections::HashMap;
 
     fn create_plugin() -> ClickHousePlugin {
@@ -1816,6 +1818,35 @@ mod tests {
         assert!(sql.contains("ORDER BY"));
     }
 
+    #[test]
+    fn test_build_create_table_sql_ignores_foreign_keys() {
+        let plugin = create_plugin();
+        let design = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "events".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id").data_type("UInt64"),
+                ColumnDefinition::new("order_id").data_type("UInt64"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_events_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: "CASCADE".to_string(),
+                on_update: String::new(),
+            }],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_create_table_sql(&design);
+
+        assert!(sql.contains("CREATE TABLE `events`"));
+        assert!(!sql.contains("FOREIGN KEY"));
+        assert!(!sql.contains("fk_events_order"));
+    }
+
     // ==================== ALTER TABLE Tests ====================
 
     #[test]
@@ -1932,6 +1963,42 @@ mod tests {
         assert!(sql.contains("ADD INDEX"));
         assert!(sql.contains("`idx_value`"));
         assert!(sql.contains("`value`"));
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_ignores_foreign_key_changes() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "events".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id").data_type("UInt64"),
+                ColumnDefinition::new("order_id").data_type("UInt64"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "events".to_string(),
+            columns: original.columns.clone(),
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_events_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: "CASCADE".to_string(),
+                on_update: String::new(),
+            }],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+
+        assert_eq!("-- No changes detected", sql);
     }
 
     // ==================== Completion Info Tests ====================

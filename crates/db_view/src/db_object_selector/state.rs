@@ -46,9 +46,10 @@ pub(crate) fn policy_for_connection<T>(
     connection: &TargetConnectionControls,
     cx: &Context<T>,
 ) -> DbObjectSelectorPolicy {
-    let Some(connection_id) = connection.select.read(cx).selected_value().cloned() else {
+    let connection_id = selected_connection_value(connection, cx);
+    if connection_id.trim().is_empty() {
         return DbObjectSelectorPolicy::default();
-    };
+    }
     let Some(db_state) = cx.try_global::<GlobalDbState>() else {
         return DbObjectSelectorPolicy::default();
     };
@@ -75,6 +76,7 @@ pub(crate) fn effective_database_schema(
 #[derive(Clone)]
 pub(crate) struct TargetConnectionControls {
     pub select: Entity<SelectState<SearchableVec<ConnectionSelectItem>>>,
+    pub fallback: Entity<InputState>,
 }
 
 #[derive(Clone)]
@@ -107,14 +109,42 @@ pub(crate) fn selected_string(
         .unwrap_or_else(|| fallback.read(cx).text().to_string())
 }
 
+pub(crate) fn selected_connection_value(connection: &TargetConnectionControls, cx: &App) -> String {
+    connection
+        .select
+        .read(cx)
+        .selected_value()
+        .cloned()
+        .unwrap_or_else(|| connection.fallback.read(cx).text().to_string())
+}
+
 pub(crate) fn set_connection_select<T>(
     select: &Entity<SelectState<SearchableVec<ConnectionSelectItem>>>,
+    fallback: &Entity<InputState>,
     value: &str,
     window: &mut Window,
     cx: &mut Context<T>,
 ) {
+    fallback.update(cx, |input, cx| {
+        input.set_value(value.to_string(), window, cx);
+    });
     select.update(cx, |state, cx| {
         state.set_selected_value(&value.to_string(), window, cx);
+        if !value.is_empty()
+            && !state
+                .selected_value()
+                .is_some_and(|selected| selected == value)
+        {
+            state.set_items(
+                SearchableVec::new(vec![ConnectionSelectItem {
+                    id: value.to_string(),
+                    label: value.to_string(),
+                }]),
+                window,
+                cx,
+            );
+            state.set_selected_index(Some(IndexPath::new(0)), window, cx);
+        }
     });
 }
 
@@ -130,14 +160,51 @@ pub(crate) fn set_string_select<T>(
     });
     select.update(cx, |state, cx| {
         state.set_selected_value(&value, window, cx);
+        if !value.is_empty()
+            && !state
+                .selected_value()
+                .is_some_and(|selected| selected == &value)
+        {
+            state.set_items(SearchableVec::new(vec![value.clone()]), window, cx);
+            state.set_selected_index(Some(IndexPath::new(0)), window, cx);
+        }
     });
 }
 
 #[cfg(test)]
 mod tests {
     use db::DatabaseCapabilities;
+    use gpui::{AppContext, Context, Entity, IntoElement, Render, TestAppContext, Window, div};
+    use gpui_component::{
+        IndexPath,
+        input::InputState,
+        select::{SearchableVec, SelectState},
+    };
 
-    use super::DbObjectSelectorPolicy;
+    use super::{DbObjectSelectorPolicy, StringSelect};
+    use crate::compare::window_ui::ConnectionSelectItem;
+
+    struct StringSelectTestRoot {
+        select: StringSelect,
+        fallback: Entity<InputState>,
+    }
+
+    struct ConnectionSelectTestRoot {
+        select: Entity<SelectState<SearchableVec<ConnectionSelectItem>>>,
+        fallback: Entity<InputState>,
+    }
+
+    impl Render for StringSelectTestRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    impl Render for ConnectionSelectTestRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
 
     #[test]
     fn schema_policy_uses_database_capabilities() {
@@ -194,5 +261,69 @@ mod tests {
                 DbObjectSelectorPolicy::default()
             )
         );
+    }
+
+    #[gpui::test]
+    fn set_string_select_keeps_missing_value_selectable(cx: &mut TestAppContext) {
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let fallback =
+                cx.new(|cx| InputState::new(window, cx).default_value("source_db".to_string()));
+            StringSelectTestRoot {
+                select: super::string_select_state("source_db".to_string(), window, cx),
+                fallback,
+            }
+        });
+
+        root.update_in(cx, |root, window, cx| {
+            super::set_string_select(
+                &root.select,
+                &root.fallback,
+                "target_db".to_string(),
+                window,
+                cx,
+            );
+        });
+
+        let (selected, fallback) = root.read_with(cx, |root, cx| {
+            (
+                root.select.read(cx).selected_value().cloned(),
+                root.fallback.read(cx).text().to_string(),
+            )
+        });
+        assert_eq!(Some("target_db".to_string()), selected);
+        assert_eq!("target_db", fallback);
+    }
+
+    #[gpui::test]
+    fn set_connection_select_keeps_missing_value_selectable(cx: &mut TestAppContext) {
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let fallback = cx.new(|cx| InputState::new(window, cx).default_value("source-conn"));
+            let select = cx.new(|cx| {
+                SelectState::new(
+                    SearchableVec::new(vec![ConnectionSelectItem {
+                        id: "source-conn".to_string(),
+                        label: "Source".to_string(),
+                    }]),
+                    Some(IndexPath::new(0)),
+                    window,
+                    cx,
+                )
+                .searchable(true)
+            });
+            ConnectionSelectTestRoot { select, fallback }
+        });
+
+        root.update_in(cx, |root, window, cx| {
+            super::set_connection_select(&root.select, &root.fallback, "target-conn", window, cx);
+        });
+
+        let (selected, fallback) = root.read_with(cx, |root, cx| {
+            (
+                root.select.read(cx).selected_value().cloned(),
+                root.fallback.read(cx).text().to_string(),
+            )
+        });
+        assert_eq!(Some("target-conn".to_string()), selected);
+        assert_eq!("target-conn", fallback);
     }
 }

@@ -1955,6 +1955,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "connection-import-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "connection-string"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3533,6 +3542,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "connection-import-protocol",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -3582,6 +3592,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "connection-import-protocol",
  "db",
  "db_view",
  "extension-component",
@@ -3609,8 +3620,12 @@ name = "extension-wasm"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "connection-import-protocol",
  "extension-component",
  "futures",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "wasmtime",
  "wasmtime-wasi",
@@ -6738,6 +6753,7 @@ dependencies = [
  "ai_chat_view",
  "anyhow",
  "base64 0.22.1",
+ "connection-import-protocol",
  "db",
  "db_view",
  "dirs 6.0.0",

@@ -74,6 +74,19 @@ impl OraclePlugin {
         Self
     }
 
+    fn foreign_key_delete_action_sql(action: &str) -> Option<String> {
+        let action = action
+            .trim()
+            .split_whitespace()
+            .map(str::to_ascii_uppercase)
+            .collect::<Vec<_>>()
+            .join(" ");
+        match action.as_str() {
+            "CASCADE" | "SET NULL" => Some(action),
+            _ => None,
+        }
+    }
+
     fn table_change_value_expr(&self, value: &str, column: Option<&ColumnInfo>) -> String {
         if value == "NULL" || value.is_empty() {
             return "NULL".to_string();
@@ -2333,6 +2346,44 @@ impl DatabasePlugin for OraclePlugin {
         def
     }
 
+    fn build_foreign_key_def(&self, foreign_key: &ForeignKeyDefinition) -> String {
+        let columns = foreign_key
+            .columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ref_columns = foreign_key
+            .ref_columns
+            .iter()
+            .map(|column| self.quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut definition = format!(
+            "CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({})",
+            self.quote_identifier(&foreign_key.name),
+            columns,
+            self.quote_identifier(&foreign_key.ref_table),
+            ref_columns
+        );
+        if let Some(action) = Self::foreign_key_delete_action_sql(&foreign_key.on_delete) {
+            definition.push_str(&format!(" ON DELETE {action}"));
+        }
+        definition
+    }
+
+    fn foreign_key_changed(
+        &self,
+        left: &ForeignKeyDefinition,
+        right: &ForeignKeyDefinition,
+    ) -> bool {
+        left.columns != right.columns
+            || left.ref_table != right.ref_table
+            || left.ref_columns != right.ref_columns
+            || Self::foreign_key_delete_action_sql(&left.on_delete)
+                != Self::foreign_key_delete_action_sql(&right.on_delete)
+    }
+
     fn build_create_table_sql(&self, design: &TableDesign) -> String {
         let mut sql = String::new();
         sql.push_str("CREATE TABLE ");
@@ -2357,6 +2408,10 @@ impl DatabasePlugin for OraclePlugin {
                 .map(|c| self.quote_identifier(c))
                 .collect();
             definitions.push(format!("  PRIMARY KEY ({})", pk_cols.join(", ")));
+        }
+
+        for foreign_key in &design.foreign_keys {
+            definitions.push(format!("  {}", self.build_foreign_key_def(foreign_key)));
         }
 
         sql.push_str(&definitions.join(",\n"));
@@ -2408,6 +2463,24 @@ impl DatabasePlugin for OraclePlugin {
             .collect();
         let new_cols: std::collections::HashMap<&str, &ColumnDefinition> =
             new.columns.iter().map(|c| (c.name.as_str(), c)).collect();
+        let original_foreign_keys: HashMap<&str, &ForeignKeyDefinition> = original
+            .foreign_keys
+            .iter()
+            .map(|foreign_key| (foreign_key.name.as_str(), foreign_key))
+            .collect();
+        let new_foreign_keys: HashMap<&str, &ForeignKeyDefinition> = new
+            .foreign_keys
+            .iter()
+            .map(|foreign_key| (foreign_key.name.as_str(), foreign_key))
+            .collect();
+
+        for (name, original_foreign_key) in &original_foreign_keys {
+            match new_foreign_keys.get(name) {
+                Some(new_foreign_key)
+                    if !self.foreign_key_changed(original_foreign_key, new_foreign_key) => {}
+                _ => statements.push(self.build_drop_foreign_key_sql(&new.table_name, name)),
+            }
+        }
 
         for name in original_cols.keys() {
             if !new_cols.contains_key(name) {
@@ -2496,6 +2569,15 @@ impl DatabasePlugin for OraclePlugin {
             }
         }
 
+        for (name, new_foreign_key) in &new_foreign_keys {
+            match original_foreign_keys.get(name) {
+                Some(original_foreign_key)
+                    if !self.foreign_key_changed(original_foreign_key, new_foreign_key) => {}
+                _ => statements
+                    .push(self.build_add_foreign_key_sql(&new.table_name, new_foreign_key)),
+            }
+        }
+
         if statements.is_empty() {
             "-- No changes detected".to_string()
         } else {
@@ -2539,8 +2621,8 @@ mod tests {
     use crate::plugin::DatabasePlugin;
     use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
     use crate::types::{
-        ColumnDefinition, ColumnInfo, IndexDefinition, TableCellChange, TableDesign, TableOptions,
-        TableRowChange, TableSaveRequest,
+        ColumnDefinition, ColumnInfo, ForeignKeyDefinition, IndexDefinition, TableCellChange,
+        TableDesign, TableOptions, TableRowChange, TableSaveRequest,
     };
     use std::collections::HashMap;
 
@@ -3030,6 +3112,67 @@ mod tests {
     }
 
     #[test]
+    fn test_build_create_table_sql_with_foreign_keys() {
+        let plugin = create_plugin();
+        let design = TableDesign {
+            database_name: "test_schema".to_string(),
+            table_name: "order_items".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id")
+                    .data_type("NUMBER")
+                    .nullable(false),
+                ColumnDefinition::new("order_id")
+                    .data_type("NUMBER")
+                    .nullable(false),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_order_items_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: "CASCADE".to_string(),
+                on_update: String::new(),
+            }],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_create_table_sql(&design);
+
+        assert!(sql.contains(
+            "CONSTRAINT \"fk_order_items_order\" FOREIGN KEY (\"order_id\") REFERENCES \"orders\" (\"id\") ON DELETE CASCADE"
+        ));
+    }
+
+    #[test]
+    fn test_build_create_table_sql_omits_unsupported_foreign_key_on_update() {
+        let plugin = create_plugin();
+        let design = TableDesign {
+            database_name: "test_schema".to_string(),
+            table_name: "order_items".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id").data_type("NUMBER"),
+                ColumnDefinition::new("order_id").data_type("NUMBER"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_order_items_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: "SET NULL".to_string(),
+                on_update: "CASCADE".to_string(),
+            }],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_create_table_sql(&design);
+
+        assert!(sql.contains("ON DELETE SET NULL"));
+        assert!(!sql.contains("ON UPDATE"));
+    }
+
+    #[test]
     fn test_build_create_table_sql_with_date_column() {
         let plugin = create_plugin();
         let design = TableDesign {
@@ -3203,6 +3346,63 @@ mod tests {
         assert!(sql.contains("CREATE UNIQUE INDEX"));
         assert!(sql.contains("\"idx_email\""));
         assert!(sql.contains("\"email\""));
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_add_and_drop_foreign_keys() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_schema".to_string(),
+            table_name: "order_items".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id").data_type("NUMBER"),
+                ColumnDefinition::new("order_id").data_type("NUMBER"),
+                ColumnDefinition::new("legacy_order_id").data_type("NUMBER"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_order_items_legacy".to_string(),
+                columns: vec!["legacy_order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: String::new(),
+                on_update: String::new(),
+            }],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            database_name: "test_schema".to_string(),
+            table_name: "order_items".to_string(),
+            columns: vec![
+                ColumnDefinition::new("id").data_type("NUMBER"),
+                ColumnDefinition::new("order_id").data_type("NUMBER"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![ForeignKeyDefinition {
+                name: "fk_order_items_order".to_string(),
+                columns: vec!["order_id".to_string()],
+                ref_table: "orders".to_string(),
+                ref_columns: vec!["id".to_string()],
+                on_delete: "CASCADE".to_string(),
+                on_update: String::new(),
+            }],
+            options: TableOptions::default(),
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+
+        assert!(
+            sql.contains("ALTER TABLE \"order_items\" DROP CONSTRAINT \"fk_order_items_legacy\";")
+        );
+        assert!(
+            sql.find("DROP CONSTRAINT \"fk_order_items_legacy\"")
+                .unwrap()
+                < sql.find("DROP COLUMN \"legacy_order_id\"").unwrap()
+        );
+        assert!(sql.contains(
+            "ALTER TABLE \"order_items\" ADD CONSTRAINT \"fk_order_items_order\" FOREIGN KEY (\"order_id\") REFERENCES \"orders\" (\"id\") ON DELETE CASCADE;"
+        ));
     }
 
     // ==================== Completion Info Tests ====================

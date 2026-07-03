@@ -10,4 +10,6 @@ pub enum WasmError {
     ComponentLoad(String),
     #[error("wasm function not found: {0}")]
     FunctionNotFound(String),
+    #[error("connection import protocol decode failed: {0}")]
+    ProtocolDecode(String),
 }

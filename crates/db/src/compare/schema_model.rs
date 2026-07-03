@@ -25,6 +25,10 @@ pub struct ForeignKeySchema {
     pub columns: Vec<String>,
     pub ref_table: String,
     pub ref_columns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_delete: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_update: Option<String>,
 }
 
 /// 表结构
@@ -99,12 +103,14 @@ pub struct SchemaCompareResult {
 #[derive(Debug, Clone)]
 pub struct SchemaCompareOptions {
     pub ignore_comments: bool,
+    pub case_sensitive_identifiers: bool,
 }
 
 impl Default for SchemaCompareOptions {
     fn default() -> Self {
         Self {
             ignore_comments: false,
+            case_sensitive_identifiers: false,
         }
     }
 }
@@ -114,4 +120,7 @@ impl Default for SchemaCompareOptions {
 pub enum SchemaCompareError {
     #[error("无效的表结构")]
     InvalidSchema,
+
+    #[error("存在重复标识符: {0}")]
+    DuplicateIdentifier(String),
 }

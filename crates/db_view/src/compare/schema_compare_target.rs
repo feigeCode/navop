@@ -106,6 +106,7 @@ impl SchemaCompareWindow {
     pub(super) fn source_connection_controls(&self) -> TargetConnectionControls {
         TargetConnectionControls {
             select: self.source_connection_select.clone(),
+            fallback: self.source_connection_id.clone(),
         }
     }
 
@@ -139,6 +140,7 @@ impl SchemaCompareWindow {
     pub(super) fn connection_controls(&self) -> TargetConnectionControls {
         TargetConnectionControls {
             select: self.target_connection_select.clone(),
+            fallback: self.target_connection_id.clone(),
         }
     }
 

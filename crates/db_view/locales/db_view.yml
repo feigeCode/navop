@@ -1075,6 +1075,70 @@ Query:
     en: Show results
     zh-CN: 显示结果
     zh-HK: 顯示結果
+  transaction_auto:
+    en: Auto
+    zh-CN: 自动
+    zh-HK: 自動
+  transaction_manual:
+    en: Manual
+    zh-CN: 手动
+    zh-HK: 手動
+  transaction_mode_prefix:
+    en: "Txn: "
+    zh-CN: "事务："
+    zh-HK: "交易："
+  transaction_commit:
+    en: Commit
+    zh-CN: 提交
+    zh-HK: 提交
+  transaction_rollback:
+    en: Rollback
+    zh-CN: 回滚
+    zh-HK: 回滾
+  transaction_not_supported:
+    en: Manual transactions are not supported by this database
+    zh-CN: 当前数据库不支持手动事务
+    zh-HK: 目前資料庫不支援手動交易
+  transaction_started:
+    en: Manual transaction started
+    zh-CN: 手动事务已开始
+    zh-HK: 手動交易已開始
+  transaction_committed:
+    en: Transaction committed
+    zh-CN: 事务已提交
+    zh-HK: 交易已提交
+  transaction_rolled_back:
+    en: Transaction rolled back
+    zh-CN: 事务已回滚
+    zh-HK: 交易已回滾
+  transaction_not_started:
+    en: No manual transaction is active
+    zh-CN: 当前没有活动的手动事务
+    zh-HK: 目前沒有作用中的手動交易
+  transaction_scope_changed:
+    en: Commit or rollback the current transaction before changing database or schema
+    zh-CN: 请先提交或回滚当前事务，再切换数据库或模式
+    zh-HK: 請先提交或回滾目前交易，再切換資料庫或模式
+  transaction_start_failed:
+    en: "Failed to start transaction: %{error}"
+    zh-CN: "启动事务失败：%{error}"
+    zh-HK: "啟動交易失敗：%{error}"
+  transaction_control_failed:
+    en: Transaction command failed
+    zh-CN: 事务控制命令执行失败
+    zh-HK: 交易控制命令執行失敗
+  transaction_control_unavailable:
+    en: Transaction command is unavailable for this database
+    zh-CN: 当前数据库不支持该事务控制命令
+    zh-HK: 目前資料庫不支援該交易控制命令
+  transaction_finish_before_switch:
+    en: Commit or rollback the current transaction before switching transaction mode
+    zh-CN: 请先提交或回滚当前事务，再切换事务模式
+    zh-HK: 請先提交或回滾目前交易，再切換交易模式
+  transaction_finish_before_close:
+    en: Commit or rollback the current transaction before closing this editor
+    zh-CN: 请先提交或回滚当前事务，再关闭编辑器
+    zh-HK: 請先提交或回滾目前交易，再關閉編輯器
   summary:
     en: Summary
     zh-CN: 摘要
@@ -2779,6 +2843,18 @@ Compare:
     en: Result
     zh-CN: 结果
     zh-HK: 結果
+  step_objects:
+    en: Objects
+    zh-CN: 对象
+    zh-HK: 物件
+  step_sql_preview:
+    en: SQL Preview
+    zh-CN: SQL 预览
+    zh-HK: SQL 預覽
+  step_sql_execute:
+    en: SQL Execute
+    zh-CN: SQL 执行
+    zh-HK: SQL 執行
   data_compare:
     en: Data Compare
     zh-CN: 数据比较
@@ -2799,6 +2875,22 @@ Compare:
     en: Key Columns
     zh-CN: 主键列
     zh-HK: 主鍵欄位
+  source_tables:
+    en: Source Tables
+    zh-CN: 源表
+    zh-HK: 來源表
+  target_tables:
+    en: Target Tables
+    zh-CN: 目标表
+    zh-HK: 目標表
+  no_tables:
+    en: No tables
+    zh-CN: 暂无表
+    zh-HK: 暫無表
+  ignore_identifier_case:
+    en: Ignore identifier case
+    zh-CN: 忽略标识符大小写
+    zh-HK: 忽略識別符大小寫
   swap_source_target:
     en: Swap source and target
     zh-CN: 交换源和目标
@@ -2835,6 +2927,10 @@ Compare:
     en: Data compare complete
     zh-CN: 数据比较完成
     zh-HK: 資料比較完成
+  data_compare_truncated_no_sql:
+    en: Data compare result was truncated; sync SQL generation and execution are disabled.
+    zh-CN: 数据比较结果已截断，已禁止生成和执行同步 SQL
+    zh-HK: 資料比較結果已截斷，已禁止產生和執行同步 SQL
   schema_compare_complete:
     en: Schema compare complete
     zh-CN: 结构比较完成
@@ -2919,6 +3015,22 @@ Compare:
     en: Destructive
     zh-CN: 破坏性
     zh-HK: 破壞性
+  destructive_sql_confirm_title:
+    en: Destructive Sync SQL Detected
+    zh-CN: 检测到可能导致数据丢失的同步 SQL
+    zh-HK: 檢測到可能導致資料遺失的同步 SQL
+  destructive_sql_confirm_message:
+    en: The sync SQL contains DELETE, TRUNCATE, or DROP statements and may remove data or database objects.
+    zh-CN: 当前同步 SQL 包含 DELETE、TRUNCATE 或 DROP 语句，可能会删除数据或数据库对象。
+    zh-HK: 當前同步 SQL 包含 DELETE、TRUNCATE 或 DROP 語句，可能會刪除資料或資料庫物件。
+  destructive_sql_confirm_desc:
+    en: Review the SQL preview carefully before continuing.
+    zh-CN: 继续执行前，请仔细确认 SQL 预览内容。
+    zh-HK: 繼續執行前，請仔細確認 SQL 預覽內容。
+  destructive_sql_confirm_execute:
+    en: Execute Anyway
+    zh-CN: 继续执行
+    zh-HK: 繼續執行
   unnamed_object:
     en: Unnamed object
     zh-CN: 未命名对象
@@ -2967,6 +3079,14 @@ Compare:
     en: Sync SQL
     zh-CN: 同步 SQL
     zh-HK: 同步 SQL
+  sync_sql_execution_log:
+    en: SQL Execution Log
+    zh-CN: SQL 执行日志
+    zh-HK: SQL 執行日誌
+  sync_sql_execution_ready:
+    en: "Ready to execute %{count} SQL statement(s)"
+    zh-CN: "准备执行 %{count} 条 SQL 语句"
+    zh-HK: "準備執行 %{count} 條 SQL 語句"
   sync_sql_placeholder:
     en: Selected sync statements will be generated here after compare finishes. You can edit them before executing.
     zh-CN: 比较完成后,选中的同步语句将在此生成,可手动编辑后执行
