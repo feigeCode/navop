@@ -31,6 +31,9 @@ fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContex
 
     assert!(names.contains(&"db_query".to_string()));
     assert!(names.contains(&"db_schema".to_string()));
+    assert!(names.contains(&"db_tables".to_string()));
+    assert!(names.contains(&"db_describe_table".to_string()));
+    assert!(names.contains(&"db_sample_rows".to_string()));
     assert!(names.contains(&"db_exec".to_string()));
     assert!(!names.contains(&"db_execute_sql".to_string()));
     assert!(!names.contains(&"db_list_tables".to_string()));
@@ -49,6 +52,9 @@ fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContex
         serde_json::json!(["connection", "sql"]),
         spec.parameters["required"]
     );
+    assert_tool_risk(&registry, "db.tables", RiskLevel::Read);
+    assert_tool_risk(&registry, "db.describe_table", RiskLevel::Read);
+    assert_tool_risk(&registry, "db.sample_rows", RiskLevel::Read);
     assert_tool_risk(&registry, "db.exec", RiskLevel::High);
 }
 

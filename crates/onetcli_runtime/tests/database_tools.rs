@@ -16,6 +16,9 @@ fn database_tool_registry_exposes_schema_query_and_exec_tools() {
     let ids = tools.iter().map(|tool| tool.id.clone()).collect::<Vec<_>>();
 
     assert!(ids.contains(&"db.schema".to_string()));
+    assert!(ids.contains(&"db.tables".to_string()));
+    assert!(ids.contains(&"db.describe_table".to_string()));
+    assert!(ids.contains(&"db.sample_rows".to_string()));
     assert!(ids.contains(&"db.query".to_string()));
     assert!(ids.contains(&"db.exec".to_string()));
 
@@ -32,6 +35,16 @@ fn database_tool_registry_exposes_schema_query_and_exec_tools() {
     assert!(query.annotations.read_only);
     assert!(!query.annotations.destructive);
 
+    let describe = tools
+        .iter()
+        .find(|tool| tool.id == "db.describe_table")
+        .expect("describe table tool should be registered");
+    assert_eq!(
+        json!(["connection", "table"]),
+        describe.input_schema["required"]
+    );
+    assert!(describe.annotations.read_only);
+
     let exec = tools
         .iter()
         .find(|tool| tool.id == "db.exec")
@@ -47,7 +60,16 @@ fn database_read_tool_registry_exposes_only_schema_and_query() {
     let tools = registry.list(ToolAdapter::FunctionCalling);
     let ids = tools.iter().map(|tool| tool.id.clone()).collect::<Vec<_>>();
 
-    assert_eq!(vec!["db.schema".to_string(), "db.query".to_string()], ids);
+    assert_eq!(
+        vec![
+            "db.schema".to_string(),
+            "db.tables".to_string(),
+            "db.describe_table".to_string(),
+            "db.sample_rows".to_string(),
+            "db.query".to_string(),
+        ],
+        ids
+    );
     assert!(tools.iter().all(|tool| tool.annotations.read_only));
 }
 
@@ -115,6 +137,60 @@ fn database_query_executes_saved_sqlite_connection() {
     assert_eq!(
         json!([[Some("Ada".to_string())]]),
         result.structured_content["results"][0]["rows"]
+    );
+}
+
+#[test]
+fn database_metadata_tools_execute_saved_sqlite_connection() {
+    let dir = tempfile::tempdir().expect("tempdir should be created");
+    let db_path = dir.path().join("metadata.sqlite");
+    let sqlite = rusqlite::Connection::open(&db_path).expect("sqlite fixture should open");
+    sqlite
+        .execute_batch("create table users(id integer primary key, name text); insert into users(name) values ('Ada'), ('Linus');")
+        .expect("sqlite fixture should be seeded");
+    drop(sqlite);
+
+    let repo = repo();
+    let mut connection = StoredConnection::new_database(
+        "local sqlite".to_string(),
+        sqlite_config(db_path.to_string_lossy().to_string()),
+        None,
+    );
+    repo.insert(&mut connection)
+        .expect("sqlite connection should insert");
+    let registry = onetcli_runtime::database_tools::database_tool_registry(repo);
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should start");
+
+    let tables = runtime
+        .block_on(registry.call(
+            "db.tables",
+            json!({ "connection": "local sqlite", "database": "main" }),
+            ToolContext::for_adapter(ToolAdapter::Mcp),
+        ))
+        .expect("tables should execute");
+    assert_eq!("users", tables.structured_content["tables"][0]["name"]);
+
+    let described = runtime
+        .block_on(registry.call(
+            "db.describe_table",
+            json!({ "connection": "local sqlite", "database": "main", "table": "users" }),
+            ToolContext::for_adapter(ToolAdapter::Mcp),
+        ))
+        .expect("describe table should execute");
+    assert_eq!("users", described.structured_content["table"]);
+    assert_eq!("id", described.structured_content["columns"][0]["name"]);
+
+    let rows = runtime
+        .block_on(registry.call(
+            "db.sample_rows",
+            json!({ "connection": "local sqlite", "database": "main", "table": "users", "limit": 1 }),
+            ToolContext::for_adapter(ToolAdapter::Mcp),
+        ))
+        .expect("sample rows should execute");
+    assert_eq!("users", rows.structured_content["table"]);
+    assert_eq!(
+        json!([[Some("1".to_string()), Some("Ada".to_string())]]),
+        rows.structured_content["result"]["rows"]
     );
 }
 
