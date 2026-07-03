@@ -1075,6 +1075,70 @@ Query:
     en: Show results
     zh-CN: 显示结果
     zh-HK: 顯示結果
+  transaction_auto:
+    en: Auto
+    zh-CN: 自动
+    zh-HK: 自動
+  transaction_manual:
+    en: Manual
+    zh-CN: 手动
+    zh-HK: 手動
+  transaction_mode_prefix:
+    en: "Txn: "
+    zh-CN: "事务："
+    zh-HK: "交易："
+  transaction_commit:
+    en: Commit
+    zh-CN: 提交
+    zh-HK: 提交
+  transaction_rollback:
+    en: Rollback
+    zh-CN: 回滚
+    zh-HK: 回滾
+  transaction_not_supported:
+    en: Manual transactions are not supported by this database
+    zh-CN: 当前数据库不支持手动事务
+    zh-HK: 目前資料庫不支援手動交易
+  transaction_started:
+    en: Manual transaction started
+    zh-CN: 手动事务已开始
+    zh-HK: 手動交易已開始
+  transaction_committed:
+    en: Transaction committed
+    zh-CN: 事务已提交
+    zh-HK: 交易已提交
+  transaction_rolled_back:
+    en: Transaction rolled back
+    zh-CN: 事务已回滚
+    zh-HK: 交易已回滾
+  transaction_not_started:
+    en: No manual transaction is active
+    zh-CN: 当前没有活动的手动事务
+    zh-HK: 目前沒有作用中的手動交易
+  transaction_scope_changed:
+    en: Commit or rollback the current transaction before changing database or schema
+    zh-CN: 请先提交或回滚当前事务，再切换数据库或模式
+    zh-HK: 請先提交或回滾目前交易，再切換資料庫或模式
+  transaction_start_failed:
+    en: "Failed to start transaction: %{error}"
+    zh-CN: "启动事务失败：%{error}"
+    zh-HK: "啟動交易失敗：%{error}"
+  transaction_control_failed:
+    en: Transaction command failed
+    zh-CN: 事务控制命令执行失败
+    zh-HK: 交易控制命令執行失敗
+  transaction_control_unavailable:
+    en: Transaction command is unavailable for this database
+    zh-CN: 当前数据库不支持该事务控制命令
+    zh-HK: 目前資料庫不支援該交易控制命令
+  transaction_finish_before_switch:
+    en: Commit or rollback the current transaction before switching transaction mode
+    zh-CN: 请先提交或回滚当前事务，再切换事务模式
+    zh-HK: 請先提交或回滾目前交易，再切換交易模式
+  transaction_finish_before_close:
+    en: Commit or rollback the current transaction before closing this editor
+    zh-CN: 请先提交或回滚当前事务，再关闭编辑器
+    zh-HK: 請先提交或回滾目前交易，再關閉編輯器
   summary:
     en: Summary
     zh-CN: 摘要
