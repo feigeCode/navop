@@ -25,11 +25,12 @@ Agent / ACP、Public MCP、CLI、UI 只作为入口适配器存在，不再拥�
 1. `crates/tool_runtime`
    - 已有 `ToolDescriptor`、`ToolRegistry`、`ToolHandler`、`ToolAdapter`、`ToolContext`、`ToolResult`。
    - `public_mcp` 和 `onetcli_runtime` 已经有部分工具使用它，例如 `db.query`、`db.exec`、`sftp.list`、`sftp.read`。
-   - 目前缺少资源池、统一目标解析、统一权限、审批、审计、alias 和 invocation contract。
+   - 目前缺少资源池、统一目标解析、统一权限、审批、审计和 invocation contract。
 
 2. `crates/agent_runtime`
    - 仍有自己的 `ResourceContext`、`ToolSpec`、`ToolRegistry`、`ToolInvocation`、`ToolRouter`。
-   - Agent 工具名仍有 `db_query`、`db_execute_sql`、`ssh_read_file` 等旧 Agent 语义。
+   - Agent 工具名已经对已迁移工具收敛到 runtime canonical id 的 function-name
+     归一化形式，例如 `db.exec` -> `db_exec`、`sftp.read` -> `sftp_read`。
    - Agent 权限模式是 `ToolExecutionMode::Auto / ReadOnly / Manual`。
 
 3. `crates/public_mcp`
@@ -76,14 +77,15 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 3c `terminal.exec` runtime contract | Done | `f0777d07 feat(public_mcp): add terminal exec runtime contract` | Wire live terminal providers and validate terminal input behavior. |
 | Phase 3c live terminal provider | Done | `crates/terminal` exposes `TerminalInputHandle`; `crates/terminal_view` registers a `TerminalExecSessionHandle` that writes `command + "\n"` into the live terminal input path. Targeted provider tests and Public MCP/runtime checks passed on 2026-07-02. | Start Agent/UI prompt, approval-card, and tool-card integration. |
 | Phase 3c Agent/UI terminal exec selection | Done | Agent prompt tells the model to use `terminal_exec` for visible terminal execution and `ssh_exec` for structured SSH execution; tool and approval card titles label `terminal_exec` as terminal execution. `agent_runtime` tests and `ai_chat_view` checks passed on 2026-07-02. | Run manual app smoke for visible terminal execution. |
-| Phase 3d Redis canonical command tool | Done | `0573668 feat(onetcli_runtime): canonicalize redis command tool` makes `redis.command` the canonical `onetcli_runtime` Redis tool id and keeps `redis.execute_command` as a runtime alias. Red/green Redis tests, `cargo check -p onetcli_runtime`, and `git diff --check` passed on 2026-07-03. | Add read-oriented Redis convenience tools such as `redis.keys`, `redis.get`, and `redis.set` only when their schemas and permission/risk contracts are explicit. |
+| Phase 3d Redis canonical command tool | Done | `0573668 feat(onetcli_runtime): canonicalize redis command tool` made `redis.command` the canonical `onetcli_runtime` Redis tool id. It initially kept `redis.execute_command` as a runtime alias, but that compatibility path was later removed by Phase 3i. Red/green Redis tests, `cargo check -p onetcli_runtime`, and `git diff --check` passed on 2026-07-03. | Add read-oriented Redis convenience tools such as `redis.keys`, `redis.get`, and `redis.set` only when their schemas and permission/risk contracts are explicit. |
 | Phase 3e Redis convenience tools | Done | `0623ec8 feat(onetcli_runtime): add redis convenience tools` adds canonical `redis.keys`, `redis.get`, and `redis.set` to `onetcli_runtime`, keeps `redis.keys/get` read-only, requires write permission for `redis.set`, and splits Redis runtime implementation into submodules under 300 lines each. Red/green Redis tests, `cargo test -p onetcli_runtime`, `cargo check -p onetcli_runtime`, and `git diff --check` passed on 2026-07-03. | Consider Public MCP convenience Redis tools only after deciding whether external clients should get the same high-level commands or only the generic `redis.command`. |
-| Phase 3f Agent Redis runtime bridge | Done | `9073061 feat(agent): bridge redis runtime tools` registers `onetcli_runtime::redis_tools::redis_tool_registry(repo)` through the Agent `tool_runtime` bridge. Agent keeps legacy `redis_execute_command` for active Redis sessions and also exposes canonical runtime tools as `redis_command`, `redis_keys`, `redis_get`, and `redis_set`; `redis.execute_command` stays an alias and is not exposed as a separate Agent tool. TDD red/green registry tests, Agent runtime adapter tests, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Migrate remaining Agent tool families such as SFTP and DB write/high-risk tools through `tool_runtime` without removing compatibility tools until aliases are covered. |
-| Phase 3g Agent SFTP runtime bridge | Done | `6b4236a feat(agent): bridge sftp runtime tools` registers `onetcli_runtime::sftp_tools::sftp_tool_registry(repo)` through the Agent `tool_runtime` bridge. Agent keeps legacy `ssh_list_dir`, `ssh_read_file`, `ssh_file_stat`, and `ssh_write_file` compatibility tools while also exposing canonical runtime tools as `sftp_list`, `sftp_read`, `sftp_write`, `sftp_stat`, `sftp_upload`, and `sftp_download`. Red/green registry tests, SFTP runtime tests, Agent runtime adapter tests, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Align prompts/tool cards so Agent prefers canonical `sftp.*` ids for saved-connection file operations while old `ssh_*` tools remain compatible. |
-| Phase 3h Agent DB exec runtime bridge | Done | `e48fd27 feat(agent): bridge database exec runtime tool` switches the Agent DB bridge from `database_read_tool_registry(repo)` to the full `database_tool_registry(repo)`. Agent keeps legacy `db_execute_sql` while also exposing canonical `db.exec` as model function `db_exec`; both are `High` risk and stay approval-gated. Red/green registry tests, DB runtime tests, Agent runtime adapter tests, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Align Agent prompt/tool-card wording so write-capable saved-connection DB operations prefer canonical `db.exec` while legacy `db_execute_sql` remains compatible. |
+| Phase 3f Agent Redis runtime bridge | Done | `9073061 feat(agent): bridge redis runtime tools` registered `onetcli_runtime::redis_tools::redis_tool_registry(repo)` through the Agent `tool_runtime` bridge. Agent initially kept legacy `redis_execute_command`; that compatibility path was later removed by Phase 3i. TDD red/green registry tests, Agent runtime adapter tests, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep Redis Agent surface canonical-only: `redis_command`, `redis_keys`, `redis_get`, `redis_set`. |
+| Phase 3g Agent SFTP runtime bridge | Done | `6b4236a feat(agent): bridge sftp runtime tools` registered `onetcli_runtime::sftp_tools::sftp_tool_registry(repo)` through the Agent `tool_runtime` bridge. Agent initially kept legacy `ssh_*` file tools; that compatibility path was later removed by Phase 3i. Red/green registry tests, SFTP runtime tests, Agent runtime adapter tests, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep SFTP Agent surface canonical-only: `sftp_list`, `sftp_read`, `sftp_write`, `sftp_stat`, `sftp_upload`, `sftp_download`. |
+| Phase 3h Agent DB exec runtime bridge | Done | `e48fd27 feat(agent): bridge database exec runtime tool` switched the Agent DB bridge from `database_read_tool_registry(repo)` to the full `database_tool_registry(repo)`. Agent initially kept legacy `db_execute_sql`; that compatibility path was later removed by Phase 3i. Red/green registry tests, DB runtime tests, Agent runtime adapter tests, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Add missing DB metadata tools as new canonical runtime tools instead of restoring old Agent native tools. |
+| Phase 3i Canonical-only tool surface | Done | `dae1dab feat(tools): remove legacy tool aliases` removes legacy DB/SFTP native Agent modules, stops registering old Redis Agent tools, removes `redis.execute_command` and `ssh.remote_*` aliases, and updates Agent prompt rules to use canonical runtime-derived function names only. Full `agent_runtime`, `onetcli_runtime`, and `public_mcp` tests plus targeted main registry tests and checks passed on 2026-07-03. | Continue adding missing capabilities only as canonical `tool_runtime` tools; do not add compatibility aliases for old names. |
 | Phase 4 Public MCP app registry merge | Done | `main/src/public_mcp_runtime/tool_registry.rs` collects enabled `tool_runtime::ToolRegistry` values, merges them, and exposes one `ToolRuntimeMcpProvider`. Terminal toolset now exposes both `ssh.exec` and `terminal.exec` through the real app registry path. Public MCP runtime tests passed on 2026-07-02. | Continue replacing remaining Public MCP-specific permission settings with unified `PermissionPolicy`. |
-| Phase 4b Public MCP Redis canonical command tool | Done | `6c99c8e feat(public_mcp): canonicalize redis command tool` makes Public MCP Redis `tools/list` expose `redis.command` while `tools/call` still accepts `redis.execute_command` through a runtime alias. `public_mcp` Redis tests, main registry Redis test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Continue replacing remaining legacy MCP tool ids with canonical ids only when old clients keep a tested alias path. |
-| Phase 4c Public MCP Redis convenience tools | Done | `6d5fc34 feat(public_mcp): add redis convenience tools` exposes `redis.keys`, `redis.get`, and `redis.set` through Public MCP and the real app registry path. `redis.keys/get` are read-only, `redis.set` is mutating and approval-gated, and `redis.execute_command` remains a compatibility alias for `redis.command`. Red/green Public MCP convenience tests, `cargo test -p public_mcp`, main Redis registry test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Continue replacing remaining legacy MCP tool ids with canonical ids only when old clients keep a tested alias path. |
+| Phase 4b Public MCP Redis canonical command tool | Done | `6c99c8e feat(public_mcp): canonicalize redis command tool` made Public MCP Redis `tools/list` expose `redis.command`. It initially accepted `redis.execute_command`; that alias was later removed by Phase 3i. `public_mcp` Redis tests, main registry Redis test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep Public MCP Redis surface canonical-only. |
+| Phase 4c Public MCP Redis convenience tools | Done | `6d5fc34 feat(public_mcp): add redis convenience tools` exposes `redis.keys`, `redis.get`, and `redis.set` through Public MCP and the real app registry path. `redis.keys/get` are read-only and `redis.set` is mutating and approval-gated. The old `redis.execute_command` alias was later removed by Phase 3i. Red/green Public MCP convenience tests, `cargo test -p public_mcp`, main Redis registry test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep Public MCP Redis surface canonical-only. |
 | Phase 4 Public MCP runtime permission policy | Done | `PermissionMode` now maps to `tool_runtime::PermissionPolicy` for runtime-backed MCP tools. `Allow` maps to Auto, so high-risk/destructive/open-world tools such as `ssh.exec`, `terminal.exec`, and generic Redis command execution still require approval. Public MCP and app runtime tests passed on 2026-07-02. | Migrate settings/UI terminology from MCP permission mode to unified permission profile. |
 | Phase 4 Public MCP settings profile wording | Done | `McpPermissionMode` keeps old persisted values but exposes profile ids `safe/confirm/auto`; Public MCP runtime config carries `permission_profile`; settings UI labels now show Safe / Confirm / Auto. Core settings and app runtime tests passed on 2026-07-02. | Later storage migration can replace `permission_mode` only when a broader settings migration is planned. |
 | Phase 5a Resource Pool UI wording/filtering | Done | `6010dad7 feat(ai_chat): add resource pool display model`, `e8985154 feat(ai_chat): rename context selector to resource pool`, `d7b82ab0 feat(ai_chat): filter resource pool by type`, `84d8fe65 test(ai_chat): document resource pool default target semantics`, `ad195aab docs: track resource pool ui checkpoint` | Keep wording and default-target semantics while wiring broader catalogs. |
@@ -110,17 +112,24 @@ Purpose:
 Last completed checkpoint:
 
 ```text
-e48fd27 feat(agent): bridge database exec runtime tool
+dae1dab feat(tools): remove legacy tool aliases
 ```
 
 Last checkpoint verification run:
 
 ```bash
-rtk cargo test -p main agent_runtime_tool_registry_uses_native_database_tools
+rtk cargo test -p agent_runtime system_prompt_prefers_canonical_runtime_tool_names
 rtk cargo test -p main agent_runtime_tool_registry
-rtk cargo test -p agent_runtime --test tool_runtime_adapter
-rtk cargo test -p onetcli_runtime database_tools
+rtk cargo test -p onetcli_runtime --test redis_tools
+rtk cargo test -p public_mcp --test redis_tools
+rtk cargo test -p public_mcp --test remote_ops
+rtk cargo test -p onetcli_runtime sftp_tools
+rtk cargo check -p onetcli_runtime
+rtk cargo check -p public_mcp
 rtk cargo check -p main
+rtk cargo test -p agent_runtime
+rtk cargo test -p onetcli_runtime
+rtk cargo test -p public_mcp
 rtk git diff --check
 ```
 
@@ -131,9 +140,9 @@ Current product decision:
 
 1. `ssh.exec` remains the structured non-interactive SSH command tool.
 2. `terminal.exec` is the new live terminal-surface tool for “像在终端里输入一样执行”.
-3. Existing tools and aliases remain available during migration.
+3. 已迁移工具不再保留旧工具名或旧 alias；旧名称应直接失败，而不是静默转发。
 4. `redis.command` is the canonical Redis command tool in `onetcli_runtime` and
-   Public MCP; `redis.execute_command` is a compatibility alias.
+   Public MCP; `redis.execute_command` is no longer accepted.
 5. `redis.keys` and `redis.get` are read-only Redis tools in `onetcli_runtime` and
    Public MCP; `redis.set` is mutating and requires write permission / approval.
 6. Agent registry now includes runtime-backed Redis tools through the `tool_runtime`
@@ -147,8 +156,7 @@ Current product decision:
    `sftp.stat`, `sftp.upload`, and `sftp.download`.
 8. Agent registry now includes runtime-backed DB write execution through the
    `tool_runtime` bridge. The model-facing function name is `db_exec`; the canonical
-   runtime id remains `db.exec`. Legacy `db_execute_sql` remains available during
-   migration.
+   runtime id remains `db.exec`. Legacy `db_execute_sql` is no longer registered.
 9. Agent-facing prompts should expose canonical ids only after the relevant adapter can
    route them safely.
 
@@ -157,10 +165,10 @@ Next recommended checkpoints:
 1. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
    through `terminal.exec`.
 2. Run manual resource-pool smoke for source presets.
-3. Align Agent prompt/tool-card wording so saved-connection file operations prefer
-   canonical `sftp.*` tools while legacy `ssh_*` tools remain compatible.
-4. Align Agent prompt/tool-card wording so write-capable saved-connection DB operations
-   prefer canonical `db.exec` while legacy `db_execute_sql` remains compatible.
+3. Add missing DB metadata capabilities as canonical runtime tools, for example
+   `db.tables`, `db.describe_table`, and `db.sample_rows`.
+4. Continue unifying Agent-facing schemas around `target` instead of per-tool
+   `connection` / `connection_id` / `session_id` fields.
 
 ## Design Principles
 
@@ -172,7 +180,7 @@ Next recommended checkpoints:
 6. Agent、MCP、CLI、UI 都从同一个 registry 派生工具列表。
 7. 权限、资源、审批、审计、风险等级在 runtime core 统一处理。
 8. `default_target` 只是默认目标，不是资源池边界。
-9. 模型只看到 canonical tool id；旧工具名通过 alias 兼容。
+9. 模型只看到 canonical tool id 派生出的 function name；旧工具名和旧 alias 不再兼容。
 10. 每个阶段都朝最终架构移动，不引入会长期保留的临时产品语义。
 
 ## Target Architecture
@@ -280,26 +288,26 @@ workspaces.list
 workspaces.show
 ```
 
-Compatibility aliases:
+Removed legacy aliases:
 
 ```text
-ssh_remote_exec       -> ssh.exec
-ssh.remote_exec       -> ssh.exec
-ssh.remote_command_poll -> ssh.command.poll
-ssh.remote_command_output -> ssh.command.output
-ssh.remote_command_cancel -> ssh.command.cancel
+ssh.remote_exec
+ssh.remote_command_poll
+ssh.remote_command_output
+ssh.remote_command_cancel
 
-db_query              -> db.query
-db.query              -> db.query
-db_execute_sql        -> db.exec
+db_execute_sql
+redis.execute_command
+redis_execute_command
 
-redis.execute_command -> redis.command
-
-ssh_list_dir          -> sftp.list
-ssh_read_file         -> sftp.read
-ssh_write_file        -> sftp.write
-ssh_file_stat         -> sftp.stat
+ssh_list_dir
+ssh_read_file
+ssh_write_file
+ssh_file_stat
 ```
+
+These names should fail instead of being routed through compatibility aliases. If a
+missing capability is still needed, add it as a new canonical `tool_runtime` tool.
 
 ### SSH Command Surface
 
@@ -320,11 +328,12 @@ the command. Its Agent-facing schema keeps the command as one shell line and use
 
 The command string is displayed unchanged in approval cards and tool result cards.
 Adapter-specific details such as `session_id`, command polling, and output collection
-stay behind the adapter boundary. Historical fields are still accepted by compatibility
-adapters in this precedence order:
+should stay behind the adapter boundary. The remaining schema cleanup is to make
+Agent-facing tools accept `target` only, then let each adapter translate that target
+into provider-specific connection/session identifiers:
 
 ```text
-target > connection > connection_id > session_id > default_target
+target -> ssh session / saved connection / terminal session
 ```
 
 This keeps Agent behavior consistent with terminal input: if a user can paste the
@@ -335,9 +344,9 @@ visible terminal" product effect.
 ### Terminal Execution Surface
 
 `terminal.exec` is a separate tool for the product effect where Agent actions execute
-inside an existing visible terminal session. This tool is additive: `ssh.exec`,
-`ssh.remote_exec`, and `ssh.command.*` remain available for structured remote execution
-and compatibility.
+inside an existing visible terminal session. This tool is additive: `ssh.exec` and
+`ssh.command.*` remain available for structured remote execution, but legacy
+`ssh.remote_exec` and `ssh.remote_command_*` aliases are no longer accepted.
 
 `terminal.exec` writes the command into the target terminal session as if it were typed
 by an operator, submits it with Enter, and observes terminal output from that same PTY
@@ -617,7 +626,7 @@ Final Agent turn:
    - permission summary
 4. Model emits a canonical tool call and optional `target`.
 5. Agent adapter converts model function call to `ToolInvocation`.
-6. `ToolRouter` resolves alias, target, permission, and risk.
+6. `ToolRouter` resolves target, permission, and risk for the canonical tool id.
 7. If policy returns `Ask`, runtime emits `ApprovalRequest`.
 8. UI approval continues the same turn.
 9. `ToolResult` and `AuditEvent` are written to transcript and audit log.
@@ -636,7 +645,7 @@ Final MCP server:
 
 1. `tools/list` reads from the same `ToolRegistry`.
 2. MCP adapter converts `ToolDescriptor` to `rmcp::Tool`.
-3. MCP compatibility aliases may be exposed depending on protocol version and client compatibility mode.
+3. MCP adapter exposes canonical tool ids only; old aliases should return an unknown-tool error.
 4. `tools/call` converts MCP arguments to `ToolInvocation`.
 5. Permission and approval use the same `PermissionPolicy`.
 6. Result conversion is only format adaptation: `ToolResult -> CallToolResult`.
@@ -801,12 +810,12 @@ Scope:
 1. Make MCP `tools/list` derive from unified catalog.
 2. Make MCP `tools/call` create `ToolInvocation`.
 3. Migrate MCP permission settings to `PermissionPolicy`.
-4. Keep compatibility aliases for existing external clients.
+4. Reject legacy aliases instead of silently routing them to canonical tools.
 
 Acceptance:
 
 1. MCP protocol tests pass.
-2. External MCP clients can call old aliases when compatibility mode is enabled.
+2. External MCP clients receive a clear unknown-tool error for removed aliases.
 3. Agent and MCP no longer disagree on permission decisions for the same tool.
 
 ### Phase 5: Resource Pool UI
@@ -896,7 +905,7 @@ Manual smoke scenarios after UI migration:
 1. Single SSH side panel asks for disk usage.
 2. Multi-SSH Agent tab checks disk usage on three resources.
 3. Confirm profile blocks and resumes a high-risk operation.
-4. MCP client calls a compatibility alias and canonical id.
+4. MCP client calls a removed alias and receives an unknown-tool error; canonical id still works.
 
 ## Risks And Mitigations
 
