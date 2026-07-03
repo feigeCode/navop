@@ -150,6 +150,9 @@ Public MCP 工具：
 |---|---|
 | `redis.list_connections` | 列出当前运行中 Redis connection |
 | `redis.command` | 对运行中 Redis connection 执行一条 Redis command |
+| `redis.keys` | 按 pattern 读取运行中 Redis connection 的 key；只读但可能较重 |
+| `redis.get` | 读取运行中 Redis connection 的单个 key；只读 |
+| `redis.set` | 写入运行中 Redis connection 的单个 string value；需要审批 |
 | `redis.execute_command` | `redis.command` 的兼容 alias |
 
 CLI / function-calling 入口：
