@@ -7,11 +7,12 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 use tool_runtime::{
-    ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler, ToolMode,
-    ToolRegistry, ToolResult,
+    ToolAdapter, ToolAlias, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler,
+    ToolMode, ToolRegistry, ToolResult,
 };
 
-const REDIS_EXECUTE_COMMAND_TOOL: &str = "redis.execute_command";
+const REDIS_COMMAND_TOOL: &str = "redis.command";
+const REDIS_EXECUTE_COMMAND_ALIAS: &str = "redis.execute_command";
 const DEFAULT_TIMEOUT_SECS: u64 = 10;
 const MAX_DB_INDEX: u64 = 255;
 
@@ -58,7 +59,7 @@ impl RedisExecuteCommandTool {
 impl ToolHandler for RedisExecuteCommandTool {
     fn descriptor(&self) -> ToolDescriptor {
         ToolDescriptor {
-            id: REDIS_EXECUTE_COMMAND_TOOL.to_string(),
+            id: REDIS_COMMAND_TOOL.to_string(),
             title: "Execute Redis command".to_string(),
             description: "Execute one Redis command through a saved Redis connection. The connection argument accepts a saved connection id or exact saved connection name. Pass db to target a specific logical database. The command may mutate Redis data and therefore requires --allow-write when called through onetcli tool call.".to_string(),
             input_schema: execute_schema(),
@@ -72,6 +73,10 @@ impl ToolHandler for RedisExecuteCommandTool {
             ],
             annotations: ToolAnnotations::mutating("Execute Redis command"),
         }
+    }
+
+    fn aliases(&self) -> Vec<ToolAlias> {
+        vec![ToolAlias::new(REDIS_EXECUTE_COMMAND_ALIAS)]
     }
 
     fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
@@ -144,14 +149,13 @@ fn reject_unsupported_redis_config(params: &RedisParams) -> Result<(), ToolError
         .is_some_and(|tunnel| tunnel.enabled)
     {
         return Err(ToolError::Failed {
-            message: "redis.execute_command does not support Redis SSH tunnels in onetcli CLI yet"
+            message: "redis.command does not support Redis SSH tunnels in onetcli CLI yet"
                 .to_string(),
         });
     }
     if params.mode != RedisMode::Standalone {
         return Err(ToolError::Failed {
-            message: "redis.execute_command currently supports standalone Redis connections"
-                .to_string(),
+            message: "redis.command currently supports standalone Redis connections".to_string(),
         });
     }
     Ok(())

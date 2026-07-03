@@ -9,20 +9,33 @@ use std::sync::Arc;
 use tool_runtime::ToolAdapter;
 
 #[test]
-fn onetcli_tool_registry_exposes_redis_execute_command_to_cli() {
+fn onetcli_tool_registry_exposes_redis_command_to_cli() {
     let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
     let tool = registry
-        .get("redis.execute_command", ToolAdapter::FunctionCalling)
-        .expect("redis execute command should be CLI-callable");
+        .get("redis.command", ToolAdapter::FunctionCalling)
+        .expect("redis.command should be CLI-callable");
 
     assert_eq!(
         json!(["connection", "command"]),
         tool.input_schema["required"]
     );
+    assert_eq!("redis.command", tool.id);
     assert!(!tool.annotations.read_only);
     assert!(tool.annotations.destructive);
+}
+
+#[test]
+fn onetcli_tool_registry_keeps_redis_execute_command_as_alias() {
+    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+        .expect("tool registry should build");
+
+    let tool = registry
+        .get("redis.execute_command", ToolAdapter::FunctionCalling)
+        .expect("legacy redis.execute_command alias should resolve");
+
+    assert_eq!("redis.command", tool.id);
 }
 
 #[test]
@@ -32,7 +45,7 @@ fn onetcli_tool_call_requires_allow_write_for_redis_commands() {
 
     let error = run_tool_command(
         ToolCommand::Call {
-            tool_id: "redis.execute_command".to_string(),
+            tool_id: "redis.command".to_string(),
             input: Some(
                 json!({
                     "connection": "prod mysql",
@@ -52,6 +65,32 @@ fn onetcli_tool_call_requires_allow_write_for_redis_commands() {
 }
 
 #[test]
+fn onetcli_tool_call_requires_allow_write_for_legacy_redis_alias() {
+    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
+        .expect("tool registry should build");
+
+    let error = run_tool_command(
+        ToolCommand::Call {
+            tool_id: "redis.execute_command".to_string(),
+            input: Some(
+                json!({
+                    "connection": "prod mysql",
+                    "command": "PING"
+                })
+                .to_string(),
+            ),
+            positional_input: None,
+            allow_write: false,
+            format: OutputFormat::Json,
+        },
+        registry,
+    )
+    .expect_err("legacy redis alias should require explicit write permission");
+
+    assert!(error.to_string().contains("write_not_allowed"));
+}
+
+#[test]
 fn onetcli_tool_call_resolves_saved_connection_before_executing_redis_command() {
     let repo = repo();
     insert_mysql(&repo);
@@ -60,7 +99,7 @@ fn onetcli_tool_call_resolves_saved_connection_before_executing_redis_command() 
 
     let error = run_tool_command(
         ToolCommand::Call {
-            tool_id: "redis.execute_command".to_string(),
+            tool_id: "redis.command".to_string(),
             input: Some(
                 json!({
                     "connection": "prod mysql",
