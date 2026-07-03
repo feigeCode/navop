@@ -13,7 +13,8 @@
 
 1. `tool_runtime::ToolRegistry`
    - 面向 CLI / Public MCP 的通用工具运行时。
-   - 工具名保留点号命名，例如 `db.query`、`sftp.read`、`redis.execute_command`。
+   - 工具名保留点号命名，例如 `db.query`、`sftp.read`、`redis.command`。
+   - 迁移期保留旧名 alias，例如 `redis.execute_command -> redis.command`。
 
 2. `public_mcp::tools::PublicMcpToolRegistry`
    - MCP Server 对外暴露的工具注册表。
@@ -158,7 +159,8 @@ CLI 工具：
 
 | 工具名 | 说明 |
 |---|---|
-| `redis.execute_command` | 对保存的 Redis 连接执行命令；当前 CLI 侧主要支持 standalone Redis |
+| `redis.command` | 对保存的 Redis 连接执行命令；当前 CLI 侧主要支持 standalone Redis |
+| `redis.execute_command` | `redis.command` 的兼容 alias |
 
 ## 3. Agent Runtime 工具集
 
@@ -389,11 +391,12 @@ Agent 工具依赖 `ResourceContext` 来获取当前资源。
 
 ### 仍保留
 
-- Public MCP / CLI 仍保留原工具名和原工具集：
+- Public MCP 仍保留原工具名和原工具集，CLI/tool runtime 已开始使用 canonical id 并保留 alias：
   - `db.query`
   - `db.exec`
   - `sftp.write`
-  - `redis.execute_command`
+  - `redis.command`
+  - `redis.execute_command` alias
   - `ssh.remote_exec`
 - Agent 仍可能通过 adapter 使用 connections / workspaces / internal functions / terminal remote ops。
 
@@ -433,4 +436,3 @@ rtk cargo check -p redis_view
 rtk cargo check -p main
 rtk cargo fmt --check
 ```
-
