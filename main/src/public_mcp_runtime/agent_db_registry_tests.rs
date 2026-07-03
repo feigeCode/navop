@@ -31,9 +31,9 @@ fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContex
 
     assert!(names.contains(&"db_query".to_string()));
     assert!(names.contains(&"db_schema".to_string()));
-    assert!(names.contains(&"db_execute_sql".to_string()));
-    assert!(names.contains(&"db_list_tables".to_string()));
     assert!(names.contains(&"db_exec".to_string()));
+    assert!(!names.contains(&"db_execute_sql".to_string()));
+    assert!(!names.contains(&"db_list_tables".to_string()));
 
     let db_query = registry
         .get(&ToolName::new("db.query"))
@@ -49,7 +49,6 @@ fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContex
         serde_json::json!(["connection", "sql"]),
         spec.parameters["required"]
     );
-    assert_tool_risk(&registry, "db_execute_sql", RiskLevel::High);
     assert_tool_risk(&registry, "db.exec", RiskLevel::High);
 }
 
@@ -74,16 +73,12 @@ fn agent_runtime_tool_registry_uses_native_redis_tools(cx: &mut TestAppContext) 
         .map(|name| name.to_string())
         .collect::<Vec<_>>();
 
-    assert!(names.contains(&"redis_execute_command".to_string()));
     assert!(names.contains(&"redis_command".to_string()));
     assert!(names.contains(&"redis_keys".to_string()));
     assert!(names.contains(&"redis_get".to_string()));
     assert!(names.contains(&"redis_set".to_string()));
-    assert!(
-        !names.contains(&"redis.execute_command".to_string()),
-        "Agent registry should not expose the old MCP redis.execute_command adapter"
-    );
-    assert_tool_risk(&registry, "redis_execute_command", RiskLevel::High);
+    assert!(!names.contains(&"redis_execute_command".to_string()));
+    assert!(!names.contains(&"redis.execute_command".to_string()));
     assert_tool_risk(&registry, "redis.command", RiskLevel::High);
     assert_tool_risk(&registry, "redis.keys", RiskLevel::Medium);
     assert_tool_risk(&registry, "redis.get", RiskLevel::Low);
@@ -111,21 +106,17 @@ fn agent_runtime_tool_registry_uses_native_ssh_sftp_tools(cx: &mut TestAppContex
         .map(|name| name.to_string())
         .collect::<Vec<_>>();
 
-    assert!(names.contains(&"ssh_list_dir".to_string()));
-    assert!(names.contains(&"ssh_read_file".to_string()));
-    assert!(names.contains(&"ssh_file_stat".to_string()));
-    assert!(names.contains(&"ssh_write_file".to_string()));
     assert!(names.contains(&"sftp_list".to_string()));
     assert!(names.contains(&"sftp_read".to_string()));
     assert!(names.contains(&"sftp_write".to_string()));
     assert!(names.contains(&"sftp_stat".to_string()));
     assert!(names.contains(&"sftp_upload".to_string()));
     assert!(names.contains(&"sftp_download".to_string()));
-    assert!(
-        !names.contains(&"sftp.write".to_string()),
-        "Agent registry should not expose the old MCP sftp.write adapter"
-    );
-    assert_tool_risk(&registry, "ssh_write_file", RiskLevel::High);
+    assert!(!names.contains(&"ssh_list_dir".to_string()));
+    assert!(!names.contains(&"ssh_read_file".to_string()));
+    assert!(!names.contains(&"ssh_file_stat".to_string()));
+    assert!(!names.contains(&"ssh_write_file".to_string()));
+    assert!(!names.contains(&"sftp.write".to_string()));
     assert_tool_risk(&registry, "sftp.list", RiskLevel::Read);
     assert_tool_risk(&registry, "sftp.read", RiskLevel::Read);
     assert_tool_risk(&registry, "sftp.write", RiskLevel::High);

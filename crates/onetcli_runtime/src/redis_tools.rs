@@ -7,8 +7,8 @@ use one_core::storage::{ConnectionRepository, ConnectionType, RedisMode, RedisPa
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    RiskLevel, ToolAdapter, ToolAlias, ToolAnnotations, ToolContext, ToolDescriptor, ToolError,
-    ToolHandler, ToolMode, ToolRegistry, ToolResult,
+    RiskLevel, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler,
+    ToolMode, ToolRegistry, ToolResult,
 };
 
 use command_io::run_command;
@@ -19,7 +19,6 @@ const REDIS_COMMAND_TOOL: &str = "redis.command";
 const REDIS_KEYS_TOOL: &str = "redis.keys";
 const REDIS_GET_TOOL: &str = "redis.get";
 const REDIS_SET_TOOL: &str = "redis.set";
-const REDIS_EXECUTE_COMMAND_ALIAS: &str = "redis.execute_command";
 
 #[derive(Clone, Copy)]
 enum RedisTool {
@@ -164,13 +163,6 @@ impl ToolHandler for RedisToolHandler {
                 ToolAdapter::Cli,
             ],
             annotations: self.tool.annotations(),
-        }
-    }
-
-    fn aliases(&self) -> Vec<ToolAlias> {
-        match self.tool {
-            RedisTool::Command => vec![ToolAlias::new(REDIS_EXECUTE_COMMAND_ALIAS)],
-            RedisTool::Keys | RedisTool::Get | RedisTool::Set => Vec::new(),
         }
     }
 

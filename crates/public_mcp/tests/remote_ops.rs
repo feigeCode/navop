@@ -234,9 +234,9 @@ fn ssh_exec_accepts_target_argument() {
 }
 
 #[test]
-fn ssh_remote_exec_alias_still_accepts_session_id() {
+fn ssh_remote_exec_alias_is_rejected() {
     let runtime_registry = remote_ops_tool_registry(registry_with_session());
-    let result = futures::executor::block_on(runtime_registry.call(
+    let error = futures::executor::block_on(runtime_registry.call(
         "ssh.remote_exec",
         json!({
             "session_id": "ssh-1",
@@ -244,15 +244,9 @@ fn ssh_remote_exec_alias_still_accepts_session_id() {
         }),
         ToolContext::for_adapter(ToolAdapter::Mcp),
     ))
-    .expect("ssh.remote_exec alias should remain callable");
+    .expect_err("ssh.remote_exec alias should be unknown");
 
-    assert_eq!(json!("exited"), result.structured_content["status"]);
-    assert!(
-        result.structured_content["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("ran pwd")
-    );
+    assert!(error.to_string().contains("unknown tool"));
 }
 
 #[test]

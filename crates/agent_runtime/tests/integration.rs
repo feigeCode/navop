@@ -1293,6 +1293,49 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
 }
 
 #[tokio::test]
+async fn system_prompt_prefers_canonical_runtime_tool_names() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::text("ok")]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(
+            ToolRegistry::new()
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "db.exec",
+                    "Execute database script.",
+                    RiskLevel::High,
+                )))
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "sftp.read",
+                    "Read SFTP file.",
+                    RiskLevel::Read,
+                )))
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "redis.get",
+                    "Get Redis key.",
+                    RiskLevel::Low,
+                ))),
+        )),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+
+    runtime
+        .run_turn_blocking(session.id(), "检查资源".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn");
+
+    let requests = model.received_requests();
+    let system = requests[0].messages[0].content_as_text();
+    assert!(system.contains("统一工具命名规则"));
+    assert!(system.contains("数据库写入使用 `db_exec`"));
+    assert!(system.contains("SFTP 文件操作使用 `sftp_read`"));
+    assert!(system.contains("Redis 操作使用 `redis_get`"));
+    assert!(!system.contains("兼容"));
+    assert!(!system.contains("db_execute_sql"));
+    assert!(!system.contains("ssh_read_file"));
+    assert!(!system.contains("redis_execute_command"));
+}
+
+#[tokio::test]
 async fn system_prompt_includes_current_resource_context() {
     let model = Arc::new(MockModelClient::new([ModelResponse::text("ok")]));
     let runtime = Runtime::new(RuntimeServices::new(

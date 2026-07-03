@@ -43,6 +43,7 @@ pub(super) fn build_system_prompt(
             "。只能调用这里列出的工具名;不要调用名为 `tool` 的通用伪工具。工具 arguments 必须是合法 JSON object。",
         );
         append_terminal_tool_selection_rules(&mut prompt, tools);
+        append_canonical_runtime_tool_rules(&mut prompt, tools);
     }
     prompt
 }
@@ -65,6 +66,70 @@ fn append_terminal_tool_selection_rules(prompt: &mut String, tools: &[ToolSpec])
             " 当用户只要求后台/结构化 SSH 命令执行、收集 stdout/stderr 或非交互检查时，使用 `{name}`；如果用户要求可见终端执行且可用工具里有终端执行工具，不要用 `{name}` 替代。"
         ));
     }
+}
+
+fn append_canonical_runtime_tool_rules(prompt: &mut String, tools: &[ToolSpec]) {
+    let rules = canonical_runtime_tool_rules(tools);
+    if rules.is_empty() {
+        return;
+    }
+    prompt.push_str("\n\n统一工具命名规则: ");
+    prompt.push_str(&rules.join(" "));
+}
+
+fn canonical_runtime_tool_rules(tools: &[ToolSpec]) -> Vec<String> {
+    let mut rules = Vec::new();
+    if let Some(name) = find_tool_name(tools, &["db_exec", "db.exec"]) {
+        rules.push(format!("数据库写入使用 `{name}`。"));
+    }
+    append_family_rule(
+        &mut rules,
+        tools,
+        CanonicalFamilyRule::new(
+            "SFTP 文件操作",
+            &[
+                "sftp_list",
+                "sftp_read",
+                "sftp_write",
+                "sftp_stat",
+                "sftp_upload",
+                "sftp_download",
+            ],
+        ),
+    );
+    append_family_rule(
+        &mut rules,
+        tools,
+        CanonicalFamilyRule::new(
+            "Redis 操作",
+            &["redis_command", "redis_keys", "redis_get", "redis_set"],
+        ),
+    );
+    rules
+}
+
+struct CanonicalFamilyRule<'a> {
+    label: &'a str,
+    names: &'a [&'a str],
+}
+
+impl<'a> CanonicalFamilyRule<'a> {
+    fn new(label: &'a str, names: &'a [&'a str]) -> Self {
+        Self { label, names }
+    }
+}
+
+fn append_family_rule(rules: &mut Vec<String>, tools: &[ToolSpec], rule: CanonicalFamilyRule<'_>) {
+    let canonical = rule
+        .names
+        .iter()
+        .filter_map(|name| find_tool_name(tools, &[*name]))
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>();
+    if canonical.is_empty() {
+        return;
+    }
+    rules.push(format!("{}使用 {}。", rule.label, canonical.join("、")));
 }
 
 fn find_tool_name<'a>(tools: &'a [ToolSpec], candidates: &[&str]) -> Option<&'a str> {

@@ -182,12 +182,12 @@ impl ToolHandler for SftpToolHandler {
             SftpTool::Read => (
                 "sftp.read",
                 "Read SFTP file",
-                "Read a remote file through a saved SSH/SFTP connection and return content_base64 plus bytes_read. Use this for remote file contents instead of ssh.remote_exec with cat/base64. The connection argument accepts a saved connection id or exact saved connection name.",
+                "Read a remote file through a saved SSH/SFTP connection and return content_base64 plus bytes_read. Use this canonical file operation for remote file contents. The connection argument accepts a saved connection id or exact saved connection name.",
             ),
             SftpTool::Write => (
                 "sftp.write",
                 "Write SFTP file",
-                "Write bytes to a remote file through a saved SSH/SFTP connection using content_base64. Use this for remote file creation or replacement instead of ssh.remote_exec shell redirection. The connection argument accepts a saved connection id or exact saved connection name. on_exists defaults to fail; pass overwrite or skip explicitly.",
+                "Write bytes to a remote file through a saved SSH/SFTP connection using content_base64. Use this canonical file operation for remote file creation or replacement. The connection argument accepts a saved connection id or exact saved connection name. on_exists defaults to fail; pass overwrite or skip explicitly.",
             ),
             SftpTool::Stat => (
                 "sftp.stat",

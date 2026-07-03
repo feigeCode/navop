@@ -30,7 +30,8 @@ fn sftp_registry_exposes_file_transfer_tools() {
         json!(["connection", "content_base64"]),
         write.input_schema["required"]
     );
-    assert!(write.description.contains("instead of ssh.remote_exec"));
+    assert!(write.description.contains("canonical file operation"));
+    assert!(!write.description.contains("ssh.remote_exec"));
 
     let upload = tools
         .iter()

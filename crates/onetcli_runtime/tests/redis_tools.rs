@@ -27,15 +27,15 @@ fn onetcli_tool_registry_exposes_redis_command_to_cli() {
 }
 
 #[test]
-fn onetcli_tool_registry_keeps_redis_execute_command_as_alias() {
+fn onetcli_tool_registry_rejects_redis_execute_command_alias() {
     let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
-    let tool = registry
-        .get("redis.execute_command", ToolAdapter::FunctionCalling)
-        .expect("legacy redis.execute_command alias should resolve");
-
-    assert_eq!("redis.command", tool.id);
+    assert!(
+        registry
+            .get("redis.execute_command", ToolAdapter::FunctionCalling)
+            .is_none()
+    );
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn onetcli_tool_call_requires_allow_write_for_redis_set() {
 }
 
 #[test]
-fn onetcli_tool_call_requires_allow_write_for_legacy_redis_alias() {
+fn onetcli_tool_call_rejects_redis_execute_command_alias() {
     let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
@@ -165,14 +165,14 @@ fn onetcli_tool_call_requires_allow_write_for_legacy_redis_alias() {
                 .to_string(),
             ),
             positional_input: None,
-            allow_write: false,
+            allow_write: true,
             format: OutputFormat::Json,
         },
         registry,
     )
-    .expect_err("legacy redis alias should require explicit write permission");
+    .expect_err("legacy redis alias should be unknown");
 
-    assert!(error.to_string().contains("write_not_allowed"));
+    assert!(error.to_string().contains("unknown_tool"));
 }
 
 #[test]

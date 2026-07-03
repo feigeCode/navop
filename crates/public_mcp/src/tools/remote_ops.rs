@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tool_runtime::{
-    RiskLevel, ToolAdapter, ToolAlias, ToolAnnotations as RuntimeToolAnnotations, ToolContext,
-    ToolDescriptor, ToolError, ToolHandler, ToolMode, ToolRegistry, ToolResult,
+    RiskLevel, ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext, ToolDescriptor,
+    ToolError, ToolHandler, ToolMode, ToolRegistry, ToolResult,
 };
 
 #[derive(Clone)]
@@ -132,14 +132,6 @@ impl ToolHandler for RemoteOpsRuntimeTool {
         }
     }
 
-    fn aliases(&self) -> Vec<ToolAlias> {
-        self.spec
-            .aliases
-            .iter()
-            .map(|id| ToolAlias::new(*id))
-            .collect()
-    }
-
     fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
         let tool = self.clone();
         Box::pin(async move {
@@ -176,7 +168,6 @@ struct RemoteOpsToolSpec {
     schema: fn() -> Value,
     read_only: bool,
     open_world: bool,
-    aliases: &'static [&'static str],
 }
 
 impl RemoteOpsToolSpec {
@@ -220,7 +211,6 @@ fn list_sessions_spec() -> RemoteOpsToolSpec {
         schema: empty_schema_value,
         read_only: true,
         open_world: false,
-        aliases: &[],
     }
 }
 
@@ -232,7 +222,6 @@ fn session_diagnostics_spec() -> RemoteOpsToolSpec {
         schema: diagnostics_schema_value,
         read_only: true,
         open_world: false,
-        aliases: &[],
     }
 }
 
@@ -244,7 +233,6 @@ fn command_poll_spec() -> RemoteOpsToolSpec {
         schema: poll_schema_value,
         read_only: true,
         open_world: false,
-        aliases: &["ssh.remote_command_poll"],
     }
 }
 
@@ -256,7 +244,6 @@ fn command_output_spec() -> RemoteOpsToolSpec {
         schema: output_schema_value,
         read_only: true,
         open_world: false,
-        aliases: &["ssh.remote_command_output"],
     }
 }
 
@@ -268,7 +255,6 @@ fn command_cancel_spec() -> RemoteOpsToolSpec {
         schema: cancel_schema_value,
         read_only: false,
         open_world: false,
-        aliases: &["ssh.remote_command_cancel"],
     }
 }
 
@@ -280,7 +266,6 @@ fn remote_exec_spec() -> RemoteOpsToolSpec {
         schema: exec_schema_value,
         read_only: false,
         open_world: true,
-        aliases: &["ssh.remote_exec"],
     }
 }
 

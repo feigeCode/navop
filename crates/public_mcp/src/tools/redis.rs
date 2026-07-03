@@ -4,8 +4,8 @@ mod schema;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    RiskLevel, ToolAdapter, ToolAlias, ToolAnnotations, ToolContext, ToolDescriptor, ToolError,
-    ToolHandler, ToolMode, ToolResult,
+    RiskLevel, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError, ToolHandler,
+    ToolMode, ToolResult,
 };
 
 use input::{optional_u8, redis_arg, required_string};
@@ -16,7 +16,6 @@ const REDIS_COMMAND_TOOL: &str = "redis.command";
 const REDIS_KEYS_TOOL: &str = "redis.keys";
 const REDIS_GET_TOOL: &str = "redis.get";
 const REDIS_SET_TOOL: &str = "redis.set";
-const REDIS_EXECUTE_COMMAND_ALIAS: &str = "redis.execute_command";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RedisConnectionSnapshot {
@@ -176,14 +175,6 @@ impl ToolHandler for RedisToolProvider {
             mode: ToolMode::Deterministic,
             adapters: vec![ToolAdapter::Mcp, ToolAdapter::FunctionCalling],
             annotations: self.tool.annotations(),
-        }
-    }
-
-    fn aliases(&self) -> Vec<ToolAlias> {
-        match self.tool {
-            RedisTool::ListConnections => Vec::new(),
-            RedisTool::Command => vec![ToolAlias::new(REDIS_EXECUTE_COMMAND_ALIAS)],
-            RedisTool::Keys | RedisTool::Get | RedisTool::Set => Vec::new(),
         }
     }
 

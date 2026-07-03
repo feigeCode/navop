@@ -99,11 +99,11 @@ fn redis_command_is_registered_as_mutating() {
 }
 
 #[tokio::test]
-async fn redis_execute_command_alias_still_calls_runtime_command() {
+async fn redis_execute_command_alias_is_rejected() {
     let registry = redis_command_registry(None);
     let approver = Arc::new(RecordingApprover::approved());
 
-    let result = registry
+    let error = registry
         .call_tool(
             "redis.execute_command",
             Some(serde_json::Map::from_iter([
@@ -116,15 +116,10 @@ async fn redis_execute_command_alias_still_calls_runtime_command() {
             },
         )
         .await
-        .expect("legacy redis.execute_command alias should run");
+        .expect_err("legacy redis.execute_command alias should be unknown");
 
-    assert_eq!(
-        Some(redis_command_result(Value::Null)),
-        result.structured_content
-    );
-    let requests = approver.requests();
-    assert_eq!(1, requests.len());
-    assert_eq!("redis.execute_command", requests[0].tool_name);
+    assert!(error.to_string().contains("unknown public MCP tool"));
+    assert!(approver.requests().is_empty());
 }
 
 fn redis_command_registry(db: Option<u8>) -> PublicMcpToolRegistry {
