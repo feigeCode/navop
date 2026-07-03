@@ -102,10 +102,37 @@ fn connection_to_resource_ref(connection: &StoredConnection) -> ResourceRef {
         kind,
         label,
     );
+    for alias in connection_aliases(connection) {
+        resource = resource.with_alias(alias);
+    }
     for scope in connection_scopes(connection) {
         resource.set_scope(scope);
     }
     resource
+}
+
+fn connection_aliases(connection: &StoredConnection) -> Vec<String> {
+    let mut aliases = Vec::new();
+    if let Some(cloud_id) = connection
+        .cloud_id
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
+        aliases.push(cloud_id.clone());
+    }
+    aliases.extend(params_aliases(&connection.params));
+    aliases
+}
+
+fn params_aliases(params: &str) -> Vec<String> {
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(params) else {
+        return Vec::new();
+    };
+    ["host", "hostname", "path"]
+        .into_iter()
+        .filter_map(|key| string_field(&map, &[key]))
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 fn string_field(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {

@@ -1,6 +1,6 @@
 use rmcp::{ErrorData as McpError, model::JsonObject};
 use serde_json::{Map, Value, json};
-use tool_runtime::{ResourcePool, TargetResolutionError};
+use tool_runtime::{ResourcePool, TargetResolutionError, ToolTargetSpec};
 
 const PROVIDER_TARGET_FIELDS: [&str; 3] = ["connection", "connection_id", "session_id"];
 
@@ -21,13 +21,14 @@ pub(super) fn normalize_mcp_arguments(
     schema: &Value,
     input: Value,
     resource_pool: Option<&ResourcePool>,
+    target_spec: Option<&ToolTargetSpec>,
 ) -> Result<Value, McpError> {
     let Value::Object(mut input) = input else {
         return Ok(input);
     };
     reject_provider_target_fields(&input)?;
     if descriptor_has_target(schema) {
-        resolve_target_argument(&mut input, resource_pool)?;
+        resolve_target_argument(&mut input, resource_pool, target_spec)?;
         return Ok(Value::Object(input));
     }
     let Some(field) = descriptor_provider_target_field(schema) else {
@@ -36,7 +37,7 @@ pub(super) fn normalize_mcp_arguments(
     if let Some(target) = take_target(&mut input)? {
         input.insert(
             field.to_string(),
-            Value::String(resolve_target_value(&target, resource_pool)?),
+            Value::String(resolve_target_value(&target, resource_pool, target_spec)?),
         );
     }
     Ok(Value::Object(input))
@@ -108,6 +109,7 @@ fn take_target(input: &mut JsonObject) -> Result<Option<String>, McpError> {
 fn resolve_target_argument(
     input: &mut JsonObject,
     resource_pool: Option<&ResourcePool>,
+    target_spec: Option<&ToolTargetSpec>,
 ) -> Result<(), McpError> {
     let Some(target) = input.get("target") else {
         return Ok(());
@@ -118,7 +120,7 @@ fn resolve_target_argument(
             None,
         ));
     };
-    let target = resolve_target_value(target, resource_pool)?;
+    let target = resolve_target_value(target, resource_pool, target_spec)?;
     input.insert("target".to_string(), Value::String(target));
     Ok(())
 }
@@ -126,12 +128,16 @@ fn resolve_target_argument(
 fn resolve_target_value(
     target: &str,
     resource_pool: Option<&ResourcePool>,
+    target_spec: Option<&ToolTargetSpec>,
 ) -> Result<String, McpError> {
     let Some(resource_pool) = resource_pool else {
         return Ok(target.to_string());
     };
+    let supported_kinds = target_spec
+        .map(|spec| spec.supported_kinds.as_slice())
+        .unwrap_or_default();
     resource_pool
-        .resolve_target(target)
+        .resolve_target_for_kinds(target, supported_kinds)
         .map(|resource| resource.id.as_str().to_string())
         .map_err(target_resolution_error)
 }

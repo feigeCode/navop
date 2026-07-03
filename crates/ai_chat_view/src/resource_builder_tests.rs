@@ -83,6 +83,27 @@ fn single_connection_sets_connection_as_default_target() {
 }
 
 #[test]
+fn connection_host_is_resource_alias() {
+    let conn = stored_connection(
+        42,
+        "prod-a",
+        ConnectionType::SshSftp,
+        r#"{"host":"10.2.4.54"}"#,
+    );
+
+    let ctx = build_resource_context_single(&conn);
+
+    assert_eq!(vec!["10.2.4.54".to_string()], ctx.resources[0].aliases);
+    assert_eq!(
+        "prod-a",
+        ctx.to_runtime_resource_pool()
+            .resolve_target("10.2.4.54")
+            .unwrap()
+            .label
+    );
+}
+
+#[test]
 fn all_connections_keep_all_resources_when_default_is_selected() {
     let conns = vec![
         stored_connection(1, "prod-a", ConnectionType::SshSftp, "{}"),

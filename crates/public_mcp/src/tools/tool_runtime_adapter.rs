@@ -15,22 +15,29 @@ use tool_runtime::{
     ToolDescriptor, ToolError, ToolRegistry, ToolResult,
 };
 
+pub type ResourcePoolProvider = Arc<dyn Fn() -> Option<ResourcePool> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct ToolRuntimeMcpProvider {
     registry: ToolRegistry,
-    resource_pool: Option<ResourcePool>,
+    resource_pool_provider: Option<ResourcePoolProvider>,
 }
 
 impl ToolRuntimeMcpProvider {
     pub fn new(registry: ToolRegistry) -> Self {
         Self {
             registry,
-            resource_pool: None,
+            resource_pool_provider: None,
         }
     }
 
     pub fn with_resource_pool(mut self, resource_pool: ResourcePool) -> Self {
-        self.resource_pool = Some(resource_pool);
+        self.resource_pool_provider = Some(Arc::new(move || Some(resource_pool.clone())));
+        self
+    }
+
+    pub fn with_resource_pool_provider(mut self, provider: ResourcePoolProvider) -> Self {
+        self.resource_pool_provider = Some(provider);
         self
     }
 }
@@ -50,15 +57,21 @@ impl PublicMcpToolProvider for ToolRuntimeMcpProvider {
         arguments: Option<JsonObject>,
         context: PublicMcpToolContext,
     ) -> Option<PublicMcpToolFuture> {
-        let descriptor = self.registry.get(name, ToolAdapter::Mcp)?;
+        let runtime_descriptor = self.registry.get_runtime(name, ToolAdapter::Mcp)?;
+        let target_spec = runtime_descriptor.target.clone();
+        let descriptor = runtime_descriptor.legacy_descriptor();
         let registry = self.registry.clone();
-        let resource_pool = self.resource_pool.clone();
+        let resource_pool = self
+            .resource_pool_provider
+            .as_ref()
+            .and_then(|provider| provider());
         let name = name.to_string();
         let raw_input = Value::Object(arguments.unwrap_or_default());
         let input = match normalize_mcp_arguments(
             &descriptor.input_schema,
             raw_input,
             resource_pool.as_ref(),
+            Some(&target_spec),
         ) {
             Ok(input) => input,
             Err(error) => return Some(Box::pin(async move { Err(error) })),

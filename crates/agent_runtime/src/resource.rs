@@ -101,6 +101,9 @@ pub struct ResourceRef {
     pub kind: ResourceKind,
     /// 人类可读标签(如 "prod-db (10.0.0.1:3306)"),用于 prompt 与展示。
     pub label: String,
+    /// 可用于匹配用户自然引用的别名,如 hostname、IP、cloud id。
+    #[serde(default)]
+    pub aliases: Vec<String>,
     /// 资源下的当前细分作用域,如 database/schema/cwd。
     #[serde(default)]
     pub scopes: Vec<ResourceScope>,
@@ -112,8 +115,17 @@ impl ResourceRef {
             id: id.into(),
             kind,
             label: label.into(),
+            aliases: Vec::new(),
             scopes: Vec::new(),
         }
+    }
+
+    pub fn with_alias(mut self, alias: impl Into<String>) -> Self {
+        let alias = alias.into();
+        if !alias.is_empty() && !self.aliases.contains(&alias) {
+            self.aliases.push(alias);
+        }
+        self
     }
 
     pub fn with_scope(mut self, scope: ResourceScope) -> Self {
@@ -135,6 +147,9 @@ impl ResourceRef {
             self.kind.to_runtime_resource_kind(),
             self.label.clone(),
         );
+        for alias in &self.aliases {
+            resource = resource.with_alias(alias.clone());
+        }
         for scope in &self.scopes {
             resource = resource.with_scope(tool_runtime::ResourceScope::new(
                 scope.key.clone(),
@@ -234,6 +249,9 @@ impl ResourceContext {
                 "- {} | 类型={} | id={}{}\n",
                 r.label, r.kind, r.id, marker
             ));
+            if !r.aliases.is_empty() {
+                out.push_str(&format!("  - aliases={}\n", r.aliases.join(", ")));
+            }
             for scope in &r.scopes {
                 out.push_str(&format!(
                     "  - {}={} ({})\n",
@@ -281,5 +299,17 @@ mod tests {
 
         assert!(description.contains("database=ai_app"));
         assert!(description.contains("schema=public"));
+    }
+
+    #[test]
+    fn runtime_resource_pool_includes_aliases() {
+        let ctx = ResourceContext::new().with_resource(
+            ResourceRef::new("c1", ResourceKind::Ssh, "prod-a").with_alias("10.2.4.54"),
+        );
+
+        let pool = ctx.to_runtime_resource_pool();
+
+        assert_eq!("prod-a", pool.resolve_target("10.2.4.54").unwrap().label);
+        assert!(ctx.describe().contains("aliases=10.2.4.54"));
     }
 }

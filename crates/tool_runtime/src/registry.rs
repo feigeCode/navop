@@ -142,6 +142,11 @@ impl ToolRegistry {
             .map(|(_, descriptor)| descriptor.legacy_descriptor())
     }
 
+    pub fn get_runtime(&self, id: &str, adapter: ToolAdapter) -> Option<RuntimeToolDescriptor> {
+        self.runtime_match(id, adapter)
+            .map(|(_, descriptor)| descriptor)
+    }
+
     pub fn call_annotations(
         &self,
         id: &str,

@@ -141,15 +141,29 @@ fn normalize_agent_arguments(
     resources: &ResourceContext,
     explicit_resource: Option<ResourceId>,
 ) -> Result<(Value, Option<ResourceId>), ToolError> {
-    let Some(field) = descriptor_provider_target_field(descriptor) else {
+    let has_target = descriptor_has_target(descriptor);
+    let provider_field = descriptor_provider_target_field(descriptor);
+    if !has_target && provider_field.is_none() {
         return Ok((arguments, explicit_resource));
-    };
+    }
     let Value::Object(mut arguments) = arguments else {
         return Ok((arguments, explicit_resource));
     };
     reject_provider_target_fields(&arguments)?;
     let target = take_string(&mut arguments, "target")?;
-    let resource_id = resolve_target_id(target.as_deref(), resources, explicit_resource)?;
+    let resource_id = resolve_target_id(
+        target.as_deref(),
+        resources,
+        explicit_resource,
+        &descriptor.target,
+    )?;
+    if has_target {
+        if let Some(id) = &resource_id {
+            arguments.insert("target".to_string(), Value::String(id.to_string()));
+        }
+        return Ok((Value::Object(arguments), resource_id));
+    }
+    let field = provider_field.expect("provider target field should exist");
     if let Some(id) = &resource_id {
         arguments.insert(field.to_string(), Value::String(id.to_string()));
     }
@@ -165,6 +179,14 @@ fn descriptor_provider_target_field(
         .get("properties")
         .and_then(Value::as_object)
         .and_then(provider_target_field)
+}
+
+fn descriptor_has_target(descriptor: &tool_runtime::RuntimeToolDescriptor) -> bool {
+    descriptor
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_some_and(|properties| properties.contains_key("target"))
 }
 
 fn provider_target_field(properties: &Map<String, Value>) -> Option<&'static str> {
@@ -232,9 +254,10 @@ fn resolve_target_id(
     target: Option<&str>,
     resources: &ResourceContext,
     explicit_resource: Option<ResourceId>,
+    target_spec: &tool_runtime::ToolTargetSpec,
 ) -> Result<Option<ResourceId>, ToolError> {
     if let Some(target) = target {
-        return resolve_named_target(target, resources);
+        return resolve_named_target(target, resources, target_spec);
     }
     if let Some(id) = explicit_resource {
         return Ok(Some(id));
@@ -245,12 +268,13 @@ fn resolve_target_id(
 fn resolve_named_target(
     target: &str,
     resources: &ResourceContext,
+    target_spec: &tool_runtime::ToolTargetSpec,
 ) -> Result<Option<ResourceId>, ToolError> {
     if resources.is_empty() {
         return Ok(Some(ResourceId::new(target)));
     }
     let pool = resources.to_runtime_resource_pool();
-    pool.resolve_target(target)
+    pool.resolve_target_for_kinds(target, &target_spec.supported_kinds)
         .map(|resource| Some(ResourceId::new(resource.id.as_str())))
         .map_err(|error| ToolError::InvalidArguments(error.to_string()))
 }

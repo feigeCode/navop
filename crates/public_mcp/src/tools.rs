@@ -18,7 +18,7 @@ pub use redis::{
 pub use registry::{PublicMcpToolRegistry, PublicMcpToolRegistryError};
 pub use remote_ops::remote_ops_tool_registry;
 pub use terminal_exec::terminal_exec_tool_registry;
-pub use tool_runtime_adapter::ToolRuntimeMcpProvider;
+pub use tool_runtime_adapter::{ResourcePoolProvider, ToolRuntimeMcpProvider};
 
 use crate::approval::{PublicMcpApprovalManager, PublicMcpApprovalOutcome};
 use crate::permissions::{PermissionMode, PublicMcpOperationKind};

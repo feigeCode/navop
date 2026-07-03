@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tool_runtime::{
-    RiskLevel, ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext, ToolDescriptor,
-    ToolError, ToolHandler, ToolMode, ToolRegistry, ToolResult,
+    ResourceKind, RiskLevel, ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext,
+    ToolDescriptor, ToolError, ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
 #[derive(Clone)]
@@ -139,6 +139,15 @@ impl ToolHandler for RemoteOpsRuntimeTool {
                 .map_err(mcp_error_to_tool_error)
                 .and_then(call_tool_result_to_runtime_result)
         })
+    }
+
+    fn target_spec(&self) -> ToolTargetSpec {
+        match self.spec.id {
+            "ssh.exec" | "ssh.session_diagnostics" => {
+                ToolTargetSpec::required(vec![ResourceKind::Terminal])
+            }
+            _ => ToolTargetSpec::none(),
+        }
     }
 }
 

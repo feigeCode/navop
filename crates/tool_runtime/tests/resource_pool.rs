@@ -54,6 +54,49 @@ fn target_matches_id_label_or_alias() {
 }
 
 #[test]
+fn target_matches_prompt_like_or_ssh_like_alias() {
+    let pool = ResourcePool::new().with_resource(
+        ResourceRef::new("terminal-prod", ResourceKind::Terminal, "prod terminal")
+            .with_alias("zn-54")
+            .with_alias("10.2.4.54"),
+    );
+
+    for target in [
+        "root@zn-54:~",
+        "root@zn-54:/var/log",
+        "ssh://root@zn-54",
+        "root@10.2.4.54:~",
+        "zn-54:~",
+    ] {
+        assert_eq!(
+            ResourceId::new("terminal-prod"),
+            pool.resolve_target(target).unwrap().id,
+            "{target} should resolve"
+        );
+    }
+}
+
+#[test]
+fn kind_target_can_resolve_through_linked_saved_connection() {
+    let pool = ResourcePool::new()
+        .with_resource(
+            ResourceRef::new("21", ResourceKind::Ssh, "prod-a")
+                .with_alias("10.2.4.54")
+                .with_alias("zn-54"),
+        )
+        .with_resource(
+            ResourceRef::new("ssh-terminal-prod-a", ResourceKind::Terminal, "prod-a")
+                .with_alias("21"),
+        );
+
+    let target = pool
+        .resolve_target_for_kinds("root@zn-54:~", &[ResourceKind::Terminal])
+        .expect("prompt-like target should resolve through saved SSH connection");
+
+    assert_eq!(ResourceId::new("ssh-terminal-prod-a"), target.id);
+}
+
+#[test]
 fn ambiguous_target_is_rejected() {
     let pool = ResourcePool::new()
         .with_resource(ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod").with_alias("prod"))

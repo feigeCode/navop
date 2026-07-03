@@ -123,9 +123,23 @@ impl ResourceRef {
     }
 
     fn matches_target(&self, target: &str) -> bool {
-        self.id.as_str() == target
-            || self.label == target
-            || self.aliases.iter().any(|alias| alias == target)
+        let target_values = target_variants(target);
+        self.target_values()
+            .iter()
+            .flat_map(|value| target_variants(value))
+            .any(|value| {
+                target_values
+                    .iter()
+                    .any(|target| same_target(&value, target))
+            })
+    }
+
+    fn target_values(&self) -> Vec<&str> {
+        let mut values = Vec::with_capacity(2 + self.aliases.len());
+        values.push(self.id.as_str());
+        values.push(self.label.as_str());
+        values.extend(self.aliases.iter().map(String::as_str));
+        values
     }
 }
 
@@ -179,6 +193,57 @@ impl ResourcePool {
         }
     }
 
+    pub fn resolve_target_for_kinds(
+        &self,
+        value: &str,
+        supported_kinds: &[ResourceKind],
+    ) -> Result<&ResourceRef, TargetResolutionError> {
+        if supported_kinds.is_empty() {
+            return self.resolve_target(value);
+        }
+        let matches = self.matches_for_kinds(value, supported_kinds);
+        if !matches.is_empty() {
+            return resolved_target(value, matches);
+        }
+        let matches = self.linked_matches_for_kinds(value, supported_kinds);
+        resolved_target(value, matches)
+    }
+
+    fn matches_for_kinds(
+        &self,
+        value: &str,
+        supported_kinds: &[ResourceKind],
+    ) -> Vec<&ResourceRef> {
+        self.resources
+            .iter()
+            .filter(|resource| supported_kinds.contains(&resource.kind))
+            .filter(|resource| resource.matches_target(value))
+            .collect()
+    }
+
+    fn linked_matches_for_kinds(
+        &self,
+        value: &str,
+        supported_kinds: &[ResourceKind],
+    ) -> Vec<&ResourceRef> {
+        let link_ids = self
+            .resources
+            .iter()
+            .filter(|resource| !supported_kinds.contains(&resource.kind))
+            .filter(|resource| resource.matches_target(value))
+            .map(|resource| resource.id.as_str().to_string())
+            .collect::<Vec<_>>();
+        self.resources
+            .iter()
+            .filter(|resource| supported_kinds.contains(&resource.kind))
+            .filter(|resource| {
+                link_ids
+                    .iter()
+                    .any(|link_id| resource.matches_target(link_id))
+            })
+            .collect()
+    }
+
     pub fn resolve_resource_target(
         &self,
         target: Option<&ResourceTarget>,
@@ -203,6 +268,77 @@ impl ResourcePool {
             .filter(|resource| &resource.kind == kind)
             .collect()
     }
+}
+
+fn resolved_target<'a>(
+    value: &str,
+    matches: Vec<&'a ResourceRef>,
+) -> Result<&'a ResourceRef, TargetResolutionError> {
+    match matches.as_slice() {
+        [resource] => Ok(resource),
+        [] => Err(TargetResolutionError::TargetNotInPool {
+            target: value.to_string(),
+        }),
+        _ => Err(TargetResolutionError::AmbiguousTarget {
+            target: value.to_string(),
+            matches: matches.iter().map(|resource| resource.id.clone()).collect(),
+        }),
+    }
+}
+
+fn target_variants(value: &str) -> Vec<String> {
+    let mut variants = Vec::new();
+    push_variant(&mut variants, value.trim());
+    if let Some(host) = host_from_user_target(value) {
+        push_variant(&mut variants, host);
+    }
+    if let Some(host) = host_from_prompt_target(value) {
+        push_variant(&mut variants, host);
+    }
+    variants
+}
+
+fn host_from_user_target(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let value = value
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(value);
+    let (_, host) = value.rsplit_once('@')?;
+    let end = host
+        .find(|ch: char| matches!(ch, ':' | '/' | ' ' | '\t' | '$' | '#'))
+        .unwrap_or(host.len());
+    non_empty(&host[..end])
+}
+
+fn host_from_prompt_target(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.contains('@') || value.matches(':').count() != 1 {
+        return None;
+    }
+    let (host, suffix) = value.split_once(':')?;
+    let prompt_suffix = suffix.starts_with('~')
+        || suffix.starts_with('/')
+        || suffix.chars().all(|ch| ch.is_ascii_digit());
+    prompt_suffix.then_some(host).and_then(non_empty)
+}
+
+fn non_empty(value: &str) -> Option<&str> {
+    (!value.is_empty()).then_some(value)
+}
+
+fn push_variant(variants: &mut Vec<String>, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    let value = value.trim_matches(|ch| matches!(ch, '`' | '"' | '\''));
+    if !value.is_empty() && !variants.iter().any(|item| same_target(item, value)) {
+        variants.push(value.to_string());
+    }
+}
+
+fn same_target(left: &str, right: &str) -> bool {
+    left == right || left.eq_ignore_ascii_case(right)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

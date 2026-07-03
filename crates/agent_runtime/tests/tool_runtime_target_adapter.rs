@@ -5,7 +5,7 @@ use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tool_runtime::{
     ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolHandler, ToolMode, ToolRegistry,
-    ToolResult,
+    ToolResult, ToolTargetSpec,
 };
 
 #[tokio::test]
@@ -93,6 +93,92 @@ async fn runtime_registry_agent_tool_maps_default_target_to_runtime_connection()
 }
 
 #[tokio::test]
+async fn runtime_registry_agent_tool_resolves_target_with_tool_resource_kind() {
+    let handler = Arc::new(
+        RuntimeEchoTool::new("terminal.exec")
+            .with_input_schema(connection_sql_schema())
+            .with_target_kinds(vec![tool_runtime::ResourceKind::Terminal]),
+    );
+    let registry = ToolRegistry::new(vec![handler.clone()]);
+    let agent_registry = agent_runtime::tools::tool_runtime_agent_tool_registry(
+        registry,
+        tool_runtime::ToolAdapter::FunctionCalling,
+    );
+    let tool = agent_registry.get(&ToolName::new("terminal.exec")).unwrap();
+    let resources = ResourceContext::new()
+        .with_resource(
+            ResourceRef::new("21", ResourceKind::Ssh, "prod-a")
+                .with_alias("10.2.4.54")
+                .with_alias("zn-54"),
+        )
+        .with_resource(
+            ResourceRef::new(
+                "ssh-terminal-prod-a",
+                ResourceKind::Terminal,
+                "prod terminal",
+            )
+            .with_alias("21"),
+        );
+
+    let observation = tool
+        .execute(agent_invocation(
+            "terminal.exec",
+            json!({ "target": "21", "sql": "select 1" }),
+            resources,
+        ))
+        .await
+        .expect("target should resolve through linked terminal resource");
+
+    assert!(observation.success);
+    assert_eq!(
+        json!({ "connection": "ssh-terminal-prod-a", "sql": "select 1" }),
+        handler.last_input()
+    );
+    assert_eq!(
+        Some(agent_runtime::ResourceId::new("ssh-terminal-prod-a")),
+        observation.resource_id
+    );
+}
+
+#[tokio::test]
+async fn runtime_registry_agent_tool_keeps_target_when_runtime_schema_has_target() {
+    let handler = Arc::new(
+        RuntimeEchoTool::new("ssh.exec")
+            .with_input_schema(target_and_provider_schema())
+            .with_target_kinds(vec![tool_runtime::ResourceKind::Terminal]),
+    );
+    let registry = ToolRegistry::new(vec![handler.clone()]);
+    let agent_registry = agent_runtime::tools::tool_runtime_agent_tool_registry(
+        registry,
+        tool_runtime::ToolAdapter::FunctionCalling,
+    );
+    let tool = agent_registry.get(&ToolName::new("ssh.exec")).unwrap();
+    let resources = ResourceContext::new()
+        .with_resource(ResourceRef::new("21", ResourceKind::Ssh, "prod-a").with_alias("zn-54"))
+        .with_resource(
+            ResourceRef::new(
+                "ssh-terminal-prod-a",
+                ResourceKind::Terminal,
+                "prod terminal",
+            )
+            .with_alias("21"),
+        );
+
+    tool.execute(agent_invocation(
+        "ssh.exec",
+        json!({ "target": "root@zn-54:~", "sql": "select 1" }),
+        resources,
+    ))
+    .await
+    .expect("target field should resolve without rewriting to provider field");
+
+    assert_eq!(
+        json!({ "target": "ssh-terminal-prod-a", "sql": "select 1" }),
+        handler.last_input()
+    );
+}
+
+#[tokio::test]
 async fn runtime_registry_agent_tool_rejects_provider_target_fields() {
     let handler =
         Arc::new(RuntimeEchoTool::new("db.query").with_input_schema(connection_sql_schema()));
@@ -118,6 +204,7 @@ async fn runtime_registry_agent_tool_rejects_provider_target_fields() {
 #[derive(Clone)]
 struct RuntimeEchoTool {
     descriptor: ToolDescriptor,
+    target_kinds: Vec<tool_runtime::ResourceKind>,
     last_input: Arc<Mutex<Option<serde_json::Value>>>,
 }
 
@@ -135,12 +222,18 @@ impl RuntimeEchoTool {
                 adapters: vec![ToolAdapter::FunctionCalling],
                 annotations: ToolAnnotations::read_only("Echo"),
             },
+            target_kinds: Vec::new(),
             last_input: Arc::new(Mutex::new(None)),
         }
     }
 
     fn with_input_schema(mut self, input_schema: serde_json::Value) -> Self {
         self.descriptor.input_schema = input_schema;
+        self
+    }
+
+    fn with_target_kinds(mut self, target_kinds: Vec<tool_runtime::ResourceKind>) -> Self {
+        self.target_kinds = target_kinds;
         self
     }
 
@@ -161,6 +254,13 @@ impl ToolHandler for RuntimeEchoTool {
     fn call(&self, input: serde_json::Value, _context: ToolContext) -> tool_runtime::ToolFuture {
         *self.last_input.lock().expect("last input lock") = Some(input.clone());
         Box::pin(async move { Ok(ToolResult::structured(input)) })
+    }
+
+    fn target_spec(&self) -> ToolTargetSpec {
+        if self.target_kinds.is_empty() {
+            return ToolTargetSpec::none();
+        }
+        ToolTargetSpec::required(self.target_kinds.clone())
     }
 }
 
@@ -192,5 +292,17 @@ fn connection_sql_schema() -> serde_json::Value {
             "sql": { "type": "string" }
         },
         "required": ["connection", "sql"]
+    })
+}
+
+fn target_and_provider_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": { "type": "string" },
+            "connection": { "type": "string" },
+            "sql": { "type": "string" }
+        },
+        "required": ["target", "sql"]
     })
 }
