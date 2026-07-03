@@ -379,12 +379,14 @@ impl DataCompareWindow {
 
         set_connection_select(
             &self.source_connection_select,
+            &self.source_connection_id,
             &target.connection_id,
             window,
             cx,
         );
         set_connection_select(
             &self.target_connection_select,
+            &self.target_connection_id,
             &source.connection_id,
             window,
             cx,
@@ -491,7 +493,7 @@ impl DataCompareWindow {
         )
     }
 
-    fn start_execute_sync_sql(&mut self, cx: &mut Context<Self>) {
+    fn start_execute_sync_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.sync_sql_blocked(cx) {
             self.set_status(t!("Compare.data_compare_truncated_no_sql").to_string(), cx);
             return;
@@ -501,6 +503,7 @@ impl DataCompareWindow {
             self.editor_sql(cx),
             self.status.clone(),
             self.is_executing.clone(),
+            window,
             cx,
         );
     }
@@ -807,8 +810,8 @@ impl Render for DataCompareWindow {
                                                 || sync_sql_blocked
                                                 || !has_sync_sql,
                                         )
-                                        .on_click(cx.listener(move |view, _, _, cx| {
-                                            view.start_execute_sync_sql(cx);
+                                        .on_click(cx.listener(move |view, _, window, cx| {
+                                            view.start_execute_sync_sql(window, cx);
                                         })),
                                 )
                             }),

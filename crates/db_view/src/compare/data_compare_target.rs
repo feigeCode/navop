@@ -189,6 +189,7 @@ impl DataCompareWindow {
     pub(super) fn source_connection_controls(&self) -> TargetConnectionControls {
         TargetConnectionControls {
             select: self.source_connection_select.clone(),
+            fallback: self.source_connection_id.clone(),
         }
     }
 
@@ -222,6 +223,7 @@ impl DataCompareWindow {
     pub(super) fn connection_controls(&self) -> TargetConnectionControls {
         TargetConnectionControls {
             select: self.target_connection_select.clone(),
+            fallback: self.target_connection_id.clone(),
         }
     }
 
@@ -263,7 +265,7 @@ impl DataCompareWindow {
         status: Entity<String>,
         cx: &mut Context<Self>,
     ) {
-        let connection_id = selected_connection_id(&connection.select, &preferred_table, cx);
+        let connection_id = selected_connection_id(&connection.select, &connection.fallback, cx);
         let database_name = selected_string(&database.select, &database.fallback, cx);
         let schema_name = selected_string(&schema.select, &schema.fallback, cx);
         let (database_name, schema_name) = effective_database_schema(

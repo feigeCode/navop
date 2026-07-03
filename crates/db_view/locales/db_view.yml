@@ -2951,6 +2951,22 @@ Compare:
     en: Destructive
     zh-CN: 破坏性
     zh-HK: 破壞性
+  destructive_sql_confirm_title:
+    en: Destructive Sync SQL Detected
+    zh-CN: 检测到可能导致数据丢失的同步 SQL
+    zh-HK: 檢測到可能導致資料遺失的同步 SQL
+  destructive_sql_confirm_message:
+    en: The sync SQL contains DELETE, TRUNCATE, or DROP statements and may remove data or database objects.
+    zh-CN: 当前同步 SQL 包含 DELETE、TRUNCATE 或 DROP 语句，可能会删除数据或数据库对象。
+    zh-HK: 當前同步 SQL 包含 DELETE、TRUNCATE 或 DROP 語句，可能會刪除資料或資料庫物件。
+  destructive_sql_confirm_desc:
+    en: Review the SQL preview carefully before continuing.
+    zh-CN: 继续执行前，请仔细确认 SQL 预览内容。
+    zh-HK: 繼續執行前，請仔細確認 SQL 預覽內容。
+  destructive_sql_confirm_execute:
+    en: Execute Anyway
+    zh-CN: 继续执行
+    zh-HK: 繼續執行
   unnamed_object:
     en: Unnamed object
     zh-CN: 未命名对象

@@ -316,12 +316,14 @@ impl SchemaCompareWindow {
 
         set_connection_select(
             &self.source_connection_select,
+            &self.source_connection_id,
             &target.connection_id,
             window,
             cx,
         );
         set_connection_select(
             &self.target_connection_select,
+            &self.target_connection_id,
             &source.connection_id,
             window,
             cx,
@@ -399,12 +401,13 @@ impl SchemaCompareWindow {
         )
     }
 
-    fn start_execute_sync_sql(&mut self, cx: &mut Context<Self>) {
+    fn start_execute_sync_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         start_sync_sql_execution(
             self.compare_target.read(cx).clone(),
             self.editor_sql(cx),
             self.status.clone(),
             self.is_executing.clone(),
+            window,
             cx,
         );
     }
@@ -674,8 +677,8 @@ impl Render for SchemaCompareWindow {
                                         .child(t!("Compare.execute_sql").to_string())
                                         .loading(is_executing)
                                         .disabled(is_running || is_executing || !has_sync_sql)
-                                        .on_click(cx.listener(move |view, _, _, cx| {
-                                            view.start_execute_sync_sql(cx);
+                                        .on_click(cx.listener(move |view, _, window, cx| {
+                                            view.start_execute_sync_sql(window, cx);
                                         })),
                                 )
                             }),

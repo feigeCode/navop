@@ -6,7 +6,7 @@ use rust_i18n::t;
 use crate::compare::window_ui::register_connection_for_compare;
 use crate::db_object_selector::state::{
     StringSelect, TargetConnectionControls, TargetStringControls, policy_for_connection,
-    selected_string,
+    selected_connection_value, selected_string,
 };
 
 pub(crate) fn load_databases<T: 'static>(
@@ -108,12 +108,7 @@ fn prepare_load<T>(
 }
 
 fn selected_connection<T>(controls: &TargetConnectionControls, cx: &Context<T>) -> String {
-    controls
-        .select
-        .read(cx)
-        .selected_value()
-        .cloned()
-        .unwrap_or_default()
+    selected_connection_value(controls, cx)
 }
 
 fn selected_database_name_for_schema_load(
