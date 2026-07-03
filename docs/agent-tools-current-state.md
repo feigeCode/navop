@@ -227,6 +227,8 @@ Agent registry 构建入口：
 - Redis canonical runtime 工具也会通过 Agent bridge 暴露，模型侧 function 名会归一化成
   `redis_command`、`redis_keys`、`redis_get`、`redis_set`。
 - `redis.execute_command` 是 `redis.command` 的 runtime alias，不作为单独 Agent 工具暴露。
+- DB canonical runtime 写工具也会通过 Agent bridge 暴露，模型侧 function 名会归一化成
+  `db_exec`。
 - SFTP canonical runtime 工具也会通过 Agent bridge 暴露，模型侧 function 名会归一化成
   `sftp_list`、`sftp_read`、`sftp_write`、`sftp_stat`、`sftp_upload`、`sftp_download`。
 
@@ -235,10 +237,13 @@ Agent registry 构建入口：
 位置：
 
 - `crates/onetcli_runtime/src/agent_db_tools/`
+- `crates/onetcli_runtime/src/database_tools.rs`
 
 注册入口：
 
 - `onetcli_runtime::agent_db_tools::register_agent_db_tools(repo, registry)`
+- `onetcli_runtime::database_tools::database_tool_registry(repo)` 通过
+  `agent_runtime::tools::tool_runtime_agent_tool_registry(...)` 桥接
 
 工具：
 
@@ -246,6 +251,7 @@ Agent registry 构建入口：
 |---|---:|---|
 | `db_query` | `Read` | 执行只读 SQL。会使用当前 Agent DB resource 的 connection / database / schema。非查询语句会被拒绝。 |
 | `db_execute_sql` | `High` | 执行写 SQL / 危险 SQL。Auto 模式也会要求用户审批。 |
+| `db_exec` | `High` | Agent function-calling 名；canonical runtime id 是 `db.exec`，执行 SQL script 或 SQL file。 |
 | `db_list_databases` | `Read` | 列出当前连接的 database / catalog。 |
 | `db_list_tables` | `Read` | 列出当前 database / schema 下的表。 |
 | `db_describe_table` | `Read` | 查看表字段、索引、外键。 |
@@ -262,8 +268,12 @@ Agent registry 构建入口：
 限制：
 
 - `db_query` 通过 DB plugin 的 `is_query_statement` 拦截非查询语句。
+- `db_exec` 是 write-capable runtime 工具，风险为 `High`，仍由 Agent approval flow
+  在 Auto / Manual 模式下做审批。
 - `db_sample_rows` 有行数上限。
 - `schema` 目前通过 `config.extra_params["schema"]` 传递，不保证所有数据库驱动都做真实 schema 切换。
+- 迁移期旧 `db_execute_sql` 与 runtime-backed `db_exec` 并存；后续 prompt 和工具卡片应优先
+  引导 canonical `db.exec`，再逐步收敛旧名。
 
 ### 3.3 Redis 原生 Agent 工具
 
