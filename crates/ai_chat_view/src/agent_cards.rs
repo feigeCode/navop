@@ -28,6 +28,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 const MAX_TOOL_OUTPUT_JSON_CHARS: usize = 4000;
+const MAX_TERMINAL_TOOL_OUTPUT_CHARS: usize = 64_000;
 const TOOL_JSON_MIN_ROWS: usize = 6;
 const TOOL_JSON_MAX_ROWS: usize = 14;
 const TOOL_JSON_LINE_HEIGHT_PX: f32 = 18.0;
@@ -329,19 +330,57 @@ impl ChatCard for ToolCard {
             ));
         }
 
-        let output = distinct_tool_output_json(&data);
-        if expanded && !output.is_empty() {
-            card = card.child(tool_card_json_block(
-                "output",
-                SharedString::from(format!("agent-tool-output-{}", data.call_id)),
-                output,
-                window,
-                cx,
-            ));
+        if expanded {
+            let terminal_output = terminal_exec_output_text(&data);
+            if !terminal_output.is_empty() {
+                card = card.child(tool_card_text_block(
+                    "output",
+                    SharedString::from(format!("agent-tool-output-{}", data.call_id)),
+                    terminal_output,
+                    window,
+                    cx,
+                ));
+            } else {
+                let output = distinct_tool_output_json(&data);
+                if !output.is_empty() {
+                    card = card.child(tool_card_json_block(
+                        "output",
+                        SharedString::from(format!("agent-tool-output-{}", data.call_id)),
+                        output,
+                        window,
+                        cx,
+                    ));
+                }
+            }
         }
 
         card.into_any_element()
     }
+}
+
+fn terminal_exec_output_text(data: &ToolCardData) -> String {
+    if !is_terminal_exec_tool(&data.tool_name) {
+        return String::new();
+    }
+    let source = if data.data_text.trim().is_empty() {
+        data.summary.trim()
+    } else {
+        data.data_text.trim()
+    };
+    let output = serde_json::from_str::<serde_json::Value>(source)
+        .ok()
+        .and_then(|value| {
+            value
+                .as_object()
+                .and_then(|object| object.get("output"))
+                .and_then(|output| output.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    if output.trim().is_empty() {
+        return String::new();
+    }
+    truncate_chars(&output, MAX_TERMINAL_TOOL_OUTPUT_CHARS)
 }
 
 /// 子代理任务卡片渲染器。
@@ -711,12 +750,76 @@ fn tool_card_json_block(
         .into_any_element()
 }
 
+fn tool_card_text_block(
+    label: &'static str,
+    id: SharedString,
+    content: String,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let height = tool_json_height(&content);
+    let input = tool_text_input(id.clone(), content, window, cx);
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_1()
+        .px_1()
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
+        )
+        .child(
+            div()
+                .w_full()
+                .h(height)
+                .child(Input::new(&input).bare().h_full().disabled(true).text_xs()),
+        )
+        .into_any_element()
+}
+
 fn tool_json_height(content: &str) -> gpui::Pixels {
     let rows = content
         .lines()
         .count()
         .clamp(TOOL_JSON_MIN_ROWS, TOOL_JSON_MAX_ROWS);
     px(rows as f32 * TOOL_JSON_LINE_HEIGHT_PX + TOOL_JSON_VERTICAL_PADDING_PX)
+}
+
+fn tool_text_input(
+    id: SharedString,
+    content: String,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<InputState> {
+    let state = window.use_keyed_state(
+        SharedString::from(format!("{}-text-input", id)),
+        cx,
+        |window, cx| {
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .code_editor("text")
+                    .line_number(false)
+                    .rows(TOOL_JSON_MAX_ROWS)
+                    .soft_wrap(false)
+                    .default_value(content.clone())
+            });
+            ToolJsonInputState {
+                input,
+                value: content.clone(),
+            }
+        },
+    );
+    state.update(cx, |data, cx| {
+        if data.value != content {
+            data.value = content.clone();
+            data.input.update(cx, |input, cx| {
+                input.set_value(content, window, cx);
+            });
+        }
+        data.input.clone()
+    })
 }
 
 fn tool_json_input(
@@ -1216,6 +1319,50 @@ mod tests {
             "{\n  \"output\": \"plain output\"\n}",
             tool_output_json(&data)
         );
+    }
+
+    #[test]
+    fn terminal_exec_output_text_extracts_multiline_output() {
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "terminal_exec".into(),
+            target_id: None,
+            target_label: None,
+            input_summary: String::new(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: String::new(),
+            data_text: serde_json::json!({
+                "completion": "observed_output",
+                "output": "line 1\nline 2\nline 3"
+            })
+            .to_string(),
+        };
+
+        assert_eq!("line 1\nline 2\nline 3", terminal_exec_output_text(&data));
+    }
+
+    #[test]
+    fn terminal_exec_output_text_keeps_more_than_generic_json_limit() {
+        let output = "a".repeat(MAX_TOOL_OUTPUT_JSON_CHARS + 100);
+        let data = ToolCardData {
+            call_id: "call_1".into(),
+            tool_name: "terminal_exec".into(),
+            target_id: None,
+            target_label: None,
+            input_summary: String::new(),
+            input_json: String::new(),
+            running: false,
+            success: Some(true),
+            summary: String::new(),
+            data_text: serde_json::json!({ "output": output }).to_string(),
+        };
+
+        let rendered = terminal_exec_output_text(&data);
+
+        assert_eq!(MAX_TOOL_OUTPUT_JSON_CHARS + 100, rendered.len());
+        assert!(!rendered.contains("已截断"));
     }
 
     #[test]

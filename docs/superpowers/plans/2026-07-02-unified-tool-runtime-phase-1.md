@@ -231,6 +231,7 @@ pub struct ToolAlias {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ToolTargetSpec {
     pub supported_kinds: Vec<ResourceKind>,
+    pub required_capabilities: Vec<ResourceCapability>,
     pub required: bool,
 }
 
@@ -319,6 +320,18 @@ impl ToolTargetSpec {
     pub fn required(supported_kinds: Vec<ResourceKind>) -> Self {
         Self {
             supported_kinds,
+            required_capabilities: Vec::new(),
+            required: true,
+        }
+    }
+
+    pub fn required_with_capabilities(
+        supported_kinds: Vec<ResourceKind>,
+        required_capabilities: Vec<ResourceCapability>,
+    ) -> Self {
+        Self {
+            supported_kinds,
+            required_capabilities,
             required: true,
         }
     }
@@ -344,6 +357,57 @@ impl RuntimeToolDescriptor {
     }
 }
 ```
+
+Target resolution must apply both `supported_kinds` and `required_capabilities`.
+This matters for active terminal sessions: a visible SSH terminal may be present in
+the resource pool for diagnostics, but `terminal.exec` must only resolve to resources
+with `ResourceCapability::TerminalExec`, and `ssh.exec` must only resolve to resources
+with `ResourceCapability::RemoteExec`.
+
+Active terminal providers must keep execution capabilities synchronized with terminal
+lifecycle. `Terminal::new_ssh` starts with `backend: None`, so `terminal_view` can
+register the Public MCP session before `external_input_handle()` is available. The
+refresh path must update the shared terminal input handle and register
+`TerminalExecSessionHandle` when the handle appears after connection. Otherwise the
+resource pool can contain an active terminal linked to the saved SSH connection but
+without `ResourceCapability::TerminalExec`, causing `terminal.exec` to fail with
+`target ... lacks required resource capabilities: [TerminalExec]`.
+
+`terminal.exec` output capture must be implemented at the terminal backend stream
+boundary, not by diffing visible text, scrollback, or alacritty grid snapshots. For SSH
+terminals, capture `ChannelEvent::Data/ExtendedData` bytes in `SshBackend` while still
+feeding the same bytes into `processor.advance(...)`. This keeps the visible terminal
+pane and tool result synchronized and avoids failures when long output scrolls off the
+viewport, commands clear/redraw the screen, or prompt text changes. Shell integration
+`CommandFinished` should be used as the preferred completion signal; without it, the
+tool may return observed stream output after a quiet interval or partial output on
+timeout, but must not fabricate an exit code.
+
+The synchronous terminal execution bridge must not block the async runtime worker that
+drives the SSH backend task. Public MCP/runtime tool entry points should run this bridge
+inside `tokio::task::spawn_blocking` or an equivalent blocking boundary. Otherwise the
+tool can wait for output while preventing the queued terminal write and PTY receive loop
+from running, producing the symptom `completion: "timed_out", output: ""` followed by
+the command output appearing in the visible terminal only after the tool card completes.
+The implementation default timeout must also match the schema default (`60000ms`), not a
+short UI polling timeout.
+
+For fallback completion without shell integration, do not treat stream quietness as
+command completion. Long commands such as `systemctl list-units` may pause between output
+chunks; completing on quietness truncates the result. Complete on shell integration
+`CommandFinished`, detected prompt return, or timeout with partial output.
+
+Command echo stripping must tolerate terminal soft/hard wraps. Remote PTYs can echo a long
+input command with line breaks inserted by the terminal width, for example splitting
+`"\.service"` into `"\.serv\nice"`. Stripping must match the submitted command while
+ignoring echo-inserted newlines; exact `output.find(command)` is not sufficient and can
+leave the user input inside the captured output.
+
+The UI card path must not discard terminal output before rendering. `terminal_exec`
+observations need a larger card payload limit than normal tools, and the card should render
+the structured `output` field as multiline terminal text instead of a JSON string with
+escaped `\n`; otherwise the right panel can appear to show only a slice of the output even
+when the backend captured more.
 
 - [ ] **Step 4: Move result, error, and registry code**
 
@@ -505,7 +569,21 @@ Create resource types with these public names and methods:
 
 ```rust
 pub enum ResourceKind { Ssh, Sftp, Mysql, Postgres, Sqlite, Redis, Mongo, Terminal, Other(String) }
-pub enum ResourceCapability { Query, Execute, ReadFile, WriteFile, ExecCommand, List, OpenSession, Other(String) }
+pub enum ResourceCapability {
+    Query,
+    Execute,
+    DatabaseQuery,
+    DatabaseExecute,
+    ManageConnection,
+    ReadFile,
+    WriteFile,
+    ExecCommand,
+    TerminalExec,
+    RemoteExec,
+    List,
+    OpenSession,
+    Other(String),
+}
 pub enum ResourceOrigin { SavedConnection, ActiveSession, Workspace, PublicMcp, ExternalMcp, Acp, Cli, Other(String) }
 pub struct ResourceScope { pub key: String, pub label: String, pub value: String }
 pub struct ResourceRef { ... }

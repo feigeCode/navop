@@ -76,6 +76,7 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 3b SSH structured command tools | Done | `1be59bb2 feat(public_mcp): canonicalize ssh command tools` | Keep `ssh.exec` structured and non-interactive. |
 | Phase 3c `terminal.exec` runtime contract | Done | `f0777d07 feat(public_mcp): add terminal exec runtime contract` | Wire live terminal providers and validate terminal input behavior. |
 | Phase 3c live terminal provider | Done | `crates/terminal` exposes `TerminalInputHandle`; `crates/terminal_view` registers a `TerminalExecSessionHandle` that writes `command + "\n"` into the live terminal input path. Targeted provider tests and Public MCP/runtime checks passed on 2026-07-02. | Start Agent/UI prompt, approval-card, and tool-card integration. |
+| Phase 3c terminal exec PTY stream capture | In progress | Worktree adds `terminal::TerminalExecHandle` and SSH PTY stream capture so `terminal.exec` result output comes from `ChannelEvent::Data/ExtendedData`, not UI grid diff. `public_mcp` runs the synchronous terminal bridge through `tokio::task::spawn_blocking`, preventing the tool call from starving the SSH backend task while waiting for output. `terminal_view` default output timeout now matches the schema default of 60s. Fallback completion no longer treats short output quiet periods as completion; without shell integration it waits for prompt return or timeout. Command echo stripping tolerates terminal-width line wraps in the echoed input. `ai_chat_view` keeps larger `terminal_exec` output payloads and renders the structured `output` field as multiline terminal text instead of a JSON string. Focused tests passed on 2026-07-03: `rtk cargo test -p terminal exec_capture`, `rtk cargo test -p terminal_view public_mcp`, `rtk cargo test -p public_mcp --test terminal_exec`, `rtk cargo test -p main public_mcp_runtime::tool_registry`, `rtk cargo test -p ai_chat_view agent_cards`, `rtk cargo test -p ai_chat_view agent_transcript`, `rtk cargo check -p terminal -p terminal_view -p public_mcp`, and `rtk cargo check -p main`. | Run manual visible-terminal smoke for long output and commit after final diff checks. |
 | Phase 3c Agent/UI terminal exec selection | Done | Agent prompt tells the model to use `terminal_exec` for visible terminal execution and `ssh_exec` for structured SSH execution; tool and approval card titles label `terminal_exec` as terminal execution. `agent_runtime` tests and `ai_chat_view` checks passed on 2026-07-02. | Run manual app smoke for visible terminal execution. |
 | Phase 3d Redis canonical command tool | Done | `0573668 feat(onetcli_runtime): canonicalize redis command tool` made `redis.command` the canonical `onetcli_runtime` Redis tool id. It initially kept `redis.execute_command` as a runtime alias, but that compatibility path was later removed by Phase 3i. Red/green Redis tests, `cargo check -p onetcli_runtime`, and `git diff --check` passed on 2026-07-03. | Add read-oriented Redis convenience tools such as `redis.keys`, `redis.get`, and `redis.set` only when their schemas and permission/risk contracts are explicit. |
 | Phase 3e Redis convenience tools | Done | `0623ec8 feat(onetcli_runtime): add redis convenience tools` adds canonical `redis.keys`, `redis.get`, and `redis.set` to `onetcli_runtime`, keeps `redis.keys/get` read-only, requires write permission for `redis.set`, and splits Redis runtime implementation into submodules under 300 lines each. Red/green Redis tests, `cargo test -p onetcli_runtime`, `cargo check -p onetcli_runtime`, and `git diff --check` passed on 2026-07-03. | Consider Public MCP convenience Redis tools only after deciding whether external clients should get the same high-level commands or only the generic `redis.command`. |
@@ -93,6 +94,9 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 4f Public MCP app resource pool | Done | `f6611e2 feat(public_mcp): build app resource pool` builds a saved-connection `ResourcePool` from the real app `ConnectionRepository`, attaches it to the merged `ToolRuntimeMcpProvider`, maps saved connection ids/names/host aliases to runtime targets, and proves a DB tool can be called through a host alias. `cargo test -p main public_mcp_runtime::tool_registry`, `cargo test -p public_mcp --test tool_runtime_target_adapter`, `tool_runtime_adapter`, `redis_tools`, `redis_convenience_tools`, `remote_ops`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Extend app resource pools to active terminal sessions and active Redis connection snapshots, not only saved connections. |
 | Phase 4g Agent approval for Public MCP runtime tools | Done | `62e696a fix(agent): require approval for public mcp runtime tools` makes the Public MCP -> Agent adapter derive Agent risk from MCP annotations, so destructive/open-world runtime tools such as `ssh.exec` and `terminal.exec` produce Agent approval requests in Auto mode. After the user approves, the adapter calls the underlying Public MCP/runtime tool with an internal approved context instead of letting the external MCP permission mode silently deny the already-approved Agent call. `cargo test -p public_mcp --test agent_runtime_adapter`, `cargo test -p public_mcp agent_runtime_adapter`, `cargo test -p public_mcp --test tool_runtime_adapter`, `cargo test -p agent_runtime high_risk`, `cargo test -p public_mcp --test protocol remote_exec`, `cargo test -p main agent_runtime_tool_registry`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Run manual UI smoke that `ssh_exec` / `terminal_exec` show confirmation cards and continue after approval. |
 | Phase 4h Live terminal target resolution | Done | `d1709b4 fix(public_mcp): resolve live terminal targets` changes `ToolRuntimeMcpProvider` from a startup resource-pool snapshot to a call-time `ResourcePoolProvider`, adds active terminal sessions to the real app resource pool, marks `ssh.exec`, `ssh.session_diagnostics`, and `terminal.exec` as `ResourceKind::Terminal` targets, and resolves saved SSH ids, host/IP aliases, and prompt-like strings such as `root@zn-54:~` through linked active terminal sessions. Agent `ResourceContext` now carries aliases and the Agent runtime adapter uses `ToolTargetSpec` for kind-aware resolution. `cargo test -p public_mcp --test tool_runtime_target_adapter`, `cargo test -p agent_runtime --test tool_runtime_target_adapter`, `cargo test -p main public_mcp_runtime::tool_registry`, `cargo test -p tool_runtime`, `cargo test -p ai_chat_view resource_builder`, `cargo test -p public_mcp --test tool_runtime_adapter`, `cargo test -p public_mcp --test remote_ops`, `cargo test -p agent_runtime --test tool_runtime_adapter`, `cargo test -p public_mcp --test agent_runtime_adapter`, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Extend the same dynamic resource-pool provider pattern to active Redis snapshots and any future app-local resources. |
+| Phase 4h follow-up Terminal capability-aware targets | Done | `6bcfc3a feat(tools): add capability-aware resource targets` makes Public MCP terminal sessions expose actual registered execution capabilities into `ResourcePool`; `terminal.exec` requires `ResourceCapability::TerminalExec`, while `ssh.exec` requires `ResourceCapability::RemoteExec`. Follow-up root cause on 2026-07-03: `TerminalView` registered the Public MCP session while SSH `backend`/`external_input_handle()` was still unavailable, and refresh only updated the snapshot, so active terminal resources could lack `TerminalExec`. `crates/terminal_view/src/public_mcp.rs` now keeps a shared input-handle slot and registers `TerminalExecSessionHandle` during refresh when the handle appears. Focused red/green tests in `tool_runtime`, `public_mcp`, `terminal_view`, and `main` passed on 2026-07-03. | Run manual visible-terminal smoke with `terminal.exec` and confirm the command appears in the active terminal pane. |
+| Phase 4i Redis target resources | Done | `6bcfc3a feat(tools): add capability-aware resource targets` makes Public MCP Redis tools and `onetcli_runtime` Redis tools declare `ResourceKind::Redis` targets. The app resource-pool provider adds active Redis connection ids from `GlobalRedisState` and merges them with saved Redis resources instead of duplicating ids. Focused red/green tests cover Public MCP Redis target resolution, active Redis resources, and saved Redis runtime target specs. | Keep Redis target behavior canonical-only through `target`; add future Redis capabilities only as canonical tools. |
+| Phase 4j Saved connection capability targets | Done | `6bcfc3a feat(tools): add capability-aware resource targets` makes saved DB, SSH/SFTP, Redis, Mongo, Serial, and other connection resources carry saved-connection capabilities in both Agent `ResourceContext` and the Public MCP app `ResourcePool`. DB runtime tools target `DatabaseQuery` / `DatabaseExecute`; SFTP tools target `List`, `ReadFile`, or `WriteFile`; `connections.show` and `connections.test` target `ManageConnection`; `connections.open_session` targets `OpenSession`. This avoids cross-resource alias collisions when DB, Redis, SSH, and active terminal resources share the same host/IP. Focused red/green tests cover DB/SFTP/connections target specs, Agent capability conversion, AI resource builder capabilities, and app resource-pool capabilities. | Continue applying capability target specs to any remaining tool families that take a resource target. |
 | Phase 4 Public MCP runtime permission policy | Done | `PermissionMode` now maps to `tool_runtime::PermissionPolicy` for runtime-backed MCP tools. `Allow` maps to Auto, so high-risk/destructive/open-world tools such as `ssh.exec`, `terminal.exec`, and generic Redis command execution still require approval. Public MCP and app runtime tests passed on 2026-07-02. | Migrate settings/UI terminology from MCP permission mode to unified permission profile. |
 | Phase 4 Public MCP settings profile wording | Done | `McpPermissionMode` keeps old persisted values but exposes profile ids `safe/confirm/auto`; Public MCP runtime config carries `permission_profile`; settings UI labels now show Safe / Confirm / Auto. Core settings and app runtime tests passed on 2026-07-02. | Later storage migration can replace `permission_mode` only when a broader settings migration is planned. |
 | Phase 5a Resource Pool UI wording/filtering | Done | `6010dad7 feat(ai_chat): add resource pool display model`, `e8985154 feat(ai_chat): rename context selector to resource pool`, `d7b82ab0 feat(ai_chat): filter resource pool by type`, `84d8fe65 test(ai_chat): document resource pool default target semantics`, `ad195aab docs: track resource pool ui checkpoint` | Keep wording and default-target semantics while wiring broader catalogs. |
@@ -103,11 +107,11 @@ Blocked     Work cannot continue without a product or technical decision.
 
 ### Active Checkpoint
 
-Current checkpoint: Phase 3c manual terminal-exec smoke, Agent approval smoke, and remaining tool-runtime migration.
+Current checkpoint: `terminal.exec` PTY stream output capture, manual terminal-exec smoke, Agent approval smoke, and remaining tool-runtime migration.
 
 Purpose:
 
-1. Verify `terminal.exec` writes into the visible terminal pane with real app behavior.
+1. Verify `terminal.exec` writes into the visible terminal pane with real app behavior and returns non-empty result output for long scrolling commands.
 2. Verify `ssh_exec` and `terminal_exec` show Agent confirmation cards before high-risk
    execution and continue after approval.
 3. Run manual resource-pool smoke for source presets.
@@ -121,75 +125,98 @@ Purpose:
 Last completed checkpoint:
 
 ```text
-d1709b4 fix(public_mcp): resolve live terminal targets
+6bcfc3a feat(tools): add capability-aware resource targets
 ```
 
 Last checkpoint verification run:
 
 ```bash
+rtk cargo fmt --check
 rtk cargo test -p public_mcp --test tool_runtime_target_adapter
 rtk cargo test -p agent_runtime --test tool_runtime_target_adapter
+rtk cargo test -p public_mcp --test registry
+rtk cargo test -p terminal_view public_mcp
+rtk cargo test -p public_mcp --test terminal_exec
+rtk cargo test -p main public_mcp_runtime::resource_pool::tests
 rtk cargo test -p main public_mcp_runtime::tool_registry
-rtk cargo test -p tool_runtime
+rtk cargo test -p tool_runtime --test resource_pool
+rtk cargo test -p public_mcp --test redis_tools
+rtk cargo test -p public_mcp --test redis_convenience_tools
+rtk cargo test -p onetcli_runtime --test redis_tools
+rtk cargo test -p onetcli_runtime --test database_tools
+rtk cargo test -p onetcli_runtime sftp_tools::tests
+rtk cargo test -p onetcli_runtime connections::tests
+rtk cargo test -p agent_runtime resource::tests
 rtk cargo test -p ai_chat_view resource_builder
-rtk cargo test -p public_mcp --test tool_runtime_adapter
-rtk cargo test -p public_mcp --test remote_ops
-rtk cargo test -p agent_runtime --test tool_runtime_adapter
-rtk cargo test -p public_mcp --test agent_runtime_adapter
-rtk cargo check -p public_mcp
+rtk cargo check -p tool_runtime -p public_mcp -p agent_runtime -p ai_chat_view -p onetcli_runtime
 rtk cargo check -p main
 rtk git diff --check
 ```
 
-Result: all commands exited 0. `cargo check -p main` still reports the existing
+Result: all commands exited 0. `cargo check` still reports the existing
 `block v0.1.6` future-incompat warning, which can remain.
 
 Current product decision:
 
 1. `ssh.exec` remains the structured non-interactive SSH command tool.
 2. `terminal.exec` is the new live terminal-surface tool for “像在终端里输入一样执行”.
-3. 已迁移工具不再保留旧工具名或旧 alias；旧名称应直接失败，而不是静默转发。
-4. `redis.command` is the canonical Redis command tool in `onetcli_runtime` and
+3. `terminal.exec` result output must be captured from the SSH PTY byte stream in
+   `terminal::SshBackend`, while the same bytes continue to feed terminal rendering.
+   UI visible text, scrollback, or grid diff can be used for display-only features, but
+   must not be the primary tool-result capture mechanism.
+4. The synchronous terminal execution bridge must not block the async runtime thread
+   that drives SSH backend tasks. Runtime tool entry points should offload this bridge
+   with `tokio::task::spawn_blocking` or an equivalent blocking boundary.
+5. Without shell integration, `terminal.exec` fallback completion must wait for prompt
+   return or timeout. A short quiet period in the output stream is not a completion
+   signal and can truncate long outputs.
+6. Command echo stripping must tolerate terminal line wraps in echoed input. Do not rely
+   on exact `output.find(command)` matching.
+7. `terminal_exec` output in `ai_chat_view` must not use the generic 2000-character
+   card data limit or JSON-string display path; render the structured `output` value as
+   multiline terminal text.
+8. 已迁移工具不再保留旧工具名或旧 alias；旧名称应直接失败，而不是静默转发。
+9. `redis.command` is the canonical Redis command tool in `onetcli_runtime` and
    Public MCP; `redis.execute_command` is no longer accepted.
-5. `redis.keys` and `redis.get` are read-only Redis tools in `onetcli_runtime` and
+10. `redis.keys` and `redis.get` are read-only Redis tools in `onetcli_runtime` and
    Public MCP; `redis.set` is mutating and requires write permission / approval.
-6. Agent registry now includes runtime-backed Redis tools through the `tool_runtime`
+11. Agent registry now includes runtime-backed Redis tools through the `tool_runtime`
    bridge. The model-facing function names are normalized as `redis_command`,
    `redis_keys`, `redis_get`, and `redis_set`; the canonical runtime ids remain
    `redis.command`, `redis.keys`, `redis.get`, and `redis.set`.
-7. Agent registry now includes runtime-backed SFTP tools through the `tool_runtime`
+12. Agent registry now includes runtime-backed SFTP tools through the `tool_runtime`
    bridge. The model-facing function names are normalized as `sftp_list`,
    `sftp_read`, `sftp_write`, `sftp_stat`, `sftp_upload`, and `sftp_download`;
    the canonical runtime ids remain `sftp.list`, `sftp.read`, `sftp.write`,
    `sftp.stat`, `sftp.upload`, and `sftp.download`.
-8. Agent registry now includes runtime-backed DB write execution through the
+13. Agent registry now includes runtime-backed DB write execution through the
    `tool_runtime` bridge. The model-facing function name is `db_exec`; the canonical
    runtime id remains `db.exec`. Legacy `db_execute_sql` is no longer registered.
-9. Agent registry now includes runtime-backed DB metadata tools through the
+14. Agent registry now includes runtime-backed DB metadata tools through the
    `tool_runtime` bridge. The model-facing function names are `db_tables`,
    `db_describe_table`, and `db_sample_rows`; the canonical runtime ids remain
    `db.tables`, `db.describe_table`, and `db.sample_rows`.
-10. Runtime-backed Agent tool schemas expose `target` instead of provider-specific
+15. Runtime-backed Agent tool schemas expose `target` instead of provider-specific
    fields such as `connection`, `connection_id`, or `session_id`. The Agent adapter
    maps `target` or the default resource back to the provider field before calling
    the runtime handler, and rejects those provider fields if the model sends them.
-11. Runtime-backed Public MCP tool schemas expose `target` instead of provider-specific
+16. Runtime-backed Public MCP tool schemas expose `target` instead of provider-specific
    fields. The MCP adapter rejects provider fields from clients and maps `target`
    back to the provider field only inside the adapter while handlers are still being
    migrated.
-12. `ToolRuntimeMcpProvider` can carry a call-time `ResourcePoolProvider`. MCP
+17. `ToolRuntimeMcpProvider` can carry a call-time `ResourcePoolProvider`. MCP
    `target` is resolved by resource id, label, alias, tool-supported resource kind,
    and linked resources before being passed to the current runtime handler field.
    Ambiguous or unknown targets are rejected instead of guessed. Static snapshots
    are still supported only for tests and non-app adapters.
-13. The real Public MCP app registry now attaches a dynamic app resource pool to the
+18. The real Public MCP app registry now attaches a dynamic app resource pool to the
    merged runtime provider. Saved connection ids, names, `cloud_id`, host/path aliases,
    and active terminal sessions can resolve MCP `target`. For terminal tools, a saved
    SSH connection target such as `21` or `10.2.4.54` resolves through the linked active
    terminal session when that terminal resource has the saved connection id as an alias.
-14. Agent-facing prompts should expose canonical ids only after the relevant adapter can
+19. Agent-facing prompts should expose canonical ids only after the relevant adapter can
    route them safely.
-15. Agent-facing Public MCP adapter tools derive Agent approval risk from MCP
+20. Agent-facing Public MCP adapter tools derive Agent approval risk from MCP
    annotations. Destructive/open-world tools must pause for Agent confirmation in Auto
    mode; after approval, the adapter treats that specific Agent path as approved so
    external MCP permission settings do not cause a second silent denial.
@@ -197,7 +224,8 @@ Current product decision:
 Next recommended checkpoints:
 
 1. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
-   through `terminal.exec`.
+   through `terminal.exec` and the returned tool result includes scrolling command
+   output such as `systemctl list-units --type=service --state=running --no-pager`.
 2. Run manual Agent approval smoke for `ssh_exec` and `terminal_exec`.
 3. Run manual resource-pool smoke for source presets.
 4. Extend the real Public MCP app resource pool beyond saved connections and active
@@ -408,10 +436,10 @@ Semantics:
 2. `command` is inserted into the terminal input exactly as provided.
 3. `submit=true` appends Enter after the command. If `submit=false`, the command is only
    staged in the terminal input and the tool result reports that no command was run.
-4. `wait_for_output=true` waits for a bounded output snapshot or shell-integration
-   completion signal when available. If no reliable completion signal exists, the result
-   must say that the command was submitted and include the observed output delta, not
-   fabricate an exit code.
+4. `wait_for_output=true` waits for output from the SSH PTY byte stream and prefers a
+   shell-integration completion signal when available. If no reliable completion signal
+   exists, the result must include observed stream output after a quiet interval or return
+   partial output on timeout, and must not fabricate an exit code.
 5. Tool cards and audit records must clearly label the operation as "executed in
    terminal" and show the target terminal plus command.
 
@@ -425,6 +453,13 @@ Safety:
 
 This split avoids changing existing clients while supporting the requested terminal
 execution experience.
+
+Implementation constraint: `terminal.exec` output capture belongs in the terminal backend
+stream path. For SSH terminals, the same `ChannelEvent::Data/ExtendedData` bytes must feed
+both the terminal renderer and the tool capture. Do not implement the primary result capture
+by diffing `Terminal::visible_text()`, scrollback, or alacritty grid snapshots; those are
+rendered views and fail for long output, scrolling, clear-screen programs, progress redraws,
+and alternate-screen applications.
 
 ### ToolDescriptor
 
@@ -466,6 +501,7 @@ pub enum ToolOrigin {
 
 pub struct ToolTargetSpec {
     pub supported_kinds: Vec<ResourceKind>,
+    pub required_capabilities: Vec<ResourceCapability>,
     pub required: bool,
 }
 ```
@@ -491,6 +527,22 @@ pub struct ResourceRef {
     pub capabilities: Vec<ResourceCapability>,
     pub origin: ResourceOrigin,
 }
+
+pub enum ResourceCapability {
+    Query,
+    Execute,
+    DatabaseQuery,
+    DatabaseExecute,
+    ManageConnection,
+    ReadFile,
+    WriteFile,
+    ExecCommand,
+    TerminalExec,
+    RemoteExec,
+    List,
+    OpenSession,
+    Other(String),
+}
 ```
 
 Semantics:
@@ -499,8 +551,18 @@ Semantics:
 2. `resources` is the full set of resources the task may operate.
 3. `default_target` does not restrict access to the rest of the pool.
 4. Explicit target selection must match `id`, `label`, or `aliases`.
-5. If the requested target is ambiguous, Agent must ask the user.
-6. If the requested target is not in the resource pool, Agent must not guess or use hidden resources.
+5. Tool target resolution must match both `ToolTargetSpec.supported_kinds` and
+   `ToolTargetSpec.required_capabilities`.
+6. If the requested target is ambiguous, Agent must ask the user.
+7. If the requested target is not in the resource pool, Agent must not guess or use hidden resources.
+8. A visible terminal session is not automatically executable for every terminal tool:
+   `terminal.exec` requires `TerminalExec`; `ssh.exec` requires `RemoteExec`;
+   `ssh.session_diagnostics` only requires a visible Terminal resource.
+9. Saved connection resources must expose capabilities at creation time. DB resources
+   expose `ManageConnection`, `OpenSession`, `DatabaseQuery`, and
+   `DatabaseExecute`; SSH/SFTP resources expose `ManageConnection`,
+   `OpenSession`, `List`, `ReadFile`, and `WriteFile`; Redis resources expose
+   `ManageConnection`, `OpenSession`, and `Execute`.
 
 Resource matching behavior:
 

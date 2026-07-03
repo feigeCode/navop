@@ -6,12 +6,14 @@ use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, Ter
 use public_mcp::tools::{PublicMcpToolRegistry, terminal_exec_tool_registry};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tool_runtime::{ToolAdapter, ToolContext};
 
 #[derive(Clone)]
 struct FakeTerminalExec {
     id: String,
     inserted: Arc<Mutex<Vec<String>>>,
+    output_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<String>>>>,
 }
 
 impl FakeTerminalExec {
@@ -19,7 +21,13 @@ impl FakeTerminalExec {
         Self {
             id: id.to_string(),
             inserted: Arc::new(Mutex::new(Vec::new())),
+            output_rx: Arc::new(Mutex::new(None)),
         }
+    }
+
+    fn with_output_receiver(mut self, output_rx: std::sync::mpsc::Receiver<String>) -> Self {
+        self.output_rx = Arc::new(Mutex::new(Some(output_rx)));
+        self
     }
 
     fn inserted(&self) -> Vec<String> {
@@ -48,14 +56,25 @@ impl TerminalExecSessionHandle for FakeTerminalExec {
             .lock()
             .expect("inserted lock")
             .push(format!("{}{}", request.command, suffix));
+        let configured_rx = self.output_rx.lock().expect("output rx lock").take();
+        let output = configured_rx
+            .as_ref()
+            .and_then(|rx| rx.recv_timeout(Duration::from_millis(50)).ok());
+        let completion = if configured_rx.is_none() || output.is_some() {
+            TerminalExecCompletion::ObservedOutput
+        } else {
+            TerminalExecCompletion::TimedOut
+        };
         Ok(TerminalExecResult {
             target: request.target,
             command: request.command,
             submitted: request.submit,
-            completion: TerminalExecCompletion::ObservedOutput,
+            completion,
             exit_code: None,
-            output: "Filesystem Size Used Avail Use% Mounted on\n/dev/sda1 47G 42G 5G 90% /\n"
-                .to_string(),
+            output: output.unwrap_or_else(|| {
+                "Filesystem Size Used Avail Use% Mounted on\n/dev/sda1 47G 42G 5G 90% /\n"
+                    .to_string()
+            }),
             duration_ms: 12,
         })
     }
@@ -129,5 +148,42 @@ fn terminal_exec_inserts_command_into_terminal_and_returns_observed_output() {
             .as_str()
             .unwrap_or_default()
             .contains("/dev/sda1")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn terminal_exec_does_not_block_runtime_while_waiting_for_output() {
+    let registry = PublicMcpRegistry::default();
+    let (output_tx, output_rx) = std::sync::mpsc::channel();
+    let terminal = FakeTerminalExec::new("terminal-1").with_output_receiver(output_rx);
+    registry.register_terminal_exec(terminal);
+    let runtime_registry = terminal_exec_tool_registry(registry);
+
+    tokio::spawn(async move {
+        tokio::task::yield_now().await;
+        let _ = output_tx.send("stream output from pty".to_string());
+    });
+
+    let result = runtime_registry
+        .call(
+            "terminal.exec",
+            json!({
+                "target": "terminal-1",
+                "command": "df -h",
+                "submit": true,
+                "wait_for_output": true
+            }),
+            ToolContext::for_adapter(ToolAdapter::Mcp),
+        )
+        .await
+        .expect("terminal.exec should run");
+
+    assert_eq!(
+        json!("observed_output"),
+        result.structured_content["completion"]
+    );
+    assert_eq!(
+        json!("stream output from pty"),
+        result.structured_content["output"]
     );
 }

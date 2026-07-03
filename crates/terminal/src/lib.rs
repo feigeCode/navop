@@ -1,3 +1,4 @@
+pub(crate) mod exec_capture;
 pub mod history;
 pub mod osc;
 pub mod pty_backend;
@@ -11,4 +12,7 @@ pub use pty_backend::{GpuiEventProxy, TerminalEvent};
 pub use serial_backend::SerialBackend;
 pub use ssh_backend::SshBackend;
 pub use terminal::TerminalScrollProxy;
-pub use types::{LocalConfig, TerminalBackend, TerminalInputHandle, TerminalSize};
+pub use types::{
+    LocalConfig, TerminalBackend, TerminalExecCompletion, TerminalExecHandle, TerminalExecOutput,
+    TerminalExecRequest, TerminalInputHandle, TerminalSize,
+};

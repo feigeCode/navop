@@ -20,6 +20,7 @@ use crate::{ChatMessageUI, MessageVariant, parse_chart_json_block};
 
 /// 观测数据文本入卡片时的最大字符数(渲染时还会再截断展示)。
 const MAX_DATA_CHARS: usize = 2000;
+const MAX_TERMINAL_EXEC_DATA_CHARS: usize = 64_000;
 const DELEGATE_TASK_TOOL: &str = "delegate_task";
 
 /// Agent 对话转录状态。
@@ -365,7 +366,7 @@ impl AgentTranscript {
     fn apply_observation(&mut self, obs: &ToolObservation) {
         let call_id = obs.call_id.to_string();
         let summary = obs.summary.clone();
-        let data_text = truncate_chars(&obs.data.to_text(), MAX_DATA_CHARS);
+        let data_text = truncate_chars(&obs.data.to_text(), max_data_chars_for_tool(obs));
         let success = obs.success;
         let target_id = obs.resource_id.as_ref().map(|id| id.as_str().to_string());
         let target_label = target_id.as_ref().map(|id| {
@@ -612,6 +613,18 @@ fn history_subagent_summary(obs: &ToolObservation) -> String {
     } else {
         data_text
     }
+}
+
+fn max_data_chars_for_tool(obs: &ToolObservation) -> usize {
+    if is_terminal_exec_tool(obs.tool_name.as_str()) {
+        MAX_TERMINAL_EXEC_DATA_CHARS
+    } else {
+        MAX_DATA_CHARS
+    }
+}
+
+fn is_terminal_exec_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "terminal_exec" | "terminal.exec")
 }
 
 fn plan_to_card(plan: &Plan) -> PlanCardData {
@@ -931,6 +944,66 @@ mod tests {
         assert_eq!(data.summary, "echo: hi");
         assert_eq!(data.input_summary, "hi");
         assert!(data.input_json.contains("\"text\": \"hi\""));
+    }
+
+    #[test]
+    fn terminal_exec_observation_keeps_long_output_for_card_display() {
+        let mut tr = AgentTranscript::new();
+        let call = ToolCallId::from_string("call_terminal");
+        tr.apply(&RuntimeEvent::ToolCallStarted {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call.clone(),
+            tool_name: ToolName::new("terminal_exec"),
+            arguments: serde_json::json!({"command": "systemctl list-units"}),
+        });
+        let output = "x".repeat(MAX_DATA_CHARS + 100);
+        let obs = ToolObservation::success(
+            call,
+            ToolName::new("terminal_exec"),
+            "ok",
+            ObservationData::Json(serde_json::json!({ "output": output })),
+        );
+
+        tr.apply(&RuntimeEvent::ObservationAdded {
+            session_id: sid(),
+            turn_id: tid(),
+            observation: obs,
+        });
+
+        let data = ToolCardData::from_json(&tr.messages[0].content).unwrap();
+        assert!(
+            data.data_text.len() > MAX_DATA_CHARS,
+            "terminal output should not be truncated at the generic card limit"
+        );
+    }
+
+    #[test]
+    fn non_terminal_observation_still_uses_generic_card_limit() {
+        let mut tr = AgentTranscript::new();
+        let call = ToolCallId::from_string("call_echo");
+        tr.apply(&RuntimeEvent::ToolCallStarted {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: call.clone(),
+            tool_name: ToolName::new("echo"),
+            arguments: serde_json::json!({"text": "hi"}),
+        });
+        let obs = ToolObservation::success(
+            call,
+            ToolName::new("echo"),
+            "ok",
+            ObservationData::Text("x".repeat(MAX_DATA_CHARS + 100)),
+        );
+
+        tr.apply(&RuntimeEvent::ObservationAdded {
+            session_id: sid(),
+            turn_id: tid(),
+            observation: obs,
+        });
+
+        let data = ToolCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!(MAX_DATA_CHARS, data.data_text.len());
     }
 
     #[test]

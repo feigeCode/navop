@@ -49,8 +49,8 @@ use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 use crate::shell_integration::embedded_shell_integration_script;
 
 use crate::{
-    LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalEvent, TerminalInputHandle,
-    TerminalSize,
+    LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalEvent, TerminalExecHandle,
+    TerminalInputHandle, TerminalSize,
 };
 use ssh::{
     ChannelEvent, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
@@ -760,6 +760,30 @@ impl TerminalScrollProxy {
             let _ = tx.send(TerminalEvent::Wakeup);
         }
     }
+}
+
+fn visible_text_from_term(term: &Arc<FairMutex<Term<GpuiEventProxy>>>) -> String {
+    let term = term.lock();
+    let grid = term.grid();
+    let display_offset = grid.display_offset();
+    let mut lines = Vec::with_capacity(term.screen_lines());
+
+    for screen_line in 0..term.screen_lines() {
+        let grid_line = screen_line as i32 - display_offset as i32;
+        if grid_line < -(term.history_size() as i32) || grid_line >= term.screen_lines() as i32 {
+            lines.push(String::new());
+            continue;
+        }
+
+        let line = &grid[Line(grid_line)];
+        let text: String = line[..].iter().map(|cell| cell.c).collect();
+        lines.push(
+            text.trim_end_matches(|ch: char| ch == ' ' || ch == '\0')
+                .to_string(),
+        );
+    }
+
+    lines.join("\n")
 }
 
 impl Terminal {
@@ -1548,28 +1572,7 @@ impl Terminal {
 
     /// 获取当前可见屏幕文本，供外部只读集成使用。
     pub fn visible_text(&self) -> String {
-        let term = self.term.lock();
-        let grid = term.grid();
-        let display_offset = grid.display_offset();
-        let mut lines = Vec::with_capacity(term.screen_lines());
-
-        for screen_line in 0..term.screen_lines() {
-            let grid_line = screen_line as i32 - display_offset as i32;
-            if grid_line < -(term.history_size() as i32) || grid_line >= term.screen_lines() as i32
-            {
-                lines.push(String::new());
-                continue;
-            }
-
-            let line = &grid[Line(grid_line)];
-            let text: String = line[..].iter().map(|cell| cell.c).collect();
-            lines.push(
-                text.trim_end_matches(|c: char| c == ' ' || c == '\0')
-                    .to_string(),
-            );
-        }
-
-        lines.join("\n")
+        visible_text_from_term(&self.term)
     }
 
     pub fn history_suggestions(&self, prefix: &str, limit: usize) -> Vec<String> {
@@ -1637,6 +1640,12 @@ impl Terminal {
         self.backend
             .as_ref()
             .and_then(|backend| backend.input_handle())
+    }
+
+    pub fn external_exec_handle(&self) -> Option<TerminalExecHandle> {
+        self.backend
+            .as_ref()
+            .and_then(|backend| backend.exec_handle())
     }
 
     /// 调整终端大小

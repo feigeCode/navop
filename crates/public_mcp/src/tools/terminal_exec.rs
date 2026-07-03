@@ -66,8 +66,23 @@ impl ToolHandler for TerminalExecRuntime {
 
     fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
         let runtime = self.clone();
-        Box::pin(async move { runtime.exec(input) })
+        Box::pin(async move { run_terminal_exec(runtime, input).await })
     }
+}
+
+async fn run_terminal_exec(
+    runtime: TerminalExecRuntime,
+    input: Value,
+) -> Result<ToolResult, ToolError> {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return runtime.exec(input);
+    }
+
+    tokio::task::spawn_blocking(move || runtime.exec(input))
+        .await
+        .map_err(|error| ToolError::Failed {
+            message: format!("terminal.exec task failed: {error}"),
+        })?
 }
 
 fn exec_schema() -> Value {

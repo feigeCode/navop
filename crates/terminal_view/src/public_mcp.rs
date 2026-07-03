@@ -6,9 +6,15 @@ use public_mcp::registry::{
 use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, TerminalExecResult};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use terminal::TerminalInputHandle;
+use std::time::Duration;
 use terminal::terminal::{ConnectionState, Terminal, TerminalConnectionKind};
+use terminal::{
+    TerminalExecCompletion as CoreTerminalExecCompletion, TerminalExecHandle,
+    TerminalExecRequest as CoreTerminalExecRequest,
+};
 use uuid::Uuid;
+
+const DEFAULT_OUTPUT_TIMEOUT_MS: u64 = 60_000;
 
 pub struct GlobalPublicMcpRegistry(pub PublicMcpRegistry);
 
@@ -29,7 +35,7 @@ pub struct TerminalPublicMcpRegistration {
     session_id: String,
     state: Arc<Mutex<TerminalSessionSnapshot>>,
     registry: PublicMcpRegistry,
-    input: Arc<Mutex<Option<TerminalInputHandle>>>,
+    exec: Arc<Mutex<Option<TerminalExecHandle>>>,
     terminal_exec_registered: AtomicBool,
 }
 
@@ -41,14 +47,14 @@ impl TerminalPublicMcpRegistration {
     pub fn refresh(&self, terminal: &Terminal) {
         self.refresh_parts(
             snapshot_for_terminal(self.session_id.clone(), terminal),
-            terminal.external_input_handle(),
+            terminal.external_exec_handle(),
         );
     }
 
-    fn refresh_parts(&self, snapshot: TerminalSessionSnapshot, input: Option<TerminalInputHandle>) {
+    fn refresh_parts(&self, snapshot: TerminalSessionSnapshot, exec: Option<TerminalExecHandle>) {
         {
-            let mut input_slot = self.input.lock().expect("public MCP input lock poisoned");
-            *input_slot = input;
+            let mut exec_slot = self.exec.lock().expect("public MCP exec lock poisoned");
+            *exec_slot = exec;
         }
         let mut state = self.state.lock().expect("public MCP state lock poisoned");
         *state = snapshot;
@@ -57,18 +63,18 @@ impl TerminalPublicMcpRegistration {
     }
 
     fn ensure_terminal_exec_registered(&self) {
-        let has_input = self
-            .input
+        let has_exec = self
+            .exec
             .lock()
-            .expect("public MCP input lock poisoned")
+            .expect("public MCP exec lock poisoned")
             .is_some();
-        if !has_input || self.terminal_exec_registered.swap(true, Ordering::AcqRel) {
+        if !has_exec || self.terminal_exec_registered.swap(true, Ordering::AcqRel) {
             return;
         }
         self.registry
             .register_terminal_exec(ThreadSafeTerminalExecHandle {
                 state: self.state.clone(),
-                input: self.input.clone(),
+                exec: self.exec.clone(),
             });
     }
 
@@ -96,7 +102,7 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
     target_registry.register(ThreadSafeTerminalHandle {
         state: state.clone(),
     });
-    let input = Arc::new(Mutex::new(terminal.external_input_handle()));
+    let exec = Arc::new(Mutex::new(terminal.external_exec_handle()));
 
     // 注册结构化远程操作桥。remote ops 与 terminal handle 共享同一份 state，一次 refresh 同步两者。
     if let Some(session_manager) = terminal.ssh_session_manager() {
@@ -113,7 +119,7 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
         session_id,
         state,
         registry: target_registry,
-        input,
+        exec,
         terminal_exec_registered: AtomicBool::new(false),
     };
     registration.ensure_terminal_exec_registered();
@@ -135,7 +141,7 @@ impl TerminalSessionHandle for ThreadSafeTerminalHandle {
 
 struct ThreadSafeTerminalExecHandle {
     state: Arc<Mutex<TerminalSessionSnapshot>>,
-    input: Arc<Mutex<Option<TerminalInputHandle>>>,
+    exec: Arc<Mutex<Option<TerminalExecHandle>>>,
 }
 
 impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
@@ -147,26 +153,38 @@ impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
     }
 
     fn exec_in_terminal(&self, request: TerminalExecRequest) -> anyhow::Result<TerminalExecResult> {
-        let mut input = request.command.clone().into_bytes();
-        if request.submit {
-            input.push(b'\n');
-        }
-        let input_handle = self
-            .input
+        let exec_handle = self
+            .exec
             .lock()
-            .expect("public MCP input lock poisoned")
+            .expect("public MCP exec lock poisoned")
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("terminal input handle is not ready"))?;
-        input_handle.write(input);
+            .ok_or_else(|| anyhow::anyhow!("terminal exec handle is not ready"))?;
+        let core_result = exec_handle.exec(CoreTerminalExecRequest {
+            command: request.command.clone(),
+            submit: request.submit,
+            wait_for_output: request.wait_for_output,
+            timeout: Duration::from_millis(request.timeout_ms.unwrap_or(DEFAULT_OUTPUT_TIMEOUT_MS)),
+        })?;
         Ok(TerminalExecResult {
             target: request.target,
             command: request.command,
             submitted: request.submit,
-            completion: TerminalExecCompletion::SubmittedOnly,
-            exit_code: None,
-            output: String::new(),
-            duration_ms: 0,
+            completion: map_exec_completion(core_result.completion),
+            exit_code: core_result.exit_code,
+            output: core_result.output,
+            duration_ms: core_result.duration_ms,
         })
+    }
+}
+
+fn map_exec_completion(completion: CoreTerminalExecCompletion) -> TerminalExecCompletion {
+    match completion {
+        CoreTerminalExecCompletion::ObservedOutput => TerminalExecCompletion::ObservedOutput,
+        CoreTerminalExecCompletion::ShellIntegrationExit => {
+            TerminalExecCompletion::ShellIntegrationExit
+        }
+        CoreTerminalExecCompletion::SubmittedOnly => TerminalExecCompletion::SubmittedOnly,
+        CoreTerminalExecCompletion::TimedOut => TerminalExecCompletion::TimedOut,
     }
 }
 
@@ -233,15 +251,30 @@ mod tests {
         }
     }
 
+    fn fake_exec_handle(
+        requests: Arc<Mutex<Vec<CoreTerminalExecRequest>>>,
+        output: terminal::TerminalExecOutput,
+    ) -> TerminalExecHandle {
+        TerminalExecHandle::new(move |request| {
+            requests.lock().expect("requests lock").push(request);
+            Ok(output.clone())
+        })
+    }
+
     #[test]
-    fn terminal_exec_handle_writes_command_to_terminal_input() {
-        let written = Arc::new(Mutex::new(Vec::new()));
-        let sink = written.clone();
+    fn terminal_exec_handle_maps_request_to_backend_exec_handle() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
         let handle = ThreadSafeTerminalExecHandle {
             state: Arc::new(Mutex::new(snapshot(McpConnectionState::Connected))),
-            input: Arc::new(Mutex::new(Some(TerminalInputHandle::new(move |bytes| {
-                sink.lock().expect("written lock").push(bytes);
-            })))),
+            exec: Arc::new(Mutex::new(Some(fake_exec_handle(
+                requests.clone(),
+                terminal::TerminalExecOutput {
+                    completion: CoreTerminalExecCompletion::SubmittedOnly,
+                    exit_code: None,
+                    output: String::new(),
+                    duration_ms: 0,
+                },
+            )))),
         };
 
         let result = handle
@@ -249,19 +282,83 @@ mod tests {
                 target: "terminal-1".to_string(),
                 command: "df -h".to_string(),
                 submit: true,
-                wait_for_output: true,
+                wait_for_output: false,
                 timeout_ms: None,
             })
-            .expect("terminal exec should write input");
+            .expect("terminal exec should call backend exec handle");
 
-        assert_eq!(vec![b"df -h\n".to_vec()], *written.lock().unwrap());
+        let recorded = requests.lock().unwrap();
+        assert_eq!(1, recorded.len());
+        assert_eq!("df -h", recorded[0].command);
+        assert!(recorded[0].submit);
+        assert!(!recorded[0].wait_for_output);
+        assert_eq!(Duration::from_millis(60_000), recorded[0].timeout);
         assert_eq!(TerminalExecCompletion::SubmittedOnly, result.completion);
         assert_eq!(None, result.exit_code);
         assert!(result.output.is_empty());
     }
 
     #[test]
-    fn refresh_registers_terminal_exec_when_input_handle_appears_after_initial_registration() {
+    fn terminal_exec_handle_maps_backend_output_to_public_mcp_result() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let handle = ThreadSafeTerminalExecHandle {
+            state: Arc::new(Mutex::new(snapshot(McpConnectionState::Connected))),
+            exec: Arc::new(Mutex::new(Some(fake_exec_handle(
+                requests,
+                terminal::TerminalExecOutput {
+                    completion: CoreTerminalExecCompletion::ShellIntegrationExit,
+                    exit_code: Some(0),
+                    output: "ssh.service loaded active running".to_string(),
+                    duration_ms: 42,
+                },
+            )))),
+        };
+
+        let result = handle
+            .exec_in_terminal(TerminalExecRequest {
+                target: "terminal-1".to_string(),
+                command: "systemctl list-units --type=service".to_string(),
+                submit: true,
+                wait_for_output: true,
+                timeout_ms: Some(200),
+            })
+            .expect("terminal exec should return backend output");
+
+        assert_eq!(
+            TerminalExecCompletion::ShellIntegrationExit,
+            result.completion
+        );
+        assert_eq!(Some(0), result.exit_code);
+        assert_eq!("ssh.service loaded active running", result.output);
+        assert_eq!(42, result.duration_ms);
+    }
+
+    #[test]
+    fn terminal_exec_handle_fails_when_exec_handle_is_missing() {
+        let handle = ThreadSafeTerminalExecHandle {
+            state: Arc::new(Mutex::new(snapshot(McpConnectionState::Connected))),
+            exec: Arc::new(Mutex::new(None)),
+        };
+
+        let error = handle
+            .exec_in_terminal(TerminalExecRequest {
+                target: "terminal-1".to_string(),
+                command: "df -h".to_string(),
+                submit: true,
+                wait_for_output: true,
+                timeout_ms: Some(10),
+            })
+            .expect_err("missing exec handle should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("terminal exec handle is not ready")
+        );
+    }
+
+    #[test]
+    fn refresh_registers_terminal_exec_when_exec_handle_appears_after_initial_registration() {
         let registry = PublicMcpRegistry::default();
         let state = Arc::new(Mutex::new(snapshot(McpConnectionState::Connecting)));
         registry.register(ThreadSafeTerminalHandle {
@@ -272,17 +369,22 @@ mod tests {
             session_id: "terminal-1".to_string(),
             state,
             registry: registry.clone(),
-            input: Arc::new(Mutex::new(None)),
+            exec: Arc::new(Mutex::new(None)),
             terminal_exec_registered: std::sync::atomic::AtomicBool::new(false),
         };
-        let written = Arc::new(Mutex::new(Vec::new()));
-        let sink = written.clone();
+        let requests = Arc::new(Mutex::new(Vec::new()));
 
         registration.refresh_parts(
             snapshot(McpConnectionState::Connected),
-            Some(TerminalInputHandle::new(move |bytes| {
-                sink.lock().expect("written lock").push(bytes);
-            })),
+            Some(fake_exec_handle(
+                requests.clone(),
+                terminal::TerminalExecOutput {
+                    completion: CoreTerminalExecCompletion::SubmittedOnly,
+                    exit_code: None,
+                    output: String::new(),
+                    duration_ms: 0,
+                },
+            )),
         );
 
         let sessions = registry.list_sessions();
@@ -305,8 +407,8 @@ mod tests {
                     timeout_ms: None,
                 },
             )
-            .expect("terminal exec should use the input handle registered during refresh");
+            .expect("terminal exec should use the exec handle registered during refresh");
 
-        assert_eq!(vec![b"df -h\n".to_vec()], *written.lock().unwrap());
+        assert_eq!(1, requests.lock().unwrap().len());
     }
 }
