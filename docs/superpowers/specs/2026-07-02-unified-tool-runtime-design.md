@@ -78,6 +78,7 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 3c Agent/UI terminal exec selection | Done | Agent prompt tells the model to use `terminal_exec` for visible terminal execution and `ssh_exec` for structured SSH execution; tool and approval card titles label `terminal_exec` as terminal execution. `agent_runtime` tests and `ai_chat_view` checks passed on 2026-07-02. | Run manual app smoke for visible terminal execution. |
 | Phase 3d Redis canonical command tool | Done | `0573668 feat(onetcli_runtime): canonicalize redis command tool` makes `redis.command` the canonical `onetcli_runtime` Redis tool id and keeps `redis.execute_command` as a runtime alias. Red/green Redis tests, `cargo check -p onetcli_runtime`, and `git diff --check` passed on 2026-07-03. | Add read-oriented Redis convenience tools such as `redis.keys`, `redis.get`, and `redis.set` only when their schemas and permission/risk contracts are explicit. |
 | Phase 4 Public MCP app registry merge | Done | `main/src/public_mcp_runtime/tool_registry.rs` collects enabled `tool_runtime::ToolRegistry` values, merges them, and exposes one `ToolRuntimeMcpProvider`. Terminal toolset now exposes both `ssh.exec` and `terminal.exec` through the real app registry path. Public MCP runtime tests passed on 2026-07-02. | Continue replacing remaining Public MCP-specific permission settings with unified `PermissionPolicy`. |
+| Phase 4b Public MCP Redis canonical command tool | Done | `6c99c8e feat(public_mcp): canonicalize redis command tool` makes Public MCP Redis `tools/list` expose `redis.command` while `tools/call` still accepts `redis.execute_command` through a runtime alias. `public_mcp` Redis tests, main registry Redis test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Continue replacing remaining legacy MCP tool ids with canonical ids only when old clients keep a tested alias path. |
 | Phase 4 Public MCP runtime permission policy | Done | `PermissionMode` now maps to `tool_runtime::PermissionPolicy` for runtime-backed MCP tools. `Allow` maps to Auto, so high-risk/destructive/open-world tools such as `ssh.exec`, `terminal.exec`, and generic Redis command execution still require approval. Public MCP and app runtime tests passed on 2026-07-02. | Migrate settings/UI terminology from MCP permission mode to unified permission profile. |
 | Phase 4 Public MCP settings profile wording | Done | `McpPermissionMode` keeps old persisted values but exposes profile ids `safe/confirm/auto`; Public MCP runtime config carries `permission_profile`; settings UI labels now show Safe / Confirm / Auto. Core settings and app runtime tests passed on 2026-07-02. | Later storage migration can replace `permission_mode` only when a broader settings migration is planned. |
 | Phase 5a Resource Pool UI wording/filtering | Done | `6010dad7 feat(ai_chat): add resource pool display model`, `e8985154 feat(ai_chat): rename context selector to resource pool`, `d7b82ab0 feat(ai_chat): filter resource pool by type`, `84d8fe65 test(ai_chat): document resource pool default target semantics`, `ad195aab docs: track resource pool ui checkpoint` | Keep wording and default-target semantics while wiring broader catalogs. |
@@ -104,18 +105,20 @@ Purpose:
 Last completed checkpoint:
 
 ```text
-0573668 feat(onetcli_runtime): canonicalize redis command tool
+6c99c8e feat(public_mcp): canonicalize redis command tool
 ```
 
 Last checkpoint verification run:
 
 ```bash
-rtk cargo test -p onetcli_runtime --test redis_tools
-rtk cargo check -p onetcli_runtime
+rtk cargo test -p public_mcp --test redis_tools
+rtk cargo test -p main build_tool_registry_includes_redis_tools
+rtk cargo check -p public_mcp
+rtk cargo check -p main
 rtk git diff --check
 ```
 
-Result: all commands exited 0. `cargo check -p onetcli_runtime` still reports the
+Result: all commands exited 0. `cargo check -p main` still reports the
 existing `block v0.1.6` future-incompat warning, which can remain.
 
 Current product decision:
@@ -123,8 +126,8 @@ Current product decision:
 1. `ssh.exec` remains the structured non-interactive SSH command tool.
 2. `terminal.exec` is the new live terminal-surface tool for “像在终端里输入一样执行”.
 3. Existing tools and aliases remain available during migration.
-4. `redis.command` is the canonical Redis command tool in `onetcli_runtime`;
-   `redis.execute_command` is a compatibility alias.
+4. `redis.command` is the canonical Redis command tool in `onetcli_runtime` and
+   Public MCP; `redis.execute_command` is a compatibility alias.
 5. Agent-facing prompts should expose canonical ids only after the relevant adapter can
    route them safely.
 

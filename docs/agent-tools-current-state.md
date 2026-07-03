@@ -149,7 +149,8 @@ Public MCP 工具：
 | 工具名 | 说明 |
 |---|---|
 | `redis.list_connections` | 列出当前运行中 Redis connection |
-| `redis.execute_command` | 对运行中 Redis connection 执行一条 Redis command |
+| `redis.command` | 对运行中 Redis connection 执行一条 Redis command |
+| `redis.execute_command` | `redis.command` 的兼容 alias |
 
 CLI / function-calling 入口：
 
@@ -391,7 +392,7 @@ Agent 工具依赖 `ResourceContext` 来获取当前资源。
 
 ### 仍保留
 
-- Public MCP 仍保留原工具名和原工具集，CLI/tool runtime 已开始使用 canonical id 并保留 alias：
+- Public MCP / CLI tool runtime 已开始使用 canonical id，并为旧 Redis command 名称保留 alias：
   - `db.query`
   - `db.exec`
   - `sftp.write`
