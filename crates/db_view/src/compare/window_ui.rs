@@ -1,9 +1,10 @@
+use std::fmt::Display;
 use std::sync::Arc;
 
 use db::GlobalDbState;
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, Hsla, IntoElement, ParentElement, Styled, Window,
-    div, px,
+    div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, IndexPath, Sizable, StyledExt, WindowExt,
@@ -15,6 +16,7 @@ use gpui_component::{
     highlighter::Language,
     input::{Input, InputState},
     progress::Progress,
+    scroll::ScrollableElement,
     select::{SearchableVec, Select, SelectItem, SelectState},
     v_flex,
 };
@@ -32,6 +34,28 @@ pub(crate) enum CompareStep {
     SqlExecute,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SyncSqlExecutionLogEntry {
+    pub message: String,
+    pub is_error: bool,
+}
+
+impl SyncSqlExecutionLogEntry {
+    fn info(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            is_error: false,
+        }
+    }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            is_error: true,
+        }
+    }
+}
+
 impl CompareStep {
     #[cfg(test)]
     pub(crate) fn next(self) -> Option<Self> {
@@ -47,22 +71,6 @@ impl CompareStep {
             Self::Objects => None,
             Self::SqlPreview => Some(Self::Objects),
             Self::SqlExecute => Some(Self::SqlPreview),
-        }
-    }
-
-    fn index(self) -> usize {
-        match self {
-            Self::Objects => 0,
-            Self::SqlPreview => 1,
-            Self::SqlExecute => 2,
-        }
-    }
-
-    fn label(self) -> String {
-        match self {
-            Self::Objects => t!("Compare.step_objects").to_string(),
-            Self::SqlPreview => t!("Compare.step_sql_preview").to_string(),
-            Self::SqlExecute => t!("Compare.step_sql_execute").to_string(),
         }
     }
 }
@@ -282,67 +290,42 @@ pub(super) fn compare_progress_view(progress: &CompareProgress, cx: &App) -> imp
     col
 }
 
-pub(super) fn compare_stepper(current: CompareStep, cx: &App) -> impl IntoElement {
-    let steps = [
-        CompareStep::Objects,
-        CompareStep::SqlPreview,
-        CompareStep::SqlExecute,
-    ];
-    h_flex().gap_2().children(steps.into_iter().map(|step| {
-        let active = step == current;
-        let complete = step.index() < current.index();
-        let color = if active || complete {
-            cx.theme().primary
-        } else {
-            cx.theme().muted_foreground
-        };
-        h_flex()
-            .gap_1()
-            .items_center()
-            .text_sm()
-            .text_color(color)
-            .child(
-                div()
-                    .w(px(22.0))
-                    .h(px(22.0))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(color)
-                    .items_center()
-                    .justify_center()
-                    .child((step.index() + 1).to_string()),
-            )
-            .child(div().child(step.label()))
-    }))
-}
-
 pub(super) fn start_sync_sql_execution<T: 'static>(
     target: Option<CompareTargetScope>,
     sql: String,
     status: Entity<String>,
     is_executing: Entity<bool>,
+    execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
     window: &mut Window,
     cx: &mut Context<T>,
 ) {
     let Some(target) = target else {
-        set_status(
-            &status,
-            t!("Compare.sync_sql_compare_first").to_string(),
-            cx,
-        );
+        let message = t!("Compare.sync_sql_compare_first").to_string();
+        set_status(&status, message.clone(), cx);
+        append_sync_sql_execution_log(&execution_log, SyncSqlExecutionLogEntry::error(message), cx);
         return;
     };
     if sql.trim().is_empty() {
-        set_status(&status, t!("Compare.sync_sql_empty").to_string(), cx);
+        let message = t!("Compare.sync_sql_empty").to_string();
+        set_status(&status, message.clone(), cx);
+        append_sync_sql_execution_log(&execution_log, SyncSqlExecutionLogEntry::error(message), cx);
         return;
     }
 
     if contains_destructive_sync_sql(&sql) {
-        open_destructive_sync_sql_dialog(target, sql, status, is_executing, window, cx);
+        open_destructive_sync_sql_dialog(
+            target,
+            sql,
+            status,
+            is_executing,
+            execution_log,
+            window,
+            cx,
+        );
         return;
     }
 
-    execute_sync_sql_now(target, sql, status, is_executing, cx);
+    execute_sync_sql_now(target, sql, status, is_executing, execution_log, cx);
 }
 
 fn open_destructive_sync_sql_dialog<T: 'static>(
@@ -350,6 +333,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
     sql: String,
     status: Entity<String>,
     is_executing: Entity<bool>,
+    execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
     window: &mut Window,
     cx: &mut Context<T>,
 ) {
@@ -359,6 +343,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
         let sql = sql.clone();
         let status = status.clone();
         let is_executing = is_executing.clone();
+        let execution_log = execution_log.clone();
         let view = view.clone();
 
         dialog
@@ -382,8 +367,9 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
                 let sql = sql.clone();
                 let status = status.clone();
                 let is_executing = is_executing.clone();
+                let execution_log = execution_log.clone();
                 view.update(cx, |_, cx| {
-                    execute_sync_sql_now(target, sql, status, is_executing, cx);
+                    execute_sync_sql_now(target, sql, status, is_executing, execution_log, cx);
                 });
                 true
             })
@@ -395,6 +381,7 @@ fn execute_sync_sql_now<T: 'static>(
     sql: String,
     status: Entity<String>,
     is_executing: Entity<bool>,
+    execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
     cx: &mut Context<T>,
 ) {
     let db_state = Arc::new(cx.global::<GlobalDbState>().clone());
@@ -402,7 +389,13 @@ fn execute_sync_sql_now<T: 'static>(
         *executing = true;
         cx.notify();
     });
-    set_status(&status, t!("Compare.sync_sql_executing").to_string(), cx);
+    let executing_message = t!("Compare.sync_sql_executing").to_string();
+    set_status(&status, executing_message.clone(), cx);
+    append_sync_sql_execution_log(
+        &execution_log,
+        SyncSqlExecutionLogEntry::info(executing_message),
+        cx,
+    );
 
     cx.spawn(async move |_, cx: &mut AsyncApp| {
         let result = execute_sync_sql(target, sql, db_state, cx).await;
@@ -412,20 +405,87 @@ fn execute_sync_sql_now<T: 'static>(
                 cx.notify();
             });
             match result {
-                Ok(count) => set_status_app(
-                    &status,
-                    t!("Compare.sync_sql_executed", count = count).to_string(),
-                    cx,
-                ),
-                Err(error) => set_status_app(
-                    &status,
-                    t!("Compare.execution_failed", error = error.to_string()).to_string(),
-                    cx,
-                ),
+                Ok(count) => {
+                    let entry = sync_sql_execution_success_log_entry(count);
+                    set_status_app(&status, entry.message.clone(), cx);
+                    append_sync_sql_execution_log_app(&execution_log, entry, cx);
+                }
+                Err(error) => {
+                    let entry = sync_sql_execution_error_log_entry(error);
+                    set_status_app(&status, entry.message.clone(), cx);
+                    append_sync_sql_execution_log_app(&execution_log, entry, cx);
+                }
             }
         });
     })
     .detach();
+}
+
+pub(crate) fn sync_sql_execution_start_log_entries(sql: &str) -> Vec<SyncSqlExecutionLogEntry> {
+    vec![SyncSqlExecutionLogEntry::info(
+        t!(
+            "Compare.sync_sql_execution_ready",
+            count = sync_sql_statement_count(sql)
+        )
+        .to_string(),
+    )]
+}
+
+pub(crate) fn sync_sql_execution_success_log_entry(count: usize) -> SyncSqlExecutionLogEntry {
+    SyncSqlExecutionLogEntry::info(t!("Compare.sync_sql_executed", count = count).to_string())
+}
+
+pub(crate) fn sync_sql_execution_error_log_entry(error: impl Display) -> SyncSqlExecutionLogEntry {
+    SyncSqlExecutionLogEntry::error(
+        t!("Compare.execution_failed", error = error.to_string()).to_string(),
+    )
+}
+
+pub(super) fn reset_sync_sql_execution_log<T: 'static>(
+    execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
+    entries: Vec<SyncSqlExecutionLogEntry>,
+    cx: &mut Context<T>,
+) {
+    execution_log.update(cx, |log, cx| {
+        *log = entries;
+        cx.notify();
+    });
+}
+
+pub(super) fn clear_sync_sql_execution_log<T: 'static>(
+    execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
+    cx: &mut Context<T>,
+) {
+    reset_sync_sql_execution_log(execution_log, Vec::new(), cx);
+}
+
+fn append_sync_sql_execution_log<T: 'static>(
+    execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
+    entry: SyncSqlExecutionLogEntry,
+    cx: &mut Context<T>,
+) {
+    execution_log.update(cx, |log, cx| {
+        log.push(entry);
+        cx.notify();
+    });
+}
+
+fn append_sync_sql_execution_log_app(
+    execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
+    entry: SyncSqlExecutionLogEntry,
+    cx: &mut App,
+) {
+    execution_log.update(cx, |log, cx| {
+        log.push(entry);
+        cx.notify();
+    });
+}
+
+fn sync_sql_statement_count(sql: &str) -> usize {
+    sql.split(';')
+        .map(str::trim)
+        .filter(|statement| !statement.is_empty())
+        .count()
 }
 
 fn contains_destructive_sync_sql(sql: &str) -> bool {
@@ -566,6 +626,82 @@ pub(super) fn sql_editor_panel(
                 .border_color(cx.theme().border)
                 .rounded_md()
                 .child(Input::new(editor).size_full()),
+        )
+}
+
+pub(super) fn sync_sql_execution_log_panel(
+    execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
+    is_executing: bool,
+    cx: &App,
+) -> impl IntoElement {
+    let entries = execution_log.read(cx).clone();
+
+    v_flex()
+        .size_full()
+        .min_h_0()
+        .gap_2()
+        .child(
+            h_flex()
+                .justify_between()
+                .items_center()
+                .child(section_title(
+                    t!("Compare.sync_sql_execution_log").to_string(),
+                ))
+                .when(is_executing, |this| {
+                    this.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("Compare.sync_sql_executing").to_string()),
+                    )
+                }),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .border_1()
+                .border_color(cx.theme().border)
+                .rounded_md()
+                .bg(cx.theme().background)
+                .overflow_y_scrollbar()
+                .child(
+                    v_flex().p_2().gap_1().children(
+                        entries
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, entry)| sync_sql_execution_log_row(index, entry, cx)),
+                    ),
+                ),
+        )
+}
+
+fn sync_sql_execution_log_row(
+    index: usize,
+    entry: SyncSqlExecutionLogEntry,
+    cx: &App,
+) -> impl IntoElement {
+    h_flex()
+        .w_full()
+        .items_start()
+        .gap_2()
+        .text_xs()
+        .child(
+            div()
+                .w(px(36.0))
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("{:>3}", index + 1)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_color(if entry.is_error {
+                    cx.theme().danger
+                } else {
+                    cx.theme().foreground
+                })
+                .child(entry.message),
         )
 }
 

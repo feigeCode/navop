@@ -3015,6 +3015,14 @@ Compare:
     en: Sync SQL
     zh-CN: 同步 SQL
     zh-HK: 同步 SQL
+  sync_sql_execution_log:
+    en: SQL Execution Log
+    zh-CN: SQL 执行日志
+    zh-HK: SQL 執行日誌
+  sync_sql_execution_ready:
+    en: "Ready to execute %{count} SQL statement(s)"
+    zh-CN: "准备执行 %{count} 条 SQL 语句"
+    zh-HK: "準備執行 %{count} 條 SQL 語句"
   sync_sql_placeholder:
     en: Selected sync statements will be generated here after compare finishes. You can edit them before executing.
     zh-CN: 比较完成后,选中的同步语句将在此生成,可手动编辑后执行

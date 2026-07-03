@@ -993,11 +993,20 @@ fn append_er_diagram_item(items: &mut Vec<ContextMenuItem>, node_id: &str, node_
 }
 
 fn append_compare_items(items: &mut Vec<ContextMenuItem>, node_id: &str, node_type: DbNodeType) {
-    // 数据比较：仅对表显示
-    if matches!(node_type, DbNodeType::Table) {
-        if !items.is_empty() {
-            items.push(ContextMenuItem::separator());
-        }
+    let can_compare_data = matches!(
+        node_type,
+        DbNodeType::Database | DbNodeType::Schema | DbNodeType::Table
+    );
+    let can_compare_schema = matches!(node_type, DbNodeType::Database | DbNodeType::Schema);
+    if !(can_compare_data || can_compare_schema) {
+        return;
+    }
+
+    if !items.is_empty() && !matches!(items.last(), Some(ContextMenuItem::Separator)) {
+        items.push(ContextMenuItem::separator());
+    }
+
+    if can_compare_data {
         items.push(ContextMenuItem::item(
             "数据比较",
             DbTreeViewEvent::CompareData {
@@ -1006,11 +1015,7 @@ fn append_compare_items(items: &mut Vec<ContextMenuItem>, node_id: &str, node_ty
         ));
     }
 
-    // 结构比较：对数据库和 Schema 显示
-    if matches!(node_type, DbNodeType::Database | DbNodeType::Schema) {
-        if items.is_empty() || !matches!(items.last(), Some(ContextMenuItem::Separator)) {
-            items.push(ContextMenuItem::separator());
-        }
+    if can_compare_schema {
         items.push(ContextMenuItem::item(
             "结构比较",
             DbTreeViewEvent::CompareSchema {
@@ -1707,7 +1712,13 @@ driver:
 
         let mut database_items = Vec::new();
         append_compare_items(&mut database_items, "database-1", DbNodeType::Database);
+        assert!(has_label(&database_items, "数据比较"));
         assert!(has_label(&database_items, "结构比较"));
+
+        let mut schema_items = Vec::new();
+        append_compare_items(&mut schema_items, "schema-1", DbNodeType::Schema);
+        assert!(has_label(&schema_items, "数据比较"));
+        assert!(has_label(&schema_items, "结构比较"));
     }
 
     #[test]

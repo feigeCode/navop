@@ -27,9 +27,11 @@ use crate::compare::target_picker::{
 };
 use crate::compare::window_params::{SchemaCompareSelection, schema_compare_params};
 use crate::compare::window_ui::{
-    CompareStep, ConnectionSelectItem, close_button, compare_stepper, connection_select_state,
-    ignore_identifier_case_option, register_connection_for_compare, selected_connection_id,
+    CompareStep, ConnectionSelectItem, SyncSqlExecutionLogEntry, clear_sync_sql_execution_log,
+    close_button, connection_select_state, ignore_identifier_case_option,
+    register_connection_for_compare, reset_sync_sql_execution_log, selected_connection_id,
     sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
+    sync_sql_execution_log_panel, sync_sql_execution_start_log_entries,
 };
 use crate::compare::{
     CompareProgress, CompareTargetScope, SchemaCompareParams, execute_schema_compare,
@@ -61,6 +63,7 @@ pub struct SchemaCompareWindow {
     pub(super) selected_statement_ids: Entity<HashSet<String>>,
     pub(super) sync_statement_list: SyncStatementListState,
     pub(super) sync_sql_editor: Entity<InputState>,
+    pub(super) execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
     pub(super) progress: Entity<Option<CompareProgress>>,
     compare_target: Entity<Option<CompareTargetScope>>,
     pub(super) status: Entity<String>,
@@ -134,6 +137,7 @@ impl SchemaCompareWindow {
                 sync_plan: cx.new(|_| None),
                 selected_statement_ids,
                 sync_statement_list,
+                execution_log: cx.new(|_| Vec::new()),
                 progress: cx.new(|_| None),
                 compare_target: cx.new(|_| None),
                 status: cx.new(|_| t!("Compare.ready").to_string()),
@@ -192,6 +196,7 @@ impl SchemaCompareWindow {
             .is_empty()
             {
                 this.load_source_databases(cx);
+                this.load_source_schemas(cx);
             }
             if !selected_connection_id(
                 &this.target_connection_select,
@@ -202,6 +207,7 @@ impl SchemaCompareWindow {
             .is_empty()
             {
                 this.load_target_databases(cx);
+                this.load_target_schemas(cx);
             }
         });
         view
@@ -224,6 +230,7 @@ impl SchemaCompareWindow {
             }
         };
         let compare_target = CompareTargetScope::from_schema_params(&params);
+        clear_sync_sql_execution_log(&self.execution_log, cx);
         register_connection_for_compare(&params.source_connection_id, cx);
         register_connection_for_compare(&params.target_connection_id, cx);
         let target_connection_id = params.target_connection_id.clone();
@@ -369,6 +376,7 @@ impl SchemaCompareWindow {
             *slot = None;
             cx.notify();
         });
+        clear_sync_sql_execution_log(&self.execution_log, cx);
         self.current_step = CompareStep::Objects;
         self.set_status(t!("Compare.swapped_source_target").to_string(), cx);
     }
@@ -407,6 +415,7 @@ impl SchemaCompareWindow {
             self.editor_sql(cx),
             self.status.clone(),
             self.is_executing.clone(),
+            self.execution_log.clone(),
             window,
             cx,
         );
@@ -421,6 +430,11 @@ impl SchemaCompareWindow {
 
     fn go_execute_step(&mut self, cx: &mut Context<Self>) {
         if self.current_step == CompareStep::SqlPreview {
+            reset_sync_sql_execution_log(
+                &self.execution_log,
+                sync_sql_execution_start_log_entries(&self.editor_sql(cx)),
+                cx,
+            );
             self.current_step = CompareStep::SqlExecute;
             cx.notify();
         }
@@ -541,7 +555,6 @@ impl Render for SchemaCompareWindow {
                     .font_semibold()
                     .child(t!("Compare.schema_compare").to_string()),
             )
-            .child(compare_stepper(self.current_step, cx))
             .child(
                 v_flex()
                     .flex_1()
@@ -554,27 +567,34 @@ impl Render for SchemaCompareWindow {
                                 .min_h_0()
                                 .gap_3()
                                 .child(
+                                    h_flex().justify_center().child(
+                                        Button::new("swap-schema-compare-source-target")
+                                            .icon(IconName::Replace)
+                                            .tooltip(t!("Compare.swap_source_target").to_string())
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.swap_source_target(window, cx);
+                                            })),
+                                    ),
+                                )
+                                .child(
                                     h_flex()
                                         .flex_1()
                                         .min_h_0()
                                         .gap_4()
-                                        .child(div().flex_1().child(self.render_source(cx)))
                                         .child(
-                                            div().pt_10().child(
-                                                Button::new("swap-schema-compare-source-target")
-                                                    .icon(IconName::Replace)
-                                                    .tooltip(
-                                                        t!("Compare.swap_source_target")
-                                                            .to_string(),
-                                                    )
-                                                    .on_click(cx.listener(
-                                                        |this, _, window, cx| {
-                                                            this.swap_source_target(window, cx);
-                                                        },
-                                                    )),
-                                            ),
+                                            div()
+                                                .flex_1()
+                                                .h_full()
+                                                .min_h_0()
+                                                .child(self.render_source(cx)),
                                         )
-                                        .child(div().flex_1().child(self.render_target(cx))),
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .h_full()
+                                                .min_h_0()
+                                                .child(self.render_target(cx)),
+                                        ),
                                 )
                                 .child(ignore_identifier_case_option(
                                     "schema-compare-ignore-identifier-case",
@@ -583,7 +603,7 @@ impl Render for SchemaCompareWindow {
                                 )),
                         )
                     })
-                    .when(self.current_step != CompareStep::Objects, |this| {
+                    .when(self.current_step == CompareStep::SqlPreview, |this| {
                         this.child(
                             h_flex()
                                 .flex_1()
@@ -603,6 +623,13 @@ impl Render for SchemaCompareWindow {
                                     cx,
                                 ))),
                         )
+                    })
+                    .when(self.current_step == CompareStep::SqlExecute, |this| {
+                        this.child(sync_sql_execution_log_panel(
+                            &self.execution_log,
+                            is_executing,
+                            cx,
+                        ))
                     }),
             )
             .child(

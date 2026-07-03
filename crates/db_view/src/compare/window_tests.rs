@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use db::compare::{SyncPlan, SyncPlanSummary, SyncStatement, SyncStatementKind};
 use db::{DbNode, DbNodeType};
 use one_core::storage::DatabaseType;
@@ -8,7 +10,10 @@ use crate::compare::window_params::{
     DataCompareSelection, SchemaCompareSelection, data_compare_params, schema_compare_params,
     split_columns,
 };
-use crate::compare::window_ui::CompareStep;
+use crate::compare::window_ui::{
+    CompareStep, sync_sql_execution_error_log_entry, sync_sql_execution_start_log_entries,
+    sync_sql_execution_success_log_entry,
+};
 use crate::compare::{DataCompareWindow, SchemaCompareWindow};
 
 #[test]
@@ -25,6 +30,35 @@ fn data_compare_popup_title_uses_source_table() {
         DataCompareWindow::popup_title_for(&node),
         t!("Compare.data_compare_title", name = "users").to_string()
     );
+}
+
+#[test]
+fn data_compare_table_node_defaults_to_selected_table() {
+    let node = DbNode::new(
+        "table-1",
+        "users",
+        DbNodeType::Table,
+        "conn-1".to_string(),
+        DatabaseType::PostgreSQL,
+    );
+
+    assert_eq!(
+        DataCompareWindow::initial_selected_tables_for_node(&node),
+        HashSet::from(["users".to_string()])
+    );
+}
+
+#[test]
+fn data_compare_database_node_does_not_fake_table_selection() {
+    let node = DbNode::new(
+        "database-1",
+        "app",
+        DbNodeType::Database,
+        "conn-1".to_string(),
+        DatabaseType::PostgreSQL,
+    );
+
+    assert!(DataCompareWindow::initial_selected_tables_for_node(&node).is_empty());
 }
 
 #[test]
@@ -193,6 +227,24 @@ fn compare_steps_follow_object_preview_execute_order() {
         Some(CompareStep::Objects)
     );
     assert_eq!(CompareStep::Objects.previous(), None);
+}
+
+#[test]
+fn sync_sql_execution_log_entries_describe_start_success_and_failure() {
+    let start_entries = sync_sql_execution_start_log_entries(
+        "INSERT INTO users (id) VALUES (1);\n\nUPDATE users SET name = 'A';",
+    );
+    assert_eq!(1, start_entries.len());
+    assert!(!start_entries[0].is_error);
+    assert!(start_entries[0].message.contains('2'));
+
+    let success = sync_sql_execution_success_log_entry(3);
+    assert!(!success.is_error);
+    assert!(success.message.contains('3'));
+
+    let failure = sync_sql_execution_error_log_entry("permission denied");
+    assert!(failure.is_error);
+    assert!(failure.message.contains("permission denied"));
 }
 
 #[test]
