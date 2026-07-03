@@ -227,6 +227,8 @@ Agent registry 构建入口：
 - Redis canonical runtime 工具也会通过 Agent bridge 暴露，模型侧 function 名会归一化成
   `redis_command`、`redis_keys`、`redis_get`、`redis_set`。
 - `redis.execute_command` 是 `redis.command` 的 runtime alias，不作为单独 Agent 工具暴露。
+- SFTP canonical runtime 工具也会通过 Agent bridge 暴露，模型侧 function 名会归一化成
+  `sftp_list`、`sftp_read`、`sftp_write`、`sftp_stat`、`sftp_upload`、`sftp_download`。
 
 ### 3.2 DB 原生 Agent 工具
 
@@ -313,10 +315,13 @@ Agent registry 构建入口：
 位置：
 
 - `crates/onetcli_runtime/src/agent_ssh_tools/`
+- `crates/onetcli_runtime/src/sftp_tools.rs`
 
 注册入口：
 
 - `onetcli_runtime::agent_ssh_tools::register_agent_ssh_tools(repo, registry)`
+- `onetcli_runtime::sftp_tools::sftp_tool_registry(repo)` 通过
+  `agent_runtime::tools::tool_runtime_agent_tool_registry(...)` 桥接
 
 工具：
 
@@ -326,6 +331,12 @@ Agent registry 构建入口：
 | `ssh_read_file` | `Read` | 读取远程文件，返回 base64 内容。最大读取 1MB。 |
 | `ssh_file_stat` | `Read` | 查看远程路径 metadata。 |
 | `ssh_write_file` | `High` | 写远程文件。Auto 模式也会要求用户审批。 |
+| `sftp_list` | `Read` | Agent function-calling 名；canonical runtime id 是 `sftp.list`，列远程目录。 |
+| `sftp_read` | `Read` | Agent function-calling 名；canonical runtime id 是 `sftp.read`，读取远程文件内容。 |
+| `sftp_write` | `High` | Agent function-calling 名；canonical runtime id 是 `sftp.write`，写远程文件。 |
+| `sftp_stat` | `Read` | Agent function-calling 名；canonical runtime id 是 `sftp.stat`，查看远程路径 metadata。 |
+| `sftp_upload` | `High` | Agent function-calling 名；canonical runtime id 是 `sftp.upload`，上传本地文件或目录到远程路径。 |
+| `sftp_download` | `High` | Agent function-calling 名；canonical runtime id 是 `sftp.download`，下载远程文件或目录到本地路径。 |
 
 默认资源解析：
 
@@ -344,7 +355,9 @@ Agent registry 构建入口：
 
 - 当前没有实现 `ssh_execute_command` 原生 Agent 工具。
 - 原因是现有 `ssh.remote_exec` 面向活跃 terminal session，不是保存连接 profile。
-- 当前 SSH/SFTP 原生 Agent 工具只覆盖保存连接语义清楚的文件系统操作。
+- 当前 SSH/SFTP Agent 工具只覆盖保存连接语义清楚的文件系统操作。
+- 迁移期旧 `ssh_*` 文件工具与 runtime-backed `sftp_*` 文件工具并存；后续 prompt
+  和工具卡片应优先引导 canonical `sftp.*`，再逐步收敛旧名。
 
 ## 4. 审批机制
 
