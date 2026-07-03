@@ -33,10 +33,7 @@ fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContex
     assert!(names.contains(&"db_schema".to_string()));
     assert!(names.contains(&"db_execute_sql".to_string()));
     assert!(names.contains(&"db_list_tables".to_string()));
-    assert!(
-        !names.contains(&"db_exec".to_string()),
-        "Agent registry must not expose write-capable db.exec through runtime bridge in Phase 3a"
-    );
+    assert!(names.contains(&"db_exec".to_string()));
 
     let db_query = registry
         .get(&ToolName::new("db.query"))
@@ -52,6 +49,8 @@ fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContex
         serde_json::json!(["connection", "sql"]),
         spec.parameters["required"]
     );
+    assert_tool_risk(&registry, "db_execute_sql", RiskLevel::High);
+    assert_tool_risk(&registry, "db.exec", RiskLevel::High);
 }
 
 #[gpui::test]
