@@ -64,6 +64,30 @@ pub(super) fn clear_table_selection_list<T: 'static>(
     });
 }
 
+pub(super) fn replace_table_selection_list<T: 'static>(
+    list_state: &TableSelectionListState,
+    selected_tables: &Entity<HashSet<String>>,
+    tables: Vec<String>,
+    new_selected: HashSet<String>,
+    cx: &mut Context<T>,
+) {
+    selected_tables.update(cx, |selected, cx| {
+        *selected = new_selected;
+        cx.notify();
+    });
+    list_state.update(cx, |list, cx| {
+        list.delegate_mut().set_tables(tables);
+        cx.notify();
+    });
+}
+
+pub(super) fn table_selection_list_tables(
+    list_state: &TableSelectionListState,
+    cx: &App,
+) -> Vec<String> {
+    list_state.read(cx).delegate().tables().to_vec()
+}
+
 pub(super) fn ordered_selected_table_names<T>(
     list_state: &TableSelectionListState,
     selected_tables: &Entity<HashSet<String>>,
@@ -297,4 +321,70 @@ fn split_table_names(value: &str) -> Vec<String> {
         .filter(|table| !table.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use gpui::{AppContext, Context, Entity, IntoElement, Render, TestAppContext, Window, div};
+
+    use super::{TableSelectionListState, table_selection_list_state};
+
+    struct TableSelectionTestRoot {
+        list_state: TableSelectionListState,
+        selected_tables: Entity<HashSet<String>>,
+    }
+
+    impl Render for TableSelectionTestRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui::test]
+    fn replace_table_selection_list_keeps_swapped_tables_and_available_items(
+        cx: &mut TestAppContext,
+    ) {
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let selected_tables = cx.new(|_| HashSet::new());
+            TableSelectionTestRoot {
+                list_state: table_selection_list_state(selected_tables.clone(), window, cx),
+                selected_tables,
+            }
+        });
+
+        root.update_in(cx, |root, _, cx| {
+            super::replace_table_selection_list(
+                &root.list_state,
+                &root.selected_tables,
+                vec![
+                    "orders".to_string(),
+                    "users".to_string(),
+                    "audit_log".to_string(),
+                ],
+                HashSet::from(["orders".to_string(), "users".to_string()]),
+                cx,
+            );
+        });
+
+        let (tables, selected) = root.read_with(cx, |root, cx| {
+            (
+                root.list_state.read(cx).delegate().tables().to_vec(),
+                root.selected_tables.read(cx).clone(),
+            )
+        });
+        assert_eq!(
+            vec![
+                "orders".to_string(),
+                "users".to_string(),
+                "audit_log".to_string()
+            ],
+            tables
+        );
+        assert_eq!(
+            HashSet::from(["orders".to_string(), "users".to_string()]),
+            selected
+        );
+    }
 }

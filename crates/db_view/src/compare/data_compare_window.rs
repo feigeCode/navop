@@ -22,7 +22,8 @@ use crate::compare::sync_statement_picker::{
     selected_sync_sql_text_for_ids, sync_statement_list_state,
 };
 use crate::compare::table_picker::{
-    TableSelectionListState, ordered_selected_table_names, table_selection_list_state,
+    TableSelectionListState, ordered_selected_table_names, replace_table_selection_list,
+    table_selection_list_state, table_selection_list_tables,
 };
 use crate::compare::target_picker::{
     StringSelect, selected_string, set_connection_select, set_string_select, string_select_state,
@@ -369,6 +370,12 @@ impl DataCompareWindow {
     fn swap_source_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let source = self.source_selection(cx);
         let target = self.target_selection(cx);
+        let source_tables = source.tables.clone();
+        let target_tables = target.tables.clone();
+        let source_list_tables = table_selection_list_tables(&self.source_table_list, cx);
+        let target_list_tables = table_selection_list_tables(&self.target_table_list, cx);
+        let source_list_tables = table_items_or_selection(source_list_tables, &source_tables);
+        let target_list_tables = table_items_or_selection(target_list_tables, &target_tables);
 
         set_connection_select(
             &self.source_connection_select,
@@ -413,25 +420,31 @@ impl DataCompareWindow {
         set_string_select(
             &self.source_table_select,
             &self.source_table,
-            first_table_name(&target.tables),
+            first_table_name(&target_tables),
             window,
             cx,
         );
         set_string_select(
             &self.target_table_select,
             &self.target_table,
-            first_table_name(&source.tables),
+            first_table_name(&source_tables),
             window,
             cx,
         );
-        self.selected_source_tables.update(cx, |selected, cx| {
-            *selected = target.tables.iter().cloned().collect();
-            cx.notify();
-        });
-        self.selected_target_tables.update(cx, |selected, cx| {
-            *selected = source.tables.iter().cloned().collect();
-            cx.notify();
-        });
+        replace_table_selection_list(
+            &self.source_table_list,
+            &self.selected_source_tables,
+            target_list_tables,
+            target_tables.iter().cloned().collect(),
+            cx,
+        );
+        replace_table_selection_list(
+            &self.target_table_list,
+            &self.selected_target_tables,
+            source_list_tables,
+            source_tables.iter().cloned().collect(),
+            cx,
+        );
 
         self.result.update(cx, |slot, cx| {
             *slot = None;
@@ -604,6 +617,14 @@ impl DataCompareWindow {
 
 fn first_table_name(tables: &[String]) -> String {
     tables.first().cloned().unwrap_or_default()
+}
+
+fn table_items_or_selection(items: Vec<String>, selected: &[String]) -> Vec<String> {
+    if items.is_empty() {
+        selected.to_vec()
+    } else {
+        items
+    }
 }
 
 fn db_object_policy_for_source(source_node: &DbNode, cx: &mut App) -> DbObjectSelectorPolicy {

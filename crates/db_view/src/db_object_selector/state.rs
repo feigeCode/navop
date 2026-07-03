@@ -130,14 +130,35 @@ pub(crate) fn set_string_select<T>(
     });
     select.update(cx, |state, cx| {
         state.set_selected_value(&value, window, cx);
+        if !value.is_empty()
+            && !state
+                .selected_value()
+                .is_some_and(|selected| selected == &value)
+        {
+            state.set_items(SearchableVec::new(vec![value.clone()]), window, cx);
+            state.set_selected_index(Some(IndexPath::new(0)), window, cx);
+        }
     });
 }
 
 #[cfg(test)]
 mod tests {
     use db::DatabaseCapabilities;
+    use gpui::{AppContext, Context, Entity, IntoElement, Render, TestAppContext, Window, div};
+    use gpui_component::input::InputState;
 
-    use super::DbObjectSelectorPolicy;
+    use super::{DbObjectSelectorPolicy, StringSelect};
+
+    struct StringSelectTestRoot {
+        select: StringSelect,
+        fallback: Entity<InputState>,
+    }
+
+    impl Render for StringSelectTestRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
 
     #[test]
     fn schema_policy_uses_database_capabilities() {
@@ -194,5 +215,36 @@ mod tests {
                 DbObjectSelectorPolicy::default()
             )
         );
+    }
+
+    #[gpui::test]
+    fn set_string_select_keeps_missing_value_selectable(cx: &mut TestAppContext) {
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let fallback =
+                cx.new(|cx| InputState::new(window, cx).default_value("source_db".to_string()));
+            StringSelectTestRoot {
+                select: super::string_select_state("source_db".to_string(), window, cx),
+                fallback,
+            }
+        });
+
+        root.update_in(cx, |root, window, cx| {
+            super::set_string_select(
+                &root.select,
+                &root.fallback,
+                "target_db".to_string(),
+                window,
+                cx,
+            );
+        });
+
+        let (selected, fallback) = root.read_with(cx, |root, cx| {
+            (
+                root.select.read(cx).selected_value().cloned(),
+                root.fallback.read(cx).text().to_string(),
+            )
+        });
+        assert_eq!(Some("target_db".to_string()), selected);
+        assert_eq!("target_db", fallback);
     }
 }

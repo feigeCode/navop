@@ -55,7 +55,7 @@ pub(crate) fn load_schemas<T: 'static>(
 ) {
     let connection_id = selected_connection(&connection, cx);
     let policy = policy_for_connection(&connection, cx);
-    let database_name = selected_select_string(&database.select, cx);
+    let database_name = selected_database_name_for_schema_load(&database, cx);
     let preferred = selected_string(&schema.select, &schema.fallback, cx);
     clear_string_select(&schema.select, cx);
     if !policy.show_schema {
@@ -116,12 +116,11 @@ fn selected_connection<T>(controls: &TargetConnectionControls, cx: &Context<T>) 
         .unwrap_or_default()
 }
 
-fn selected_select_string<T>(select: &StringSelect, cx: &Context<T>) -> String {
-    select
-        .read(cx)
-        .selected_value()
-        .cloned()
-        .unwrap_or_default()
+fn selected_database_name_for_schema_load(
+    database: &TargetStringControls,
+    cx: &gpui::App,
+) -> String {
+    selected_string(&database.select, &database.fallback, cx)
 }
 
 fn update_string_select_async(
@@ -177,4 +176,45 @@ fn set_status<T>(status: &Entity<String>, message: String, cx: &mut Context<T>) 
         *status = message;
         cx.notify();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{AppContext, Context, IntoElement, Render, TestAppContext, Window, div};
+    use gpui_component::input::InputState;
+
+    use crate::db_object_selector::state::{
+        StringSelect, TargetStringControls, string_select_state,
+    };
+
+    struct LoaderTestRoot {
+        database: TargetStringControls,
+    }
+
+    impl Render for LoaderTestRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui::test]
+    fn schema_load_database_name_uses_fallback_when_select_is_cleared(cx: &mut TestAppContext) {
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let fallback =
+                cx.new(|cx| InputState::new(window, cx).default_value("app_db".to_string()));
+            let select: StringSelect = string_select_state("app_db".to_string(), window, cx);
+            LoaderTestRoot {
+                database: TargetStringControls { select, fallback },
+            }
+        });
+
+        root.update_in(cx, |root, _, cx| {
+            super::clear_string_select(&root.database.select, cx);
+        });
+
+        let database_name = root.read_with(cx, |root, cx| {
+            super::selected_database_name_for_schema_load(&root.database, cx)
+        });
+        assert_eq!("app_db", database_name);
+    }
 }
