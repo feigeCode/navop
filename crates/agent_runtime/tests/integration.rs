@@ -1358,11 +1358,13 @@ async fn system_prompt_includes_current_resource_context() {
 
     let requests = model.received_requests();
     let system = requests[0].messages[0].content_as_text();
-    assert!(system.contains("当前可操作资源"));
+    assert!(system.contains("资源池"));
+    assert!(system.contains("target 参数"));
     assert!(system.contains("prod analytics"));
     assert!(system.contains("类型=postgres"));
     assert!(system.contains("id=db-1"));
     assert!(system.contains("[当前]"));
     assert!(system.contains("database=ai_app"));
     assert!(system.contains("schema=public"));
+    assert!(!system.contains("connection、connection_id、session_id"));
 }

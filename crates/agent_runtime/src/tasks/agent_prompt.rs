@@ -164,10 +164,11 @@ fn append_resource_context(prompt: &mut String, resources: &ResourceContext) {
     if resources.is_empty() {
         return;
     }
-    prompt.push_str("\n\n当前可操作资源:\n");
+    prompt.push_str("\n\n资源池:\n");
     prompt.push_str(&resources.describe());
     prompt.push_str(
-        "调用工具时优先使用上面列出的当前资源 id 作为 connection、connection_id、session_id 等参数;\
+        "调用工具时使用上面列出的资源 id、名称或标签作为 target 参数;\
+当前标记为 [当前] 的资源是默认目标,但不是资源池边界。\
 若工具需要 database、schema、db 或 cwd 等作用域参数,优先使用资源作用域里的值。\
 不要猜测未列出的资源或连接标识。",
     );

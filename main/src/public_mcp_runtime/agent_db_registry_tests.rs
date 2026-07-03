@@ -48,10 +48,7 @@ fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContex
             .contains("Run read-only SQL through a saved database connection"),
         "db_query should be backed by tool_runtime db.query descriptor"
     );
-    assert_eq!(
-        serde_json::json!(["connection", "sql"]),
-        spec.parameters["required"]
-    );
+    assert_agent_target_schema(&registry, "db.query", serde_json::json!(["target", "sql"]));
     assert_tool_risk(&registry, "db.tables", RiskLevel::Read);
     assert_tool_risk(&registry, "db.describe_table", RiskLevel::Read);
     assert_tool_risk(&registry, "db.sample_rows", RiskLevel::Read);
@@ -85,6 +82,11 @@ fn agent_runtime_tool_registry_uses_native_redis_tools(cx: &mut TestAppContext) 
     assert!(names.contains(&"redis_set".to_string()));
     assert!(!names.contains(&"redis_execute_command".to_string()));
     assert!(!names.contains(&"redis.execute_command".to_string()));
+    assert_agent_target_schema(
+        &registry,
+        "redis.command",
+        serde_json::json!(["target", "command"]),
+    );
     assert_tool_risk(&registry, "redis.command", RiskLevel::High);
     assert_tool_risk(&registry, "redis.keys", RiskLevel::Medium);
     assert_tool_risk(&registry, "redis.get", RiskLevel::Low);
@@ -123,6 +125,7 @@ fn agent_runtime_tool_registry_uses_native_ssh_sftp_tools(cx: &mut TestAppContex
     assert!(!names.contains(&"ssh_file_stat".to_string()));
     assert!(!names.contains(&"ssh_write_file".to_string()));
     assert!(!names.contains(&"sftp.write".to_string()));
+    assert_agent_target_schema(&registry, "sftp.list", serde_json::json!(["target"]));
     assert_tool_risk(&registry, "sftp.list", RiskLevel::Read);
     assert_tool_risk(&registry, "sftp.read", RiskLevel::Read);
     assert_tool_risk(&registry, "sftp.write", RiskLevel::High);
@@ -141,6 +144,24 @@ fn register_connection_repository(cx: &mut gpui::App) {
 fn assert_tool_risk(registry: &agent_runtime::ToolRegistry, name: &str, risk: RiskLevel) {
     let tool = registry.get(&ToolName::new(name)).expect(name);
     assert_eq!(risk, tool.spec(&ResourceContext::new()).risk, "{name} risk");
+}
+
+fn assert_agent_target_schema(
+    registry: &agent_runtime::ToolRegistry,
+    name: &str,
+    required: serde_json::Value,
+) {
+    let tool = registry.get(&ToolName::new(name)).expect(name);
+    let spec = tool.spec(&ResourceContext::new());
+    let properties = spec.parameters["properties"].as_object().unwrap();
+    assert_eq!(required, spec.parameters["required"], "{name} required");
+    assert!(properties.contains_key("target"), "{name} target");
+    assert!(!properties.contains_key("connection"), "{name} connection");
+    assert!(
+        !properties.contains_key("connection_id"),
+        "{name} connection_id"
+    );
+    assert!(!properties.contains_key("session_id"), "{name} session_id");
 }
 
 fn test_connection() -> SqliteConnection {
