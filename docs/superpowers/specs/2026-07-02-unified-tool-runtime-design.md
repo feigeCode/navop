@@ -81,8 +81,9 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 3e Redis convenience tools | Done | `0623ec8 feat(onetcli_runtime): add redis convenience tools` adds canonical `redis.keys`, `redis.get`, and `redis.set` to `onetcli_runtime`, keeps `redis.keys/get` read-only, requires write permission for `redis.set`, and splits Redis runtime implementation into submodules under 300 lines each. Red/green Redis tests, `cargo test -p onetcli_runtime`, `cargo check -p onetcli_runtime`, and `git diff --check` passed on 2026-07-03. | Consider Public MCP convenience Redis tools only after deciding whether external clients should get the same high-level commands or only the generic `redis.command`. |
 | Phase 3f Agent Redis runtime bridge | Done | `9073061 feat(agent): bridge redis runtime tools` registered `onetcli_runtime::redis_tools::redis_tool_registry(repo)` through the Agent `tool_runtime` bridge. Agent initially kept legacy `redis_execute_command`; that compatibility path was later removed by Phase 3i. TDD red/green registry tests, Agent runtime adapter tests, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep Redis Agent surface canonical-only: `redis_command`, `redis_keys`, `redis_get`, `redis_set`. |
 | Phase 3g Agent SFTP runtime bridge | Done | `6b4236a feat(agent): bridge sftp runtime tools` registered `onetcli_runtime::sftp_tools::sftp_tool_registry(repo)` through the Agent `tool_runtime` bridge. Agent initially kept legacy `ssh_*` file tools; that compatibility path was later removed by Phase 3i. Red/green registry tests, SFTP runtime tests, Agent runtime adapter tests, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep SFTP Agent surface canonical-only: `sftp_list`, `sftp_read`, `sftp_write`, `sftp_stat`, `sftp_upload`, `sftp_download`. |
-| Phase 3h Agent DB exec runtime bridge | Done | `e48fd27 feat(agent): bridge database exec runtime tool` switched the Agent DB bridge from `database_read_tool_registry(repo)` to the full `database_tool_registry(repo)`. Agent initially kept legacy `db_execute_sql`; that compatibility path was later removed by Phase 3i. Red/green registry tests, DB runtime tests, Agent runtime adapter tests, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Add missing DB metadata tools as new canonical runtime tools instead of restoring old Agent native tools. |
+| Phase 3h Agent DB exec runtime bridge | Done | `e48fd27 feat(agent): bridge database exec runtime tool` switched the Agent DB bridge from `database_read_tool_registry(repo)` to the full `database_tool_registry(repo)`. Agent initially kept legacy `db_execute_sql`; that compatibility path was later removed by Phase 3i. Red/green registry tests, DB runtime tests, Agent runtime adapter tests, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep DB write execution canonical-only through `db.exec`. |
 | Phase 3i Canonical-only tool surface | Done | `dae1dab feat(tools): remove legacy tool aliases` removes legacy DB/SFTP native Agent modules, stops registering old Redis Agent tools, removes `redis.execute_command` and `ssh.remote_*` aliases, and updates Agent prompt rules to use canonical runtime-derived function names only. Full `agent_runtime`, `onetcli_runtime`, and `public_mcp` tests plus targeted main registry tests and checks passed on 2026-07-03. | Continue adding missing capabilities only as canonical `tool_runtime` tools; do not add compatibility aliases for old names. |
+| Phase 3j DB metadata canonical tools | Done | `c8de98c feat(database): add canonical metadata tools` adds `db.tables`, `db.describe_table`, and `db.sample_rows` to `onetcli_runtime::database_tools`, exposes them through the Agent runtime bridge as `db_tables`, `db_describe_table`, and `db_sample_rows`, and keeps them read-only. `cargo test -p onetcli_runtime --test database_tools`, `cargo test -p main agent_runtime_tool_registry`, `cargo test -p onetcli_runtime`, `cargo check -p onetcli_runtime`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Continue unifying Agent-facing schemas around `target` instead of per-tool `connection` fields. |
 | Phase 4 Public MCP app registry merge | Done | `main/src/public_mcp_runtime/tool_registry.rs` collects enabled `tool_runtime::ToolRegistry` values, merges them, and exposes one `ToolRuntimeMcpProvider`. Terminal toolset now exposes both `ssh.exec` and `terminal.exec` through the real app registry path. Public MCP runtime tests passed on 2026-07-02. | Continue replacing remaining Public MCP-specific permission settings with unified `PermissionPolicy`. |
 | Phase 4b Public MCP Redis canonical command tool | Done | `6c99c8e feat(public_mcp): canonicalize redis command tool` made Public MCP Redis `tools/list` expose `redis.command`. It initially accepted `redis.execute_command`; that alias was later removed by Phase 3i. `public_mcp` Redis tests, main registry Redis test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep Public MCP Redis surface canonical-only. |
 | Phase 4c Public MCP Redis convenience tools | Done | `6d5fc34 feat(public_mcp): add redis convenience tools` exposes `redis.keys`, `redis.get`, and `redis.set` through Public MCP and the real app registry path. `redis.keys/get` are read-only and `redis.set` is mutating and approval-gated. The old `redis.execute_command` alias was later removed by Phase 3i. Red/green Public MCP convenience tests, `cargo test -p public_mcp`, main Redis registry test, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Keep Public MCP Redis surface canonical-only. |
@@ -112,29 +113,23 @@ Purpose:
 Last completed checkpoint:
 
 ```text
-dae1dab feat(tools): remove legacy tool aliases
+c8de98c feat(database): add canonical metadata tools
 ```
 
 Last checkpoint verification run:
 
 ```bash
-rtk cargo test -p agent_runtime system_prompt_prefers_canonical_runtime_tool_names
 rtk cargo test -p main agent_runtime_tool_registry
-rtk cargo test -p onetcli_runtime --test redis_tools
-rtk cargo test -p public_mcp --test redis_tools
-rtk cargo test -p public_mcp --test remote_ops
-rtk cargo test -p onetcli_runtime sftp_tools
-rtk cargo check -p onetcli_runtime
-rtk cargo check -p public_mcp
-rtk cargo check -p main
-rtk cargo test -p agent_runtime
+rtk cargo test -p onetcli_runtime --test database_tools
 rtk cargo test -p onetcli_runtime
-rtk cargo test -p public_mcp
+rtk cargo check -p onetcli_runtime
+rtk cargo check -p main
 rtk git diff --check
 ```
 
-Result: all commands exited 0. `cargo check -p main` still reports the
-existing `block v0.1.6` future-incompat warning, which can remain.
+Result: all commands exited 0. `cargo check -p onetcli_runtime` and
+`cargo check -p main` still report the existing `block v0.1.6`
+future-incompat warning, which can remain.
 
 Current product decision:
 
@@ -157,7 +152,11 @@ Current product decision:
 8. Agent registry now includes runtime-backed DB write execution through the
    `tool_runtime` bridge. The model-facing function name is `db_exec`; the canonical
    runtime id remains `db.exec`. Legacy `db_execute_sql` is no longer registered.
-9. Agent-facing prompts should expose canonical ids only after the relevant adapter can
+9. Agent registry now includes runtime-backed DB metadata tools through the
+   `tool_runtime` bridge. The model-facing function names are `db_tables`,
+   `db_describe_table`, and `db_sample_rows`; the canonical runtime ids remain
+   `db.tables`, `db.describe_table`, and `db.sample_rows`.
+10. Agent-facing prompts should expose canonical ids only after the relevant adapter can
    route them safely.
 
 Next recommended checkpoints:
@@ -165,9 +164,7 @@ Next recommended checkpoints:
 1. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
    through `terminal.exec`.
 2. Run manual resource-pool smoke for source presets.
-3. Add missing DB metadata capabilities as canonical runtime tools, for example
-   `db.tables`, `db.describe_table`, and `db.sample_rows`.
-4. Continue unifying Agent-facing schemas around `target` instead of per-tool
+3. Continue unifying Agent-facing schemas around `target` instead of per-tool
    `connection` / `connection_id` / `session_id` fields.
 
 ## Design Principles
@@ -275,6 +272,7 @@ db.exec
 db.schema
 db.tables
 db.describe_table
+db.sample_rows
 
 redis.command
 redis.keys
@@ -404,7 +402,6 @@ pub struct ToolDescriptor {
     pub annotations: ToolAnnotations,
     pub target: ToolTargetSpec,
     pub origin: ToolOrigin,
-    pub aliases: Vec<ToolAlias>,
 }
 
 pub struct ToolAnnotations {
@@ -742,7 +739,7 @@ Scope:
 
 1. Extend `crates/tool_runtime` with final core models.
 2. Preserve existing `ToolRegistry`, `ToolHandler`, and `ToolDescriptor` compatibility.
-3. Add unit tests for resource pool target resolution, alias resolution, and permission decisions.
+3. Add unit tests for resource pool target resolution, removed-alias rejection, and permission decisions.
 4. Do not migrate business tools yet.
 5. Do not change UI or Agent behavior yet.
 
@@ -753,10 +750,10 @@ Acceptance:
 3. New tests prove:
    - first resource can be default target
    - default target is not a resource pool boundary
-   - id / label / alias target matching works
+   - id / label / resource alias target matching works
    - ambiguous target is rejected
    - safe / confirm / auto / unrestricted profiles decide as specified
-   - descriptor aliases map to canonical ids
+   - removed tool aliases return unknown-tool errors
 
 ### Phase 2: Agent Adapter
 
@@ -789,15 +786,15 @@ Migration order:
 Scope:
 
 1. Move Agent-specific DB / SSH tools toward canonical `tool_runtime` descriptors.
-2. Add aliases for old Agent names.
+2. Do not add aliases for old Agent names; removed names must fail closed.
 3. Normalize `target` to existing `connection` / `session_id` inputs internally.
 4. Add `terminal.exec` as a new terminal-surface tool instead of changing `ssh.exec`
    into terminal UI execution.
 
 Acceptance:
 
-1. Old tool names still call the same functionality.
-2. New canonical tool names also call the same functionality.
+1. Removed tool names return unknown-tool errors instead of compatibility routing.
+2. Canonical tool names call the same functionality through `tool_runtime`.
 3. Agent prompt only exposes canonical names.
 4. High-risk tools produce unified approval requests.
 5. `terminal.exec` can execute through a visible terminal session without removing or
@@ -915,7 +912,9 @@ Mitigation: Phase 1 only adds `tool_runtime` core contract and tests. Business m
 
 Risk: Existing external MCP clients rely on old tool names.
 
-Mitigation: Keep aliases and optionally expose compatibility names through MCP adapter.
+Mitigation: Treat the canonical-only surface as an intentional breaking change. Removed
+tool ids return clear unknown-tool errors, and follow-up release notes should list the
+canonical replacements.
 
 Risk: Dotted canonical ids are not valid function names for some model APIs.
 
@@ -991,4 +990,4 @@ Ambiguity check:
 
 1. Target resolution precedence is explicit.
 2. Permission profile mapping from existing Agent and MCP settings is explicit.
-3. Compatibility alias behavior is explicit.
+3. Canonical-only behavior for removed aliases is explicit.

@@ -115,6 +115,9 @@
 | 工具名 | 说明 |
 |---|---|
 | `db.schema` | 读取数据库 schema 信息 |
+| `db.tables` | 列出保存数据库连接中的表 |
+| `db.describe_table` | 读取表字段、索引和外键 metadata |
+| `db.sample_rows` | 读取单表有限样例行，默认 20 行、最多 100 行 |
 | `db.query` | 执行只读 SQL，非查询语句会被拒绝 |
 | `db.exec` | 执行写 SQL / SQL 文件 |
 
@@ -211,6 +214,9 @@ Agent function tools：
 | Agent function 名 | canonical runtime id | 风险 | 说明 |
 |---|---|---:|---|
 | `db_schema` | `db.schema` | `Read` | 读取 schema-level metadata |
+| `db_tables` | `db.tables` | `Read` | 列出数据库表 |
+| `db_describe_table` | `db.describe_table` | `Read` | 读取表字段、索引和外键 metadata |
+| `db_sample_rows` | `db.sample_rows` | `Read` | 读取单表有限样例行 |
 | `db_query` | `db.query` | `Read` | 执行只读 SQL |
 | `db_exec` | `db.exec` | `High` | 执行 SQL script 或 SQL file |
 
@@ -219,11 +225,9 @@ Agent function tools：
 - `db_execute_sql`
 - `db_list_databases`
 - `db_list_tables`
-- `db_describe_table`
-- `db_sample_rows`
 
-这些能力若仍需要，应作为新的 canonical runtime 工具补齐，例如 `db.tables`、
-`db.describe_table`、`db.sample_rows`，而不是恢复旧 Agent native 工具。
+`db_describe_table` 和 `db_sample_rows` 现在是 canonical runtime id 派生出的
+function name，不是旧 native Agent 工具的兼容入口。
 
 ### 3.3 Redis Agent 工具
 
@@ -332,11 +336,13 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 - `redis.execute_command` 不再作为 `redis.command` alias 解析。
 - `ssh.remote_exec` 和 `ssh.remote_command_*` 不再作为 `ssh.*` alias 解析。
 - Agent prompt 会在可用时提示使用统一工具命名规则。
+- `db.tables`、`db.describe_table`、`db.sample_rows` 已作为 canonical DB metadata
+  工具补齐，并通过 Agent bridge 暴露为 `db_tables`、`db_describe_table`、
+  `db_sample_rows`。
 - 危险 DB / Redis / SFTP 写操作使用 `RiskLevel::High`。
 
 暂未做：
 
-- `db.tables`、`db.describe_table`、`db.sample_rows` 等 canonical DB metadata 工具尚未补齐。
 - Agent-facing schema 尚未统一为 `target` 字段；部分 runtime 工具仍使用 `connection`。
 - Public MCP adapter 的风险仍有部分路径不是直接由 runtime annotations 精细映射。
 - 旧 `redis_view::agent_tools` 代码仍存在于 `redis_view` crate，但主 Agent registry 不再调用。
@@ -349,7 +355,7 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 | Public MCP toolset 拼装 | `main/src/public_mcp_runtime/tool_registry.rs` | 根据 settings 注册 Public MCP providers |
 | Runtime -> Agent adapter | `crates/agent_runtime/src/tools/runtime_adapter.rs` | 把 runtime descriptor/call 转成 Agent tool |
 | Agent prompt | `crates/agent_runtime/src/tasks/agent_prompt.rs` | 工具命名、资源上下文、终端选择规则 |
-| DB runtime tools | `crates/onetcli_runtime/src/database_tools.rs` | `db.schema` / `db.query` / `db.exec` |
+| DB runtime tools | `crates/onetcli_runtime/src/database_tools.rs` | `db.schema` / `db.tables` / `db.describe_table` / `db.sample_rows` / `db.query` / `db.exec` |
 | SFTP runtime tools | `crates/onetcli_runtime/src/sftp_tools.rs` | `sftp.*` 文件工具 |
 | Redis runtime tools | `crates/onetcli_runtime/src/redis_tools.rs` | CLI / function-calling Redis 工具 |
 | Public MCP Redis provider | `crates/public_mcp/src/tools/redis.rs` | MCP Redis active-connection 工具 |
@@ -364,6 +370,7 @@ Agent 仍使用 `agent_runtime::ResourceContext`，但产品语义已经按资�
 ```bash
 rtk cargo test -p agent_runtime system_prompt_prefers_canonical_runtime_tool_names
 rtk cargo test -p main agent_runtime_tool_registry
+rtk cargo test -p onetcli_runtime --test database_tools
 rtk cargo test -p onetcli_runtime --test redis_tools
 rtk cargo test -p public_mcp --test redis_tools
 rtk cargo test -p public_mcp --test remote_ops
