@@ -16,8 +16,8 @@ use crate::model::{ModelRequest, ModelResponse, ModelStreamEvent};
 use crate::planner::history_to_messages;
 use crate::resource::ResourceContext;
 use crate::runtime::{
-    PendingToolApproval, RuntimeServices, RuntimeTask, Session, TaskContext, TaskKind, TaskOutcome,
-    ToolExecutionMode,
+    PendingToolApproval, PendingToolCallSummary, RuntimeServices, RuntimeTask, Session,
+    TaskContext, TaskKind, TaskOutcome, ToolExecutionMode,
 };
 use crate::tasks::agent_prompt::build_system_prompt;
 use crate::tasks::agent_tool_validation::{
@@ -283,12 +283,18 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
                 resources: ctx.resources.clone(),
             };
             let question = approval_question(&pending);
+            let pending_tool_calls = pending
+                .calls()
+                .iter()
+                .map(PendingToolCallSummary::from_call)
+                .collect();
             ctx.session.set_pending_tool_approval(pending);
             return TaskOutcome::NeedUserInput {
                 question,
                 pending_tool_call_id: Some(pending_tool_call_id),
                 tool_name: Some(tool_name),
                 arguments: Some(arguments),
+                pending_tool_calls,
             };
         }
 

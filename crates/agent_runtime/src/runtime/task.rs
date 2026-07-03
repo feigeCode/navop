@@ -51,11 +51,30 @@ pub enum TaskOutcome {
         pending_tool_call_id: Option<ToolCallId>,
         tool_name: Option<ToolName>,
         arguments: Option<Value>,
+        pending_tool_calls: Vec<PendingToolCallSummary>,
     },
     /// 失败。
     Failed { reason: String },
     /// 被取消。
     Cancelled,
+}
+
+/// 等待审批的工具调用摘要,用于 UI / adapter 展示批量确认。
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingToolCallSummary {
+    pub call_id: ToolCallId,
+    pub tool_name: ToolName,
+    pub arguments: Value,
+}
+
+impl PendingToolCallSummary {
+    pub fn from_call(call: &ToolCall) -> Self {
+        Self {
+            call_id: call.call_id.clone(),
+            tool_name: call.tool_name.clone(),
+            arguments: call.arguments.clone(),
+        }
+    }
 }
 
 /// 暂停等待用户审批的一次工具调用。

@@ -5,14 +5,14 @@
 //! [`AgentTranscript::apply`],再渲染 `messages`。
 
 use agent_runtime::{
-    HistoryItem, Plan, PlanStatus, ResourceContext, RuntimeEvent, StepStatus, ToolObservation,
-    ids::ToolCallId,
+    HistoryItem, PendingToolCallSummary, Plan, PlanStatus, ResourceContext, RuntimeEvent,
+    StepStatus, ToolObservation, ids::ToolCallId,
 };
 use std::collections::HashMap;
 
 use crate::agent_cards::{
     PlanCardData, PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD,
-    ToolCardData, ToolConfirmCardData,
+    ToolCardData, ToolConfirmCardData, ToolConfirmItemData,
 };
 use crate::agent_tool_input::build_tool_input_display;
 use crate::code_block::extract_fenced_code_blocks;
@@ -198,6 +198,7 @@ impl AgentTranscript {
                 pending_tool_call_id,
                 tool_name,
                 arguments,
+                pending_tool_calls,
                 ..
             } => {
                 let tool_name_text = tool_name
@@ -215,6 +216,7 @@ impl AgentTranscript {
                         .map(ToString::to_string)
                         .unwrap_or_default(),
                     tool_name: tool_name_text,
+                    items: self.confirm_items_display(pending_tool_calls),
                     input_summary: input.summary,
                     input_json: input.json,
                     question: question.clone(),
@@ -434,6 +436,24 @@ impl AgentTranscript {
                 json: data.input_json,
             })
             .unwrap_or_default()
+    }
+
+    fn confirm_items_display(
+        &self,
+        pending_tool_calls: &[PendingToolCallSummary],
+    ) -> Vec<ToolConfirmItemData> {
+        pending_tool_calls
+            .iter()
+            .map(|call| {
+                let input = build_tool_input_display(call.tool_name.as_str(), &call.arguments);
+                ToolConfirmItemData {
+                    call_id: call.call_id.to_string(),
+                    tool_name: call.tool_name.to_string(),
+                    input_summary: input.summary,
+                    input_json: input.json,
+                }
+            })
+            .collect()
     }
 
     /// 按 call_id 查找工具卡片数据。
@@ -672,7 +692,8 @@ mod tests {
     use agent_runtime::ids::{SubAgentId, ToolCallId, TurnId};
     use agent_runtime::tools::{ObservationData, ToolCall, ToolName};
     use agent_runtime::{
-        PlanSource, PlanStep, ResourceContext, ResourceId, ResourceKind, ResourceRef, SessionId,
+        PendingToolCallSummary, PlanSource, PlanStep, ResourceContext, ResourceId, ResourceKind,
+        ResourceRef, SessionId,
     };
 
     fn sid() -> SessionId {
@@ -958,6 +979,7 @@ mod tests {
             pending_tool_call_id: Some(ToolCallId::from_string("call_confirm")),
             tool_name: Some(ToolName::new("db_schema")),
             arguments: Some(serde_json::json!({"sql": "show tables"})),
+            pending_tool_calls: Vec::new(),
         });
 
         assert_eq!(1, tr.messages.len());
@@ -969,6 +991,41 @@ mod tests {
         assert!(data.input_json.contains("\"sql\": \"show tables\""));
         assert_eq!(data.question, "确认执行工具 `db_schema` 吗?");
         assert_eq!(data.status, "pending");
+    }
+
+    #[test]
+    fn need_user_input_renders_batch_tool_confirm_items() {
+        let mut tr = AgentTranscript::new();
+
+        tr.apply(&RuntimeEvent::NeedUserInput {
+            session_id: sid(),
+            turn_id: tid(),
+            question: "确认执行 2 个工具吗?".into(),
+            pending_tool_call_id: Some(ToolCallId::from_string("call_a")),
+            tool_name: Some(ToolName::new("ssh.exec")),
+            arguments: Some(serde_json::json!({"command": "rm -rf /tmp/a"})),
+            pending_tool_calls: vec![
+                PendingToolCallSummary {
+                    call_id: ToolCallId::from_string("call_a"),
+                    tool_name: ToolName::new("ssh.exec"),
+                    arguments: serde_json::json!({"command": "rm -rf /tmp/a"}),
+                },
+                PendingToolCallSummary {
+                    call_id: ToolCallId::from_string("call_b"),
+                    tool_name: ToolName::new("ssh.exec"),
+                    arguments: serde_json::json!({"command": "rm -rf /tmp/b"}),
+                },
+            ],
+        });
+
+        let data = ToolConfirmCardData::from_json(&tr.messages[0].content).unwrap();
+        assert_eq!("call_a", data.call_id);
+        assert_eq!(2, data.items.len());
+        assert_eq!("call_a", data.items[0].call_id);
+        assert_eq!("ssh_exec", data.items[0].tool_name);
+        assert_eq!("rm -rf /tmp/a", data.items[0].input_summary);
+        assert_eq!("call_b", data.items[1].call_id);
+        assert_eq!("rm -rf /tmp/b", data.items[1].input_summary);
     }
 
     #[test]
@@ -990,6 +1047,7 @@ mod tests {
             pending_tool_call_id: Some(call_id),
             tool_name: Some(ToolName::new("db_query")),
             arguments: None,
+            pending_tool_calls: Vec::new(),
         });
 
         assert_eq!(2, tr.messages.len());
@@ -1014,6 +1072,7 @@ mod tests {
             pending_tool_call_id: Some(call_id.clone()),
             tool_name: Some(ToolName::new("db_schema")),
             arguments: Some(serde_json::json!({"sql": "show tables"})),
+            pending_tool_calls: Vec::new(),
         });
         tr.apply(&RuntimeEvent::ToolApprovalResolved {
             session_id: sid(),

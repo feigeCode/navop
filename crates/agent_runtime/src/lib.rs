@@ -34,8 +34,9 @@ pub use resource::{ResourceContext, ResourceId, ResourceKind, ResourceRef, Resou
 pub use risk::RiskLevel;
 pub use runtime::{InputImage, TurnInput};
 pub use runtime::{
-    Runtime, RuntimeCommand, RuntimeEvent, RuntimeEventReceiver, RuntimeServices, Session,
-    SessionSnapshot, TaskKind, TaskOutcome, ToolExecutionMode, TurnContext, UserInput,
+    PendingToolCallSummary, Runtime, RuntimeCommand, RuntimeEvent, RuntimeEventReceiver,
+    RuntimeServices, Session, SessionSnapshot, TaskKind, TaskOutcome, ToolExecutionMode,
+    TurnContext, UserInput,
 };
 pub use tasks::AgentTask;
 pub use tools::{

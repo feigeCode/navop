@@ -132,6 +132,7 @@ async fn auto_tool_mode_batches_sibling_high_risk_approvals() {
         ToolRegistry::new().with_tool(Arc::new(HighRiskTool)),
     );
     let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
 
     let outcome = runtime
         .run_turn_blocking_with_tool_mode(
@@ -154,6 +155,18 @@ async fn auto_tool_mode_batches_sibling_high_risk_approvals() {
         }
         other => panic!("high risk batch should pause for approval, got {other:?}"),
     };
+    let events = drain_events(&mut rx);
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::NeedUserInput {
+                pending_tool_calls,
+                ..
+            } if pending_tool_calls.len() == 2
+                && pending_tool_calls[0].call_id.as_str() == "c_drop_users"
+                && pending_tool_calls[1].call_id.as_str() == "c_drop_orders"
+        )
+    }));
 
     let outcome = runtime
         .approve_pending_tool(session.id(), &call_id)

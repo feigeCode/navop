@@ -121,6 +121,9 @@ pub struct SubAgentCardData {
 pub struct ToolConfirmCardData {
     pub call_id: String,
     pub tool_name: String,
+    /// 批量审批中的每个工具调用。为空表示旧的单工具确认卡。
+    #[serde(default)]
+    pub items: Vec<ToolConfirmItemData>,
     /// 工具入参摘要,用于确认卡片头部。
     #[serde(default)]
     pub input_summary: String,
@@ -130,6 +133,17 @@ pub struct ToolConfirmCardData {
     pub question: String,
     #[serde(default = "default_tool_confirm_status")]
     pub status: String,
+}
+
+/// 批量工具确认卡片中的单个待执行项。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolConfirmItemData {
+    pub call_id: String,
+    pub tool_name: String,
+    #[serde(default)]
+    pub input_summary: String,
+    #[serde(default)]
+    pub input_json: String,
 }
 
 #[derive(Clone, Action, PartialEq, Eq, Deserialize)]
@@ -433,11 +447,15 @@ impl ChatCard for ToolConfirmCard {
                 div().text_sm().text_color(cx.theme().foreground).child(
                     TextView::markdown(
                         SharedString::from(format!("agent-tool-confirm-{}", msg.id)),
-                        data.question,
+                        data.question.clone(),
                     )
                     .selectable(true),
                 ),
             );
+
+        if data.items.len() > 1 {
+            card = card.child(render_confirm_batch_items(&data, cx));
+        }
 
         if !data.input_json.is_empty() {
             card = card.child(tool_card_json_block(
@@ -536,6 +554,9 @@ fn tool_card_target_label(data: &ToolCardData) -> Option<&str> {
 }
 
 fn confirm_card_header(data: &ToolConfirmCardData) -> &'static str {
+    if data.items.len() > 1 {
+        return "批量工具执行确认";
+    }
     if is_terminal_exec_tool(&data.tool_name) {
         "终端执行确认"
     } else {
@@ -544,12 +565,49 @@ fn confirm_card_header(data: &ToolConfirmCardData) -> &'static str {
 }
 
 fn confirm_card_title(data: &ToolConfirmCardData) -> String {
+    if data.items.len() > 1 {
+        return format!("工具 · {} 个待执行", data.items.len());
+    }
     let prefix = tool_card_prefix(&data.tool_name);
     if data.input_summary.is_empty() || !data.input_json.is_empty() {
         format!("{prefix} · {}", data.tool_name)
     } else {
         format!("{prefix} · {} · {}", data.tool_name, data.input_summary)
     }
+}
+
+fn render_confirm_batch_items(data: &ToolConfirmCardData, cx: &App) -> AnyElement {
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_1()
+        .children(data.items.iter().map(|item| {
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .bg(cx.theme().background)
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(item.tool_name.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(cx.theme().foreground)
+                        .child(item.input_summary.clone()),
+                )
+        }))
+        .into_any_element()
 }
 
 fn tool_card_prefix(tool_name: &str) -> &'static str {
@@ -1012,6 +1070,7 @@ mod tests {
         let data = ToolConfirmCardData {
             call_id: "call_1".into(),
             tool_name: "db_schema".into(),
+            items: Vec::new(),
             input_summary: "show tables".into(),
             input_json: "{\"sql\":\"show tables\"}".into(),
             question: "确认执行工具 `db_schema` 吗?".into(),
@@ -1021,6 +1080,7 @@ mod tests {
 
         assert_eq!(back.call_id, "call_1");
         assert_eq!(back.tool_name, "db_schema");
+        assert!(back.items.is_empty());
         assert_eq!(back.input_summary, "show tables");
         assert_eq!(back.input_json, "{\"sql\":\"show tables\"}");
         assert_eq!(back.question, "确认执行工具 `db_schema` 吗?");
@@ -1028,10 +1088,43 @@ mod tests {
     }
 
     #[test]
+    fn batch_tool_confirm_card_data_roundtrips_and_titles_as_batch() {
+        let data = ToolConfirmCardData {
+            call_id: "call_a".into(),
+            tool_name: "ssh_exec".into(),
+            items: vec![
+                ToolConfirmItemData {
+                    call_id: "call_a".into(),
+                    tool_name: "ssh_exec".into(),
+                    input_summary: "rm -rf /tmp/a".into(),
+                    input_json: String::new(),
+                },
+                ToolConfirmItemData {
+                    call_id: "call_b".into(),
+                    tool_name: "ssh_exec".into(),
+                    input_summary: "rm -rf /tmp/b".into(),
+                    input_json: String::new(),
+                },
+            ],
+            input_summary: "rm -rf /tmp/a".into(),
+            input_json: String::new(),
+            question: "确认执行 2 个工具吗?".into(),
+            status: "pending".into(),
+        };
+        let back = ToolConfirmCardData::from_json(&data.to_json()).expect("parse");
+
+        assert_eq!(2, back.items.len());
+        assert_eq!("call_b", back.items[1].call_id);
+        assert_eq!("批量工具执行确认", confirm_card_header(&back));
+        assert_eq!("工具 · 2 个待执行", confirm_card_title(&back));
+    }
+
+    #[test]
     fn confirm_card_title_omits_summary_when_input_details_are_visible() {
         let data = ToolConfirmCardData {
             call_id: "call_1".into(),
             tool_name: "db_schema".into(),
+            items: Vec::new(),
             input_summary: "{\"connection\":\"8\",\"database\":\"ai_app3\"}".into(),
             input_json: "{\n  \"connection\": \"8\",\n  \"database\": \"ai_app3\"\n}".into(),
             question: "确认执行工具 `db_schema` 吗?".into(),
@@ -1046,6 +1139,7 @@ mod tests {
         let data = ToolConfirmCardData {
             call_id: "call_1".into(),
             tool_name: "db_schema".into(),
+            items: Vec::new(),
             input_summary: "show tables".into(),
             input_json: String::new(),
             question: "确认执行工具 `db_schema` 吗?".into(),
@@ -1060,6 +1154,7 @@ mod tests {
         let data = ToolConfirmCardData {
             call_id: "call_1".into(),
             tool_name: "terminal_exec".into(),
+            items: Vec::new(),
             input_summary: "df -h".into(),
             input_json: String::new(),
             question: "确认执行工具 `terminal_exec` 吗?".into(),
