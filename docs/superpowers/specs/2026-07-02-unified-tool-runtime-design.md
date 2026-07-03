@@ -91,6 +91,7 @@ Blocked     Work cannot continue without a product or technical decision.
 | Phase 4d Public MCP target adapter | Done | `3a558e6 feat(public_mcp): expose runtime targets through target` makes runtime-backed MCP tools expose `target` instead of provider fields such as `connection`, `connection_id`, and `session_id`; rejects those provider fields at the MCP adapter boundary; and maps `target` back to the current handler field only as an internal migration adapter. `cargo test -p public_mcp --test tool_runtime_target_adapter`, `tool_runtime_adapter`, `redis_tools`, `redis_convenience_tools`, `remote_ops`, `internal_functions`, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Add MCP resource-pool id/label/alias resolution and continue moving CLI/runtime-core invocation paths toward first-class `target`. |
 | Phase 4e Public MCP resource-pool target resolution | Done | `f1f92f7 feat(public_mcp): resolve runtime targets from resource pool` adds an optional `ResourcePool` snapshot to `ToolRuntimeMcpProvider`, resolves MCP `target` by resource id / label / alias before mapping to the handler field, and rejects ambiguous resource targets. `cargo test -p public_mcp --test tool_runtime_target_adapter`, `tool_runtime_adapter`, `redis_tools`, `redis_convenience_tools`, `remote_ops`, `internal_functions`, `cargo check -p public_mcp`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Real app saved-connection pool wiring is covered by Phase 4f; next expand active session resources. |
 | Phase 4f Public MCP app resource pool | Done | `f6611e2 feat(public_mcp): build app resource pool` builds a saved-connection `ResourcePool` from the real app `ConnectionRepository`, attaches it to the merged `ToolRuntimeMcpProvider`, maps saved connection ids/names/host aliases to runtime targets, and proves a DB tool can be called through a host alias. `cargo test -p main public_mcp_runtime::tool_registry`, `cargo test -p public_mcp --test tool_runtime_target_adapter`, `tool_runtime_adapter`, `redis_tools`, `redis_convenience_tools`, `remote_ops`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Extend app resource pools to active terminal sessions and active Redis connection snapshots, not only saved connections. |
+| Phase 4g Agent approval for Public MCP runtime tools | Done | `62e696a fix(agent): require approval for public mcp runtime tools` makes the Public MCP -> Agent adapter derive Agent risk from MCP annotations, so destructive/open-world runtime tools such as `ssh.exec` and `terminal.exec` produce Agent approval requests in Auto mode. After the user approves, the adapter calls the underlying Public MCP/runtime tool with an internal approved context instead of letting the external MCP permission mode silently deny the already-approved Agent call. `cargo test -p public_mcp --test agent_runtime_adapter`, `cargo test -p public_mcp agent_runtime_adapter`, `cargo test -p public_mcp --test tool_runtime_adapter`, `cargo test -p agent_runtime high_risk`, `cargo test -p public_mcp --test protocol remote_exec`, `cargo test -p main agent_runtime_tool_registry`, `cargo check -p main`, and `git diff --check` passed on 2026-07-03. | Run manual UI smoke that `ssh_exec` / `terminal_exec` show confirmation cards and continue after approval. |
 | Phase 4 Public MCP runtime permission policy | Done | `PermissionMode` now maps to `tool_runtime::PermissionPolicy` for runtime-backed MCP tools. `Allow` maps to Auto, so high-risk/destructive/open-world tools such as `ssh.exec`, `terminal.exec`, and generic Redis command execution still require approval. Public MCP and app runtime tests passed on 2026-07-02. | Migrate settings/UI terminology from MCP permission mode to unified permission profile. |
 | Phase 4 Public MCP settings profile wording | Done | `McpPermissionMode` keeps old persisted values but exposes profile ids `safe/confirm/auto`; Public MCP runtime config carries `permission_profile`; settings UI labels now show Safe / Confirm / Auto. Core settings and app runtime tests passed on 2026-07-02. | Later storage migration can replace `permission_mode` only when a broader settings migration is planned. |
 | Phase 5a Resource Pool UI wording/filtering | Done | `6010dad7 feat(ai_chat): add resource pool display model`, `e8985154 feat(ai_chat): rename context selector to resource pool`, `d7b82ab0 feat(ai_chat): filter resource pool by type`, `84d8fe65 test(ai_chat): document resource pool default target semantics`, `ad195aab docs: track resource pool ui checkpoint` | Keep wording and default-target semantics while wiring broader catalogs. |
@@ -101,23 +102,25 @@ Blocked     Work cannot continue without a product or technical decision.
 
 ### Active Checkpoint
 
-Current checkpoint: Phase 3c manual terminal-exec smoke and remaining tool-runtime migration.
+Current checkpoint: Phase 3c manual terminal-exec smoke, Agent approval smoke, and remaining tool-runtime migration.
 
 Purpose:
 
 1. Verify `terminal.exec` writes into the visible terminal pane with real app behavior.
-2. Run manual resource-pool smoke for source presets.
-3. Keep side-panel sessions single-resource by default while allowing explicit expansion
+2. Verify `ssh_exec` and `terminal_exec` show Agent confirmation cards before high-risk
+   execution and continue after approval.
+3. Run manual resource-pool smoke for source presets.
+4. Keep side-panel sessions single-resource by default while allowing explicit expansion
    from a broader catalog.
-4. Keep persisted workspace/tag presets deferred until a real workspace/tag resource
+5. Keep persisted workspace/tag presets deferred until a real workspace/tag resource
    catalog source exists.
-5. Avoid guessing a terminal catalog until `TerminalSidebar` has a real full-connection
+6. Avoid guessing a terminal catalog until `TerminalSidebar` has a real full-connection
    source.
 
 Last completed checkpoint:
 
 ```text
-f6611e2 feat(public_mcp): build app resource pool
+62e696a fix(agent): require approval for public mcp runtime tools
 ```
 
 Last checkpoint verification run:
@@ -125,10 +128,11 @@ Last checkpoint verification run:
 ```bash
 rtk cargo test -p public_mcp --test tool_runtime_target_adapter
 rtk cargo test -p public_mcp --test tool_runtime_adapter
-rtk cargo test -p public_mcp --test redis_tools
-rtk cargo test -p public_mcp --test redis_convenience_tools
-rtk cargo test -p public_mcp --test remote_ops
-rtk cargo test -p main public_mcp_runtime::tool_registry
+rtk cargo test -p public_mcp --test agent_runtime_adapter
+rtk cargo test -p public_mcp agent_runtime_adapter
+rtk cargo test -p agent_runtime high_risk
+rtk cargo test -p public_mcp --test protocol remote_exec
+rtk cargo test -p main agent_runtime_tool_registry
 rtk cargo check -p main
 rtk git diff --check
 ```
@@ -179,15 +183,20 @@ Current product decision:
    aliases can resolve MCP `target` for saved-connection-backed tools.
 14. Agent-facing prompts should expose canonical ids only after the relevant adapter can
    route them safely.
+15. Agent-facing Public MCP adapter tools derive Agent approval risk from MCP
+   annotations. Destructive/open-world tools must pause for Agent confirmation in Auto
+   mode; after approval, the adapter treats that specific Agent path as approved so
+   external MCP permission settings do not cause a second silent denial.
 
 Next recommended checkpoints:
 
 1. Run the Phase 3c manual smoke where a command appears in the visible terminal pane
    through `terminal.exec`.
-2. Run manual resource-pool smoke for source presets.
-3. Extend the real Public MCP app resource pool beyond saved connections to include
+2. Run manual Agent approval smoke for `ssh_exec` and `terminal_exec`.
+3. Run manual resource-pool smoke for source presets.
+4. Extend the real Public MCP app resource pool beyond saved connections to include
    active terminal sessions and active Redis connection snapshots.
-4. Continue moving CLI and runtime-core invocation paths toward first-class `target`
+5. Continue moving CLI and runtime-core invocation paths toward first-class `target`
    resolution rather than provider-specific fields.
 
 ## Design Principles

@@ -212,6 +212,10 @@ Agent registry 构建入口：
 4. DB / Redis / SFTP 直接从 `tool_runtime::ToolRegistry` 通过
    `tool_runtime_agent_tool_registry(...)` 桥接到 Agent。
 5. 旧 native Agent DB / SSH 工具模块已删除；旧 Redis Agent 工具不再注册。
+6. Public MCP adapter 转 Agent 工具时，Agent 风险等级从 MCP annotations 推导。
+   `destructive` 或 `openWorld` 工具在 Agent Auto 模式下会先产生确认卡片；
+   用户批准后，adapter 使用内部 approved context 调用底层 MCP/runtime tool，
+   避免外部 MCP permission mode 在 Agent 确认后再次静默拒绝。
 
 ### 3.1 通用 Public MCP adapter 工具
 
@@ -227,6 +231,15 @@ Agent registry 构建入口：
 | `connections` | `connections_list` / `connections_show` / `connections_create` 等 | 保存连接管理 |
 | `workspaces` | `workspaces_list` / `workspaces_show` | workspace 查询 |
 | `terminal` | `ssh_exec` / `terminal_exec` / `ssh_command_poll` 等 | 活跃 SSH terminal session 工具 |
+
+审批语义：
+
+- `readOnly` tools 映射为 Agent `RiskLevel::Read`。
+- `destructive` 或 `openWorld` tools 映射为 Agent `RiskLevel::High`。
+- `ssh_exec` 和 `terminal_exec` 因为是开放世界执行工具，在 Agent Auto 模式下必须
+  弹出确认卡片，不能直接返回 `permission_denied`。
+- 外部 MCP server 的 `safe/confirm/auto` permission profile 仍只约束外部 MCP
+  clients；Agent 入口使用 Agent 自己的工具模式和确认卡片作为审批入口。
 
 ### 3.2 DB Agent 工具
 
