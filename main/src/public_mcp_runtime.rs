@@ -2,6 +2,7 @@ mod config;
 mod connection_sessions;
 mod internal_functions;
 mod redis;
+mod resource_pool;
 mod session;
 mod status;
 mod tool_registry;

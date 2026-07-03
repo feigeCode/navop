@@ -1,4 +1,4 @@
-use super::{internal_functions, redis};
+use super::{internal_functions, redis, resource_pool};
 use gpui::App;
 use one_core::settings::McpToolsetSettings;
 use public_mcp::tools::{
@@ -98,9 +98,14 @@ pub(super) fn build_tool_registry(
         )));
     }
     if !runtime_registries.is_empty() {
-        providers.push(Arc::new(ToolRuntimeMcpProvider::new(
-            tool_runtime::ToolRegistry::merge(runtime_registries)?,
-        )));
+        let mut provider =
+            ToolRuntimeMcpProvider::new(tool_runtime::ToolRegistry::merge(runtime_registries)?);
+        if let Some(pool) =
+            resource_pool::app_resource_pool(cx)?.filter(|pool| !pool.resources.is_empty())
+        {
+            provider = provider.with_resource_pool(pool);
+        }
+        providers.push(Arc::new(provider));
     }
     if providers.is_empty() {
         tracing::warn!("Public MCP runtime enabled without any tool providers");
@@ -116,12 +121,15 @@ mod tests {
     use one_core::settings::McpToolsetSettings;
     use one_core::storage::connection::SqliteConnection;
     use one_core::storage::migration::run_migrations;
+    use one_core::storage::traits::Repository;
     use one_core::storage::{
-        ConnectionRepository, GlobalStorageState, StorageManager, WorkspaceRepository,
+        ConnectionRepository, DatabaseType, DbConnectionConfig, GlobalStorageState, StorageManager,
+        StoredConnection, WorkspaceRepository,
     };
     use public_mcp::permissions::PermissionMode;
     use public_mcp::tools::{InternalFunctionDefinition, PublicMcpToolContext};
     use serde_json::json;
+    use std::sync::Arc;
 
     #[gpui::test]
     fn build_tool_registry_includes_internal_function_tools(cx: &mut TestAppContext) {
@@ -253,6 +261,45 @@ mod tests {
     }
 
     #[gpui::test]
+    fn build_tool_registry_resolves_saved_connection_target_alias(cx: &mut TestAppContext) {
+        let toolsets = McpToolsetSettings {
+            terminal: false,
+            connections: false,
+            database: true,
+            ..Default::default()
+        };
+
+        let registry = cx.update(|cx| {
+            let repo = register_connection_repository(cx);
+            insert_database_connection(&repo, "prod-db", "127.0.0.1");
+            build_tool_registry(cx, &toolsets).expect("database registry should build")
+        });
+
+        let error = futures::executor::block_on(registry.call_tool(
+            "db.query",
+            Some(serde_json::Map::from_iter([
+                ("target".to_string(), json!("127.0.0.1")),
+                (
+                    "sql".to_string(),
+                    json!("create table unsafe_write(id integer)"),
+                ),
+            ])),
+            PublicMcpToolContext {
+                permission_mode: PermissionMode::Deny,
+                approver: Default::default(),
+            },
+        ))
+        .expect_err("resolved target should reach db.query validation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("db.query only accepts query statements"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[gpui::test]
     fn build_tool_registry_terminal_toolset_includes_terminal_exec(cx: &mut TestAppContext) {
         let toolsets = McpToolsetSettings {
             terminal: true,
@@ -351,11 +398,38 @@ mod tests {
         )
     }
 
-    fn register_connection_repository(cx: &mut gpui::App) {
+    fn register_connection_repository(cx: &mut gpui::App) -> Arc<ConnectionRepository> {
         let storage = StorageManager::new_with_connection(test_connection());
-        storage.register(ConnectionRepository::new(storage.connection()));
+        let repo = ConnectionRepository::new(storage.connection());
+        let repo_for_insert = Arc::new(repo.clone());
+        storage.register(repo);
         storage.register(WorkspaceRepository::new(storage.connection()));
         cx.set_global(GlobalStorageState { storage });
+        repo_for_insert
+    }
+
+    fn insert_database_connection(repo: &ConnectionRepository, name: &str, host: &str) {
+        let mut connection =
+            StoredConnection::new_database(name.to_string(), db_config(host), None);
+        repo.insert(&mut connection)
+            .expect("database connection should insert");
+    }
+
+    fn db_config(host: &str) -> DbConnectionConfig {
+        DbConnectionConfig {
+            id: String::new(),
+            database_type: DatabaseType::SQLite,
+            name: String::new(),
+            host: host.to_string(),
+            port: 0,
+            username: String::new(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params: Default::default(),
+        }
     }
 
     fn test_connection() -> SqliteConnection {
