@@ -76,18 +76,19 @@ fn agent_runtime_tool_registry_uses_native_redis_tools(cx: &mut TestAppContext) 
         .collect::<Vec<_>>();
 
     assert!(names.contains(&"redis_execute_command".to_string()));
+    assert!(names.contains(&"redis_command".to_string()));
+    assert!(names.contains(&"redis_keys".to_string()));
+    assert!(names.contains(&"redis_get".to_string()));
+    assert!(names.contains(&"redis_set".to_string()));
     assert!(
         !names.contains(&"redis.execute_command".to_string()),
         "Agent registry should not expose the old MCP redis.execute_command adapter"
     );
-    let exec = registry
-        .get(&ToolName::new("redis_execute_command"))
-        .expect("redis execute tool");
-    assert_eq!(
-        RiskLevel::High,
-        exec.spec(&ResourceContext::new()).risk,
-        "Redis command execution must require approval through high risk"
-    );
+    assert_tool_risk(&registry, "redis_execute_command", RiskLevel::High);
+    assert_tool_risk(&registry, "redis.command", RiskLevel::High);
+    assert_tool_risk(&registry, "redis.keys", RiskLevel::Medium);
+    assert_tool_risk(&registry, "redis.get", RiskLevel::Low);
+    assert_tool_risk(&registry, "redis.set", RiskLevel::High);
 }
 
 #[gpui::test]
@@ -134,6 +135,11 @@ fn register_connection_repository(cx: &mut gpui::App) {
     storage.register(ConnectionRepository::new(storage.connection()));
     storage.register(WorkspaceRepository::new(storage.connection()));
     cx.set_global(GlobalStorageState { storage });
+}
+
+fn assert_tool_risk(registry: &agent_runtime::ToolRegistry, name: &str, risk: RiskLevel) {
+    let tool = registry.get(&ToolName::new(name)).expect(name);
+    assert_eq!(risk, tool.spec(&ResourceContext::new()).risk, "{name} risk");
 }
 
 fn test_connection() -> SqliteConnection {

@@ -138,6 +138,7 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
     }
     if agent_redis_enabled {
         redis_view::agent_tools::register_agent_redis_tools(cx, &mut agent_registry)?;
+        register_runtime_redis_tools(cx, &mut agent_registry);
     }
     if agent_sftp_enabled {
         if let Some(repo) = connection_repository(cx) {
@@ -147,6 +148,19 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
         }
     }
     Ok(agent_registry)
+}
+
+fn register_runtime_redis_tools(cx: &App, agent_registry: &mut agent_runtime::ToolRegistry) {
+    let Some(repo) = connection_repository(cx) else {
+        tracing::warn!("Agent Redis runtime tools enabled without ConnectionRepository");
+        return;
+    };
+    let runtime_redis_registry = onetcli_runtime::redis_tools::redis_tool_registry(repo);
+    let runtime_agent_redis_registry = agent_runtime::tools::tool_runtime_agent_tool_registry(
+        runtime_redis_registry,
+        tool_runtime::ToolAdapter::FunctionCalling,
+    );
+    agent_registry.extend(runtime_agent_redis_registry);
 }
 
 fn connection_repository(
