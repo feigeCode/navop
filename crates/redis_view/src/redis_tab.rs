@@ -21,6 +21,10 @@ use one_core::gpui_tokio::Tokio;
 use one_core::layout::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
 };
+use one_core::sidebar_contribution::{
+    SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPanelSize,
+    SidebarPanelStyle, SidebarPlacement, SidebarPlacementSet,
+};
 use one_core::storage::{ActiveConnections, StoredConnection, Workspace};
 use one_core::tab_container::{
     TabContainer, TabContainerEvent, TabContent, TabContentEvent, TabItem,
@@ -31,10 +35,43 @@ use tracing::warn;
 const PANEL_MIN_SIZE: Pixels = px(100.0);
 const TREE_PANEL_DEFAULT_SIZE: Pixels = px(250.0);
 
+fn redis_tools_sidebar_policy() -> SidebarPanelPolicy {
+    SidebarPanelPolicy {
+        hideable: true,
+        movable: true,
+        allowed_placements: SidebarPlacementSet::all(),
+        initially_visible: true,
+    }
+}
+
+fn redis_tools_sidebar_size(panel_visible: bool, panel_size: Pixels) -> SidebarPanelSize {
+    if panel_visible {
+        SidebarPanelSize {
+            side_width: Some(panel_size + TOOLBAR_WIDTH),
+            bottom_height: Some(panel_size),
+        }
+    } else {
+        SidebarPanelSize {
+            side_width: Some(TOOLBAR_WIDTH),
+            bottom_height: Some(TOOLBAR_WIDTH),
+        }
+    }
+}
+
+fn redis_tools_sidebar_chrome() -> SidebarPanelChrome {
+    SidebarPanelChrome::HostNoHeader
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResizingPanel {
     TreePanel,
     Sidebar,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RedisSidebarRenderMode {
+    Embedded,
+    External,
 }
 
 /// Redis 标签页视图
@@ -65,6 +102,7 @@ pub struct RedisTabView {
     tree_panel_size: Pixels,
     /// 侧边栏面板大小
     sidebar_panel_size: Pixels,
+    sidebar_render_mode: RedisSidebarRenderMode,
     /// 正在调整大小的面板
     resizing: Option<ResizingPanel>,
     /// 视图边界
@@ -149,9 +187,15 @@ impl RedisTabView {
             _subscriptions: subscriptions,
             tree_panel_size: TREE_PANEL_DEFAULT_SIZE,
             sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
+            sidebar_render_mode: RedisSidebarRenderMode::Embedded,
             resizing: None,
             bounds: Bounds::default(),
         }
+    }
+
+    pub fn with_external_sidebar(mut self) -> Self {
+        self.sidebar_render_mode = RedisSidebarRenderMode::External;
+        self
     }
 
     pub fn new(connection: StoredConnection, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -400,6 +444,54 @@ impl TabContent for RedisTabView {
         true
     }
 
+    fn can_split(&self, _cx: &App) -> bool {
+        true
+    }
+
+    fn sidebar_contributions(&self, _cx: &App) -> Vec<SidebarContribution> {
+        if self.sidebar_render_mode != RedisSidebarRenderMode::External {
+            return Vec::new();
+        }
+
+        vec![
+            SidebarContribution {
+                id: SidebarPanelId::new(self.tree_view.entity_id(), "redis.tree"),
+                title: SharedString::from("Redis"),
+                icon: IconName::Redis,
+                view: self.tree_view.clone().into(),
+                default_placement: SidebarPlacement::Left,
+                policy: SidebarPanelPolicy {
+                    hideable: false,
+                    movable: true,
+                    allowed_placements: SidebarPlacementSet::left_right(),
+                    initially_visible: true,
+                },
+                style: SidebarPanelStyle::default(),
+                size: SidebarPanelSize {
+                    side_width: Some(self.tree_panel_size),
+                    bottom_height: None,
+                },
+                chrome: SidebarPanelChrome::HostNoHeader,
+                actions: Default::default(),
+            },
+            SidebarContribution {
+                id: SidebarPanelId::new(self.sidebar.entity_id(), "redis.sidebar"),
+                title: SharedString::from("Redis Tools"),
+                icon: IconName::Bot,
+                view: self.sidebar.clone().into(),
+                default_placement: SidebarPlacement::Right,
+                policy: redis_tools_sidebar_policy(),
+                style: SidebarPanelStyle::default(),
+                size: redis_tools_sidebar_size(
+                    self.sidebar.read(_cx).is_panel_visible(),
+                    self.sidebar_panel_size,
+                ),
+                chrome: redis_tools_sidebar_chrome(),
+                actions: Default::default(),
+            },
+        ]
+    }
+
     fn on_activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_active(true, cx);
@@ -460,6 +552,41 @@ impl TabContent for RedisTabView {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redis_tools_sidebar_keeps_toolbar_visible_by_default() {
+        let policy = redis_tools_sidebar_policy();
+
+        assert!(policy.hideable);
+        assert!(policy.initially_visible);
+    }
+
+    #[test]
+    fn redis_tools_sidebar_uses_toolbar_width_until_panel_opens() {
+        let collapsed = redis_tools_sidebar_size(false, SIDEBAR_DEFAULT_WIDTH);
+        let expanded = redis_tools_sidebar_size(true, SIDEBAR_DEFAULT_WIDTH);
+
+        assert_eq!(Some(TOOLBAR_WIDTH), collapsed.side_width);
+        assert_eq!(Some(TOOLBAR_WIDTH), collapsed.bottom_height);
+        assert_eq!(
+            Some(SIDEBAR_DEFAULT_WIDTH + TOOLBAR_WIDTH),
+            expanded.side_width
+        );
+        assert_eq!(Some(SIDEBAR_DEFAULT_WIDTH), expanded.bottom_height);
+    }
+
+    #[test]
+    fn redis_tools_sidebar_does_not_render_host_header() {
+        assert_eq!(
+            SidebarPanelChrome::HostNoHeader,
+            redis_tools_sidebar_chrome()
+        );
+    }
+}
+
 impl Render for RedisTabView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
@@ -467,6 +594,14 @@ impl Render for RedisTabView {
         let tree_panel_size = self.tree_panel_size;
         let sidebar_visible = self.sidebar.read(cx).is_panel_visible();
         let sidebar_panel_size = self.sidebar_panel_size;
+
+        if self.sidebar_render_mode == RedisSidebarRenderMode::External {
+            return div()
+                .id("redis-tab-view")
+                .track_focus(&self.focus_handle)
+                .size_full()
+                .child(self.tab_container.clone());
+        }
 
         div()
             .id("redis-tab-view")

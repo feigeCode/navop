@@ -16,6 +16,8 @@ pub mod layout;
 pub mod license;
 pub mod llm;
 pub mod popup_window;
+pub mod sidebar_contribution;
+pub mod split_tab_container;
 pub mod storage;
 pub mod tab_container;
 // pub mod tab_persistence;
@@ -26,6 +28,12 @@ pub mod when_clause;
 
 #[cfg(test)]
 mod extension_core_contract_tests;
+#[cfg(test)]
+mod sidebar_contribution_tests;
+#[cfg(test)]
+mod tab_container_split_tests;
+#[cfg(test)]
+mod tab_content_contract_tests;
 
 pub use crate::agent::{
     Agent, AgentContext, AgentDescriptor, AgentDispatcher, AgentEvent, AgentRegistry, AgentResult,

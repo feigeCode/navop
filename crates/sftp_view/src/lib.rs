@@ -4866,6 +4866,10 @@ impl TabContent for SftpView {
         true
     }
 
+    fn can_split(&self, _cx: &App) -> bool {
+        true
+    }
+
     fn try_close(
         &mut self,
         _tab_id: &str,

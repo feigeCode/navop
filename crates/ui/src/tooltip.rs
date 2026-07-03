@@ -222,6 +222,13 @@ fn clamp_tooltip_bounds(
     bounds
 }
 
+fn tooltip_should_remain_visible(
+    trigger_bounds: Bounds<Pixels>,
+    mouse_position: Point<Pixels>,
+) -> bool {
+    trigger_bounds.contains(&mouse_position)
+}
+
 struct TooltipOverlayPositioner {
     trigger_bounds: Bounds<Pixels>,
     children: Vec<AnyElement>,
@@ -464,12 +471,25 @@ impl TooltipOverlay {
 
 impl Render for TooltipOverlay {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(trigger_bounds) = self.content.as_ref().map(|content| content.trigger_bounds)
+        else {
+            return div().into_any_element();
+        };
+
+        if !tooltip_should_remain_visible(trigger_bounds, window.mouse_position()) {
+            self.content = None;
+            self.prev_trigger_bounds = None;
+            self.had_recent_tooltip = false;
+            self._show_task = None;
+            self._hide_task = None;
+            return div().into_any_element();
+        }
+
         let Some(content) = self.content.as_ref() else {
             return div().into_any_element();
         };
 
         let content_view = (content.build)(window, cx);
-        let trigger_bounds = content.trigger_bounds;
         let animation_epoch = self.animation_epoch;
         let is_switching = self.is_switching;
         let prev_trigger_bounds = self.prev_trigger_bounds;
@@ -673,5 +693,19 @@ mod tests {
         assert_eq!(position.placement, TooltipPlacement::Below);
         assert_eq!(position.bounds.top(), TOOLTIP_WINDOW_MARGIN);
         assert_eq!(position.bounds.left(), px(60.));
+    }
+
+    #[test]
+    fn tooltip_visibility_expires_when_mouse_leaves_trigger_bounds() {
+        let trigger_bounds = test_bounds(100., 80., 80., 24.);
+
+        assert!(tooltip_should_remain_visible(
+            trigger_bounds,
+            point(px(120.), px(90.)),
+        ));
+        assert!(!tooltip_should_remain_visible(
+            trigger_bounds,
+            point(px(40.), px(40.)),
+        ));
     }
 }

@@ -1,11 +1,11 @@
 use crate::home_tab::HomePage;
+use crate::onetcli_app::GlobalTabContainer;
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
 use db_view::database_tab::DatabaseTabView;
-use gpui::AppContext;
-use gpui::{App, Context, Window};
+use gpui::{App, AppContext, Context, Entity, Window};
 use mongodb_view::MongoTabView;
 use one_core::storage::{ConnectionType, StoredConnection, Workspace};
-use one_core::tab_container::TabItem;
+use one_core::tab_container::{TabContainer, TabItem};
 use redis_view::RedisTabView;
 use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
 use remote_desktop_view::{RemoteDesktopView, RemoteDesktopViewConfig};
@@ -117,6 +117,12 @@ mod tests {
 }
 
 impl HomePage {
+    fn active_tab_container(&self, cx: &App) -> Entity<TabContainer> {
+        cx.try_global::<GlobalTabContainer>()
+            .map(|global| global.primary_pane())
+            .unwrap_or_else(|| self.tab_container.clone())
+    }
+
     fn terminal_sync_path_enabled(cx: &App) -> bool {
         current_terminal_settings(cx).sync_path_with_terminal
     }
@@ -137,8 +143,8 @@ impl HomePage {
 
         // 统计同一连接的 SSH 终端数量，计算序号
         let prefix = format!("ssh-terminal-{}-", conn_id);
-        let existing_count = self
-            .tab_container
+        let tab_container = self.active_tab_container(cx);
+        let existing_count = tab_container
             .read(cx)
             .tabs()
             .iter()
@@ -153,8 +159,9 @@ impl HomePage {
 
         let terminal_view = cx.new(|cx| {
             TerminalView::new_ssh_with_index(conn, tab_index, window, cx, None, sync_path)
+                .with_external_sidebar()
         });
-        self.tab_container.update(cx, |tc, cx| {
+        tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, "ssh", terminal_view);
             tc.add_and_activate_tab_with_focus(tab, window, cx);
         });
@@ -174,8 +181,8 @@ impl HomePage {
         let tab_id = format!("serial-terminal-{}-{}", conn_id, timestamp);
 
         let prefix = format!("serial-terminal-{}-", conn_id);
-        let existing_count = self
-            .tab_container
+        let tab_container = self.active_tab_container(cx);
+        let existing_count = tab_container
             .read(cx)
             .tabs()
             .iter()
@@ -187,9 +194,10 @@ impl HomePage {
             None
         };
 
-        let terminal_view =
-            cx.new(|cx| TerminalView::new_serial_with_index(conn, tab_index, window, cx));
-        self.tab_container.update(cx, |tc, cx| {
+        let terminal_view = cx.new(|cx| {
+            TerminalView::new_serial_with_index(conn, tab_index, window, cx).with_external_sidebar()
+        });
+        tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, "serial", terminal_view);
             tc.add_and_activate_tab_with_focus(tab, window, cx);
         });
@@ -211,8 +219,8 @@ impl HomePage {
 
         // 统计同一连接的 SFTP 视图数量，计算序号
         let prefix = format!("sftp-{}-", conn_id);
-        let existing_count = self
-            .tab_container
+        let tab_container = self.active_tab_container(cx);
+        let existing_count = tab_container
             .read(cx)
             .tabs()
             .iter()
@@ -226,7 +234,7 @@ impl HomePage {
 
         // 创建 SftpView 并订阅终端打开事件
         let sftp_view = cx.new(|cx| SftpView::new_with_index(conn, tab_index, window, cx));
-        let tab_container = self.tab_container.clone();
+        let event_tab_container = tab_container.clone();
 
         let subscription = cx.subscribe_in(
             &sftp_view,
@@ -245,7 +253,7 @@ impl HomePage {
                         };
                         let tab_id = format!("local-terminal-{}", ts);
                         // 统计已有本地终端数量
-                        let existing = tab_container
+                        let existing = event_tab_container
                             .read(cx)
                             .tabs()
                             .iter()
@@ -259,9 +267,11 @@ impl HomePage {
                         } else {
                             None
                         };
-                        let terminal_view =
-                            cx.new(|cx| TerminalView::new_with_index(config, idx, window, cx));
-                        tab_container.update(cx, |tc, cx| {
+                        let terminal_view = cx.new(|cx| {
+                            TerminalView::new_with_index(config, idx, window, cx)
+                                .with_external_sidebar()
+                        });
+                        event_tab_container.update(cx, |tc, cx| {
                             let tab = TabItem::new(tab_id, "terminal", terminal_view);
                             tc.add_and_activate_tab_with_focus(tab, window, cx);
                         });
@@ -280,7 +290,7 @@ impl HomePage {
                         let conn = connection.clone();
                         // 统计同一连接的 SSH 终端数量
                         let prefix = format!("ssh-terminal-{}-", conn_id);
-                        let existing = tab_container
+                        let existing = event_tab_container
                             .read(cx)
                             .tabs()
                             .iter()
@@ -301,8 +311,9 @@ impl HomePage {
                                 Some(working_dir),
                                 sync_path,
                             )
+                            .with_external_sidebar()
                         });
-                        tab_container.update(cx, |tc, cx| {
+                        event_tab_container.update(cx, |tc, cx| {
                             let tab = TabItem::new(tab_id, "ssh", terminal_view);
                             tc.add_and_activate_tab_with_focus(tab, window, cx);
                         });
@@ -314,7 +325,7 @@ impl HomePage {
 
         // 添加标签页
         let tab = TabItem::new(tab_id, "sftp", sftp_view);
-        self.tab_container.update(cx, |tc, cx| {
+        tab_container.update(cx, |tc, cx| {
             tc.add_and_activate_tab_with_focus(tab, window, cx);
         });
     }
@@ -342,8 +353,8 @@ impl HomePage {
         let tab_kind = remote_desktop_tab_kind(protocol);
         let tab_id = format!("{tab_kind}-{conn_id}-{timestamp}");
         let prefix = format!("{tab_kind}-{conn_id}-");
-        let existing_count = self
-            .tab_container
+        let tab_container = self.active_tab_container(cx);
+        let existing_count = tab_container
             .read(cx)
             .tabs()
             .iter()
@@ -365,7 +376,7 @@ impl HomePage {
                 cx,
             )
         });
-        self.tab_container.update(cx, |tc, cx| {
+        tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, tab_kind, view);
             tc.add_and_activate_tab_with_focus(tab, window, cx);
         });
@@ -388,7 +399,7 @@ impl HomePage {
         let (tab_id, connections, workspace_for_tab) =
             redis_tab_open_context(open_mode, &conn, workspace, &self.connections);
 
-        let tab_container = self.tab_container.clone();
+        let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
             let tab_id_for_tab = tab_id.clone();
             tab_container.update(cx, |tc, cx| {
@@ -403,6 +414,7 @@ impl HomePage {
                                 window,
                                 cx,
                             )
+                            .with_external_sidebar()
                         });
                         TabItem::new(tab_id_for_tab, "redis", redis_view)
                     },
@@ -448,7 +460,7 @@ impl HomePage {
             }
         };
 
-        let tab_container = self.tab_container.clone();
+        let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
             let tab_id_for_tab = tab_id.clone();
             tab_container.update(cx, |tc, cx| {
@@ -463,6 +475,7 @@ impl HomePage {
                                 window,
                                 cx,
                             )
+                            .with_external_sidebar()
                         });
                         TabItem::new(tab_id_for_tab, "mongodb", mongo_view)
                     },
@@ -474,7 +487,7 @@ impl HomePage {
     }
 
     pub(crate) fn add_settings_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tab_container = self.tab_container.clone();
+        let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
             tab_container.update(cx, |tc, cx| {
                 tc.activate_or_add_tab_lazy(
@@ -495,7 +508,7 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let tab_container = self.tab_container.clone();
+        let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
             tab_container.update(cx, |tc, cx| {
                 tc.activate_or_add_tab_lazy(
@@ -512,7 +525,7 @@ impl HomePage {
     }
 
     pub(crate) fn add_extensions_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tab_container = self.tab_container.clone();
+        let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
             tab_container.update(cx, |tc, cx| {
                 tc.activate_or_add_tab_lazy(
@@ -539,8 +552,8 @@ impl HomePage {
         let tab_id = format!("terminal-{}", timestamp);
 
         // 统计已有本地终端数量，计算序号
-        let existing_count = self
-            .tab_container
+        let tab_container = self.active_tab_container(cx);
+        let existing_count = tab_container
             .read(cx)
             .tabs()
             .iter()
@@ -552,12 +565,12 @@ impl HomePage {
             None
         };
 
-        let tab_container = self.tab_container.clone();
         let home = cx.entity();
         window.defer(cx, move |window, cx| {
             home.update(cx, |_this, cx| {
                 let terminal_view = cx.new(|cx| {
                     TerminalView::new_with_index(LocalConfig::default(), tab_index, window, cx)
+                        .with_external_sidebar()
                 });
                 tab_container.update(cx, |tc, cx| {
                     let tab = TabItem::new(tab_id, "home", terminal_view);
@@ -596,7 +609,7 @@ impl HomePage {
             _ => vec![conn.clone()],
         };
 
-        let tab_container = self.tab_container.clone();
+        let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
             tab_container.update(cx, |tc, cx| match open_mode {
                 DatabaseOpenMode::Single => {
@@ -612,6 +625,7 @@ impl HomePage {
                                     window,
                                     cx,
                                 )
+                                .with_external_sidebar()
                             });
                             TabItem::new(tab_id.clone(), "home", db_view)
                         },
@@ -638,6 +652,7 @@ impl HomePage {
                                     window,
                                     cx,
                                 )
+                                .with_external_sidebar()
                             });
                             TabItem::new(tab_id.clone(), "home", db_view)
                         },
@@ -651,7 +666,8 @@ impl HomePage {
 
     /// 复制当前活动标签并打开
     pub(crate) fn duplicate_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tc = self.tab_container.read(cx);
+        let tab_container = self.active_tab_container(cx);
+        let tc = tab_container.read(cx);
 
         // pinned tab 不支持复制
         if tc.is_pinned_tab_active() {

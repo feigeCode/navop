@@ -37,13 +37,22 @@ use crate::settings::{
     GlobalTerminalLocalSettings, TerminalHighlightRule, TerminalSettings, TerminalSettingsEvent,
     current_settings, update_settings,
 };
-use crate::sidebar::{SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
+use crate::sidebar::{
+    SidebarPanel, TerminalSidebar, TerminalSidebarEvent, TerminalSidebarToolPanel,
+    TerminalSidebarToolbar,
+};
 use crate::terminal_element::{RenderCache, TerminalElement};
 use crate::theme::{
     DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, default_font_fallbacks,
     default_monospace_font, normalize_terminal_primary_font, terminal_cell_width_from_advances,
 };
-use one_core::layout::{SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
+use one_core::layout::{
+    SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
+};
+use one_core::sidebar_contribution::{
+    SidebarContribution, SidebarContributionActions, SidebarPanelChrome, SidebarPanelId,
+    SidebarPanelPolicy, SidebarPanelSize, SidebarPanelStyle, SidebarPlacement, SidebarPlacementSet,
+};
 use one_core::storage::models::{ActiveConnections, StoredConnection};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
@@ -78,6 +87,12 @@ actions!(
 );
 
 const TERMINAL_CONTEXT: &str = "TerminalView";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalSidebarRenderMode {
+    Embedded,
+    External,
+}
 
 #[cfg(target_os = "macos")]
 const TERMINAL_COPY_SHORTCUT: &str = "cmd-c";
@@ -701,6 +716,8 @@ pub struct TerminalView {
     blink_manager: Entity<BlinkCursor>,
     /// 侧边栏
     sidebar: Entity<TerminalSidebar>,
+    sidebar_toolbar: Entity<TerminalSidebarToolbar>,
+    sidebar_tool_panels: HashMap<SidebarPanel, Entity<TerminalSidebarToolPanel>>,
 
     font_size: Pixels,
     line_height: Pixels,
@@ -769,6 +786,7 @@ pub struct TerminalView {
 
     /// 侧边栏面板大小
     sidebar_panel_size: Pixels,
+    sidebar_render_mode: TerminalSidebarRenderMode,
     /// 正在调整大小的面板
     resizing: Option<ResizingPanel>,
     /// 视图边界
@@ -1081,6 +1099,18 @@ impl TerminalView {
                 cx,
             )
         });
+        let sidebar_toolbar = cx.new(|_| TerminalSidebarToolbar::new(sidebar.clone()));
+        let sidebar_tool_panels = SidebarPanel::all()
+            .iter()
+            .copied()
+            .map(|panel| {
+                let sidebar = sidebar.clone();
+                (
+                    panel,
+                    cx.new(move |_| TerminalSidebarToolPanel::new(sidebar.clone(), panel)),
+                )
+            })
+            .collect::<HashMap<_, _>>();
 
         // 订阅侧边栏事件（需要 window 以便弹确认对话框）
         let sidebar_subscription = cx.subscribe_in(&sidebar, window, Self::handle_sidebar_event);
@@ -1140,6 +1170,8 @@ impl TerminalView {
             },
             blink_manager,
             sidebar,
+            sidebar_toolbar,
+            sidebar_tool_panels,
             font_size: default_font_size,
             line_height: default_font_size * default_line_height_scale,
             font_family: default_font_family,
@@ -1178,6 +1210,7 @@ impl TerminalView {
             middle_click_paste: true,
             vim_scroll_to_arrow_keys: true,
             sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
+            sidebar_render_mode: TerminalSidebarRenderMode::Embedded,
             resizing: None,
             view_bounds: Bounds::default(),
             scrollbar_metrics,
@@ -1188,6 +1221,11 @@ impl TerminalView {
         this.apply_settings_snapshot(&initial_settings, window, cx);
         this.register_public_mcp_session(cx);
         this
+    }
+
+    pub fn with_external_sidebar(mut self) -> Self {
+        self.sidebar_render_mode = TerminalSidebarRenderMode::External;
+        self
     }
 
     fn register_public_mcp_session(&mut self, cx: &mut Context<Self>) {
@@ -1240,6 +1278,7 @@ impl TerminalView {
     ) {
         match event {
             TerminalSidebarEvent::PanelChanged(_panel) => {
+                cx.emit(TabContentEvent::StateChanged);
                 cx.notify();
             }
             TerminalSidebarEvent::SearchPatternChanged(pattern) => {
@@ -4068,6 +4107,94 @@ impl TabContent for TerminalView {
         true
     }
 
+    fn can_split(&self, _cx: &App) -> bool {
+        true
+    }
+
+    fn sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution> {
+        if self.sidebar_render_mode != TerminalSidebarRenderMode::External {
+            return Vec::new();
+        }
+        let colors = self.current_theme.colors();
+        let style = SidebarPanelStyle {
+            background: Some(colors.background),
+            header_background: Some(colors.muted),
+            border: Some(colors.border),
+            text: Some(colors.foreground),
+        };
+        let open_panels = self.sidebar.read(cx).open_tool_panels();
+        let mut contributions = Vec::new();
+
+        for (panel, placement) in open_panels {
+            let Some(view) = self.sidebar_tool_panels.get(&panel).cloned() else {
+                continue;
+            };
+            let sidebar_for_close = self.sidebar.clone();
+            let sidebar_for_move = self.sidebar.clone();
+            contributions.push(SidebarContribution {
+                id: SidebarPanelId::new(self.sidebar.entity_id(), panel.local_id()),
+                title: SharedString::from(panel.title()),
+                icon: panel.icon_name(),
+                view: view.into(),
+                default_placement: placement,
+                policy: SidebarPanelPolicy {
+                    hideable: true,
+                    movable: true,
+                    allowed_placements: SidebarPlacementSet::all(),
+                    initially_visible: true,
+                },
+                style,
+                size: SidebarPanelSize {
+                    side_width: Some(self.sidebar_panel_size),
+                    bottom_height: Some(self.sidebar_panel_size),
+                },
+                chrome: SidebarPanelChrome::Host,
+                actions: SidebarContributionActions {
+                    close: Some(Arc::new(move |_window, cx| {
+                        sidebar_for_close.update(cx, |sidebar, cx| {
+                            sidebar.close_tool(panel, cx);
+                        });
+                    })),
+                    move_to: Some(Arc::new(move |placement, _window, cx| {
+                        sidebar_for_move.update(cx, |sidebar, cx| {
+                            sidebar.move_tool(panel, placement, cx);
+                        });
+                    })),
+                },
+            });
+        }
+
+        if self.sidebar.read(cx).toolbar_visible() {
+            contributions.push(SidebarContribution {
+                id: SidebarPanelId::new(self.sidebar.entity_id(), "terminal.toolbar"),
+                title: SharedString::from("Terminal"),
+                icon: IconName::Terminal,
+                view: self.sidebar_toolbar.clone().into(),
+                default_placement: SidebarPlacement::Right,
+                policy: SidebarPanelPolicy {
+                    hideable: false,
+                    movable: false,
+                    allowed_placements: SidebarPlacementSet::right_only(),
+                    initially_visible: true,
+                },
+                style: SidebarPanelStyle {
+                    background: Some(colors.background),
+                    header_background: Some(colors.muted),
+                    border: Some(colors.border),
+                    text: Some(colors.foreground),
+                },
+                size: SidebarPanelSize {
+                    side_width: Some(TOOLBAR_WIDTH),
+                    bottom_height: Some(TOOLBAR_WIDTH),
+                },
+                chrome: SidebarPanelChrome::None,
+                actions: SidebarContributionActions::default(),
+            });
+        }
+
+        contributions
+    }
+
     fn try_close(
         &mut self,
         _tab_id: &str,
@@ -4159,7 +4286,9 @@ impl Render for TerminalView {
         let bg_color = self.current_theme.background;
         let has_selection = self.terminal.read(cx).term().lock().selection.is_some();
         let selection_text = self.terminal.read(cx).selection_text();
-        let sidebar_visible = self.sidebar.read(cx).is_visible();
+        let render_embedded_sidebar =
+            self.sidebar_render_mode == TerminalSidebarRenderMode::Embedded;
+        let sidebar_visible = render_embedded_sidebar && self.sidebar.read(cx).is_visible();
         let sidebar_panel_size = self.sidebar_panel_size;
         let view = cx.entity().clone();
         let terminal_mode = self.terminal.read(cx).mode();
@@ -4370,7 +4499,9 @@ impl Render for TerminalView {
                         .child(self.sidebar.clone()),
                 )
             })
-            .when(!sidebar_visible, |this| this.child(self.sidebar.clone()))
+            .when(render_embedded_sidebar && !sidebar_visible, |this| {
+                this.child(self.sidebar.clone())
+            })
             .child(ResizeEventHandler { view })
     }
 }

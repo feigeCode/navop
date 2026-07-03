@@ -8,6 +8,7 @@ use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use raw_window_handle::HasWindowHandle;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use raw_window_handle::RawWindowHandle;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
@@ -39,6 +40,12 @@ pub struct GlobalTabContainer {
 
 impl gpui::Global for GlobalTabContainer {}
 
+impl GlobalTabContainer {
+    pub fn primary_pane(&self) -> Entity<TabContainer> {
+        self.tab_container.clone()
+    }
+}
+
 #[derive(Clone)]
 pub struct GlobalHomePage {
     pub home_page: Entity<HomePage>,
@@ -53,6 +60,7 @@ use gpui_component::dock::{ClosePanel, ToggleZoom};
 use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
 use one_core::settings::AppSettings;
+use one_core::split_tab_container::{SplitTabContainer, TabPaneFactory};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{TabContainer, TabContentRegistry, TabItem};
 #[cfg(unix)]
@@ -515,12 +523,12 @@ fn init_action_handlers(cx: &mut App) {
 }
 
 pub struct OnetCliApp {
-    tab_container: Entity<TabContainer>,
+    split_container: Entity<SplitTabContainer>,
 }
 
 impl OnetCliApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let tab_container = cx.new(|cx| {
+        let pane_factory: TabPaneFactory = Rc::new(|window, cx, primary| {
             let mut container = TabContainer::new(window, cx)
                 .with_tab_bar_colors(
                     Some(gpui::rgb(0x2b2b2b).into()),
@@ -531,37 +539,44 @@ impl OnetCliApp {
                     Some(gpui::rgb(0x3a3a3a).into()),
                 )
                 .with_inactive_tab_bg_color(Some(gpui::rgb(0x3a3a3a).into()))
-                .with_tab_content_colors(Some(gpui::white()), Some(gpui::rgb(0xaaaaaa).into()));
+                .with_tab_content_colors(Some(gpui::white()), Some(gpui::rgb(0xaaaaaa).into()))
+                .with_split_enabled(true);
 
             #[cfg(target_os = "macos")]
             {
-                container = container
-                    .with_left_padding(px(80.0))
-                    .with_top_padding(px(4.0))
+                if primary {
+                    container = container
+                        .with_left_padding(px(80.0))
+                        .with_top_padding(px(4.0))
+                }
             }
 
             #[cfg(not(target_os = "macos"))]
             {
-                // 窗口置顶按钮注入：点击时切换置顶并刷新按钮视觉状态
-                let on_toggle: std::sync::Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> =
-                    std::sync::Arc::new(|_window: &mut Window, cx: &mut App| {
-                        toggle_always_on_top(cx);
-                        if let Some(tab_container) = cx
-                            .try_global::<GlobalTabContainer>()
-                            .map(|global| global.tab_container.clone())
-                        {
-                            tab_container.update(cx, |_, cx| cx.notify());
-                        }
-                    });
-                let is_active: std::sync::Arc<dyn Fn() -> bool + Send + Sync> =
-                    std::sync::Arc::new(|| ALWAYS_ON_TOP.load(Ordering::Relaxed));
-                container = container
-                    .with_window_controls(true)
-                    .with_always_on_top_control(on_toggle, is_active);
+                if primary {
+                    // 窗口置顶按钮注入：点击时切换置顶并刷新按钮视觉状态
+                    let on_toggle: std::sync::Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> =
+                        std::sync::Arc::new(|_window: &mut Window, cx: &mut App| {
+                            toggle_always_on_top(cx);
+                            if let Some(tab_container) = cx
+                                .try_global::<GlobalTabContainer>()
+                                .map(|global| global.tab_container.clone())
+                            {
+                                tab_container.update(cx, |_, cx| cx.notify());
+                            }
+                        });
+                    let is_active: std::sync::Arc<dyn Fn() -> bool + Send + Sync> =
+                        std::sync::Arc::new(|| ALWAYS_ON_TOP.load(Ordering::Relaxed));
+                    container = container
+                        .with_window_controls(true)
+                        .with_always_on_top_control(on_toggle, is_active);
+                }
             }
 
             container
         });
+        let split_container = cx.new(|cx| SplitTabContainer::new(window, cx, pane_factory.clone()));
+        let tab_container = split_container.read(cx).primary_pane();
 
         cx.set_global(GlobalTabContainer {
             tab_container: tab_container.clone(),
@@ -580,7 +595,7 @@ impl OnetCliApp {
             });
         }
 
-        Self { tab_container }
+        Self { split_container }
     }
 }
 
@@ -659,7 +674,7 @@ impl Render for OnetCliApp {
             .size_full()
             .relative()
             .bg(cx.theme().background)
-            .child(div().size_full().child(self.tab_container.clone()))
+            .child(div().size_full().child(self.split_container.clone()))
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)

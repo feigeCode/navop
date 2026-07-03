@@ -16,7 +16,7 @@ use gpui::{
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
+use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, h_flex, v_flex};
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::storage::StoredConnection;
 
@@ -258,24 +258,26 @@ impl Focusable for DatabaseSidebar {
 
 impl Render for DatabaseSidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let border_color = cx.theme().border;
         let bg_color = cx.theme().background;
+        let active_panel = self.active_panel;
 
-        div()
+        h_flex()
             .h_full()
             .flex_shrink_0()
-            .when_some(self.active_panel, |this, panel| {
-                this.w_full().child(
-                    v_flex()
-                        .size_full()
-                        .border_l_1()
-                        .border_color(border_color)
+            .bg(bg_color)
+            .when(active_panel.is_some(), |this| this.w_full())
+            .when(active_panel.is_none(), |this| this.w(TOOLBAR_WIDTH))
+            .when_some(active_panel, |this, panel| {
+                this.child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .min_w_0()
+                        .overflow_hidden()
                         .bg(bg_color)
                         .child(self.render_panel_content(panel, window, cx)),
                 )
             })
-            .when(!self.is_panel_visible(), |this| {
-                this.child(self.render_toolbar(window, cx))
-            })
+            .child(self.render_toolbar(window, cx))
     }
 }

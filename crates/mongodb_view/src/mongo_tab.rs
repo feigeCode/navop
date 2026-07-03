@@ -10,6 +10,10 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, h_flex};
 use one_core::gpui_tokio::Tokio;
+use one_core::sidebar_contribution::{
+    SidebarContribution, SidebarPanelChrome, SidebarPanelId, SidebarPanelPolicy, SidebarPanelSize,
+    SidebarPanelStyle, SidebarPlacement, SidebarPlacementSet,
+};
 use one_core::storage::{ActiveConnections, StoredConnection, Workspace};
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem};
 use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
@@ -27,11 +31,45 @@ use one_core::layout::{
 const PANEL_MIN_SIZE: Pixels = px(100.0);
 const TREE_PANEL_DEFAULT_SIZE: Pixels = px(250.0);
 
+fn mongo_tools_sidebar_policy() -> SidebarPanelPolicy {
+    SidebarPanelPolicy {
+        hideable: true,
+        movable: true,
+        allowed_placements: SidebarPlacementSet::all(),
+        initially_visible: true,
+    }
+}
+
+fn mongo_tools_sidebar_size(panel_visible: bool, panel_size: Pixels) -> SidebarPanelSize {
+    if panel_visible {
+        SidebarPanelSize {
+            side_width: Some(panel_size + TOOLBAR_WIDTH),
+            bottom_height: Some(panel_size),
+        }
+    } else {
+        SidebarPanelSize {
+            side_width: Some(TOOLBAR_WIDTH),
+            bottom_height: Some(TOOLBAR_WIDTH),
+        }
+    }
+}
+
+fn mongo_tools_sidebar_chrome() -> SidebarPanelChrome {
+    SidebarPanelChrome::HostNoHeader
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResizingPanel {
     TreePanel,
     Sidebar,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MongoSidebarRenderMode {
+    Embedded,
+    External,
+}
+
 /// MongoDB 标签页视图
 pub struct MongoTabView {
     connections: Vec<StoredConnection>,
@@ -45,6 +83,7 @@ pub struct MongoTabView {
     _subscriptions: Vec<Subscription>,
     tree_panel_size: Pixels,
     sidebar_panel_size: Pixels,
+    sidebar_render_mode: MongoSidebarRenderMode,
     resizing: Option<ResizingPanel>,
     bounds: Bounds<Pixels>,
 }
@@ -120,9 +159,15 @@ impl MongoTabView {
             _subscriptions: subscriptions,
             tree_panel_size: TREE_PANEL_DEFAULT_SIZE,
             sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
+            sidebar_render_mode: MongoSidebarRenderMode::Embedded,
             resizing: None,
             bounds: Bounds::default(),
         }
+    }
+
+    pub fn with_external_sidebar(mut self) -> Self {
+        self.sidebar_render_mode = MongoSidebarRenderMode::External;
+        self
     }
 
     fn active_connection(&self) -> Option<&StoredConnection> {
@@ -250,6 +295,54 @@ impl TabContent for MongoTabView {
         true
     }
 
+    fn can_split(&self, _cx: &App) -> bool {
+        true
+    }
+
+    fn sidebar_contributions(&self, _cx: &App) -> Vec<SidebarContribution> {
+        if self.sidebar_render_mode != MongoSidebarRenderMode::External {
+            return Vec::new();
+        }
+
+        vec![
+            SidebarContribution {
+                id: SidebarPanelId::new(self.tree_view.entity_id(), "mongodb.tree"),
+                title: SharedString::from("MongoDB"),
+                icon: IconName::MongoDB,
+                view: self.tree_view.clone().into(),
+                default_placement: SidebarPlacement::Left,
+                policy: SidebarPanelPolicy {
+                    hideable: false,
+                    movable: true,
+                    allowed_placements: SidebarPlacementSet::left_right(),
+                    initially_visible: true,
+                },
+                style: SidebarPanelStyle::default(),
+                size: SidebarPanelSize {
+                    side_width: Some(self.tree_panel_size),
+                    bottom_height: None,
+                },
+                chrome: SidebarPanelChrome::HostNoHeader,
+                actions: Default::default(),
+            },
+            SidebarContribution {
+                id: SidebarPanelId::new(self.sidebar.entity_id(), "mongodb.sidebar"),
+                title: SharedString::from("MongoDB Tools"),
+                icon: IconName::Bot,
+                view: self.sidebar.clone().into(),
+                default_placement: SidebarPlacement::Right,
+                policy: mongo_tools_sidebar_policy(),
+                style: SidebarPanelStyle::default(),
+                size: mongo_tools_sidebar_size(
+                    self.sidebar.read(_cx).is_panel_visible(),
+                    self.sidebar_panel_size,
+                ),
+                chrome: mongo_tools_sidebar_chrome(),
+                actions: Default::default(),
+            },
+        ]
+    }
+
     fn on_activate(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_active(true, cx);
@@ -310,6 +403,41 @@ impl TabContent for MongoTabView {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mongo_tools_sidebar_keeps_toolbar_visible_by_default() {
+        let policy = mongo_tools_sidebar_policy();
+
+        assert!(policy.hideable);
+        assert!(policy.initially_visible);
+    }
+
+    #[test]
+    fn mongo_tools_sidebar_uses_toolbar_width_until_panel_opens() {
+        let collapsed = mongo_tools_sidebar_size(false, SIDEBAR_DEFAULT_WIDTH);
+        let expanded = mongo_tools_sidebar_size(true, SIDEBAR_DEFAULT_WIDTH);
+
+        assert_eq!(Some(TOOLBAR_WIDTH), collapsed.side_width);
+        assert_eq!(Some(TOOLBAR_WIDTH), collapsed.bottom_height);
+        assert_eq!(
+            Some(SIDEBAR_DEFAULT_WIDTH + TOOLBAR_WIDTH),
+            expanded.side_width
+        );
+        assert_eq!(Some(SIDEBAR_DEFAULT_WIDTH), expanded.bottom_height);
+    }
+
+    #[test]
+    fn mongo_tools_sidebar_does_not_render_host_header() {
+        assert_eq!(
+            SidebarPanelChrome::HostNoHeader,
+            mongo_tools_sidebar_chrome()
+        );
+    }
+}
+
 impl Render for MongoTabView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
@@ -317,6 +445,14 @@ impl Render for MongoTabView {
         let tree_panel_size = self.tree_panel_size;
         let sidebar_visible = self.sidebar.read(cx).is_panel_visible();
         let sidebar_panel_size = self.sidebar_panel_size;
+
+        if self.sidebar_render_mode == MongoSidebarRenderMode::External {
+            return div()
+                .id("mongodb-tab-view")
+                .track_focus(&self.focus_handle)
+                .size_full()
+                .child(self.tab_container.clone());
+        }
 
         div()
             .id("mongodb-tab-view")
