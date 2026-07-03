@@ -593,6 +593,31 @@ fn table_schema_from_metadata(
     indexes: Vec<IndexInfo>,
     foreign_keys: Vec<ForeignKeyDefinition>,
 ) -> TableSchema {
+    let primary_columns = columns
+        .iter()
+        .filter(|column| column.is_primary_key)
+        .map(|column| column.name.clone())
+        .collect::<Vec<_>>();
+    let mut indexes = indexes
+        .into_iter()
+        .map(|index| IndexSchema {
+            name: index.name,
+            columns: index.columns,
+            unique: index.is_unique,
+        })
+        .collect::<Vec<_>>();
+    if !primary_columns.is_empty()
+        && !indexes
+            .iter()
+            .any(|index| index.name.eq_ignore_ascii_case("PRIMARY"))
+    {
+        indexes.push(IndexSchema {
+            name: "PRIMARY".to_string(),
+            columns: primary_columns,
+            unique: true,
+        });
+    }
+
     TableSchema {
         name: table.name,
         columns: columns
@@ -605,14 +630,7 @@ fn table_schema_from_metadata(
                 comment: column.comment,
             })
             .collect(),
-        indexes: indexes
-            .into_iter()
-            .map(|index| IndexSchema {
-                name: index.name,
-                columns: index.columns,
-                unique: index.is_unique,
-            })
-            .collect(),
+        indexes,
         foreign_keys: foreign_keys
             .into_iter()
             .map(|foreign_key| ForeignKeySchema {
@@ -1093,6 +1111,9 @@ mod tests {
         assert_eq!(schema.columns[0].nullable, false);
         assert_eq!(schema.indexes[0].name, "idx_orders_id");
         assert_eq!(schema.indexes[0].unique, true);
+        assert!(schema.indexes.iter().any(|index| index.name == "PRIMARY"
+            && index.columns == vec!["id".to_string()]
+            && index.unique));
         assert_eq!(schema.foreign_keys[0].name, "fk_orders_user");
         assert_eq!(schema.foreign_keys[0].on_delete.as_deref(), Some("CASCADE"));
         assert_eq!(

@@ -679,4 +679,35 @@ mod tests {
                 .any(|d| d.name == "fk_orders_user" && d.status == DiffStatus::Modified)
         );
     }
+
+    #[test]
+    fn test_primary_key_column_changes_are_modified_indexes() {
+        let mut source = table("orders", vec![column("id", "int", false)]);
+        source.indexes = vec![IndexSchema {
+            name: "PRIMARY".to_string(),
+            columns: vec!["id".to_string()],
+            unique: true,
+        }];
+
+        let mut target = table("orders", vec![column("id", "int", false)]);
+        target.indexes = vec![IndexSchema {
+            name: "PRIMARY".to_string(),
+            columns: vec!["legacy_id".to_string()],
+            unique: true,
+        }];
+
+        let result =
+            compare_schemas(vec![source], vec![target], SchemaCompareOptions::default()).unwrap();
+
+        let diff = result
+            .table_diffs
+            .iter()
+            .find(|d| d.name == "orders")
+            .unwrap();
+        assert!(
+            diff.index_diffs
+                .iter()
+                .any(|d| d.name == "PRIMARY" && d.status == DiffStatus::Modified)
+        );
+    }
 }

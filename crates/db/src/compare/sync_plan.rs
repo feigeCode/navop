@@ -428,6 +428,46 @@ fn generate_drop_index_sql(
     }
 }
 
+fn is_primary_index_name(index_name: &str) -> bool {
+    index_name.eq_ignore_ascii_case("PRIMARY")
+}
+
+fn is_primary_index(index: &super::IndexSchema) -> bool {
+    is_primary_index_name(&index.name)
+}
+
+fn generate_add_primary_key_sql(
+    table_name: &str,
+    index: &super::IndexSchema,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let columns = index
+        .columns
+        .iter()
+        .map(|column| dialect.quote_identifier(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("ALTER TABLE {} ADD PRIMARY KEY ({});", table_name, columns)
+}
+
+fn generate_drop_primary_key_sql(
+    target_db_type: &str,
+    table_name: &str,
+    primary_key_name: &str,
+    dialect: &dyn SyncSqlDialect,
+) -> String {
+    let db_type = target_db_type.to_lowercase();
+    if db_type.contains("mysql") || db_type.contains("mariadb") {
+        format!("ALTER TABLE {} DROP PRIMARY KEY;", table_name)
+    } else {
+        format!(
+            "ALTER TABLE {} DROP CONSTRAINT {};",
+            table_name,
+            dialect.quote_identifier(primary_key_name)
+        )
+    }
+}
+
 fn generate_add_foreign_key_sql(
     table_name: &str,
     foreign_key: &super::ForeignKeySchema,
@@ -794,10 +834,75 @@ fn build_schema_sync_plan_with_dialect(
                                     target_schema,
                                     &table_diff.name,
                                 );
+                                if is_primary_index(index) {
+                                    statements.push(SyncStatement {
+                                        id: stmt_id,
+                                        sql: generate_add_primary_key_sql(
+                                            &table_ref, index, dialect,
+                                        ),
+                                        kind: SyncStatementKind::AlterTable,
+                                        object_name: Some(idx_diff.name.clone()),
+                                        row_key: None,
+                                        destructive: false,
+                                        transactional_safe: true,
+                                        selected_by_default: true,
+                                        warnings: vec![],
+                                    });
+                                } else {
+                                    statements.push(SyncStatement {
+                                        id: stmt_id,
+                                        sql: generate_create_index_sql(&table_ref, index, dialect),
+                                        kind: SyncStatementKind::CreateIndex,
+                                        object_name: Some(idx_diff.name.clone()),
+                                        row_key: None,
+                                        destructive: false,
+                                        transactional_safe: true,
+                                        selected_by_default: true,
+                                        warnings: vec![],
+                                    });
+                                }
+                            }
+                        }
+                        DiffStatus::Removed => {
+                            let table_ref = dialect.format_table_reference(
+                                target_database,
+                                target_schema,
+                                &table_diff.name,
+                            );
+                            let index_name = idx_diff
+                                .target
+                                .as_ref()
+                                .map(|index| index.name.as_str())
+                                .unwrap_or(&idx_diff.name);
+                            if is_primary_index_name(index_name) {
                                 statements.push(SyncStatement {
                                     id: stmt_id,
-                                    sql: generate_create_index_sql(&table_ref, index, dialect),
-                                    kind: SyncStatementKind::CreateIndex,
+                                    sql: generate_drop_primary_key_sql(
+                                        target_db_type,
+                                        &table_ref,
+                                        index_name,
+                                        dialect,
+                                    ),
+                                    kind: SyncStatementKind::AlterTable,
+                                    object_name: Some(idx_diff.name.clone()),
+                                    row_key: None,
+                                    destructive: false,
+                                    transactional_safe: true,
+                                    selected_by_default: false,
+                                    warnings: vec![
+                                        "此操作会删除目标主键约束，请先确认依赖关系".to_string(),
+                                    ],
+                                });
+                            } else {
+                                statements.push(SyncStatement {
+                                    id: stmt_id,
+                                    sql: generate_drop_index_sql(
+                                        target_db_type,
+                                        &table_ref,
+                                        index_name,
+                                        dialect,
+                                    ),
+                                    kind: SyncStatementKind::DropIndex,
                                     object_name: Some(idx_diff.name.clone()),
                                     row_key: None,
                                     destructive: false,
@@ -807,29 +912,6 @@ fn build_schema_sync_plan_with_dialect(
                                 });
                             }
                         }
-                        DiffStatus::Removed => {
-                            let table_ref = dialect.format_table_reference(
-                                target_database,
-                                target_schema,
-                                &table_diff.name,
-                            );
-                            statements.push(SyncStatement {
-                                id: stmt_id,
-                                sql: generate_drop_index_sql(
-                                    target_db_type,
-                                    &table_ref,
-                                    &idx_diff.name,
-                                    dialect,
-                                ),
-                                kind: SyncStatementKind::DropIndex,
-                                object_name: Some(idx_diff.name.clone()),
-                                row_key: None,
-                                destructive: false,
-                                transactional_safe: true,
-                                selected_by_default: true,
-                                warnings: vec![],
-                            });
-                        }
                         DiffStatus::Modified => {
                             if let Some(index) = &idx_diff.source {
                                 let drop_index_name = idx_diff
@@ -837,39 +919,78 @@ fn build_schema_sync_plan_with_dialect(
                                     .as_ref()
                                     .map(|index| index.name.as_str())
                                     .unwrap_or(&idx_diff.name);
-                                statements.push(SyncStatement {
-                                    id: stmt_id,
-                                    sql: generate_drop_index_sql(
-                                        target_db_type,
-                                        &table_ref,
-                                        drop_index_name,
-                                        dialect,
-                                    ),
-                                    kind: SyncStatementKind::DropIndex,
-                                    object_name: Some(idx_diff.name.clone()),
-                                    row_key: None,
-                                    destructive: false,
-                                    transactional_safe: true,
-                                    selected_by_default: false,
-                                    warnings: vec![
-                                        "此操作会重建目标索引，请先确认现有索引可被替换"
-                                            .to_string(),
-                                    ],
-                                });
-                                statements.push(SyncStatement {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    sql: generate_create_index_sql(&table_ref, index, dialect),
-                                    kind: SyncStatementKind::CreateIndex,
-                                    object_name: Some(idx_diff.name.clone()),
-                                    row_key: None,
-                                    destructive: false,
-                                    transactional_safe: true,
-                                    selected_by_default: false,
-                                    warnings: vec![
-                                        "此操作会重建目标索引，请先确认现有索引可被替换"
-                                            .to_string(),
-                                    ],
-                                });
+                                if is_primary_index(index) || is_primary_index_name(drop_index_name)
+                                {
+                                    statements.push(SyncStatement {
+                                        id: stmt_id,
+                                        sql: generate_drop_primary_key_sql(
+                                            target_db_type,
+                                            &table_ref,
+                                            drop_index_name,
+                                            dialect,
+                                        ),
+                                        kind: SyncStatementKind::AlterTable,
+                                        object_name: Some(idx_diff.name.clone()),
+                                        row_key: None,
+                                        destructive: false,
+                                        transactional_safe: true,
+                                        selected_by_default: false,
+                                        warnings: vec![
+                                            "此操作会重建目标主键约束，请先确认依赖关系"
+                                                .to_string(),
+                                        ],
+                                    });
+                                    statements.push(SyncStatement {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        sql: generate_add_primary_key_sql(
+                                            &table_ref, index, dialect,
+                                        ),
+                                        kind: SyncStatementKind::AlterTable,
+                                        object_name: Some(idx_diff.name.clone()),
+                                        row_key: None,
+                                        destructive: false,
+                                        transactional_safe: true,
+                                        selected_by_default: false,
+                                        warnings: vec![
+                                            "此操作会重建目标主键约束，请先确认依赖关系"
+                                                .to_string(),
+                                        ],
+                                    });
+                                } else {
+                                    statements.push(SyncStatement {
+                                        id: stmt_id,
+                                        sql: generate_drop_index_sql(
+                                            target_db_type,
+                                            &table_ref,
+                                            drop_index_name,
+                                            dialect,
+                                        ),
+                                        kind: SyncStatementKind::DropIndex,
+                                        object_name: Some(idx_diff.name.clone()),
+                                        row_key: None,
+                                        destructive: false,
+                                        transactional_safe: true,
+                                        selected_by_default: false,
+                                        warnings: vec![
+                                            "此操作会重建目标索引，请先确认现有索引可被替换"
+                                                .to_string(),
+                                        ],
+                                    });
+                                    statements.push(SyncStatement {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        sql: generate_create_index_sql(&table_ref, index, dialect),
+                                        kind: SyncStatementKind::CreateIndex,
+                                        object_name: Some(idx_diff.name.clone()),
+                                        row_key: None,
+                                        destructive: false,
+                                        transactional_safe: true,
+                                        selected_by_default: false,
+                                        warnings: vec![
+                                            "此操作会重建目标索引，请先确认现有索引可被替换"
+                                                .to_string(),
+                                        ],
+                                    });
+                                }
                             }
                         }
                     }
@@ -941,14 +1062,30 @@ fn build_schema_sync_plan_with_dialect(
 
 fn table_schema_to_design(database: &str, table: &TableSchema) -> TableDesign {
     let mut design = TableDesign::new(database, table.name.clone());
+    let primary_columns = table
+        .indexes
+        .iter()
+        .find(|index| is_primary_index(index))
+        .map(|index| index.columns.clone())
+        .unwrap_or_default();
     design.columns = table
         .columns
         .iter()
-        .map(column_schema_to_definition)
+        .map(|column| {
+            let mut definition = column_schema_to_definition(column);
+            if primary_columns
+                .iter()
+                .any(|primary_column| primary_column.eq_ignore_ascii_case(&column.name))
+            {
+                definition = definition.primary_key(true);
+            }
+            definition
+        })
         .collect();
     design.indexes = table
         .indexes
         .iter()
+        .filter(|index| !is_primary_index(index))
         .map(|index| {
             IndexDefinition::new(index.name.clone())
                 .columns(index.columns.clone())
@@ -1461,6 +1598,70 @@ mod tests {
     }
 
     #[test]
+    fn test_mysql_schema_sync_plan_rebuilds_modified_primary_key() {
+        use super::super::{
+            DiffStatus, IndexDiff, IndexSchema, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let table = TableSchema {
+            name: "users".to_string(),
+            columns: vec![],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(table.clone()),
+                target: Some(table),
+                column_diffs: vec![],
+                index_diffs: vec![IndexDiff {
+                    name: "PRIMARY".to_string(),
+                    status: DiffStatus::Modified,
+                    source: Some(IndexSchema {
+                        name: "PRIMARY".to_string(),
+                        columns: vec!["uuid".to_string()],
+                        unique: true,
+                    }),
+                    target: Some(IndexSchema {
+                        name: "PRIMARY".to_string(),
+                        columns: vec!["id".to_string()],
+                        unique: true,
+                    }),
+                }],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+        let sql = plan
+            .statements
+            .iter()
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            sql,
+            vec![
+                "ALTER TABLE `app`.`users` DROP PRIMARY KEY;",
+                "ALTER TABLE `app`.`users` ADD PRIMARY KEY (`uuid`);",
+            ]
+        );
+        assert!(
+            plan.statements
+                .iter()
+                .all(|statement| !statement.selected_by_default)
+        );
+    }
+
+    #[test]
     fn test_mysql_schema_sync_plan_generates_foreign_key_sync_sql() {
         use super::super::{
             DiffStatus, ForeignKeyDiff, ForeignKeySchema, SchemaCompareResult, TableDiff,
@@ -1615,7 +1816,8 @@ mod tests {
     #[test]
     fn test_mysql_schema_sync_plan_adds_foreign_keys_after_added_table() {
         use super::super::{
-            ColumnSchema, DiffStatus, ForeignKeySchema, SchemaCompareResult, TableDiff, TableSchema,
+            ColumnSchema, DiffStatus, ForeignKeySchema, IndexSchema, SchemaCompareResult,
+            TableDiff, TableSchema,
         };
 
         let source = TableSchema {
@@ -1636,7 +1838,11 @@ mod tests {
                     comment: None,
                 },
             ],
-            indexes: vec![],
+            indexes: vec![IndexSchema {
+                name: "PRIMARY".to_string(),
+                columns: vec!["id".to_string()],
+                unique: true,
+            }],
             foreign_keys: vec![ForeignKeySchema {
                 name: "fk_order_items_order".to_string(),
                 columns: vec!["order_id".to_string()],
@@ -1673,6 +1879,8 @@ mod tests {
 
         assert_eq!(2, sql.len());
         assert!(sql[0].starts_with("CREATE TABLE `order_items`"));
+        assert!(sql[0].contains("PRIMARY KEY (`id`)"));
+        assert!(!sql[0].contains("UNIQUE INDEX `PRIMARY`"));
         assert_eq!(
             sql[1],
             "ALTER TABLE `app`.`order_items` ADD CONSTRAINT `fk_order_items_order` FOREIGN KEY (`order_id`) REFERENCES `app`.`orders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT;"
