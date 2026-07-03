@@ -30,7 +30,11 @@ use gpui::{
     InteractiveElement, IntoElement, ParentElement, Pixels, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
-use gpui_component::{Icon, IconName, Sizable, Size, h_flex, v_flex};
+use gpui_component::{
+    Icon, IconName, Sizable, Size,
+    button::{Button, ButtonVariants},
+    h_flex, v_flex,
+};
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::models::StoredConnection;
@@ -368,7 +372,8 @@ impl TerminalSidebar {
                 cx,
             )
         });
-        let quick_command_panel = cx.new(|cx| QuickCommandPanel::new(connection_id, window, cx));
+        let quick_command_panel =
+            cx.new(|cx| QuickCommandPanel::new(connection_id, colors.clone(), window, cx));
         let ai_chat_panel = cx.new(|cx| {
             if let Some(connection) = stored_connection.as_ref() {
                 let (resources, mentions) = build_agent_context_single(connection);
@@ -386,7 +391,13 @@ impl TerminalSidebar {
             .zip(ssh_session_manager)
             .map(|(_config, manager)| {
                 cx.new(|cx| {
-                    ServerMonitorPanel::new(connection_id, manager, auto_show_server_monitor, cx)
+                    ServerMonitorPanel::new(
+                        connection_id,
+                        manager,
+                        auto_show_server_monitor,
+                        colors.clone(),
+                        cx,
+                    )
                 })
             });
 
@@ -689,6 +700,14 @@ impl TerminalSidebar {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_current_theme(theme_clone, window, cx);
         });
+        self.quick_command_panel.update(cx, |panel, cx| {
+            panel.set_colors(self.colors.clone(), cx);
+        });
+        if let Some(ref monitor_panel) = self.server_monitor_panel {
+            monitor_panel.update(cx, |panel, cx| {
+                panel.set_colors(self.colors.clone(), cx);
+            });
+        }
 
         cx.notify();
     }
@@ -911,11 +930,79 @@ impl TerminalSidebar {
         &self,
         panel: SidebarPanel,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.panel_view(panel)
-            .map(|view| view.into_any_element())
-            .unwrap_or_else(|| div().into_any_element())
+        let Some(view) = self.panel_view(panel) else {
+            return div().into_any_element();
+        };
+        let needs_embedded_header = matches!(
+            panel,
+            SidebarPanel::Settings | SidebarPanel::QuickCommand | SidebarPanel::ServerMonitor
+        );
+        if !needs_embedded_header {
+            return view.into_any_element();
+        }
+
+        v_flex()
+            .size_full()
+            .child(self.render_embedded_panel_header(panel, cx))
+            .child(div().flex_1().min_h_0().overflow_hidden().child(view))
+            .into_any_element()
+    }
+
+    fn render_embedded_panel_header(
+        &self,
+        panel: SidebarPanel,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let border = self.colors.border;
+        let header_bg = self.colors.muted;
+        let text = self.colors.foreground;
+        let title: SharedString = match panel {
+            SidebarPanel::Settings => t!("Settings.title").to_string().into(),
+            _ => panel.title().into(),
+        };
+
+        h_flex()
+            .flex_shrink_0()
+            .w_full()
+            .h(px(40.0))
+            .px_3()
+            .items_center()
+            .justify_between()
+            .border_b_1()
+            .border_color(border)
+            .bg(header_bg)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        Icon::new(panel.icon_name())
+                            .with_size(Size::Small)
+                            .text_color(text),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(text)
+                            .child(title),
+                    ),
+            )
+            .child(
+                Button::new(SharedString::from(format!(
+                    "close-terminal-sidebar-panel-{}",
+                    panel.local_id()
+                )))
+                .icon(IconName::Close)
+                .ghost()
+                .xsmall()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_tool(panel, cx);
+                })),
+            )
+            .into_any_element()
     }
 }
 
