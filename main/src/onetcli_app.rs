@@ -29,6 +29,8 @@ actions!(
         ToggleAlwaysOnTop,
         MinimizeWindow,
         DuplicateTab,
+        SwitchNextTab,
+        SwitchPreviousTab,
         QuitApp,
     ]
 );
@@ -63,6 +65,7 @@ use one_core::settings::AppSettings;
 use one_core::split_tab_container::{SplitTabContainer, TabPaneFactory};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{TabContainer, TabContentRegistry, TabItem};
+use one_core::tab_navigation::{TabCycleDirection, tab_index_after_cycle};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -97,6 +100,32 @@ fn activate_tab_by_number(number: usize, cx: &mut App) {
                 if index < tc.tabs().len() {
                     tc.set_active_index(index, window, cx);
                 }
+            });
+        });
+    });
+}
+
+fn switch_tab(direction: TabCycleDirection, cx: &mut App) {
+    let Some(active_window) = cx.active_window() else {
+        return;
+    };
+    let Some(container) = cx.try_global::<GlobalTabContainer>() else {
+        return;
+    };
+    let container = container.tab_container.clone();
+
+    cx.defer(move |cx| {
+        _ = active_window.update(cx, |_, window, cx| {
+            container.update(cx, |tc, cx| {
+                let Some(index) = tab_index_after_cycle(
+                    tc.active_index(),
+                    tc.tabs().len(),
+                    tc.is_pinned_tab_active(),
+                    direction,
+                ) else {
+                    return;
+                };
+                tc.set_active_index(index, window, cx);
             });
         });
     });
@@ -409,6 +438,16 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .map(|key| KeyBinding::new(&key, DuplicateTab, None)),
     );
     keybindings.extend(
+        shortcuts_for(cx, action_id::APP_SWITCH_NEXT_TAB, &["ctrl-tab"])
+            .into_iter()
+            .map(|key| KeyBinding::new(&key, SwitchNextTab, None)),
+    );
+    keybindings.extend(
+        shortcuts_for(cx, action_id::APP_SWITCH_PREVIOUS_TAB, &["ctrl-shift-tab"])
+            .into_iter()
+            .map(|key| KeyBinding::new(&key, SwitchPreviousTab, None)),
+    );
+    keybindings.extend(
         shortcuts_for(
             cx,
             action_id::APP_QUIT,
@@ -460,6 +499,20 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
     ));
     keybindings.extend(rebind_keybindings(
         cx,
+        action_id::APP_SWITCH_NEXT_TAB,
+        &["ctrl-tab"],
+        None,
+        SwitchNextTab,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::APP_SWITCH_PREVIOUS_TAB,
+        &["ctrl-shift-tab"],
+        None,
+        SwitchPreviousTab,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
         action_id::APP_QUIT,
         &[default_shortcut("cmd-q", "alt-f4")],
         None,
@@ -481,6 +534,8 @@ fn init_action_handlers(cx: &mut App) {
     cx.on_action(|_: &ToggleFullscreen, cx| toggle_fullscreen(cx));
     cx.on_action(|_: &ToggleAlwaysOnTop, cx| toggle_always_on_top(cx));
     cx.on_action(|_: &DuplicateTab, cx| duplicate_tab(cx));
+    cx.on_action(|_: &SwitchNextTab, cx| switch_tab(TabCycleDirection::Next, cx));
+    cx.on_action(|_: &SwitchPreviousTab, cx| switch_tab(TabCycleDirection::Previous, cx));
     cx.on_action(|_: &QuitApp, cx| quit_app(cx));
     cx.on_action(|_: &OpenConnectionQuickOpen, cx| {
         let Some(active_window) = cx.active_window() else {

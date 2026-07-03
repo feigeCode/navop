@@ -1661,6 +1661,14 @@ Settings:
       en: "Switch to Tab N"
       zh-CN: "切换到第 N 个标签页"
       zh-HK: "切換到第 N 個標籤頁"
+    switch_next_tab:
+      en: Switch to Next Tab
+      zh-CN: 切换到下一个标签页
+      zh-HK: 切換到下一個標籤頁
+    switch_previous_tab:
+      en: Switch to Previous Tab
+      zh-CN: 切换到上一个标签页
+      zh-HK: 切換到上一個標籤頁
     duplicate_tab:
       en: Duplicate Tab
       zh-CN: 复制标签页

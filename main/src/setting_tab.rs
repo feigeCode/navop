@@ -2405,6 +2405,20 @@ const TAB_SHORTCUTS: &[ShortcutEntry] = &[
         system_hotkey: false,
     },
     ShortcutEntry {
+        keys_macos: &["ctrl-tab"],
+        keys_other: &["ctrl-tab"],
+        label_key: "Settings.Shortcuts.switch_next_tab",
+        action_id: Some(action_id::APP_SWITCH_NEXT_TAB),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
+        keys_macos: &["ctrl-shift-tab"],
+        keys_other: &["ctrl-shift-tab"],
+        label_key: "Settings.Shortcuts.switch_previous_tab",
+        action_id: Some(action_id::APP_SWITCH_PREVIOUS_TAB),
+        system_hotkey: false,
+    },
+    ShortcutEntry {
         keys_macos: &["cmd-o"],
         keys_other: &["alt-o"],
         label_key: "Settings.Shortcuts.quick_open",

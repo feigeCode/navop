@@ -2037,6 +2037,7 @@ impl TerminalView {
                 self.sync_ssh_mfa_inputs(window, cx);
                 self.focus_terminal_after_connect_if_ready(window, cx);
                 self.refresh_history_prompt_matches(cx);
+                cx.emit(TabContentEvent::ContentChanged);
                 cx.notify();
             }
             TerminalModelEvent::SshMfaChanged => {

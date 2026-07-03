@@ -1,4 +1,5 @@
 use gpui::SharedString;
+use std::collections::HashSet;
 
 pub const TAB_TITLE_METADATA_KEY: &str = "tab_title";
 
@@ -44,9 +45,25 @@ pub fn duplicate_tab_id(source_id: &str, mut exists: impl FnMut(&str) -> bool) -
     }
 }
 
+pub fn mark_tab_activity(
+    activity_tabs: &mut HashSet<String>,
+    tab_id: &str,
+    tab_is_active: bool,
+) -> bool {
+    if tab_is_active {
+        return false;
+    }
+    activity_tabs.insert(tab_id.to_string())
+}
+
+pub fn clear_tab_activity(activity_tabs: &mut HashSet<String>, tab_id: &str) -> bool {
+    activity_tabs.remove(tab_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn title_override_uses_trimmed_custom_title() {
@@ -86,5 +103,25 @@ mod tests {
         let id = duplicate_tab_id("terminal-1", |candidate| existing.contains(&candidate));
 
         assert_eq!("terminal-1-duplicate-3", id);
+    }
+
+    #[test]
+    fn activity_marker_ignores_active_tab_and_marks_inactive_tab() {
+        let mut activity_tabs = HashSet::new();
+
+        assert!(!mark_tab_activity(&mut activity_tabs, "terminal-1", true));
+        assert!(activity_tabs.is_empty());
+
+        assert!(mark_tab_activity(&mut activity_tabs, "terminal-2", false));
+        assert!(activity_tabs.contains("terminal-2"));
+    }
+
+    #[test]
+    fn activity_marker_is_cleared_when_tab_is_activated() {
+        let mut activity_tabs = HashSet::from(["terminal-2".to_string()]);
+
+        assert!(clear_tab_activity(&mut activity_tabs, "terminal-2"));
+        assert!(!activity_tabs.contains("terminal-2"));
+        assert!(!clear_tab_activity(&mut activity_tabs, "terminal-2"));
     }
 }

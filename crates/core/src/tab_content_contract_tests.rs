@@ -1,4 +1,4 @@
-use crate::tab_container::TabContentView;
+use crate::tab_container::{TabContentEvent, TabContentView};
 use gpui::App;
 
 #[test]
@@ -18,4 +18,9 @@ fn tab_content_view_exposes_tab_action_contracts() {
         &mut gpui::Window,
         &mut App,
     ) -> Option<std::sync::Arc<dyn TabContentView>> = <dyn TabContentView>::duplicate;
+}
+
+#[test]
+fn tab_content_event_exposes_content_changed_contract() {
+    let _event = TabContentEvent::ContentChanged;
 }

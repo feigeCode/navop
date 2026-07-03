@@ -4,7 +4,8 @@ use crate::sidebar_contribution::{
     sidebar_panel_renders_header,
 };
 use crate::tab_actions::{
-    TAB_TITLE_METADATA_KEY, duplicate_tab_id, normalize_title, resolve_tab_title,
+    TAB_TITLE_METADATA_KEY, clear_tab_activity, duplicate_tab_id, mark_tab_activity,
+    normalize_title, resolve_tab_title,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -117,6 +118,8 @@ pub(crate) fn sidebar_panel_blocks_exclusive_target(
 pub enum TabContentEvent {
     /// Tab state changed
     StateChanged,
+    /// Tab content changed while it may be inactive.
+    ContentChanged,
 }
 
 /// Events emitted by TabContainer
@@ -428,8 +431,8 @@ impl<T: TabContent> TabContentView for Entity<T> {
         cx.subscribe_in(
             self,
             window,
-            |container, _content, event: &TabContentEvent, _window, cx| {
-                container.handle_tab_content_event(event, cx);
+            |container, content, event: &TabContentEvent, _window, cx| {
+                container.handle_tab_content_event(content.entity_id(), event, cx);
             },
         )
     }
@@ -946,6 +949,7 @@ pub struct TabContainer {
     list_popover_open: bool,
     tab_list: Option<Entity<ListState<TabListDelegate>>>,
     closing_tabs: HashSet<SharedString>,
+    activity_tabs: HashSet<String>,
     tab_content_subscriptions: Vec<Subscription>,
     renaming_tab_id: Option<SharedString>,
     rename_input: Option<Entity<InputState>>,
@@ -991,6 +995,7 @@ impl TabContainer {
             list_popover_open: false,
             tab_list: None,
             closing_tabs: HashSet::new(),
+            activity_tabs: HashSet::new(),
             tab_content_subscriptions: Vec::new(),
             renaming_tab_id: None,
             rename_input: None,
@@ -1159,13 +1164,40 @@ impl TabContainer {
             .push(tab.content().subscribe_events(window, cx));
     }
 
-    fn handle_tab_content_event(&mut self, event: &TabContentEvent, cx: &mut Context<Self>) {
+    fn handle_tab_content_event(
+        &mut self,
+        content_id: EntityId,
+        event: &TabContentEvent,
+        cx: &mut Context<Self>,
+    ) {
         match event {
             TabContentEvent::StateChanged => {
                 cx.emit(TabContainerEvent::LayoutChanged);
                 cx.notify();
             }
+            TabContentEvent::ContentChanged => {
+                if self.mark_content_activity(content_id, cx) {
+                    cx.notify();
+                }
+            }
         }
+    }
+
+    fn mark_content_activity(&mut self, content_id: EntityId, cx: &App) -> bool {
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.content().content_id(cx) == content_id)
+        else {
+            return false;
+        };
+        let tab_id = self.tabs[index].id().to_string();
+        let tab_is_active = self.regular_tab_is_active(index);
+        mark_tab_activity(&mut self.activity_tabs, &tab_id, tab_is_active)
+    }
+
+    fn regular_tab_is_active(&self, index: usize) -> bool {
+        !self.pinned_tab_active && index == self.active_index
     }
 
     /// Add a new tab and activate it
@@ -1283,6 +1315,7 @@ impl TabContainer {
             let removed_tab_id = self.tabs[index].id();
             self.tabs.remove(index);
             self.closing_tabs.remove(&removed_tab_id);
+            clear_tab_activity(&mut self.activity_tabs, removed_tab_id.as_ref());
 
             if self.tabs.is_empty() {
                 // All regular tabs closed, activate pinned tab if present
@@ -1628,6 +1661,7 @@ impl TabContainer {
             } else {
                 String::new()
             };
+            clear_tab_activity(&mut self.activity_tabs, &tab_id);
 
             cx.emit(TabContainerEvent::TabActivated { index, id: tab_id });
             cx.emit(TabContainerEvent::LayoutChanged);
@@ -1840,6 +1874,7 @@ impl TabContainer {
         cx: &mut App,
     ) {
         self.tabs.clear();
+        self.activity_tabs.clear();
 
         for tab_state in &state.tabs {
             if let Some(content) = registry.build(tab_state, window, cx) {
@@ -1916,6 +1951,7 @@ impl TabContainer {
 
         let was_active = !self.pinned_tab_active && index == self.active_index;
         let tab = self.tabs.remove(index);
+        clear_tab_activity(&mut self.activity_tabs, tab.id().as_ref());
 
         if self.tabs.is_empty() {
             self.active_index = 0;
@@ -3214,15 +3250,19 @@ impl TabContainer {
                         let view_clone = view.clone();
                         let title_clone = title.clone();
                         let tab_width = self.get_tab_width(tab, cx);
+                        let tab_id = tab.id();
+                        let has_activity =
+                            !is_active && self.activity_tabs.contains(tab_id.as_ref());
                         let rename_input_for_tab = self
                             .renaming_tab_id
                             .as_ref()
-                            .filter(|renaming_id| *renaming_id == &tab.id())
+                            .filter(|renaming_id| *renaming_id == &tab_id)
                             .and_then(|_| self.rename_input.clone());
 
                         div()
                             .id(idx)
                             .flex()
+                            .relative()
                             .flex_shrink_0()
                             .overflow_hidden()
                             .items_center()
@@ -3236,6 +3276,18 @@ impl TabContainer {
                             .when(!is_active, |el| {
                                 el.hover(move |style| style.bg(hover_tab_color))
                                     .bg(inactive_tab_color)
+                            })
+                            .when(has_activity, |el| {
+                                el.child(
+                                    div()
+                                        .id(SharedString::from(format!("tab-activity-{idx}")))
+                                        .absolute()
+                                        .top(px(5.0))
+                                        .left(px(6.0))
+                                        .size(px(7.0))
+                                        .rounded_full()
+                                        .bg(gpui::rgb(0x22c55e)),
+                                )
                             })
                             .when(allow_tab_drag, |el| {
                                 el.cursor_grab()
