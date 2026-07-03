@@ -116,18 +116,23 @@ fn agent_runtime_tool_registry_uses_native_ssh_sftp_tools(cx: &mut TestAppContex
     assert!(names.contains(&"ssh_read_file".to_string()));
     assert!(names.contains(&"ssh_file_stat".to_string()));
     assert!(names.contains(&"ssh_write_file".to_string()));
+    assert!(names.contains(&"sftp_list".to_string()));
+    assert!(names.contains(&"sftp_read".to_string()));
+    assert!(names.contains(&"sftp_write".to_string()));
+    assert!(names.contains(&"sftp_stat".to_string()));
+    assert!(names.contains(&"sftp_upload".to_string()));
+    assert!(names.contains(&"sftp_download".to_string()));
     assert!(
         !names.contains(&"sftp.write".to_string()),
         "Agent registry should not expose the old MCP sftp.write adapter"
     );
-    let write = registry
-        .get(&ToolName::new("ssh_write_file"))
-        .expect("ssh write tool");
-    assert_eq!(
-        RiskLevel::High,
-        write.spec(&ResourceContext::new()).risk,
-        "SSH/SFTP writes must require approval through high risk"
-    );
+    assert_tool_risk(&registry, "ssh_write_file", RiskLevel::High);
+    assert_tool_risk(&registry, "sftp.list", RiskLevel::Read);
+    assert_tool_risk(&registry, "sftp.read", RiskLevel::Read);
+    assert_tool_risk(&registry, "sftp.write", RiskLevel::High);
+    assert_tool_risk(&registry, "sftp.stat", RiskLevel::Read);
+    assert_tool_risk(&registry, "sftp.upload", RiskLevel::High);
+    assert_tool_risk(&registry, "sftp.download", RiskLevel::High);
 }
 
 fn register_connection_repository(cx: &mut gpui::App) {

@@ -142,7 +142,11 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
     }
     if agent_sftp_enabled {
         if let Some(repo) = connection_repository(cx) {
-            onetcli_runtime::agent_ssh_tools::register_agent_ssh_tools(repo, &mut agent_registry);
+            onetcli_runtime::agent_ssh_tools::register_agent_ssh_tools(
+                repo.clone(),
+                &mut agent_registry,
+            );
+            register_runtime_sftp_tools(repo, &mut agent_registry);
         } else {
             tracing::warn!("Agent SSH/SFTP tools enabled without ConnectionRepository");
         }
@@ -161,6 +165,18 @@ fn register_runtime_redis_tools(cx: &App, agent_registry: &mut agent_runtime::To
         tool_runtime::ToolAdapter::FunctionCalling,
     );
     agent_registry.extend(runtime_agent_redis_registry);
+}
+
+fn register_runtime_sftp_tools(
+    repo: std::sync::Arc<one_core::storage::ConnectionRepository>,
+    agent_registry: &mut agent_runtime::ToolRegistry,
+) {
+    let runtime_sftp_registry = onetcli_runtime::sftp_tools::sftp_tool_registry(repo);
+    let runtime_agent_sftp_registry = agent_runtime::tools::tool_runtime_agent_tool_registry(
+        runtime_sftp_registry,
+        tool_runtime::ToolAdapter::FunctionCalling,
+    );
+    agent_registry.extend(runtime_agent_sftp_registry);
 }
 
 fn connection_repository(
