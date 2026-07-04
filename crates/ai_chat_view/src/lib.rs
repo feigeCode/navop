@@ -51,6 +51,7 @@ mod resource_builder_tests;
 mod send_button;
 mod session_service;
 mod session_sidebar;
+mod theme;
 #[cfg(test)]
 mod workbench_tab_tests;
 
@@ -62,9 +63,7 @@ pub use acp::{
 pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData};
 pub use agent_tab::{AGENT_TAB_CONTENT_KEY, AgentTabContent};
 pub use agent_transcript::AgentTranscript;
-pub use agent_view::{
-    AgentChatTheme, AgentChatView, AgentChatViewConfig, AgentChatViewEvent, AgentRuntimeFactory,
-};
+pub use agent_view::{AgentChatView, AgentChatViewConfig, AgentChatViewEvent, AgentRuntimeFactory};
 pub use ask_ai::{
     AskAiButton, AskAiEvent, AskAiNotifier, emit_ask_ai_event, emit_ask_ai_event_app,
     format_ask_ai_message, get_ask_ai_notifier, init_ask_ai_notifier,
@@ -116,6 +115,7 @@ pub use resource_builder::{
 pub use send_button::{SendButton, SendButtonEvent, SendButtonState};
 pub use session_service::{SessionError, SessionService, extract_session_name};
 pub use session_sidebar::{SessionSummary, format_timestamp, session_row};
+pub use theme::AgentChatTheme;
 
 /// 初始化 `ai_chat_view`:确保全局卡片注册表存在。
 ///

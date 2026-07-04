@@ -19,7 +19,7 @@ use agent_runtime::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AppContext, Context, Entity, EventEmitter, FontWeight, Hsla, InteractiveElement,
+    Anchor, App, AppContext, Context, Entity, EventEmitter, FontWeight, InteractiveElement,
     IntoElement, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
     Styled, Subscription, Task, Window, div, px,
 };
@@ -51,6 +51,7 @@ use crate::input::{
 use crate::message_view::render_messages_with_code_actions;
 use crate::persistence;
 use crate::session_sidebar::{self, SessionSummary};
+use crate::theme::{AgentChatTheme, resolve_agent_chat_theme};
 
 /// Agent 聊天视图事件。
 #[derive(Clone, Debug)]
@@ -141,35 +142,8 @@ pub struct AgentChatViewConfig {
     pub sidebar_mode: bool,
     /// 可接入的外部 ACP agent(自定义命令)。非空时头部显示后端切换控件。
     pub acp_agents: Vec<AcpAgentConfig>,
-    /// 可选的局部主题色,用于嵌入终端等非全局应用主题的容器。
+    /// 可选的局部聊天主题。用于终端侧边栏等嵌入场景,普通 Agent tab 保持应用主题。
     pub theme: Option<AgentChatTheme>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct AgentChatTheme {
-    pub background: Hsla,
-    pub foreground: Hsla,
-    pub muted: Hsla,
-    pub muted_foreground: Hsla,
-    pub border: Hsla,
-}
-
-impl AgentChatTheme {
-    pub fn new(
-        background: Hsla,
-        foreground: Hsla,
-        muted: Hsla,
-        muted_foreground: Hsla,
-        border: Hsla,
-    ) -> Self {
-        Self {
-            background,
-            foreground,
-            muted,
-            muted_foreground,
-            border,
-        }
-    }
 }
 
 impl AgentChatViewConfig {
@@ -206,8 +180,9 @@ impl AgentChatViewConfig {
         self
     }
 
-    pub fn with_theme(mut self, theme: Option<AgentChatTheme>) -> Self {
-        self.theme = theme;
+    /// 注入局部聊天主题。
+    pub fn with_theme(mut self, theme: AgentChatTheme) -> Self {
+        self.theme = Some(theme);
         self
     }
 
@@ -381,10 +356,10 @@ pub struct AgentChatView {
     is_running: bool,
     /// 系统提示词（可选，用于自定义 AI 行为）。
     system_instruction: Option<String>,
-    /// 局部主题色覆盖。
-    theme: Option<AgentChatTheme>,
     /// 代码块操作注册表。
     code_block_actions: CodeBlockActionRegistry,
+    /// 可选的局部聊天主题。
+    theme: Option<AgentChatTheme>,
     /// 是否侧边栏模式。
     _subscriptions: Vec<Subscription>,
     _event_task: Task<()>,
@@ -532,11 +507,6 @@ impl AgentChatView {
             _subscriptions: subscriptions,
             _event_task: event_task,
         }
-    }
-
-    pub fn set_theme(&mut self, theme: Option<AgentChatTheme>, cx: &mut Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 
     fn spawn_event_pump(
@@ -1401,6 +1371,11 @@ impl AgentChatView {
         self.code_block_actions.register(action);
     }
 
+    pub fn set_theme(&mut self, theme: Option<AgentChatTheme>, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
     /// 渲染单个会话行:活跃视图可点击切换 + 重命名/归档/删除;归档视图为恢复/永久删除。
     fn render_session_row(
         &self,
@@ -1617,8 +1592,9 @@ impl AgentChatView {
 
     /// 侧边栏视图(窄面板)头部:标题 + 新建对话 + 历史记录(Popover)。
     fn render_sidebar_mode_header(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let border = cx.theme().border;
-        let muted = cx.theme().muted;
+        let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
+        let border = theme.border;
+        let muted = theme.muted;
         let history_open = self.history_popover_open;
         // 仅在打开时构建列表,避免每帧渲染全部会话行。
         let history_list = history_open.then(|| self.render_history_list(cx));
@@ -1683,16 +1659,18 @@ impl AgentChatView {
 
     /// 历史记录 Popover 内容:小标题 + 活跃/归档切换 + 会话行列表(复用行渲染)。
     fn render_history_list(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let border = cx.theme().border;
+        let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
+        let border = theme.border;
         // ACP 模式:会话由外部 agent 管理,不展示本地列表。
         if self.backend == Backend::Acp {
             return v_flex()
                 .w(px(300.0))
                 .p_3()
+                .bg(theme.background)
                 .child(
                     div()
                         .text_sm()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(theme.muted_foreground)
                         .child("ACP 任务由外部 agent 管理,不在此持久化。"),
                 )
                 .into_any_element();
@@ -1707,6 +1685,8 @@ impl AgentChatView {
 
         v_flex()
             .w(px(300.0))
+            .bg(theme.background)
+            .text_color(theme.foreground)
             .child(
                 h_flex()
                     .w_full()
@@ -1752,7 +1732,7 @@ impl AgentChatView {
                     .px_3()
                     .py_4()
                     .text_sm()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(theme.muted_foreground)
                     .child(if show_archived {
                         "暂无已归档会话"
                     } else {
@@ -1825,19 +1805,12 @@ impl Render for AgentChatView {
         if self.auto_scroll.take_pending_for_render() {
             self.scroll_handle.scroll_to_bottom();
         }
-        let theme = self.theme.unwrap_or_else(|| {
-            AgentChatTheme::new(
-                cx.theme().background,
-                cx.theme().foreground,
-                cx.theme().muted,
-                cx.theme().muted_foreground,
-                cx.theme().border,
-            )
-        });
+        let chat_theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
         let messages = render_messages_with_code_actions(
             &self.transcript.messages,
             &self.scroll_handle,
             Some(&self.code_block_actions),
+            Some(&chat_theme),
             window,
             cx,
         );
@@ -1846,9 +1819,8 @@ impl Render for AgentChatView {
             .w_full()
             .flex_shrink_0()
             .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .text_color(theme.foreground)
+            .border_color(chat_theme.border)
+            .bg(chat_theme.background)
             .child(
                 v_flex()
                     .w_full()
@@ -1861,8 +1833,8 @@ impl Render for AgentChatView {
             let header = self.render_sidebar_mode_header(cx);
             div()
                 .size_full()
-                .bg(theme.background)
-                .text_color(theme.foreground)
+                .text_color(chat_theme.foreground)
+                .bg(chat_theme.background)
                 .on_action(cx.listener(Self::approve_tool_call))
                 .on_action(cx.listener(Self::reject_tool_call))
                 .child(
@@ -1878,8 +1850,8 @@ impl Render for AgentChatView {
             let toolbar = self.render_toolbar(cx);
             div()
                 .size_full()
-                .bg(theme.background)
-                .text_color(theme.foreground)
+                .text_color(chat_theme.foreground)
+                .bg(chat_theme.background)
                 .on_action(cx.listener(Self::approve_tool_call))
                 .on_action(cx.listener(Self::reject_tool_call))
                 .child(
