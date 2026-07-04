@@ -3,12 +3,13 @@ use std::rc::Rc;
 use gpui::{
     Action, AnyElement, App, AppContext, Context, DismissEvent, Empty, Entity, EventEmitter,
     Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Point,
-    Render, RenderOnce, SharedString, Styled, StyledText, Subscription, Window, deferred, div,
-    prelude::FluentBuilder, px, relative,
+    Render, RenderOnce, SharedString, Size, Styled, StyledText, Subscription, Window, deferred,
+    div, prelude::FluentBuilder, px, relative,
 };
 use lsp_types::{CompletionItem, CompletionTextEdit};
 
 const MAX_MENU_WIDTH: Pixels = px(320.);
+const MIN_MENU_WIDTH: Pixels = px(120.);
 const MAX_MENU_HEIGHT: Pixels = px(240.);
 const POPOVER_GAP: Pixels = px(4.);
 
@@ -178,6 +179,50 @@ pub struct CompletionMenu {
     pub(crate) trigger_start_offset: Option<usize>,
     query: SharedString,
     _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CompletionMenuLayout {
+    position: Point<Pixels>,
+    max_width: Pixels,
+    documentation_width: Pixels,
+    menu_max_height: Pixels,
+    vertical_layout: bool,
+}
+
+fn completion_menu_layout(
+    preferred_position: Point<Pixels>,
+    input_origin: Point<Pixels>,
+    window_size: Size<Pixels>,
+) -> CompletionMenuLayout {
+    let preferred_abs_x = input_origin.x + preferred_position.x;
+    let preferred_abs_y = input_origin.y + preferred_position.y;
+    let max_abs_x = (window_size.width - MIN_MENU_WIDTH).max(px(0.));
+    let abs_x = preferred_abs_x.max(px(0.)).min(max_abs_x);
+    let available_width = (window_size.width - abs_x).max(MIN_MENU_WIDTH);
+    let max_width = MAX_MENU_WIDTH.min(available_width);
+    let below_space = window_size.height - preferred_abs_y;
+    let abs_y = if below_space >= MAX_MENU_HEIGHT || preferred_abs_y <= MAX_MENU_HEIGHT {
+        preferred_abs_y.max(px(0.))
+    } else {
+        (preferred_abs_y - MAX_MENU_HEIGHT - POPOVER_GAP).max(px(0.))
+    };
+    let menu_max_height = MAX_MENU_HEIGHT.min((window_size.height - abs_y).max(px(80.)));
+    let vertical_layout =
+        abs_x + MAX_MENU_WIDTH + POPOVER_GAP + MAX_MENU_WIDTH + POPOVER_GAP > window_size.width;
+    let documentation_width = if vertical_layout {
+        max_width
+    } else {
+        MAX_MENU_WIDTH
+    };
+
+    CompletionMenuLayout {
+        position: Point::new(abs_x - input_origin.x, abs_y - input_origin.y),
+        max_width,
+        documentation_width,
+        menu_max_height,
+        vertical_layout,
+    }
 }
 
 impl CompletionMenu {
@@ -408,41 +453,38 @@ impl Render for CompletionMenu {
             .selected_item()
             .and_then(|item| item.documentation.clone());
 
-        let max_width = MAX_MENU_WIDTH.min(window.bounds().size.width - pos.x);
-        let abs_pos = self.editor.read(cx).input_bounds.origin + pos;
-        let vertical_layout =
-            abs_pos.x + MAX_MENU_WIDTH + POPOVER_GAP + MAX_MENU_WIDTH + POPOVER_GAP
-                > window.bounds().size.width;
+        let input_origin = self.editor.read(cx).input_bounds.origin;
+        let layout = completion_menu_layout(pos, input_origin, window.bounds().size);
 
         deferred(
             div()
                 .absolute()
-                .left(pos.x)
-                .top(pos.y)
+                .left(layout.position.x)
+                .top(layout.position.y)
                 .flex()
                 .flex_row()
                 .gap(POPOVER_GAP)
                 .items_start()
-                .when(vertical_layout, |this| this.flex_col())
+                .when(layout.vertical_layout, |this| this.flex_col())
                 .child(
                     editor_popover("completion-menu", cx)
-                        .max_w(max_width)
-                        .min_w(px(120.))
-                        .child(List::new(&self.list).max_h(MAX_MENU_HEIGHT)),
+                        .max_w(layout.max_width)
+                        .min_w(MIN_MENU_WIDTH)
+                        .child(List::new(&self.list).max_h(layout.menu_max_height)),
                 )
                 .when_some(selected_documentation, |this, documentation| {
                     let mut doc = match documentation {
                         lsp_types::Documentation::String(s) => s.clone(),
                         lsp_types::Documentation::MarkupContent(mc) => mc.value.clone(),
                     };
-                    if vertical_layout {
+                    if layout.vertical_layout {
                         doc = doc.split("\n").next().unwrap_or_default().to_string();
                     }
 
                     this.child(
                         div().child(
                             editor_popover("completion-menu", cx)
-                                .w(MAX_MENU_WIDTH)
+                                .w(layout.documentation_width)
                                 .px_2()
                                 .child(render_markdown("doc", doc, window, cx)),
                         ),
@@ -453,5 +495,36 @@ impl Render for CompletionMenu {
                 })),
         )
         .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_MENU_HEIGHT, MIN_MENU_WIDTH, POPOVER_GAP, completion_menu_layout};
+    use gpui::{Point, px, size};
+
+    #[test]
+    fn completion_menu_flips_above_when_bottom_space_is_tight() {
+        let layout = completion_menu_layout(
+            Point::new(px(32.), px(280.)),
+            Point::new(px(0.), px(0.)),
+            size(px(420.), px(300.)),
+        );
+
+        assert_eq!(px(280.) - MAX_MENU_HEIGHT - POPOVER_GAP, layout.position.y);
+        assert_eq!(MAX_MENU_HEIGHT, layout.menu_max_height);
+    }
+
+    #[test]
+    fn completion_menu_keeps_min_width_when_cursor_is_near_right_edge() {
+        let layout = completion_menu_layout(
+            Point::new(px(380.), px(32.)),
+            Point::new(px(0.), px(0.)),
+            size(px(420.), px(300.)),
+        );
+
+        assert_eq!(px(300.), layout.position.x);
+        assert_eq!(MIN_MENU_WIDTH, layout.max_width);
+        assert_eq!(MIN_MENU_WIDTH, layout.documentation_width);
     }
 }

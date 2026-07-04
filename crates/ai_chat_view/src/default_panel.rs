@@ -10,8 +10,9 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
 use one_core::{
+    connection_notifier::{ConnectionDataEvent, get_notifier},
     llm::{GlobalProviderState, ProviderConfig, storage::ProviderRepository},
-    storage::{GlobalStorageState, traits::Repository},
+    storage::{ConnectionRepository, GlobalStorageState, StoredConnection, traits::Repository},
     tab_container::{TabContent, TabContentEvent},
 };
 
@@ -31,6 +32,26 @@ pub(crate) enum DefaultAgentChatPanelMode {
     Workbench,
 }
 
+pub(crate) fn should_refresh_resource_catalog(event: &ConnectionDataEvent) -> bool {
+    matches!(
+        event,
+        ConnectionDataEvent::ConnectionCreated { .. }
+            | ConnectionDataEvent::ConnectionUpdated { .. }
+            | ConnectionDataEvent::ConnectionDeleted { .. }
+    )
+}
+
+fn list_connections(cx: &mut Context<DefaultAgentChatPanel>) -> Option<Vec<StoredConnection>> {
+    let storage_state = cx.try_global::<GlobalStorageState>()?;
+    Some(
+        storage_state
+            .storage
+            .get::<ConnectionRepository>()
+            .and_then(|repo| repo.list().ok())
+            .unwrap_or_default(),
+    )
+}
+
 pub struct DefaultAgentChatPanel {
     focus_handle: FocusHandle,
     mode: DefaultAgentChatPanelMode,
@@ -43,7 +64,9 @@ pub struct DefaultAgentChatPanel {
         Vec<MentionItem>,
         Vec<agent_runtime::ResourceRef>,
     )>,
+    pending_resource_catalog: Option<(Vec<MentionItem>, Vec<agent_runtime::ResourceRef>)>,
     pending_code_block_actions: Vec<CodeBlockAction>,
+    connection_subscription: Option<Subscription>,
     theme: Option<AgentChatTheme>,
     error: Option<String>,
 }
@@ -167,7 +190,7 @@ impl DefaultAgentChatPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let panel = Self {
+        let mut panel = Self {
             focus_handle: cx.focus_handle(),
             mode,
             view: None,
@@ -175,12 +198,37 @@ impl DefaultAgentChatPanel {
             pending_message: None,
             pending_system_instruction: None,
             pending_resource_context: None,
+            pending_resource_catalog: None,
             pending_code_block_actions: Vec::new(),
+            connection_subscription: None,
             theme: None,
             error: None,
         };
+        panel.subscribe_connection_events(cx);
         Self::spawn_build_view(resources, mentions, available_resources, mode, window, cx);
         panel
+    }
+
+    fn subscribe_connection_events(&mut self, cx: &mut Context<Self>) {
+        let Some(notifier) = get_notifier(cx) else {
+            return;
+        };
+        self.connection_subscription = Some(cx.subscribe(
+            &notifier,
+            |this, _, event: &ConnectionDataEvent, cx| {
+                if should_refresh_resource_catalog(event) {
+                    this.refresh_resource_catalog(cx);
+                }
+            },
+        ));
+    }
+
+    fn refresh_resource_catalog(&mut self, cx: &mut Context<Self>) {
+        let Some(connections) = list_connections(cx) else {
+            return;
+        };
+        let (_, catalog, mentions) = crate::build_workbench_resource_state(&connections);
+        self.set_resource_catalog(mentions, catalog.resources, cx);
     }
 
     pub fn send_external_message(&mut self, message: String, cx: &mut Context<Self>) {
@@ -229,6 +277,29 @@ impl DefaultAgentChatPanel {
             });
         } else {
             self.pending_resource_context = Some((resources, mentions, available_resources));
+            self.pending_resource_catalog = None;
+            cx.notify();
+        }
+    }
+
+    pub fn set_resource_catalog(
+        &mut self,
+        mentions: Vec<MentionItem>,
+        available_resources: Vec<agent_runtime::ResourceRef>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| {
+                view.set_resource_catalog(mentions, available_resources, cx);
+            });
+        } else if let Some((_, pending_mentions, pending_available_resources)) =
+            self.pending_resource_context.as_mut()
+        {
+            *pending_mentions = mentions;
+            *pending_available_resources = available_resources;
+            cx.notify();
+        } else {
+            self.pending_resource_catalog = Some((mentions, available_resources));
             cx.notify();
         }
     }
@@ -321,6 +392,13 @@ impl DefaultAgentChatPanel {
                                         available_resources,
                                         cx,
                                     );
+                                });
+                            }
+                            if let Some((mentions, available_resources)) =
+                                panel.pending_resource_catalog.take()
+                            {
+                                view.update(cx, |view, cx| {
+                                    view.set_resource_catalog(mentions, available_resources, cx);
                                 });
                             }
                             for action in panel.pending_code_block_actions.drain(..) {

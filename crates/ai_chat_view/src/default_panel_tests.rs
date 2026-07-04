@@ -1,13 +1,15 @@
 use crate::default_panel::{
     DefaultAgentChatPanelMode, build_sidebar_config, build_workbench_config,
-    enabled_provider_configs, panel_title_for_mode,
+    enabled_provider_configs, panel_title_for_mode, should_refresh_resource_catalog,
 };
 use crate::{AcpAgentConfig, AgentChatViewConfig};
 use agent_runtime::model::{MockModelClient, ModelClient};
 use agent_runtime::{
     ResourceContext, ResourceKind, ResourceRef, Runtime, RuntimeServices, ToolRegistry, ToolRouter,
 };
+use one_core::connection_notifier::ConnectionDataEvent;
 use one_core::llm::{ProviderConfig, ProviderType};
+use one_core::storage::{ConnectionType, StoredConnection};
 use std::sync::Arc;
 
 #[test]
@@ -90,10 +92,64 @@ fn workbench_mode_uses_workbench_tab_title() {
     );
 }
 
+#[test]
+fn resource_catalog_refreshes_only_for_connection_list_changes() {
+    assert!(should_refresh_resource_catalog(
+        &ConnectionDataEvent::ConnectionCreated {
+            connection: stored_connection_for_event(1),
+        },
+    ));
+    assert!(should_refresh_resource_catalog(
+        &ConnectionDataEvent::ConnectionUpdated {
+            connection: stored_connection_for_event(1),
+        },
+    ));
+    assert!(should_refresh_resource_catalog(
+        &ConnectionDataEvent::ConnectionDeleted {
+            connection_id: 1,
+            cloud_id: None,
+        },
+    ));
+    assert!(!should_refresh_resource_catalog(
+        &ConnectionDataEvent::SchemaChanged {
+            connection_id: "1".to_string(),
+            database: "ai_app".to_string(),
+            schema: None,
+        },
+    ));
+    assert!(!should_refresh_resource_catalog(
+        &ConnectionDataEvent::CloudSyncRequested,
+    ));
+    assert!(!should_refresh_resource_catalog(
+        &ConnectionDataEvent::WorkspaceCreated { workspace_id: 1 },
+    ));
+}
+
 fn test_runtime() -> Arc<Runtime> {
     let model: Arc<dyn ModelClient> = Arc::new(MockModelClient::new([]));
     Arc::new(Runtime::new(RuntimeServices::new(
         model,
         Arc::new(ToolRouter::new(ToolRegistry::new())),
     )))
+}
+
+fn stored_connection_for_event(id: i64) -> StoredConnection {
+    StoredConnection {
+        id: Some(id),
+        name: format!("conn-{id}"),
+        connection_type: ConnectionType::SshSftp,
+        params: "{}".to_string(),
+        workspace_id: None,
+        selected_databases: None,
+        remark: None,
+        sync_enabled: true,
+        cloud_id: None,
+        last_synced_at: None,
+        last_used_at: None,
+        sort_order: None,
+        created_at: None,
+        updated_at: None,
+        team_id: None,
+        owner_id: None,
+    }
 }

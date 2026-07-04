@@ -51,6 +51,7 @@ mod reasoning;
 mod resource_builder;
 #[cfg(test)]
 mod resource_builder_tests;
+mod resource_display;
 mod send_button;
 mod session_service;
 mod session_sidebar;

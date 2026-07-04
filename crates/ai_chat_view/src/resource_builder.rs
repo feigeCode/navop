@@ -8,6 +8,7 @@ use one_core::storage::{ConnectionType, StoredConnection};
 use serde_json::Value;
 
 use crate::input::MentionItem;
+use crate::resource_display::visible_alias;
 
 /// 从单个连接构建 ResourceContext（用于侧边栏模式）。
 pub fn build_resource_context_single(connection: &StoredConnection) -> ResourceContext {
@@ -168,7 +169,13 @@ fn connection_to_mention(connection: &StoredConnection) -> Option<MentionItem> {
 
 fn mention_detail(resource: &ResourceRef) -> String {
     let mut parts = vec![resource.kind.as_str().to_string()];
-    parts.extend(resource.aliases.iter().cloned());
+    parts.extend(
+        resource
+            .aliases
+            .iter()
+            .filter(|alias| visible_alias(alias))
+            .cloned(),
+    );
     parts.extend(
         resource
             .scopes

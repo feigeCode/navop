@@ -50,6 +50,7 @@ use crate::input::{
 };
 use crate::message_view::render_messages_with_code_actions;
 use crate::persistence;
+use crate::resource_display::first_visible_alias;
 use crate::session_sidebar::{self, SessionRowStyle, SessionSummary};
 use crate::theme::{AgentChatTheme, resolve_agent_chat_theme};
 
@@ -1389,6 +1390,26 @@ impl AgentChatView {
         self.set_resource_context_with_catalog(resources, mentions, available_resources, cx);
     }
 
+    pub fn set_resource_catalog(
+        &mut self,
+        mentions: Vec<MentionItem>,
+        available_resources: Vec<ResourceRef>,
+        cx: &mut Context<Self>,
+    ) {
+        self.available_resources = available_resources;
+        let resource_metadata_changed =
+            refresh_pool_resource_metadata(&mut self.resources, &self.available_resources);
+        self.input
+            .update(cx, |input, cx| input.set_mentions(mentions, cx));
+        if resource_metadata_changed {
+            self.sync_session_resources();
+            self.sync_resource_targets(cx);
+        } else {
+            self.sync_composer(cx);
+        }
+        cx.notify();
+    }
+
     pub fn set_resource_context_with_catalog(
         &mut self,
         resources: ResourceContext,
@@ -2458,10 +2479,7 @@ fn resource_pool_items(
 }
 
 fn resource_primary_meta(resource: &ResourceRef) -> String {
-    resource
-        .aliases
-        .first()
-        .cloned()
+    first_visible_alias(&resource.aliases)
         .or_else(|| {
             resource
                 .scopes
@@ -2477,6 +2495,24 @@ fn resource_pool_status(in_pool: bool) -> &'static str {
 
 fn resource_default_reason(is_default: bool) -> Option<&'static str> {
     is_default.then_some("默认目标")
+}
+
+fn refresh_pool_resource_metadata(pool: &mut ResourceContext, catalog: &[ResourceRef]) -> bool {
+    let mut changed = false;
+    for resource in &mut pool.resources {
+        let Some(updated) = catalog
+            .iter()
+            .find(|candidate| candidate.id == resource.id)
+            .cloned()
+        else {
+            continue;
+        };
+        if *resource != updated {
+            *resource = updated;
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn add_resource_to_pool(pool: &mut ResourceContext, catalog: &[ResourceRef], id: &str) -> bool {
@@ -3010,6 +3046,57 @@ mod tests {
         assert_eq!(config.available_resources, catalog);
     }
 
+    #[gpui::test]
+    fn gpui_refreshing_resource_catalog_preserves_current_scope(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let pool = ResourceContext::new().with_resource(ResourceRef::new(
+            "ssh-a",
+            ResourceKind::Ssh,
+            "prod-a",
+        ));
+        let initial_catalog = vec![ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a")];
+        let config = AgentChatViewConfig::new(test_runtime("m"), pool, Vec::new())
+            .with_available_resources(initial_catalog);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            view.set_resource_catalog(
+                vec![
+                    MentionItem::new("ssh-a", "prod-a", "ssh", "ssh"),
+                    MentionItem::new("db-a", "prod-db", "mysql", "mysql"),
+                ],
+                vec![
+                    ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a-renamed"),
+                    ResourceRef::new("db-a", ResourceKind::Mysql, "prod-db"),
+                ],
+                cx,
+            );
+        });
+
+        let (pool_labels, default_id, catalog_labels) = view.read_with(cx, |view, _| {
+            (
+                view.resources
+                    .resources
+                    .iter()
+                    .map(|resource| resource.label.as_str().to_string())
+                    .collect::<Vec<_>>(),
+                view.resources
+                    .current
+                    .as_ref()
+                    .map(|id| id.as_str().to_string()),
+                view.available_resources
+                    .iter()
+                    .map(|resource| resource.label.as_str().to_string())
+                    .collect::<Vec<_>>(),
+            )
+        });
+
+        assert_eq!(vec!["prod-a-renamed"], pool_labels);
+        assert_eq!(Some("ssh-a".to_string()), default_id);
+        assert_eq!(vec!["prod-a-renamed", "prod-db"], catalog_labels);
+    }
+
     #[test]
     fn applying_mentioned_resource_adds_from_catalog_and_sets_default() {
         let mut resources = ResourceContext::new();
@@ -3064,6 +3151,15 @@ mod tests {
         );
 
         assert_eq!(resource_primary_meta(&resource), "rdp");
+    }
+
+    #[test]
+    fn resource_pool_item_primary_meta_skips_uuid_alias() {
+        let resource = ResourceRef::new("rdp-a", ResourceKind::Other("rdp".into()), "a82 bi 服务")
+            .with_alias("abfcee0a-2827-4588-9f6-587a7a95d1e9")
+            .with_alias("10.1.131.181");
+
+        assert_eq!(resource_primary_meta(&resource), "10.1.131.181");
     }
 
     #[test]

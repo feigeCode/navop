@@ -176,6 +176,29 @@ fn connection_host_is_resource_alias() {
 }
 
 #[test]
+fn mention_detail_hides_cloud_uuid_but_keeps_host_context() {
+    let mut conn = stored_connection(
+        42,
+        "10.1.131.181",
+        ConnectionType::Database,
+        r#"{"type":"mysql","host":"10.1.131.181","database":"ai_app2"}"#,
+    );
+    conn.cloud_id = Some("abfcee0a-2827-4588-9f6-587a7a95d1e9".to_string());
+
+    let mut ctx = build_resource_context_single(&conn);
+    let resource = ctx.resources.remove(0);
+    let mention = build_mentions_single(&conn).remove(0);
+
+    assert!(
+        resource
+            .aliases
+            .iter()
+            .any(|alias| alias == "abfcee0a-2827-4588-9f6-587a7a95d1e9")
+    );
+    assert_eq!("mysql · 10.1.131.181 · Database: ai_app2", mention.detail);
+}
+
+#[test]
 fn all_connections_keep_all_resources_when_default_is_selected() {
     let conns = vec![
         stored_connection(1, "prod-a", ConnectionType::SshSftp, "{}"),
