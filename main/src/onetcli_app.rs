@@ -680,11 +680,11 @@ impl OnetCliApp {
                     .get::<ConnectionRepository>()
                     .and_then(|repo| repo.list().ok())
                     .unwrap_or_default();
-                let (resources, mentions, catalog) =
-                    ai_chat_view::build_workbench_agent_context(&connections);
+                let (scope, catalog, mentions) =
+                    ai_chat_view::build_workbench_resource_state(&connections);
                 let workbench = cx.new(|cx| {
-                    ai_chat_view::DefaultAgentChatPanel::new_workbench_with_context_and_catalog(
-                        resources, mentions, catalog, window, cx,
+                    ai_chat_view::DefaultAgentChatPanel::new_workbench_with_scope_and_catalog(
+                        scope, catalog, mentions, window, cx,
                     )
                 });
                 let workbench_tab = TabItem::new(layout.workbench_tab_id, "app", workbench);

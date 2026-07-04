@@ -13,9 +13,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agent_runtime::{
-    ResourceContext, ResourceId, ResourceKind, ResourceRef, Runtime, RuntimeEvent,
-    RuntimeEventReceiver, SessionId, TaskKind, ToolCallId, ToolExecutionMode, ToolRegistry,
-    UserInput,
+    AgentResourceScope, ResourceCatalog, ResourceContext, ResourceId, ResourceKind, ResourceRef,
+    Runtime, RuntimeEvent, RuntimeEventReceiver, SessionId, TaskKind, ToolCallId,
+    ToolExecutionMode, ToolRegistry, UserInput,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -176,6 +176,18 @@ impl AgentChatViewConfig {
             acp_agents: Vec::new(),
             theme: None,
         }
+    }
+
+    pub fn new_with_scope(
+        runtime: Arc<Runtime>,
+        scope: AgentResourceScope,
+        catalog: ResourceCatalog,
+        mentions: Vec<MentionItem>,
+    ) -> Self {
+        let resources = scope.to_resource_context();
+        let mut config = Self::new(runtime, resources, mentions);
+        config.available_resources = catalog.resources;
+        config
     }
 
     /// 切换为「侧边栏视图」(窄面板)模式。
@@ -2932,6 +2944,21 @@ mod tests {
     }
 
     #[test]
+    fn agent_config_can_start_with_empty_scope_and_non_empty_catalog() {
+        let catalog = agent_runtime::ResourceCatalog::new(vec![
+            ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
+            ResourceRef::new("db-a", ResourceKind::Mysql, "prod-db"),
+        ]);
+        let scope = agent_runtime::AgentResourceScope::empty();
+
+        let config =
+            AgentChatViewConfig::new_with_scope(test_runtime("m"), scope, catalog.clone(), Vec::new());
+
+        assert!(config.resources.is_empty());
+        assert_eq!(catalog.resources, config.available_resources);
+    }
+
+    #[test]
     fn agent_config_accepts_available_resource_catalog() {
         let pool = ResourceContext::new().with_resource(ResourceRef::new(
             "ssh-a",
@@ -2947,6 +2974,24 @@ mod tests {
             .with_available_resources(catalog.clone());
 
         assert_eq!(config.available_resources, catalog);
+    }
+
+    #[test]
+    fn applying_mentioned_resource_adds_from_catalog_and_sets_default() {
+        let mut resources = ResourceContext::new();
+        let catalog = vec![
+            ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
+            ResourceRef::new("db-a", ResourceKind::Mysql, "prod-db"),
+        ];
+        let mentions = vec![MentionItem::new("db-a", "prod-db", "mysql", "mysql")];
+
+        assert!(apply_mentioned_resources(&mut resources, &catalog, &mentions));
+
+        assert_eq!(1, resources.resources.len());
+        assert_eq!(
+            Some("prod-db"),
+            resources.current().map(|resource| resource.label.as_str())
+        );
     }
 
     #[test]

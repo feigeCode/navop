@@ -13,7 +13,10 @@
 
 use gpui::App;
 
-pub use agent_runtime::{ResourceContext, ResourceId, ResourceScope};
+pub use agent_runtime::{
+    AgentResourceScope, DefaultTargetReason, ResourceCatalog, ResourceContext, ResourceId,
+    ResourceScope,
+};
 
 mod acp;
 mod agent_cards;

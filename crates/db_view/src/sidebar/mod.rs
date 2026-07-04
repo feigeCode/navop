@@ -7,8 +7,9 @@ mod ai_context;
 pub(crate) mod cell_preview_panel;
 
 use ai_chat_view::{
-    AskAiEvent, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent, ResourceId,
-    build_agent_context_all, build_resource_catalog, get_ask_ai_notifier,
+    AskAiEvent, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent,
+    DefaultTargetReason, ResourceCatalog, ResourceContext, ResourceId, build_resource_catalog,
+    build_sidebar_resource_state, get_ask_ai_notifier,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -64,13 +65,20 @@ impl DatabaseSidebar {
         let active_connection = active_conn_id
             .and_then(|id| connections.iter().find(|conn| conn.id == Some(id)))
             .or_else(|| connections.first());
-        let (resources, mentions) = build_agent_context_all(active_connection, &connections);
-        let catalog = build_resource_catalog(&connections);
-        let chat_panel = cx.new(|cx| {
-            DefaultAgentChatPanel::new_with_context_and_catalog(
-                resources, mentions, catalog, window, cx,
-            )
-        });
+        let chat_panel = if let Some(connection) = active_connection {
+            let (scope, catalog, mentions) = build_sidebar_resource_state(
+                connection,
+                &connections,
+                DefaultTargetReason::CurrentDatabase,
+            );
+            cx.new(|cx| {
+                DefaultAgentChatPanel::new_sidebar_with_scope_and_catalog(
+                    scope, catalog, mentions, window, cx,
+                )
+            })
+        } else {
+            cx.new(|cx| DefaultAgentChatPanel::new(window, cx))
+        };
 
         let mut subs = Vec::new();
         subs.push(cx.subscribe(
@@ -154,8 +162,20 @@ impl DatabaseSidebar {
         let active_connection = active_id
             .and_then(|id| self.connections.iter().find(|conn| conn.id == Some(id)))
             .or_else(|| self.connections.first());
-        let (mut resources, mentions) =
-            build_agent_context_all(active_connection, &self.connections);
+        let (mut resources, mentions, catalog) = if let Some(connection) = active_connection {
+            let (scope, catalog, mentions) = build_sidebar_resource_state(
+                connection,
+                &self.connections,
+                DefaultTargetReason::CurrentDatabase,
+            );
+            (scope.to_resource_context(), mentions, catalog)
+        } else {
+            (
+                ResourceContext::new(),
+                Vec::new(),
+                ResourceCatalog::new(build_resource_catalog(&self.connections)),
+            )
+        };
         let resource_id = ResourceId::new(connection_id.to_string());
         apply_database_scope(
             &mut resources,
@@ -180,7 +200,7 @@ impl DatabaseSidebar {
             panel.set_resource_context_with_catalog(
                 resources.clone(),
                 mentions.clone(),
-                build_resource_catalog(&self.connections),
+                catalog.resources.clone(),
                 cx,
             );
         });

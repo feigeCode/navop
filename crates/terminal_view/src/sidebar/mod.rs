@@ -26,7 +26,7 @@ use crate::{
 };
 use ai_chat_view::{
     AgentChatTheme, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent,
-    LanguageMatcher, MentionItem, build_agent_context_single_with_catalog,
+    LanguageMatcher, MentionItem, build_sidebar_resource_state,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -87,12 +87,16 @@ fn build_terminal_ai_context(
     current_connection: &StoredConnection,
     all_connections: &[StoredConnection],
 ) -> (
-    agent_runtime::ResourceContext,
+    agent_runtime::AgentResourceScope,
+    agent_runtime::ResourceCatalog,
     Vec<MentionItem>,
-    Vec<agent_runtime::ResourceRef>,
 ) {
     let catalog = terminal_ai_connection_catalog(current_connection, all_connections);
-    build_agent_context_single_with_catalog(current_connection, &catalog)
+    build_sidebar_resource_state(
+        current_connection,
+        &catalog,
+        agent_runtime::DefaultTargetReason::CurrentTerminal,
+    )
 }
 
 fn terminal_ai_connection_catalog(
@@ -469,11 +473,11 @@ impl TerminalSidebar {
         let rich_input_panel = cx.new(|cx| RichInputPanel::new(colors.clone(), window, cx));
         let ai_chat_panel = if let Some(connection) = stored_connection.as_ref() {
             let connections = load_terminal_ai_connections(cx);
-            let (resources, mentions, catalog) =
+            let (scope, catalog, mentions) =
                 build_terminal_ai_context(connection, &connections);
             cx.new(|cx| {
-                DefaultAgentChatPanel::new_with_context_and_catalog(
-                    resources, mentions, catalog, window, cx,
+                DefaultAgentChatPanel::new_sidebar_with_scope_and_catalog(
+                    scope, catalog, mentions, window, cx,
                 )
             })
         } else {
@@ -1337,12 +1341,15 @@ mod tests {
             stored_connection(3, "cache", ConnectionType::Redis),
         ];
 
-        let (resources, mentions, catalog) = build_terminal_ai_context(&current, &connections);
+        let (scope, catalog, mentions) = build_terminal_ai_context(&current, &connections);
 
-        assert_eq!(1, resources.resources.len());
+        assert_eq!(1, scope.selected.len());
         assert_eq!(
             Some("current-terminal"),
-            resources.current().map(|resource| resource.label.as_str())
+            scope
+                .to_resource_context()
+                .current()
+                .map(|resource| resource.label.as_str())
         );
         assert_eq!(
             vec!["current-terminal", "app-db", "cache"],
@@ -1354,6 +1361,7 @@ mod tests {
         assert_eq!(
             vec!["current-terminal", "app-db", "cache"],
             catalog
+                .resources
                 .iter()
                 .map(|resource| resource.label.as_str())
                 .collect::<Vec<_>>()

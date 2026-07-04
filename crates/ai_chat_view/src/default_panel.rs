@@ -85,6 +85,22 @@ impl DefaultAgentChatPanel {
         )
     }
 
+    pub fn new_sidebar_with_scope_and_catalog(
+        scope: agent_runtime::AgentResourceScope,
+        catalog: agent_runtime::ResourceCatalog,
+        mentions: Vec<MentionItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_context_and_catalog(
+            scope.to_resource_context(),
+            mentions,
+            catalog.resources,
+            window,
+            cx,
+        )
+    }
+
     pub fn new_workbench(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::new_workbench_with_context(
             agent_runtime::ResourceContext::new(),
@@ -122,6 +138,22 @@ impl DefaultAgentChatPanel {
             mentions,
             available_resources,
             DefaultAgentChatPanelMode::Workbench,
+            window,
+            cx,
+        )
+    }
+
+    pub fn new_workbench_with_scope_and_catalog(
+        scope: agent_runtime::AgentResourceScope,
+        catalog: agent_runtime::ResourceCatalog,
+        mentions: Vec<MentionItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_workbench_with_context_and_catalog(
+            scope.to_resource_context(),
+            mentions,
+            catalog.resources,
             window,
             cx,
         )
