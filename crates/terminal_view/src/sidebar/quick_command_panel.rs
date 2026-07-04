@@ -24,6 +24,8 @@ use one_core::storage::{
 use rust_i18n::t;
 use std::ops::Range;
 
+use crate::theme::TerminalColors;
+
 /// 快捷命令面板事件
 #[derive(Clone, Debug)]
 pub enum QuickCommandPanelEvent {
@@ -57,10 +59,17 @@ pub struct QuickCommandPanel {
     show_add_input: bool,
     /// 列表滚动句柄
     scroll_handle: UniformListScrollHandle,
+    /// 终端主题配色
+    colors: TerminalColors,
 }
 
 impl QuickCommandPanel {
-    pub fn new(connection_id: Option<i64>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        connection_id: Option<i64>,
+        colors: TerminalColors,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let search_input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
 
         let add_input_state =
@@ -95,12 +104,18 @@ impl QuickCommandPanel {
             search_query: String::new(),
             show_add_input: false,
             scroll_handle: UniformListScrollHandle::new(),
+            colors,
         };
 
         // 初始加载
         panel.load_commands(cx);
 
         panel
+    }
+
+    pub fn set_colors(&mut self, colors: TerminalColors, cx: &mut Context<Self>) {
+        self.colors = colors;
+        cx.notify();
     }
 
     /// 加载快捷命令
@@ -328,71 +343,41 @@ impl QuickCommandPanel {
         });
     }
 
-    /// 渲染头部
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border = cx.theme().border;
-        let muted_bg = cx.theme().muted;
-        let fg = cx.theme().foreground;
+    /// 渲染面板操作栏。标题和关闭由终端侧边栏宿主统一渲染。
+    fn render_action_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let border = self.colors.border;
+        let muted_bg = self.colors.muted;
 
         h_flex()
             .flex_shrink_0()
             .w_full()
-            .h(px(40.0))
-            .px_3()
+            .h(px(32.0))
+            .px_2()
             .items_center()
-            .justify_between()
+            .justify_end()
             .border_b_1()
             .border_color(border)
             .bg(muted_bg)
             .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        Icon::new(IconName::SquareTerminal)
-                            .with_size(Size::Small)
-                            .text_color(fg),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(fg)
-                            .child("Quick Commands"),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("add-command")
-                            .icon(IconName::Plus)
-                            .ghost()
-                            .xsmall()
-                            .tooltip(t!("QuickCommand.add_tooltip").to_string())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.show_add_input = true;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("close-quick-command-panel")
-                            .icon(IconName::Close)
-                            .ghost()
-                            .xsmall()
-                            .tooltip(t!("QuickCommand.close_tooltip").to_string())
-                            .on_click(cx.listener(|_this, _, _, cx| {
-                                cx.emit(QuickCommandPanelEvent::Close);
-                            })),
-                    ),
+                h_flex().gap_1().child(
+                    Button::new("add-command")
+                        .icon(IconName::Plus)
+                        .ghost()
+                        .xsmall()
+                        .tooltip(t!("QuickCommand.add_tooltip").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_add_input = true;
+                            cx.notify();
+                        })),
+                ),
             )
     }
 
     /// 渲染搜索栏
-    fn render_search_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_search_bar(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let has_query = !self.search_query.is_empty();
-        let border = cx.theme().border;
-        let muted_fg = cx.theme().muted_foreground;
+        let border = self.colors.border;
+        let muted_fg = self.colors.muted_foreground;
 
         h_flex()
             .flex_shrink_0()
@@ -416,8 +401,8 @@ impl QuickCommandPanel {
     /// 渲染新增命令输入框
     fn render_add_input(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let add_input = self.add_input_state.clone();
-        let border = cx.theme().border;
-        let muted_bg = cx.theme().muted;
+        let border = self.colors.border;
+        let muted_bg = self.colors.muted;
 
         h_flex()
             .flex_shrink_0()
@@ -484,7 +469,7 @@ impl QuickCommandPanel {
         let group_name = SharedString::from(format!("quick-cmd-group-{}", index));
 
         let pin_color = cx.theme().warning;
-        let muted_bg = cx.theme().muted;
+        let muted_bg = self.colors.muted;
 
         div()
             .id(item_id)
@@ -602,8 +587,8 @@ impl QuickCommandPanel {
     }
 
     /// 渲染空状态
-    fn render_empty_state(&self, cx: &App) -> impl IntoElement {
-        let muted_fg = cx.theme().muted_foreground;
+    fn render_empty_state(&self, _cx: &App) -> impl IntoElement {
+        let muted_fg = self.colors.muted_foreground;
         let search_empty = self.search_query.is_empty();
 
         div()
@@ -626,8 +611,8 @@ impl QuickCommandPanel {
     }
 
     /// 渲染加载状态
-    fn render_loading_state(&self, cx: &App) -> impl IntoElement {
-        let muted_fg = cx.theme().muted_foreground;
+    fn render_loading_state(&self, _cx: &App) -> impl IntoElement {
+        let muted_fg = self.colors.muted_foreground;
 
         div()
             .size_full()
@@ -662,9 +647,9 @@ impl Render for QuickCommandPanel {
 
         v_flex()
             .size_full()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
-            .child(self.render_header(cx))
+            .bg(self.colors.background)
+            .text_color(self.colors.foreground)
+            .child(self.render_action_bar(cx))
             .child(self.render_search_bar(cx))
             .when(show_add, |this| this.child(self.render_add_input(cx)))
             .when(is_loading, |this| this.child(self.render_loading_state(cx)))

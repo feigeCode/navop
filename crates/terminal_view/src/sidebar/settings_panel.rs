@@ -10,7 +10,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Colorize, Icon, IconName, Sizable, Size, WindowExt,
+    Colorize, Icon, IconName, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants},
     color_picker::{ColorPicker, ColorPickerState},
     dialog::DialogButtonProps,
@@ -27,7 +27,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     TerminalHighlightRule,
-    theme::{MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, is_supported_terminal_primary_font},
+    theme::{
+        MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalColors, TerminalTheme,
+        is_supported_terminal_primary_font,
+    },
 };
 use one_core::settings::{AppSettings, CustomFont, is_installed_font_family};
 
@@ -689,53 +692,13 @@ impl SettingsPanel {
         cx.notify();
     }
 
-    /// 渲染头部
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border = cx.theme().border;
-        let muted_bg = cx.theme().muted;
-        let fg = cx.theme().foreground;
-
-        h_flex()
-            .flex_shrink_0()
-            .w_full()
-            .h(px(40.0))
-            .px_3()
-            .items_center()
-            .justify_between()
-            .border_b_1()
-            .border_color(border)
-            .bg(muted_bg)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        Icon::new(IconName::Settings)
-                            .with_size(Size::Small)
-                            .text_color(fg),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(fg)
-                            .child(t!("Settings.title")),
-                    ),
-            )
-            .child(
-                Button::new("close-settings-panel")
-                    .icon(IconName::Close)
-                    .ghost()
-                    .xsmall()
-                    .on_click(cx.listener(|_this, _, _, cx| {
-                        cx.emit(SettingsPanelEvent::Close);
-                    })),
-            )
+    fn colors(&self) -> TerminalColors {
+        self.current_theme.colors()
     }
 
     /// 渲染搜索区域
     fn render_search_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let muted_fg = cx.theme().muted_foreground;
+        let muted_fg = self.colors().muted_foreground;
 
         v_flex().gap_3().p_3().child(
             v_flex()
@@ -784,10 +747,11 @@ impl SettingsPanel {
         let current_theme_name = self.current_theme.name;
         let is_current = current_theme_name == theme.name;
         let theme_for_click = theme.clone();
-        let accent = cx.theme().accent;
-        let accent_fg = cx.theme().accent_foreground;
-        let muted = cx.theme().muted;
-        let border = cx.theme().border;
+        let colors = self.colors();
+        let accent = colors.accent;
+        let accent_fg = colors.accent_foreground;
+        let muted = colors.muted;
+        let border = colors.border;
         let theme_i18n_key = format!("Theme.{}", theme.name);
         let theme_display_name = t!(&theme_i18n_key).to_string();
 
@@ -841,10 +805,11 @@ impl SettingsPanel {
     }
 
     /// 渲染字体设置区域
-    fn render_font_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border = cx.theme().border;
-        let fg = cx.theme().foreground;
-        let muted_fg = cx.theme().muted_foreground;
+    fn render_font_section(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.colors();
+        let border = colors.border;
+        let fg = colors.foreground;
+        let muted_fg = colors.muted_foreground;
 
         v_flex()
             .gap_3()
@@ -890,8 +855,9 @@ impl SettingsPanel {
 
     /// 渲染光标设置区域
     fn render_cursor_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border = cx.theme().border;
-        let muted_fg = cx.theme().muted_foreground;
+        let colors = self.colors();
+        let border = colors.border;
+        let muted_fg = colors.muted_foreground;
         let cursor_blink = self.cursor_blink;
 
         v_flex()
@@ -928,8 +894,9 @@ impl SettingsPanel {
     }
 
     fn render_safety_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border = cx.theme().border;
-        let muted_fg = cx.theme().muted_foreground;
+        let colors = self.colors();
+        let border = colors.border;
+        let muted_fg = colors.muted_foreground;
 
         let confirm_multiline = self.confirm_multiline_paste;
         let confirm_high_risk = self.confirm_high_risk_command;
@@ -1068,8 +1035,9 @@ impl SettingsPanel {
 
     /// 渲染文件管理器设置区域（仅 SSH 终端有文件管理器时显示）
     fn render_file_manager_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border = cx.theme().border;
-        let muted_fg = cx.theme().muted_foreground;
+        let colors = self.colors();
+        let border = colors.border;
+        let muted_fg = colors.muted_foreground;
         let sync_path = self.sync_path;
 
         v_flex()
@@ -1121,9 +1089,10 @@ impl SettingsPanel {
         rule: &TerminalHighlightRule,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let border = cx.theme().border;
-        let muted = cx.theme().muted;
-        let muted_fg = cx.theme().muted_foreground;
+        let colors = self.colors();
+        let border = colors.border;
+        let muted = colors.muted;
+        let muted_fg = colors.muted_foreground;
         let enabled = rule.enabled;
         let pattern = rule.pattern.clone();
         let note = if rule.note.trim().is_empty() {
@@ -1273,9 +1242,10 @@ impl SettingsPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let border = cx.theme().border;
-        let muted = cx.theme().muted;
-        let muted_fg = cx.theme().muted_foreground;
+        let colors = self.colors();
+        let border = colors.border;
+        let muted = colors.muted;
+        let muted_fg = colors.muted_foreground;
         let rows: Vec<AnyElement> = self
             .custom_highlights
             .iter()
@@ -1336,9 +1306,10 @@ impl SettingsPanel {
 
     /// 渲染主题选择区域
     fn render_theme_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border = cx.theme().border;
-        let muted = cx.theme().muted;
-        let muted_fg = cx.theme().muted_foreground;
+        let colors = self.colors();
+        let border = colors.border;
+        let muted = colors.muted;
+        let muted_fg = colors.muted_foreground;
 
         // 预先收集所有主题项
         let theme_items: Vec<AnyElement> = TerminalTheme::all()
@@ -1560,12 +1531,12 @@ impl Focusable for SettingsPanel {
 impl Render for SettingsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_file_manager = self.has_file_manager;
+        let colors = self.colors();
 
         v_flex()
             .size_full()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
-            .child(self.render_header(cx))
+            .bg(colors.background)
+            .text_color(colors.foreground)
             .child(
                 div()
                     .id("settings-panel-scroll")

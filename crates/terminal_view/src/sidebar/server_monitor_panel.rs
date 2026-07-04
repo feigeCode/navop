@@ -28,6 +28,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::theme::TerminalColors;
+
 const REFRESH_INTERVAL_SECS: u64 = 3;
 const HISTORY_LIMIT: usize = 30;
 const MAX_HISTORY_X_AXIS_LABELS: usize = 6;
@@ -457,6 +459,7 @@ pub struct ServerMonitorPanel {
     cpu_history: Vec<f64>,
     rx_history: Vec<f64>,
     tx_history: Vec<f64>,
+    colors: TerminalColors,
 }
 
 impl ServerMonitorPanel {
@@ -476,6 +479,7 @@ impl ServerMonitorPanel {
         connection_id: Option<i64>,
         session_manager: Arc<SshSessionManager>,
         auto_show: bool,
+        colors: TerminalColors,
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
@@ -496,7 +500,13 @@ impl ServerMonitorPanel {
             cpu_history: Vec::new(),
             rx_history: Vec::new(),
             tx_history: Vec::new(),
+            colors,
         }
+    }
+
+    pub fn set_colors(&mut self, colors: TerminalColors, cx: &mut Context<Self>) {
+        self.colors = colors;
+        cx.notify();
     }
 
     pub fn restore_monitoring(&mut self, cx: &mut Context<Self>) {
@@ -686,12 +696,12 @@ impl ServerMonitorPanel {
         self.current_stats = Some(stats);
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let subtitle = self
+    fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let status = self
             .current_stats
             .as_ref()
             .and_then(|stats| stats.os.as_ref().map(|os| os.pretty_name.clone()))
-            .unwrap_or_else(|| t!("ServerMonitor.title").to_string());
+            .filter(|subtitle| !subtitle.trim().is_empty());
         let uptime = self
             .current_stats
             .as_ref()
@@ -699,58 +709,40 @@ impl ServerMonitorPanel {
             .and_then(|time| time.uptime_seconds)
             .map(format_uptime)
             .unwrap_or_default();
+        let status = status.map(|subtitle| {
+            if uptime.is_empty() {
+                subtitle
+            } else {
+                format!("{subtitle} · {uptime}")
+            }
+        });
 
         h_flex()
-            .h_11()
+            .h_9()
             .px_3()
             .items_center()
             .justify_between()
             .border_b_1()
-            .border_color(cx.theme().border)
+            .border_color(self.colors.border)
+            .child(div().flex_1().min_w_0().when_some(status, |this, status| {
+                this.text_xs()
+                    .text_color(self.colors.muted_foreground)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(status)
+            }))
             .child(
-                v_flex()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_semibold()
-                            .child(t!("ServerMonitor.title")),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(if uptime.is_empty() {
-                                subtitle
-                            } else {
-                                format!("{subtitle} · {uptime}")
-                            }),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("server-monitor-refresh")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Refresh)
-                            .disabled(!self.monitor_enabled || self.preparing)
-                            .tooltip(t!("ServerMonitor.refresh"))
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.refresh_now(cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("server-monitor-close")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Close)
-                            .tooltip(t!("ServerMonitor.close"))
-                            .on_click(cx.listener(|_this, _, _window, cx| {
-                                cx.emit(ServerMonitorPanelEvent::Close);
-                            })),
-                    ),
+                h_flex().gap_1().child(
+                    Button::new("server-monitor-refresh")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Refresh)
+                        .disabled(!self.monitor_enabled || self.preparing)
+                        .tooltip(t!("ServerMonitor.refresh"))
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            this.refresh_now(cx);
+                        })),
+                ),
             )
     }
 
@@ -765,7 +757,7 @@ impl ServerMonitorPanel {
                 div()
                     .text_center()
                     .text_sm()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(self.colors.muted_foreground)
                     .child(t!("ServerMonitor.start_hint")),
             )
             .when_some(self.last_error.clone(), |this, error| {
@@ -924,7 +916,7 @@ impl ServerMonitorPanel {
         title: impl Into<SharedString>,
         summary: impl Into<SharedString>,
         body: AnyElement,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> AnyElement {
         let title: SharedString = title.into();
         let summary: SharedString = summary.into();
@@ -933,8 +925,8 @@ impl ServerMonitorPanel {
             .gap_2()
             .rounded_lg()
             .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
+            .border_color(self.colors.border)
+            .bg(self.colors.background)
             .p_3()
             .child(
                 h_flex()
@@ -944,7 +936,7 @@ impl ServerMonitorPanel {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(cx.theme().muted_foreground)
+                            .text_color(self.colors.muted_foreground)
                             .child(summary),
                     ),
             )
@@ -1129,9 +1121,9 @@ impl Render for ServerMonitorPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
-            .child(self.render_header(cx))
+            .bg(self.colors.background)
+            .text_color(self.colors.foreground)
+            .child(self.render_status_bar(cx))
             .child(
                 div()
                     .id("server-monitor-scroll")
