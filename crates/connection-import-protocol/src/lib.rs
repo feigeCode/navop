@@ -14,6 +14,7 @@ mod tests {
             id: "navicat:prod".to_string(),
             importer_id: "navicat".to_string(),
             source_label: "Navicat".to_string(),
+            source_id: None,
             kind: ImportRecordKind::Database,
             display_name: "Prod MySQL".to_string(),
             database: None,
@@ -23,7 +24,11 @@ mod tests {
                 port: Some(22),
                 username: "root".to_string(),
                 auth_method: SshImportAuthMethod::Agent,
+                init_script: None,
+                jump_server: None,
+                proxy: None,
             }),
+            port_forwarding: None,
             password_status: PasswordImportStatus::Unsupported,
             warnings: Vec::new(),
         };
@@ -40,6 +45,7 @@ mod tests {
             id: "xshell:prod".to_string(),
             importer_id: "xshell".to_string(),
             source_label: "Xshell".to_string(),
+            source_id: None,
             kind: ImportRecordKind::Ssh,
             display_name: "Prod SSH".to_string(),
             database: Some(DatabaseImportRecord {
@@ -53,6 +59,7 @@ mod tests {
                 extra_params: BTreeMap::new(),
             }),
             ssh: None,
+            port_forwarding: None,
             password_status: PasswordImportStatus::Unsupported,
             warnings: Vec::new(),
         };
