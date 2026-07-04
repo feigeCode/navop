@@ -1,4 +1,6 @@
-use agent_runtime::{DefaultTargetReason, ResourceCapability, ResourceId, ResourceKind, ResourceScope};
+use agent_runtime::{
+    DefaultTargetReason, ResourceCapability, ResourceId, ResourceKind, ResourceScope,
+};
 use one_core::storage::{ConnectionType, StoredConnection};
 
 use crate::{
@@ -398,7 +400,10 @@ fn sidebar_resource_state_keeps_current_connection_as_default_scope() {
     assert_eq!("prod-db", scope.selected[0].label);
     assert_eq!(
         Some(&ResourceId::new("2")),
-        scope.default_target.as_ref().map(|target| &target.resource_id)
+        scope
+            .default_target
+            .as_ref()
+            .map(|target| &target.resource_id)
     );
     assert_eq!(2, catalog.resources.len());
     assert_eq!(2, mentions.len());

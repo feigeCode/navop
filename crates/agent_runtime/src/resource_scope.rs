@@ -138,7 +138,10 @@ mod tests {
         assert_eq!(vec![current], scope.selected);
         assert_eq!(
             Some(&ResourceId::new("ssh-a")),
-            scope.default_target.as_ref().map(|target| &target.resource_id)
+            scope
+                .default_target
+                .as_ref()
+                .map(|target| &target.resource_id)
         );
         assert_eq!(
             Some("prod-a"),
@@ -166,7 +169,10 @@ mod tests {
         assert_eq!(1, scope.selected.len());
         assert_eq!(
             Some(&ResourceId::new("db-a")),
-            scope.default_target.as_ref().map(|target| &target.resource_id)
+            scope
+                .default_target
+                .as_ref()
+                .map(|target| &target.resource_id)
         );
     }
 
@@ -190,7 +196,10 @@ mod tests {
         assert_eq!(2, scope.selected.len());
         assert_eq!(
             Some(&ResourceId::new("ssh-a")),
-            scope.default_target.as_ref().map(|target| &target.resource_id)
+            scope
+                .default_target
+                .as_ref()
+                .map(|target| &target.resource_id)
         );
     }
 }

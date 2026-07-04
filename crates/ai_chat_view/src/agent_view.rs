@@ -2472,11 +2472,7 @@ fn resource_primary_meta(resource: &ResourceRef) -> String {
 }
 
 fn resource_pool_status(in_pool: bool) -> &'static str {
-    if in_pool {
-        "已加入"
-    } else {
-        "可添加"
-    }
+    if in_pool { "已加入" } else { "可添加" }
 }
 
 fn resource_default_reason(is_default: bool) -> Option<&'static str> {
@@ -2980,8 +2976,12 @@ mod tests {
         ]);
         let scope = agent_runtime::AgentResourceScope::empty();
 
-        let config =
-            AgentChatViewConfig::new_with_scope(test_runtime("m"), scope, catalog.clone(), Vec::new());
+        let config = AgentChatViewConfig::new_with_scope(
+            test_runtime("m"),
+            scope,
+            catalog.clone(),
+            Vec::new(),
+        );
 
         assert!(config.resources.is_empty());
         assert_eq!(catalog.resources, config.available_resources);
@@ -3014,7 +3014,11 @@ mod tests {
         ];
         let mentions = vec![MentionItem::new("db-a", "prod-db", "mysql", "mysql")];
 
-        assert!(apply_mentioned_resources(&mut resources, &catalog, &mentions));
+        assert!(apply_mentioned_resources(
+            &mut resources,
+            &catalog,
+            &mentions
+        ));
 
         assert_eq!(1, resources.resources.len());
         assert_eq!(

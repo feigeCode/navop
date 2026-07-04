@@ -980,14 +980,26 @@ impl AgentInput {
             .child(div().text_sm().child(item.label.clone()))
             .child(div().text_xs().child(format!("类型: {}", item.kind)))
             .child(div().text_xs().child(format!("状态: {}", item.status)))
-            .child(div().text_xs().child(format!("主要信息: {}", item.primary_meta)))
+            .child(
+                div()
+                    .text_xs()
+                    .child(format!("主要信息: {}", item.primary_meta)),
+            )
             .when_some(item.default_reason.clone(), |this, reason| {
                 this.child(div().text_xs().child(format!("默认目标: {reason}")))
             })
-            .child(div().text_xs().child(format!("能力数量: {}", item.capability_count)))
+            .child(
+                div()
+                    .text_xs()
+                    .child(format!("能力数量: {}", item.capability_count)),
+            )
     }
 
-    fn show_resource_detail_dialog(item: ComposerResourcePoolItem, window: &mut Window, cx: &mut App) {
+    fn show_resource_detail_dialog(
+        item: ComposerResourcePoolItem,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         window.open_dialog(cx, move |dialog, _window, _cx| {
             dialog
                 .title("资源详情")
@@ -1007,10 +1019,7 @@ impl AgentInput {
             .filter(|item| !item.in_pool)
             .collect::<Vec<_>>();
         window.open_dialog(cx, move |dialog, _window, _cx| {
-            let mut list = v_flex()
-                .gap_2()
-                .max_h(px(360.0))
-                .overflow_y_scrollbar();
+            let mut list = v_flex().gap_2().max_h(px(360.0)).overflow_y_scrollbar();
             for item in addable_items.clone() {
                 let id = item.id.clone();
                 let view = view.clone();
@@ -1023,12 +1032,7 @@ impl AgentInput {
                                 .flex_1()
                                 .min_w_0()
                                 .child(div().text_sm().truncate().child(item.label.clone()))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .truncate()
-                                        .child(item.primary_meta.clone()),
-                                ),
+                                .child(div().text_xs().truncate().child(item.primary_meta.clone())),
                         )
                         .child(
                             Button::new(format!("resource-add-dialog-{id}"))
@@ -1836,17 +1840,14 @@ fn resource_pool_item_row(
     let in_pool = item.in_pool;
     let is_default = item.is_default;
     let detail_item = item.clone();
-    let detail_button = Button::new(SharedString::from(format!(
-        "resource-detail-{}",
-        item.id
-    )))
-    .icon(IconName::Info)
-    .ghost()
-    .xsmall()
-    .tooltip("资源详情")
-    .on_click(move |_, window, cx| {
-        AgentInput::show_resource_detail_dialog(detail_item.clone(), window, cx);
-    });
+    let detail_button = Button::new(SharedString::from(format!("resource-detail-{}", item.id)))
+        .icon(IconName::Info)
+        .ghost()
+        .xsmall()
+        .tooltip("资源详情")
+        .on_click(move |_, window, cx| {
+            AgentInput::show_resource_detail_dialog(detail_item.clone(), window, cx);
+        });
     let action_button = Button::new(SharedString::from(format!(
         "resource-pool-action-{}",
         action_id
@@ -1938,11 +1939,7 @@ fn resource_pool_item_row(
                                 theme.foreground,
                             ))
                         })
-                        .child(resource_pool_badge(
-                            item.status.clone(),
-                            theme.panel,
-                            muted,
-                        )),
+                        .child(resource_pool_badge(item.status.clone(), theme.panel, muted)),
                 )
                 .child(
                     div()
@@ -2264,30 +2261,25 @@ impl Render for AgentInput {
             .child(editor_top_bar)
             // 中部：多行输入框
             .child(
-                div()
-                    .w_full()
-                    .px_3()
-                    .pt_1()
-                    .max_h(px(220.0))
-                    .child(
-                        div()
-                            .w_full()
-                            .border_1()
-                            .rounded(cx.theme().radius)
-                            .border_color(if input_focused {
-                                theme.accent
-                            } else {
-                                theme.border
-                            })
-                            .bg(theme.background)
-                            .child(
-                                Input::new(&self.input_state)
-                                    .size_full()
-                                    .appearance(false)
-                                    .text_color(theme.foreground)
-                                    .caret_color(theme.foreground),
-                            ),
-                    ),
+                div().w_full().px_3().pt_1().max_h(px(220.0)).child(
+                    div()
+                        .w_full()
+                        .border_1()
+                        .rounded(cx.theme().radius)
+                        .border_color(if input_focused {
+                            theme.accent
+                        } else {
+                            theme.border
+                        })
+                        .bg(theme.background)
+                        .child(
+                            Input::new(&self.input_state)
+                                .size_full()
+                                .appearance(false)
+                                .text_color(theme.foreground)
+                                .caret_color(theme.foreground),
+                        ),
+                ),
             )
             // 底部：执行参数、模型和发送按钮
             .child(toolbar)

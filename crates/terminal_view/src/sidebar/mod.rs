@@ -473,8 +473,7 @@ impl TerminalSidebar {
         let rich_input_panel = cx.new(|cx| RichInputPanel::new(colors.clone(), window, cx));
         let ai_chat_panel = if let Some(connection) = stored_connection.as_ref() {
             let connections = load_terminal_ai_connections(cx);
-            let (scope, catalog, mentions) =
-                build_terminal_ai_context(connection, &connections);
+            let (scope, catalog, mentions) = build_terminal_ai_context(connection, &connections);
             cx.new(|cx| {
                 DefaultAgentChatPanel::new_sidebar_with_scope_and_catalog(
                     scope, catalog, mentions, window, cx,
