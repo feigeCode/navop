@@ -20,8 +20,8 @@ tracing = { workspace = true }
 serialport = { workspace = true }
 base64 = { workspace = true }
 dirs = { workspace = true }
+polling = "3.11.0"
 
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-

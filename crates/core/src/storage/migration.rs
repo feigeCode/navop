@@ -46,6 +46,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260704000002",
         include_str!("../../migrations/20260704000002_workspace_last_synced_at.sql"),
     ),
+    (
+        "20260705000001",
+        include_str!("../../migrations/20260705000001_terminal_command_history.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

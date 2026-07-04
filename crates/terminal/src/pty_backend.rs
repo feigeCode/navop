@@ -1,16 +1,18 @@
-use alacritty_terminal::event::{Event as AlacTermEvent, EventListener, WindowSize};
+use alacritty_terminal::event::{Event as AlacTermEvent, EventListener, OnResize, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{ClipboardType, Term};
-use alacritty_terminal::tty::{self, Options as PtyOptions};
+use alacritty_terminal::tty::{self, EventedPty, EventedReadWrite, Options as PtyOptions};
 use alacritty_terminal::vte::ansi::{NamedColor, Rgb};
 use std::borrow::Cow;
+use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::osc::{OscEvent, extract_osc_events};
 use crate::{TerminalBackend, TerminalInputHandle, TerminalSize};
 
 /// 终端事件类型
@@ -49,6 +51,120 @@ pub enum PtyCommand {
     Write(Vec<u8>),
     Resize(TerminalSize),
     Shutdown,
+}
+
+fn terminal_event_from_osc_event(event: OscEvent) -> TerminalEvent {
+    match event {
+        OscEvent::PromptStart => TerminalEvent::PromptStart,
+        OscEvent::InputStart => TerminalEvent::InputStart,
+        OscEvent::CommandStart => TerminalEvent::CommandStart,
+        OscEvent::CommandFinished { exit_code } => TerminalEvent::CommandFinished { exit_code },
+        OscEvent::WorkingDirChanged(path) => TerminalEvent::WorkingDirChanged(path),
+        OscEvent::CommandRecorded(command) => TerminalEvent::CommandRecorded(command),
+    }
+}
+
+fn terminal_events_from_osc_chunk(data: &[u8]) -> Vec<TerminalEvent> {
+    extract_osc_events(data)
+        .into_iter()
+        .map(terminal_event_from_osc_event)
+        .collect()
+}
+
+fn forward_osc_events(data: &[u8], event_tx: &UnboundedSender<TerminalEvent>) {
+    for event in terminal_events_from_osc_chunk(data) {
+        tracing::debug!(
+            target: "terminal.history_prompt.osc",
+            event = ?event,
+            "local pty observed osc event"
+        );
+        let _ = event_tx.send(event);
+    }
+}
+
+struct OscTrackingPty<T: EventedPty> {
+    inner: Box<T>,
+    reader: OscTrackingReader<T>,
+}
+
+struct OscTrackingReader<T: EventedPty> {
+    inner: *mut T,
+    event_tx: UnboundedSender<TerminalEvent>,
+}
+
+// EventLoop owns the wrapper on one thread; the reader pointer targets the boxed
+// PTY allocation and is only dereferenced while EventLoop holds `&mut reader`.
+unsafe impl<T: EventedPty + Send> Send for OscTrackingReader<T> {}
+
+impl<T: EventedPty> OscTrackingPty<T> {
+    fn new(inner: T, event_tx: UnboundedSender<TerminalEvent>) -> Self {
+        let mut inner = Box::new(inner);
+        let reader = OscTrackingReader {
+            inner: inner.as_mut() as *mut T,
+            event_tx,
+        };
+        Self { inner, reader }
+    }
+}
+
+impl<T: EventedPty> Read for OscTrackingReader<T> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let bytes_read = unsafe { (&mut *self.inner).reader().read(buf) }?;
+        if bytes_read > 0 {
+            forward_osc_events(&buf[..bytes_read], &self.event_tx);
+        }
+        Ok(bytes_read)
+    }
+}
+
+impl<T: EventedPty> EventedReadWrite for OscTrackingPty<T> {
+    type Reader = OscTrackingReader<T>;
+    type Writer = T::Writer;
+
+    unsafe fn register(
+        &mut self,
+        poller: &Arc<polling::Poller>,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        unsafe { self.inner.register(poller, event, mode) }
+    }
+
+    fn reregister(
+        &mut self,
+        poller: &Arc<polling::Poller>,
+        event: polling::Event,
+        mode: polling::PollMode,
+    ) -> io::Result<()> {
+        self.inner.reregister(poller, event, mode)
+    }
+
+    fn deregister(&mut self, poller: &Arc<polling::Poller>) -> io::Result<()> {
+        self.inner.deregister(poller)
+    }
+
+    fn reader(&mut self) -> &mut Self::Reader {
+        &mut self.reader
+    }
+
+    fn writer(&mut self) -> &mut Self::Writer {
+        self.inner.writer()
+    }
+}
+
+impl<T: EventedPty> EventedPty for OscTrackingPty<T> {
+    fn next_child_event(&mut self) -> Option<tty::ChildEvent> {
+        self.inner.next_child_event()
+    }
+}
+
+impl<T> OnResize for OscTrackingPty<T>
+where
+    T: EventedPty + OnResize,
+{
+    fn on_resize(&mut self, window_size: WindowSize) {
+        self.inner.on_resize(window_size);
+    }
 }
 
 /// 用于将数据写回 PTY/SSH 通道的回写通道
@@ -110,6 +226,7 @@ impl LocalPtyBackend {
         );
 
         let pty = tty::new(&pty_options, window_size, 0)?;
+        let pty = OscTrackingPty::new(pty, event_proxy.event_tx.clone());
         let event_loop = EventLoop::new(term, event_proxy.clone(), pty, true, false)?;
         let event_loop_sender = event_loop.channel();
 
@@ -315,6 +432,7 @@ fn default_color_for_index(index: usize) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use std::sync::Arc;
     use tokio::sync::mpsc::unbounded_channel;
 
@@ -401,5 +519,37 @@ mod tests {
         assert_ne!((bg.r, bg.g, bg.b), (0, 0, 0));
         assert_eq!((cursor.r, cursor.g, cursor.b), (0xFF, 0xFF, 0xFF));
         assert_eq!((other.r, other.g, other.b), (0, 0, 0));
+    }
+
+    #[test]
+    fn local_pty_osc_chunk_maps_prompt_lifecycle_events() {
+        let events = terminal_events_from_osc_chunk(
+            b"\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07\x1b]133;D;7\x07",
+        );
+
+        assert!(matches!(events.first(), Some(TerminalEvent::PromptStart)));
+        assert!(matches!(events.get(1), Some(TerminalEvent::InputStart)));
+        assert!(matches!(events.get(2), Some(TerminalEvent::CommandStart)));
+        assert!(matches!(
+            events.get(3),
+            Some(TerminalEvent::CommandFinished { exit_code: 7 })
+        ));
+    }
+
+    #[test]
+    fn local_pty_osc_chunk_maps_working_dir_and_recorded_command() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode("git status");
+        let chunk = format!("\x1b]7;file://host/tmp/project\x07\x1b]1337;Command={encoded}\x07");
+
+        let events = terminal_events_from_osc_chunk(chunk.as_bytes());
+
+        assert!(matches!(
+            events.first(),
+            Some(TerminalEvent::WorkingDirChanged(path)) if path == "/tmp/project"
+        ));
+        assert!(matches!(
+            events.get(1),
+            Some(TerminalEvent::CommandRecorded(command)) if command == "git status"
+        ));
     }
 }

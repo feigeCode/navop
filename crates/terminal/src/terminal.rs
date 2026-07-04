@@ -22,6 +22,10 @@ use one_core::gpui_tokio::Tokio;
 use one_core::storage::models::{
     ActiveConnections, ProxyType as StorageProxyType, SerialParams, SshAuthMethod, StoredConnection,
 };
+use one_core::storage::{
+    GlobalStorageState, TerminalCommandHistoryRepository, TerminalCommandHistorySort,
+    TerminalHistoryScope,
+};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
@@ -107,6 +111,64 @@ fn clear_screen_remote_redraw_bytes(kind: TerminalConnectionKind) -> Option<&'st
     match kind {
         TerminalConnectionKind::Ssh => Some(SSH_CLEAR_SCREEN_REDRAW_BYTES),
         TerminalConnectionKind::Local | TerminalConnectionKind::Serial => None,
+    }
+}
+
+#[derive(Default)]
+struct CommandRecordGate {
+    command_started: bool,
+    exit_code: Option<i32>,
+    recorded_command: Option<String>,
+}
+
+impl CommandRecordGate {
+    fn command_started(&mut self) {
+        self.command_started = true;
+        self.exit_code = None;
+        self.recorded_command = None;
+    }
+
+    fn command_finished(&mut self, exit_code: i32) -> Option<(String, i32)> {
+        if !self.command_started {
+            self.clear();
+            return None;
+        }
+        self.exit_code = Some(exit_code);
+        if exit_code != 0 {
+            self.clear();
+            return None;
+        }
+        self.recorded_command
+            .take()
+            .map(|command| self.accept(command, exit_code))
+    }
+
+    fn command_recorded(&mut self, command: String) -> Option<(String, i32)> {
+        if !self.command_started {
+            return None;
+        }
+        match self.exit_code {
+            Some(0) => Some(self.accept(command, 0)),
+            Some(_) => {
+                self.clear();
+                None
+            }
+            None => {
+                self.recorded_command = Some(command);
+                None
+            }
+        }
+    }
+
+    fn accept(&mut self, command: String, exit_code: i32) -> (String, i32) {
+        self.clear();
+        (command, exit_code)
+    }
+
+    fn clear(&mut self) {
+        self.command_started = false;
+        self.exit_code = None;
+        self.recorded_command = None;
     }
 }
 
@@ -693,6 +755,12 @@ pub struct Terminal {
     session_history: VecDeque<HistoryEntry>,
     /// 从 shell 历史文件加载的持久化历史
     persisted_history: Vec<String>,
+    /// 成功命令历史数据库仓库
+    history_repository: Option<Arc<TerminalCommandHistoryRepository>>,
+    /// 当前终端对应的历史 scope
+    history_scope: Option<TerminalHistoryScope>,
+    /// OSC 命令记录 gate：只有 exit_code=0 的命令会被接收
+    command_record_gate: CommandRecordGate,
     /// 当前连接尝试代次，用于忽略过期的异步回调
     connection_generation: u64,
 
@@ -786,6 +854,20 @@ fn visible_text_from_term(term: &Arc<FairMutex<Term<GpuiEventProxy>>>) -> String
     lines.join("\n")
 }
 
+fn merge_history_matches(primary: Vec<String>, fallback: Vec<String>, limit: usize) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut merged = Vec::new();
+    for command in primary.into_iter().chain(fallback) {
+        if seen.insert(command.clone()) {
+            merged.push(command);
+        }
+        if merged.len() >= limit {
+            break;
+        }
+    }
+    merged
+}
+
 impl Terminal {
     fn new_local_disconnected(error: String, cx: &mut Context<Self>) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
@@ -816,6 +898,9 @@ impl Terminal {
             init_commands: None,
             session_history: VecDeque::new(),
             persisted_history: Vec::new(),
+            history_repository: Self::history_repository(cx),
+            history_scope: Some(TerminalHistoryScope::local()),
+            command_record_gate: CommandRecordGate::default(),
             connection_generation: 0,
             connection_kind: TerminalConnectionKind::Local,
         }
@@ -869,6 +954,7 @@ impl Terminal {
 
         Self::spawn_event_loop(event_rx, event_proxy.wakeup_pending_handle(), cx);
         Self::spawn_local_history_loader(history_shell.as_deref(), cx);
+        let history_repository = Self::history_repository(cx);
 
         Ok(Self {
             term,
@@ -892,6 +978,9 @@ impl Terminal {
             init_commands: None,
             session_history: VecDeque::new(),
             persisted_history: Vec::new(),
+            history_repository,
+            history_scope: Some(TerminalHistoryScope::local()),
+            command_record_gate: CommandRecordGate::default(),
             connection_generation: 0,
             connection_kind: TerminalConnectionKind::Local,
         })
@@ -1033,6 +1122,8 @@ impl Terminal {
             cx,
         );
         Self::spawn_ssh_history_loader(ssh_session_manager.clone(), cx);
+        let history_repository = Self::history_repository(cx);
+        let history_scope = conn.id.map(TerminalHistoryScope::ssh);
 
         Self {
             term,
@@ -1056,6 +1147,9 @@ impl Terminal {
             init_commands,
             session_history: VecDeque::new(),
             persisted_history: Vec::new(),
+            history_repository,
+            history_scope,
+            command_record_gate: CommandRecordGate::default(),
             connection_generation,
             connection_kind: TerminalConnectionKind::Ssh,
         }
@@ -1106,9 +1200,17 @@ impl Terminal {
             init_commands: None,
             session_history: VecDeque::new(),
             persisted_history: Vec::new(),
+            history_repository: None,
+            history_scope: None,
+            command_record_gate: CommandRecordGate::default(),
             connection_generation,
             connection_kind: TerminalConnectionKind::Serial,
         }
+    }
+
+    fn history_repository(cx: &mut Context<Self>) -> Option<Arc<TerminalCommandHistoryRepository>> {
+        cx.try_global::<GlobalStorageState>()
+            .and_then(|state| state.storage.get::<TerminalCommandHistoryRepository>())
     }
 
     fn next_connection_generation(&mut self) -> u64 {
@@ -1444,11 +1546,32 @@ impl Terminal {
         }
     }
 
-    fn record_history_entry(&mut self, command: &str, cx: &mut Context<Self>) {
-        let entry =
-            HistoryEntry::new(command.to_string()).with_cwd(self.current_working_dir.clone());
-        if push_rich_history_entry(&mut self.session_history, entry, SESSION_HISTORY_LIMIT) {
+    fn record_successful_history_entry(
+        &mut self,
+        command: &str,
+        exit_code: i32,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = self.current_working_dir.clone();
+        let entry = HistoryEntry::new(command.to_string())
+            .with_cwd(cwd.clone())
+            .with_exit_code(Some(exit_code));
+        let changed =
+            push_rich_history_entry(&mut self.session_history, entry, SESSION_HISTORY_LIMIT);
+        if let (Some(repo), Some(scope)) = (&self.history_repository, &self.history_scope) {
+            if let Err(error) = repo.record_success(scope, command, cwd.as_deref(), Some(exit_code))
+            {
+                tracing::warn!(%error, "failed to record terminal command history");
+            }
+        }
+        if changed {
             cx.emit(TerminalModelEvent::Wakeup);
+        }
+    }
+
+    fn accept_recorded_command(&mut self, accepted: Option<(String, i32)>, cx: &mut Context<Self>) {
+        if let Some((command, exit_code)) = accepted {
+            self.record_successful_history_entry(&command, exit_code, cx);
         }
     }
 
@@ -1489,6 +1612,7 @@ impl Terminal {
                 cx.emit(TerminalModelEvent::InputStart);
             }
             TerminalEvent::CommandStart => {
+                self.command_record_gate.command_started();
                 cx.emit(TerminalModelEvent::CommandStart);
             }
             TerminalEvent::TitleChanged(title) => {
@@ -1513,14 +1637,13 @@ impl Terminal {
                 cx.emit(TerminalModelEvent::WorkingDirChanged(path));
             }
             TerminalEvent::CommandFinished { exit_code } => {
-                // 命令执行完毕（OSC 133;D）— 将退出码记录到最后一条历史条目
                 tracing::debug!("命令执行完毕，退出码: {}", exit_code);
-                if let Some(last) = self.session_history.back_mut() {
-                    last.exit_code = Some(exit_code);
-                }
+                let accepted = self.command_record_gate.command_finished(exit_code);
+                self.accept_recorded_command(accepted, cx);
             }
             TerminalEvent::CommandRecorded(command) => {
-                self.record_history_entry(&command, cx);
+                let accepted = self.command_record_gate.command_recorded(command);
+                self.accept_recorded_command(accepted, cx);
             }
         }
     }
@@ -1576,21 +1699,51 @@ impl Terminal {
     }
 
     pub fn history_suggestions(&self, prefix: &str, limit: usize) -> Vec<String> {
-        collect_history_suggestions_with_cwd(
+        let db_matches = self
+            .history_repository
+            .as_ref()
+            .zip(self.history_scope.as_ref())
+            .and_then(|(repo, scope)| repo.suggestions(scope, prefix, limit).ok())
+            .unwrap_or_default();
+        let fallback = collect_history_suggestions_with_cwd(
             &self.session_history,
             &self.persisted_history,
             prefix,
             limit,
             self.current_working_dir.as_deref(),
-        )
+        );
+        merge_history_matches(db_matches, fallback, limit)
     }
 
     pub fn history_search_results(&self, query: &str, limit: usize) -> Vec<String> {
-        collect_history_search_results(&self.session_history, &self.persisted_history, query, limit)
+        let db_matches = self
+            .history_repository
+            .as_ref()
+            .zip(self.history_scope.as_ref())
+            .and_then(|(repo, scope)| {
+                repo.list(
+                    scope,
+                    TerminalCommandHistorySort::Latest,
+                    (!query.trim().is_empty()).then_some(query),
+                    limit,
+                )
+                .ok()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| item.command)
+            .collect();
+        let fallback = collect_history_search_results(
+            &self.session_history,
+            &self.persisted_history,
+            query,
+            limit,
+        );
+        merge_history_matches(db_matches, fallback, limit)
     }
 
     pub fn record_command(&mut self, command: &str, cx: &mut Context<Self>) {
-        self.record_history_entry(command, cx);
+        self.record_successful_history_entry(command, 0, cx);
     }
 
     /// 获取 SSH 连接配置（仅 SSH 终端）
@@ -1766,6 +1919,7 @@ impl Terminal {
                         generation,
                         cx,
                     );
+                    Self::spawn_ssh_history_loader(session_manager.clone(), cx);
                 });
             })
             .detach();
@@ -1935,10 +2089,10 @@ impl EventEmitter<TerminalModelEvent> for Terminal {}
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectionState, Terminal, TerminalConnectionKind, TerminalMfaPrompt, TerminalMfaRequest,
-        TerminalMfaResponder, build_cd_command, build_ssh_base_init_commands,
+        CommandRecordGate, ConnectionState, Terminal, TerminalConnectionKind, TerminalMfaPrompt,
+        TerminalMfaRequest, TerminalMfaResponder, build_cd_command, build_ssh_base_init_commands,
         build_ssh_init_commands, clear_screen_remote_redraw_bytes, compose_ssh_init_commands,
-        format_connection_error, keyboard_interactive_answers_for_terminal,
+        format_connection_error, keyboard_interactive_answers_for_terminal, merge_history_matches,
         resolve_default_windows_shell_from_env, resolve_local_working_dir, shell_escape_arg,
     };
     use crate::TerminalEvent;
@@ -1987,6 +2141,83 @@ mod tests {
             None,
             clear_screen_remote_redraw_bytes(TerminalConnectionKind::Serial)
         );
+    }
+
+    #[test]
+    fn command_record_gate_accepts_success_when_finish_precedes_record() {
+        let mut gate = CommandRecordGate::default();
+
+        gate.command_started();
+        assert_eq!(None, gate.command_finished(0));
+
+        assert_eq!(
+            Some(("git status".to_string(), 0)),
+            gate.command_recorded("git status".to_string())
+        );
+    }
+
+    #[test]
+    fn command_record_gate_accepts_success_when_record_precedes_finish() {
+        let mut gate = CommandRecordGate::default();
+
+        gate.command_started();
+        assert_eq!(None, gate.command_recorded("cargo test".to_string()));
+
+        assert_eq!(
+            Some(("cargo test".to_string(), 0)),
+            gate.command_finished(0)
+        );
+    }
+
+    #[test]
+    fn command_record_gate_discards_failed_commands() {
+        let mut gate = CommandRecordGate::default();
+
+        gate.command_started();
+        gate.command_finished(127);
+
+        assert_eq!(None, gate.command_recorded("missing-command".to_string()));
+    }
+
+    #[test]
+    fn command_record_gate_discards_record_without_command_start() {
+        let mut gate = CommandRecordGate::default();
+
+        assert_eq!(None, gate.command_recorded("git status".to_string()));
+        assert_eq!(None, gate.command_finished(0));
+    }
+
+    #[test]
+    fn merge_history_matches_prefers_database_and_deduplicates_fallback() {
+        let merged = merge_history_matches(
+            vec!["git status".to_string(), "cargo test".to_string()],
+            vec![
+                "git status".to_string(),
+                "git stash".to_string(),
+                "cargo test".to_string(),
+            ],
+            4,
+        );
+
+        assert_eq!(
+            vec![
+                "git status".to_string(),
+                "cargo test".to_string(),
+                "git stash".to_string(),
+            ],
+            merged
+        );
+    }
+
+    #[test]
+    fn merge_history_matches_respects_limit() {
+        let merged = merge_history_matches(
+            vec!["first".to_string(), "second".to_string()],
+            vec!["third".to_string()],
+            2,
+        );
+
+        assert_eq!(vec!["first".to_string(), "second".to_string()], merged);
     }
 
     #[test]
@@ -2344,6 +2575,9 @@ mod tests {
             init_commands: None,
             session_history: VecDeque::new(),
             persisted_history: Vec::new(),
+            history_repository: None,
+            history_scope: None,
+            command_record_gate: CommandRecordGate::default(),
             connection_generation: 1,
             connection_kind: TerminalConnectionKind::Ssh,
         };

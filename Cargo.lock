@@ -11927,6 +11927,7 @@ dependencies = [
  "gpui",
  "libc",
  "one-core",
+ "polling",
  "serde",
  "serialport",
  "ssh",

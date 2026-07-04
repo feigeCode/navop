@@ -7,12 +7,14 @@
 //! - 文件管理器面板（仅 SSH 终端）
 
 pub mod file_manager_panel;
+mod history_command_panel;
 mod quick_command_panel;
 mod rich_input_panel;
 mod server_monitor_panel;
 mod settings_panel;
 
 pub use file_manager_panel::{FileManagerPanel, FileManagerPanelEvent};
+pub use history_command_panel::{HistoryCommandPanel, HistoryCommandPanelEvent};
 pub use quick_command_panel::QuickCommandPanel;
 pub use rich_input_panel::{
     RichInputPanel, RichInputPanelEvent, RichInputSubmit, prepare_rich_input_submit,
@@ -42,7 +44,8 @@ use gpui_component::{
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::{
-    ConnectionRepository, GlobalStorageState, models::StoredConnection, traits::Repository,
+    ConnectionRepository, GlobalStorageState, TerminalHistoryScope, models::StoredConnection,
+    traits::Repository,
 };
 use rust_i18n::t;
 use ssh::SshSessionManager;
@@ -145,6 +148,8 @@ pub enum SidebarPanel {
     Settings,
     /// 快捷命令面板
     QuickCommand,
+    /// 历史命令面板
+    HistoryCommand,
     /// Rich Input 面板
     RichInput,
     /// AI 聊天面板
@@ -156,9 +161,10 @@ pub enum SidebarPanel {
 }
 
 impl SidebarPanel {
-    pub const ALL: [SidebarPanel; 6] = [
+    pub const ALL: [SidebarPanel; 7] = [
         SidebarPanel::Settings,
         SidebarPanel::QuickCommand,
+        SidebarPanel::HistoryCommand,
         SidebarPanel::RichInput,
         SidebarPanel::AiChat,
         SidebarPanel::FileManager,
@@ -173,6 +179,7 @@ impl SidebarPanel {
         match self {
             SidebarPanel::Settings => "terminal.settings",
             SidebarPanel::QuickCommand => "terminal.quick-command",
+            SidebarPanel::HistoryCommand => "terminal.history-command",
             SidebarPanel::RichInput => "terminal.rich-input",
             SidebarPanel::AiChat => "terminal.ai-chat",
             SidebarPanel::FileManager => "terminal.file-manager",
@@ -184,6 +191,7 @@ impl SidebarPanel {
         match self {
             SidebarPanel::Settings => IconName::Settings,
             SidebarPanel::QuickCommand => IconName::SquareTerminal,
+            SidebarPanel::HistoryCommand => IconName::BookOpen,
             SidebarPanel::RichInput => IconName::Edit,
             SidebarPanel::AiChat => IconName::AI,
             SidebarPanel::FileManager => IconName::FolderOpen,
@@ -196,6 +204,7 @@ impl SidebarPanel {
         match self {
             SidebarPanel::Settings => IconName::SettingColor.color(),
             SidebarPanel::QuickCommand => IconName::SquareTerminalColor.color(),
+            SidebarPanel::HistoryCommand => IconName::BookOpen.color(),
             SidebarPanel::RichInput => IconName::RichInputColor.color(),
             SidebarPanel::AiChat => IconName::AI.color(),
             SidebarPanel::FileManager => IconName::FolderOpenColor.color(),
@@ -208,12 +217,33 @@ impl SidebarPanel {
         match self {
             SidebarPanel::Settings => "Settings",
             SidebarPanel::QuickCommand => "Quick Commands",
+            SidebarPanel::HistoryCommand => "History Commands",
             SidebarPanel::RichInput => "Rich Input",
             SidebarPanel::AiChat => "AI Chat",
             SidebarPanel::FileManager => "File Manager",
             SidebarPanel::ServerMonitor => "Server Monitor",
         }
     }
+}
+
+fn terminal_sidebar_available_panels(
+    has_file_manager: bool,
+    has_server_monitor: bool,
+    history_supported: bool,
+) -> Vec<SidebarPanel> {
+    let mut panels = vec![SidebarPanel::Settings, SidebarPanel::AiChat];
+    if history_supported {
+        panels.push(SidebarPanel::HistoryCommand);
+    }
+    if has_file_manager {
+        panels.push(SidebarPanel::FileManager);
+    }
+    if has_server_monitor {
+        panels.push(SidebarPanel::ServerMonitor);
+    }
+    panels.push(SidebarPanel::QuickCommand);
+    panels.push(SidebarPanel::RichInput);
+    panels
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -419,6 +449,8 @@ pub struct TerminalSidebar {
     settings_panel: Entity<SettingsPanel>,
     /// 快捷命令面板
     quick_command_panel: Entity<QuickCommandPanel>,
+    /// 历史命令面板
+    history_command_panel: Option<Entity<HistoryCommandPanel>>,
     /// Rich Input 面板
     rich_input_panel: Entity<RichInputPanel>,
     /// AI 聊天面板
@@ -447,6 +479,7 @@ impl TerminalSidebar {
         initial_font_size: Pixels,
         initial_font_family: SharedString,
         sync_path_enabled: bool,
+        history_scope: Option<TerminalHistoryScope>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -470,6 +503,8 @@ impl TerminalSidebar {
         });
         let quick_command_panel =
             cx.new(|cx| QuickCommandPanel::new(connection_id, colors.clone(), window, cx));
+        let history_command_panel = history_scope
+            .map(|scope| cx.new(|cx| HistoryCommandPanel::new(scope, colors.clone(), window, cx)));
         let rich_input_panel = cx.new(|cx| RichInputPanel::new(colors.clone(), window, cx));
         let ai_chat_panel = if let Some(connection) = stored_connection.as_ref() {
             let connections = load_terminal_ai_connections(cx);
@@ -602,6 +637,17 @@ impl TerminalSidebar {
             },
         );
 
+        let history_sub = history_command_panel.as_ref().map(|panel| {
+            cx.subscribe(
+                panel,
+                |_this, _, event: &HistoryCommandPanelEvent, cx| match event {
+                    HistoryCommandPanelEvent::ExecuteCommand(command) => {
+                        cx.emit(TerminalSidebarEvent::ExecuteCommand(command.clone()));
+                    }
+                },
+            )
+        });
+
         let rich_input_sub = cx.subscribe(
             &rich_input_panel,
             |_this, _, event: &RichInputPanelEvent, cx| match event {
@@ -620,7 +666,9 @@ impl TerminalSidebar {
         );
 
         let mut subs = vec![set_sub, quick_sub, rich_input_sub, ai_chat_sub];
-        let mut available_panels = vec![SidebarPanel::Settings, SidebarPanel::AiChat];
+        if let Some(sub) = history_sub {
+            subs.push(sub);
+        }
 
         // 订阅文件管理器面板事件
         if let Some(ref fm_panel) = file_manager_panel {
@@ -640,7 +688,6 @@ impl TerminalSidebar {
                     },
                 );
             subs.push(fm_sub);
-            available_panels.push(SidebarPanel::FileManager);
         }
 
         if let Some(ref monitor_panel) = server_monitor_panel {
@@ -653,15 +700,18 @@ impl TerminalSidebar {
                 },
             );
             subs.push(monitor_sub);
-            available_panels.push(SidebarPanel::ServerMonitor);
         }
 
-        available_panels.push(SidebarPanel::QuickCommand);
-        available_panels.push(SidebarPanel::RichInput);
+        let available_panels = terminal_sidebar_available_panels(
+            file_manager_panel.is_some(),
+            server_monitor_panel.is_some(),
+            history_command_panel.is_some(),
+        );
         Self {
             tool_dock: TerminalToolDockState::new(available_panels),
             settings_panel,
             quick_command_panel,
+            history_command_panel,
             rich_input_panel,
             ai_chat_panel,
             file_manager_panel,
@@ -724,6 +774,10 @@ impl TerminalSidebar {
         match panel {
             SidebarPanel::Settings => Some(self.settings_panel.clone().into()),
             SidebarPanel::QuickCommand => Some(self.quick_command_panel.clone().into()),
+            SidebarPanel::HistoryCommand => self
+                .history_command_panel
+                .as_ref()
+                .map(|panel| panel.clone().into()),
             SidebarPanel::RichInput => Some(self.rich_input_panel.clone().into()),
             SidebarPanel::AiChat => Some(self.ai_chat_panel.clone().into()),
             SidebarPanel::FileManager => self
@@ -817,6 +871,11 @@ impl TerminalSidebar {
         self.quick_command_panel.update(cx, |panel, cx| {
             panel.set_colors(self.colors.clone(), cx);
         });
+        if let Some(ref history_panel) = self.history_command_panel {
+            history_panel.update(cx, |panel, cx| {
+                panel.set_colors(self.colors.clone(), cx);
+            });
+        }
         self.rich_input_panel.update(cx, |panel, cx| {
             panel.set_colors(self.colors.clone(), cx);
         });
@@ -1025,8 +1084,6 @@ impl TerminalSidebar {
     pub fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let border_color = self.colors.border;
         let muted_bg = self.colors.background;
-        let has_file_manager = self.file_manager_panel.is_some();
-        let has_server_monitor = self.server_monitor_panel.is_some();
 
         v_flex()
             .flex_shrink_0()
@@ -1038,16 +1095,13 @@ impl TerminalSidebar {
             .items_center()
             .py_2()
             .gap_1()
-            .child(self.render_toolbar_button(SidebarPanel::Settings, window, cx))
-            .child(self.render_toolbar_button(SidebarPanel::QuickCommand, window, cx))
-            .child(self.render_toolbar_button(SidebarPanel::RichInput, window, cx))
-            .child(self.render_toolbar_button(SidebarPanel::AiChat, window, cx))
-            .when(has_file_manager, |this| {
-                this.child(self.render_toolbar_button(SidebarPanel::FileManager, window, cx))
-            })
-            .when(has_server_monitor, |this| {
-                this.child(self.render_toolbar_button(SidebarPanel::ServerMonitor, window, cx))
-            })
+            .children(
+                self.tool_dock
+                    .panels
+                    .iter()
+                    .copied()
+                    .map(|panel| self.render_toolbar_button(panel, window, cx)),
+            )
             .into_any_element()
     }
 
@@ -1065,6 +1119,7 @@ impl TerminalSidebar {
             panel,
             SidebarPanel::Settings
                 | SidebarPanel::QuickCommand
+                | SidebarPanel::HistoryCommand
                 | SidebarPanel::RichInput
                 | SidebarPanel::ServerMonitor
         );
@@ -1274,7 +1329,7 @@ impl Render for TerminalSidebar {
 mod tests {
     use super::{
         SidebarPanel, TerminalToolDockState, agent_theme_from_terminal_theme,
-        build_terminal_ai_context,
+        build_terminal_ai_context, terminal_sidebar_available_panels,
     };
     use crate::theme::TerminalTheme;
     use one_core::sidebar_contribution::SidebarPlacement;
@@ -1312,6 +1367,33 @@ mod tests {
     #[test]
     fn sidebar_default_panels_include_rich_input() {
         assert!(SidebarPanel::all().contains(&SidebarPanel::RichInput));
+    }
+
+    #[test]
+    fn history_command_panel_is_available_for_local_terminals() {
+        let panels = terminal_sidebar_available_panels(false, false, true);
+
+        assert!(panels.contains(&SidebarPanel::HistoryCommand));
+        assert!(!panels.contains(&SidebarPanel::FileManager));
+        assert!(!panels.contains(&SidebarPanel::ServerMonitor));
+    }
+
+    #[test]
+    fn history_command_panel_is_available_for_ssh_terminals() {
+        let panels = terminal_sidebar_available_panels(true, true, true);
+
+        assert!(panels.contains(&SidebarPanel::HistoryCommand));
+        assert!(panels.contains(&SidebarPanel::FileManager));
+        assert!(panels.contains(&SidebarPanel::ServerMonitor));
+    }
+
+    #[test]
+    fn history_command_panel_is_not_available_for_serial_terminals() {
+        let panels = terminal_sidebar_available_panels(false, false, false);
+
+        assert!(!panels.contains(&SidebarPanel::HistoryCommand));
+        assert!(!panels.contains(&SidebarPanel::FileManager));
+        assert!(!panels.contains(&SidebarPanel::ServerMonitor));
     }
 
     #[test]

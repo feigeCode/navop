@@ -7,6 +7,7 @@ pub mod quick_command;
 pub mod repository;
 pub mod row_mapping;
 pub mod sftp_favorite_path;
+pub mod terminal_command_history;
 pub mod traits;
 
 use gpui::App;
@@ -15,6 +16,7 @@ pub use models::*;
 pub use quick_command::*;
 pub use repository::*;
 pub use sftp_favorite_path::*;
+pub use terminal_command_history::*;
 
 pub fn init(cx: &mut App) {
     cx.set_global(ActiveConnections::new());
