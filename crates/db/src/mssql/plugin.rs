@@ -19,7 +19,7 @@ use crate::manifest_helpers::{
     ssh_password_field, tab, yes_no_options,
 };
 use crate::mssql::connection::MssqlDbConnection;
-use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
+use crate::plugin::{DatabasePlugin, DatabaseUserOperationRequest, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
     DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
@@ -83,9 +83,22 @@ impl MsSqlPlugin {
 }
 
 fn build_mssql_ui_manifest() -> DatabaseUiManifest {
+    let mut forms = vec![
+        mssql_connection_form(),
+        mssql_database_form(false),
+        mssql_database_form(true),
+        mssql_schema_form(),
+    ];
+    forms.extend(mssql_user_forms());
+
     DatabaseUiManifest {
         capabilities: DatabaseUiCapabilities {
             supports_schema: true,
+            supports_users: true,
+            supports_user_create: true,
+            supports_user_edit: true,
+            supports_user_delete: true,
+            supports_user_privileges: true,
             supports_sequences: true,
             supports_functions: true,
             supports_procedures: true,
@@ -93,14 +106,86 @@ fn build_mssql_ui_manifest() -> DatabaseUiManifest {
             supports_table_collation: true,
             ..DatabaseUiCapabilities::default()
         },
-        forms: vec![
-            mssql_connection_form(),
-            mssql_database_form(false),
-            mssql_database_form(true),
-            mssql_schema_form(),
-        ],
+        forms,
         actions: mssql_action_manifest(),
         ..DatabaseUiManifest::default()
+    }
+}
+
+fn mssql_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn mssql_user_password(request: &DatabaseUserOperationRequest) -> &str {
+    request
+        .field_values
+        .get("password")
+        .map(String::as_str)
+        .filter(|password| !password.is_empty())
+        .unwrap_or("change_me")
+}
+
+fn mssql_user_role(request: &DatabaseUserOperationRequest) -> &str {
+    match request.field_values.get("role").map(String::as_str) {
+        Some("db_datareader") => "db_datareader",
+        Some("db_datawriter") => "db_datawriter",
+        Some("db_owner") => "db_owner",
+        _ => "db_datareader",
+    }
+}
+
+fn mssql_user_forms() -> Vec<DatabaseFormManifest> {
+    vec![
+        mssql_user_form(DatabaseFormKind::CreateUser, true, false),
+        mssql_user_form(DatabaseFormKind::EditUser, true, false),
+        mssql_user_form(DatabaseFormKind::DeleteUser, false, false),
+        mssql_user_form(DatabaseFormKind::UserPrivileges, false, true),
+    ]
+}
+
+fn mssql_user_form(
+    kind: DatabaseFormKind,
+    include_password: bool,
+    include_role: bool,
+) -> DatabaseFormManifest {
+    let mut fields = vec![field(
+        "name",
+        "DatabaseUser.name",
+        DatabaseFormFieldType::Text,
+    )];
+    if include_password {
+        fields.push(field(
+            "password",
+            "DatabaseUser.password",
+            DatabaseFormFieldType::Password,
+        ));
+    }
+    if include_role {
+        fields.push(
+            field("role", "DatabaseUser.role", DatabaseFormFieldType::Select)
+                .with_default("db_datareader")
+                .with_options(vec![
+                    option("db_datareader", "DatabaseUser.role_datareader"),
+                    option("db_datawriter", "DatabaseUser.role_datawriter"),
+                    option("db_owner", "DatabaseUser.role_owner"),
+                ]),
+        );
+    }
+    DatabaseFormManifest {
+        kind,
+        title_i18n_key: user_form_title_key(kind).into(),
+        submit_i18n_key: "Common.save".into(),
+        tabs: vec![tab("user", "DatabaseUser.user_tab", fields)],
+    }
+}
+
+fn user_form_title_key(kind: DatabaseFormKind) -> &'static str {
+    match kind {
+        DatabaseFormKind::CreateUser => "DatabaseUser.create_title",
+        DatabaseFormKind::EditUser => "DatabaseUser.edit_title",
+        DatabaseFormKind::DeleteUser => "DatabaseUser.delete_title",
+        DatabaseFormKind::UserPrivileges => "DatabaseUser.privileges_title",
+        _ => "DatabaseUser.user_title",
     }
 }
 
@@ -2172,6 +2257,55 @@ impl DatabasePlugin for MsSqlPlugin {
         def
     }
 
+    fn build_list_users_sql(&self, _database: Option<&str>) -> Option<String> {
+        Some(
+            r#"SELECT
+  name,
+  type_desc,
+  authentication_type_desc,
+  default_schema_name,
+  create_date,
+  modify_date
+FROM sys.database_principals
+WHERE type IN ('S', 'U', 'G', 'R')
+  AND name NOT LIKE '##%'
+ORDER BY name;"#
+                .to_string(),
+        )
+    }
+
+    fn build_create_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        let user = self.quote_identifier(&request.user_name);
+        Some(format!(
+            "CREATE LOGIN {} WITH PASSWORD = {};\nCREATE USER {} FOR LOGIN {};",
+            user,
+            mssql_string_literal(mssql_user_password(request)),
+            user,
+            user
+        ))
+    }
+
+    fn build_modify_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        Some(format!(
+            "ALTER LOGIN {} WITH PASSWORD = {};",
+            self.quote_identifier(&request.user_name),
+            mssql_string_literal(mssql_user_password(request))
+        ))
+    }
+
+    fn build_drop_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        let user = self.quote_identifier(&request.user_name);
+        Some(format!("DROP USER {};\nDROP LOGIN {};", user, user))
+    }
+
+    fn build_user_privileges_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        Some(format!(
+            "ALTER ROLE {} ADD MEMBER {};",
+            self.quote_identifier(mssql_user_role(request)),
+            self.quote_identifier(&request.user_name)
+        ))
+    }
+
     fn build_create_database_sql(
         &self,
         request: &crate::plugin::DatabaseOperationRequest,
@@ -2577,6 +2711,22 @@ mod tests {
         MsSqlPlugin::new()
     }
 
+    fn user_request(
+        user_name: &str,
+        database: Option<&str>,
+        values: &[(&str, &str)],
+    ) -> crate::plugin::DatabaseUserOperationRequest {
+        crate::plugin::DatabaseUserOperationRequest {
+            user_name: user_name.to_string(),
+            host: None,
+            database: database.map(str::to_string),
+            field_values: values
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        }
+    }
+
     // ==================== Basic Plugin Info Tests ====================
 
     #[test]
@@ -2618,6 +2768,10 @@ mod tests {
                 DatabaseFormKind::CreateDatabase,
                 DatabaseFormKind::EditDatabase,
                 DatabaseFormKind::CreateSchema,
+                DatabaseFormKind::CreateUser,
+                DatabaseFormKind::EditUser,
+                DatabaseFormKind::DeleteUser,
+                DatabaseFormKind::UserPrivileges,
             ]
         );
         assert!(
@@ -2700,6 +2854,48 @@ mod tests {
         let sql = plugin.drop_view("test_db", "my_view");
         assert!(sql.contains("DROP VIEW"));
         assert!(sql.contains("[my_view]"));
+    }
+
+    #[test]
+    fn test_build_list_users_sql() {
+        let plugin = create_plugin();
+        let sql = plugin
+            .build_list_users_sql(Some("appdb"))
+            .expect("MSSQL supports user listing");
+
+        assert!(sql.contains("FROM sys.database_principals"));
+        assert!(sql.contains("authentication_type_desc"));
+        assert!(sql.contains("default_schema_name"));
+    }
+
+    #[test]
+    fn test_build_mssql_user_operation_sql() {
+        let plugin = create_plugin();
+        let request = user_request(
+            "app]user",
+            Some("appdb"),
+            &[("password", "pa'ss"), ("role", "db_datareader")],
+        );
+
+        assert_eq!(
+            Some(
+                "CREATE LOGIN [app]]user] WITH PASSWORD = 'pa''ss';\nCREATE USER [app]]user] FOR LOGIN [app]]user];"
+                    .to_string()
+            ),
+            plugin.build_create_user_sql(&request)
+        );
+        assert_eq!(
+            Some("ALTER LOGIN [app]]user] WITH PASSWORD = 'pa''ss';".to_string()),
+            plugin.build_modify_user_sql(&request)
+        );
+        assert_eq!(
+            Some("DROP USER [app]]user];\nDROP LOGIN [app]]user];".to_string()),
+            plugin.build_drop_user_sql(&request)
+        );
+        assert_eq!(
+            Some("ALTER ROLE [db_datareader] ADD MEMBER [app]]user];".to_string()),
+            plugin.build_user_privileges_sql(&request)
+        );
     }
 
     // ==================== Database Operations Tests ====================

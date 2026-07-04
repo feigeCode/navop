@@ -12,7 +12,7 @@ use crate::import_export::{
     ImportResult,
 };
 use crate::mysql::connection::MysqlDbConnection;
-use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
+use crate::plugin::{DatabasePlugin, DatabaseUserOperationRequest, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionDescriptor, DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement,
     DatabaseActionTarget, DatabaseActionToolbarScope, DatabaseCapabilities, DatabaseFormField,
@@ -147,10 +147,22 @@ impl MySqlPlugin {
 }
 
 fn build_mysql_ui_manifest() -> DatabaseUiManifest {
+    let mut forms = vec![
+        mysql_connection_form(),
+        mysql_database_form(false),
+        mysql_database_form(true),
+    ];
+    forms.extend(mysql_user_forms());
+
     DatabaseUiManifest {
         capabilities: DatabaseUiCapabilities {
             supports_schema: false,
             uses_schema_as_database: false,
+            supports_users: true,
+            supports_user_create: true,
+            supports_user_edit: true,
+            supports_user_delete: true,
+            supports_user_privileges: true,
             supports_sequences: false,
             supports_functions: true,
             supports_procedures: true,
@@ -166,11 +178,7 @@ fn build_mysql_ui_manifest() -> DatabaseUiManifest {
             show_collation_in_column_detail: true,
             table_engines: mysql_engine_names(),
         },
-        forms: vec![
-            mysql_connection_form(),
-            mysql_database_form(false),
-            mysql_database_form(true),
-        ],
+        forms,
         actions: mysql_action_manifest(),
         ..DatabaseUiManifest::default()
     }
@@ -253,6 +261,126 @@ fn parse_mysql_triggers(rows: Vec<Vec<Option<String>>>) -> Vec<TriggerInfo> {
             definition: row.get(4).and_then(|v| v.clone()),
         })
         .collect()
+}
+
+fn mysql_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn mysql_user_host(request: &DatabaseUserOperationRequest) -> &str {
+    request
+        .field_values
+        .get("host")
+        .map(String::as_str)
+        .or(request.host.as_deref())
+        .filter(|host| !host.trim().is_empty())
+        .unwrap_or("%")
+}
+
+fn mysql_user_account(request: &DatabaseUserOperationRequest) -> String {
+    format!(
+        "{}@{}",
+        mysql_string_literal(&request.user_name),
+        mysql_string_literal(mysql_user_host(request))
+    )
+}
+
+fn mysql_user_password(request: &DatabaseUserOperationRequest) -> &str {
+    request
+        .field_values
+        .get("password")
+        .map(String::as_str)
+        .filter(|password| !password.is_empty())
+        .unwrap_or("change_me")
+}
+
+fn mysql_user_privileges(request: &DatabaseUserOperationRequest) -> &str {
+    match request.field_values.get("privileges").map(String::as_str) {
+        Some("SELECT") => "SELECT",
+        Some("INSERT") => "INSERT",
+        Some("UPDATE") => "UPDATE",
+        Some("DELETE") => "DELETE",
+        Some("ALL PRIVILEGES") => "ALL PRIVILEGES",
+        _ => "SELECT",
+    }
+}
+
+fn mysql_user_forms() -> Vec<DatabaseFormManifest> {
+    vec![
+        mysql_user_form(DatabaseFormKind::CreateUser, true, true, false),
+        mysql_user_form(DatabaseFormKind::EditUser, true, true, false),
+        mysql_user_form(DatabaseFormKind::DeleteUser, true, false, false),
+        mysql_user_form(DatabaseFormKind::UserPrivileges, true, false, true),
+    ]
+}
+
+fn mysql_user_form(
+    kind: DatabaseFormKind,
+    include_host: bool,
+    include_password: bool,
+    include_privileges: bool,
+) -> DatabaseFormManifest {
+    let mut fields = vec![field(
+        "name",
+        "DatabaseUser.name",
+        DatabaseFormFieldType::Text,
+    )];
+    if include_host {
+        fields.push(
+            field("host", "DatabaseUser.host", DatabaseFormFieldType::Text)
+                .optional()
+                .with_default("%"),
+        );
+    }
+    if include_password {
+        fields.push(field(
+            "password",
+            "DatabaseUser.password",
+            DatabaseFormFieldType::Password,
+        ));
+    }
+    if include_privileges {
+        fields.push(field(
+            "database",
+            "DatabaseUser.database",
+            DatabaseFormFieldType::Text,
+        ));
+        fields.push(
+            field(
+                "privileges",
+                "DatabaseUser.privileges",
+                DatabaseFormFieldType::Select,
+            )
+            .with_default("SELECT")
+            .with_options(mysql_user_privilege_options()),
+        );
+    }
+    DatabaseFormManifest {
+        kind,
+        title_i18n_key: user_form_title_key(kind).into(),
+        submit_i18n_key: "Common.save".into(),
+        tabs: vec![tab("user", "DatabaseUser.user_tab", fields)],
+    }
+}
+
+fn mysql_user_privilege_options() -> Vec<FormSelectOption> {
+    vec![
+        option("SELECT", "DatabaseUser.privilege_select"),
+        option("INSERT", "DatabaseUser.privilege_insert"),
+        option("UPDATE", "DatabaseUser.privilege_update"),
+        option("DELETE", "DatabaseUser.privilege_delete"),
+        option("ALL PRIVILEGES", "DatabaseUser.privilege_all"),
+    ]
+}
+
+fn user_form_title_key(kind: DatabaseFormKind) -> &'static str {
+    match kind {
+        DatabaseFormKind::CreateUser => "DatabaseUser.create_title",
+        DatabaseFormKind::EditUser => "DatabaseUser.edit_title",
+        DatabaseFormKind::DeleteUser => "DatabaseUser.delete_title",
+        DatabaseFormKind::UserPrivileges => "DatabaseUser.privileges_title",
+        _ => "DatabaseUser.user_title",
+    }
 }
 
 fn mysql_connection_form() -> DatabaseFormManifest {
@@ -1916,6 +2044,58 @@ impl DatabasePlugin for MySqlPlugin {
     }
 
     // === Database Management Operations ===
+    fn build_list_users_sql(&self, _database: Option<&str>) -> Option<String> {
+        Some(
+            r#"SELECT
+  User,
+  Host,
+  account_locked AS account_locked,
+  password_expired AS password_expired,
+  plugin AS authentication_plugin
+FROM mysql.user
+ORDER BY User, Host;"#
+                .to_string(),
+        )
+    }
+
+    fn build_create_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        Some(format!(
+            "CREATE USER {} IDENTIFIED BY {};",
+            mysql_user_account(request),
+            mysql_string_literal(mysql_user_password(request))
+        ))
+    }
+
+    fn build_modify_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        Some(format!(
+            "ALTER USER {} IDENTIFIED BY {};",
+            mysql_user_account(request),
+            mysql_string_literal(mysql_user_password(request))
+        ))
+    }
+
+    fn build_drop_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        Some(format!("DROP USER {};", mysql_user_account(request)))
+    }
+
+    fn build_user_privileges_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        let database = request
+            .field_values
+            .get("database")
+            .map(String::as_str)
+            .or(request.database.as_deref())
+            .filter(|database| !database.trim().is_empty());
+        let scope = database
+            .map(|database| format!("{}.*", self.quote_identifier(database)))
+            .unwrap_or_else(|| "*.*".to_string());
+        Some(format!(
+            "GRANT {} ON {} TO {};",
+            mysql_user_privileges(request),
+            scope,
+            mysql_user_account(request)
+        ))
+    }
+
     fn build_create_database_sql(
         &self,
         request: &crate::plugin::DatabaseOperationRequest,
@@ -2936,6 +3116,23 @@ mod tests {
         values.iter().map(|value| cell(value)).collect()
     }
 
+    fn user_request(
+        user_name: &str,
+        host: Option<&str>,
+        database: Option<&str>,
+        values: &[(&str, &str)],
+    ) -> crate::plugin::DatabaseUserOperationRequest {
+        crate::plugin::DatabaseUserOperationRequest {
+            user_name: user_name.to_string(),
+            host: host.map(str::to_string),
+            database: database.map(str::to_string),
+            field_values: values
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        }
+    }
+
     // ==================== Basic Plugin Info Tests ====================
 
     #[test]
@@ -3082,6 +3279,47 @@ mod tests {
         let sql = plugin.drop_view("test_db", "my_view");
         assert!(sql.contains("DROP VIEW"));
         assert!(sql.contains("`my_view`"));
+    }
+
+    #[test]
+    fn test_build_list_users_sql() {
+        let plugin = create_plugin();
+        let sql = plugin
+            .build_list_users_sql(Some("appdb"))
+            .expect("MySQL supports user listing");
+
+        assert!(sql.contains("FROM mysql.user"));
+        assert!(sql.contains("User"));
+        assert!(sql.contains("Host"));
+        assert!(sql.contains("account_locked"));
+    }
+
+    #[test]
+    fn test_build_mysql_user_operation_sql_escapes_user_host_and_password() {
+        let plugin = create_plugin();
+        let request = user_request(
+            "app'user",
+            Some("10.%"),
+            Some("app`db"),
+            &[("password", "pa'ss"), ("privileges", "SELECT")],
+        );
+
+        assert_eq!(
+            Some("CREATE USER 'app''user'@'10.%' IDENTIFIED BY 'pa''ss';".to_string()),
+            plugin.build_create_user_sql(&request)
+        );
+        assert_eq!(
+            Some("ALTER USER 'app''user'@'10.%' IDENTIFIED BY 'pa''ss';".to_string()),
+            plugin.build_modify_user_sql(&request)
+        );
+        assert_eq!(
+            Some("DROP USER 'app''user'@'10.%';".to_string()),
+            plugin.build_drop_user_sql(&request)
+        );
+        assert_eq!(
+            Some("GRANT SELECT ON `app``db`.* TO 'app''user'@'10.%';".to_string()),
+            plugin.build_user_privileges_sql(&request)
+        );
     }
 
     // ==================== Database Operations Tests ====================
@@ -3751,7 +3989,7 @@ mod tests {
         let plugin = create_plugin();
         let manifest = plugin.ui_manifest();
 
-        assert_eq!(manifest.forms.len(), 3);
+        assert_eq!(manifest.forms.len(), 7);
         assert_eq!(
             manifest
                 .forms
@@ -3762,6 +4000,10 @@ mod tests {
                 DatabaseFormKind::Connection,
                 DatabaseFormKind::CreateDatabase,
                 DatabaseFormKind::EditDatabase,
+                DatabaseFormKind::CreateUser,
+                DatabaseFormKind::EditUser,
+                DatabaseFormKind::DeleteUser,
+                DatabaseFormKind::UserPrivileges,
             ]
         );
 

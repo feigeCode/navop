@@ -18,7 +18,7 @@ use crate::manifest_helpers::{
     schema_preference_fields, ssh_auth_rules, ssh_enabled_rules, ssh_field, ssh_number_field,
     ssh_password_field, tab, yes_no_options,
 };
-use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
+use crate::plugin::{DatabasePlugin, DatabaseUserOperationRequest, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
     DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
@@ -151,9 +151,22 @@ impl PostgresPlugin {
 }
 
 fn build_postgresql_ui_manifest() -> DatabaseUiManifest {
+    let mut forms = vec![
+        postgresql_connection_form(),
+        postgresql_database_form(false),
+        postgresql_database_form(true),
+        postgresql_schema_form(),
+    ];
+    forms.extend(postgres_user_forms());
+
     DatabaseUiManifest {
         capabilities: DatabaseUiCapabilities {
             supports_schema: true,
+            supports_users: true,
+            supports_user_create: true,
+            supports_user_edit: true,
+            supports_user_delete: true,
+            supports_user_privileges: true,
             supports_sequences: true,
             supports_functions: true,
             supports_procedures: true,
@@ -163,14 +176,97 @@ fn build_postgresql_ui_manifest() -> DatabaseUiManifest {
             supports_tablespace: true,
             ..DatabaseUiCapabilities::default()
         },
-        forms: vec![
-            postgresql_connection_form(),
-            postgresql_database_form(false),
-            postgresql_database_form(true),
-            postgresql_schema_form(),
-        ],
+        forms,
         actions: postgresql_action_manifest(),
         ..DatabaseUiManifest::default()
+    }
+}
+
+fn postgres_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn postgres_user_password(request: &DatabaseUserOperationRequest) -> &str {
+    request
+        .field_values
+        .get("password")
+        .map(String::as_str)
+        .filter(|password| !password.is_empty())
+        .unwrap_or("change_me")
+}
+
+fn postgres_user_privileges(request: &DatabaseUserOperationRequest) -> &str {
+    match request.field_values.get("privileges").map(String::as_str) {
+        Some("CONNECT") => "CONNECT",
+        Some("CREATE") => "CREATE",
+        Some("TEMPORARY") => "TEMPORARY",
+        Some("ALL PRIVILEGES") => "ALL PRIVILEGES",
+        _ => "CONNECT",
+    }
+}
+
+fn postgres_user_forms() -> Vec<DatabaseFormManifest> {
+    vec![
+        postgres_user_form(DatabaseFormKind::CreateUser, true, false),
+        postgres_user_form(DatabaseFormKind::EditUser, true, false),
+        postgres_user_form(DatabaseFormKind::DeleteUser, false, false),
+        postgres_user_form(DatabaseFormKind::UserPrivileges, false, true),
+    ]
+}
+
+fn postgres_user_form(
+    kind: DatabaseFormKind,
+    include_password: bool,
+    include_privileges: bool,
+) -> DatabaseFormManifest {
+    let mut fields = vec![field(
+        "name",
+        "DatabaseUser.name",
+        DatabaseFormFieldType::Text,
+    )];
+    if include_password {
+        fields.push(field(
+            "password",
+            "DatabaseUser.password",
+            DatabaseFormFieldType::Password,
+        ));
+    }
+    if include_privileges {
+        fields.push(field(
+            "database",
+            "DatabaseUser.database",
+            DatabaseFormFieldType::Text,
+        ));
+        fields.push(
+            field(
+                "privileges",
+                "DatabaseUser.privileges",
+                DatabaseFormFieldType::Select,
+            )
+            .with_default("CONNECT")
+            .with_options(vec![
+                option("CONNECT", "DatabaseUser.privilege_connect"),
+                option("CREATE", "DatabaseUser.privilege_create"),
+                option("TEMPORARY", "DatabaseUser.privilege_temporary"),
+                option("ALL PRIVILEGES", "DatabaseUser.privilege_all"),
+            ]),
+        );
+    }
+    DatabaseFormManifest {
+        kind,
+        title_i18n_key: user_form_title_key(kind).into(),
+        submit_i18n_key: "Common.save".into(),
+        tabs: vec![tab("user", "DatabaseUser.user_tab", fields)],
+    }
+}
+
+fn user_form_title_key(kind: DatabaseFormKind) -> &'static str {
+    match kind {
+        DatabaseFormKind::CreateUser => "DatabaseUser.create_title",
+        DatabaseFormKind::EditUser => "DatabaseUser.edit_title",
+        DatabaseFormKind::DeleteUser => "DatabaseUser.delete_title",
+        DatabaseFormKind::UserPrivileges => "DatabaseUser.privileges_title",
+        _ => "DatabaseUser.user_title",
     }
 }
 
@@ -1880,6 +1976,60 @@ impl DatabasePlugin for PostgresPlugin {
         def
     }
 
+    fn build_list_users_sql(&self, _database: Option<&str>) -> Option<String> {
+        Some(
+            r#"SELECT
+  rolname,
+  rolcanlogin,
+  rolsuper,
+  rolcreatedb,
+  rolcreaterole,
+  rolreplication,
+  rolvaliduntil
+FROM pg_catalog.pg_roles
+ORDER BY rolname;"#
+                .to_string(),
+        )
+    }
+
+    fn build_create_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        Some(format!(
+            "CREATE ROLE {} LOGIN PASSWORD {};",
+            self.quote_identifier(&request.user_name),
+            postgres_string_literal(postgres_user_password(request))
+        ))
+    }
+
+    fn build_modify_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        Some(format!(
+            "ALTER ROLE {} WITH PASSWORD {};",
+            self.quote_identifier(&request.user_name),
+            postgres_string_literal(postgres_user_password(request))
+        ))
+    }
+
+    fn build_drop_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        Some(format!(
+            "DROP ROLE {};",
+            self.quote_identifier(&request.user_name)
+        ))
+    }
+
+    fn build_user_privileges_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        let database = request
+            .field_values
+            .get("database")
+            .map(String::as_str)
+            .or(request.database.as_deref())
+            .filter(|database| !database.trim().is_empty())?;
+        Some(format!(
+            "GRANT {} ON DATABASE {} TO {};",
+            postgres_user_privileges(request),
+            self.quote_identifier(database),
+            self.quote_identifier(&request.user_name)
+        ))
+    }
+
     fn build_create_database_sql(
         &self,
         request: &crate::plugin::DatabaseOperationRequest,
@@ -2306,6 +2456,22 @@ mod tests {
         PostgresPlugin::new()
     }
 
+    fn user_request(
+        user_name: &str,
+        database: Option<&str>,
+        values: &[(&str, &str)],
+    ) -> crate::plugin::DatabaseUserOperationRequest {
+        crate::plugin::DatabaseUserOperationRequest {
+            user_name: user_name.to_string(),
+            host: None,
+            database: database.map(str::to_string),
+            field_values: values
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        }
+    }
+
     fn connection_root_node() -> DbNode {
         DbNode::new(
             "conn-1",
@@ -2366,6 +2532,10 @@ mod tests {
                 DatabaseFormKind::CreateDatabase,
                 DatabaseFormKind::EditDatabase,
                 DatabaseFormKind::CreateSchema,
+                DatabaseFormKind::CreateUser,
+                DatabaseFormKind::EditUser,
+                DatabaseFormKind::DeleteUser,
+                DatabaseFormKind::UserPrivileges,
             ]
         );
         assert!(
@@ -2486,6 +2656,45 @@ mod tests {
         let sql = plugin.drop_view("test_db", "my_view");
         assert!(sql.contains("DROP VIEW"));
         assert!(sql.contains("\"my_view\""));
+    }
+
+    #[test]
+    fn test_build_list_users_sql() {
+        let plugin = create_plugin();
+        let sql = plugin
+            .build_list_users_sql(Some("appdb"))
+            .expect("PostgreSQL supports user listing");
+
+        assert!(sql.contains("FROM pg_catalog.pg_roles"));
+        assert!(sql.contains("rolname"));
+        assert!(sql.contains("rolcanlogin"));
+    }
+
+    #[test]
+    fn test_build_postgres_user_operation_sql_escapes_role_and_password() {
+        let plugin = create_plugin();
+        let request = user_request(
+            "app\"user",
+            Some("app\"db"),
+            &[("password", "pa'ss"), ("privileges", "CONNECT")],
+        );
+
+        assert_eq!(
+            Some("CREATE ROLE \"app\"\"user\" LOGIN PASSWORD 'pa''ss';".to_string()),
+            plugin.build_create_user_sql(&request)
+        );
+        assert_eq!(
+            Some("ALTER ROLE \"app\"\"user\" WITH PASSWORD 'pa''ss';".to_string()),
+            plugin.build_modify_user_sql(&request)
+        );
+        assert_eq!(
+            Some("DROP ROLE \"app\"\"user\";".to_string()),
+            plugin.build_drop_user_sql(&request)
+        );
+        assert_eq!(
+            Some("GRANT CONNECT ON DATABASE \"app\"\"db\" TO \"app\"\"user\";".to_string()),
+            plugin.build_user_privileges_sql(&request)
+        );
     }
 
     // ==================== Database Operations Tests ====================

@@ -6,7 +6,6 @@ pub mod connection_form_window;
 pub mod database_objects_tab;
 pub mod database_tab;
 mod database_toolbar;
-mod database_users;
 mod database_users_list;
 mod database_users_tab;
 mod database_users_toolbar;

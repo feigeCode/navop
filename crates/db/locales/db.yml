@@ -37,6 +37,116 @@ Common:
     zh-CN: 否
     zh-HK: 否
 
+DatabaseUser:
+  user_title:
+    en: User
+    zh-CN: 用户
+    zh-HK: 使用者
+  create_title:
+    en: Create User
+    zh-CN: 新增用户
+    zh-HK: 新增使用者
+  edit_title:
+    en: Edit User
+    zh-CN: 编辑用户
+    zh-HK: 編輯使用者
+  delete_title:
+    en: Delete User
+    zh-CN: 删除用户
+    zh-HK: 刪除使用者
+  privileges_title:
+    en: User Privileges
+    zh-CN: 用户权限
+    zh-HK: 使用者權限
+  user_tab:
+    en: User
+    zh-CN: 用户
+    zh-HK: 使用者
+  name:
+    en: Name
+    zh-CN: 名称
+    zh-HK: 名稱
+  host:
+    en: Host
+    zh-CN: 主机
+    zh-HK: 主機
+  password:
+    en: Password
+    zh-CN: 密码
+    zh-HK: 密碼
+  database:
+    en: Database
+    zh-CN: 数据库
+    zh-HK: 資料庫
+  privileges:
+    en: Privileges
+    zh-CN: 权限
+    zh-HK: 權限
+  role:
+    en: Role
+    zh-CN: 角色
+    zh-HK: 角色
+  privilege_select:
+    en: SELECT
+    zh-CN: SELECT
+    zh-HK: SELECT
+  privilege_insert:
+    en: INSERT
+    zh-CN: INSERT
+    zh-HK: INSERT
+  privilege_update:
+    en: UPDATE
+    zh-CN: UPDATE
+    zh-HK: UPDATE
+  privilege_delete:
+    en: DELETE
+    zh-CN: DELETE
+    zh-HK: DELETE
+  privilege_connect:
+    en: CONNECT
+    zh-CN: CONNECT
+    zh-HK: CONNECT
+  privilege_create:
+    en: CREATE
+    zh-CN: CREATE
+    zh-HK: CREATE
+  privilege_temporary:
+    en: TEMPORARY
+    zh-CN: TEMPORARY
+    zh-HK: TEMPORARY
+  privilege_alter:
+    en: ALTER
+    zh-CN: ALTER
+    zh-HK: ALTER
+  privilege_all:
+    en: All Privileges
+    zh-CN: 全部权限
+    zh-HK: 全部權限
+  role_datareader:
+    en: Data Reader
+    zh-CN: 数据读取
+    zh-HK: 資料讀取
+  role_datawriter:
+    en: Data Writer
+    zh-CN: 数据写入
+    zh-HK: 資料寫入
+  role_owner:
+    en: Owner
+    zh-CN: 所有者
+    zh-HK: 擁有者
+  role_connect:
+    en: CONNECT
+    zh-CN: CONNECT
+    zh-HK: CONNECT
+  role_resource:
+    en: RESOURCE
+    zh-CN: RESOURCE
+    zh-HK: RESOURCE
+  role_dba:
+    en: DBA
+    zh-CN: DBA
+    zh-HK: DBA
+
 Connection:
   new:
     en: "New %{db_type} Connection"

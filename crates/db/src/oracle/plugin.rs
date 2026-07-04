@@ -21,7 +21,7 @@ use crate::manifest_helpers::{
     ssh_password_field, tab, yes_no_options,
 };
 use crate::oracle::connection::OracleDbConnection;
-use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
+use crate::plugin::{DatabasePlugin, DatabaseUserOperationRequest, SqlCompletionInfo};
 use crate::plugin_manifest::{
     DatabaseActionId, DatabaseActionManifest, DatabaseActionPlacement, DatabaseActionToolbarScope,
     DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
@@ -479,9 +479,21 @@ fn split_oracle_literal_chunks(value: &str, max_escaped_bytes: usize) -> Vec<Str
 }
 
 fn build_oracle_ui_manifest() -> DatabaseUiManifest {
+    let mut forms = vec![
+        oracle_connection_form(),
+        oracle_database_form(false),
+        oracle_database_form(true),
+    ];
+    forms.extend(oracle_user_forms());
+
     DatabaseUiManifest {
         capabilities: DatabaseUiCapabilities {
             uses_schema_as_database: true,
+            supports_users: true,
+            supports_user_create: true,
+            supports_user_edit: true,
+            supports_user_delete: true,
+            supports_user_privileges: true,
             supports_sequences: true,
             supports_functions: true,
             supports_procedures: true,
@@ -489,13 +501,86 @@ fn build_oracle_ui_manifest() -> DatabaseUiManifest {
             supports_tablespace: true,
             ..DatabaseUiCapabilities::default()
         },
-        forms: vec![
-            oracle_connection_form(),
-            oracle_database_form(false),
-            oracle_database_form(true),
-        ],
+        forms,
         actions: oracle_action_manifest(),
         ..DatabaseUiManifest::default()
+    }
+}
+
+fn oracle_quoted_password(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn oracle_user_password(request: &DatabaseUserOperationRequest) -> &str {
+    request
+        .field_values
+        .get("password")
+        .map(String::as_str)
+        .filter(|password| !password.is_empty())
+        .unwrap_or("change_me")
+}
+
+fn oracle_user_role(request: &DatabaseUserOperationRequest) -> &str {
+    match request.field_values.get("role").map(String::as_str) {
+        Some("CONNECT") => "CONNECT",
+        Some("RESOURCE") => "RESOURCE",
+        Some("DBA") => "DBA",
+        _ => "CONNECT",
+    }
+}
+
+fn oracle_user_forms() -> Vec<DatabaseFormManifest> {
+    vec![
+        oracle_user_form(DatabaseFormKind::CreateUser, true, false),
+        oracle_user_form(DatabaseFormKind::EditUser, true, false),
+        oracle_user_form(DatabaseFormKind::DeleteUser, false, false),
+        oracle_user_form(DatabaseFormKind::UserPrivileges, false, true),
+    ]
+}
+
+fn oracle_user_form(
+    kind: DatabaseFormKind,
+    include_password: bool,
+    include_role: bool,
+) -> DatabaseFormManifest {
+    let mut fields = vec![field(
+        "name",
+        "DatabaseUser.name",
+        DatabaseFormFieldType::Text,
+    )];
+    if include_password {
+        fields.push(field(
+            "password",
+            "DatabaseUser.password",
+            DatabaseFormFieldType::Password,
+        ));
+    }
+    if include_role {
+        fields.push(
+            field("role", "DatabaseUser.role", DatabaseFormFieldType::Select)
+                .with_default("CONNECT")
+                .with_options(vec![
+                    option("CONNECT", "DatabaseUser.role_connect"),
+                    option("RESOURCE", "DatabaseUser.role_resource"),
+                    option("DBA", "DatabaseUser.role_dba"),
+                ]),
+        );
+    }
+    DatabaseFormManifest {
+        kind,
+        title_i18n_key: user_form_title_key(kind).into(),
+        submit_i18n_key: "Common.save".into(),
+        tabs: vec![tab("user", "DatabaseUser.user_tab", fields)],
+    }
+}
+
+fn user_form_title_key(kind: DatabaseFormKind) -> &'static str {
+    match kind {
+        DatabaseFormKind::CreateUser => "DatabaseUser.create_title",
+        DatabaseFormKind::EditUser => "DatabaseUser.edit_title",
+        DatabaseFormKind::DeleteUser => "DatabaseUser.delete_title",
+        DatabaseFormKind::UserPrivileges => "DatabaseUser.privileges_title",
+        _ => "DatabaseUser.user_title",
     }
 }
 
@@ -2230,6 +2315,51 @@ impl DatabasePlugin for OraclePlugin {
         def
     }
 
+    fn build_list_users_sql(&self, _database: Option<&str>) -> Option<String> {
+        Some(
+            r#"SELECT
+  username,
+  user_id,
+  created
+FROM all_users
+ORDER BY username;"#
+                .to_string(),
+        )
+    }
+
+    fn build_create_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        let user = self.quote_identifier(&request.user_name);
+        Some(format!(
+            "CREATE USER {} IDENTIFIED BY {};\nGRANT CONNECT TO {};",
+            user,
+            oracle_quoted_password(oracle_user_password(request)),
+            user
+        ))
+    }
+
+    fn build_modify_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        Some(format!(
+            "ALTER USER {} IDENTIFIED BY {};",
+            self.quote_identifier(&request.user_name),
+            oracle_quoted_password(oracle_user_password(request))
+        ))
+    }
+
+    fn build_drop_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        Some(format!(
+            "DROP USER {} CASCADE;",
+            self.quote_identifier(&request.user_name)
+        ))
+    }
+
+    fn build_user_privileges_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
+        Some(format!(
+            "GRANT {} TO {};",
+            oracle_user_role(request),
+            self.quote_identifier(&request.user_name)
+        ))
+    }
+
     fn build_create_database_sql(
         &self,
         request: &crate::plugin::DatabaseOperationRequest,
@@ -2637,6 +2767,21 @@ mod tests {
         OraclePlugin::new()
     }
 
+    fn user_request(
+        user_name: &str,
+        values: &[(&str, &str)],
+    ) -> crate::plugin::DatabaseUserOperationRequest {
+        crate::plugin::DatabaseUserOperationRequest {
+            user_name: user_name.to_string(),
+            host: None,
+            database: None,
+            field_values: values
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect(),
+        }
+    }
+
     fn column_info(name: &str, data_type: &str, is_primary_key: bool) -> ColumnInfo {
         ColumnInfo {
             name: name.to_string(),
@@ -2690,6 +2835,10 @@ mod tests {
                 DatabaseFormKind::Connection,
                 DatabaseFormKind::CreateDatabase,
                 DatabaseFormKind::EditDatabase,
+                DatabaseFormKind::CreateUser,
+                DatabaseFormKind::EditUser,
+                DatabaseFormKind::DeleteUser,
+                DatabaseFormKind::UserPrivileges,
             ]
         );
         assert!(
@@ -2934,6 +3083,44 @@ mod tests {
         let sql = plugin.drop_view("test_schema", "my_view");
         assert!(sql.contains("DROP VIEW"));
         assert!(sql.contains("\"my_view\""));
+    }
+
+    #[test]
+    fn test_build_list_users_sql() {
+        let plugin = create_plugin();
+        let sql = plugin
+            .build_list_users_sql(Some("appdb"))
+            .expect("Oracle supports user listing");
+
+        assert!(sql.contains("FROM all_users"));
+        assert!(sql.contains("username"));
+        assert!(sql.contains("user_id"));
+    }
+
+    #[test]
+    fn test_build_oracle_user_operation_sql() {
+        let plugin = create_plugin();
+        let request = user_request("APP\"USER", &[("password", "pa\"ss"), ("role", "CONNECT")]);
+
+        assert_eq!(
+            Some(
+                "CREATE USER \"APP\"\"USER\" IDENTIFIED BY \"pa\"\"ss\";\nGRANT CONNECT TO \"APP\"\"USER\";"
+                    .to_string()
+            ),
+            plugin.build_create_user_sql(&request)
+        );
+        assert_eq!(
+            Some("ALTER USER \"APP\"\"USER\" IDENTIFIED BY \"pa\"\"ss\";".to_string()),
+            plugin.build_modify_user_sql(&request)
+        );
+        assert_eq!(
+            Some("DROP USER \"APP\"\"USER\" CASCADE;".to_string()),
+            plugin.build_drop_user_sql(&request)
+        );
+        assert_eq!(
+            Some("GRANT CONNECT TO \"APP\"\"USER\";".to_string()),
+            plugin.build_user_privileges_sql(&request)
+        );
     }
 
     // ==================== Database/Schema Operations Tests ====================

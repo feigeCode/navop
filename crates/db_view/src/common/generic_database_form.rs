@@ -260,7 +260,7 @@ impl Render for GenericDatabaseForm {
     }
 }
 
-fn flatten_fields(manifest: &DatabaseFormManifest) -> Vec<DatabaseFormField> {
+pub(crate) fn flatten_fields(manifest: &DatabaseFormManifest) -> Vec<DatabaseFormField> {
     manifest
         .tabs
         .iter()
@@ -268,7 +268,7 @@ fn flatten_fields(manifest: &DatabaseFormManifest) -> Vec<DatabaseFormField> {
         .collect()
 }
 
-fn build_input_state(
+pub(crate) fn build_input_state(
     field: &DatabaseFormField,
     value: &str,
     text_resolver: &dyn Fn(&str) -> String,
@@ -293,7 +293,7 @@ fn build_input_state(
     input
 }
 
-fn render_database_field(
+pub(crate) fn render_database_field(
     field_info: &DatabaseFormField,
     is_edit_mode: bool,
     text_resolver: &dyn Fn(&str) -> String,
