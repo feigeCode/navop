@@ -31,6 +31,7 @@ use crate::input::context::{
     ComposerScope, ComposerSubAgentItem, ComposerTarget,
 };
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
+use crate::theme::AgentChatTheme;
 
 /// AgentInput 对外事件。
 #[derive(Clone, Debug)]
@@ -151,6 +152,8 @@ pub struct AgentInput {
     expanded_plan_items: HashSet<String>,
     /// 是否折叠顶部计划 / Agent / 上下文能力区。
     top_capabilities_collapsed: bool,
+    /// 可选的局部聊天主题。终端侧边栏会注入终端主题,普通 Agent tab 继续使用应用主题。
+    theme: Option<AgentChatTheme>,
     edge_to_edge: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -254,9 +257,21 @@ impl AgentInput {
             open_menu: None,
             expanded_plan_items: HashSet::new(),
             top_capabilities_collapsed: false,
+            theme: None,
             edge_to_edge: false,
             _subscriptions: vec![enter_sub, paste_sub, context_search_sub],
         }
+    }
+
+    pub fn set_theme(&mut self, theme: Option<AgentChatTheme>, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
+    fn local_theme(&self, cx: &App) -> AgentChatTheme {
+        self.theme
+            .clone()
+            .unwrap_or_else(|| AgentChatTheme::from_app(cx))
     }
 
     pub fn set_edge_to_edge(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -394,19 +409,20 @@ impl AgentInput {
     }
 
     fn render_context_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let border = cx.theme().border;
+        let theme = self.local_theme(cx);
 
         v_flex()
             .w_full()
             .flex_shrink_0()
             .when(!self.top_capabilities_collapsed, |this| {
                 this.border_b_1()
-                    .border_color(border)
+                    .border_color(theme.border)
                     .child(self.render_mode_tabs(cx))
             })
     }
 
     fn render_mode_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = self.local_theme(cx);
         v_flex().w_full().px_3().pt_2().pb_1p5().child(
             h_flex()
                 .w_full()
@@ -414,8 +430,8 @@ impl AgentInput {
                 .items_center()
                 .rounded(cx.theme().radius)
                 .border_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().muted)
+                .border_color(theme.border)
+                .bg(theme.panel)
                 .child(self.render_plan_mode_tab(cx))
                 .child(self.render_mode_separator(cx))
                 .child(self.render_subagent_mode_tab(cx))
@@ -502,6 +518,7 @@ impl AgentInput {
         cx: &mut Context<Self>,
     ) -> Button {
         let label = label.into();
+        let theme = self.local_theme(cx);
         Button::new(id)
             .debug_selector(move || id.to_string())
             .flex_1()
@@ -515,7 +532,7 @@ impl AgentInput {
                     .items_center()
                     .justify_center()
                     .gap_1()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(theme.muted_foreground)
                     .child(Icon::new(icon).xsmall())
                     .child(div().text_sm().truncate().child(label)),
             )
@@ -584,10 +601,11 @@ impl AgentInput {
     }
 
     fn render_context_mode_trigger(&self, cx: &mut Context<Self>) -> Button {
+        let theme = self.local_theme(cx);
         let fg = if self.context.target.is_some() {
-            cx.theme().foreground
+            theme.foreground
         } else {
-            cx.theme().muted_foreground
+            theme.muted_foreground
         };
         Button::new("agent-context-mode")
             .flex_1()
@@ -613,7 +631,8 @@ impl AgentInput {
     }
 
     fn render_mode_separator(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        div().h(px(20.0)).w(px(1.0)).bg(cx.theme().border)
+        let theme = self.local_theme(cx);
+        div().h(px(20.0)).w(px(1.0)).bg(theme.border)
     }
 
     fn render_execution_mode_menu(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -627,15 +646,19 @@ impl AgentInput {
             tool_options: self.tool_options.clone(),
         };
 
-        let trigger = Button::new("agent-task-mode")
-            .debug_selector(|| "agent-task-mode".to_string())
-            .small()
-            .w_full()
-            .h_full()
-            .justify_between()
-            .outline()
-            .disabled(self.is_running)
-            .child(toolbar_button_label(task_label));
+        let theme = self.local_theme(cx);
+        let trigger = themed_outline_button(
+            Button::new("agent-task-mode")
+                .debug_selector(|| "agent-task-mode".to_string())
+                .small()
+                .w_full()
+                .h_full()
+                .justify_between()
+                .outline()
+                .disabled(self.is_running)
+                .child(toolbar_button_label(task_label)),
+            &theme,
+        );
 
         Popover::new("agent-mode-popover")
             .p_0()
@@ -657,7 +680,10 @@ impl AgentInput {
             .trigger(trigger)
             .content({
                 let view = view.clone();
-                move |_state, _window, cx| render_mode_content(view.clone(), data.clone(), cx)
+                let theme = theme.clone();
+                move |_state, _window, cx| {
+                    render_mode_content(view.clone(), data.clone(), &theme, cx)
+                }
             })
     }
 
@@ -670,14 +696,18 @@ impl AgentInput {
         let view = cx.entity();
         let is_open = self.open_menu == Some(ComposerMenuKind::Model);
 
-        let trigger = Button::new("agent-model")
-            .small()
-            .w_full()
-            .h_full()
-            .justify_between()
-            .outline()
-            .disabled(self.is_running)
-            .child(toolbar_button_label(trigger_label));
+        let theme = self.local_theme(cx);
+        let trigger = themed_outline_button(
+            Button::new("agent-model")
+                .small()
+                .w_full()
+                .h_full()
+                .justify_between()
+                .outline()
+                .disabled(self.is_running)
+                .child(toolbar_button_label(trigger_label)),
+            &theme,
+        );
 
         Popover::new("agent-model-popover")
             .p_0()
@@ -699,11 +729,17 @@ impl AgentInput {
             .trigger(trigger)
             .content({
                 let view = view.clone();
+                let theme = theme.clone();
                 move |_state, _window, cx| {
-                    let muted = cx.theme().muted_foreground;
-                    let hover_bg = cx.theme().list_hover;
+                    let muted = theme.muted_foreground;
+                    let hover_bg = theme.panel_hover;
                     let radius = cx.theme().radius;
-                    let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(240.0));
+                    let mut col = v_flex()
+                        .p_1()
+                        .gap(px(2.0))
+                        .min_w(px(240.0))
+                        .bg(theme.background)
+                        .text_color(theme.foreground);
                     for opt in &options {
                         let view = view.clone();
                         let id = opt.id.clone();
@@ -754,6 +790,7 @@ impl AgentInput {
         if self.attachments.is_empty() {
             return None;
         }
+        let theme = self.local_theme(cx);
         let thumbs: Vec<gpui::AnyElement> = self
             .attachments
             .iter()
@@ -767,7 +804,7 @@ impl AgentInput {
                             .h(px(56.0))
                             .rounded(cx.theme().radius)
                             .border_1()
-                            .border_color(cx.theme().border),
+                            .border_color(theme.border),
                     )
                     .child(
                         div().absolute().top_0().right_0().child(
@@ -797,7 +834,8 @@ impl AgentInput {
     }
 
     fn render_editor_top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = cx.theme().muted_foreground;
+        let theme = self.local_theme(cx);
+        let muted = theme.muted_foreground;
         let count = self.attachments.len();
 
         h_flex()
@@ -830,7 +868,7 @@ impl AgentInput {
                             .text_color(muted)
                             .child(format!("{count} 个附件")),
                     )
-                    .child(div().h(px(18.0)).w(px(1.0)).bg(cx.theme().border)),
+                    .child(div().h(px(18.0)).w(px(1.0)).bg(theme.border)),
             )
             .child(
                 h_flex()
@@ -865,6 +903,7 @@ impl AgentInput {
     }
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = self.local_theme(cx);
         let running = self.is_running;
         let model_label = match &self.context.model {
             Some(m) => SharedString::from(format!("{} / {}", m.provider, m.model)),
@@ -889,6 +928,7 @@ impl AgentInput {
         h_flex()
             .w_full()
             .items_center()
+            .text_color(theme.foreground)
             .gap_2()
             .px_3()
             .py_2()
@@ -927,6 +967,13 @@ fn referenced_mentions_in_text(text: &str, mentions: &[MentionItem]) -> Vec<Ment
         .filter(|mention| text_contains_mention(text, &mention.label))
         .cloned()
         .collect()
+}
+
+fn themed_outline_button(button: Button, theme: &AgentChatTheme) -> Button {
+    button
+        .bg(theme.panel)
+        .border_color(theme.border)
+        .text_color(theme.foreground)
 }
 
 fn text_contains_mention(text: &str, label: &str) -> bool {
@@ -981,9 +1028,15 @@ enum ModeOptionEvent {
 fn render_mode_content(
     view: Entity<AgentInput>,
     data: ModeContentData,
+    theme: &AgentChatTheme,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(320.0));
+    let mut col = v_flex()
+        .p_1()
+        .gap(px(2.0))
+        .min_w(px(320.0))
+        .bg(theme.background)
+        .text_color(theme.foreground);
 
     col = col.child(context_group_label("响应模式", cx));
     for option in data.task_options {
@@ -1994,17 +2047,19 @@ impl Render for AgentInput {
         let attachments = self.render_attachments(cx);
         let editor_top_bar = self.render_editor_top_bar(cx);
         let toolbar = self.render_toolbar(cx);
+        let theme = self.local_theme(cx);
 
         v_flex()
             .debug_selector(|| "agent-input-root".to_string())
             .track_focus(&self.focus_handle)
             .w_full()
             .flex_shrink_0()
-            .bg(cx.theme().background)
+            .bg(theme.background)
+            .text_color(theme.foreground)
             .when(!self.edge_to_edge, |this| {
                 this.rounded_lg()
                     .border_1()
-                    .border_color(cx.theme().border)
+                    .border_color(theme.border)
                     .shadow_sm()
             })
             // 捕获阶段拦截 cmd/ctrl-v:把剪贴板图片作为附件(不阻断文本粘贴)。
@@ -2026,7 +2081,13 @@ impl Render for AgentInput {
                     .pt_1()
                     .max_h(px(220.0))
                     .overflow_hidden()
-                    .child(Input::new(&self.input_state).size_full()),
+                    .child(
+                        Input::new(&self.input_state)
+                            .size_full()
+                            .bg(theme.background)
+                            .text_color(theme.foreground)
+                            .border_color(theme.border),
+                    ),
             )
             // 底部：执行参数、模型和发送按钮
             .child(toolbar)

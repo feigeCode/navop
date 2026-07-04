@@ -416,6 +416,9 @@ impl AgentChatView {
         let input = cx.new(|cx| {
             AgentInput::with_mentions(mentions, "描述目标，输入 @ 引用资源…", window, cx)
         });
+        if let Some(theme) = theme.clone() {
+            input.update(cx, |input, cx| input.set_theme(Some(theme), cx));
+        }
         if sidebar_mode {
             input.update(cx, |input, cx| input.set_edge_to_edge(true, cx));
         }
@@ -1372,7 +1375,9 @@ impl AgentChatView {
     }
 
     pub fn set_theme(&mut self, theme: Option<AgentChatTheme>, cx: &mut Context<Self>) {
-        self.theme = theme;
+        self.theme = theme.clone();
+        self.input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
         cx.notify();
     }
 
@@ -1767,6 +1772,7 @@ impl AgentChatView {
 
     fn render_agent_switcher(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let view = cx.entity();
+        let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
         let label = current_agent_label(
             self.backend,
             &self.acp_agents,
@@ -1785,14 +1791,20 @@ impl AgentChatView {
             .label(compact_agent_label(label.as_ref(), 24))
             .outline()
             .dropdown_caret(true)
-            .disabled(self.is_running);
+            .disabled(self.is_running)
+            .bg(theme.panel)
+            .border_color(theme.border)
+            .text_color(theme.foreground);
 
         Popover::new("agent-header-switcher")
             .anchor(Anchor::TopLeft)
             .p_0()
             .trigger(trigger)
-            .content(move |_state, _window, cx| {
-                render_agent_switcher_content(view.clone(), options.clone(), cx)
+            .content({
+                let theme = theme.clone();
+                move |_state, _window, cx| {
+                    render_agent_switcher_content(view.clone(), options.clone(), &theme, cx)
+                }
             })
             .into_any_element()
     }
@@ -2128,12 +2140,18 @@ fn compact_agent_label(label: &str, max_chars: usize) -> SharedString {
 fn render_agent_switcher_content(
     view: Entity<AgentChatView>,
     agents: Vec<ComposerAgentOption>,
+    theme: &AgentChatTheme,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let muted = cx.theme().muted_foreground;
-    let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(300.0));
+    let muted = theme.muted_foreground;
+    let mut col = v_flex()
+        .p_1()
+        .gap(px(2.0))
+        .min_w(px(300.0))
+        .bg(theme.background)
+        .text_color(theme.foreground);
 
-    col = col.child(header_switcher_group_label("Agent", cx));
+    col = col.child(header_switcher_group_label("Agent", theme));
     if agents.is_empty() {
         return col
             .child(
@@ -2148,20 +2166,23 @@ fn render_agent_switcher_content(
     }
 
     for agent in agents {
-        col = col.child(header_agent_option_row(view.clone(), agent, muted, cx));
+        col = col.child(header_agent_option_row(
+            view.clone(),
+            agent,
+            muted,
+            theme,
+            cx,
+        ));
     }
     col.into_any_element()
 }
 
-fn header_switcher_group_label(
-    label: &'static str,
-    cx: &mut Context<gpui_component::popover::PopoverState>,
-) -> gpui::AnyElement {
+fn header_switcher_group_label(label: &'static str, theme: &AgentChatTheme) -> gpui::AnyElement {
     div()
         .px_2()
         .py_1()
         .text_xs()
-        .text_color(cx.theme().muted_foreground)
+        .text_color(theme.muted_foreground)
         .child(label)
         .into_any_element()
 }
@@ -2170,12 +2191,13 @@ fn header_agent_option_row(
     view: Entity<AgentChatView>,
     agent: ComposerAgentOption,
     muted: gpui::Hsla,
+    theme: &AgentChatTheme,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let hover_bg = cx.theme().list_hover;
-    let selected_bg = cx.theme().accent;
+    let hover_bg = theme.panel_hover;
+    let selected_bg = theme.accent;
     let icon_fg = if agent.selected {
-        cx.theme().accent_foreground
+        theme.accent_foreground
     } else {
         muted
     };
@@ -2194,6 +2216,9 @@ fn header_agent_option_row(
         .py_1p5()
         .rounded(cx.theme().radius)
         .when(agent.selected, |this| this.bg(selected_bg))
+        .when(agent.selected, |this| {
+            this.text_color(theme.accent_foreground)
+        })
         .when(disabled, |this| this.opacity(0.5))
         .when(!disabled, |this| {
             this.cursor_pointer()
