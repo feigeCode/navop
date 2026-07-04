@@ -60,7 +60,7 @@ impl PersonalSyncLocalRepositorySource {
             cloud_id: workspace.cloud_id.clone(),
             data_type: data_type::WORKSPACE.to_string(),
             updated_at: workspace.updated_at.unwrap_or(0),
-            last_synced_at: None,
+            last_synced_at: workspace.last_synced_at,
             checksum: record.checksum,
             team_id: None,
         })
@@ -170,6 +170,8 @@ impl PersonalSyncLocalRepositorySource {
         workspace.id =
             local.and_then(|item| parse_prefixed_id(&item.local_id, WORKSPACE_PREFIX).ok());
         workspace.cloud_id = Some(record.id.clone());
+        workspace.last_synced_at = Some(record.updated_at / 1000);
+        workspace.updated_at = Some(record.updated_at / 1000);
 
         if workspace.id.is_some() {
             self.workspaces
@@ -241,7 +243,7 @@ impl PersonalSyncLocalSource for PersonalSyncLocalRepositorySource {
         }
         let id = parse_prefixed_id(local_id, WORKSPACE_PREFIX)?;
         self.workspaces
-            .update_cloud_id(id, Some(cloud_id.to_string()))
+            .update_sync_status(id, Some(cloud_id.to_string()), Some(synced_at))
             .map_err(repository_error)
     }
 

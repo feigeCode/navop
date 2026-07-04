@@ -207,6 +207,30 @@ mod tests {
     }
 
     #[test]
+    fn planner_updates_local_workspace_when_only_remote_changed_after_last_sync() {
+        let local = vec![local_item_with_type_and_sync(
+            "workspace-1",
+            "cloud-workspace-1",
+            data_type::WORKSPACE,
+            100,
+            100,
+            "local-checksum",
+        )];
+        let mut remote = test_record(
+            "cloud-workspace-1",
+            data_type::WORKSPACE,
+            2,
+            "remote-checksum",
+        );
+        remote.updated_at = 300_000;
+
+        let plan = PersonalSyncPlanner::new().plan(&local, &[remote], &HashSet::new());
+
+        assert_eq!(1, plan.to_update_local.len());
+        assert!(plan.conflicts.is_empty());
+    }
+
+    #[test]
     fn planner_uploads_local_checksum_change_even_when_timestamp_matches_last_sync() {
         let local = vec![local_item_with_sync(
             "local-1",
@@ -249,10 +273,28 @@ mod tests {
         last_synced_at: i64,
         checksum: &str,
     ) -> PersonalSyncItemSnapshot {
+        local_item_with_type_and_sync(
+            local_id,
+            cloud_id,
+            data_type::CONNECTION,
+            updated_at,
+            last_synced_at,
+            checksum,
+        )
+    }
+
+    fn local_item_with_type_and_sync(
+        local_id: &str,
+        cloud_id: &str,
+        item_type: &str,
+        updated_at: i64,
+        last_synced_at: i64,
+        checksum: &str,
+    ) -> PersonalSyncItemSnapshot {
         PersonalSyncItemSnapshot {
             local_id: local_id.to_string(),
             cloud_id: Some(cloud_id.to_string()),
-            data_type: data_type::CONNECTION.to_string(),
+            data_type: item_type.to_string(),
             updated_at,
             last_synced_at: Some(last_synced_at),
             checksum: checksum.to_string(),

@@ -52,6 +52,34 @@ async fn local_source_exports_connection_as_encrypted_sync_record() {
 }
 
 #[tokio::test]
+async fn local_source_reads_and_updates_workspace_sync_timestamp() {
+    let fixture = Fixture::new();
+    let workspace_id = fixture.insert_workspace("workspace");
+
+    fixture
+        .source
+        .mark_synced(
+            &format!("workspace:{workspace_id}"),
+            "cloud-workspace-1",
+            10,
+        )
+        .await
+        .expect("workspace marked synced");
+
+    let item = fixture
+        .source
+        .list_items()
+        .await
+        .expect("items list")
+        .into_iter()
+        .find(|item| item.local_id == format!("workspace:{workspace_id}"))
+        .expect("workspace snapshot exists");
+
+    assert_eq!(Some("cloud-workspace-1".to_string()), item.cloud_id);
+    assert_eq!(Some(10), item.last_synced_at);
+}
+
+#[tokio::test]
 async fn local_source_downloads_remote_connection_and_marks_synced() {
     let fixture = Fixture::new();
     let local_id = fixture.insert_connection("personal", None, true);

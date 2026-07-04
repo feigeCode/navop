@@ -90,6 +90,7 @@ struct WorkspaceRow {
     created_at: i64,
     updated_at: i64,
     cloud_id: Option<String>,
+    last_synced_at: Option<i64>,
     sort_order: Option<i32>,
 }
 
@@ -103,6 +104,7 @@ impl FromSqliteRow for WorkspaceRow {
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
             cloud_id: row.get("cloud_id")?,
+            last_synced_at: row.get("last_synced_at").unwrap_or(None),
             sort_order: row.get("sort_order").unwrap_or(Some(0)),
         })
     }
@@ -118,6 +120,7 @@ impl From<WorkspaceRow> for Workspace {
             created_at: Some(row.created_at),
             updated_at: Some(row.updated_at),
             cloud_id: row.cloud_id,
+            last_synced_at: row.last_synced_at,
             sort_order: row.sort_order,
         }
     }
@@ -447,13 +450,14 @@ impl WorkspaceRepository {
         let color = item.color.clone();
         let icon = item.icon.clone();
         let cloud_id = item.cloud_id.clone();
+        let last_synced_at = item.last_synced_at;
         let sort_order = item.sort_order;
         let updated_at = item.updated_at.unwrap_or_else(now);
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, cloud_id = ?4, sort_order = COALESCE(?5, sort_order), updated_at = ?6 WHERE id = ?7",
-                params![name, color, icon, cloud_id, sort_order, updated_at, id],
+                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, cloud_id = ?4, last_synced_at = ?5, sort_order = COALESCE(?6, sort_order), updated_at = ?7 WHERE id = ?8",
+                params![name, color, icon, cloud_id, last_synced_at, sort_order, updated_at, id],
             )?;
             Ok(())
         })
@@ -465,6 +469,22 @@ impl WorkspaceRepository {
             conn.execute(
                 "UPDATE workspaces SET cloud_id = ?1 WHERE id = ?2",
                 params![cloud_id, local_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// 更新工作空间的云端同步状态和最后同步时间。
+    pub fn update_sync_status(
+        &self,
+        local_id: i64,
+        cloud_id: Option<String>,
+        last_synced_at: Option<i64>,
+    ) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE workspaces SET cloud_id = ?1, last_synced_at = ?2 WHERE id = ?3",
+                params![cloud_id, last_synced_at, local_id],
             )?;
             Ok(())
         })
@@ -508,13 +528,14 @@ impl Repository for WorkspaceRepository {
         let color = item.color.clone();
         let icon = item.icon.clone();
         let cloud_id = item.cloud_id.clone();
+        let last_synced_at = item.last_synced_at;
         let sort_order = item.sort_order.unwrap_or(self.next_sort_order()?);
         let ts = now();
 
         let id = self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO workspaces (name, color, icon, cloud_id, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![name, color, icon, cloud_id, sort_order, ts, ts],
+                "INSERT INTO workspaces (name, color, icon, cloud_id, last_synced_at, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![name, color, icon, cloud_id, last_synced_at, sort_order, ts, ts],
             )?;
             Ok(conn.last_insert_rowid())
         })?;
@@ -535,13 +556,14 @@ impl Repository for WorkspaceRepository {
         let color = item.color.clone();
         let icon = item.icon.clone();
         let cloud_id = item.cloud_id.clone();
+        let last_synced_at = item.last_synced_at;
         let sort_order = item.sort_order;
         let ts = now();
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, cloud_id = ?4, sort_order = COALESCE(?5, sort_order), updated_at = ?6 WHERE id = ?7",
-                params![name, color, icon, cloud_id, sort_order, ts, id],
+                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, cloud_id = ?4, last_synced_at = ?5, sort_order = COALESCE(?6, sort_order), updated_at = ?7 WHERE id = ?8",
+                params![name, color, icon, cloud_id, last_synced_at, sort_order, ts, id],
             )?;
             Ok(())
         })
@@ -560,7 +582,7 @@ impl Repository for WorkspaceRepository {
 
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, color, icon, created_at, updated_at, cloud_id, sort_order FROM workspaces WHERE id = ?1")?;
+            let mut stmt = conn.prepare("SELECT id, name, color, icon, created_at, updated_at, cloud_id, last_synced_at, sort_order FROM workspaces WHERE id = ?1")?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
                 Ok(Some(WorkspaceRow::from_row(row)?.into()))
@@ -572,7 +594,7 @@ impl Repository for WorkspaceRepository {
 
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, color, icon, created_at, updated_at, cloud_id, sort_order FROM workspaces ORDER BY sort_order ASC, updated_at DESC, id DESC")?;
+            let mut stmt = conn.prepare("SELECT id, name, color, icon, created_at, updated_at, cloud_id, last_synced_at, sort_order FROM workspaces ORDER BY sort_order ASC, updated_at DESC, id DESC")?;
             let rows = stmt.query_map([], |row| WorkspaceRow::from_row(row))?;
             let mut results = Vec::new();
             for row in rows {
