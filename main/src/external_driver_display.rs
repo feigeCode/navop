@@ -3,17 +3,6 @@ use gpui_component::{Icon, Size};
 use one_core::storage::DbConnectionConfig;
 use std::path::Path;
 
-pub(crate) fn external_driver_icon_for_config(
-    config: &DbConnectionConfig,
-    size: impl Into<Size>,
-) -> Option<Icon> {
-    if !config.database_type.is_external() {
-        return None;
-    }
-
-    external_driver_icon_for_config_with_registry(config, size, &IpcDriverRegistry::load_default())
-}
-
 pub(crate) fn external_driver_icon_for_config_with_registry(
     config: &DbConnectionConfig,
     size: impl Into<Size>,

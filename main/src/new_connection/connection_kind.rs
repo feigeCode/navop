@@ -74,10 +74,6 @@ pub(super) enum NewConnectionKind {
 }
 
 impl NewConnectionKind {
-    pub(super) fn all() -> Vec<Self> {
-        Self::all_with_registry(&IpcDriverRegistry::load_default())
-    }
-
     pub(super) fn all_with_registry(registry: &IpcDriverRegistry) -> Vec<Self> {
         let mut items = vec![
             Self::Ssh,
