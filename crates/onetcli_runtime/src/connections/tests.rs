@@ -7,7 +7,7 @@ use one_core::storage::{ConnectionRepository, DatabaseType};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tool_runtime::{ResourceCapability, ToolAdapter, ToolContext};
+use tool_runtime::{ResourceCapability, RiskLevel, ToolAdapter, ToolContext};
 
 mod create_extended;
 mod management;
@@ -86,6 +86,18 @@ fn open_session_is_exposed_to_mcp_function_calling_and_cli() {
         assert_eq!(json!(["connection"]), tool.input_schema["required"]);
         assert!(!tool.annotations.read_only);
     }
+}
+
+#[test]
+fn set_sync_enabled_is_low_risk_non_destructive_write() {
+    let registry = connection_tool_registry(repo());
+    let tool = registry
+        .get("connections.set_sync_enabled", ToolAdapter::FunctionCalling)
+        .expect("set_sync_enabled tool should be exposed");
+
+    assert!(!tool.annotations.read_only);
+    assert!(!tool.annotations.destructive);
+    assert_eq!(RiskLevel::Low, tool.annotations.risk);
 }
 
 #[test]

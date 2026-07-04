@@ -56,6 +56,36 @@ fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn agent_runtime_tool_registry_ignores_public_mcp_toolset_exposure(cx: &mut TestAppContext) {
+    let registry = cx.update(|cx| {
+        register_connection_repository(cx);
+        let mut settings = AppSettings::default();
+        settings.mcp.toolsets = McpToolsetSettings {
+            terminal: false,
+            connections: false,
+            sftp: false,
+            database: false,
+            redis: false,
+            internal_functions: false,
+        };
+        cx.set_global(settings);
+
+        agent_runtime_tool_registry(cx).expect("agent registry should build")
+    });
+    let names = registry
+        .names()
+        .into_iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&"connections_set_sync_enabled".to_string()));
+    assert!(names.contains(&"internal_functions_call".to_string()));
+    assert!(names.contains(&"db_query".to_string()));
+    assert!(names.contains(&"redis_get".to_string()));
+    assert!(names.contains(&"sftp_read".to_string()));
+}
+
+#[gpui::test]
 fn agent_runtime_tool_registry_uses_native_redis_tools(cx: &mut TestAppContext) {
     let registry = cx.update(|cx| {
         register_connection_repository(cx);

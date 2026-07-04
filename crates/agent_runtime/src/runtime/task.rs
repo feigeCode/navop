@@ -32,11 +32,11 @@ pub enum TaskKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ToolExecutionMode {
     /// 自动:把可用工具暴露给模型,并执行模型请求的工具。
-    #[default]
     Auto,
     /// 只读:只暴露 `RiskLevel::Read` 工具。
     ReadOnly,
     /// 手动确认:允许模型请求工具,但业务工具执行前需要用户确认。
+    #[default]
     Manual,
 }
 

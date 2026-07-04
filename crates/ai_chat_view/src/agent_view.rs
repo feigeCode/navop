@@ -424,7 +424,7 @@ impl AgentChatView {
         }
 
         let task_kind = default_task_kind();
-        let selected_tool = SharedString::from("自动");
+        let selected_tool = default_tool_label();
         let tool_options = default_tool_options();
         let task_options = default_task_options();
 
@@ -713,7 +713,7 @@ impl AgentChatView {
     }
 
     fn resolve_tool_call(&mut self, call_id: String, approved: bool, cx: &mut Context<Self>) {
-        if self.backend != Backend::Local || self.is_running {
+        if self.backend != Backend::Local {
             return;
         }
         self.set_running(true, cx);
@@ -2523,6 +2523,10 @@ fn tool_execution_mode_from_label(label: &SharedString) -> ToolExecutionMode {
     }
 }
 
+fn default_tool_label() -> SharedString {
+    SharedString::from("手动确认")
+}
+
 fn static_runtime_model_option(runtime: &Runtime) -> ComposerModelOption {
     let model = runtime.services().model.model_name().to_string();
     ComposerModelOption::new("runtime:current", "runtime", "当前 Runtime", model)
@@ -3034,6 +3038,11 @@ mod tests {
     }
 
     #[test]
+    fn default_tool_label_is_manual_confirmation() {
+        assert_eq!("手动确认", default_tool_label().as_ref());
+    }
+
+    #[test]
     fn composer_defaults_to_auto_ask_plan_modes() {
         let options = default_task_options();
 
@@ -3325,6 +3334,47 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(tool_names.contains(&"echo"));
         assert!(!tool_names.contains(&"write_data"));
+    }
+
+    #[gpui::test]
+    fn gpui_tool_approval_click_is_not_blocked_by_running_flag(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let model = Arc::new(MockModelClient::new([
+            ModelResponse::tool_call(function_tool_call(
+                "c_write",
+                "write_data",
+                json!({"value": "x"}).to_string(),
+            )),
+            ModelResponse::text("写入已完成。"),
+        ]));
+        let runtime = test_runtime_with_model_and_write_tool(model.clone());
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update_in(cx, |view, window, cx| {
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "写入 x".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+        cx.run_until_parked();
+
+        view.update(cx, |view, cx| {
+            view.is_running = true;
+            view.resolve_tool_call("c_write".into(), true, cx);
+        });
+        run_gpui_until(cx, || model.request_count() >= 2);
+
+        assert_eq!(2, model.request_count());
     }
 
     #[gpui::test]

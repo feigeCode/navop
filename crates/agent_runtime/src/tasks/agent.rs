@@ -15,6 +15,7 @@ use crate::ids::{ToolCallId, TurnId};
 use crate::model::{ModelRequest, ModelResponse, ModelStreamEvent};
 use crate::planner::history_to_messages;
 use crate::resource::ResourceContext;
+use crate::risk::RiskLevel;
 use crate::runtime::{
     PendingToolApproval, PendingToolCallSummary, RuntimeServices, RuntimeTask, Session,
     TaskContext, TaskKind, TaskOutcome, ToolExecutionMode,
@@ -433,13 +434,15 @@ fn requires_tool_approval(
     if !requires_manual_confirmation(call.tool_name.as_str()) {
         return false;
     }
-    if mode == ToolExecutionMode::Manual {
-        return true;
-    }
-    specs
+    let risk = specs
         .iter()
         .find(|spec| spec.name == call.tool_name)
-        .is_some_and(|spec| spec.risk.requires_confirmation())
+        .map(|spec| spec.risk);
+    match mode {
+        ToolExecutionMode::Manual => risk.is_some_and(|risk| risk != RiskLevel::Read),
+        ToolExecutionMode::Auto => risk.is_some_and(RiskLevel::requires_confirmation),
+        ToolExecutionMode::ReadOnly => false,
+    }
 }
 
 fn approval_question(pending: &PendingToolApproval) -> String {

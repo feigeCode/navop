@@ -839,7 +839,12 @@ async fn parallel_tool_calls_start_before_first_finishes() {
 
     let outcome = tokio::time::timeout(
         Duration::from_secs(1),
-        runtime.run_turn_blocking(session.id(), "并发检查".into(), TaskKind::Agent),
+        runtime.run_turn_blocking_with_tool_mode(
+            session.id(),
+            "并发检查".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Auto,
+        ),
     )
     .await
     .expect("parallel-safe tool calls should both start before either finishes")
@@ -878,7 +883,12 @@ async fn parallel_tool_observations_preserve_original_call_order() {
     let mut rx = runtime.subscribe();
 
     runtime
-        .run_turn_blocking(session.id(), "并发顺序检查".into(), TaskKind::Agent)
+        .run_turn_blocking_with_tool_mode(
+            session.id(),
+            "并发顺序检查".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Auto,
+        )
         .await
         .expect("run agent turn");
 
@@ -939,6 +949,11 @@ async fn manual_mode_pauses_parallel_safe_tool_before_dispatch() {
     assert_eq!(0, started.load(Ordering::SeqCst));
 }
 
+#[test]
+fn default_tool_execution_mode_is_manual_confirmation() {
+    assert_eq!(ToolExecutionMode::Manual, ToolExecutionMode::default());
+}
+
 #[tokio::test]
 async fn ask_mode_does_not_send_tools_or_tool_choice() {
     let model = Arc::new(MockModelClient::new([ModelResponse::text("直接回答。")]));
@@ -970,6 +985,96 @@ async fn ask_mode_does_not_send_tools_or_tool_choice() {
     assert!(!system.contains("可用 function calling 工具名"));
     assert!(!system.contains("update_plan"));
     assert!(!system.contains("delegate_task"));
+}
+
+#[tokio::test]
+async fn manual_tool_mode_dispatches_read_tool_without_confirmation() {
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_call(function_tool_call(
+                "c_echo",
+                "echo",
+                json!({"message": "hello"}).to_string(),
+            )),
+            ModelResponse::text("读工具已完成。"),
+        ],
+        ToolRegistry::new().with_tool(Arc::new(EchoTool)),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking_with_tool_mode(
+            session.id(),
+            "回显 hello".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Manual,
+        )
+        .await
+        .expect("run manual read turn");
+
+    assert!(
+        matches!(outcome, TaskOutcome::Completed { answer: Some(answer) } if answer == "读工具已完成。")
+    );
+    let events = drain_events(&mut rx);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::NeedUserInput { .. })),
+        "manual mode must not pause read tools for confirmation"
+    );
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ObservationAdded { observation, .. }
+                if observation.success && observation.summary == "echo: hello"
+        )
+    }));
+}
+
+#[tokio::test]
+async fn auto_tool_mode_dispatches_low_risk_write_without_confirmation() {
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_call(function_tool_call(
+                "c_write",
+                "write_data",
+                json!({"value": "x"}).to_string(),
+            )),
+            ModelResponse::text("自动写入已完成。"),
+        ],
+        ToolRegistry::new().with_tool(Arc::new(WriteTool)),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking_with_tool_mode(
+            session.id(),
+            "自动写入 x".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Auto,
+        )
+        .await
+        .expect("run auto write turn");
+
+    assert!(
+        matches!(outcome, TaskOutcome::Completed { answer: Some(answer) } if answer == "自动写入已完成。")
+    );
+    let events = drain_events(&mut rx);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::NeedUserInput { .. })),
+        "auto mode must not pause low-risk write tools for confirmation"
+    );
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ObservationAdded { observation, .. }
+                if observation.success && observation.summary.contains("write executed")
+        )
+    }));
 }
 
 #[tokio::test]

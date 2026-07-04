@@ -13,8 +13,8 @@ use one_core::storage::{ConnectionRepository, StoredConnection, WorkspaceReposit
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    ResourceCapability, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolError,
-    ToolFuture, ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
+    ResourceCapability, RiskLevel, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor,
+    ToolError, ToolFuture, ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
 #[derive(Clone, Copy)]
@@ -319,7 +319,10 @@ impl ToolHandler for ConnectionToolHandler {
                 ToolAdapter::FunctionCalling,
                 ToolAdapter::Cli,
             ],
-            annotations: annotations(title, read_only),
+            annotations: match self.tool {
+                ConnectionTool::SetSyncEnabled => low_risk_write_annotations(title),
+                _ => annotations(title, read_only),
+            },
         }
     }
 
@@ -350,6 +353,18 @@ fn annotations(title: &str, read_only: bool) -> ToolAnnotations {
         ToolAnnotations::read_only(title)
     } else {
         ToolAnnotations::mutating(title)
+    }
+}
+
+fn low_risk_write_annotations(title: &str) -> ToolAnnotations {
+    ToolAnnotations {
+        title: title.to_string(),
+        read_only: false,
+        destructive: false,
+        idempotent: true,
+        open_world: false,
+        supports_parallel: false,
+        risk: RiskLevel::Low,
     }
 }
 

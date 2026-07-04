@@ -112,7 +112,7 @@ fn menu_state_after_open_change(
 
 fn current_tool_label(label: &SharedString) -> SharedString {
     if label.is_empty() {
-        SharedString::from("自动")
+        SharedString::from("手动确认")
     } else {
         label.clone()
     }
@@ -1049,6 +1049,7 @@ fn render_mode_content(
                 selected,
                 event: ModeOptionEvent::Task,
             },
+            theme,
             cx,
         ));
     }
@@ -1064,6 +1065,7 @@ fn render_mode_content(
                 selected,
                 event: ModeOptionEvent::Tool,
             },
+            theme,
             cx,
         ));
     }
@@ -1074,12 +1076,13 @@ fn render_mode_content(
 fn mode_option_row(
     view: Entity<AgentInput>,
     row: ModeOptionRow,
+    theme: &AgentChatTheme,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let muted = cx.theme().muted_foreground;
-    let hover_bg = cx.theme().list_hover;
-    let selected_bg = cx.theme().accent;
-    let selected_fg = cx.theme().accent_foreground;
+    let muted = theme.muted_foreground;
+    let hover_bg = theme.panel_hover;
+    let selected_bg = theme.panel_hover;
+    let selected_fg = theme.accent;
     let id = row.option.id.clone();
     let row_id = SharedString::from(format!("{}-opt-{id}", row.id_prefix));
     let mut inner = v_flex()
@@ -1100,7 +1103,9 @@ fn mode_option_row(
         .py_1p5()
         .rounded(cx.theme().radius)
         .cursor_pointer()
-        .when(row.selected, |this| this.bg(selected_bg))
+        .when(row.selected, |this| {
+            this.bg(selected_bg).text_color(theme.foreground)
+        })
         .hover(move |this| this.bg(hover_bg))
         .child(inner)
         .when(row.selected, |this| {
@@ -2101,7 +2106,8 @@ impl Render for AgentInput {
                                 Input::new(&self.input_state)
                                     .size_full()
                                     .appearance(false)
-                                    .text_color(theme.foreground),
+                                    .text_color(theme.foreground)
+                                    .caret_color(theme.accent),
                             ),
                     ),
             )
@@ -2141,7 +2147,7 @@ mod tests {
                             "Very Long Provider Name",
                             "extremely-long-model-name-with-large-context",
                         )),
-                        tool_label: SharedString::from("自动"),
+                        tool_label: SharedString::from("手动确认"),
                         task_label: SharedString::from("Auto Mode"),
                         ..AgentComposerContext::default()
                     },
@@ -2266,6 +2272,14 @@ mod tests {
                 .iter()
                 .map(|option| option.label.as_ref())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn empty_tool_label_defaults_to_manual_confirmation() {
+        assert_eq!(
+            "手动确认",
+            current_tool_label(&SharedString::from("")).as_ref()
         );
     }
 
