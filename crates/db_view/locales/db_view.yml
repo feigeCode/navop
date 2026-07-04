@@ -221,6 +221,50 @@ ConnectionForm:
     en: Database
     zh-CN: 数据库
     zh-HK: 資料庫
+  default_schema:
+    en: Default Schema
+    zh-CN: 默认 Schema
+    zh-HK: 預設 Schema
+  default_schema_placeholder:
+    en: Leave empty to use the database default
+    zh-CN: 留空则使用数据库默认值
+    zh-HK: 留空則使用資料庫預設值
+  schema_filter_mode:
+    en: Schema Filter
+    zh-CN: Schema 过滤
+    zh-HK: Schema 過濾
+  schema_filter_mode_auto:
+    en: Auto hide system schemas
+    zh-CN: 自动隐藏系统 Schema
+    zh-HK: 自動隱藏系統 Schema
+  schema_filter_mode_include:
+    en: Show only listed schemas
+    zh-CN: 仅显示指定 Schema
+    zh-HK: 僅顯示指定 Schema
+  schema_filter_mode_exclude:
+    en: Hide listed schemas
+    zh-CN: 隐藏指定 Schema
+    zh-HK: 隱藏指定 Schema
+  schema_filter_mode_all:
+    en: Show all schemas
+    zh-CN: 显示全部 Schema
+    zh-HK: 顯示全部 Schema
+  schema_filter_include:
+    en: Include Schemas
+    zh-CN: 包含 Schema
+    zh-HK: 包含 Schema
+  schema_filter_include_placeholder:
+    en: app, audit_*
+    zh-CN: app, audit_*
+    zh-HK: app, audit_*
+  schema_filter_exclude:
+    en: Exclude Schemas
+    zh-CN: 排除 Schema
+    zh-HK: 排除 Schema
+  schema_filter_exclude_placeholder:
+    en: tmp_*, scratch
+    zh-CN: tmp_*, scratch
+    zh-HK: tmp_*, scratch
   schema:
     en: Scheme
     zh-CN: 协议

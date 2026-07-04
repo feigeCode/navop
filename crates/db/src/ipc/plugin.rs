@@ -17,6 +17,9 @@ use crate::oracle::OraclePlugin;
 use crate::plugin::{ConnectionLifecycle, DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{DatabaseCapabilities, DatabaseUiManifest};
 use crate::postgresql::PostgresPlugin;
+use crate::schema_preferences::{
+    SchemaFilterProfile, filter_schemas, schema_filter_profile_for_database_type,
+};
 use crate::sqlite::SqlitePlugin;
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::streaming_parser::StreamingSqlParser;
@@ -88,6 +91,15 @@ impl ExternalDatabasePlugin {
             self.driver.dialect.compatible_database_type,
             Some(DatabaseType::Oracle)
         )
+    }
+
+    fn schema_filter_profile(&self) -> SchemaFilterProfile {
+        self.driver
+            .dialect
+            .compatible_database_type
+            .as_ref()
+            .map(schema_filter_profile_for_database_type)
+            .unwrap_or(SchemaFilterProfile::None)
     }
 
     fn oracle_table_save_request(&self, request: &TableSaveRequest) -> TableSaveRequest {
@@ -719,15 +731,22 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<Vec<String>> {
-        self.metadata(
-            connection,
-            wire_method::SCHEMA_SCHEMAS,
-            serde_json::json!({ "database": database }),
-        )
-        .await
-        .map(|schemas: Vec<wire_schema::SchemaInfo>| {
-            schemas.into_iter().map(|schema| schema.name).collect()
-        })
+        let schemas = self
+            .metadata(
+                connection,
+                wire_method::SCHEMA_SCHEMAS,
+                serde_json::json!({ "database": database }),
+            )
+            .await
+            .map(|schemas: Vec<wire_schema::SchemaInfo>| {
+                schemas.into_iter().map(|schema| schema.name).collect()
+            })?;
+
+        Ok(filter_schemas(
+            connection.config(),
+            self.schema_filter_profile(),
+            schemas,
+        ))
     }
 
     async fn list_schemas_view(

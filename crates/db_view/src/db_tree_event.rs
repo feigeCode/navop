@@ -11,7 +11,7 @@ use crate::{
     sql_editor_view::SqlEditorTab,
     table_designer_tab::{TableDesigner, TableDesignerConfig},
 };
-use db::{DbNode, DbNodeType, GlobalDbState, SqlResult};
+use db::{DbNode, DbNodeType, GlobalDbState, SqlResult, schema_for_new_query};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, ParentElement, PathPromptOptions, Styled,
     Subscription, Window, div, px,
@@ -686,7 +686,13 @@ impl DatabaseEventHandler {
     ) {
         let connection_id = node.connection_id.clone();
         let database = node.get_database_name();
-        let schema = node.get_schema_name();
+        let node_schema = node.get_schema_name();
+        let schema = cx
+            .global::<GlobalDbState>()
+            .get_config(&connection_id)
+            .as_ref()
+            .and_then(|config| schema_for_new_query(node_schema.as_deref(), config))
+            .or(node_schema);
         let database_type = node.database_type.clone();
         let title = Self::query_title_for_node(&node, database.as_deref());
         let initial_sql = Self::format_query_table_reference(&node, cx.global::<GlobalDbState>())

@@ -16,8 +16,9 @@ use crate::import_export::{
     ImportResult,
 };
 use crate::manifest_helpers::{
-    DatabaseActionDescriptorExt, action, action_with_scope, field, option, ssh_auth_rules,
-    ssh_enabled_rules, ssh_field, ssh_number_field, ssh_password_field, tab, yes_no_options,
+    DatabaseActionDescriptorExt, action, action_with_scope, field, option,
+    schema_preference_fields, ssh_auth_rules, ssh_enabled_rules, ssh_field, ssh_number_field,
+    ssh_password_field, tab, yes_no_options,
 };
 use crate::oracle::connection::OracleDbConnection;
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
@@ -26,6 +27,7 @@ use crate::plugin_manifest::{
     DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
     DatabaseUiCapabilities, DatabaseUiManifest,
 };
+use crate::schema_preferences::{SchemaFilterProfile, filter_schemas};
 use crate::types::*;
 
 /// Oracle data types (name, description)
@@ -541,10 +543,8 @@ fn oracle_connection_form() -> DatabaseFormManifest {
                         .with_placeholder("orcl (or use Service Name)"),
                 ],
             ),
-            tab(
-                "advanced",
-                "ConnectionForm.advanced",
-                vec![
+            {
+                let mut fields = vec![
                     field(
                         "connect_timeout",
                         "ConnectionForm.connect_timeout",
@@ -553,8 +553,10 @@ fn oracle_connection_form() -> DatabaseFormManifest {
                     .optional()
                     .with_placeholder("30")
                     .with_default("30"),
-                ],
-            ),
+                ];
+                fields.extend(schema_preference_fields());
+                tab("advanced", "ConnectionForm.advanced", fields)
+            },
             tab(
                 "ssh",
                 "ConnectionForm.ssh",
@@ -1022,14 +1024,12 @@ impl DatabasePlugin for OraclePlugin {
         let sql = r#"
         SELECT DISTINCT owner AS schema_name
         FROM all_objects
-        WHERE owner NOT IN ('SYS', 'SYSTEM')
-          AND owner NOT LIKE 'APEX%'
         ORDER BY owner
     "#;
 
         match connection.query(sql).await {
             Ok(SqlResult::Query(qr)) => {
-                let schemas: Vec<String> = qr
+                let schemas = qr
                     .rows
                     .iter()
                     .filter_map(|row| {
@@ -1038,6 +1038,8 @@ impl DatabasePlugin for OraclePlugin {
                             .map(|s| s.trim().to_string())
                     })
                     .collect();
+                let schemas =
+                    filter_schemas(connection.config(), SchemaFilterProfile::Oracle, schemas);
 
                 if !schemas.is_empty() {
                     return Ok(schemas);
@@ -1057,11 +1059,16 @@ impl DatabasePlugin for OraclePlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list schemas (fallback): {}", e))?;
 
         if let SqlResult::Query(qr) = result {
-            Ok(qr
+            let schemas = qr
                 .rows
                 .iter()
                 .filter_map(|row| row.first().and_then(|v| v.clone()))
-                .collect())
+                .collect();
+            Ok(filter_schemas(
+                connection.config(),
+                SchemaFilterProfile::Oracle,
+                schemas,
+            ))
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }

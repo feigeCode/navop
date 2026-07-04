@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use db::plugin_manifest::FormVisibilityRule;
-use db::{GlobalDbState, oracle};
+use db::{
+    DEFAULT_SCHEMA_PARAM, GlobalDbState, SCHEMA_FILTER_EXCLUDE_PARAM, SCHEMA_FILTER_INCLUDE_PARAM,
+    SCHEMA_FILTER_MODE_PARAM, oracle,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AsyncApp, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
@@ -293,6 +296,62 @@ pub struct DbFormConfig {
 }
 
 impl DbFormConfig {
+    fn schema_preference_fields() -> Vec<FormField> {
+        vec![
+            FormField::new(
+                DEFAULT_SCHEMA_PARAM,
+                t!("ConnectionForm.default_schema"),
+                FormFieldType::Text,
+            )
+            .optional()
+            .placeholder(t!("ConnectionForm.default_schema_placeholder")),
+            FormField::new(
+                SCHEMA_FILTER_MODE_PARAM,
+                t!("ConnectionForm.schema_filter_mode"),
+                FormFieldType::Select,
+            )
+            .optional()
+            .default("auto")
+            .options(vec![
+                (
+                    "auto".to_string(),
+                    t!("ConnectionForm.schema_filter_mode_auto").to_string(),
+                ),
+                (
+                    "include".to_string(),
+                    t!("ConnectionForm.schema_filter_mode_include").to_string(),
+                ),
+                (
+                    "exclude".to_string(),
+                    t!("ConnectionForm.schema_filter_mode_exclude").to_string(),
+                ),
+                (
+                    "all".to_string(),
+                    t!("ConnectionForm.schema_filter_mode_all").to_string(),
+                ),
+            ]),
+            FormField::new(
+                SCHEMA_FILTER_INCLUDE_PARAM,
+                t!("ConnectionForm.schema_filter_include"),
+                FormFieldType::Text,
+            )
+            .optional()
+            .placeholder(t!("ConnectionForm.schema_filter_include_placeholder")),
+            FormField::new(
+                SCHEMA_FILTER_EXCLUDE_PARAM,
+                t!("ConnectionForm.schema_filter_exclude"),
+                FormFieldType::Text,
+            )
+            .optional()
+            .placeholder(t!("ConnectionForm.schema_filter_exclude_placeholder")),
+        ]
+    }
+
+    fn with_schema_preference_fields(mut fields: Vec<FormField>) -> Vec<FormField> {
+        fields.extend(Self::schema_preference_fields());
+        fields
+    }
+
     fn ssh_tab_group() -> TabGroup {
         TabGroup::new("ssh", t!("ConnectionForm.ssh")).fields(vec![
             FormField::new(
@@ -684,23 +743,25 @@ impl DbFormConfig {
                     .optional()
                     .placeholder("database name (optional)"),
                 ]),
-                TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(vec![
-                    FormField::new(
-                        "connect_timeout",
-                        t!("ConnectionForm.connect_timeout"),
-                        FormFieldType::Number,
-                    )
-                    .optional()
-                    .placeholder("30")
-                    .default("30"),
-                    FormField::new(
-                        "application_name",
-                        t!("ConnectionForm.application_name"),
-                        FormFieldType::Text,
-                    )
-                    .optional()
-                    .placeholder("Application Name"),
-                ]),
+                TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(
+                    Self::with_schema_preference_fields(vec![
+                        FormField::new(
+                            "connect_timeout",
+                            t!("ConnectionForm.connect_timeout"),
+                            FormFieldType::Number,
+                        )
+                        .optional()
+                        .placeholder("30")
+                        .default("30"),
+                        FormField::new(
+                            "application_name",
+                            t!("ConnectionForm.application_name"),
+                            FormFieldType::Text,
+                        )
+                        .optional()
+                        .placeholder("Application Name"),
+                    ]),
+                ),
                 Self::postgres_ssl_tab_group(),
                 Self::ssh_tab_group(),
                 TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
@@ -760,23 +821,25 @@ impl DbFormConfig {
                     .optional()
                     .placeholder("database name (optional)"),
                 ]),
-                TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(vec![
-                    FormField::new(
-                        "connect_timeout",
-                        t!("ConnectionForm.connect_timeout"),
-                        FormFieldType::Number,
-                    )
-                    .optional()
-                    .placeholder("30")
-                    .default("30"),
-                    FormField::new(
-                        "application_name",
-                        t!("ConnectionForm.application_name"),
-                        FormFieldType::Text,
-                    )
-                    .optional()
-                    .placeholder("Application Name"),
-                ]),
+                TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(
+                    Self::with_schema_preference_fields(vec![
+                        FormField::new(
+                            "connect_timeout",
+                            t!("ConnectionForm.connect_timeout"),
+                            FormFieldType::Number,
+                        )
+                        .optional()
+                        .placeholder("30")
+                        .default("30"),
+                        FormField::new(
+                            "application_name",
+                            t!("ConnectionForm.application_name"),
+                            FormFieldType::Text,
+                        )
+                        .optional()
+                        .placeholder("Application Name"),
+                    ]),
+                ),
                 Self::mssql_ssl_tab_group(),
                 Self::ssh_tab_group(),
                 TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
@@ -835,16 +898,18 @@ impl DbFormConfig {
                         .optional()
                         .placeholder("orcl (or use Service Name)"),
                 ]),
-                TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(vec![
-                    FormField::new(
-                        "connect_timeout",
-                        t!("ConnectionForm.connect_timeout"),
-                        FormFieldType::Number,
-                    )
-                    .optional()
-                    .placeholder("30")
-                    .default("30"),
-                ]),
+                TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(
+                    Self::with_schema_preference_fields(vec![
+                        FormField::new(
+                            "connect_timeout",
+                            t!("ConnectionForm.connect_timeout"),
+                            FormFieldType::Number,
+                        )
+                        .optional()
+                        .placeholder("30")
+                        .default("30"),
+                    ]),
+                ),
                 Self::ssh_tab_group(),
                 TabGroup::new("notes", t!("ConnectionForm.notes")).fields(vec![
                     FormField::new(

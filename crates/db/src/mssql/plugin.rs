@@ -14,8 +14,9 @@ use crate::import_export::{
     ImportResult,
 };
 use crate::manifest_helpers::{
-    DatabaseActionDescriptorExt, action, action_with_scope, field, option, ssh_auth_rules,
-    ssh_enabled_rules, ssh_field, ssh_number_field, ssh_password_field, tab, yes_no_options,
+    DatabaseActionDescriptorExt, action, action_with_scope, field, option,
+    schema_preference_fields, ssh_auth_rules, ssh_enabled_rules, ssh_field, ssh_number_field,
+    ssh_password_field, tab, yes_no_options,
 };
 use crate::mssql::connection::MssqlDbConnection;
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
@@ -24,6 +25,7 @@ use crate::plugin_manifest::{
     DatabaseCapabilities, DatabaseFormFieldType, DatabaseFormKind, DatabaseFormManifest,
     DatabaseUiCapabilities, DatabaseUiManifest, FormSelectOption, ReferenceDataKind,
 };
+use crate::schema_preferences::{SchemaFilterProfile, filter_schemas};
 use crate::types::*;
 
 /// MSSQL data types (name, description)
@@ -147,10 +149,8 @@ fn mssql_connection_form() -> DatabaseFormManifest {
                     .with_placeholder("database name (optional)"),
                 ],
             ),
-            tab(
-                "advanced",
-                "ConnectionForm.advanced",
-                vec![
+            {
+                let mut fields = vec![
                     field(
                         "connect_timeout",
                         "ConnectionForm.connect_timeout",
@@ -166,8 +166,10 @@ fn mssql_connection_form() -> DatabaseFormManifest {
                     )
                     .optional()
                     .with_placeholder("Application Name"),
-                ],
-            ),
+                ];
+                fields.extend(schema_preference_fields());
+                tab("advanced", "ConnectionForm.advanced", fields)
+            },
             tab(
                 "ssl",
                 "ConnectionForm.ssl",
@@ -915,12 +917,6 @@ impl DatabasePlugin for MsSqlPlugin {
             r#"
             SELECT s.name
             FROM [{database}].sys.schemas s
-            WHERE s.name NOT IN (
-                'INFORMATION_SCHEMA', 'sys',
-                'db_owner', 'db_accessadmin', 'db_securityadmin', 'db_ddladmin',
-                'db_backupoperator', 'db_datareader', 'db_datawriter',
-                'db_denydatareader', 'db_denydatawriter'
-            )
             ORDER BY s.name
             "#,
             database = database.replace("]", "]]")
@@ -932,11 +928,16 @@ impl DatabasePlugin for MsSqlPlugin {
             .map_err(|e| anyhow::anyhow!("Failed to list schemas: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
+            let schemas = query_result
                 .rows
                 .iter()
                 .filter_map(|row| row.first().and_then(|v| v.clone()))
-                .collect())
+                .collect();
+            Ok(filter_schemas(
+                connection.config(),
+                SchemaFilterProfile::MsSql,
+                schemas,
+            ))
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }

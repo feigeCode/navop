@@ -4,6 +4,10 @@ use crate::plugin_manifest::{
     DatabaseActionToolbarScope, DatabaseFormField, DatabaseFormFieldType, DatabaseFormTab,
     FormSelectOption, FormValueCondition, FormVisibilityRule,
 };
+use crate::schema_preferences::{
+    DEFAULT_SCHEMA_PARAM, SCHEMA_FILTER_EXCLUDE_PARAM, SCHEMA_FILTER_INCLUDE_PARAM,
+    SCHEMA_FILTER_MODE_PARAM,
+};
 
 pub(crate) fn tab(
     id: &str,
@@ -50,6 +54,45 @@ pub(crate) fn ssh_password_field(
 
 pub(crate) fn yes_no_options() -> Vec<FormSelectOption> {
     vec![option("false", "Common.no"), option("true", "Common.yes")]
+}
+
+pub(crate) fn schema_preference_fields() -> Vec<ManifestFieldBuilder> {
+    vec![
+        field(
+            DEFAULT_SCHEMA_PARAM,
+            "ConnectionForm.default_schema",
+            DatabaseFormFieldType::Text,
+        )
+        .optional()
+        .with_placeholder("ConnectionForm.default_schema_placeholder"),
+        field(
+            SCHEMA_FILTER_MODE_PARAM,
+            "ConnectionForm.schema_filter_mode",
+            DatabaseFormFieldType::Select,
+        )
+        .optional()
+        .with_default("auto")
+        .with_options(vec![
+            option("auto", "ConnectionForm.schema_filter_mode_auto"),
+            option("include", "ConnectionForm.schema_filter_mode_include"),
+            option("exclude", "ConnectionForm.schema_filter_mode_exclude"),
+            option("all", "ConnectionForm.schema_filter_mode_all"),
+        ]),
+        field(
+            SCHEMA_FILTER_INCLUDE_PARAM,
+            "ConnectionForm.schema_filter_include",
+            DatabaseFormFieldType::Text,
+        )
+        .optional()
+        .with_placeholder("ConnectionForm.schema_filter_include_placeholder"),
+        field(
+            SCHEMA_FILTER_EXCLUDE_PARAM,
+            "ConnectionForm.schema_filter_exclude",
+            DatabaseFormFieldType::Text,
+        )
+        .optional()
+        .with_placeholder("ConnectionForm.schema_filter_exclude_placeholder"),
+    ]
 }
 
 pub(crate) fn option(value: &str, label_i18n_key: &str) -> FormSelectOption {

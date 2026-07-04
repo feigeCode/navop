@@ -14,8 +14,9 @@ use crate::import_export::{
     ImportResult,
 };
 use crate::manifest_helpers::{
-    DatabaseActionDescriptorExt, action, action_with_scope, field, option, ssh_auth_rules,
-    ssh_enabled_rules, ssh_field, ssh_number_field, ssh_password_field, tab, yes_no_options,
+    DatabaseActionDescriptorExt, action, action_with_scope, field, option,
+    schema_preference_fields, ssh_auth_rules, ssh_enabled_rules, ssh_field, ssh_number_field,
+    ssh_password_field, tab, yes_no_options,
 };
 use crate::plugin::{DatabasePlugin, SqlCompletionInfo};
 use crate::plugin_manifest::{
@@ -24,6 +25,7 @@ use crate::plugin_manifest::{
     DatabaseUiCapabilities, DatabaseUiManifest,
 };
 use crate::postgresql::connection::PostgresDbConnection;
+use crate::schema_preferences::{SchemaFilterProfile, filter_schemas};
 use crate::types::*;
 
 /// PostgreSQL data types (name, description)
@@ -217,10 +219,8 @@ fn postgresql_connection_form() -> DatabaseFormManifest {
                     .with_placeholder("database name (optional)"),
                 ],
             ),
-            tab(
-                "advanced",
-                "ConnectionForm.advanced",
-                vec![
+            {
+                let mut fields = vec![
                     field(
                         "connect_timeout",
                         "ConnectionForm.connect_timeout",
@@ -236,8 +236,10 @@ fn postgresql_connection_form() -> DatabaseFormManifest {
                     )
                     .optional()
                     .with_placeholder("Application Name"),
-                ],
-            ),
+                ];
+                fields.extend(schema_preference_fields());
+                tab("advanced", "ConnectionForm.advanced", fields)
+            },
             tab(
                 "ssl",
                 "ConnectionForm.ssl",
@@ -1067,18 +1069,22 @@ impl DatabasePlugin for PostgresPlugin {
         let result = connection
             .query(
                 "SELECT schema_name FROM information_schema.schemata \
-             WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') \
              ORDER BY schema_name",
             )
             .await
             .map_err(|e| anyhow::anyhow!("Failed to list schemas: {}", e))?;
 
         if let SqlResult::Query(query_result) = result {
-            Ok(query_result
+            let schemas = query_result
                 .rows
                 .iter()
                 .filter_map(|row| row.first().and_then(|v| v.clone()))
-                .collect())
+                .collect();
+            Ok(filter_schemas(
+                connection.config(),
+                SchemaFilterProfile::PostgreSql,
+                schemas,
+            ))
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
