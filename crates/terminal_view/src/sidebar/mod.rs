@@ -128,8 +128,11 @@ impl SidebarPanel {
     /// 获取面板图标
     pub fn icon(&self) -> Icon {
         match self {
-            SidebarPanel::AiChat | SidebarPanel::ServerMonitor => self.icon_name().color(),
-            _ => self.icon_name().mono(),
+            SidebarPanel::Settings => IconName::SettingColor.color(),
+            SidebarPanel::QuickCommand => IconName::SquareTerminalColor.color(),
+            SidebarPanel::AiChat => IconName::AI.color(),
+            SidebarPanel::FileManager => IconName::FolderOpenColor.color(),
+            SidebarPanel::ServerMonitor => IconName::Monitor.color(),
         }
     }
 

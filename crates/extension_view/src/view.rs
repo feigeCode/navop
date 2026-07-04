@@ -89,7 +89,7 @@ impl TabContent for ExtensionManagerView {
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
-        Some(IconName::GalleryVerticalEnd.color())
+        Some(IconName::ExtensionsColor.color())
     }
 }
 
