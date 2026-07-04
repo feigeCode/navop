@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -56,6 +57,9 @@ fn install_from_staging_with_policy(
         .or_else(|| direct_package_kind(&package_root))
         .ok_or_else(|| anyhow!("无法识别扩展包类型: {}", staging_dir.display()))?;
     enforce_install_security_policy(&package_root, kind, allow_high_risk_permissions)?;
+    if kind == ExtensionKind::LanguageBundle {
+        return install_language_bundle_from_package_root(&package_root, registry);
+    }
 
     let install_name = package_install_name(&package_root, kind)?;
     let provider = registry
@@ -86,6 +90,195 @@ fn install_from_staging_with_policy(
             Err(err).with_context(|| format!("install {:?} from {}", kind, target_dir.display()))
         }
     }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+struct LanguageBundleInstallManifest {
+    id: String,
+    name: String,
+    version: String,
+    #[serde(default)]
+    languages: Vec<String>,
+    #[serde(default)]
+    file_extensions: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LanguageBundleChildManifest {
+    #[serde(default)]
+    file_extensions: Vec<String>,
+}
+
+fn install_language_bundle_from_package_root(
+    package_root: &Path,
+    registry: &ExtensionRegistry,
+) -> Result<ExtensionSummary> {
+    let mut manifest = read_language_bundle_install_manifest(package_root)?;
+    manifest.languages = validated_bundle_languages(&manifest.languages)?;
+    manifest.file_extensions =
+        bundle_file_extensions(package_root, &manifest.languages, &manifest.file_extensions)?;
+
+    let language_root = registry.root_for(ExtensionKind::Language);
+    let marker_root = registry.root_for(ExtensionKind::LanguageBundle);
+    std::fs::create_dir_all(&language_root)
+        .with_context(|| format!("create {}", language_root.display()))?;
+    std::fs::create_dir_all(&marker_root)
+        .with_context(|| format!("create {}", marker_root.display()))?;
+
+    let mut installed = Vec::new();
+    if let Err(err) = install_bundle_language_children(
+        package_root,
+        &language_root,
+        &manifest.languages,
+        &mut installed,
+    )
+    .and_then(|_| install_bundle_marker(&marker_root, &manifest, &mut installed))
+    {
+        restore_bundle_targets(&installed)?;
+        return Err(err);
+    }
+    remove_bundle_backups(&installed);
+    Ok(language_bundle_summary(
+        &manifest,
+        marker_root.join(&manifest.id),
+    ))
+}
+
+fn read_language_bundle_install_manifest(
+    package_root: &Path,
+) -> Result<LanguageBundleInstallManifest> {
+    let manifest_path = package_root.join("manifest.json");
+    let bytes = std::fs::read(&manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let manifest: LanguageBundleInstallManifest = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parse {}", manifest_path.display()))?;
+    if manifest.id.trim().is_empty() {
+        anyhow::bail!("language bundle manifest missing id");
+    }
+    if manifest.name.trim().is_empty() {
+        anyhow::bail!("language bundle manifest missing name");
+    }
+    if manifest.version.trim().is_empty() {
+        anyhow::bail!("language bundle manifest missing version");
+    }
+    if manifest.languages.is_empty() {
+        anyhow::bail!("language bundle manifest missing languages");
+    }
+    Ok(manifest)
+}
+
+fn validated_bundle_languages(languages: &[String]) -> Result<Vec<String>> {
+    let mut out = BTreeSet::new();
+    for language in languages {
+        out.insert(validate_install_name(language)?.to_string());
+    }
+    Ok(out.into_iter().collect())
+}
+
+fn bundle_file_extensions(
+    package_root: &Path,
+    languages: &[String],
+    manifest_extensions: &[String],
+) -> Result<Vec<String>> {
+    let mut extensions = BTreeSet::new();
+    for language in languages {
+        let child_dir = package_root.join(language);
+        ensure_bundle_child_language(&child_dir)?;
+        let manifest = read_bundle_child_manifest(&child_dir)?;
+        extensions.extend(manifest.file_extensions);
+    }
+    if extensions.is_empty() {
+        extensions.extend(manifest_extensions.iter().cloned());
+    }
+    Ok(extensions.into_iter().collect())
+}
+
+fn ensure_bundle_child_language(child_dir: &Path) -> Result<()> {
+    let manifest_path = child_dir.join("manifest.json");
+    if !manifest_path.exists() {
+        anyhow::bail!("missing language manifest: {}", manifest_path.display());
+    }
+    let parser_path = child_dir.join("parser.wasm");
+    if !parser_path.exists() {
+        anyhow::bail!("missing language parser.wasm: {}", parser_path.display());
+    }
+    Ok(())
+}
+
+fn read_bundle_child_manifest(child_dir: &Path) -> Result<LanguageBundleChildManifest> {
+    let manifest_path = child_dir.join("manifest.json");
+    let bytes = std::fs::read(&manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parse {}", manifest_path.display()))
+}
+
+fn install_bundle_language_children(
+    package_root: &Path,
+    language_root: &Path,
+    languages: &[String],
+    installed: &mut Vec<(PathBuf, Option<PathBuf>)>,
+) -> Result<()> {
+    for language in languages {
+        let source = package_root.join(language);
+        let target = language_root.join(language);
+        let backup = backup_existing_target(language_root, language, &target)?;
+        if let Err(err) = copy_dir_recursive(&source, &target) {
+            restore_failed_install(&target, backup.as_deref())?;
+            return Err(err);
+        }
+        installed.push((target, backup));
+    }
+    Ok(())
+}
+
+fn install_bundle_marker(
+    marker_root: &Path,
+    manifest: &LanguageBundleInstallManifest,
+    installed: &mut Vec<(PathBuf, Option<PathBuf>)>,
+) -> Result<()> {
+    let marker_dir = marker_root.join(&manifest.id);
+    let backup = backup_existing_target(marker_root, &manifest.id, &marker_dir)?;
+    if let Err(err) = write_bundle_marker(&marker_dir, manifest) {
+        restore_failed_install(&marker_dir, backup.as_deref())?;
+        return Err(err);
+    }
+    installed.push((marker_dir, backup));
+    Ok(())
+}
+
+fn write_bundle_marker(dir: &Path, manifest: &LanguageBundleInstallManifest) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let mut json = serde_json::to_string_pretty(manifest)?;
+    json.push('\n');
+    std::fs::write(dir.join("manifest.json"), json)
+        .with_context(|| format!("write {}", dir.join("manifest.json").display()))
+}
+
+fn restore_bundle_targets(installed: &[(PathBuf, Option<PathBuf>)]) -> Result<()> {
+    for (target, backup) in installed.iter().rev() {
+        restore_failed_install(target, backup.as_deref())?;
+    }
+    Ok(())
+}
+
+fn remove_bundle_backups(installed: &[(PathBuf, Option<PathBuf>)]) {
+    for (_, backup) in installed {
+        remove_install_backup(backup.as_deref());
+    }
+}
+
+fn language_bundle_summary(
+    manifest: &LanguageBundleInstallManifest,
+    marker_dir: PathBuf,
+) -> ExtensionSummary {
+    ExtensionSummary::new(
+        ExtensionKind::LanguageBundle,
+        manifest.id.clone(),
+        manifest.version.clone(),
+        marker_dir,
+    )
+    .with_description(format!("{} language bundle", manifest.name))
+    .with_file_extensions(manifest.file_extensions.clone())
 }
 
 fn backup_existing_target(
@@ -154,6 +347,7 @@ pub fn stage_local_tarball(source: &Path) -> Result<PathBuf> {
 fn package_install_name(staging_dir: &Path, kind: ExtensionKind) -> Result<String> {
     let manifest_file = match kind {
         ExtensionKind::Language => "manifest.json",
+        ExtensionKind::LanguageBundle => "manifest.json",
         ExtensionKind::DatabaseDriver => "driver.json",
         ExtensionKind::RemoteDesktopProvider => "remote_desktop_provider.json",
         ExtensionKind::McpHelper => "mcp_helper.json",

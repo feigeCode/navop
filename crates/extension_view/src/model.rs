@@ -5,6 +5,7 @@ use semver::Version;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExtensionKind {
     Language,
+    LanguageBundle,
     DatabaseDriver,
     RemoteDesktopProvider,
     McpHelper,

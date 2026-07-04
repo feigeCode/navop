@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionKind {
     Language,
+    LanguageBundle,
     DatabaseDriver,
     RemoteDesktopProvider,
     McpHelper,
@@ -15,6 +16,7 @@ impl ExtensionKind {
     pub fn dir_name(self) -> &'static str {
         match self {
             Self::Language => "languages",
+            Self::LanguageBundle => "language_bundles",
             Self::DatabaseDriver => "database_drivers",
             Self::RemoteDesktopProvider => "remote_desktop_providers",
             Self::McpHelper => "mcp_helpers",
@@ -26,6 +28,7 @@ impl ExtensionKind {
     pub fn all() -> &'static [Self] {
         &[
             Self::Language,
+            Self::LanguageBundle,
             Self::DatabaseDriver,
             Self::RemoteDesktopProvider,
             Self::McpHelper,

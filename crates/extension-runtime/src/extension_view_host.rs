@@ -351,6 +351,9 @@ fn to_host_entry(entry: extension_view::MarketplaceEntry) -> host_downloader::Ma
 fn to_view_kind(kind: host_extension::ExtensionKind) -> extension_view::ExtensionKind {
     match kind {
         host_extension::ExtensionKind::Language => extension_view::ExtensionKind::Language,
+        host_extension::ExtensionKind::LanguageBundle => {
+            extension_view::ExtensionKind::LanguageBundle
+        }
         host_extension::ExtensionKind::DatabaseDriver => {
             extension_view::ExtensionKind::DatabaseDriver
         }
@@ -366,6 +369,9 @@ fn to_view_kind(kind: host_extension::ExtensionKind) -> extension_view::Extensio
 fn to_host_kind(kind: extension_view::ExtensionKind) -> host_extension::ExtensionKind {
     match kind {
         extension_view::ExtensionKind::Language => host_extension::ExtensionKind::Language,
+        extension_view::ExtensionKind::LanguageBundle => {
+            host_extension::ExtensionKind::LanguageBundle
+        }
         extension_view::ExtensionKind::DatabaseDriver => {
             host_extension::ExtensionKind::DatabaseDriver
         }
@@ -446,6 +452,35 @@ mod tests {
                 "https://github.com/feigeCode/onetcli-extensions/releases/download/fake_pg-v1.2.3/extension-manifest.json".to_string(),
             ],
             round_tripped.extension_manifest_urls()
+        );
+    }
+
+    #[test]
+    fn language_bundle_kind_round_trips_between_host_and_view() {
+        let host_entry = host_downloader::MarketplaceEntry::from_resolved_urls(
+            "tree-sitter-languages",
+            host_extension::ExtensionKind::LanguageBundle,
+            "Tree-sitter Languages",
+            "0.1.0",
+            "Tree-sitter syntax bundle",
+            vec!["rs".to_string(), "js".to_string()],
+            vec![
+                "https://example.test/tree-sitter-languages-language-bundle-universal.tar.gz"
+                    .to_string(),
+            ],
+            Some("abc".to_string()),
+        );
+
+        let view_entry = to_view_entry(host_entry);
+        assert_eq!(
+            extension_view::ExtensionKind::LanguageBundle,
+            view_entry.kind
+        );
+
+        let round_tripped = to_host_entry(view_entry);
+        assert_eq!(
+            host_extension::ExtensionKind::LanguageBundle,
+            round_tripped.kind
         );
     }
 }

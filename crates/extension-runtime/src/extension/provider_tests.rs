@@ -2,14 +2,15 @@ use std::{fs, sync::Arc};
 
 use super::{
     AcpAgentExtensionProvider, DatabaseDriverExtensionProvider, ExtensionKind, ExtensionProvider,
-    ExtensionRegistry, LanguageExtensionProvider, RemoteDesktopProviderExtensionProvider,
-    builtin_registry, load_language_extensions_from_root,
+    ExtensionRegistry, LanguageBundleExtensionProvider, LanguageExtensionProvider,
+    RemoteDesktopProviderExtensionProvider, builtin_registry, load_language_extensions_from_root,
     register_language_extension_manifests_from_root,
 };
 
 #[test]
 fn extension_kind_maps_stable_directories() {
     assert_eq!("languages", ExtensionKind::Language.dir_name());
+    assert_eq!("language_bundles", ExtensionKind::LanguageBundle.dir_name());
     assert_eq!("database_drivers", ExtensionKind::DatabaseDriver.dir_name());
     assert_eq!(
         "remote_desktop_providers",
@@ -18,6 +19,13 @@ fn extension_kind_maps_stable_directories() {
     assert_eq!("mcp_helpers", ExtensionKind::McpHelper.dir_name());
     assert_eq!("acp_agents", ExtensionKind::AcpAgent.dir_name());
     assert_eq!("composite", ExtensionKind::Composite.dir_name());
+}
+
+#[test]
+fn extension_kind_parses_language_bundle() {
+    let kind: ExtensionKind = serde_json::from_str(r#""language_bundle""#).unwrap();
+
+    assert_eq!(ExtensionKind::LanguageBundle, kind);
 }
 
 #[test]
@@ -75,6 +83,74 @@ fn language_provider_lists_installed_language_summaries() {
         list[0].file_extensions
     );
     assert!(list[0].description.contains(".rs"));
+}
+
+#[test]
+fn language_bundle_provider_lists_installed_bundle_markers() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("extensions");
+    let marker_dir = root.join("language_bundles").join("tree-sitter-languages");
+    fs::create_dir_all(&marker_dir).unwrap();
+    fs::write(
+        marker_dir.join("manifest.json"),
+        r#"{
+            "id": "tree-sitter-languages",
+            "name": "Tree-sitter Languages",
+            "version": "0.1.0",
+            "languages": ["javascript", "rust"],
+            "file_extensions": ["js", "rs"]
+        }"#,
+    )
+    .unwrap();
+
+    let mut registry = ExtensionRegistry::new(root);
+    registry.register_provider(Arc::new(LanguageBundleExtensionProvider));
+
+    let list = registry
+        .list_installed_of(ExtensionKind::LanguageBundle)
+        .expect("language bundles should list");
+
+    assert_eq!(1, list.len());
+    assert_eq!(ExtensionKind::LanguageBundle, list[0].kind);
+    assert_eq!("tree-sitter-languages", list[0].name);
+    assert_eq!("0.1.0", list[0].version);
+    assert_eq!(
+        vec!["js".to_string(), "rs".to_string()],
+        list[0].file_extensions
+    );
+}
+
+#[test]
+fn language_bundle_provider_uninstalls_marker_and_tracked_languages() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("extensions");
+    let marker_dir = root.join("language_bundles").join("tree-sitter-languages");
+    fs::create_dir_all(&marker_dir).unwrap();
+    fs::create_dir_all(root.join("languages/rust")).unwrap();
+    fs::create_dir_all(root.join("languages/javascript")).unwrap();
+    fs::write(
+        marker_dir.join("manifest.json"),
+        r#"{
+            "id": "tree-sitter-languages",
+            "name": "Tree-sitter Languages",
+            "version": "0.1.0",
+            "languages": ["javascript", "rust"],
+            "file_extensions": ["js", "rs"]
+        }"#,
+    )
+    .unwrap();
+
+    let mut registry = ExtensionRegistry::new(root.clone());
+    registry.register_provider(Arc::new(LanguageBundleExtensionProvider));
+
+    let id = registry
+        .uninstall(ExtensionKind::LanguageBundle, "tree-sitter-languages")
+        .expect("language bundle should uninstall");
+
+    assert_eq!("tree-sitter-languages", id);
+    assert!(!marker_dir.exists());
+    assert!(!root.join("languages/rust").exists());
+    assert!(!root.join("languages/javascript").exists());
 }
 
 #[test]
@@ -265,6 +341,7 @@ fn builtin_registry_registers_all_extension_providers() {
     let registry = builtin_registry(tmp.path().join("extensions"));
 
     assert!(registry.provider(ExtensionKind::Language).is_some());
+    assert!(registry.provider(ExtensionKind::LanguageBundle).is_some());
     assert!(registry.provider(ExtensionKind::DatabaseDriver).is_some());
     assert!(
         registry
