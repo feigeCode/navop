@@ -2,16 +2,18 @@ use gpui::TestAppContext;
 use one_core::cloud_sync::ConflictResolution;
 use one_core::cloud_sync::personal::{
     PersonalConflictType, PersonalSyncConflict, PersonalSyncConflictRepository, PersonalSyncEvent,
+    PersonalSyncItemSnapshot,
 };
 use one_core::connection_notifier::ConnectionDataEvent;
 use one_core::settings::{AppSettings, PersonalSyncBackendKind, SyncProvider};
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
+use one_core::storage::traits::Repository;
 use one_core::storage::{DatabaseType, DbConnectionConfig, StoredConnection};
 use one_core::storage::{GlobalStorageState, StorageManager};
 
 use crate::personal_sync_runtime::{
-    actions_enabled, build_conflict_sink, list_personal_conflicts,
+    actions_enabled, build_conflict_sink, list_personal_conflicts, personal_conflict_display_info,
     personal_sync_event_from_connection_event, resolve_personal_conflict,
     resolve_personal_conflicts, runtime_status, should_start_drain_after_enqueue,
 };
@@ -212,6 +214,36 @@ fn personal_sync_lists_registered_conflicts(cx: &mut TestAppContext) {
     });
 }
 
+#[gpui::test]
+fn personal_sync_conflict_display_reads_local_connection_summary(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let conn = SqliteConnection::open(temp.path().join("test.db")).expect("sqlite");
+    conn.with_connection(|conn| run_migrations(conn))
+        .expect("migrations run");
+    let storage = StorageManager::new_with_connection(conn);
+
+    cx.update(|cx| {
+        cx.set_global(GlobalStorageState { storage });
+        one_core::storage::repository::init(cx);
+        let repo = cx
+            .global::<GlobalStorageState>()
+            .storage
+            .get::<one_core::storage::ConnectionRepository>()
+            .expect("connection repository registered");
+        let mut connection = test_connection(0);
+        connection.name = "Local MySQL".to_string();
+        connection.cloud_id = Some("cloud-1".to_string());
+        let local_id = repo.insert(&mut connection).expect("connection insert");
+        let conflict = personal_conflict_with_local_snapshot(local_id);
+
+        let display = personal_conflict_display_info(&conflict, cx);
+
+        let local = display.local.expect("local display");
+        assert_eq!("Local MySQL", local.name);
+        assert_eq!(Some("Database localhost:3306".to_string()), local.info);
+    });
+}
+
 #[test]
 fn personal_sync_resolve_entrypoint_uses_conflict_resolution_strategy() {
     let _entrypoint: fn(String, ConflictResolution, &mut gpui::App) = resolve_personal_conflict;
@@ -244,4 +276,25 @@ fn test_connection(id: i64) -> StoredConnection {
     );
     connection.id = Some(id);
     connection
+}
+
+fn personal_conflict_with_local_snapshot(local_id: i64) -> PersonalSyncConflict {
+    let snapshot = PersonalSyncItemSnapshot {
+        local_id: format!("connection:{local_id}"),
+        cloud_id: Some("cloud-1".to_string()),
+        data_type: one_core::cloud_sync::data_type::CONNECTION.to_string(),
+        updated_at: 100,
+        last_synced_at: Some(90),
+        checksum: "local-checksum".to_string(),
+        team_id: None,
+    };
+    PersonalSyncConflict {
+        backend_profile_id: "personal".to_string(),
+        record_id: "cloud-1".to_string(),
+        data_type: one_core::cloud_sync::data_type::CONNECTION.to_string(),
+        conflict_type: PersonalConflictType::BothModified,
+        local_snapshot: Some(serde_json::to_string(&snapshot).expect("snapshot json")),
+        remote_snapshot: None,
+        detected_at: 100,
+    }
 }

@@ -2,7 +2,8 @@ use connection_import_protocol::{ImportRecord, ImportRecordKind, PasswordImportS
 use one_core::storage::StoredConnection;
 
 use super::connection_import_draft_conversion::{
-    import_draft_duplicate_identity, import_draft_to_stored_connection, ssh_auth_edit_values,
+    import_draft_duplicate_identity, import_draft_to_editor_connection,
+    import_draft_to_stored_connection, ssh_auth_edit_values,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,6 +190,12 @@ impl EditableImportDraft {
     pub(crate) fn to_stored_connection(&self) -> Result<StoredConnection, String> {
         match &self.payload {
             ImportDraftPayload::Record(record) => import_draft_to_stored_connection(self, record),
+        }
+    }
+
+    pub(crate) fn to_editor_connection(&self) -> Result<StoredConnection, String> {
+        match &self.payload {
+            ImportDraftPayload::Record(record) => import_draft_to_editor_connection(self, record),
         }
     }
 

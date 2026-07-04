@@ -2,8 +2,6 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use gpui::{App, AsyncApp, Global, Subscription};
-use one_core::cloud_sync::CloudSyncService;
-use one_core::cloud_sync::ConflictResolution;
 use one_core::cloud_sync::personal::{
     ConfiguredPersonalSyncStore, PersonalSyncConflict, PersonalSyncConflictRepository,
     PersonalSyncConflictResolver, PersonalSyncEvent, PersonalSyncLocalRepositorySource,
@@ -11,11 +9,16 @@ use one_core::cloud_sync::personal::{
     PersonalSyncWorker, SqlitePersonalSyncConflictSink, SyncDeviceId, SyncStoreError,
     SyncStoreHealth, WorkerConfig, build_personal_sync_runtime_config,
 };
+use one_core::cloud_sync::{CloudSyncData, CloudSyncService, ConflictResolution, data_type};
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::crypto;
 use one_core::gpui_tokio::Tokio;
 use one_core::settings::{AppSettings, GlobalCurrentUser, PersonalSyncSettings, SyncProvider};
-use one_core::storage::{ConnectionRepository, GlobalStorageState, WorkspaceRepository};
+use one_core::storage::traits::Repository;
+use one_core::storage::{
+    ConnectionRepository, ConnectionType, DatabaseType, GlobalStorageState, StoredConnection,
+    Workspace, WorkspaceRepository,
+};
 
 use crate::personal_sync_status::PersonalSyncRuntimeStatus;
 
@@ -141,6 +144,32 @@ pub(crate) fn list_personal_conflicts(
         .map_err(|error| SyncStoreError::Io(error.to_string()))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PersonalSyncConflictDisplayInfo {
+    pub local: Option<PersonalSyncRecordDisplay>,
+    pub remote: Option<PersonalSyncRecordDisplay>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PersonalSyncRecordDisplay {
+    pub name: String,
+    pub info: Option<String>,
+}
+
+pub(crate) fn refresh_personal_sync_identity(cx: &mut App) {
+    sync_master_key_and_user(cx);
+}
+
+pub(crate) fn personal_conflict_display_info(
+    conflict: &PersonalSyncConflict,
+    cx: &App,
+) -> PersonalSyncConflictDisplayInfo {
+    PersonalSyncConflictDisplayInfo {
+        local: local_conflict_display(conflict, cx),
+        remote: remote_conflict_display(conflict, cx),
+    }
+}
+
 pub fn resolve_personal_conflict(record_id: String, strategy: ConflictResolution, cx: &mut App) {
     sync_master_key_and_user(cx);
     let Some(config) = active_or_current_config(cx) else {
@@ -223,6 +252,201 @@ pub fn resolve_personal_conflicts(strategies: Vec<(String, ConflictResolution)>,
         Ok::<(), anyhow::Error>(())
     })
     .detach();
+}
+
+fn local_conflict_display(
+    conflict: &PersonalSyncConflict,
+    cx: &App,
+) -> Option<PersonalSyncRecordDisplay> {
+    let snapshot = parse_local_conflict_snapshot(conflict)?;
+    let storage = cx.try_global::<GlobalStorageState>()?.storage.clone();
+    match snapshot.data_type.as_str() {
+        data_type::CONNECTION => {
+            let id = parse_prefixed_id(&snapshot.local_id, "connection:")?;
+            storage
+                .get::<ConnectionRepository>()?
+                .get(id)
+                .ok()
+                .flatten()
+                .map(|connection| connection_record_display(&connection))
+        }
+        data_type::WORKSPACE => {
+            let id = parse_prefixed_id(&snapshot.local_id, "workspace:")?;
+            storage
+                .get::<WorkspaceRepository>()?
+                .get(id)
+                .ok()
+                .flatten()
+                .map(|workspace| workspace_record_display(&workspace))
+        }
+        _ => None,
+    }
+}
+
+fn remote_conflict_display(
+    conflict: &PersonalSyncConflict,
+    cx: &App,
+) -> Option<PersonalSyncRecordDisplay> {
+    let remote = parse_remote_conflict_snapshot(conflict)?;
+    let service = cx
+        .try_global::<GlobalPersonalSyncRuntime>()?
+        .service
+        .clone();
+    let service = service.read().ok()?;
+    match remote.data_type.as_str() {
+        data_type::CONNECTION => service
+            .decrypt_sync_data_connection(&remote)
+            .ok()
+            .map(|connection| connection_record_display(&connection)),
+        data_type::WORKSPACE => service
+            .decrypt_sync_data_workspace(&remote)
+            .ok()
+            .map(|workspace| workspace_record_display(&workspace)),
+        _ => None,
+    }
+}
+
+fn connection_record_display(connection: &StoredConnection) -> PersonalSyncRecordDisplay {
+    PersonalSyncRecordDisplay {
+        name: fallback_name(
+            &connection.name,
+            connection.cloud_id.as_deref(),
+            "connection",
+        ),
+        info: record_info([
+            Some(connection.connection_type.label().to_string()),
+            connection_endpoint(connection),
+        ]),
+    }
+}
+
+fn workspace_record_display(workspace: &Workspace) -> PersonalSyncRecordDisplay {
+    PersonalSyncRecordDisplay {
+        name: fallback_name(&workspace.name, workspace.cloud_id.as_deref(), "workspace"),
+        info: None,
+    }
+}
+
+fn connection_endpoint(connection: &StoredConnection) -> Option<String> {
+    match connection.connection_type {
+        ConnectionType::Database => database_endpoint(connection),
+        ConnectionType::SshSftp => connection
+            .to_ssh_params()
+            .ok()
+            .map(|params| user_host_port(&params.username, &params.host, params.port)),
+        ConnectionType::Redis => connection
+            .to_redis_params()
+            .ok()
+            .map(|params| format!("{}:{}/{}", params.host, params.port, params.db_index)),
+        ConnectionType::MongoDB => mongodb_endpoint(connection),
+        ConnectionType::Serial => connection
+            .to_serial_params()
+            .ok()
+            .map(|params| params.port_name),
+        ConnectionType::Rdp | ConnectionType::Vnc => remote_desktop_endpoint(connection),
+        ConnectionType::PortForwarding => port_forwarding_endpoint(connection),
+        _ => None,
+    }
+}
+
+fn database_endpoint(connection: &StoredConnection) -> Option<String> {
+    let params = connection.to_db_connection().ok()?;
+    if matches!(
+        params.database_type,
+        DatabaseType::SQLite | DatabaseType::DuckDB
+    ) {
+        return Some(params.host);
+    }
+    let database = params
+        .database
+        .map(|db| format!("/{db}"))
+        .unwrap_or_default();
+    Some(format!(
+        "{}{}",
+        user_host_port(&params.username, &params.host, params.port),
+        database
+    ))
+}
+
+fn mongodb_endpoint(connection: &StoredConnection) -> Option<String> {
+    let params = connection.to_mongodb_params().ok()?;
+    if !params.host.is_empty() {
+        return Some(match params.port {
+            Some(port) => format!("{}:{}", params.host, port),
+            None => params.host,
+        });
+    }
+    (!params.connection_string.is_empty()).then(|| mongo_uri_target(&params.connection_string))
+}
+
+fn remote_desktop_endpoint(connection: &StoredConnection) -> Option<String> {
+    let params = connection.to_remote_desktop_params().ok()?;
+    Some(match params.username.as_deref() {
+        Some(username) if !username.is_empty() => {
+            user_host_port(username, &params.host, params.port)
+        }
+        _ => format!("{}:{}", params.host, params.port),
+    })
+}
+
+fn port_forwarding_endpoint(connection: &StoredConnection) -> Option<String> {
+    let params = connection.to_port_forwarding_params().ok()?;
+    Some(match params.kind {
+        one_core::storage::PortForwardingKind::Local => format!(
+            "{}:{} -> {}:{}",
+            params.bind_host, params.bind_port, params.target_host, params.target_port
+        ),
+        one_core::storage::PortForwardingKind::Dynamic => {
+            format!("SOCKS {}:{}", params.bind_host, params.bind_port)
+        }
+    })
+}
+
+fn parse_local_conflict_snapshot(
+    conflict: &PersonalSyncConflict,
+) -> Option<one_core::cloud_sync::personal::PersonalSyncItemSnapshot> {
+    serde_json::from_str(conflict.local_snapshot.as_deref()?).ok()
+}
+
+fn parse_remote_conflict_snapshot(conflict: &PersonalSyncConflict) -> Option<CloudSyncData> {
+    serde_json::from_str(conflict.remote_snapshot.as_deref()?).ok()
+}
+
+fn parse_prefixed_id(local_id: &str, prefix: &str) -> Option<i64> {
+    local_id.strip_prefix(prefix)?.parse().ok()
+}
+
+fn fallback_name(name: &str, id: Option<&str>, fallback: &str) -> String {
+    if !name.trim().is_empty() {
+        return name.to_string();
+    }
+    id.unwrap_or(fallback).to_string()
+}
+
+fn record_info<const N: usize>(parts: [Option<String>; N]) -> Option<String> {
+    let parts = parts.into_iter().flatten().filter(|part| !part.is_empty());
+    let text = parts.collect::<Vec<_>>().join(" ");
+    (!text.is_empty()).then_some(text)
+}
+
+fn user_host_port(username: &str, host: &str, port: u16) -> String {
+    if username.is_empty() {
+        return format!("{host}:{port}");
+    }
+    format!("{username}@{host}:{port}")
+}
+
+fn mongo_uri_target(uri: &str) -> String {
+    let without_scheme = uri.split_once("://").map(|(_, rest)| rest).unwrap_or(uri);
+    let without_auth = without_scheme
+        .rsplit_once('@')
+        .map(|(_, target)| target)
+        .unwrap_or(without_scheme);
+    without_auth
+        .split(['/', '?'])
+        .next()
+        .unwrap_or(without_auth)
+        .to_string()
 }
 
 fn run_temporary_full_scan(

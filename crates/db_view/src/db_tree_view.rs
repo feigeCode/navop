@@ -817,6 +817,20 @@ impl DbTreeView {
             .or_else(|| self.flat_entries.first().map(|entry| entry.node_id.clone()))
     }
 
+    pub fn selected_or_first_connection_id(&self) -> Option<String> {
+        if let Some(node_id) = self.selected_node_id.as_ref()
+            && let Some(node) = self.db_nodes.get(node_id)
+        {
+            return Some(node.connection_id.clone());
+        }
+
+        self.flat_entries.iter().find_map(|entry| {
+            self.db_nodes
+                .get(&entry.node_id)
+                .map(|node| node.connection_id.clone())
+        })
+    }
+
     pub fn selected_or_first_node_id_for_types(&self, node_types: &[DbNodeType]) -> Option<String> {
         if let Some(node_id) = self.selected_node_id_for_types(node_types) {
             return Some(node_id);

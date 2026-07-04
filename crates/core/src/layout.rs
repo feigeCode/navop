@@ -5,7 +5,7 @@
 use gpui::{Pixels, px};
 
 /// 侧边栏默认宽度
-pub const SIDEBAR_DEFAULT_WIDTH: Pixels = px(400.0);
+pub const SIDEBAR_DEFAULT_WIDTH: Pixels = px(420.0);
 /// 侧边栏最小宽度
 pub const SIDEBAR_MIN_WIDTH: Pixels = px(400.0);
 /// 侧边栏最大宽度

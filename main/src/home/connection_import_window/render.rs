@@ -70,8 +70,10 @@ impl ConnectionImportWindow {
 
     fn render_sources(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
+            .flex_none()
             .w(px(260.0))
             .h_full()
+            .min_h_0()
             .border_r_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().sidebar)
@@ -96,24 +98,28 @@ impl ConnectionImportWindow {
         v_flex()
             .flex_1()
             .h_full()
+            .min_h_0()
             .min_w_0()
             .p_4()
             .gap_3()
             .child(self.render_preview_summary(cx))
             .child(
-                v_flex()
-                    .flex_1()
-                    .gap_2()
-                    .overflow_y_scrollbar()
-                    .when(self.model.rows().is_empty(), |this| {
-                        this.child(self.render_empty_state(cx))
-                    })
-                    .children(
-                        self.model
-                            .rows()
-                            .iter()
-                            .map(|row| render_preview_row(row, cx)),
-                    ),
+                div().flex_1().min_h_0().overflow_hidden().child(
+                    v_flex()
+                        .size_full()
+                        .gap_2()
+                        .pb_3()
+                        .overflow_y_scrollbar()
+                        .when(self.model.rows().is_empty(), |this| {
+                            this.child(self.render_empty_state(cx))
+                        })
+                        .children(
+                            self.model
+                                .rows()
+                                .iter()
+                                .map(|row| render_preview_row(row, cx)),
+                        ),
+                ),
             )
     }
 
@@ -188,6 +194,7 @@ impl Render for ConnectionImportWindow {
             .child(
                 h_flex()
                     .flex_1()
+                    .min_h_0()
                     .w_full()
                     .overflow_hidden()
                     .child(self.render_sources(cx))

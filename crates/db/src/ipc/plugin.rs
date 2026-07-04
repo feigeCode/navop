@@ -6,8 +6,8 @@ use crate::import_export::{
     ImportResult,
 };
 use crate::ipc::client::JsonRpcClient;
-use crate::ipc::connection::{ExternalDbConnection, WIRE_PREFIX};
-use crate::ipc::protocol::driver_config_value_with_target;
+use crate::ipc::connection::ExternalDbConnection;
+use crate::ipc::protocol::{WIRE_PREFIX, driver_config_value_with_target};
 use crate::ipc::registry::{
     IpcDriverManifest, IpcDriverRegistry, LimitStyle, TableReferenceSchemaMode,
 };
@@ -2111,7 +2111,7 @@ mod tests {
     use crate::QueryResult;
     use crate::connection::StreamingProgress;
     use crate::executor::{ExecOptions, SqlResult, SqlSource};
-    use crate::ipc::connection::WIRE_PREFIX;
+    use crate::ipc::protocol::WIRE_PREFIX;
     use std::path::PathBuf;
     use tokio::sync::mpsc;
 

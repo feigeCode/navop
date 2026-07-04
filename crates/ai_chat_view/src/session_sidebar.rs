@@ -4,7 +4,9 @@
 //! 折叠 / 展开、点击交互等编排由上层视图(`ChatView`)负责,本模块只提供「长什么样」。
 
 use gpui::prelude::FluentBuilder;
-use gpui::{App, Div, FontWeight, ParentElement, SharedString, Styled, div};
+use gpui::{
+    App, Div, FontWeight, Hsla, InteractiveElement, ParentElement, SharedString, Styled, div,
+};
 use gpui_component::{ActiveTheme, h_flex, v_flex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -17,6 +19,27 @@ pub struct SessionSummary {
     pub name: SharedString,
     /// 最后更新时间(Unix 秒)。
     pub updated_at: i64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SessionRowStyle {
+    pub foreground: Hsla,
+    pub muted_foreground: Hsla,
+    pub selected_background: Hsla,
+    pub selected_foreground: Hsla,
+    pub hover_background: Hsla,
+}
+
+impl SessionRowStyle {
+    pub fn from_app(cx: &App) -> Self {
+        Self {
+            foreground: cx.theme().foreground,
+            muted_foreground: cx.theme().muted_foreground,
+            selected_background: cx.theme().accent,
+            selected_foreground: cx.theme().accent_foreground,
+            hover_background: cx.theme().list_hover,
+        }
+    }
 }
 
 impl SessionSummary {
@@ -33,6 +56,14 @@ impl SessionSummary {
 ///
 /// 返回 [`Div`],调用方可继续 `.id(..).on_click(..)` 附加交互(因此交互逻辑留在上层)。
 pub fn session_row(session: &SessionSummary, is_current: bool, cx: &App) -> Div {
+    session_row_with_style(session, is_current, SessionRowStyle::from_app(cx))
+}
+
+pub fn session_row_with_style(
+    session: &SessionSummary,
+    is_current: bool,
+    style: SessionRowStyle,
+) -> Div {
     h_flex()
         .w_full()
         .gap_2()
@@ -41,9 +72,13 @@ pub fn session_row(session: &SessionSummary, is_current: bool, cx: &App) -> Div 
         .py_1()
         .rounded_md()
         .cursor_pointer()
+        .text_color(style.foreground)
+        .when(!is_current, |this| {
+            this.hover(move |this| this.bg(style.hover_background))
+        })
         .when(is_current, |this| {
-            this.bg(cx.theme().accent)
-                .text_color(cx.theme().accent_foreground)
+            this.bg(style.selected_background)
+                .text_color(style.selected_foreground)
         })
         .child(
             v_flex()
@@ -61,7 +96,11 @@ pub fn session_row(session: &SessionSummary, is_current: bool, cx: &App) -> Div 
                 .child(
                     div()
                         .text_xs()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(if is_current {
+                            style.selected_foreground.opacity(0.72)
+                        } else {
+                            style.muted_foreground
+                        })
                         .child(format_timestamp(session.updated_at)),
                 ),
         )

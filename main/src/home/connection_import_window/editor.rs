@@ -17,7 +17,7 @@ impl ConnectionImportWindow {
         let Some(draft) = self.model.draft(&record_id) else {
             return;
         };
-        let connection = match draft.to_stored_connection() {
+        let connection = match draft.to_editor_connection() {
             Ok(connection) => connection,
             Err(error) => {
                 self.model.mark_failed(&record_id, error);
@@ -50,10 +50,12 @@ impl ConnectionImportWindow {
         let Ok(config) = connection.to_db_connection() else {
             return;
         };
-        let (workspaces, ssh_connections) = self.parent.read(cx).import_editor_context();
+        let (workspaces, ssh_connections, external_driver_registry) =
+            self.parent.read(cx).import_editor_context();
         let form_config = ConnectionFormWindowConfig {
             db_type: config.database_type.clone(),
             external_driver_id: None,
+            external_driver_registry,
             editing_connection: None,
             initial_connection: Some(connection),
             on_saved: Some(self.database_editor_saved_callback(record_id, cx)),
@@ -74,7 +76,7 @@ impl ConnectionImportWindow {
         connection: StoredConnection,
         cx: &mut Context<Self>,
     ) {
-        let (workspaces, _) = self.parent.read(cx).import_editor_context();
+        let (workspaces, _, _) = self.parent.read(cx).import_editor_context();
         let form_config = SshFormWindowConfig {
             editing_connection: None,
             initial_connection: Some(connection),
@@ -157,17 +159,33 @@ impl ConnectionImportWindow {
 }
 
 trait ImportEditorContext {
-    fn import_editor_context(&self) -> (Vec<one_core::storage::Workspace>, Vec<StoredConnection>);
+    fn import_editor_context(
+        &self,
+    ) -> (
+        Vec<one_core::storage::Workspace>,
+        Vec<StoredConnection>,
+        db::ipc::IpcDriverRegistry,
+    );
 }
 
 impl ImportEditorContext for HomePage {
-    fn import_editor_context(&self) -> (Vec<one_core::storage::Workspace>, Vec<StoredConnection>) {
+    fn import_editor_context(
+        &self,
+    ) -> (
+        Vec<one_core::storage::Workspace>,
+        Vec<StoredConnection>,
+        db::ipc::IpcDriverRegistry,
+    ) {
         let ssh_connections = self
             .connections
             .iter()
             .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
             .cloned()
             .collect();
-        (self.workspaces.clone(), ssh_connections)
+        (
+            self.workspaces.clone(),
+            ssh_connections,
+            self.external_driver_registry.clone(),
+        )
     }
 }

@@ -31,7 +31,7 @@ use crate::input::context::{
     ComposerScope, ComposerSubAgentItem, ComposerTarget,
 };
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
-use crate::theme::AgentChatTheme;
+use crate::theme::{AgentChatTheme, active_agent_chat_theme};
 
 /// AgentInput 对外事件。
 #[derive(Clone, Debug)]
@@ -116,6 +116,13 @@ fn current_tool_label(label: &SharedString) -> SharedString {
     } else {
         label.clone()
     }
+}
+
+fn execution_mode_trigger_label(
+    task_label: &SharedString,
+    tool_label: &SharedString,
+) -> SharedString {
+    SharedString::from(format!("{task_label} · {tool_label}"))
 }
 
 /// Agent 输入框组件。
@@ -639,9 +646,11 @@ impl AgentInput {
         let view = cx.entity();
         let is_open = self.open_menu == Some(ComposerMenuKind::Mode);
         let task_label = current_task_label(&self.context.task_label);
+        let tool_label = current_tool_label(&self.context.tool_label);
+        let trigger_label = execution_mode_trigger_label(&task_label, &tool_label);
         let data = ModeContentData {
             task_label: task_label.clone(),
-            tool_label: current_tool_label(&self.context.tool_label),
+            tool_label,
             task_options: self.task_options.clone(),
             tool_options: self.tool_options.clone(),
         };
@@ -656,7 +665,7 @@ impl AgentInput {
                 .justify_between()
                 .outline()
                 .disabled(self.is_running)
-                .child(toolbar_button_label(task_label)),
+                .child(toolbar_button_label(trigger_label)),
             &theme,
         );
 
@@ -732,7 +741,7 @@ impl AgentInput {
                 let theme = theme.clone();
                 move |_state, _window, cx| {
                     let muted = theme.muted_foreground;
-                    let hover_bg = theme.panel_hover;
+                    let hover_bg = theme.hover_background();
                     let radius = cx.theme().radius;
                     let mut col = v_flex()
                         .p_1()
@@ -1038,7 +1047,7 @@ fn render_mode_content(
         .bg(theme.background)
         .text_color(theme.foreground);
 
-    col = col.child(context_group_label("响应模式", cx));
+    col = col.child(context_group_label("响应模式", theme));
     for option in data.task_options {
         let selected = option.label == data.task_label;
         col = col.child(mode_option_row(
@@ -1054,7 +1063,7 @@ fn render_mode_content(
         ));
     }
 
-    col = col.child(context_group_label("工具执行确认", cx));
+    col = col.child(context_group_label("工具执行确认", theme));
     for option in data.tool_options {
         let selected = option.label == data.tool_label;
         col = col.child(mode_option_row(
@@ -1080,8 +1089,8 @@ fn mode_option_row(
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
     let muted = theme.muted_foreground;
-    let hover_bg = theme.panel_hover;
-    let selected_bg = theme.panel_hover;
+    let hover_bg = theme.hover_background();
+    let selected_bg = theme.selection_background();
     let selected_fg = theme.accent;
     let id = row.option.id.clone();
     let row_id = SharedString::from(format!("{}-opt-{id}", row.id_prefix));
@@ -1138,11 +1147,12 @@ fn render_plan_mode_content(
     expanded_items: HashSet<String>,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let muted = cx.theme().muted_foreground;
-    let border = cx.theme().border;
+    let theme = active_agent_chat_theme(cx);
+    let muted = theme.muted_foreground;
+    let border = theme.border;
     let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(320.0));
 
-    col = col.child(context_group_label("计划 Todo", cx));
+    col = col.child(context_group_label("计划 Todo", &theme));
     if items.is_empty() {
         return col
             .child(
@@ -1166,6 +1176,7 @@ fn render_plan_mode_content(
             expanded,
             muted,
             border,
+            &theme,
             cx,
         ));
     }
@@ -1209,6 +1220,7 @@ fn plan_item_row(
     expanded: bool,
     muted: gpui::Hsla,
     border: gpui::Hsla,
+    theme: &AgentChatTheme,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
     let icon = match item.status.as_ref() {
@@ -1223,7 +1235,7 @@ fn plan_item_row(
     };
 
     let has_details = item.has_details();
-    let hover_bg = cx.theme().list_hover;
+    let hover_bg = theme.hover_background();
     let radius = cx.theme().radius;
     let row_id = SharedString::from(format!("agent-plan-item-{key}"));
     let row = h_flex()
@@ -1347,10 +1359,11 @@ fn render_subagent_mode_content(
     subagents: Vec<ComposerSubAgentItem>,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let muted = cx.theme().muted_foreground;
+    let theme = active_agent_chat_theme(cx);
+    let muted = theme.muted_foreground;
     let mut col = v_flex().p_1().gap(px(2.0)).min_w(px(300.0));
 
-    col = col.child(context_group_label("子代理", cx));
+    col = col.child(context_group_label("子代理", &theme));
     if subagents.is_empty() {
         col = col.child(
             div()
@@ -1460,8 +1473,9 @@ fn render_context_mode_content(
     search_query: SharedString,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let muted = cx.theme().muted_foreground;
-    let border = cx.theme().border;
+    let theme = active_agent_chat_theme(cx);
+    let muted = theme.muted_foreground;
+    let border = theme.border;
     let mut col = v_flex()
         .debug_selector(|| "agent-context-popover-content".to_string())
         .w(px(CONTEXT_POPOVER_WIDTH))
@@ -1472,14 +1486,21 @@ fn render_context_mode_content(
         col = col
             .px_1()
             .pt_1()
-            .child(context_group_label("默认目标", cx))
-            .child(context_summary_row(target, muted, cx));
+            .child(context_group_label("默认目标", &theme))
+            .child(context_summary_row(target, muted, &theme));
     }
     let has_database_scope = scopes.iter().any(|scope| scope.key.as_ref() == "database");
     if !scopes.is_empty() {
-        col = col.px_1().child(context_group_label("作用域", cx));
+        col = col.px_1().child(context_group_label("作用域", &theme));
         for scope in scopes {
-            col = col.child(context_scope_row(view.clone(), scope, muted, border, cx));
+            col = col.child(context_scope_row(
+                view.clone(),
+                scope,
+                muted,
+                border,
+                &theme,
+                cx,
+            ));
         }
         if has_database_scope {
             col = col.child(context_database_hint(muted, cx));
@@ -1490,12 +1511,18 @@ fn render_context_mode_content(
         col = col.child(render_resource_source_options(
             view.clone(),
             source_options,
+            &theme,
             cx,
         ));
     }
 
     if !filters.is_empty() {
-        col = col.child(render_resource_type_filters(view.clone(), filters, cx));
+        col = col.child(render_resource_type_filters(
+            view.clone(),
+            filters,
+            &theme,
+            cx,
+        ));
     }
 
     // 搜索框:固定在列表上方,不参与滚动,避免长列表里输入框被滚出可视区。
@@ -1564,11 +1591,17 @@ fn render_context_mode_content(
     }
     if filtered_pool_items.is_empty() {
         for opt in filtered_targets {
-            list = list.child(context_target_option(view.clone(), opt, muted, cx));
+            list = list.child(context_target_option(view.clone(), opt, muted, &theme, cx));
         }
     } else {
         for item in filtered_pool_items {
-            list = list.child(resource_pool_item_row(view.clone(), item, muted, cx));
+            list = list.child(resource_pool_item_row(
+                view.clone(),
+                item,
+                muted,
+                &theme,
+                cx,
+            ));
         }
     }
 
@@ -1579,12 +1612,13 @@ fn render_context_mode_content(
 fn render_resource_source_options(
     view: Entity<AgentInput>,
     options: Vec<ComposerResourceSourceOption>,
-    cx: &mut Context<gpui_component::popover::PopoverState>,
+    theme: &AgentChatTheme,
+    _cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let selected_bg = cx.theme().accent;
-    let selected_fg = cx.theme().accent_foreground;
-    let muted = cx.theme().muted_foreground;
-    let hover_bg = cx.theme().list_hover;
+    let selected_bg = theme.selection_background();
+    let selected_fg = theme.foreground;
+    let muted = theme.muted_foreground;
+    let hover_bg = theme.hover_background();
     let mut row = h_flex().w_full().px_1().pb_1().gap(px(4.0)).flex_wrap();
 
     for option in options.into_iter().filter(|option| option.enabled) {
@@ -1632,12 +1666,13 @@ fn render_resource_source_options(
 fn render_resource_type_filters(
     view: Entity<AgentInput>,
     filters: Vec<ComposerResourceTypeFilter>,
-    cx: &mut Context<gpui_component::popover::PopoverState>,
+    theme: &AgentChatTheme,
+    _cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let hover_bg = cx.theme().list_hover;
-    let selected_bg = cx.theme().accent;
-    let selected_fg = cx.theme().accent_foreground;
-    let muted = cx.theme().muted_foreground;
+    let hover_bg = theme.hover_background();
+    let selected_bg = theme.selection_background();
+    let selected_fg = theme.foreground;
+    let muted = theme.muted_foreground;
     let mut row = h_flex().w_full().px_1().pb_1().gap(px(4.0));
 
     for filter in filters {
@@ -1678,9 +1713,10 @@ fn resource_pool_item_row(
     view: Entity<AgentInput>,
     item: ComposerResourcePoolItem,
     muted: gpui::Hsla,
+    theme: &AgentChatTheme,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let hover_bg = cx.theme().list_hover;
+    let hover_bg = theme.hover_background();
     let radius = cx.theme().radius;
     let id = item.id.clone();
     let action_id = item.id.clone();
@@ -1879,15 +1915,12 @@ fn context_database_hint(
         .into_any_element()
 }
 
-fn context_group_label(
-    label: &'static str,
-    cx: &mut Context<gpui_component::popover::PopoverState>,
-) -> gpui::AnyElement {
+fn context_group_label(label: &'static str, theme: &AgentChatTheme) -> gpui::AnyElement {
     div()
         .px_2()
         .pt_1()
         .text_xs()
-        .text_color(cx.theme().muted_foreground)
+        .text_color(theme.muted_foreground)
         .child(label)
         .into_any_element()
 }
@@ -1895,9 +1928,9 @@ fn context_group_label(
 fn context_summary_row(
     target: ComposerTarget,
     muted: gpui::Hsla,
-    cx: &mut Context<gpui_component::popover::PopoverState>,
+    theme: &AgentChatTheme,
 ) -> gpui::AnyElement {
-    context_target_row(target, muted, cx, true)
+    context_target_row(target, muted, theme, true)
         .debug_selector(|| "context-current-summary".to_string())
         .into_any_element()
 }
@@ -1905,11 +1938,11 @@ fn context_summary_row(
 fn context_target_row(
     opt: ComposerTarget,
     muted: gpui::Hsla,
-    cx: &mut Context<gpui_component::popover::PopoverState>,
+    theme: &AgentChatTheme,
     selected: bool,
 ) -> gpui::Div {
-    let hover_bg = cx.theme().list_hover;
-    let radius = cx.theme().radius;
+    let hover_bg = theme.hover_background();
+    let selected_bg = theme.selection_background();
 
     h_flex()
         .w_full()
@@ -1918,15 +1951,15 @@ fn context_target_row(
         .gap(px(8.0))
         .px_2()
         .py_1()
-        .rounded(radius)
-        .when(selected, |this| this.bg(hover_bg))
+        .rounded(px(6.0))
+        .when(selected, |this| this.bg(selected_bg))
         .child(
             h_flex()
                 .flex_shrink_0()
                 .items_center()
                 .justify_center()
                 .size(px(24.0))
-                .rounded(radius)
+                .rounded(px(6.0))
                 .bg(hover_bg)
                 .text_xs()
                 .child(opt.icon),
@@ -1970,10 +2003,11 @@ fn context_scope_row(
     scope: ComposerScope,
     muted: gpui::Hsla,
     border: gpui::Hsla,
+    theme: &AgentChatTheme,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
     let key = scope.key.clone();
-    let hover_bg = cx.theme().list_hover;
+    let hover_bg = theme.hover_background();
     let radius = cx.theme().radius;
 
     h_flex()
@@ -2008,13 +2042,14 @@ fn context_target_option(
     view: Entity<AgentInput>,
     opt: ComposerTarget,
     muted: gpui::Hsla,
-    cx: &mut Context<gpui_component::popover::PopoverState>,
+    theme: &AgentChatTheme,
+    _cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
     let sel = opt.id.clone();
     let row_id = SharedString::from(format!("context-target-opt-{}", opt.id));
-    let hover_bg = cx.theme().list_hover;
+    let hover_bg = theme.hover_background();
 
-    context_target_row(opt, muted, cx, false)
+    context_target_row(opt, muted, theme, false)
         .id(row_id)
         .cursor_pointer()
         .hover(move |s| s.bg(hover_bg))
@@ -2107,7 +2142,7 @@ impl Render for AgentInput {
                                     .size_full()
                                     .appearance(false)
                                     .text_color(theme.foreground)
-                                    .caret_color(theme.accent),
+                                    .caret_color(theme.foreground),
                             ),
                     ),
             )
@@ -2280,6 +2315,18 @@ mod tests {
         assert_eq!(
             "手动确认",
             current_tool_label(&SharedString::from("")).as_ref()
+        );
+    }
+
+    #[test]
+    fn mode_trigger_label_includes_task_and_tool_confirmation_modes() {
+        assert_eq!(
+            "Auto Mode · 手动确认",
+            execution_mode_trigger_label(
+                &SharedString::from("Auto Mode"),
+                &SharedString::from("手动确认")
+            )
+            .as_ref()
         );
     }
 

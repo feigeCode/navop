@@ -4,6 +4,7 @@
 //! UI 参考 `sftp_view` 的 `FileListPanel`，但为侧边栏场景做了精简和适配。
 //! 支持文件传输（上传/下载/拖拽），使用独立的传输连接避免阻塞浏览。
 
+use crate::theme::TerminalColors;
 use chrono::{DateTime, Local};
 use gpui::{
     App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable,
@@ -865,12 +866,15 @@ pub struct FileManagerPanel {
     is_dragging_over: bool,
     /// 终端当前工作目录缓存，用于首次连接和导航失败恢复
     working_dir_hint: Option<String>,
+    /// 终端主题配色，用于嵌入侧边栏时保持和终端一致
+    colors: TerminalColors,
 }
 
 impl FileManagerPanel {
     pub fn new(
         stored_connection: StoredConnection,
         session_manager: Arc<SshSessionManager>,
+        colors: TerminalColors,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -968,7 +972,13 @@ impl FileManagerPanel {
             active_extract: None,
             is_dragging_over: false,
             working_dir_hint: None,
+            colors,
         }
+    }
+
+    pub fn set_colors(&mut self, colors: TerminalColors, cx: &mut Context<Self>) {
+        self.colors = colors;
+        cx.notify();
     }
 
     // ── 连接管理 ──────────────────────────────────────────────
@@ -1405,7 +1415,9 @@ impl FileManagerPanel {
     }
 
     fn render_path_breadcrumb(&self, cx: &mut Context<Self>) -> Breadcrumb {
-        let mut breadcrumb = Breadcrumb::new();
+        let foreground = self.colors.foreground;
+        let muted_foreground = self.colors.muted_foreground;
+        let mut breadcrumb = Breadcrumb::new().colors(foreground, muted_foreground);
         const MAX_VISIBLE: usize = 4;
 
         if self.current_path == "." {
@@ -3064,11 +3076,18 @@ impl FileManagerPanel {
         let is_connected = self.connection_state == ConnectionState::Connected;
         let is_favorite = self.is_current_path_favorite();
         let favorite_paths = self.favorite_paths.clone();
+        let border = self.colors.border;
+        let panel = self.colors.muted;
+        let hover = self.colors.muted.opacity(0.72);
+        let field_bg = self.colors.background;
+        let foreground = self.colors.foreground;
+        let muted_foreground = self.colors.muted_foreground;
+        let accent = self.colors.accent;
 
         v_flex()
             .border_b_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().title_bar)
+            .border_color(border)
+            .bg(panel)
             .child(
                 h_flex()
                     .h_9()
@@ -3083,7 +3102,7 @@ impl FileManagerPanel {
                             .rounded_md()
                             .p(px(5.))
                             .when(!can_go_back, |el| el.opacity(0.4))
-                            .when(can_go_back, |el| el.hover(|s| s.bg(cx.theme().list_active)))
+                            .when(can_go_back, |el| el.hover(move |s| s.bg(hover)))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _window, cx| {
@@ -3097,7 +3116,7 @@ impl FileManagerPanel {
                             .child(
                                 Icon::new(IconName::ArrowLeft)
                                     .small()
-                                    .text_color(cx.theme().muted_foreground),
+                                    .text_color(muted_foreground),
                             ),
                     )
                     // Home 按钮
@@ -3107,7 +3126,7 @@ impl FileManagerPanel {
                             .cursor_pointer()
                             .rounded_md()
                             .p(px(5.))
-                            .hover(|s| s.bg(cx.theme().list_active))
+                            .hover(move |s| s.bg(hover))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _window, cx| {
@@ -3121,7 +3140,7 @@ impl FileManagerPanel {
                             .child(
                                 Icon::new(IconName::Home)
                                     .small()
-                                    .text_color(cx.theme().muted_foreground),
+                                    .text_color(muted_foreground),
                             ),
                     )
                     // 上级目录按钮
@@ -3132,9 +3151,7 @@ impl FileManagerPanel {
                             .rounded_md()
                             .p(px(5.))
                             .when(self.is_at_root(), |el| el.opacity(0.4))
-                            .when(!self.is_at_root(), |el| {
-                                el.hover(|s| s.bg(cx.theme().list_active))
-                            })
+                            .when(!self.is_at_root(), |el| el.hover(move |s| s.bg(hover)))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _window, cx| {
@@ -3148,7 +3165,7 @@ impl FileManagerPanel {
                             .child(
                                 Icon::new(IconName::ArrowUp)
                                     .small()
-                                    .text_color(cx.theme().muted_foreground),
+                                    .text_color(muted_foreground),
                             ),
                     )
                     .child(
@@ -3202,7 +3219,7 @@ impl FileManagerPanel {
                             .cursor_pointer()
                             .rounded_md()
                             .p(px(5.))
-                            .hover(|s| s.bg(cx.theme().list_active))
+                            .hover(move |s| s.bg(hover))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |_this, _, _window, cx| {
@@ -3216,7 +3233,7 @@ impl FileManagerPanel {
                             .child(
                                 Icon::new(IconName::Sync)
                                     .small()
-                                    .text_color(cx.theme().muted_foreground),
+                                    .text_color(muted_foreground),
                             ),
                     )
                     // 刷新按钮
@@ -3226,7 +3243,7 @@ impl FileManagerPanel {
                             .cursor_pointer()
                             .rounded_md()
                             .p(px(5.))
-                            .hover(|s| s.bg(cx.theme().list_active))
+                            .hover(move |s| s.bg(hover))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _window, cx| {
@@ -3240,7 +3257,7 @@ impl FileManagerPanel {
                             .child(
                                 Icon::new(IconName::Refresh)
                                     .small()
-                                    .text_color(cx.theme().muted_foreground),
+                                    .text_color(muted_foreground),
                             ),
                     )
                     // 隐藏文件开关
@@ -3250,8 +3267,8 @@ impl FileManagerPanel {
                             .cursor_pointer()
                             .rounded_md()
                             .p(px(5.))
-                            .hover(|s| s.bg(cx.theme().list_active))
-                            .when(self.show_hidden, |el| el.bg(cx.theme().list_active))
+                            .hover(move |s| s.bg(hover))
+                            .when(self.show_hidden, |el| el.bg(hover))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _window, cx| {
@@ -3268,7 +3285,7 @@ impl FileManagerPanel {
                             .child(
                                 Icon::new(IconName::Eye)
                                     .small()
-                                    .text_color(cx.theme().muted_foreground),
+                                    .text_color(muted_foreground),
                             ),
                     )
                     // 关闭按钮
@@ -3278,7 +3295,7 @@ impl FileManagerPanel {
                             .cursor_pointer()
                             .rounded_md()
                             .p(px(5.))
-                            .hover(|s| s.bg(cx.theme().list_active))
+                            .hover(move |s| s.bg(hover))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |_this, _, _window, cx| {
@@ -3288,7 +3305,7 @@ impl FileManagerPanel {
                             .child(
                                 Icon::new(IconName::Close)
                                     .small()
-                                    .text_color(cx.theme().muted_foreground),
+                                    .text_color(muted_foreground),
                             ),
                     ),
             )
@@ -3307,13 +3324,15 @@ impl FileManagerPanel {
                             .h_7()
                             .px_2()
                             .items_center()
-                            .bg(cx.theme().secondary)
+                            .bg(field_bg)
                             .rounded_md()
                             .child(
                                 Input::new(&self.path_input)
                                     .small()
                                     .appearance(false)
                                     .cleanable(false)
+                                    .text_color(foreground)
+                                    .caret_color(accent)
                                     .w_full(),
                             )
                             .into_any_element()
@@ -3325,10 +3344,11 @@ impl FileManagerPanel {
                             .h_7()
                             .px_2()
                             .items_center()
-                            .bg(cx.theme().secondary)
+                            .bg(field_bg)
+                            .text_color(foreground)
                             .cursor_text()
                             .rounded_md()
-                            .hover(|style| style.bg(cx.theme().list_active))
+                            .hover(move |style| style.bg(hover))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.start_path_editing(window, cx);
                             }))
@@ -3557,10 +3577,15 @@ impl FileManagerPanel {
     }
 
     /// 渲染搜索栏
-    fn render_search_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_search_bar(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let has_query = !self.search_query.is_empty();
         let filtered_count = self.filtered_indices.len();
         let total_count = self.items.len();
+        let border = self.colors.border;
+        let background = self.colors.background;
+        let foreground = self.colors.foreground;
+        let muted_foreground = self.colors.muted_foreground;
+        let accent = self.colors.accent;
 
         h_flex()
             .h_8()
@@ -3568,18 +3593,20 @@ impl FileManagerPanel {
             .gap_2()
             .items_center()
             .border_b_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
+            .border_color(border)
+            .bg(background)
             .child(
                 Icon::new(IconName::Search)
                     .xsmall()
-                    .text_color(cx.theme().muted_foreground),
+                    .text_color(muted_foreground),
             )
             .child(
                 div().flex_1().child(
                     Input::new(&self.search_input)
                         .xsmall()
                         .appearance(false)
+                        .text_color(foreground)
+                        .caret_color(accent)
                         .cleanable(has_query),
                 ),
             )
@@ -3587,7 +3614,7 @@ impl FileManagerPanel {
                 el.child(
                     div()
                         .text_xs()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(muted_foreground)
                         .child(format!("{}/{}", filtered_count, total_count)),
                 )
             })
@@ -3595,13 +3622,16 @@ impl FileManagerPanel {
 
     /// 渲染排序表头
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let border = self.colors.border;
+        let panel = self.colors.muted;
+
         h_flex()
             .h_7()
             .px_2()
             .items_center()
             .border_b_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().title_bar)
+            .border_color(border)
+            .bg(panel)
             .child(self.render_header_cell(&t!("FileManager.name"), SortColumn::Name, true, cx))
             .child(self.render_header_cell(&t!("FileManager.size"), SortColumn::Size, false, cx))
             .child(self.render_header_cell(
@@ -3623,6 +3653,8 @@ impl FileManagerPanel {
         let is_sorted = self.sort_column == column;
         let sort_order = self.sort_order;
         let label = label.to_string();
+        let hover = self.colors.muted.opacity(0.72);
+        let muted_foreground = self.colors.muted_foreground;
 
         let base = h_flex()
             .h_full()
@@ -3630,19 +3662,14 @@ impl FileManagerPanel {
             .items_center()
             .gap_0p5()
             .cursor_pointer()
-            .hover(|s| s.bg(cx.theme().list_active))
+            .hover(move |s| s.bg(hover))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _window, cx| {
                     this.set_sort(column, cx);
                 }),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(label),
-            )
+            .child(div().text_xs().text_color(muted_foreground).child(label))
             .when(is_sorted, |el| {
                 el.child(
                     Icon::new(if sort_order == SortOrder::Ascending {
@@ -3651,7 +3678,7 @@ impl FileManagerPanel {
                         IconName::ChevronDown
                     })
                     .xsmall()
-                    .text_color(cx.theme().muted_foreground),
+                    .text_color(muted_foreground),
                 )
             });
 
@@ -3667,16 +3694,20 @@ impl FileManagerPanel {
         &self,
         item: &RemoteFileItem,
         is_selected: bool,
-        cx: &App,
+        _cx: &App,
     ) -> impl IntoElement {
         let name = item.name.clone();
         let is_dir = item.is_dir;
+        let foreground = self.colors.foreground;
+        let muted_foreground = self.colors.muted_foreground;
+        let selection = self.colors.accent.opacity(0.24);
 
         h_flex()
             .h(px(36.))
             .px_2()
             .items_center()
-            .when(is_selected, |el| el.bg(cx.theme().selection))
+            .text_color(foreground)
+            .when(is_selected, |el| el.bg(selection))
             // 名称列
             .child(
                 h_flex()
@@ -3713,7 +3744,7 @@ impl FileManagerPanel {
                 div()
                     .w(px(50.))
                     .text_xs()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(muted_foreground)
                     .child(if is_dir {
                         "-".to_string()
                     } else {
@@ -3725,7 +3756,7 @@ impl FileManagerPanel {
                 div()
                     .w(px(70.))
                     .text_xs()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(muted_foreground)
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
@@ -3735,10 +3766,13 @@ impl FileManagerPanel {
 
     /// 渲染上级目录行（..）
     fn render_parent_row(&self, _cx: &App) -> impl IntoElement {
+        let foreground = self.colors.foreground;
+
         h_flex()
             .h(px(36.))
             .px_2()
             .items_center()
+            .text_color(foreground)
             .child(
                 h_flex()
                     .flex_1()
@@ -3950,6 +3984,10 @@ impl FileManagerPanel {
         let Some(task) = self.transfer_queue.active_task() else {
             return div().into_any_element();
         };
+        let border = self.colors.border;
+        let panel = self.colors.muted;
+        let hover = self.colors.muted.opacity(0.72);
+        let muted_foreground = self.colors.muted_foreground;
 
         let (icon, label) = match &task.operation {
             TransferOperation::Upload { local_path, .. } => (
@@ -4002,8 +4040,8 @@ impl FileManagerPanel {
 
         v_flex()
             .border_t_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().title_bar)
+            .border_color(border)
+            .bg(panel)
             .px_2()
             .py_1()
             .gap_1()
@@ -4012,11 +4050,7 @@ impl FileManagerPanel {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .child(
-                        Icon::new(icon)
-                            .xsmall()
-                            .text_color(cx.theme().muted_foreground),
-                    )
+                    .child(Icon::new(icon).xsmall().text_color(muted_foreground))
                     .child(
                         div()
                             .id("fm-transfer-name")
@@ -4033,7 +4067,7 @@ impl FileManagerPanel {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(cx.theme().muted_foreground)
+                            .text_color(muted_foreground)
                             .child(status_text),
                     )
                     .when(
@@ -4045,7 +4079,7 @@ impl FileManagerPanel {
                                     .cursor_pointer()
                                     .rounded_md()
                                     .p(px(2.))
-                                    .hover(|s| s.bg(cx.theme().list_active))
+                                    .hover(move |s| s.bg(hover))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, _window, cx| {
@@ -4055,7 +4089,7 @@ impl FileManagerPanel {
                                     .child(
                                         Icon::new(IconName::Close)
                                             .xsmall()
-                                            .text_color(cx.theme().muted_foreground),
+                                            .text_color(muted_foreground),
                                     ),
                             )
                         },
@@ -4075,7 +4109,7 @@ impl FileManagerPanel {
                         el.child(
                             div()
                                 .text_xs()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(muted_foreground)
                                 .child(format!("+{}", pending_count)),
                         )
                     }),
@@ -4083,16 +4117,19 @@ impl FileManagerPanel {
             .into_any_element()
     }
 
-    fn render_extract_progress(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_extract_progress(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let Some(extract) = self.active_extract.clone() else {
             return div().into_any_element();
         };
         let tooltip_label = extract.path.clone();
+        let border = self.colors.border;
+        let panel = self.colors.muted;
+        let muted_foreground = self.colors.muted_foreground;
 
         h_flex()
             .border_t_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().title_bar)
+            .border_color(border)
+            .bg(panel)
             .px_2()
             .py_1()
             .gap_2()
@@ -4101,7 +4138,7 @@ impl FileManagerPanel {
             .child(
                 Icon::new(IconName::Unarchive)
                     .xsmall()
-                    .text_color(cx.theme().muted_foreground),
+                    .text_color(muted_foreground),
             )
             .child(
                 div()
@@ -4119,14 +4156,16 @@ impl FileManagerPanel {
             .child(
                 div()
                     .text_xs()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(muted_foreground)
                     .child(t!("FileManager.extract_running")),
             )
             .into_any_element()
     }
 
     /// 渲染拖拽覆盖层
-    fn render_drop_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_drop_overlay(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        let foreground = self.colors.foreground;
+
         div()
             .absolute()
             .top_0()
@@ -4144,14 +4183,16 @@ impl FileManagerPanel {
                     div()
                         .text_sm()
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(cx.theme().foreground)
+                        .text_color(foreground)
                         .child(t!("FileManager.drop_files_here")),
                 ),
             )
     }
 
     /// 渲染连接中状态
-    fn render_connecting(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_connecting(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        let muted_foreground = self.colors.muted_foreground;
+
         v_flex()
             .size_full()
             .items_center()
@@ -4161,13 +4202,16 @@ impl FileManagerPanel {
             .child(
                 div()
                     .text_sm()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(muted_foreground)
                     .child(t!("FileManager.connecting")),
             )
     }
 
     /// 渲染错误状态
     fn render_error(&self, error: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        let accent = self.colors.accent;
+        let accent_foreground = self.colors.accent_foreground;
+
         v_flex()
             .size_full()
             .items_center()
@@ -4195,8 +4239,8 @@ impl FileManagerPanel {
                     .px_3()
                     .py_1()
                     .rounded_md()
-                    .bg(cx.theme().primary)
-                    .text_color(cx.theme().primary_foreground)
+                    .bg(accent)
+                    .text_color(accent_foreground)
                     .text_sm()
                     .hover(|s| s.opacity(0.9))
                     .on_mouse_down(
@@ -4211,6 +4255,10 @@ impl FileManagerPanel {
 
     /// 渲染初始状态（提示连接）
     fn render_idle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let accent = self.colors.accent;
+        let accent_foreground = self.colors.accent_foreground;
+        let muted_foreground = self.colors.muted_foreground;
+
         v_flex()
             .size_full()
             .items_center()
@@ -4221,12 +4269,12 @@ impl FileManagerPanel {
                 Icon::new(IconName::FolderOpen)
                     .color()
                     .with_size(Size::Large)
-                    .text_color(cx.theme().muted_foreground),
+                    .text_color(muted_foreground),
             )
             .child(
                 div()
                     .text_sm()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(muted_foreground)
                     .child(t!("FileManager.title")),
             )
             .child(
@@ -4236,8 +4284,8 @@ impl FileManagerPanel {
                     .px_3()
                     .py_1()
                     .rounded_md()
-                    .bg(cx.theme().primary)
-                    .text_color(cx.theme().primary_foreground)
+                    .bg(accent)
+                    .text_color(accent_foreground)
                     .text_sm()
                     .hover(|s| s.opacity(0.9))
                     .on_mouse_down(
@@ -4264,9 +4312,12 @@ impl FileManagerPanel {
         let has_active_transfer = self.transfer_queue.has_active();
         let has_active_extract = self.active_extract.is_some();
         let is_dragging = self.is_dragging_over;
+        let background = self.colors.background;
+        let hover = self.colors.muted.opacity(0.72);
 
         v_flex()
             .size_full()
+            .bg(background)
             .child(self.render_toolbar(cx))
             .child(self.render_search_bar(cx))
             .child(self.render_header(cx))
@@ -4286,6 +4337,7 @@ impl FileManagerPanel {
                         .id("fm-file-list-drop-zone")
                         .flex_1()
                         .relative()
+                        .bg(background)
                         // 拖拽上传支持
                         .drag_over::<ExternalPaths>(|el, _, _, _cx| el.bg(gpui::rgba(0x3b82f620)))
                         .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
@@ -4311,7 +4363,7 @@ impl FileManagerPanel {
                                                     return div()
                                                         .id(list_ix)
                                                         .cursor_pointer()
-                                                        .hover(|s| s.bg(cx.theme().list_hover))
+                                                        .hover(move |s| s.bg(hover))
                                                         .on_double_click(cx.listener(
                                                             move |this, _, _window, cx| {
                                                                 this.go_parent(cx);
@@ -4344,7 +4396,7 @@ impl FileManagerPanel {
                                                 div()
                                                     .id(list_ix)
                                                     .cursor_pointer()
-                                                    .hover(|s| s.bg(cx.theme().list_hover))
+                                                    .hover(move |s| s.bg(hover))
                                                     .on_mouse_down(
                                                         MouseButton::Left,
                                                         cx.listener(
@@ -4447,10 +4499,13 @@ impl Focusable for FileManagerPanel {
 impl Render for FileManagerPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.connection_state.clone();
+        let background = self.colors.background;
+        let foreground = self.colors.foreground;
 
         v_flex()
             .size_full()
-            .bg(cx.theme().background)
+            .bg(background)
+            .text_color(foreground)
             .child(match state {
                 ConnectionState::Idle => self.render_idle(cx).into_any_element(),
                 ConnectionState::Connecting => self.render_connecting(cx).into_any_element(),

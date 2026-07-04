@@ -50,7 +50,7 @@ use crate::input::{
 };
 use crate::message_view::render_messages_with_code_actions;
 use crate::persistence;
-use crate::session_sidebar::{self, SessionSummary};
+use crate::session_sidebar::{self, SessionRowStyle, SessionSummary};
 use crate::theme::{AgentChatTheme, resolve_agent_chat_theme};
 
 /// Agent 聊天视图事件。
@@ -96,6 +96,16 @@ fn agent_history_title(show_archived: bool) -> &'static str {
 
 fn current_agent_task_title() -> &'static str {
     "当前 Agent 任务"
+}
+
+fn themed_session_row_style(theme: &AgentChatTheme) -> SessionRowStyle {
+    SessionRowStyle {
+        foreground: theme.foreground,
+        muted_foreground: theme.muted_foreground,
+        selected_background: theme.selection_background(),
+        selected_foreground: theme.foreground,
+        hover_background: theme.hover_background(),
+    }
 }
 
 impl RuntimeBinding {
@@ -1392,9 +1402,11 @@ impl AgentChatView {
         let archived_view = self.show_archived;
         let selected = !archived_view && self.current_session == session.id;
         let group = SharedString::from(format!("agent-session-row-{uid}"));
+        let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
+        let row_style = themed_session_row_style(&theme);
 
         // 标题区:活跃视图可点击切换;归档视图只读。
-        let label = session_sidebar::session_row(session, selected, cx);
+        let label = session_sidebar::session_row_with_style(session, selected, row_style);
         let label_area = if archived_view {
             div().flex_1().min_w_0().child(label).into_any_element()
         } else {
@@ -2194,13 +2206,10 @@ fn header_agent_option_row(
     theme: &AgentChatTheme,
     cx: &mut Context<gpui_component::popover::PopoverState>,
 ) -> gpui::AnyElement {
-    let hover_bg = theme.panel_hover;
-    let selected_bg = theme.accent;
-    let icon_fg = if agent.selected {
-        theme.accent_foreground
-    } else {
-        muted
-    };
+    let hover_bg = theme.hover_background();
+    let selected_bg = theme.selection_background();
+    let selected_fg = theme.foreground;
+    let icon_fg = if agent.selected { theme.accent } else { muted };
     let target = agent.id.clone();
     let disabled = agent.connecting;
 
@@ -2216,9 +2225,7 @@ fn header_agent_option_row(
         .py_1p5()
         .rounded(cx.theme().radius)
         .when(agent.selected, |this| this.bg(selected_bg))
-        .when(agent.selected, |this| {
-            this.text_color(theme.accent_foreground)
-        })
+        .when(agent.selected, |this| this.text_color(selected_fg))
         .when(disabled, |this| this.opacity(0.5))
         .when(!disabled, |this| {
             this.cursor_pointer()

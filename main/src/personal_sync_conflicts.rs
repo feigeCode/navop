@@ -4,6 +4,7 @@ use one_core::cloud_sync::ConflictResolution;
 use one_core::cloud_sync::personal::{PersonalConflictType, PersonalSyncConflict};
 use rust_i18n::t;
 
+use crate::personal_sync_runtime::{PersonalSyncConflictDisplayInfo, PersonalSyncRecordDisplay};
 use crate::sync_conflict_dialog::{
     SyncConflictDialogItem, SyncConflictResolutionOption, show_sync_conflict_dialog,
 };
@@ -15,6 +16,7 @@ pub(crate) fn current_personal_conflict_count(cx: &App) -> usize {
 }
 
 pub(crate) fn show_personal_conflict_dialog(window: &mut Window, cx: &mut App) {
+    crate::personal_sync_runtime::refresh_personal_sync_identity(cx);
     let conflicts = match crate::personal_sync_runtime::list_personal_conflicts(cx) {
         Ok(conflicts) => conflicts,
         Err(error) => {
@@ -29,7 +31,11 @@ pub(crate) fn show_personal_conflict_dialog(window: &mut Window, cx: &mut App) {
     let count = conflicts.len();
     let items = conflicts
         .iter()
-        .map(personal_conflict_dialog_item)
+        .map(|conflict| {
+            let display =
+                crate::personal_sync_runtime::personal_conflict_display_info(conflict, cx);
+            personal_conflict_dialog_item(conflict, &display)
+        })
         .collect();
     show_sync_conflict_dialog(
         window,
@@ -58,21 +64,57 @@ pub(crate) fn default_personal_conflict_strategy(
     }
 }
 
-fn personal_conflict_dialog_item(conflict: &PersonalSyncConflict) -> SyncConflictDialogItem {
+fn personal_conflict_dialog_item(
+    conflict: &PersonalSyncConflict,
+    display: &PersonalSyncConflictDisplayInfo,
+) -> SyncConflictDialogItem {
     SyncConflictDialogItem {
         id: conflict.record_id.clone(),
-        title: format!(
-            "{} {}",
-            data_type_label(conflict.data_type.as_str()),
-            conflict.record_id
-        ),
-        detail: t!(
+        title: personal_conflict_title(conflict, display),
+        detail: personal_conflict_detail(conflict, display),
+        default_strategy: default_personal_conflict_strategy(conflict.conflict_type),
+        options: personal_resolution_options(),
+    }
+}
+
+fn personal_conflict_title(
+    conflict: &PersonalSyncConflict,
+    display: &PersonalSyncConflictDisplayInfo,
+) -> String {
+    let name = display
+        .remote
+        .as_ref()
+        .or(display.local.as_ref())
+        .map(|record| record.name.as_str())
+        .unwrap_or(conflict.record_id.as_str());
+    format!("{} {}", data_type_label(conflict.data_type.as_str()), name)
+}
+
+fn personal_conflict_detail(
+    conflict: &PersonalSyncConflict,
+    display: &PersonalSyncConflictDisplayInfo,
+) -> String {
+    let mut parts = Vec::new();
+    if let Some(local) = &display.local {
+        parts.push(format!("本地: {}", record_display_text(local)));
+    }
+    if let Some(remote) = &display.remote {
+        parts.push(format!("远端: {}", record_display_text(remote)));
+    }
+    parts.push(
+        t!(
             "Home.personal_sync_conflict_type",
             conflict_type = conflict_type_label(conflict.conflict_type)
         )
         .to_string(),
-        default_strategy: default_personal_conflict_strategy(conflict.conflict_type),
-        options: personal_resolution_options(),
+    );
+    parts.join(" | ")
+}
+
+fn record_display_text(record: &PersonalSyncRecordDisplay) -> String {
+    match record.info.as_deref() {
+        Some(info) if !info.is_empty() => format!("{} ({info})", record.name),
+        _ => record.name.clone(),
     }
 }
 
@@ -117,7 +159,13 @@ mod tests {
     use one_core::cloud_sync::ConflictResolution;
     use one_core::cloud_sync::personal::{PersonalConflictType, PersonalSyncConflict};
 
-    use super::{default_personal_conflict_strategy, personal_conflict_count};
+    use crate::personal_sync_runtime::{
+        PersonalSyncConflictDisplayInfo, PersonalSyncRecordDisplay,
+    };
+
+    use super::{
+        default_personal_conflict_strategy, personal_conflict_count, personal_conflict_dialog_item,
+    };
 
     #[test]
     fn personal_conflict_defaults_only_use_supported_resolution_strategies() {
@@ -145,6 +193,37 @@ mod tests {
         assert_eq!(2, personal_conflict_count(&conflicts));
     }
 
+    #[test]
+    fn personal_conflict_dialog_item_prefers_readable_name_and_endpoint() {
+        let conflict = personal_conflict("cloud-1", PersonalConflictType::BothModified);
+        let display = PersonalSyncConflictDisplayInfo {
+            local: Some(record("Local MySQL", "Database root@127.0.0.1:3306/ai_app")),
+            remote: Some(record("Remote MySQL", "Database root@10.0.0.8:3306/ai_app")),
+        };
+
+        let item = personal_conflict_dialog_item(&conflict, &display);
+
+        assert!(item.title.contains("Remote MySQL"));
+        assert!(item.detail.contains("本地: Local MySQL"));
+        assert!(item.detail.contains("127.0.0.1:3306"));
+        assert!(item.detail.contains("远端: Remote MySQL"));
+        assert!(item.detail.contains("10.0.0.8:3306"));
+    }
+
+    #[test]
+    fn personal_conflict_dialog_item_falls_back_to_record_id() {
+        let conflict = personal_conflict("cloud-1", PersonalConflictType::BothModified);
+        let display = PersonalSyncConflictDisplayInfo {
+            local: None,
+            remote: None,
+        };
+
+        let item = personal_conflict_dialog_item(&conflict, &display);
+
+        assert!(item.title.contains("cloud-1"));
+        assert!(item.detail.contains("冲突类型"));
+    }
+
     fn personal_conflict(
         record_id: &str,
         conflict_type: PersonalConflictType,
@@ -157,6 +236,13 @@ mod tests {
             local_snapshot: None,
             remote_snapshot: None,
             detected_at: 100,
+        }
+    }
+
+    fn record(name: &str, info: &str) -> PersonalSyncRecordDisplay {
+        PersonalSyncRecordDisplay {
+            name: name.to_string(),
+            info: Some(info.to_string()),
         }
     }
 }

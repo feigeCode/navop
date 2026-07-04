@@ -2,22 +2,32 @@ use std::ops::Deref;
 use std::path::PathBuf;
 
 use crate::database_objects_tab::DatabaseObjectsPanel;
+use crate::database_toolbar::{
+    DatabaseToolbarAction, DatabaseToolbarItem, WORKSPACE_TOOLBAR_HEIGHT,
+    WORKSPACE_TOOLBAR_HOVER_ALPHA, WORKSPACE_TOOLBAR_ITEM_HEIGHT, WORKSPACE_TOOLBAR_ITEM_RADIUS,
+    WORKSPACE_TOOLBAR_ITEM_WIDTH, database_toolbar_items, toolbar_item_icon, toolbar_item_label,
+    toolbar_tone_color,
+};
+use crate::database_users_tab::DatabaseUsersTab;
 use crate::db_tree_event::DatabaseEventHandler;
-use crate::db_tree_view::{DbTreeView, DbTreeViewEvent};
+use crate::db_tree_view::{DbTreeView, DbTreeViewEvent, SqlDumpMode};
 use crate::sidebar::{DatabaseSidebar, DatabaseSidebarEvent};
 use crate::sql_editor_view::SqlEditorTab;
 use ai_chat_view::{CodeBlockAction, LanguageMatcher};
 use db::{
-    GlobalDbState,
+    DbNodeType, GlobalDbState,
     ipc::{IpcDriverRegistry, driver_icon_from_asset_path, driver_icon_from_file_path},
 };
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Axis, Bounds, Context, Element, Entity, EventEmitter,
     FocusHandle, Focusable, FontWeight, Hsla, InteractiveElement, IntoElement, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString, Style, Styled, Task, Window,
-    div, prelude::FluentBuilder, px,
+    MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString, StatefulInteractiveElement,
+    Style, Styled, Task, Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, h_flex, v_flex};
+use gpui_component::WindowExt;
+use gpui_component::{
+    ActiveTheme, Icon, IconName, Sizable, Size, h_flex, notification::Notification, v_flex,
+};
 use one_core::layout::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
 };
@@ -37,7 +47,6 @@ use uuid::Uuid;
 const PANEL_MIN_SIZE: Pixels = px(100.0);
 const TREE_PANEL_DEFAULT_SIZE: Pixels = px(250.0);
 const CHAT_SIDEBAR_MIN_WIDTH: Pixels = px(360.0);
-const CHAT_SIDEBAR_DEFAULT_WIDTH: Pixels = px(420.0);
 
 fn database_tools_sidebar_policy() -> SidebarPanelPolicy {
     SidebarPanelPolicy {
@@ -102,7 +111,18 @@ fn database_tab_icon_from_registry(
 }
 
 fn database_tab_icon(config: &DbConnectionConfig) -> Icon {
-    let registry = IpcDriverRegistry::load_default();
+    database_tab_icon_with_registry_loader(config, IpcDriverRegistry::load_default)
+}
+
+fn database_tab_icon_with_registry_loader(
+    config: &DbConnectionConfig,
+    load_registry: impl FnOnce() -> IpcDriverRegistry,
+) -> Icon {
+    if !config.database_type.is_external() {
+        return config.database_type.as_node_icon().with_size(Size::Medium);
+    }
+
+    let registry = load_registry();
     database_tab_icon_from_registry(config, &registry)
 }
 
@@ -199,8 +219,7 @@ impl DatabaseTabView {
                     sidebar.update(cx, |sidebar, cx| {
                         sidebar.set_database_scope(&connection_id, database, schema, cx);
                     });
-                    this.sidebar_panel_size =
-                        this.sidebar_panel_size.max(CHAT_SIDEBAR_DEFAULT_WIDTH);
+                    this.sidebar_panel_size = this.sidebar_panel_size.max(SIDEBAR_DEFAULT_WIDTH);
                 }
             }
         }));
@@ -235,7 +254,7 @@ impl DatabaseTabView {
             sidebar,
             _subscriptions: subscriptions,
             tree_panel_size: TREE_PANEL_DEFAULT_SIZE,
-            sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH.max(CHAT_SIDEBAR_DEFAULT_WIDTH),
+            sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
             sidebar_render_mode: DatabaseSidebarRenderMode::Embedded,
             resizing: None,
             bounds: Bounds::default(),
@@ -437,6 +456,200 @@ impl DatabaseTabView {
     fn done_resizing(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.resizing = None;
         cx.notify();
+    }
+
+    fn render_workspace_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .child(self.render_workspace_toolbar(cx))
+            .child(div().flex_1().min_h_0().child(self.tab_container.clone()))
+            .into_any_element()
+    }
+
+    fn render_workspace_toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        h_flex()
+            .h(WORKSPACE_TOOLBAR_HEIGHT)
+            .w_full()
+            .flex_shrink_0()
+            .items_center()
+            .gap_1()
+            .px_3()
+            .py_1()
+            .overflow_x_hidden()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .children(
+                database_toolbar_items()
+                    .into_iter()
+                    .map(|item| self.render_toolbar_item(item, cx)),
+            )
+            .into_any_element()
+    }
+
+    fn render_toolbar_item(&self, item: DatabaseToolbarItem, cx: &mut Context<Self>) -> AnyElement {
+        let color = toolbar_tone_color(item.tone, cx);
+        let hover_bg = cx.theme().muted.opacity(WORKSPACE_TOOLBAR_HOVER_ALPHA);
+        let border = cx.theme().border.opacity(0.0);
+        let hover_border = cx.theme().border;
+        let action = item.action;
+
+        div()
+            .id(item.id)
+            .w(WORKSPACE_TOOLBAR_ITEM_WIDTH)
+            .h(WORKSPACE_TOOLBAR_ITEM_HEIGHT)
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .rounded(WORKSPACE_TOOLBAR_ITEM_RADIUS)
+            .border_1()
+            .border_color(border)
+            .cursor_pointer()
+            .hover(move |this| this.bg(hover_bg).border_color(hover_border))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.handle_toolbar_action(action, window, cx);
+            }))
+            .child(toolbar_item_icon(item.icon, color))
+            .child(toolbar_item_label(item.label, cx))
+            .into_any_element()
+    }
+
+    fn handle_toolbar_action(
+        &mut self,
+        action: DatabaseToolbarAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            DatabaseToolbarAction::ShowObjects => self.activate_objects_panel(window, cx),
+            DatabaseToolbarAction::CreateQuery => self.emit_tree_event_or_notify(
+                |node_id| DbTreeViewEvent::CreateNewQuery { node_id },
+                "没有可用的数据库连接，无法新建查询。",
+                window,
+                cx,
+            ),
+            DatabaseToolbarAction::CompareSchema => self.emit_tree_event_or_notify(
+                |node_id| DbTreeViewEvent::CompareSchema { node_id },
+                "没有可用的数据库连接，无法比较结构。",
+                window,
+                cx,
+            ),
+            DatabaseToolbarAction::CompareData => self.emit_tree_event_or_notify(
+                |node_id| DbTreeViewEvent::CompareData { node_id },
+                "没有可用的数据库连接，无法比较数据。",
+                window,
+                cx,
+            ),
+            DatabaseToolbarAction::Backup => self.emit_backup_event(window, cx),
+            DatabaseToolbarAction::Users => self.open_users_tab(window, cx),
+            DatabaseToolbarAction::DataGenerator => {
+                self.notify_unimplemented_action("数据生成", window, cx)
+            }
+            DatabaseToolbarAction::Automation => {
+                self.notify_unimplemented_action("自动运行", window, cx)
+            }
+            DatabaseToolbarAction::Model => self.notify_unimplemented_action("模型", window, cx),
+            DatabaseToolbarAction::Bi => self.notify_unimplemented_action("BI", window, cx),
+        }
+    }
+
+    fn activate_objects_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab_container.update(cx, |container, cx| {
+            container.activate_pinned_tab(window, cx);
+        });
+    }
+
+    fn open_users_tab(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(config) = self.toolbar_connection_config(cx) else {
+            self.notify_info("没有可用的数据库连接，无法查看用户。", window, cx);
+            return;
+        };
+
+        let tab_id = format!("db-users-{}", config.id);
+        let tab_id_clone = tab_id.clone();
+        let connection_id = config.id.clone();
+
+        self.tab_container.update(cx, |container, cx| {
+            container.activate_or_add_tab_lazy(
+                tab_id.clone(),
+                move |_window, cx| {
+                    let users_tab = cx.new(|cx| DatabaseUsersTab::new(config.clone(), cx));
+                    TabItem::new(tab_id_clone.clone(), connection_id.clone(), users_tab)
+                },
+                window,
+                cx,
+            );
+        });
+    }
+
+    fn toolbar_connection_config(&self, cx: &App) -> Option<DbConnectionConfig> {
+        let selected_connection_id = self.db_tree_view.read(cx).selected_or_first_connection_id();
+        let connection = selected_connection_id
+            .as_deref()
+            .and_then(|id| {
+                self.connections.iter().find(|connection| {
+                    connection
+                        .id
+                        .is_some_and(|conn_id| conn_id.to_string() == id)
+                })
+            })
+            .or_else(|| self.connections.first())?;
+
+        connection.to_db_connection().ok()
+    }
+
+    fn emit_tree_event_or_notify(
+        &self,
+        build_event: impl FnOnce(String) -> DbTreeViewEvent,
+        message: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(node_id) = self.db_tree_view.read(cx).selected_or_first_node_id() else {
+            self.notify_info(message, window, cx);
+            return;
+        };
+        self.emit_tree_event(build_event(node_id), cx);
+    }
+
+    fn emit_backup_event(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let node_types = [DbNodeType::Database, DbNodeType::Schema, DbNodeType::Table];
+        let node_id = self
+            .db_tree_view
+            .read(cx)
+            .selected_or_first_node_id_for_types(&node_types);
+        let Some(node_id) = node_id else {
+            self.notify_info("请选择数据库、Schema 或表后再备份。", window, cx);
+            return;
+        };
+        self.emit_tree_event(
+            DbTreeViewEvent::DumpSqlFile {
+                node_id,
+                mode: SqlDumpMode::StructureAndData,
+            },
+            cx,
+        );
+    }
+
+    fn emit_tree_event(&self, event: DbTreeViewEvent, cx: &mut Context<Self>) {
+        self.db_tree_view.update(cx, |_tree, cx| cx.emit(event));
+    }
+
+    fn notify_unimplemented_action(
+        &self,
+        label: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.notify_info(&format!("{label} 功能暂未实现。"), window, cx);
+    }
+
+    fn notify_info(&self, message: &str, window: &mut Window, cx: &mut Context<Self>) {
+        window.push_notification(Notification::info(message.to_string()).autohide(true), cx);
     }
 
     fn render_connection_status(&self, cx: &App) -> AnyElement {
@@ -773,6 +986,16 @@ mod tests {
     }
 
     #[test]
+    fn builtin_database_tab_icon_bypasses_external_driver_registry() {
+        let mut config = external_config("demo");
+        config.database_type = DatabaseType::MySQL;
+
+        let _icon = database_tab_icon_with_registry_loader(&config, || {
+            panic!("builtin database tab icon should not load external driver registry")
+        });
+    }
+
+    #[test]
     fn database_tools_sidebar_keeps_toolbar_visible_by_default() {
         let policy = database_tools_sidebar_policy();
 
@@ -782,16 +1005,16 @@ mod tests {
 
     #[test]
     fn database_tools_sidebar_uses_toolbar_width_until_panel_opens() {
-        let collapsed = database_tools_sidebar_size(false, CHAT_SIDEBAR_DEFAULT_WIDTH);
-        let expanded = database_tools_sidebar_size(true, CHAT_SIDEBAR_DEFAULT_WIDTH);
+        let collapsed = database_tools_sidebar_size(false, SIDEBAR_DEFAULT_WIDTH);
+        let expanded = database_tools_sidebar_size(true, SIDEBAR_DEFAULT_WIDTH);
 
         assert_eq!(Some(TOOLBAR_WIDTH), collapsed.side_width);
         assert_eq!(Some(TOOLBAR_WIDTH), collapsed.bottom_height);
         assert_eq!(
-            Some(CHAT_SIDEBAR_DEFAULT_WIDTH + TOOLBAR_WIDTH),
+            Some(SIDEBAR_DEFAULT_WIDTH + TOOLBAR_WIDTH),
             expanded.side_width
         );
-        assert_eq!(Some(CHAT_SIDEBAR_DEFAULT_WIDTH), expanded.bottom_height);
+        assert_eq!(Some(SIDEBAR_DEFAULT_WIDTH), expanded.bottom_height);
     }
 
     #[test]
@@ -814,7 +1037,7 @@ impl Render for DatabaseTabView {
             return div()
                 .track_focus(&self.focus_handle)
                 .size_full()
-                .child(self.tab_container.clone());
+                .child(self.render_workspace_content(cx));
         }
 
         div()
@@ -846,7 +1069,7 @@ impl Render for DatabaseTabView {
                                 .flex_1()
                                 .h_full()
                                 .min_w_0()
-                                .child(self.tab_container.clone()),
+                                .child(self.render_workspace_content(cx)),
                         )
                         .when(sidebar_visible, |this| {
                             this.child(

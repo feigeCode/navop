@@ -67,7 +67,8 @@ fn render_row_actions(
             Button::new(format!("save-import-{record_id}"))
                 .xsmall()
                 .primary()
-                .icon(IconName::Check)
+                .icon(IconName::Upload)
+                .label("保存")
                 .disabled(!is_save_candidate(&row.save_status))
                 .on_click(cx.listener({
                     let record_id = record_id.to_string();
@@ -110,14 +111,7 @@ fn render_row_text(
                 .overflow_hidden()
                 .text_ellipsis()
                 .whitespace_nowrap()
-                .child(format!(
-                    "{} · {}:{} · {} · {}",
-                    row.draft.source_name(),
-                    row.draft.host,
-                    row.draft.port,
-                    row.draft.username,
-                    row.draft.password_status_text()
-                )),
+                .child(row_detail_text(&row.draft)),
         )
         .when_some(row.draft.warning_text(), |this, warning| {
             this.child(
@@ -130,6 +124,31 @@ fn render_row_text(
                     .child(warning),
             )
         })
+}
+
+fn row_detail_text(draft: &EditableImportDraft) -> String {
+    let mut parts = vec![draft.source_name().to_string()];
+    if let Some(endpoint) = endpoint_text(draft) {
+        parts.push(endpoint);
+    }
+    if let Some(username) = trimmed_text(&draft.username) {
+        parts.push(username);
+    }
+    parts.push(draft.password_status_text().to_string());
+    parts.join(" · ")
+}
+
+fn endpoint_text(draft: &EditableImportDraft) -> Option<String> {
+    let host = trimmed_text(&draft.host)?;
+    Some(match trimmed_text(&draft.port) {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
+}
+
+fn trimmed_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn render_row_status(

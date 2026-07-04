@@ -410,9 +410,12 @@ impl TerminalSidebar {
         });
 
         // 仅 SSH 终端（有 StoredConnection）时创建文件管理器面板
-        let file_manager_panel = stored_connection
-            .zip(ssh_session_manager.clone())
-            .map(|(conn, manager)| cx.new(|cx| FileManagerPanel::new(conn, manager, window, cx)));
+        let file_manager_panel =
+            stored_connection
+                .zip(ssh_session_manager.clone())
+                .map(|(conn, manager)| {
+                    cx.new(|cx| FileManagerPanel::new(conn, manager, colors.clone(), window, cx))
+                });
         let server_monitor_panel = ssh_config
             .zip(ssh_session_manager)
             .map(|(_config, manager)| {
@@ -734,6 +737,11 @@ impl TerminalSidebar {
         self.ai_chat_panel.update(cx, |panel, cx| {
             panel.set_theme(Some(agent_theme_from_terminal_theme(theme)), cx);
         });
+        if let Some(ref fm_panel) = self.file_manager_panel {
+            fm_panel.update(cx, |panel, cx| {
+                panel.set_colors(self.colors.clone(), cx);
+            });
+        }
         if let Some(ref monitor_panel) = self.server_monitor_panel {
             monitor_panel.update(cx, |panel, cx| {
                 panel.set_colors(self.colors.clone(), cx);

@@ -28,6 +28,7 @@ pub const SCHEMA_DATABASES: &str = "schema/databases";
 pub const SCHEMA_SCHEMAS: &str = "schema/schemas";
 pub const SCHEMA_OBJECT_VIEW: &str = "schema/object_view";
 pub const SCHEMA_OBJECTS: &str = "schema/objects";
+pub const SCHEMA_USERS: &str = "schema/users";
 pub const SCHEMA_COLUMNS: &str = "schema/columns";
 pub const SCHEMA_INDEXES: &str = "schema/indexes";
 pub const SCHEMA_FOREIGN_KEYS: &str = "schema/foreign_keys";
@@ -122,6 +123,7 @@ pub const ALL_METHODS: &[&str] = &[
     SCHEMA_SCHEMAS,
     SCHEMA_OBJECT_VIEW,
     SCHEMA_OBJECTS,
+    SCHEMA_USERS,
     SCHEMA_COLUMNS,
     SCHEMA_INDEXES,
     SCHEMA_FOREIGN_KEYS,
@@ -217,6 +219,7 @@ mod tests {
             SCHEMA_SCHEMAS,
             SCHEMA_OBJECT_VIEW,
             SCHEMA_OBJECTS,
+            SCHEMA_USERS,
             SCHEMA_COLUMNS,
             SCHEMA_INDEXES,
             SCHEMA_FOREIGN_KEYS,
@@ -304,6 +307,7 @@ mod tests {
         assert!(is_known(DDL_BUILD_DROP));
         assert!(is_known(SCHEMA_COLUMNS));
         assert!(is_known(SCHEMA_OBJECT_VIEW));
+        assert!(is_known(SCHEMA_USERS));
         assert!(!is_known("sql/fromat"));
         assert!(!is_known("ddl/build_nonsense"));
         assert!(!is_known(""));

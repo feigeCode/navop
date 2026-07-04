@@ -18,7 +18,7 @@ use crate::executor::{
 use crate::ipc::client::JsonRpcClient;
 use crate::ipc::method_support::{MethodSet, MethodSupport};
 use crate::ipc::protocol::{
-    conn_only_params, conn_use_params, cursor_close_params, cursor_fetch_params,
+    WIRE_PREFIX, conn_only_params, conn_use_params, cursor_close_params, cursor_fetch_params,
     driver_config_value_with_target, exec_batch_params, exec_run_params, query_start_params,
 };
 use crate::ipc::registry::IpcDriverManifest;
@@ -41,10 +41,6 @@ use tracing::{debug, error, warn};
 
 /// 单次 cursor/fetch 拉取的行数上限——稍大一些减少 round-trip,但避免一次 buffer 太多。
 const DEFAULT_FETCH_SIZE: u32 = 2_000;
-
-/// wire 透传信封前缀:plugin 把同步方法包装成「伪 SQL」注入到 `query`,connection
-/// 识别此前缀后解码并改调真正的 wire 方法。
-pub(crate) const WIRE_PREFIX: &str = "/*onetcli-ipc-wire*/ ";
 
 pub struct ExternalDbConnection {
     config: DbConnectionConfig,
@@ -1014,8 +1010,37 @@ fn wire_result_for_method(sql: &str, method_name: &str, value: Value) -> SqlResu
     match method_name {
         method::SQL_EXPLAIN => sql_explain_value_result(sql, value.clone())
             .unwrap_or_else(|| wire_value_result(sql, value)),
+        method::SCHEMA_USERS => schema_users_value_result(sql, value.clone())
+            .unwrap_or_else(|| wire_value_result(sql, value)),
         _ => wire_value_result(sql, value),
     }
+}
+
+fn schema_users_value_result(sql: &str, value: Value) -> Option<SqlResult> {
+    let view: extension_protocol::schema::ObjectView = serde_json::from_value(value).ok()?;
+    let columns = view
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect::<Vec<_>>();
+    let column_meta = view
+        .columns
+        .iter()
+        .map(|column| QueryColumnMeta::new(column.name.clone(), "TEXT"))
+        .collect::<Vec<_>>();
+    let rows = view
+        .rows
+        .into_iter()
+        .map(|row| row.into_iter().map(Some).collect())
+        .collect();
+
+    Some(SqlResult::Query(QueryResult {
+        sql: sql.to_string(),
+        columns,
+        column_meta,
+        rows,
+        elapsed_ms: 0,
+    }))
 }
 
 fn sql_explain_value_result(sql: &str, value: Value) -> Option<SqlResult> {
@@ -1306,6 +1331,34 @@ mod tests {
                 assert_eq!(q.columns, vec!["explain"]);
                 assert_eq!(q.column_meta[0].db_type, "TEXT");
                 assert_eq!(q.rows[0][0].as_deref(), Some("physical_plan"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn schema_users_wire_result_uses_object_view_table() {
+        let result = wire_result_for_method(
+            "/*onetcli-ipc-wire*/ {}",
+            method::SCHEMA_USERS,
+            json!({
+                "columns": [
+                    {"key": "name", "name": "名称"},
+                    {"key": "host", "name": "主机"}
+                ],
+                "rows": [
+                    ["root", "localhost"],
+                    ["app", "%"]
+                ]
+            }),
+        );
+
+        match result {
+            SqlResult::Query(q) => {
+                assert_eq!(q.columns, vec!["名称", "主机"]);
+                assert_eq!(q.column_meta[0].db_type, "TEXT");
+                assert_eq!(q.rows[0][0].as_deref(), Some("root"));
+                assert_eq!(q.rows[1][1].as_deref(), Some("%"));
             }
             other => panic!("unexpected: {other:?}"),
         }

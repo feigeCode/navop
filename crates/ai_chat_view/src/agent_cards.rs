@@ -517,6 +517,7 @@ impl ChatCard for ToolConfirmCard {
                     .gap_2()
                     .child(
                         Button::new(SharedString::from(format!("reject-tool-{call_id}")))
+                            .debug_selector(|| "agent-tool-reject".to_string())
                             .with_size(Size::Small)
                             .danger()
                             .label("拒绝")
@@ -531,6 +532,7 @@ impl ChatCard for ToolConfirmCard {
                     )
                     .child(
                         Button::new(SharedString::from(format!("approve-tool-{call_id}")))
+                            .debug_selector(|| "agent-tool-approve".to_string())
                             .with_size(Size::Small)
                             .primary()
                             .label("执行")

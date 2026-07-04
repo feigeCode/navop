@@ -14,6 +14,24 @@ use serde_json::{Value, json};
 /// re-export wire 方法常量,业务层走它们(避免直接 `import extension_protocol::method`)。
 pub use extension_protocol::method;
 
+/// wire 透传信封前缀:把 schema/* 等方法包装成「伪 SQL」注入到 query。
+pub const WIRE_PREFIX: &str = "/*onetcli-ipc-wire*/ ";
+
+pub fn wire_request_sql(method: &str, params: Value) -> String {
+    format!(
+        "{WIRE_PREFIX}{}",
+        serde_json::json!({ "method": method, "params": params })
+    )
+}
+
+pub fn schema_users_wire_sql(fallback_sql: Option<&str>) -> String {
+    let mut params = json!({});
+    if let Some(fallback_sql) = fallback_sql {
+        params["fallback_sql"] = json!(fallback_sql);
+    }
+    wire_request_sql(method::SCHEMA_USERS, params)
+}
+
 /// 构造 `conn/open` 的 `config` 字段。
 ///
 /// driver 子进程读到这份 JSON 后自行反序列化为自己内部的 config struct

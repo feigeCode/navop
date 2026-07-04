@@ -66,6 +66,18 @@ impl AgentChatTheme {
             link: self.link,
         })
     }
+
+    pub fn hover_background(&self) -> Hsla {
+        if self.is_dark {
+            self.panel_hover
+        } else {
+            self.accent.opacity(0.14)
+        }
+    }
+
+    pub fn selection_background(&self) -> Hsla {
+        self.accent.opacity(if self.is_dark { 0.22 } else { 0.30 })
+    }
 }
 
 thread_local! {

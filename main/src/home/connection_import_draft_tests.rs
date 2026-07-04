@@ -4,7 +4,7 @@ use connection_import_protocol::{
     DatabaseImportRecord, ImportDatabaseType, ImportRecord, ImportRecordKind, PasswordImportStatus,
     SshImportAuthMethod, SshImportRecord,
 };
-use one_core::storage::{ConnectionType, SshAuthMethod};
+use one_core::storage::{ConnectionType, DatabaseType, SshAuthMethod};
 
 use super::connection_import_actions::duplicate_connection_name;
 use super::connection_import_draft::{
@@ -56,6 +56,37 @@ fn edited_database_draft_is_converted_to_stored_connection() {
     assert_eq!("local mysql", stored[0].name);
     assert_eq!("127.0.0.1", config.host);
     assert_eq!(3307, config.port);
+}
+
+#[test]
+fn sqlite_database_draft_uses_database_field_as_file_path() {
+    let draft = EditableImportDraft::new(sqlite_import(
+        "DBeaver Sample Database (SQLite)",
+        Some("/tmp/dbeaver-sample.db"),
+    ));
+
+    let stored = draft.to_stored_connection().unwrap();
+    let config = stored.to_db_connection().unwrap();
+
+    assert_eq!(DatabaseType::SQLite, config.database_type);
+    assert_eq!("/tmp/dbeaver-sample.db", config.host);
+    assert_eq!(None, config.database);
+}
+
+#[test]
+fn sqlite_database_draft_without_file_path_can_open_editor_prefill() {
+    let draft = EditableImportDraft::new(sqlite_import("DBeaver Sample Database (SQLite)", None));
+
+    assert_eq!(
+        "数据库文件路径不能为空",
+        draft.to_stored_connection().unwrap_err()
+    );
+
+    let editor_connection = draft.to_editor_connection().unwrap();
+    let config = editor_connection.to_db_connection().unwrap();
+
+    assert_eq!(DatabaseType::SQLite, config.database_type);
+    assert_eq!("", config.host);
 }
 
 #[test]
@@ -147,6 +178,31 @@ fn database_import(name: &str) -> ImportRecord {
         ssh: None,
         port_forwarding: None,
         password_status: PasswordImportStatus::Included,
+        warnings: Vec::new(),
+    }
+}
+
+fn sqlite_import(name: &str, path: Option<&str>) -> ImportRecord {
+    ImportRecord {
+        id: format!("dbeaver:{name}"),
+        importer_id: "com.onetcli.importer.dbeaver/dbeaver".to_string(),
+        source_label: "DBeaver".to_string(),
+        source_id: None,
+        kind: ImportRecordKind::Database,
+        display_name: name.to_string(),
+        database: Some(DatabaseImportRecord {
+            database_type: ImportDatabaseType::Sqlite,
+            name: name.to_string(),
+            host: String::new(),
+            port: None,
+            username: String::new(),
+            password: None,
+            database: path.map(str::to_string),
+            extra_params: BTreeMap::new(),
+        }),
+        ssh: None,
+        port_forwarding: None,
+        password_status: PasswordImportStatus::Missing,
         warnings: Vec::new(),
     }
 }

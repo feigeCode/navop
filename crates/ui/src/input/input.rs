@@ -49,6 +49,7 @@ pub struct Input {
     disabled: bool,
     bordered: bool,
     focus_bordered: bool,
+    caret_color: Option<Hsla>,
     tab_index: isize,
     selected: bool,
     bare: bool,
@@ -94,6 +95,7 @@ impl Input {
             disabled: false,
             bordered: true,
             focus_bordered: true,
+            caret_color: None,
             tab_index: 0,
             selected: false,
             bare: false,
@@ -138,6 +140,12 @@ impl Input {
     /// Set focus border for the input, default is true.
     pub fn focus_bordered(mut self, bordered: bool) -> Self {
         self.focus_bordered = bordered;
+        self
+    }
+
+    /// Override the blinking caret color for locally themed embedded inputs.
+    pub fn caret_color(mut self, color: Hsla) -> Self {
+        self.caret_color = Some(color);
         self
     }
 
@@ -261,6 +269,7 @@ impl RenderOnce for Input {
             state.context_menu_builder = self.context_menu_builder.clone();
             state.disabled = self.disabled;
             state.size = self.size;
+            state.caret_color = self.caret_color;
 
             // Only for single line mode
             if state.mode.is_single_line() {
