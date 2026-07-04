@@ -15,6 +15,7 @@ remote_file_editor = { workspace = true, features = ["ui"] }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 ai_chat_view = { workspace = true }
+agent_runtime = { workspace = true }
 one-core = { workspace = true }
 one-ui = { workspace = true }
 # Terminal emulation

@@ -8,11 +8,15 @@
 
 pub mod file_manager_panel;
 mod quick_command_panel;
+mod rich_input_panel;
 mod server_monitor_panel;
 mod settings_panel;
 
 pub use file_manager_panel::{FileManagerPanel, FileManagerPanelEvent};
 pub use quick_command_panel::QuickCommandPanel;
+pub use rich_input_panel::{
+    RichInputPanel, RichInputPanelEvent, RichInputSubmit, prepare_rich_input_submit,
+};
 pub use server_monitor_panel::{ServerMonitorPanel, ServerMonitorPanelEvent};
 pub use settings_panel::SettingsPanel;
 
@@ -22,7 +26,7 @@ use crate::{
 };
 use ai_chat_view::{
     AgentChatTheme, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent,
-    LanguageMatcher, build_agent_context_single,
+    LanguageMatcher, MentionItem, build_agent_context_single_with_catalog,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -37,7 +41,9 @@ use gpui_component::{
 };
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
-use one_core::storage::models::StoredConnection;
+use one_core::storage::{
+    ConnectionRepository, GlobalStorageState, models::StoredConnection, traits::Repository,
+};
 use rust_i18n::t;
 use ssh::SshSessionManager;
 use std::collections::{HashMap, HashSet};
@@ -77,6 +83,60 @@ fn agent_theme_from_terminal_theme(theme: &TerminalTheme) -> AgentChatTheme {
     }
 }
 
+fn build_terminal_ai_context(
+    current_connection: &StoredConnection,
+    all_connections: &[StoredConnection],
+) -> (
+    agent_runtime::ResourceContext,
+    Vec<MentionItem>,
+    Vec<agent_runtime::ResourceRef>,
+) {
+    let catalog = terminal_ai_connection_catalog(current_connection, all_connections);
+    build_agent_context_single_with_catalog(current_connection, &catalog)
+}
+
+fn terminal_ai_connection_catalog(
+    current_connection: &StoredConnection,
+    all_connections: &[StoredConnection],
+) -> Vec<StoredConnection> {
+    let mut catalog = Vec::with_capacity(all_connections.len().max(1));
+    catalog.push(current_connection.clone());
+    catalog.extend(
+        all_connections
+            .iter()
+            .filter(|connection| !same_connection(connection, current_connection))
+            .cloned(),
+    );
+    catalog
+}
+
+fn same_connection(left: &StoredConnection, right: &StoredConnection) -> bool {
+    match (left.id, right.id) {
+        (Some(left_id), Some(right_id)) => left_id == right_id,
+        _ => {
+            left.name == right.name
+                && left.connection_type == right.connection_type
+                && left.params == right.params
+        }
+    }
+}
+
+fn load_terminal_ai_connections(cx: &App) -> Vec<StoredConnection> {
+    let Some(storage) = cx.try_global::<GlobalStorageState>() else {
+        return Vec::new();
+    };
+    let Some(repo) = storage.storage.get::<ConnectionRepository>() else {
+        return Vec::new();
+    };
+    match repo.list() {
+        Ok(connections) => connections,
+        Err(error) => {
+            tracing::warn!(%error, "Failed to load terminal AI connection catalog");
+            Vec::new()
+        }
+    }
+}
+
 /// 侧边栏面板类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SidebarPanel {
@@ -84,6 +144,8 @@ pub enum SidebarPanel {
     Settings,
     /// 快捷命令面板
     QuickCommand,
+    /// Rich Input 面板
+    RichInput,
     /// AI 聊天面板
     AiChat,
     /// 文件管理器面板（仅 SSH 终端）
@@ -93,9 +155,10 @@ pub enum SidebarPanel {
 }
 
 impl SidebarPanel {
-    pub const ALL: [SidebarPanel; 5] = [
+    pub const ALL: [SidebarPanel; 6] = [
         SidebarPanel::Settings,
         SidebarPanel::QuickCommand,
+        SidebarPanel::RichInput,
         SidebarPanel::AiChat,
         SidebarPanel::FileManager,
         SidebarPanel::ServerMonitor,
@@ -109,6 +172,7 @@ impl SidebarPanel {
         match self {
             SidebarPanel::Settings => "terminal.settings",
             SidebarPanel::QuickCommand => "terminal.quick-command",
+            SidebarPanel::RichInput => "terminal.rich-input",
             SidebarPanel::AiChat => "terminal.ai-chat",
             SidebarPanel::FileManager => "terminal.file-manager",
             SidebarPanel::ServerMonitor => "terminal.server-monitor",
@@ -119,6 +183,7 @@ impl SidebarPanel {
         match self {
             SidebarPanel::Settings => IconName::Settings,
             SidebarPanel::QuickCommand => IconName::SquareTerminal,
+            SidebarPanel::RichInput => IconName::Edit,
             SidebarPanel::AiChat => IconName::AI,
             SidebarPanel::FileManager => IconName::FolderOpen,
             SidebarPanel::ServerMonitor => IconName::Monitor,
@@ -130,6 +195,7 @@ impl SidebarPanel {
         match self {
             SidebarPanel::Settings => IconName::SettingColor.color(),
             SidebarPanel::QuickCommand => IconName::SquareTerminalColor.color(),
+            SidebarPanel::RichInput => IconName::RichInputColor.color(),
             SidebarPanel::AiChat => IconName::AI.color(),
             SidebarPanel::FileManager => IconName::FolderOpenColor.color(),
             SidebarPanel::ServerMonitor => IconName::Monitor.color(),
@@ -141,6 +207,7 @@ impl SidebarPanel {
         match self {
             SidebarPanel::Settings => "Settings",
             SidebarPanel::QuickCommand => "Quick Commands",
+            SidebarPanel::RichInput => "Rich Input",
             SidebarPanel::AiChat => "AI Chat",
             SidebarPanel::FileManager => "File Manager",
             SidebarPanel::ServerMonitor => "Server Monitor",
@@ -351,6 +418,8 @@ pub struct TerminalSidebar {
     settings_panel: Entity<SettingsPanel>,
     /// 快捷命令面板
     quick_command_panel: Entity<QuickCommandPanel>,
+    /// Rich Input 面板
+    rich_input_panel: Entity<RichInputPanel>,
     /// AI 聊天面板
     ai_chat_panel: Entity<DefaultAgentChatPanel>,
     /// 文件管理器面板（仅 SSH 终端时创建）
@@ -400,14 +469,19 @@ impl TerminalSidebar {
         });
         let quick_command_panel =
             cx.new(|cx| QuickCommandPanel::new(connection_id, colors.clone(), window, cx));
-        let ai_chat_panel = cx.new(|cx| {
-            if let Some(connection) = stored_connection.as_ref() {
-                let (resources, mentions) = build_agent_context_single(connection);
-                DefaultAgentChatPanel::new_with_context(resources, mentions, window, cx)
-            } else {
-                DefaultAgentChatPanel::new(window, cx)
-            }
-        });
+        let rich_input_panel = cx.new(|cx| RichInputPanel::new(colors.clone(), window, cx));
+        let ai_chat_panel = if let Some(connection) = stored_connection.as_ref() {
+            let connections = load_terminal_ai_connections(cx);
+            let (resources, mentions, catalog) =
+                build_terminal_ai_context(connection, &connections);
+            cx.new(|cx| {
+                DefaultAgentChatPanel::new_with_context_and_catalog(
+                    resources, mentions, catalog, window, cx,
+                )
+            })
+        } else {
+            cx.new(|cx| DefaultAgentChatPanel::new(window, cx))
+        };
 
         // 仅 SSH 终端（有 StoredConnection）时创建文件管理器面板
         let file_manager_panel =
@@ -528,6 +602,15 @@ impl TerminalSidebar {
             },
         );
 
+        let rich_input_sub = cx.subscribe(
+            &rich_input_panel,
+            |_this, _, event: &RichInputPanelEvent, cx| match event {
+                RichInputPanelEvent::ExecuteCommand(command) => {
+                    cx.emit(TerminalSidebarEvent::ExecuteCommand(command.clone()));
+                }
+            },
+        );
+
         // 订阅 AI 聊天面板关闭事件
         let ai_chat_sub = cx.subscribe(
             &ai_chat_panel,
@@ -536,10 +619,11 @@ impl TerminalSidebar {
             },
         );
 
-        let mut subs = vec![set_sub, quick_sub, ai_chat_sub];
+        let mut subs = vec![set_sub, quick_sub, rich_input_sub, ai_chat_sub];
         let mut available_panels = vec![
             SidebarPanel::Settings,
             SidebarPanel::QuickCommand,
+            SidebarPanel::RichInput,
             SidebarPanel::AiChat,
         ];
 
@@ -581,6 +665,7 @@ impl TerminalSidebar {
             tool_dock: TerminalToolDockState::new(available_panels),
             settings_panel,
             quick_command_panel,
+            rich_input_panel,
             ai_chat_panel,
             file_manager_panel,
             server_monitor_panel,
@@ -642,6 +727,7 @@ impl TerminalSidebar {
         match panel {
             SidebarPanel::Settings => Some(self.settings_panel.clone().into()),
             SidebarPanel::QuickCommand => Some(self.quick_command_panel.clone().into()),
+            SidebarPanel::RichInput => Some(self.rich_input_panel.clone().into()),
             SidebarPanel::AiChat => Some(self.ai_chat_panel.clone().into()),
             SidebarPanel::FileManager => self
                 .file_manager_panel
@@ -732,6 +818,9 @@ impl TerminalSidebar {
             panel.set_current_theme(theme_clone, window, cx);
         });
         self.quick_command_panel.update(cx, |panel, cx| {
+            panel.set_colors(self.colors.clone(), cx);
+        });
+        self.rich_input_panel.update(cx, |panel, cx| {
             panel.set_colors(self.colors.clone(), cx);
         });
         self.ai_chat_panel.update(cx, |panel, cx| {
@@ -954,6 +1043,7 @@ impl TerminalSidebar {
             .gap_1()
             .child(self.render_toolbar_button(SidebarPanel::Settings, window, cx))
             .child(self.render_toolbar_button(SidebarPanel::QuickCommand, window, cx))
+            .child(self.render_toolbar_button(SidebarPanel::RichInput, window, cx))
             .child(self.render_toolbar_button(SidebarPanel::AiChat, window, cx))
             .when(has_file_manager, |this| {
                 this.child(self.render_toolbar_button(SidebarPanel::FileManager, window, cx))
@@ -976,7 +1066,10 @@ impl TerminalSidebar {
         };
         let needs_embedded_header = matches!(
             panel,
-            SidebarPanel::Settings | SidebarPanel::QuickCommand | SidebarPanel::ServerMonitor
+            SidebarPanel::Settings
+                | SidebarPanel::QuickCommand
+                | SidebarPanel::RichInput
+                | SidebarPanel::ServerMonitor
         );
         if !needs_embedded_header {
             return view.into_any_element();
@@ -1182,9 +1275,34 @@ impl Render for TerminalSidebar {
 
 #[cfg(test)]
 mod tests {
-    use super::{SidebarPanel, TerminalToolDockState, agent_theme_from_terminal_theme};
+    use super::{
+        SidebarPanel, TerminalToolDockState, agent_theme_from_terminal_theme,
+        build_terminal_ai_context,
+    };
     use crate::theme::TerminalTheme;
     use one_core::sidebar_contribution::SidebarPlacement;
+    use one_core::storage::{ConnectionType, StoredConnection};
+
+    fn stored_connection(id: i64, name: &str, connection_type: ConnectionType) -> StoredConnection {
+        StoredConnection {
+            id: Some(id),
+            name: name.to_string(),
+            connection_type,
+            params: "{}".to_string(),
+            workspace_id: None,
+            selected_databases: None,
+            remark: None,
+            sync_enabled: true,
+            cloud_id: None,
+            last_synced_at: None,
+            last_used_at: None,
+            sort_order: None,
+            created_at: None,
+            updated_at: None,
+            team_id: None,
+            owner_id: None,
+        }
+    }
 
     #[test]
     fn tool_dock_keeps_toolbar_visible_when_no_panel_is_open() {
@@ -1192,6 +1310,11 @@ mod tests {
 
         assert!(dock.toolbar_visible());
         assert!(dock.open_panels().is_empty());
+    }
+
+    #[test]
+    fn sidebar_default_panels_include_rich_input() {
+        assert!(SidebarPanel::all().contains(&SidebarPanel::RichInput));
     }
 
     #[test]
@@ -1209,6 +1332,38 @@ mod tests {
         );
         assert_eq!(Some(agent_theme.table_header), markdown_style.table_header);
         assert_eq!(Some(agent_theme.quote_border), markdown_style.quote_border);
+    }
+
+    #[test]
+    fn terminal_ai_context_keeps_current_connection_default_and_mentions_all_connections() {
+        let current = stored_connection(2, "current-terminal", ConnectionType::SshSftp);
+        let connections = vec![
+            stored_connection(1, "app-db", ConnectionType::Database),
+            current.clone(),
+            stored_connection(3, "cache", ConnectionType::Redis),
+        ];
+
+        let (resources, mentions, catalog) = build_terminal_ai_context(&current, &connections);
+
+        assert_eq!(1, resources.resources.len());
+        assert_eq!(
+            Some("current-terminal"),
+            resources.current().map(|resource| resource.label.as_str())
+        );
+        assert_eq!(
+            vec!["current-terminal", "app-db", "cache"],
+            mentions
+                .iter()
+                .map(|mention| mention.label.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec!["current-terminal", "app-db", "cache"],
+            catalog
+                .iter()
+                .map(|resource| resource.label.as_str())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

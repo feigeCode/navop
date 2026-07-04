@@ -11938,6 +11938,7 @@ dependencies = [
 name = "terminal_view"
 version = "0.1.0"
 dependencies = [
+ "agent_runtime",
  "ai_chat_view",
  "alacritty_terminal",
  "anyhow",
