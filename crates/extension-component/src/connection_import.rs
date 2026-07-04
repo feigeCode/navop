@@ -13,6 +13,16 @@ pub trait ExtensionConnectionImportHost: Send + Sync {
 
     fn read_directory(&self, candidate_id: &str) -> Result<Vec<DirectoryEntry>, HostAccessError>;
 
+    fn read_candidate_child_file(
+        &self,
+        candidate_id: &str,
+        _relative_path: &str,
+    ) -> Result<Vec<u8>, HostAccessError> {
+        Err(HostAccessError::UndeclaredCandidate(
+            candidate_id.to_string(),
+        ))
+    }
+
     fn read_secret(&self, query: SecretQuery) -> SecretResult;
 
     fn log(&self, level: &str, message: &str);
@@ -114,6 +124,8 @@ mod tests {
         let result = host.read_secret(SecretQuery {
             service: "Navicat".to_string(),
             account: "root@localhost".to_string(),
+            namespace: None,
+            key: None,
         });
 
         assert_eq!(SecretResult::Unsupported, result);
