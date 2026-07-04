@@ -22,7 +22,10 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
-use gpui_component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, v_flex};
+use gpui_component::scroll::ScrollableElement;
+use gpui_component::{
+    ActiveTheme, Disableable, Icon, IconName, Sizable, WindowExt as _, h_flex, v_flex,
+};
 
 use crate::input::attachment::ImageAttachment;
 use crate::input::context::{
@@ -615,6 +618,7 @@ impl AgentInput {
             theme.muted_foreground
         };
         Button::new("agent-context-mode")
+            .debug_selector(|| "agent-context-mode".to_string())
             .flex_1()
             .min_w_0()
             .h_full()
@@ -967,6 +971,83 @@ impl AgentInput {
                     .debug_selector(|| "agent-input-send-control".to_string())
                     .child(run_button),
             )
+    }
+
+    fn render_resource_detail_dialog(item: ComposerResourcePoolItem) -> impl IntoElement {
+        v_flex()
+            .gap_3()
+            .child(div().text_sm().child(item.label.clone()))
+            .child(div().text_xs().child(format!("类型: {}", item.kind)))
+            .child(div().text_xs().child(format!("状态: {}", item.status)))
+            .child(div().text_xs().child(format!("主要信息: {}", item.primary_meta)))
+            .when_some(item.default_reason.clone(), |this, reason| {
+                this.child(div().text_xs().child(format!("默认目标: {reason}")))
+            })
+            .child(div().text_xs().child(format!("能力数量: {}", item.capability_count)))
+    }
+
+    fn show_resource_detail_dialog(item: ComposerResourcePoolItem, window: &mut Window, cx: &mut App) {
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            dialog
+                .title("资源详情")
+                .w(px(420.0))
+                .child(Self::render_resource_detail_dialog(item.clone()))
+        });
+    }
+
+    fn show_add_resource_dialog(
+        view: Entity<AgentInput>,
+        items: Vec<ComposerResourcePoolItem>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let addable_items = items
+            .into_iter()
+            .filter(|item| !item.in_pool)
+            .collect::<Vec<_>>();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let mut list = v_flex()
+                .gap_2()
+                .max_h(px(360.0))
+                .overflow_y_scrollbar();
+            for item in addable_items.clone() {
+                let id = item.id.clone();
+                let view = view.clone();
+                list = list.child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().text_sm().truncate().child(item.label.clone()))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .truncate()
+                                        .child(item.primary_meta.clone()),
+                                ),
+                        )
+                        .child(
+                            Button::new(format!("resource-add-dialog-{id}"))
+                                .icon(IconName::Plus)
+                                .small()
+                                .on_click(move |_, _window, cx| {
+                                    let id = id.clone();
+                                    view.update(cx, |this, cx| {
+                                        if this.is_running {
+                                            return;
+                                        }
+                                        cx.emit(AgentInputEvent::AddResourceToPool { id });
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                );
+            }
+            dialog.title("添加资源").w(px(460.0)).child(list)
+        });
     }
 }
 
@@ -1525,6 +1606,14 @@ fn render_context_mode_content(
         ));
     }
 
+    if pool_items.iter().any(|item| !item.in_pool) {
+        col = col.child(render_add_resource_dialog_button(
+            view.clone(),
+            pool_items.clone(),
+            &theme,
+        ));
+    }
+
     // 搜索框:固定在列表上方,不参与滚动,避免长列表里输入框被滚出可视区。
     col = col.child(
         div()
@@ -1607,6 +1696,25 @@ fn render_context_mode_content(
 
     col = col.child(list);
     col.into_any_element()
+}
+
+fn render_add_resource_dialog_button(
+    view: Entity<AgentInput>,
+    items: Vec<ComposerResourcePoolItem>,
+    theme: &AgentChatTheme,
+) -> gpui::AnyElement {
+    Button::new("agent-add-resource-dialog")
+        .debug_selector(|| "agent-add-resource-dialog".to_string())
+        .icon(IconName::Plus)
+        .small()
+        .label("添加资源")
+        .bg(theme.panel)
+        .border_color(theme.border)
+        .text_color(theme.foreground)
+        .on_click(move |_, window, cx| {
+            AgentInput::show_add_resource_dialog(view.clone(), items.clone(), window, cx);
+        })
+        .into_any_element()
 }
 
 fn render_resource_source_options(
@@ -1726,6 +1834,18 @@ fn resource_pool_item_row(
     let add_action_view = action_view.clone();
     let in_pool = item.in_pool;
     let is_default = item.is_default;
+    let detail_item = item.clone();
+    let detail_button = Button::new(SharedString::from(format!(
+        "resource-detail-{}",
+        item.id
+    )))
+    .icon(IconName::Info)
+    .ghost()
+    .xsmall()
+    .tooltip("资源详情")
+    .on_click(move |_, window, cx| {
+        AgentInput::show_resource_detail_dialog(detail_item.clone(), window, cx);
+    });
     let action_button = Button::new(SharedString::from(format!(
         "resource-pool-action-{}",
         action_id
@@ -1762,6 +1882,7 @@ fn resource_pool_item_row(
 
     h_flex()
         .id(item.element_id())
+        .debug_selector(|| "agent-resource-pool-row".to_string())
         .w_full()
         .min_w_0()
         .items_center()
@@ -1801,14 +1922,26 @@ fn resource_pool_item_row(
             v_flex()
                 .flex_1()
                 .min_w_0()
-                .gap(px(1.0))
+                .gap(px(2.0))
                 .child(
-                    div()
+                    h_flex()
                         .w_full()
                         .min_w_0()
-                        .text_sm()
-                        .truncate()
-                        .child(item.label),
+                        .items_center()
+                        .gap(px(4.0))
+                        .child(div().min_w_0().text_sm().truncate().child(item.label))
+                        .when(item.is_default, |this| {
+                            this.child(resource_pool_badge(
+                                SharedString::from("默认"),
+                                theme.selection_background(),
+                                theme.foreground,
+                            ))
+                        })
+                        .child(resource_pool_badge(
+                            item.status.clone(),
+                            theme.panel,
+                            muted,
+                        )),
                 )
                 .child(
                     div()
@@ -1817,20 +1950,30 @@ fn resource_pool_item_row(
                         .text_xs()
                         .text_color(muted)
                         .truncate()
-                        .child(item.subtitle),
+                        .child(item.primary_meta),
                 ),
         )
-        .child(
-            div()
-                .flex_shrink_0()
-                .max_w(px(CONTEXT_KIND_MAX_WIDTH))
-                .text_xs()
-                .text_color(muted)
-                .truncate()
-                .child(item.kind),
-        )
+        .child(detail_button)
         .child(action_button)
         .into_any_element()
+}
+
+fn resource_pool_badge(
+    label: SharedString,
+    background: gpui::Hsla,
+    foreground: gpui::Hsla,
+) -> impl IntoElement {
+    div()
+        .flex_shrink_0()
+        .max_w(px(CONTEXT_KIND_MAX_WIDTH))
+        .px_1()
+        .py(px(1.0))
+        .rounded_sm()
+        .bg(background)
+        .text_xs()
+        .text_color(foreground)
+        .truncate()
+        .child(label)
 }
 
 /// 目标是否匹配搜索关键字(子串匹配,忽略大小写)。
@@ -1866,7 +2009,7 @@ fn filter_pool_items(
         .filter(|item| {
             needle.is_empty()
                 || item.label.to_lowercase().contains(needle)
-                || item.subtitle.to_lowercase().contains(needle)
+                || item.primary_meta.to_lowercase().contains(needle)
                 || item.kind.to_lowercase().contains(needle)
         })
         .collect()
@@ -2155,7 +2298,7 @@ impl Render for AgentInput {
 mod tests {
     use super::*;
     use crate::input::context::ComposerModel;
-    use gpui::{Pixels, TestAppContext, VisualTestContext};
+    use gpui::{Modifiers, Pixels, TestAppContext, VisualTestContext};
 
     struct AgentInputLayoutRoot {
         input: Entity<AgentInput>,
@@ -2169,6 +2312,45 @@ mod tests {
 
         fn wide(window: &mut Window, cx: &mut Context<Self>) -> Self {
             Self::with_width(px(900.0), window, cx)
+        }
+
+        fn with_resource_pool(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            let root = Self::with_width(px(420.0), window, cx);
+            root.input.update(cx, |input, cx| {
+                input.set_context(
+                    AgentComposerContext {
+                        resource_pool_items: vec![
+                            ComposerResourcePoolItem::new(
+                                "ssh-a",
+                                "production-ssh-with-a-long-readable-name",
+                                "SH",
+                                "ssh",
+                                "10.2.4.54",
+                                "已加入",
+                                Some("默认目标"),
+                                3,
+                                true,
+                                true,
+                            ),
+                            ComposerResourcePoolItem::new(
+                                "db-a",
+                                "analytics-postgres-primary",
+                                "DB",
+                                "postgres",
+                                "Database: ai_app",
+                                "可添加",
+                                None::<&str>,
+                                4,
+                                false,
+                                false,
+                            ),
+                        ],
+                        ..AgentComposerContext::default()
+                    },
+                    cx,
+                );
+            });
+            root
         }
 
         fn with_width(width: Pixels, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -2290,6 +2472,33 @@ mod tests {
         assert!(
             cx.debug_bounds("agent-tool-mode").is_none(),
             "tool mode should not render as a separate bottom toolbar control"
+        );
+    }
+
+    #[gpui::test]
+    fn resource_pool_rows_keep_stable_compact_height(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(AgentInputLayoutRoot::with_resource_pool);
+        let cx: &mut VisualTestContext = cx;
+
+        let trigger = cx
+            .debug_bounds("agent-context-mode")
+            .expect("context trigger should render");
+        cx.simulate_click(trigger.center(), Modifiers::default());
+
+        let root = cx
+            .debug_bounds("agent-input-root")
+            .expect("input root should render");
+        let row = cx
+            .debug_bounds("agent-resource-pool-row")
+            .expect("resource row should render");
+
+        assert!(
+            row.size.width <= root.size.width,
+            "resource row should stay within input width: row={row:?}, root={root:?}"
         );
     }
 
@@ -2462,7 +2671,10 @@ mod tests {
             "prod-b",
             "SH",
             "ssh",
-            "ssh · ssh-b",
+            "ssh-b",
+            "可添加",
+            None::<&str>,
+            0,
             false,
             false,
         );
@@ -2471,7 +2683,10 @@ mod tests {
             "prod-a",
             "SH",
             "ssh",
-            "ssh · ssh-a",
+            "ssh-a",
+            "已加入",
+            None::<&str>,
+            0,
             true,
             false,
         );
@@ -2480,7 +2695,10 @@ mod tests {
             "prod-a",
             "SH",
             "ssh",
-            "ssh · ssh-a",
+            "ssh-a",
+            "已加入",
+            Some("默认目标"),
+            0,
             true,
             true,
         );

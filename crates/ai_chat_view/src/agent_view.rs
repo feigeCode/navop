@@ -2446,12 +2446,41 @@ fn resource_pool_items(
                 resource.label.clone(),
                 kind_icon(&resource.kind),
                 resource.kind.as_str().to_string(),
-                format!("{} · {}", resource.kind.as_str(), resource.id),
+                resource_primary_meta(resource),
+                resource_pool_status(in_pool),
+                resource_default_reason(is_default),
+                resource.capabilities.len(),
                 in_pool,
                 is_default,
             )
         })
         .collect()
+}
+
+fn resource_primary_meta(resource: &ResourceRef) -> String {
+    resource
+        .aliases
+        .first()
+        .cloned()
+        .or_else(|| {
+            resource
+                .scopes
+                .first()
+                .map(|scope| format!("{}: {}", scope.label, scope.value))
+        })
+        .unwrap_or_else(|| resource.id.to_string())
+}
+
+fn resource_pool_status(in_pool: bool) -> &'static str {
+    if in_pool {
+        "已加入"
+    } else {
+        "可添加"
+    }
+}
+
+fn resource_default_reason(is_default: bool) -> Option<&'static str> {
+    is_default.then_some("默认目标")
 }
 
 fn add_resource_to_pool(pool: &mut ResourceContext, catalog: &[ResourceRef], id: &str) -> bool {

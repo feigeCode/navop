@@ -152,7 +152,10 @@ pub struct ComposerResourcePoolItem {
     pub label: SharedString,
     pub icon: SharedString,
     pub kind: SharedString,
-    pub subtitle: SharedString,
+    pub primary_meta: SharedString,
+    pub status: SharedString,
+    pub default_reason: Option<SharedString>,
+    pub capability_count: usize,
     pub in_pool: bool,
     pub is_default: bool,
 }
@@ -163,7 +166,10 @@ impl ComposerResourcePoolItem {
         label: impl Into<SharedString>,
         icon: impl Into<SharedString>,
         kind: impl Into<SharedString>,
-        subtitle: impl Into<SharedString>,
+        primary_meta: impl Into<SharedString>,
+        status: impl Into<SharedString>,
+        default_reason: Option<impl Into<SharedString>>,
+        capability_count: usize,
         in_pool: bool,
         is_default: bool,
     ) -> Self {
@@ -172,7 +178,10 @@ impl ComposerResourcePoolItem {
             label: label.into(),
             icon: icon.into(),
             kind: kind.into(),
-            subtitle: subtitle.into(),
+            primary_meta: primary_meta.into(),
+            status: status.into(),
+            default_reason: default_reason.map(Into::into),
+            capability_count,
             in_pool,
             is_default,
         }
@@ -526,7 +535,10 @@ mod tests {
             "prod-a",
             "SH",
             "ssh",
-            "ssh · ssh-a",
+            "10.2.4.54",
+            "active",
+            Some("Current connection"),
+            3,
             true,
             true,
         );
@@ -535,12 +547,22 @@ mod tests {
             "prod-b",
             "SH",
             "ssh",
-            "ssh · ssh-b",
+            "10.2.4.55",
+            "saved",
+            None::<&str>,
+            2,
             false,
             false,
         );
 
         assert_eq!(in_pool.element_id().as_ref(), "resource-pool-item-ssh-a");
+        assert_eq!(in_pool.primary_meta.as_ref(), "10.2.4.54");
+        assert_eq!(in_pool.status.as_ref(), "active");
+        assert_eq!(
+            in_pool.default_reason.as_ref().map(|s| s.as_ref()),
+            Some("Current connection")
+        );
+        assert_eq!(3, in_pool.capability_count);
         assert!(in_pool.in_pool);
         assert!(in_pool.is_default);
         assert!(!out_pool.in_pool);
