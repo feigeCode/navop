@@ -75,6 +75,10 @@ pub(super) enum NewConnectionKind {
 
 impl NewConnectionKind {
     pub(super) fn all() -> Vec<Self> {
+        Self::all_with_registry(&IpcDriverRegistry::load_default())
+    }
+
+    pub(super) fn all_with_registry(registry: &IpcDriverRegistry) -> Vec<Self> {
         let mut items = vec![
             Self::Ssh,
             Self::Terminal,
@@ -91,7 +95,7 @@ impl NewConnectionKind {
                 .cloned()
                 .map(Self::Database),
         );
-        items.extend(external_database_kinds(&IpcDriverRegistry::load_default()));
+        items.extend(external_database_kinds(registry));
         items.push(Self::MoreConnections);
         items
     }
@@ -256,7 +260,8 @@ mod tests {
 
     #[test]
     fn remote_desktop_kinds_are_available_from_new_connection() {
-        let kinds = NewConnectionKind::all();
+        let registry = IpcDriverRegistry::empty();
+        let kinds = NewConnectionKind::all_with_registry(&registry);
         assert!(kinds.contains(&NewConnectionKind::Rdp));
         assert!(kinds.contains(&NewConnectionKind::Vnc));
         assert_eq!(
@@ -271,7 +276,8 @@ mod tests {
 
     #[test]
     fn more_connections_kind_is_last_and_only_visible_in_all() {
-        let kinds = NewConnectionKind::all();
+        let registry = IpcDriverRegistry::empty();
+        let kinds = NewConnectionKind::all_with_registry(&registry);
 
         assert!(matches!(
             kinds.last(),

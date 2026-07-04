@@ -5,8 +5,8 @@ use super::data_grid::DataGrid;
 use db::{ColumnInfo, FieldType};
 use gpui::{
     App, AppContext, ClipboardItem, Context, Font, InteractiveElement, IntoElement,
-    ParentElement as _, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    WeakEntity, Window, div, prelude::FluentBuilder, px,
+    ParentElement as _, SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
+    Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::calendar::Date;
 use gpui_component::date_picker::{DatePickerEvent, DatePickerState};
@@ -2351,6 +2351,7 @@ mod tests {
             table_name: SharedString::default(),
             primary_key_indices: Vec::new(),
             data_grid: None,
+            preview_font_cache: None,
         }
     }
 
@@ -2431,5 +2432,35 @@ mod tests {
         assert_eq!(1, delegate.filtered_row_count());
         assert_eq!(Some(0), delegate.resolve_display_row(0));
         assert_eq!(None, delegate.resolve_display_row(1));
+    }
+
+    #[test]
+    fn table_render_uses_cached_preview_font() {
+        let source = include_str!("results_delegate.rs");
+        let preview_font = source
+            .split("fn preview_font(")
+            .nth(1)
+            .expect("preview_font helper exists")
+            .split("pub fn set_data_grid")
+            .next()
+            .expect("preview_font helper has an end marker");
+        let render_th = source
+            .split("fn render_th(")
+            .nth(1)
+            .expect("render_th exists")
+            .split("fn context_menu(")
+            .next()
+            .expect("render_th has an end marker");
+        let render_td = source
+            .split("fn render_td(")
+            .nth(1)
+            .expect("render_td exists")
+            .split("fn loading(")
+            .next()
+            .expect("render_td has an end marker");
+
+        assert!(preview_font.contains("cx.text_system().all_font_names()"));
+        assert!(!render_th.contains("cx.text_system().all_font_names()"));
+        assert!(!render_td.contains("cx.text_system().all_font_names()"));
     }
 }

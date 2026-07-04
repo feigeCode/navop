@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
 
+use db::ipc::IpcDriverRegistry;
 use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -53,7 +54,7 @@ use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
 use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
-use crate::external_driver_display::external_driver_icon_for_config;
+use crate::external_driver_display::external_driver_icon_for_config_with_registry;
 use crate::home::connection_import_window::show_connection_import_window;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
@@ -307,6 +308,7 @@ pub struct HomePage {
     master_key_dialog_open: bool,
     sidebar_collapsed: bool,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
+    pub(crate) external_driver_registry: IpcDriverRegistry,
 }
 
 fn external_driver_id_for_connection_form(
@@ -430,6 +432,31 @@ mod external_driver_form_tests {
         );
     }
 
+    #[test]
+    fn home_render_uses_cached_external_driver_registry() {
+        let source = include_str!("home_tab.rs");
+        let list_item = source
+            .rsplit("fn render_connection_list_item(")
+            .next()
+            .expect("render_connection_list_item exists")
+            .split("\n    fn render_connection_card(")
+            .next()
+            .expect("list item render has an end marker");
+        let card = source
+            .rsplit("fn render_connection_card(")
+            .next()
+            .expect("render_connection_card exists")
+            .split("impl Focusable for HomePage")
+            .next()
+            .expect("card render has an end marker");
+
+        assert!(source.contains("external_driver_registry: IpcDriverRegistry"));
+        assert!(list_item.contains("external_driver_icon_for_config_with_registry"));
+        assert!(card.contains("external_driver_icon_for_config_with_registry"));
+        assert!(!list_item.contains("IpcDriverRegistry::load_default()"));
+        assert!(!card.contains("IpcDriverRegistry::load_default()"));
+    }
+
     fn sync_conflict(cloud_id: &str) -> SyncConflict {
         SyncConflict {
             local: StoredConnection::new_database(
@@ -529,6 +556,7 @@ impl HomePage {
             port_forwarding_runtime: Arc::new(
                 tokio::sync::Mutex::new(PortForwardingRuntime::new()),
             ),
+            external_driver_registry: IpcDriverRegistry::empty(),
         };
 
         // 异步加载工作区
@@ -658,18 +686,22 @@ impl HomePage {
         }
 
         let storage = cx.global::<GlobalStorageState>().storage.clone();
-        cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let result = (|| {
+        let load_task = cx.background_spawn(async move {
+            (|| {
                 let repo = storage
                     .get::<ConnectionRepository>()
                     .ok_or_else(|| anyhow::anyhow!("ConnectionRepository not found"))?;
-                repo.list()
-            })();
+                Ok::<_, anyhow::Error>((repo.list()?, IpcDriverRegistry::load_default()))
+            })()
+        });
 
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let result = load_task.await;
             match result {
-                Ok(connections) => {
+                Ok((connections, external_driver_registry)) => {
                     _ = this.update(cx, |this, cx| {
                         this.connections = connections;
+                        this.external_driver_registry = external_driver_registry;
                         cx.notify();
                     });
                 }
@@ -1454,10 +1486,19 @@ impl HomePage {
 
         let parent = cx.entity();
         let parent_window = window.window_handle();
+        let external_driver_registry = self.external_driver_registry.clone();
         open_popup_window(
             PopupWindowOptions::new(t!("Home.new_connection").to_string()).size(1100.0, 700.0),
             move |window, cx| {
-                cx.new(|cx| NewConnectionWindow::new(parent, parent_window, window, cx))
+                cx.new(|cx| {
+                    NewConnectionWindow::new(
+                        parent,
+                        parent_window,
+                        external_driver_registry.clone(),
+                        window,
+                        cx,
+                    )
+                })
             },
             cx,
         );
@@ -1714,10 +1755,7 @@ impl HomePage {
         if let Some(driver_id) =
             external_driver_id_for_connection_form(&db_type, editing_conn.as_ref())
         {
-            if db::ipc::IpcDriverRegistry::load_default()
-                .find(&driver_id)
-                .is_none()
-            {
+            if self.external_driver_registry.find(&driver_id).is_none() {
                 let connection_name = editing_conn
                     .as_ref()
                     .map(|connection| connection.name.clone())
@@ -1741,6 +1779,7 @@ impl HomePage {
         let config = ConnectionFormWindowConfig {
             db_type: db_type.clone(),
             external_driver_id: None,
+            external_driver_registry: self.external_driver_registry.clone(),
             editing_connection: editing_conn,
             initial_connection: None,
             on_saved: None,
@@ -3446,8 +3485,12 @@ impl HomePage {
                     let icon = conn
                         .to_db_connection()
                         .map(|c| {
-                            external_driver_icon_for_config(&c, px(24.0))
-                                .unwrap_or_else(|| c.database_type.as_icon())
+                            external_driver_icon_for_config_with_registry(
+                                &c,
+                                px(24.0),
+                                &self.external_driver_registry,
+                            )
+                            .unwrap_or_else(|| c.database_type.as_icon())
                         })
                         .unwrap_or_else(|_| IconName::Database.color());
                     icon.with_size(px(24.0)).flex_shrink_0()
@@ -4001,8 +4044,12 @@ impl HomePage {
                                     let icon = conn
                                         .to_db_connection()
                                         .map(|c| {
-                                            external_driver_icon_for_config(&c, px(40.0))
-                                                .unwrap_or_else(|| c.database_type.as_icon())
+                                            external_driver_icon_for_config_with_registry(
+                                                &c,
+                                                px(40.0),
+                                                &self.external_driver_registry,
+                                            )
+                                            .unwrap_or_else(|| c.database_type.as_icon())
                                         })
                                         .unwrap_or_else(|_| IconName::Database.color());
                                     icon.with_size(px(40.0))

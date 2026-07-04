@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::common::db_connection_form::{DbConnectionForm, DbConnectionFormEvent};
 use crate::database_view_plugin::{
-    create_connection_form_for, create_external_connection_form_for,
+    create_connection_form_for_with_registry, create_external_connection_form_for_with_registry,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +39,7 @@ pub type ConnectionFormSavedCallback = Arc<
 pub struct ConnectionFormWindowConfig {
     pub db_type: DatabaseType,
     pub external_driver_id: Option<String>,
+    pub external_driver_registry: db::ipc::IpcDriverRegistry,
     pub editing_connection: Option<StoredConnection>,
     pub initial_connection: Option<StoredConnection>,
     pub on_saved: Option<ConnectionFormSavedCallback>,
@@ -108,12 +109,11 @@ fn external_driver_id_for_form(
         .or_else(|| external_driver_id_from_connection(conn))
 }
 
-fn external_driver_name_for_title(driver_id: Option<&str>) -> Option<String> {
-    driver_id.and_then(|driver_id| {
-        db::ipc::IpcDriverRegistry::load_default()
-            .find(driver_id)
-            .map(|driver| driver.name)
-    })
+fn external_driver_name_for_title(
+    driver_id: Option<&str>,
+    registry: &db::ipc::IpcDriverRegistry,
+) -> Option<String> {
+    driver_id.and_then(|driver_id| registry.find(driver_id).map(|driver| driver.name))
 }
 
 fn connection_title_for_locale(
@@ -145,7 +145,10 @@ impl ConnectionFormWindow {
             config.external_driver_id.as_deref(),
             connection_to_load,
         );
-        let external_driver_name = external_driver_name_for_title(external_driver_id.as_deref());
+        let external_driver_name = external_driver_name_for_title(
+            external_driver_id.as_deref(),
+            &config.external_driver_registry,
+        );
         let title: SharedString = connection_title_for_locale(
             locale().as_ref(),
             is_editing,
@@ -156,8 +159,22 @@ impl ConnectionFormWindow {
 
         let form = external_driver_id
             .as_deref()
-            .and_then(|driver_id| create_external_connection_form_for(driver_id, window, cx))
-            .unwrap_or_else(|| create_connection_form_for(db_type, window, cx));
+            .and_then(|driver_id| {
+                create_external_connection_form_for_with_registry(
+                    driver_id,
+                    &config.external_driver_registry,
+                    window,
+                    cx,
+                )
+            })
+            .unwrap_or_else(|| {
+                create_connection_form_for_with_registry(
+                    db_type,
+                    &config.external_driver_registry,
+                    window,
+                    cx,
+                )
+            });
 
         form.update(cx, |f, cx| {
             f.set_workspaces(config.workspaces.clone(), window, cx);
@@ -437,6 +454,7 @@ mod tests {
         let config = ConnectionFormWindowConfig {
             db_type: DatabaseType::MySQL,
             external_driver_id: None,
+            external_driver_registry: db::ipc::IpcDriverRegistry::empty(),
             editing_connection: None,
             initial_connection: Some(initial_connection),
             on_saved: None,
@@ -455,6 +473,7 @@ mod tests {
         let config = ConnectionFormWindowConfig {
             db_type: DatabaseType::MySQL,
             external_driver_id: None,
+            external_driver_registry: db::ipc::IpcDriverRegistry::empty(),
             editing_connection: None,
             initial_connection: Some(initial_connection),
             on_saved: Some(Arc::new(|_, _, _, _| {})),
@@ -465,6 +484,32 @@ mod tests {
 
         assert!(config.supports_save_and_continue());
         assert!(!config.is_editing());
+    }
+
+    #[test]
+    fn connection_form_window_uses_configured_external_driver_registry() {
+        let source = include_str!("connection_form_window.rs");
+        let constructor = source
+            .split("impl ConnectionFormWindow {")
+            .nth(1)
+            .expect("ConnectionFormWindow impl exists")
+            .split("let form = external_driver_id")
+            .next()
+            .expect("constructor prefix has an end marker");
+        let form_factory = source
+            .split("let form = external_driver_id")
+            .nth(1)
+            .expect("form factory block exists")
+            .split("form.update(cx")
+            .next()
+            .expect("form factory block has an end marker");
+
+        assert!(source.contains("external_driver_registry: db::ipc::IpcDriverRegistry"));
+        assert!(constructor.contains("&config.external_driver_registry"));
+        assert!(form_factory.contains("create_external_connection_form_for_with_registry"));
+        assert!(form_factory.contains("create_connection_form_for_with_registry"));
+        assert!(!constructor.contains("IpcDriverRegistry::load_default()"));
+        assert!(!form_factory.contains("IpcDriverRegistry::load_default()"));
     }
 
     #[test]

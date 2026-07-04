@@ -14,7 +14,7 @@ pub(crate) fn external_driver_icon_for_config(
     external_driver_icon_for_config_with_registry(config, size, &IpcDriverRegistry::load_default())
 }
 
-fn external_driver_icon_for_config_with_registry(
+pub(crate) fn external_driver_icon_for_config_with_registry(
     config: &DbConnectionConfig,
     size: impl Into<Size>,
     registry: &IpcDriverRegistry,

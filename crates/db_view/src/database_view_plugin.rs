@@ -611,7 +611,17 @@ pub fn create_connection_form_for(
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<DbConnectionForm> {
-    if let Some(config) = duckdb_ipc_connection_form_config(&database_type, cx) {
+    let registry = IpcDriverRegistry::load_default();
+    create_connection_form_for_with_registry(database_type, &registry, window, cx)
+}
+
+pub fn create_connection_form_for_with_registry(
+    database_type: DatabaseType,
+    registry: &IpcDriverRegistry,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<DbConnectionForm> {
+    if let Some(config) = duckdb_ipc_connection_form_config(&database_type, registry, cx) {
         return cx.new(|cx| DbConnectionForm::new(config, window, cx));
     }
     manifest_plugin(database_type, cx).create_connection_form(window, cx)
@@ -622,7 +632,17 @@ pub fn create_external_connection_form_for(
     window: &mut Window,
     cx: &mut App,
 ) -> Option<Entity<DbConnectionForm>> {
-    let driver = IpcDriverRegistry::load_default().find(driver_id)?;
+    let registry = IpcDriverRegistry::load_default();
+    create_external_connection_form_for_with_registry(driver_id, &registry, window, cx)
+}
+
+pub fn create_external_connection_form_for_with_registry(
+    driver_id: &str,
+    registry: &IpcDriverRegistry,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Entity<DbConnectionForm>> {
+    let driver = registry.find(driver_id)?;
     let config = external_form_config(&driver, cx)?;
     Some(cx.new(|cx| DbConnectionForm::new(config, window, cx)))
 }
@@ -634,6 +654,7 @@ fn external_form_config(driver: &IpcDriverManifest, cx: &mut App) -> Option<DbFo
 
 fn duckdb_ipc_connection_form_config(
     database_type: &DatabaseType,
+    registry: &IpcDriverRegistry,
     cx: &mut App,
 ) -> Option<DbFormConfig> {
     if database_type != &DatabaseType::DuckDB {
@@ -644,7 +665,7 @@ fn duckdb_ipc_connection_form_config(
     if duckdb_plugin.name() != DatabaseType::external("duckdb") {
         return None;
     }
-    let driver = IpcDriverRegistry::load_default().find("duckdb")?;
+    let driver = registry.find("duckdb")?;
     let plugin_type = DatabaseType::external(driver.id.clone());
     let plugin = db_state.get_plugin(&plugin_type).ok()?;
     duckdb_ipc_form_config_with_plugin(&driver, plugin.as_ref())

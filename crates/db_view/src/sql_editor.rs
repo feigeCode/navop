@@ -6,7 +6,8 @@ use db::sql_editor::sql_context_inferrer::{ContextInferrer, SqlContext as Inferr
 use db::sql_editor::sql_symbol_table::SymbolTable;
 use db::sql_editor::sql_tokenizer::SqlTokenizer;
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, Render, Styled as _, Subscription, Task, Window,
+    App, AppContext, Context, Entity, Font, IntoElement, Render, Styled as _, Subscription, Task,
+    Window,
 };
 use gpui_component::input::{
     CodeActionProvider, CompletionProvider, HoverProvider, Input, InputContextMenuItem, InputEvent,
@@ -1360,6 +1361,12 @@ impl CompletionProvider for TableMentionCompletionProvider {
 pub struct SqlEditor {
     editor: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
+    font_cache: Option<SqlEditorFontCache>,
+}
+
+struct SqlEditorFontCache {
+    requested_family: String,
+    font: Font,
 }
 
 impl SqlEditor {
@@ -1395,7 +1402,25 @@ impl SqlEditor {
         Self {
             editor,
             _subscriptions,
+            font_cache: None,
         }
+    }
+
+    fn editor_font(&mut self, cx: &mut Context<Self>) -> Font {
+        let font_family = AppSettings::global(cx).sql_editor_font_family.clone();
+        if let Some(cache) = &self.font_cache
+            && cache.requested_family == font_family
+        {
+            return cache.font.clone();
+        }
+
+        let installed_font_names = cx.text_system().all_font_names();
+        let font = installed_grid_monospace_font(&font_family, &installed_font_names);
+        self.font_cache = Some(SqlEditorFontCache {
+            requested_family: font_family,
+            font: font.clone(),
+        });
+        font
     }
 
     /// Set database-specific completion information from plugin
@@ -1519,12 +1544,32 @@ impl SqlEditor {
 
 impl Render for SqlEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let installed_font_names = cx.text_system().all_font_names();
-        Input::new(&self.editor)
-            .font(installed_grid_monospace_font(
-                &AppSettings::global(cx).sql_editor_font_family,
-                &installed_font_names,
-            ))
-            .size_full()
+        let font = self.editor_font(cx);
+        Input::new(&self.editor).font(font).size_full()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sql_editor_render_uses_cached_font() {
+        let source = include_str!("sql_editor.rs");
+        let editor_font = source
+            .split("fn editor_font(")
+            .nth(1)
+            .expect("editor_font helper exists")
+            .split("/// Set database-specific completion information")
+            .next()
+            .expect("editor_font helper has an end marker");
+        let render = source
+            .split("impl Render for SqlEditor")
+            .nth(1)
+            .expect("SqlEditor render impl exists")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("SqlEditor render impl has an end marker");
+
+        assert!(editor_font.contains("cx.text_system().all_font_names()"));
+        assert!(!render.contains("cx.text_system().all_font_names()"));
     }
 }

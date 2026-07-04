@@ -1,3 +1,4 @@
+use db::ipc::IpcDriverRegistry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyView, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, FontWeight,
@@ -34,6 +35,8 @@ pub(crate) struct NewConnectionWindow {
     focus_handle: FocusHandle,
     selected_category: NewConnectionCategory,
     selected_kind: Option<NewConnectionKind>,
+    connection_kinds: Vec<NewConnectionKind>,
+    external_driver_registry: IpcDriverRegistry,
     form: Option<AnyView>,
 }
 
@@ -41,6 +44,7 @@ impl NewConnectionWindow {
     pub(crate) fn new(
         parent: Entity<HomePage>,
         parent_window: AnyWindowHandle,
+        external_driver_registry: IpcDriverRegistry,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -54,26 +58,40 @@ impl NewConnectionWindow {
 
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
+        let connection_kinds = NewConnectionKind::all_with_registry(&external_driver_registry);
+        let selected_kind =
+            Self::first_visible_item_in(&connection_kinds, NewConnectionCategory::All);
 
         Self {
             parent,
             parent_window,
             focus_handle,
             selected_category: NewConnectionCategory::All,
-            selected_kind: Self::first_visible_item(NewConnectionCategory::All),
+            selected_kind,
+            connection_kinds,
+            external_driver_registry,
             form: None,
         }
     }
 
-    fn first_visible_item(category: NewConnectionCategory) -> Option<NewConnectionKind> {
-        NewConnectionKind::all()
-            .into_iter()
+    fn first_visible_item_in(
+        kinds: &[NewConnectionKind],
+        category: NewConnectionCategory,
+    ) -> Option<NewConnectionKind> {
+        kinds
+            .iter()
+            .cloned()
             .find(|kind| category == NewConnectionCategory::All || kind.category() == category)
     }
 
+    fn first_visible_item(&self, category: NewConnectionCategory) -> Option<NewConnectionKind> {
+        Self::first_visible_item_in(&self.connection_kinds, category)
+    }
+
     fn visible_items(&self) -> Vec<NewConnectionKind> {
-        NewConnectionKind::all()
-            .into_iter()
+        self.connection_kinds
+            .iter()
+            .cloned()
             .filter(|kind| {
                 self.selected_category == NewConnectionCategory::All
                     || kind.category() == self.selected_category
@@ -106,7 +124,13 @@ impl NewConnectionWindow {
             return;
         };
 
-        match kind.build_form_view(self.parent.clone(), self.parent_window, window, cx) {
+        match kind.build_form_view(
+            self.parent.clone(),
+            self.parent_window,
+            &self.external_driver_registry,
+            window,
+            cx,
+        ) {
             NewConnectionFormResult::Form(form) => {
                 self.form = Some(form);
                 cx.notify();
@@ -202,7 +226,7 @@ impl NewConnectionWindow {
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected_category = category;
-                        this.selected_kind = Self::first_visible_item(category);
+                        this.selected_kind = this.first_visible_item(category);
                         cx.notify();
                     }))
                     .child(Icon::new(category.icon()).color().with_size(Size::Medium))
@@ -418,5 +442,40 @@ impl Render for NewConnectionWindow {
             )
             .child(self.render_selection_footer(cx))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn new_connection_render_uses_cached_connection_kinds() {
+        let source = include_str!("connection_window.rs");
+        let new_fn = source
+            .split("pub(crate) fn new(")
+            .nth(1)
+            .expect("new connection window constructor exists")
+            .split("fn first_visible_item_in(")
+            .next()
+            .expect("constructor has an end marker");
+        let visible_items = source
+            .split("fn visible_items(")
+            .nth(1)
+            .expect("visible_items exists")
+            .split("fn select_visible_item(")
+            .next()
+            .expect("visible_items has an end marker");
+        let render = source
+            .split("impl Render for NewConnectionWindow")
+            .nth(1)
+            .expect("render impl exists")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("render impl has an end marker");
+
+        assert!(source.contains("connection_kinds: Vec<NewConnectionKind>"));
+        assert!(new_fn.contains("let connection_kinds = NewConnectionKind::all_with_registry"));
+        assert!(visible_items.contains("self.connection_kinds"));
+        assert!(!visible_items.contains("NewConnectionKind::all()"));
+        assert!(!render.contains("NewConnectionKind::all()"));
     }
 }

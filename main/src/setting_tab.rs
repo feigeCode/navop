@@ -356,6 +356,13 @@ pub struct SettingsPanel {
     size: Size,
     group_variant: GroupBoxVariant,
     initial_page_index: usize,
+    monospace_font_options_cache: Option<FontOptionsCache>,
+}
+
+#[derive(Clone)]
+struct FontOptionsCache {
+    custom_fonts: Vec<CustomFont>,
+    options: Vec<(SharedString, SharedString)>,
 }
 
 impl SettingsPanel {
@@ -375,15 +382,32 @@ impl SettingsPanel {
             size: Size::default(),
             group_variant: GroupBoxVariant::Outline,
             initial_page_index,
+            monospace_font_options_cache: None,
         }
     }
 
-    fn setting_pages(&self, _window: &mut Window, cx: &App) -> Vec<SettingPage> {
+    fn cached_monospace_font_options(&mut self, cx: &App) -> Vec<(SharedString, SharedString)> {
+        let custom_fonts = AppSettings::global(cx).custom_fonts.clone();
+        if let Some(cache) = &self.monospace_font_options_cache
+            && cache.custom_fonts == custom_fonts
+        {
+            return cache.options.clone();
+        }
+
+        let options = monospace_font_options(cx);
+        self.monospace_font_options_cache = Some(FontOptionsCache {
+            custom_fonts,
+            options: options.clone(),
+        });
+        options
+    }
+
+    fn setting_pages(&mut self, _window: &mut Window, cx: &App) -> Vec<SettingPage> {
         let llm_view = self.llm_providers_view.clone();
         let default_settings = AppSettings::default();
         let default_system_hotkey = AppSettings::default().current_system_hotkey().to_string();
         let app_font_options = app_font_options(cx);
-        let font_options = monospace_font_options(cx);
+        let font_options = self.cached_monospace_font_options(cx);
 
         vec![
             SettingPage::new(t!("Settings.General.title"))
@@ -3458,6 +3482,21 @@ mod tests {
         assert!(options.iter().any(|(value, label)| {
             value.as_ref() == "Custom Mono" && label.as_ref() == "Custom Mono (未安装)"
         }));
+    }
+
+    #[test]
+    fn setting_pages_uses_cached_monospace_font_options() {
+        let source = include_str!("setting_tab.rs");
+        let setting_pages = source
+            .split("fn setting_pages(")
+            .nth(1)
+            .expect("setting_pages exists")
+            .split("fn render_personal_sync_path_field")
+            .next()
+            .expect("setting_pages has an end marker");
+
+        assert!(setting_pages.contains("self.cached_monospace_font_options(cx)"));
+        assert!(!setting_pages.contains("let font_options = monospace_font_options(cx);"));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use db::ipc::IpcDriverRegistry;
 use db_view::connection_form_window::{ConnectionFormWindow, ConnectionFormWindowConfig};
 use gpui::{AnyView, AnyWindowHandle, AppContext, Context, Entity, Window};
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
@@ -25,6 +26,7 @@ pub(crate) trait NewConnectionFormPage {
         self,
         parent: Entity<HomePage>,
         parent_window: AnyWindowHandle,
+        external_driver_registry: &IpcDriverRegistry,
         window: &mut Window,
         cx: &mut Context<NewConnectionWindow>,
     ) -> NewConnectionFormResult;
@@ -35,6 +37,7 @@ impl NewConnectionFormPage for NewConnectionKind {
         self,
         parent: Entity<HomePage>,
         parent_window: AnyWindowHandle,
+        external_driver_registry: &IpcDriverRegistry,
         window: &mut Window,
         cx: &mut Context<NewConnectionWindow>,
     ) -> NewConnectionFormResult {
@@ -48,10 +51,19 @@ impl NewConnectionFormPage for NewConnectionKind {
             Self::Serial => build_serial_form(parent, window, cx),
             Self::PortForwarding => build_port_forwarding_form(parent, window, cx),
             Self::MoreConnections => open_extensions_tab(parent, parent_window, cx),
-            Self::Database(db_type) => build_database_form(parent, db_type, None, window, cx),
+            Self::Database(db_type) => {
+                build_database_form(parent, db_type, None, external_driver_registry, window, cx)
+            }
             Self::ExternalDatabase { driver_id, .. } => {
                 let db_type = DatabaseType::external(driver_id.clone());
-                build_database_form(parent, db_type, Some(driver_id), window, cx)
+                build_database_form(
+                    parent,
+                    db_type,
+                    Some(driver_id),
+                    external_driver_registry,
+                    window,
+                    cx,
+                )
             }
         }
     }
@@ -160,14 +172,12 @@ fn build_database_form(
     parent: Entity<HomePage>,
     db_type: DatabaseType,
     external_driver_id: Option<String>,
+    external_driver_registry: &IpcDriverRegistry,
     window: &mut Window,
     cx: &mut Context<NewConnectionWindow>,
 ) -> NewConnectionFormResult {
     if let Some(driver_id) = external_driver_id.as_deref() {
-        if db::ipc::IpcDriverRegistry::load_default()
-            .find(driver_id)
-            .is_none()
-        {
+        if external_driver_registry.find(driver_id).is_none() {
             extension_runtime::database_driver_install::prompt_install_database_driver(
                 driver_id.to_string(),
                 driver_id.to_string(),
@@ -196,6 +206,7 @@ fn build_database_form(
         Some(ConnectionFormWindowConfig {
             db_type,
             external_driver_id: external_driver_id.clone(),
+            external_driver_registry: external_driver_registry.clone(),
             editing_connection,
             initial_connection: None,
             on_saved: None,
