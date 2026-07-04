@@ -246,3 +246,15 @@ fn is_valid_db_scope(scope: &str) -> bool {
         || scope.contains('\\')
         || path_has_escape(scope))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::validate_permission;
+
+    #[test]
+    fn secret_permission_allows_termius_localkey_scope() {
+        let permission = validate_permission("secrets:read:termius.localkey").unwrap();
+
+        assert_eq!(permission.raw, "secrets:read:termius.localkey");
+    }
+}

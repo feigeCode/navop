@@ -262,7 +262,10 @@ where
         candidate_id: String,
         relative_path: String,
     ) -> wasmtime::Result<Result<Vec<u8>, Wit::HostError>> {
-        if let Err(error) = self.candidate_access().candidate(&candidate_id) {
+        if let Err(error) = self
+            .candidate_access()
+            .validate_child(&candidate_id, &relative_path)
+        {
             return Ok(Err(wit_host_error(error)));
         }
         Ok(self

@@ -172,6 +172,7 @@ aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
 sha2 = "0.10"
+security-framework = "3.7.0"
 
 # Terminal emulation
 alacritty_terminal = "0.26"

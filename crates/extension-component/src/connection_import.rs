@@ -1,6 +1,7 @@
 use connection_import_protocol::{
     CandidateFile, DirectoryEntry, HostAccessError, Platform, SecretQuery, SecretResult,
 };
+use std::path::{Component, Path, PathBuf};
 
 use crate::PermissionSet;
 
@@ -53,6 +54,26 @@ impl CandidateFileAccess {
         } else {
             Err(HostAccessError::PermissionDenied(candidate.path.clone()))
         }
+    }
+
+    pub fn validate_child(
+        &self,
+        candidate_id: &str,
+        relative_path: &str,
+    ) -> Result<(CandidateFile, PathBuf), HostAccessError> {
+        let candidate = self.candidate(candidate_id)?.clone();
+        let child = Path::new(relative_path);
+        if child.is_absolute()
+            || child.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(HostAccessError::PermissionDenied(relative_path.to_string()));
+        }
+        Ok((candidate, child.to_path_buf()))
     }
 }
 
@@ -115,6 +136,27 @@ mod tests {
             HostAccessError::UndeclaredCandidate("arbitrary-path".to_string()),
             error
         );
+    }
+
+    #[test]
+    fn candidate_child_read_rejects_parent_escape() {
+        let access = CandidateFileAccess::new(
+            vec![CandidateFile {
+                id: "termius-db".to_string(),
+                platform: None,
+                path: "~/Library/Application Support/Termius/IndexedDB/file__0.indexeddb.leveldb"
+                    .to_string(),
+            }],
+            PermissionSet::new([
+                "fs:read:~/Library/Application Support/Termius/IndexedDB/file__0.indexeddb.leveldb",
+            ]),
+        );
+
+        let error = access
+            .validate_child("termius-db", "../Login Data")
+            .unwrap_err();
+
+        assert!(matches!(error, HostAccessError::PermissionDenied(_)));
     }
 
     #[test]

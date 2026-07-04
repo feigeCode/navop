@@ -21,6 +21,8 @@ pub use extension::{init, manifest::set_current_host_version};
 pub use extension_view_host::MainExtensionViewHost;
 pub use global::{GlobalExtensionRuntimeCatalog, refresh_global_runtime_catalog};
 
+#[cfg(all(test, feature = "wasm-components"))]
+mod connection_import_provider_tests;
 #[cfg(test)]
 mod database_driver_install_tests;
 #[cfg(test)]

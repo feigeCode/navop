@@ -1,7 +1,7 @@
 (module
   (memory (export "cm32p2_memory") 1)
   (data (i32.const 512) "\00\04\00\00\15\01\00\00")
-  (data (i32.const 520) "\00\08\00\00\6f\00\00\00")
+  (data (i32.const 520) "\00\08\00\00\70\00\00\00")
   (data (i32.const 528) "\00\0c\00\00\53\01\00\00")
   (data (i32.const 1024) "{\"id\":\"dbeaver\",\"display_name\":\"DBeaver\",\"description\":null,\"icon\":null,\"vendor\":null,\"supported_platforms\":[\"macos\"],\"output_kinds\":[\"database\"],\"capabilities\":{\"supports_scan\":true,\"supports_password_import\":false,\"supports_manual_file_pick\":true,\"supports_incremental_preview\":false}}")
   (data (i32.const 2048) "{\"importer_id\":\"dbeaver\",\"availability\":{\"available\":{\"estimated_count\":1}},\"discovered_files\":[],\"warnings\":[]}")

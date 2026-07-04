@@ -15,20 +15,65 @@ use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
 use one_core::storage::{DatabaseType, StoredConnection, Workspace};
 use rust_i18n::locale;
 use rust_i18n::t;
+use std::sync::Arc;
 
 use crate::common::db_connection_form::{DbConnectionForm, DbConnectionFormEvent};
 use crate::database_view_plugin::{
     create_connection_form_for, create_external_connection_form_for,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionFormPostSaveAction {
+    Close,
+    Continue,
+}
+
+pub type ConnectionFormSavedCallback = Arc<
+    dyn Fn(StoredConnection, ConnectionFormPostSaveAction, &mut Window, &mut App)
+        + Send
+        + Sync
+        + 'static,
+>;
+
 /// 连接表单窗口的配置
 pub struct ConnectionFormWindowConfig {
     pub db_type: DatabaseType,
     pub external_driver_id: Option<String>,
     pub editing_connection: Option<StoredConnection>,
+    pub initial_connection: Option<StoredConnection>,
+    pub on_saved: Option<ConnectionFormSavedCallback>,
     pub workspaces: Vec<Workspace>,
     pub teams: Vec<TeamOption>,
     pub ssh_connections: Vec<StoredConnection>,
+}
+
+impl ConnectionFormWindowConfig {
+    pub fn is_editing(&self) -> bool {
+        self.editing_connection.is_some()
+    }
+
+    pub fn supports_save_and_continue(&self) -> bool {
+        self.on_saved.is_some()
+    }
+
+    fn connection_to_load(&self) -> Option<&StoredConnection> {
+        self.editing_connection
+            .as_ref()
+            .or(self.initial_connection.as_ref())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SaveAction {
+    Close,
+    Continue,
+}
+
+fn post_save_action(action: SaveAction) -> ConnectionFormPostSaveAction {
+    match action {
+        SaveAction::Close => ConnectionFormPostSaveAction::Close,
+        SaveAction::Continue => ConnectionFormPostSaveAction::Continue,
+    }
 }
 
 /// 连接表单窗口
@@ -38,6 +83,8 @@ pub struct ConnectionFormWindow {
     focus_handle: FocusHandle,
     form: Entity<DbConnectionForm>,
     title: SharedString,
+    on_saved: Option<ConnectionFormSavedCallback>,
+    save_action: SaveAction,
 }
 
 fn external_driver_id_from_connection(conn: Option<&StoredConnection>) -> Option<String> {
@@ -88,13 +135,15 @@ impl ConnectionFormWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let is_editing = config.editing_connection.is_some();
-        let db_type = config.db_type;
+        let is_editing = config.is_editing();
+        let on_saved = config.on_saved.clone();
+        let db_type = config.db_type.clone();
+        let connection_to_load = config.connection_to_load();
 
         let external_driver_id = external_driver_id_for_form(
             &db_type,
             config.external_driver_id.as_deref(),
-            config.editing_connection.as_ref(),
+            connection_to_load,
         );
         let external_driver_name = external_driver_name_for_title(external_driver_id.as_deref());
         let title: SharedString = connection_title_for_locale(
@@ -116,17 +165,18 @@ impl ConnectionFormWindow {
             f.set_ssh_connections(config.ssh_connections.clone(), window, cx);
         });
 
-        if let Some(ref conn) = config.editing_connection {
+        if let Some(conn) = connection_to_load {
             form.update(cx, |f, cx| {
                 f.load_connection(conn, window, cx);
             });
         }
 
         let is_edit = is_editing;
+        let on_saved_callback = on_saved.clone();
         cx.subscribe_in(
             &form,
             window,
-            move |_this, _form, event: &DbConnectionFormEvent, window, cx| match event {
+            move |this, _form, event: &DbConnectionFormEvent, window, cx| match event {
                 DbConnectionFormEvent::Saved(conn) => {
                     if is_edit {
                         emit_connection_event(
@@ -143,6 +193,14 @@ impl ConnectionFormWindow {
                             cx,
                         );
                     }
+                    if let Some(callback) = on_saved_callback.as_ref() {
+                        callback(
+                            conn.as_ref().clone(),
+                            post_save_action(this.save_action),
+                            window,
+                            cx,
+                        );
+                    }
                     window.remove_window();
                 }
                 DbConnectionFormEvent::SaveError(_) => {}
@@ -154,6 +212,8 @@ impl ConnectionFormWindow {
             focus_handle: cx.focus_handle(),
             form,
             title,
+            on_saved,
+            save_action: SaveAction::Close,
         }
     }
 
@@ -164,6 +224,14 @@ impl ConnectionFormWindow {
     }
 
     fn on_save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.save_action = SaveAction::Close;
+        self.form.update(cx, |form, cx| {
+            form.save_connection(cx);
+        });
+    }
+
+    fn on_save_and_continue(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.save_action = SaveAction::Continue;
         self.form.update(cx, |form, cx| {
             form.save_connection(cx);
         });
@@ -287,6 +355,17 @@ impl Render for ConnectionFormWindow {
                                 this.on_test(window, cx);
                             })),
                     )
+                    .when(self.on_saved.is_some(), |this| {
+                        this.child(
+                            Button::new("save-continue")
+                                .small()
+                                .outline()
+                                .label("保存并继续")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.on_save_and_continue(window, cx);
+                                })),
+                        )
+                    })
                     .child(
                         Button::new("ok")
                             .small()
@@ -305,6 +384,7 @@ mod tests {
     use super::*;
     use one_core::storage::{DbConnectionConfig, StoredConnection};
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     fn stored_external_connection(driver_id: &str) -> StoredConnection {
         StoredConnection::new_database(
@@ -349,6 +429,42 @@ mod tests {
             },
             None,
         )
+    }
+
+    #[test]
+    fn database_form_prefill_does_not_enter_edit_mode() {
+        let initial_connection = stored_connection_with_extra_driver_param();
+        let config = ConnectionFormWindowConfig {
+            db_type: DatabaseType::MySQL,
+            external_driver_id: None,
+            editing_connection: None,
+            initial_connection: Some(initial_connection),
+            on_saved: None,
+            workspaces: Vec::new(),
+            teams: Vec::new(),
+            ssh_connections: Vec::new(),
+        };
+
+        assert!(!config.is_editing());
+        assert!(config.initial_connection.is_some());
+    }
+
+    #[test]
+    fn database_form_prefill_can_enable_save_and_continue() {
+        let initial_connection = stored_connection_with_extra_driver_param();
+        let config = ConnectionFormWindowConfig {
+            db_type: DatabaseType::MySQL,
+            external_driver_id: None,
+            editing_connection: None,
+            initial_connection: Some(initial_connection),
+            on_saved: Some(Arc::new(|_, _, _, _| {})),
+            workspaces: Vec::new(),
+            teams: Vec::new(),
+            ssh_connections: Vec::new(),
+        };
+
+        assert!(config.supports_save_and_continue());
+        assert!(!config.is_editing());
     }
 
     #[test]

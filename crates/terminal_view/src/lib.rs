@@ -25,7 +25,7 @@ pub use settings::{
     TerminalHighlightRule, TerminalSettings, current_settings, init_settings, update_settings,
 };
 pub use sidebar::{SettingsPanel, SidebarPanel, TerminalSidebar, TerminalSidebarEvent};
-pub use ssh_form_window::{SshFormWindow, SshFormWindowConfig};
+pub use ssh_form_window::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};
 pub use terminal::terminal::{
     ConnectionState, SshTerminalConfig, Terminal, TerminalConnectionKind, TerminalModelEvent,
 };

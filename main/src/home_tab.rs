@@ -55,7 +55,7 @@ use terminal_view::{SshFormWindow, SshFormWindowConfig};
 
 use crate::auth::{AuthService, load_auth_data, show_auth_dialog};
 use crate::external_driver_display::external_driver_icon_for_config;
-use crate::home::connection_import_dialog::show_connection_import_dialog;
+use crate::home::connection_import_window::show_connection_import_window;
 use crate::home::home_connection_quick_open::ConnectionQuickOpenDelegate;
 use crate::home::home_strategy::build_connection_open_strategy;
 use crate::home::home_workspace_filter::{WorkspaceFilterDelegate, show_workspace_dialog};
@@ -1867,6 +1867,8 @@ impl HomePage {
             db_type: db_type.clone(),
             external_driver_id: None,
             editing_connection: editing_conn,
+            initial_connection: None,
+            on_saved: None,
             workspaces: self.workspaces.clone(),
             teams: get_cached_team_options(cx),
             ssh_connections,
@@ -1900,6 +1902,8 @@ impl HomePage {
 
         let config = SshFormWindowConfig {
             editing_connection: editing_conn,
+            initial_connection: None,
+            on_saved: None,
             workspaces: self.workspaces.clone(),
             teams: get_cached_team_options(cx),
         };
@@ -2508,8 +2512,15 @@ impl HomePage {
                             .icon(IconName::Upload)
                             .label(t!("Home.import"))
                             .tooltip(t!("Home.import"))
-                            .on_click(move |_, window, cx| {
-                                show_connection_import_dialog(window, cx);
+                            .on_click({
+                                let view = view.clone();
+                                move |_, window, cx| {
+                                    show_connection_import_window(
+                                        view.clone(),
+                                        window.window_handle(),
+                                        cx,
+                                    );
+                                }
                             }),
                     )
                     // 分隔线

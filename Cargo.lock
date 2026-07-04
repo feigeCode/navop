@@ -3604,6 +3604,7 @@ dependencies = [
  "gpui-component",
  "one-core",
  "remote_desktop",
+ "security-framework 3.7.0",
  "semver",
  "serde",
  "serde_json",

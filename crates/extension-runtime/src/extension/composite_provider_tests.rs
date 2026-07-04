@@ -84,7 +84,10 @@ fn composite_provider_lists_connection_importer_with_windows_env_permission() {
     assert_eq!(1, list.len());
     assert_eq!(ExtensionKind::Composite, list[0].kind);
     assert_eq!("com.onetcli.importer.dbeaver", list[0].name);
-    assert_eq!("Import database connections from DBeaver", list[0].description);
+    assert_eq!(
+        "Import database connections from DBeaver",
+        list[0].description
+    );
 }
 
 #[test]
