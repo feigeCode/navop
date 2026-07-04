@@ -1,10 +1,11 @@
-use agent_runtime::{ResourceCapability, ResourceKind, ResourceScope};
+use agent_runtime::{DefaultTargetReason, ResourceCapability, ResourceId, ResourceKind, ResourceScope};
 use one_core::storage::{ConnectionType, StoredConnection};
 
 use crate::{
     build_agent_context_all, build_agent_context_single_with_catalog,
     build_mentions_from_connections, build_mentions_single, build_resource_catalog,
-    build_resource_context_all, build_resource_context_single, build_workbench_agent_context,
+    build_resource_context_all, build_resource_context_single, build_sidebar_resource_state,
+    build_workbench_agent_context, build_workbench_resource_state,
 };
 
 fn stored_connection(
@@ -350,4 +351,55 @@ fn workbench_agent_context_uses_all_connections_for_mentions_and_catalog() {
             .map(|resource| resource.label.as_str())
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn workbench_resource_state_has_catalog_but_empty_scope() {
+    let conns = vec![
+        stored_connection(1, "prod-a", ConnectionType::SshSftp, "{}"),
+        stored_connection(
+            2,
+            "prod-db",
+            ConnectionType::Database,
+            r#"{"type":"mysql"}"#,
+        ),
+    ];
+
+    let (scope, catalog, mentions) = build_workbench_resource_state(&conns);
+
+    assert!(scope.selected.is_empty());
+    assert!(scope.default_target.is_none());
+    assert_eq!(2, catalog.resources.len());
+    assert_eq!(
+        vec!["prod-a", "prod-db"],
+        mentions
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn sidebar_resource_state_keeps_current_connection_as_default_scope() {
+    let conns = vec![
+        stored_connection(1, "prod-a", ConnectionType::SshSftp, "{}"),
+        stored_connection(
+            2,
+            "prod-db",
+            ConnectionType::Database,
+            r#"{"type":"mysql"}"#,
+        ),
+    ];
+
+    let (scope, catalog, mentions) =
+        build_sidebar_resource_state(&conns[1], &conns, DefaultTargetReason::CurrentDatabase);
+
+    assert_eq!(1, scope.selected.len());
+    assert_eq!("prod-db", scope.selected[0].label);
+    assert_eq!(
+        Some(&ResourceId::new("2")),
+        scope.default_target.as_ref().map(|target| &target.resource_id)
+    );
+    assert_eq!(2, catalog.resources.len());
+    assert_eq!(2, mentions.len());
 }

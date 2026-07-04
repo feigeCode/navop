@@ -1,7 +1,8 @@
 //! 从应用连接数据构建 AgentChatView 的 ResourceContext。
 
 use agent_runtime::{
-    ResourceCapability, ResourceContext, ResourceId, ResourceKind, ResourceRef, ResourceScope,
+    AgentResourceScope, DefaultTargetReason, ResourceCapability, ResourceCatalog, ResourceContext,
+    ResourceId, ResourceKind, ResourceRef, ResourceScope,
 };
 use one_core::storage::{ConnectionType, StoredConnection};
 use serde_json::Value;
@@ -86,6 +87,33 @@ pub fn build_workbench_agent_context(
     let (resources, mentions) = build_agent_context_all(connections.first(), connections);
     let catalog = build_resource_catalog(connections);
     (resources, mentions, catalog)
+}
+
+/// 从所有连接构建工作台资源状态:catalog 全量可见,scope 初始为空。
+pub fn build_workbench_resource_state(
+    connections: &[StoredConnection],
+) -> (AgentResourceScope, ResourceCatalog, Vec<MentionItem>) {
+    let catalog = ResourceCatalog::new(build_resource_catalog(connections));
+    let mentions = build_mentions_from_connections(connections);
+    (AgentResourceScope::empty(), catalog, mentions)
+}
+
+/// 从当前连接和全量连接构建侧边栏资源状态。
+pub fn build_sidebar_resource_state(
+    current_connection: &StoredConnection,
+    connections: &[StoredConnection],
+    reason: DefaultTargetReason,
+) -> (AgentResourceScope, ResourceCatalog, Vec<MentionItem>) {
+    let catalog_connections = if connections.is_empty() {
+        vec![current_connection.clone()]
+    } else {
+        connections.to_vec()
+    };
+    let catalog = ResourceCatalog::new(build_resource_catalog(&catalog_connections));
+    let current_resource = connection_to_resource_ref(current_connection);
+    let scope = AgentResourceScope::single_default(current_resource, reason);
+    let mentions = build_mentions_from_connections(&catalog_connections);
+    (scope, catalog, mentions)
 }
 
 /// 从单个连接构建 `@` 提及项。

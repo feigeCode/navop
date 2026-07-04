@@ -110,7 +110,8 @@ pub use reasoning::render_reasoning_block;
 pub use resource_builder::{
     build_agent_context_all, build_agent_context_single, build_agent_context_single_with_catalog,
     build_mentions_from_connections, build_mentions_single, build_resource_catalog,
-    build_resource_context_all, build_resource_context_single, build_workbench_agent_context,
+    build_resource_context_all, build_resource_context_single, build_sidebar_resource_state,
+    build_workbench_agent_context, build_workbench_resource_state,
 };
 pub use send_button::{SendButton, SendButtonEvent, SendButtonState};
 pub use session_service::{SessionError, SessionService, extract_session_name};
