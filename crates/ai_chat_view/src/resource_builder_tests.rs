@@ -176,6 +176,22 @@ fn connection_host_is_resource_alias() {
 }
 
 #[test]
+fn connection_host_is_in_mention_display_label() {
+    let conn = stored_connection(
+        42,
+        "prod-a",
+        ConnectionType::SshSftp,
+        r#"{"host":"10.2.4.54"}"#,
+    );
+
+    let mention = build_mentions_single(&conn).remove(0);
+
+    assert_eq!("prod-a", mention.label);
+    assert_eq!("prod-a · 10.2.4.54", mention.display_label);
+    assert_eq!("@`prod-a` ", mention.mention_text());
+}
+
+#[test]
 fn mention_detail_hides_cloud_uuid_but_keeps_host_context() {
     let mut conn = stored_connection(
         42,

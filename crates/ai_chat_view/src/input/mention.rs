@@ -26,6 +26,8 @@ pub struct MentionItem {
     pub id: String,
     /// 显示与插入用的标签(插入文本为 `@label`)。
     pub label: String,
+    /// 补全菜单展示标签。可比 `label` 更详细,但不参与插入文本。
+    pub display_label: String,
     /// 次要说明(类型、地址等),展示在补全项右侧。
     pub detail: String,
     /// 分类标识(如 `mysql` / `ssh` / `file`),用于图标 / 分组(可空)。
@@ -39,12 +41,23 @@ impl MentionItem {
         detail: impl Into<String>,
         kind: impl Into<String>,
     ) -> Self {
+        let label = label.into();
         Self {
             id: id.into(),
-            label: label.into(),
+            display_label: label.clone(),
+            label,
             detail: detail.into(),
             kind: kind.into(),
         }
+    }
+
+    pub fn with_display_label(mut self, display_label: impl Into<String>) -> Self {
+        self.display_label = display_label.into();
+        self
+    }
+
+    pub fn completion_label(&self) -> String {
+        format!("@{}", self.display_label)
     }
 
     /// 插入到输入框的提及文本(末尾带空格,便于继续输入)。
@@ -135,7 +148,13 @@ impl CompletionProvider for MentionCompletionProvider {
             let mut completions = Vec::new();
             for item in items.iter() {
                 let label_lower = item.label.to_lowercase();
-                if !prefix_lower.is_empty() && !label_lower.contains(&prefix_lower) {
+                let display_label_lower = item.display_label.to_lowercase();
+                let detail_lower = item.detail.to_lowercase();
+                if !prefix_lower.is_empty()
+                    && !label_lower.contains(&prefix_lower)
+                    && !display_label_lower.contains(&prefix_lower)
+                    && !detail_lower.contains(&prefix_lower)
+                {
                     continue;
                 }
                 let mention_text = item.mention_text();
@@ -145,7 +164,7 @@ impl CompletionProvider for MentionCompletionProvider {
                     Some(Documentation::String(item.detail.clone()))
                 };
                 completions.push(CompletionItem {
-                    label: format!("@{}", item.label),
+                    label: item.completion_label(),
                     kind: Some(CompletionItemKind::REFERENCE),
                     detail: (!item.detail.is_empty()).then(|| item.detail.clone()),
                     documentation,
@@ -229,6 +248,15 @@ mod tests {
     fn name_with_space_is_quoted() {
         let item = MentionItem::new("c2", "my db", "mysql", "mysql");
         assert_eq!(item.mention_text(), "@`my db` ");
+    }
+
+    #[test]
+    fn completion_label_can_include_context_without_changing_insert_text() {
+        let item = MentionItem::new("c1", "prod-db", "mysql", "mysql")
+            .with_display_label("prod-db · 10.1.1.7");
+
+        assert_eq!(item.completion_label(), "@prod-db · 10.1.1.7");
+        assert_eq!(item.mention_text(), "@`prod-db` ");
     }
 
     #[test]

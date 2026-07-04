@@ -1846,7 +1846,6 @@ fn resource_pool_item_row(
     let add_action_id = action_id.clone();
     let add_action_view = action_view.clone();
     let in_pool = item.in_pool;
-    let is_default = item.is_default;
     let detail_item = item.clone();
     let detail_view = view.clone();
     let detail_button = Button::new(SharedString::from(format!("resource-detail-{}", item.id)))
@@ -1871,8 +1870,8 @@ fn resource_pool_item_row(
     .ghost()
     .xsmall()
     .label(action_label)
-    .disabled(is_default);
-    let action_button = if in_pool && !is_default {
+    .disabled(resource_pool_action_disabled(&item));
+    let action_button = if in_pool {
         action_button.on_click(move |_, _window, cx| {
             let id = action_id.clone();
             action_view.update(cx, |this, cx| {
@@ -2037,13 +2036,11 @@ fn filter_pool_items(
 }
 
 fn resource_pool_action_label(item: &ComposerResourcePoolItem) -> &'static str {
-    if item.is_default {
-        "默认"
-    } else if item.in_pool {
-        "-"
-    } else {
-        "+"
-    }
+    if item.in_pool { "-" } else { "+" }
+}
+
+fn resource_pool_action_disabled(_item: &ComposerResourcePoolItem) -> bool {
+    false
 }
 
 fn resource_source_option_label(option: &ComposerResourceSourceOption) -> SharedString {
@@ -2759,7 +2756,8 @@ mod tests {
 
         assert_eq!(resource_pool_action_label(&add), "+");
         assert_eq!(resource_pool_action_label(&remove), "-");
-        assert_eq!(resource_pool_action_label(&default), "默认");
+        assert_eq!(resource_pool_action_label(&default), "-");
+        assert!(!resource_pool_action_disabled(&default));
     }
 
     #[test]
