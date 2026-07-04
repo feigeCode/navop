@@ -88,6 +88,39 @@ impl PostgresPlugin {
         Self
     }
 
+    fn database_node(node: &DbNode, database: String) -> DbNode {
+        DbNode::new(
+            format!("{}:{}", node.id, database),
+            database,
+            DbNodeType::Database,
+            node.connection_id.clone(),
+            node.database_type.clone(),
+        )
+        .with_parent_context(&node.id)
+    }
+
+    fn database_tree_from_list_result(
+        node: &DbNode,
+        configured_database: Option<&str>,
+        result: Result<Vec<String>>,
+    ) -> Result<Vec<DbNode>> {
+        match result {
+            Ok(databases) => Ok(databases
+                .into_iter()
+                .map(|database| Self::database_node(node, database))
+                .collect()),
+            Err(error) => {
+                let Some(database) = configured_database
+                    .map(str::trim)
+                    .filter(|db| !db.is_empty())
+                else {
+                    return Err(error);
+                };
+                Ok(vec![Self::database_node(node, database.to_string())])
+            }
+        }
+    }
+
     fn normalize_type_name(type_name: &str) -> String {
         let type_lower = type_name.to_lowercase();
 
@@ -920,6 +953,15 @@ impl DatabasePlugin for PostgresPlugin {
         } else {
             Err(anyhow::anyhow!("Unexpected result type"))
         }
+    }
+
+    async fn build_database_tree(
+        &self,
+        connection: &dyn DbConnection,
+        node: &DbNode,
+    ) -> Result<Vec<DbNode>> {
+        let result = self.list_databases(connection).await;
+        Self::database_tree_from_list_result(node, connection.config().database.as_deref(), result)
     }
 
     async fn list_databases_view(&self, connection: &dyn DbConnection) -> Result<ObjectView> {
@@ -2258,6 +2300,16 @@ mod tests {
         PostgresPlugin::new()
     }
 
+    fn connection_root_node() -> DbNode {
+        DbNode::new(
+            "conn-1",
+            "Local PostgreSQL",
+            DbNodeType::Connection,
+            "conn-1".to_string(),
+            DatabaseType::PostgreSQL,
+        )
+    }
+
     // ==================== Basic Plugin Info Tests ====================
 
     #[test]
@@ -2316,6 +2368,43 @@ mod tests {
                 .actions
                 .iter()
                 .any(|action| action.id == DatabaseActionId::CreateSchema)
+        );
+    }
+
+    #[test]
+    fn test_build_database_tree_uses_configured_database_when_listing_fails() {
+        let node = connection_root_node();
+
+        let children = PostgresPlugin::database_tree_from_list_result(
+            &node,
+            Some("app_db"),
+            Err(anyhow::anyhow!("permission denied for table pg_database")),
+        )
+        .unwrap();
+
+        assert_eq!(1, children.len());
+        assert_eq!("conn-1:app_db", children[0].id);
+        assert_eq!("app_db", children[0].name);
+        assert_eq!(DbNodeType::Database, children[0].node_type);
+        assert_eq!("conn-1", children[0].connection_id);
+        assert_eq!(Some("conn-1"), children[0].parent_context.as_deref());
+    }
+
+    #[test]
+    fn test_build_database_tree_keeps_listing_error_without_configured_database() {
+        let node = connection_root_node();
+
+        let error = PostgresPlugin::database_tree_from_list_result(
+            &node,
+            None,
+            Err(anyhow::anyhow!("permission denied for table pg_database")),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("permission denied for table pg_database")
         );
     }
 
