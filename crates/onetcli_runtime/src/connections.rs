@@ -11,6 +11,8 @@ mod validation;
 use one_core::storage::traits::Repository;
 use one_core::storage::{ConnectionRepository, StoredConnection, WorkspaceRepository};
 use serde_json::{Value, json};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tool_runtime::{
     ResourceCapability, RiskLevel, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor,
@@ -35,11 +37,48 @@ pub trait ConnectionSessionOpener: Send + Sync + 'static {
     fn open_session(&self, connection: StoredConnection) -> ToolFuture;
 }
 
+#[derive(Debug, Clone)]
+pub enum ConnectionSaveEvent {
+    Created(StoredConnection),
+    Updated(StoredConnection),
+}
+
+pub type ConnectionSaveNotifyFuture = Pin<Box<dyn Future<Output = Result<(), ToolError>> + Send>>;
+
+pub trait ConnectionSaveNotifier: Send + Sync + 'static {
+    fn notify_save(&self, event: ConnectionSaveEvent) -> ConnectionSaveNotifyFuture;
+}
+
+#[derive(Clone, Default)]
+pub struct ConnectionToolHooks {
+    session_opener: Option<Arc<dyn ConnectionSessionOpener>>,
+    save_notifier: Option<Arc<dyn ConnectionSaveNotifier>>,
+}
+
+impl ConnectionToolHooks {
+    pub fn with_session_opener(
+        mut self,
+        session_opener: Option<Arc<dyn ConnectionSessionOpener>>,
+    ) -> Self {
+        self.session_opener = session_opener;
+        self
+    }
+
+    pub fn with_save_notifier(
+        mut self,
+        save_notifier: Option<Arc<dyn ConnectionSaveNotifier>>,
+    ) -> Self {
+        self.save_notifier = save_notifier;
+        self
+    }
+}
+
 #[derive(Clone)]
 struct ConnectionToolHandler {
     repo: Arc<ConnectionRepository>,
     workspaces: Option<Arc<WorkspaceRepository>>,
     session_opener: Option<Arc<dyn ConnectionSessionOpener>>,
+    save_notifier: Option<Arc<dyn ConnectionSaveNotifier>>,
     tool: ConnectionTool,
 }
 
@@ -51,7 +90,11 @@ pub fn connection_tool_registry_with_workspaces(
     repo: Arc<ConnectionRepository>,
     workspaces: Option<Arc<WorkspaceRepository>>,
 ) -> ToolRegistry {
-    connection_tool_registry_with_workspaces_and_session_opener(repo, workspaces, None)
+    connection_tool_registry_with_workspaces_and_hooks(
+        repo,
+        workspaces,
+        ConnectionToolHooks::default(),
+    )
 }
 
 pub fn connection_tool_registry_with_workspaces_and_session_opener(
@@ -59,46 +102,58 @@ pub fn connection_tool_registry_with_workspaces_and_session_opener(
     workspaces: Option<Arc<WorkspaceRepository>>,
     session_opener: Option<Arc<dyn ConnectionSessionOpener>>,
 ) -> ToolRegistry {
+    connection_tool_registry_with_workspaces_and_hooks(
+        repo,
+        workspaces,
+        ConnectionToolHooks::default().with_session_opener(session_opener),
+    )
+}
+
+pub fn connection_tool_registry_with_workspaces_and_hooks(
+    repo: Arc<ConnectionRepository>,
+    workspaces: Option<Arc<WorkspaceRepository>>,
+    hooks: ConnectionToolHooks,
+) -> ToolRegistry {
     ToolRegistry::new(vec![
         Arc::new(
             ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::List)
-                .with_session_opener(session_opener.clone()),
+                .with_hooks(hooks.clone()),
         ),
         Arc::new(
             ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Show)
-                .with_session_opener(session_opener.clone()),
+                .with_hooks(hooks.clone()),
         ),
         Arc::new(
             ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::ListKinds)
-                .with_session_opener(session_opener.clone()),
+                .with_hooks(hooks.clone()),
         ),
         Arc::new(
             ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::GetSchema)
-                .with_session_opener(session_opener.clone()),
+                .with_hooks(hooks.clone()),
         ),
         Arc::new(
             ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Validate)
-                .with_session_opener(session_opener.clone()),
+                .with_hooks(hooks.clone()),
         ),
         Arc::new(
             ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Save)
-                .with_session_opener(session_opener.clone()),
+                .with_hooks(hooks.clone()),
         ),
         Arc::new(
             ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Find)
-                .with_session_opener(session_opener.clone()),
+                .with_hooks(hooks.clone()),
         ),
         Arc::new(
             ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Delete)
-                .with_session_opener(session_opener.clone()),
+                .with_hooks(hooks.clone()),
         ),
         Arc::new(
             ConnectionToolHandler::new(repo.clone(), workspaces.clone(), ConnectionTool::Test)
-                .with_session_opener(session_opener.clone()),
+                .with_hooks(hooks.clone()),
         ),
         Arc::new(
             ConnectionToolHandler::new(repo, workspaces, ConnectionTool::OpenSession)
-                .with_session_opener(session_opener),
+                .with_hooks(hooks),
         ),
     ])
 }
@@ -113,15 +168,14 @@ impl ConnectionToolHandler {
             repo,
             workspaces,
             session_opener: None,
+            save_notifier: None,
             tool,
         }
     }
 
-    fn with_session_opener(
-        mut self,
-        session_opener: Option<Arc<dyn ConnectionSessionOpener>>,
-    ) -> Self {
-        self.session_opener = session_opener;
+    fn with_hooks(mut self, hooks: ConnectionToolHooks) -> Self {
+        self.session_opener = hooks.session_opener;
+        self.save_notifier = hooks.save_notifier;
         self
     }
 
@@ -134,7 +188,7 @@ impl ConnectionToolHandler {
             ConnectionTool::ListKinds => Ok(ToolResult::structured(schema::list_kinds())),
             ConnectionTool::GetSchema => Ok(ToolResult::structured(schema::schema_for(input)?)),
             ConnectionTool::Validate => Ok(ToolResult::structured(validation::validate(input))),
-            ConnectionTool::Save => self.save(input),
+            ConnectionTool::Save => self.save(input).await,
             ConnectionTool::Find => management::find(&self.repo, self.workspaces.as_ref(), input),
             ConnectionTool::Delete => {
                 management::delete(&self.repo, self.workspaces.as_ref(), input)
@@ -146,14 +200,21 @@ impl ConnectionToolHandler {
         }
     }
 
-    fn save(&self, input: Value) -> Result<ToolResult, ToolError> {
+    async fn save(&self, input: Value) -> Result<ToolResult, ToolError> {
         if input.get("id").is_some() {
-            return management::update(&self.repo, self.workspaces.as_ref(), input);
+            let id = input::optional_i64(&input, "id").ok_or_else(|| ToolError::Failed {
+                message: "missing integer field: id".to_string(),
+            })?;
+            let result = management::update(&self.repo, self.workspaces.as_ref(), input)?;
+            let connection = management::find_unique_connection(&self.repo, &id.to_string())?;
+            self.notify_save(ConnectionSaveEvent::Updated(connection))
+                .await?;
+            return Ok(result);
         }
-        self.create(input)
+        self.create_and_notify(input).await
     }
 
-    fn create(&self, input: Value) -> Result<ToolResult, ToolError> {
+    async fn create_and_notify(&self, input: Value) -> Result<ToolResult, ToolError> {
         let validation = validation::validate(input.clone());
         if !validation["can_apply"].as_bool().unwrap_or(false) {
             return Ok(ToolResult::structured(validation));
@@ -162,10 +223,19 @@ impl ConnectionToolHandler {
         self.repo
             .insert(&mut connection)
             .map_err(input::tool_error)?;
+        self.notify_save(ConnectionSaveEvent::Created(connection.clone()))
+            .await?;
         Ok(ToolResult::structured(json!({
             "ok": true,
             "connection": management::summarize(&connection, self.workspaces.as_ref(), true)?
         })))
+    }
+
+    async fn notify_save(&self, event: ConnectionSaveEvent) -> Result<(), ToolError> {
+        if let Some(notifier) = &self.save_notifier {
+            notifier.notify_save(event).await?;
+        }
+        Ok(())
     }
 
     async fn open_session(

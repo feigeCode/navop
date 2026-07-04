@@ -1,20 +1,34 @@
 use crate::onetcli_app::GlobalHomePage;
 use gpui::{App, AsyncApp};
 use gpui_component::WindowExt;
+use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::storage::StoredConnection;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tool_runtime::{ToolError, ToolFuture, ToolResult};
 
+use onetcli_runtime::connections::{
+    ConnectionSaveEvent, ConnectionSaveNotifier, ConnectionSaveNotifyFuture,
+};
+
 struct OpenConnectionRequest {
     connection: StoredConnection,
     reply: oneshot::Sender<Result<Value, String>>,
 }
 
+struct SaveNotificationRequest {
+    event: ConnectionSaveEvent,
+}
+
 #[derive(Clone)]
 struct GpuiConnectionSessionOpener {
     requests: mpsc::UnboundedSender<OpenConnectionRequest>,
+}
+
+#[derive(Clone)]
+struct GpuiConnectionSaveNotifier {
+    requests: mpsc::UnboundedSender<SaveNotificationRequest>,
 }
 
 pub(super) fn connection_session_opener(
@@ -32,6 +46,18 @@ pub(super) fn connection_session_opener(
     })
     .detach();
     Arc::new(GpuiConnectionSessionOpener { requests: tx })
+}
+
+pub(super) fn connection_save_notifier(cx: &mut App) -> Arc<dyn ConnectionSaveNotifier> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<SaveNotificationRequest>();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        while let Some(request) = rx.recv().await {
+            cx.update(|cx| emit_connection_save_event(request.event, cx));
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .detach();
+    Arc::new(GpuiConnectionSaveNotifier { requests: tx })
 }
 
 impl onetcli_runtime::connections::ConnectionSessionOpener for GpuiConnectionSessionOpener {
@@ -52,6 +78,37 @@ impl onetcli_runtime::connections::ConnectionSessionOpener for GpuiConnectionSes
             ))
         })
     }
+}
+
+impl ConnectionSaveNotifier for GpuiConnectionSaveNotifier {
+    fn notify_save(&self, event: ConnectionSaveEvent) -> ConnectionSaveNotifyFuture {
+        let requests = self.requests.clone();
+        Box::pin(async move {
+            requests
+                .send(SaveNotificationRequest { event })
+                .map_err(|_| ToolError::Failed {
+                    message: "connection save notifier is no longer available".to_string(),
+                })?;
+            Ok(())
+        })
+    }
+}
+
+fn emit_connection_save_event(event: ConnectionSaveEvent, cx: &mut App) {
+    let Some(notifier) = get_notifier(cx) else {
+        tracing::warn!("connection save notification skipped because notifier is not initialized");
+        return;
+    };
+    notifier.update(cx, |_, cx| {
+        cx.emit(match event {
+            ConnectionSaveEvent::Created(connection) => {
+                ConnectionDataEvent::ConnectionCreated { connection }
+            }
+            ConnectionSaveEvent::Updated(connection) => {
+                ConnectionDataEvent::ConnectionUpdated { connection }
+            }
+        });
+    });
 }
 
 fn open_connection_on_active_window(

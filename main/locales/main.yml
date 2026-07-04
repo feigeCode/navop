@@ -1157,6 +1157,79 @@ Settings:
         zh-CN: 设置数据库表和可编辑表格的行高（24-100像素）
         zh-HK: 設置資料庫表和可編輯表格的行高（24-100像素）
 
+    ToolExposure:
+      mcp_group_title:
+        en: MCP Tool Exposure
+        zh-CN: MCP 工具暴露
+        zh-HK: MCP 工具暴露
+      agent_group_title:
+        en: Agent Tool Exposure
+        zh-CN: Agent 工具暴露
+        zh-HK: Agent 工具暴露
+      terminal:
+        en: Terminal Tools
+        zh-CN: 终端工具
+        zh-HK: 終端工具
+      terminal_desc:
+        en: Expose active terminal session tools on this surface
+        zh-CN: 在这一调用面暴露当前终端会话工具
+        zh-HK: 在這一調用面暴露當前終端會話工具
+      terminal_ssh_exec:
+        en: SSH Exec Tools
+        zh-CN: SSH 执行工具
+        zh-HK: SSH 執行工具
+      terminal_ssh_exec_desc:
+        en: Expose structured SSH command execution tools
+        zh-CN: 暴露结构化 SSH 命令执行工具
+        zh-HK: 暴露結構化 SSH 命令執行工具
+      terminal_exec:
+        en: Visible Terminal Exec
+        zh-CN: 可见终端执行
+        zh-HK: 可見終端執行
+      terminal_exec_desc:
+        en: Expose tools that type commands into visible terminal PTYs
+        zh-CN: 暴露向可见终端 PTY 输入命令的工具
+        zh-HK: 暴露向可見終端 PTY 輸入命令的工具
+      connections:
+        en: Connection Tools
+        zh-CN: 连接工具
+        zh-HK: 連線工具
+      connections_desc:
+        en: Expose saved connection inspection, save, and session tools
+        zh-CN: 暴露已保存连接的查看、保存和会话工具
+        zh-HK: 暴露已儲存連線的查看、儲存和會話工具
+      sftp:
+        en: SFTP Tools
+        zh-CN: SFTP 工具
+        zh-HK: SFTP 工具
+      sftp_desc:
+        en: Expose SSH/SFTP file operation tools
+        zh-CN: 暴露 SSH/SFTP 文件操作工具
+        zh-HK: 暴露 SSH/SFTP 檔案操作工具
+      redis:
+        en: Redis Tools
+        zh-CN: Redis 工具
+        zh-HK: Redis 工具
+      redis_desc:
+        en: Expose Redis inspection and command tools
+        zh-CN: 暴露 Redis 查看和命令工具
+        zh-HK: 暴露 Redis 查看和命令工具
+      database:
+        en: Database Tools
+        zh-CN: 数据库工具
+        zh-HK: 資料庫工具
+      database_desc:
+        en: Expose database query, schema, and execution tools
+        zh-CN: 暴露数据库查询、结构和执行工具
+        zh-HK: 暴露資料庫查詢、結構和執行工具
+      internal_functions:
+        en: Internal Function Tools
+        zh-CN: 内置函数工具
+        zh-HK: 內建函數工具
+      internal_functions_desc:
+        en: Expose app-provided function tools to the built-in Agent
+        zh-CN: 向内置 Agent 暴露应用内置函数工具
+        zh-HK: 向內建 Agent 暴露應用內建函數工具
     Mcp:
       group_title:
         en: MCP
@@ -1394,55 +1467,6 @@ Settings:
         en: MCP helper is not executable
         zh-CN: MCP helper 不可执行
         zh-HK: MCP helper 不可執行
-      toolset_terminal:
-        en: Terminal Tools
-        zh-CN: 终端工具
-        zh-HK: 終端工具
-      toolset_terminal_desc:
-        en: Expose active terminal sessions through MCP
-        zh-CN: 通过 MCP 暴露当前终端会话
-        zh-HK: 通過 MCP 暴露當前終端會話
-      toolset_connections:
-        en: Connection Tools
-        zh-CN: 连接工具
-        zh-HK: 連線工具
-      toolset_connections_desc:
-        en: Expose saved connection inspection and creation tools through MCP
-        zh-CN: 通过 MCP 暴露已保存连接的查看和创建工具
-        zh-HK: 通過 MCP 暴露已儲存連線的查看和建立工具
-      toolset_sftp:
-        en: SFTP Tools
-        zh-CN: SFTP 工具
-        zh-HK: SFTP 工具
-      toolset_sftp_desc:
-        en: Expose remote file operations through MCP
-        zh-CN: 通过 MCP 暴露远程文件操作
-        zh-HK: 通過 MCP 暴露遠程檔案操作
-      toolset_database:
-        en: Database Tools
-        zh-CN: 数据库工具
-        zh-HK: 資料庫工具
-      toolset_database_desc:
-        en: Expose database connection creation, inspection, and query tools through MCP
-        zh-CN: 通过 MCP 暴露数据库连接创建、查看和查询工具
-        zh-HK: 通過 MCP 暴露資料庫連線建立、查看和查詢工具
-      toolset_redis:
-        en: Redis Tools
-        zh-CN: Redis 工具
-        zh-HK: Redis 工具
-      toolset_redis_desc:
-        en: Expose Redis command and inspection tools through MCP
-        zh-CN: 通过 MCP 暴露 Redis 命令和查看工具
-        zh-HK: 通過 MCP 暴露 Redis 命令和查看工具
-      toolset_internal_functions:
-        en: Internal Function Tools
-        zh-CN: 内部函数工具
-        zh-HK: 內部函數工具
-      toolset_internal_functions_desc:
-        en: Expose selected internal application functions through MCP
-        zh-CN: 通过 MCP 暴露选定的应用内部函数
-        zh-HK: 通過 MCP 暴露選定的應用內部函數
-
     Log:
       group_title:
         en: Log
@@ -2388,5 +2412,3 @@ SSH:
     en: Edit SSH Connection
     zh-CN: 编辑 SSH 连接
     zh-HK: 編輯 SSH 連線
-
-

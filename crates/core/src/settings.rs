@@ -294,9 +294,13 @@ impl McpPermissionMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct McpToolsetSettings {
+pub struct ToolExposureToolsetSettings {
     #[serde(default = "default_true")]
     pub terminal: bool,
+    #[serde(default = "default_true")]
+    pub terminal_ssh_exec: bool,
+    #[serde(default = "default_true")]
+    pub terminal_exec: bool,
     #[serde(default = "default_true")]
     pub connections: bool,
     #[serde(default)]
@@ -309,15 +313,55 @@ pub struct McpToolsetSettings {
     pub internal_functions: bool,
 }
 
-impl Default for McpToolsetSettings {
-    fn default() -> Self {
+impl ToolExposureToolsetSettings {
+    pub fn public_mcp_default() -> Self {
         Self {
             terminal: true,
+            terminal_ssh_exec: true,
+            terminal_exec: true,
             connections: true,
             sftp: false,
             database: false,
             redis: false,
             internal_functions: false,
+        }
+    }
+
+    pub fn agent_default() -> Self {
+        Self {
+            terminal: true,
+            terminal_ssh_exec: true,
+            terminal_exec: true,
+            connections: true,
+            sftp: true,
+            database: true,
+            redis: true,
+            internal_functions: true,
+        }
+    }
+}
+
+impl Default for ToolExposureToolsetSettings {
+    fn default() -> Self {
+        Self::public_mcp_default()
+    }
+}
+
+pub type McpToolsetSettings = ToolExposureToolsetSettings;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolExposureSettings {
+    #[serde(default = "ToolExposureToolsetSettings::public_mcp_default")]
+    pub mcp: ToolExposureToolsetSettings,
+    #[serde(default = "ToolExposureToolsetSettings::agent_default")]
+    pub agent: ToolExposureToolsetSettings,
+}
+
+impl Default for ToolExposureSettings {
+    fn default() -> Self {
+        Self {
+            mcp: ToolExposureToolsetSettings::public_mcp_default(),
+            agent: ToolExposureToolsetSettings::agent_default(),
         }
     }
 }
@@ -330,8 +374,8 @@ pub struct McpSettings {
     pub server_mode: McpServerMode,
     #[serde(default)]
     pub permission_mode: McpPermissionMode,
-    #[serde(default)]
-    pub toolsets: McpToolsetSettings,
+    #[serde(default, rename = "toolsets", skip_serializing)]
+    pub legacy_toolsets: Option<ToolExposureToolsetSettings>,
 }
 
 impl Default for McpSettings {
@@ -340,7 +384,7 @@ impl Default for McpSettings {
             server_enabled: false,
             server_mode: McpServerMode::Temporary,
             permission_mode: McpPermissionMode::Deny,
-            toolsets: McpToolsetSettings::default(),
+            legacy_toolsets: None,
         }
     }
 }
@@ -518,6 +562,8 @@ pub struct AppSettings {
     pub global_proxy: GlobalProxySettings,
     #[serde(default)]
     pub mcp: McpSettings,
+    #[serde(default)]
+    pub tool_exposure: ToolExposureSettings,
     #[serde(default)]
     pub ai_chat: AiChatSettings,
     #[serde(default)]
@@ -800,6 +846,7 @@ impl Default for AppSettings {
             sync_provider: SyncProvider::OnetCloud,
             global_proxy: GlobalProxySettings::default(),
             mcp: McpSettings::default(),
+            tool_exposure: ToolExposureSettings::default(),
             ai_chat: AiChatSettings::default(),
             personal_sync: PersonalSyncSettings::default(),
             database_open_mode: DatabaseOpenMode::default(),
@@ -819,6 +866,15 @@ impl Default for AppSettings {
 impl Global for AppSettings {}
 
 impl AppSettings {
+    fn migrate_legacy_mcp_toolsets(&mut self) {
+        let Some(toolsets) = self.mcp.legacy_toolsets.take() else {
+            return;
+        };
+        if self.tool_exposure.mcp == ToolExposureToolsetSettings::public_mcp_default() {
+            self.tool_exposure.mcp = toolsets;
+        }
+    }
+
     pub fn normalize_font_settings(&mut self) {
         self.sql_editor_font_family =
             normalize_grid_monospace_font_family(&self.sql_editor_font_family);
@@ -884,6 +940,7 @@ impl AppSettings {
             Ok(content) => match serde_json::from_str::<Self>(&content) {
                 Ok(mut settings) => {
                     info!("Settings loaded from {:?}", path);
+                    settings.migrate_legacy_mcp_toolsets();
                     settings.normalize_font_settings();
                     settings
                 }
@@ -988,11 +1045,20 @@ mod tests {
         assert!(!settings.mcp.server_enabled);
         assert_eq!(settings.mcp.server_mode, McpServerMode::Temporary);
         assert_eq!(settings.mcp.permission_mode, McpPermissionMode::Deny);
-        assert!(settings.mcp.toolsets.terminal);
-        assert!(settings.mcp.toolsets.connections);
-        assert!(!settings.mcp.toolsets.database);
-        assert!(!settings.mcp.toolsets.redis);
-        assert!(!settings.mcp.toolsets.sftp);
+        assert!(settings.tool_exposure.mcp.terminal);
+        assert!(settings.tool_exposure.mcp.terminal_ssh_exec);
+        assert!(settings.tool_exposure.mcp.terminal_exec);
+        assert!(settings.tool_exposure.mcp.connections);
+        assert!(!settings.tool_exposure.mcp.database);
+        assert!(!settings.tool_exposure.mcp.redis);
+        assert!(!settings.tool_exposure.mcp.sftp);
+        assert!(settings.tool_exposure.agent.terminal);
+        assert!(settings.tool_exposure.agent.terminal_ssh_exec);
+        assert!(settings.tool_exposure.agent.terminal_exec);
+        assert!(settings.tool_exposure.agent.connections);
+        assert!(settings.tool_exposure.agent.database);
+        assert!(settings.tool_exposure.agent.redis);
+        assert!(settings.tool_exposure.agent.sftp);
     }
 
     #[test]
@@ -1136,8 +1202,35 @@ mod tests {
         assert_eq!("en", settings.locale);
         assert!(!settings.mcp.server_enabled);
         assert_eq!(settings.mcp.permission_mode, McpPermissionMode::Deny);
-        assert!(settings.mcp.toolsets.terminal);
-        assert!(settings.mcp.toolsets.connections);
+        assert!(settings.tool_exposure.mcp.terminal);
+        assert!(settings.tool_exposure.mcp.terminal_ssh_exec);
+        assert!(settings.tool_exposure.mcp.terminal_exec);
+        assert!(settings.tool_exposure.mcp.connections);
+        assert!(settings.tool_exposure.agent.database);
+    }
+
+    #[test]
+    fn app_settings_migrates_legacy_mcp_toolsets_to_tool_exposure() {
+        let mut settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "mcp": {
+                "toolsets": {
+                    "terminal": false,
+                    "connections": false,
+                    "database": true,
+                    "redis": true
+                }
+            }
+        }))
+        .expect("旧版 mcp.toolsets 应能读取");
+
+        assert!(settings.mcp.legacy_toolsets.is_some());
+        settings.migrate_legacy_mcp_toolsets();
+
+        assert!(settings.mcp.legacy_toolsets.is_none());
+        assert!(!settings.tool_exposure.mcp.terminal);
+        assert!(!settings.tool_exposure.mcp.connections);
+        assert!(settings.tool_exposure.mcp.database);
+        assert!(settings.tool_exposure.mcp.redis);
     }
 
     #[test]
@@ -1315,9 +1408,10 @@ mod tests {
         settings.mcp.server_enabled = true;
         settings.mcp.server_mode = McpServerMode::Persistent;
         settings.mcp.permission_mode = McpPermissionMode::Ask;
-        settings.mcp.toolsets.connections = false;
-        settings.mcp.toolsets.database = true;
-        settings.mcp.toolsets.redis = true;
+        settings.tool_exposure.mcp.connections = false;
+        settings.tool_exposure.mcp.database = true;
+        settings.tool_exposure.mcp.redis = true;
+        settings.tool_exposure.agent.terminal_exec = false;
 
         let json = serde_json::to_string(&settings).expect("应序列化 AppSettings");
         let loaded: AppSettings = serde_json::from_str(&json).expect("应反序列化 AppSettings");
@@ -1325,9 +1419,12 @@ mod tests {
         assert!(loaded.mcp.server_enabled);
         assert_eq!(loaded.mcp.server_mode, McpServerMode::Persistent);
         assert_eq!(loaded.mcp.permission_mode, McpPermissionMode::Ask);
-        assert!(loaded.mcp.toolsets.terminal);
-        assert!(!loaded.mcp.toolsets.connections);
-        assert!(loaded.mcp.toolsets.database);
-        assert!(loaded.mcp.toolsets.redis);
+        assert!(loaded.tool_exposure.mcp.terminal);
+        assert!(loaded.tool_exposure.mcp.terminal_ssh_exec);
+        assert!(loaded.tool_exposure.mcp.terminal_exec);
+        assert!(!loaded.tool_exposure.mcp.connections);
+        assert!(loaded.tool_exposure.mcp.database);
+        assert!(loaded.tool_exposure.mcp.redis);
+        assert!(!loaded.tool_exposure.agent.terminal_exec);
     }
 }

@@ -1,7 +1,7 @@
 use super::agent_runtime_tool_registry;
 use agent_runtime::{ResourceContext, RiskLevel, ToolName};
 use gpui::TestAppContext;
-use one_core::settings::{AppSettings, McpToolsetSettings};
+use one_core::settings::{AppSettings, ToolExposureToolsetSettings};
 use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
 use one_core::storage::{
@@ -13,7 +13,7 @@ fn agent_runtime_tool_registry_uses_native_database_tools(cx: &mut TestAppContex
     let registry = cx.update(|cx| {
         register_connection_repository(cx);
         let mut settings = AppSettings::default();
-        settings.mcp.toolsets = McpToolsetSettings {
+        settings.tool_exposure.agent = ToolExposureToolsetSettings {
             terminal: false,
             connections: false,
             database: true,
@@ -60,8 +60,10 @@ fn agent_runtime_tool_registry_ignores_public_mcp_toolset_exposure(cx: &mut Test
     let registry = cx.update(|cx| {
         register_connection_repository(cx);
         let mut settings = AppSettings::default();
-        settings.mcp.toolsets = McpToolsetSettings {
+        settings.tool_exposure.mcp = ToolExposureToolsetSettings {
             terminal: false,
+            terminal_ssh_exec: false,
+            terminal_exec: false,
             connections: false,
             sftp: false,
             database: false,
@@ -78,7 +80,7 @@ fn agent_runtime_tool_registry_ignores_public_mcp_toolset_exposure(cx: &mut Test
         .map(|name| name.to_string())
         .collect::<Vec<_>>();
 
-    assert!(names.contains(&"connections_set_sync_enabled".to_string()));
+    assert!(names.contains(&"connections_save".to_string()));
     assert!(names.contains(&"internal_functions_call".to_string()));
     assert!(names.contains(&"db_query".to_string()));
     assert!(names.contains(&"redis_get".to_string()));
@@ -86,11 +88,42 @@ fn agent_runtime_tool_registry_ignores_public_mcp_toolset_exposure(cx: &mut Test
 }
 
 #[gpui::test]
+fn agent_runtime_tool_registry_respects_agent_tool_exposure(cx: &mut TestAppContext) {
+    let registry = cx.update(|cx| {
+        register_connection_repository(cx);
+        let mut settings = AppSettings::default();
+        settings.tool_exposure.agent = ToolExposureToolsetSettings {
+            terminal: false,
+            connections: false,
+            sftp: false,
+            database: false,
+            redis: false,
+            internal_functions: false,
+            ..Default::default()
+        };
+        cx.set_global(settings);
+
+        agent_runtime_tool_registry(cx).expect("agent registry should build")
+    });
+    let names = registry
+        .names()
+        .into_iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(!names.contains(&"connections_save".to_string()));
+    assert!(!names.contains(&"internal_functions_call".to_string()));
+    assert!(!names.contains(&"db_query".to_string()));
+    assert!(!names.contains(&"redis_get".to_string()));
+    assert!(!names.contains(&"sftp_read".to_string()));
+}
+
+#[gpui::test]
 fn agent_runtime_tool_registry_uses_native_redis_tools(cx: &mut TestAppContext) {
     let registry = cx.update(|cx| {
         register_connection_repository(cx);
         let mut settings = AppSettings::default();
-        settings.mcp.toolsets = McpToolsetSettings {
+        settings.tool_exposure.agent = ToolExposureToolsetSettings {
             terminal: false,
             connections: false,
             redis: true,
@@ -128,7 +161,7 @@ fn agent_runtime_tool_registry_uses_native_ssh_sftp_tools(cx: &mut TestAppContex
     let registry = cx.update(|cx| {
         register_connection_repository(cx);
         let mut settings = AppSettings::default();
-        settings.mcp.toolsets = McpToolsetSettings {
+        settings.tool_exposure.agent = ToolExposureToolsetSettings {
             terminal: false,
             connections: false,
             sftp: true,

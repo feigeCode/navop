@@ -31,7 +31,7 @@ pub(crate) fn cli_tool_registry() -> anyhow::Result<tool_runtime::ToolRegistry> 
 
 use gpui::{App, AsyncApp, Global, Subscription};
 use one_core::gpui_tokio::Tokio;
-use one_core::settings::{AppSettings, McpToolsetSettings};
+use one_core::settings::AppSettings;
 use public_mcp::approval::PublicMcpApprovalManager;
 use public_mcp::discovery::{
     public_mcp_discovery_path, read_discovery, remove_discovery, write_discovery,
@@ -106,7 +106,7 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
         session_enabled,
         PublicMcpEnvOverride::from_env(),
     );
-    let mut agent_toolsets = internal_agent_toolsets();
+    let mut agent_toolsets = settings.tool_exposure.agent.clone();
     let agent_database_enabled = agent_toolsets.database;
     let agent_redis_enabled = agent_toolsets.redis;
     let agent_sftp_enabled = agent_toolsets.sftp;
@@ -142,17 +142,6 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
         }
     }
     Ok(agent_registry)
-}
-
-fn internal_agent_toolsets() -> McpToolsetSettings {
-    McpToolsetSettings {
-        terminal: true,
-        connections: true,
-        sftp: true,
-        database: true,
-        redis: true,
-        internal_functions: true,
-    }
 }
 
 fn register_runtime_redis_tools(cx: &App, agent_registry: &mut agent_runtime::ToolRegistry) {

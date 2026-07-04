@@ -53,8 +53,8 @@
 
 - `main/src/public_mcp_runtime/tool_registry.rs`
 - `terminal_view::public_mcp::registry(cx)`
-- `public_mcp::tools::remote_ops_tool_registry(registry)`
-- `public_mcp::tools::terminal_exec_tool_registry(registry)`
+- `public_mcp::tools::remote_ops_tool_registry(registry)`：受 `tool_exposure.mcp.terminal && tool_exposure.mcp.terminal_ssh_exec` 控制
+- `public_mcp::tools::terminal_exec_tool_registry(registry)`：受 `tool_exposure.mcp.terminal && tool_exposure.mcp.terminal_exec` 控制
 
 工具：
 
@@ -209,7 +209,7 @@ Agent registry 构建入口：
 
 当前策略：
 
-1. 读取 MCP settings 里的 toolsets。
+1. 读取 `tool_exposure.agent` 里的 toolsets。
 2. 对 Agent 侧单独关闭 `database`、`redis`、`sftp` 的通用 Public MCP adapter。
 3. 用剩余 toolsets 构建 Public MCP registry，并通过
    `public_mcp::tools::agent_runtime_tool_registry(...)` 转成 Agent 工具。
@@ -232,7 +232,7 @@ Agent registry 构建入口：
 | 来源 toolset | Agent 工具名示例 | 说明 |
 |---|---|---|
 | `internal_functions` | `internal_functions_list` / `internal_functions_call` / `onetcli_app_info` | 内部函数与 app info |
-| `connections` | `connections_list` / `connections_show` / `connections_create` 等 | 保存连接管理 |
+| `connections` | `connections_list` / `connections_show` / `connections_save` 等 | 保存连接管理 |
 | `workspaces` | `workspaces_list` / `workspaces_show` | workspace 查询 |
 | `terminal` | `ssh_exec` / `terminal_exec` / `ssh_command_poll` 等 | 活跃 SSH terminal session 工具 |
 

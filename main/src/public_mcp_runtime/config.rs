@@ -1,4 +1,6 @@
-use one_core::settings::{AppSettings, McpPermissionMode, McpServerMode, McpToolsetSettings};
+use one_core::settings::{
+    AppSettings, McpPermissionMode, McpServerMode, ToolExposureToolsetSettings,
+};
 use public_mcp::discovery::PublicMcpMode;
 use public_mcp::permissions::PermissionMode;
 
@@ -8,7 +10,7 @@ pub struct PublicMcpStartConfig {
     pub mode: PublicMcpMode,
     pub permission_mode: PermissionMode,
     pub permission_profile: &'static str,
-    pub toolsets: McpToolsetSettings,
+    pub toolsets: ToolExposureToolsetSettings,
 }
 
 impl PublicMcpStartConfig {
@@ -35,7 +37,7 @@ impl PublicMcpStartConfig {
             mode: map_server_mode(settings.mcp.server_mode),
             permission_mode,
             permission_profile: permission_profile_id(permission_mode),
-            toolsets: settings.mcp.toolsets.clone(),
+            toolsets: settings.tool_exposure.mcp.clone(),
         }
     }
 
