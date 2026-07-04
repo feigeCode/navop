@@ -1850,6 +1850,8 @@ impl HomePage {
 
         let config = RedisFormWindowConfig {
             editing_connection: editing_conn,
+            initial_connection: None,
+            on_saved: None,
             workspaces: self.workspaces.clone(),
             teams: get_cached_team_options(cx),
             ssh_connections: self
@@ -1888,6 +1890,8 @@ impl HomePage {
 
         let config = MongoFormWindowConfig {
             editing_connection: editing_conn,
+            initial_connection: None,
+            on_saved: None,
             workspaces: self.workspaces.clone(),
             teams: get_cached_team_options(cx),
         };
