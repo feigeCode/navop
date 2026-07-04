@@ -2817,7 +2817,7 @@ impl HomePage {
                     .border_color(cx.theme().border)
                     .child(
                         Button::new("open_team_management")
-                            .icon(IconName::Building2)
+                            .icon(IconName::TeamColor.color())
                             .tooltip(t!("TeamManagement.title").to_string())
                             .when(collapsed, |button| button.ghost().small())
                             .when(!collapsed, |button| {
@@ -2832,7 +2832,7 @@ impl HomePage {
                     )
                     .child(
                         Button::new("open_extensions")
-                            .icon(IconName::GalleryVerticalEnd)
+                            .icon(IconName::ExtensionsColor.color())
                             .tooltip(t!("Home.extensions").to_string())
                             .when(collapsed, |button| button.ghost().small())
                             .when(!collapsed, |button| {
@@ -2847,7 +2847,7 @@ impl HomePage {
                     )
                     .child(
                         Button::new("open_settings")
-                            .icon(IconName::Settings)
+                            .icon(IconName::SettingColor.color())
                             .tooltip(t!("Common.settings").to_string())
                             .when(collapsed, |button| button.ghost().small())
                             .when(!collapsed, |button| {
