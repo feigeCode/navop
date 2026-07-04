@@ -191,7 +191,7 @@ impl SidebarPanel {
         match self {
             SidebarPanel::Settings => IconName::Settings,
             SidebarPanel::QuickCommand => IconName::SquareTerminal,
-            SidebarPanel::HistoryCommand => IconName::BookOpen,
+            SidebarPanel::HistoryCommand => IconName::TerminalColor,
             SidebarPanel::RichInput => IconName::Edit,
             SidebarPanel::AiChat => IconName::AI,
             SidebarPanel::FileManager => IconName::FolderOpen,
@@ -204,7 +204,7 @@ impl SidebarPanel {
         match self {
             SidebarPanel::Settings => IconName::SettingColor.color(),
             SidebarPanel::QuickCommand => IconName::SquareTerminalColor.color(),
-            SidebarPanel::HistoryCommand => IconName::BookOpen.color(),
+            SidebarPanel::HistoryCommand => IconName::TerminalColor.color(),
             SidebarPanel::RichInput => IconName::RichInputColor.color(),
             SidebarPanel::AiChat => IconName::AI.color(),
             SidebarPanel::FileManager => IconName::FolderOpenColor.color(),
