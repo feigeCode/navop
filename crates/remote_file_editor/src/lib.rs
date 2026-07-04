@@ -1,12 +1,10 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod close_guard;
-#[cfg(feature = "ui")]
 mod editor_window;
 mod file_policy;
 mod language;
 
-#[cfg(feature = "ui")]
 pub use editor_window::{open_remote_file_editor, refresh_keybindings};
 
 pub use close_guard::{
