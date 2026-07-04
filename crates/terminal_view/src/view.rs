@@ -53,7 +53,10 @@ use one_core::sidebar_contribution::{
     SidebarContribution, SidebarContributionActions, SidebarPanelChrome, SidebarPanelId,
     SidebarPanelPolicy, SidebarPanelSize, SidebarPanelStyle, SidebarPlacement, SidebarPlacementSet,
 };
-use one_core::storage::models::{ActiveConnections, StoredConnection};
+use one_core::storage::{
+    TerminalHistoryScope,
+    models::{ActiveConnections, StoredConnection},
+};
 use one_core::tab_container::{TabContent, TabContentEvent, TabContentView};
 use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
 use rust_i18n::t;
@@ -367,11 +370,29 @@ fn history_prompt_available(
     shell_prompt_input_active: bool,
 ) -> bool {
     autocomplete_enabled
-        && connection_kind == TerminalConnectionKind::Ssh
+        && history_prompt_connection_supported(connection_kind)
         && shell_prompt_input_active
         && !terminal_application_mode_active(mode)
         && !mode.contains(TermMode::ALT_SCREEN)
         && !mode.contains(TermMode::VI)
+}
+
+fn history_prompt_connection_supported(connection_kind: TerminalConnectionKind) -> bool {
+    matches!(
+        connection_kind,
+        TerminalConnectionKind::Local | TerminalConnectionKind::Ssh
+    )
+}
+
+fn terminal_history_scope(
+    connection_kind: TerminalConnectionKind,
+    connection_id: Option<i64>,
+) -> Option<TerminalHistoryScope> {
+    match connection_kind {
+        TerminalConnectionKind::Local => Some(TerminalHistoryScope::local()),
+        TerminalConnectionKind::Ssh => connection_id.map(TerminalHistoryScope::ssh),
+        TerminalConnectionKind::Serial => None,
+    }
 }
 
 fn terminal_application_mode_active(mode: TermMode) -> bool {
@@ -1138,6 +1159,8 @@ impl TerminalView {
         let default_line_height_scale = DEFAULT_LINE_HEIGHT_SCALE;
         let ssh_config = terminal.read(cx).ssh_config().cloned();
         let ssh_session_manager = terminal.read(cx).ssh_session_manager().cloned();
+        let history_scope =
+            terminal_history_scope(terminal.read(cx).connection_kind(), connection_id);
 
         // 创建侧边栏（传递 StoredConnection 用于文件管理器）
         let sidebar = cx.new(|cx| {
@@ -1150,6 +1173,7 @@ impl TerminalView {
                 default_font_size,
                 default_font_family.clone(),
                 sync_path_enabled,
+                history_scope,
                 window,
                 cx,
             )
@@ -2690,14 +2714,6 @@ impl TerminalView {
                     }
                 }
                 "enter" => {
-                    if self.connection_kind(cx) == TerminalConnectionKind::Local
-                        && self.history_prompt.is_valid()
-                    {
-                        let command = self.history_prompt.input().to_string();
-                        self.terminal.update(cx, |terminal, cx| {
-                            terminal.record_command(&command, cx);
-                        });
-                    }
                     self.clear_history_prompt();
                 }
                 "left" | "home" | "end" | "delete" => {
@@ -4839,7 +4855,7 @@ mod tests {
         should_dismiss_history_prompt_for_scroll, should_extend_selection_on_shift_click,
         should_reset_history_prompt_for_terminal_event, should_scroll_to_bottom_on_user_input,
         should_start_selection_from_pending_sgr_press, take_whole_scroll_lines,
-        terminal_tab_duplicate_supported,
+        terminal_history_scope, terminal_tab_duplicate_supported,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
@@ -4922,6 +4938,19 @@ mod tests {
         assert!(terminal_tab_duplicate_supported(
             &TerminalDuplicateSource::Serial(serial)
         ));
+    }
+
+    #[test]
+    fn terminal_history_scope_matches_supported_connection_kinds() {
+        let local = terminal_history_scope(TerminalConnectionKind::Local, None)
+            .expect("local terminal should have history scope");
+        let ssh = terminal_history_scope(TerminalConnectionKind::Ssh, Some(42))
+            .expect("ssh terminal with id should have history scope");
+
+        assert_eq!("local", local.scope_key);
+        assert_eq!("ssh:42", ssh.scope_key);
+        assert!(terminal_history_scope(TerminalConnectionKind::Ssh, None).is_none());
+        assert!(terminal_history_scope(TerminalConnectionKind::Serial, Some(7)).is_none());
     }
 
     #[test]
@@ -5248,7 +5277,7 @@ mod tests {
     fn history_prompt_requires_global_autocomplete_switch() {
         let mode = TermMode::empty();
 
-        assert!(!history_prompt_available(
+        assert!(history_prompt_available(
             true,
             TerminalConnectionKind::Local,
             mode,
@@ -5263,10 +5292,10 @@ mod tests {
     }
 
     #[test]
-    fn history_prompt_only_remains_available_for_ssh() {
+    fn history_prompt_is_available_for_local_and_ssh_prompt_input() {
         let mode = TermMode::empty();
 
-        assert!(!history_prompt_available(
+        assert!(history_prompt_available(
             true,
             TerminalConnectionKind::Local,
             mode,
@@ -5274,7 +5303,7 @@ mod tests {
         ));
         assert!(!history_prompt_available(
             true,
-            TerminalConnectionKind::Local,
+            TerminalConnectionKind::Serial,
             mode,
             true,
         ));
@@ -5288,17 +5317,16 @@ mod tests {
 
     #[test]
     fn history_prompt_is_unavailable_in_terminal_application_modes() {
-        for mode in [
-            TermMode::FOCUS_IN_OUT,
-            TermMode::MOUSE_MODE,
-            TermMode::DISAMBIGUATE_ESC_CODES,
-        ] {
-            assert!(!history_prompt_available(
-                true,
-                TerminalConnectionKind::Ssh,
-                mode,
-                true,
-            ));
+        for connection_kind in [TerminalConnectionKind::Local, TerminalConnectionKind::Ssh] {
+            for mode in [
+                TermMode::FOCUS_IN_OUT,
+                TermMode::MOUSE_MODE,
+                TermMode::DISAMBIGUATE_ESC_CODES,
+                TermMode::ALT_SCREEN,
+                TermMode::VI,
+            ] {
+                assert!(!history_prompt_available(true, connection_kind, mode, true));
+            }
         }
     }
 
@@ -5306,13 +5334,13 @@ mod tests {
     fn history_prompt_requires_active_shell_prompt_input() {
         assert!(!history_prompt_available(
             true,
-            TerminalConnectionKind::Ssh,
+            TerminalConnectionKind::Local,
             TermMode::empty(),
             false,
         ));
         assert!(history_prompt_available(
             true,
-            TerminalConnectionKind::Ssh,
+            TerminalConnectionKind::Local,
             TermMode::empty(),
             true,
         ));
