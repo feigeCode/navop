@@ -50,6 +50,7 @@ pub struct PublicMcpSessionInfo {
     pub cwd: Option<String>,
     pub rows: usize,
     pub cols: usize,
+    pub connection_kind: TerminalConnectionKind,
     pub connected: bool,
     pub capabilities: Vec<ResourceCapability>,
 }
@@ -104,6 +105,13 @@ impl PublicMcpRegistry {
     }
 
     pub fn list_sessions(&self) -> Vec<PublicMcpSessionInfo> {
+        self.list_sessions_with_kind(None)
+    }
+
+    pub fn list_sessions_with_kind(
+        &self,
+        kind: Option<TerminalConnectionKind>,
+    ) -> Vec<PublicMcpSessionInfo> {
         let sessions = self
             .sessions
             .lock()
@@ -120,7 +128,7 @@ impl PublicMcpRegistry {
                 let snapshot = handle.snapshot();
                 let capabilities =
                     session_capabilities(&snapshot.session_id, &terminal_exec_ids, &remote_ops_ids);
-                exposed_session_info(snapshot, capabilities)
+                listed_session_info(snapshot, capabilities, kind)
             })
             .collect()
     }
@@ -281,11 +289,15 @@ impl PublicMcpRegistry {
     }
 }
 
-fn exposed_session_info(
+fn listed_session_info(
     snapshot: TerminalSessionSnapshot,
     capabilities: Vec<ResourceCapability>,
+    kind: Option<TerminalConnectionKind>,
 ) -> Option<PublicMcpSessionInfo> {
-    if !is_exposed(&snapshot) {
+    if !is_listable_session(&snapshot) {
+        return None;
+    }
+    if kind.is_some_and(|kind| snapshot.connection_kind != kind) {
         return None;
     }
 
@@ -297,6 +309,7 @@ fn exposed_session_info(
         cwd: snapshot.cwd,
         rows: snapshot.rows,
         cols: snapshot.cols,
+        connection_kind: snapshot.connection_kind,
         connected: true,
         capabilities,
     })
@@ -334,6 +347,10 @@ fn ensure_exposed_session(snapshot: &TerminalSessionSnapshot) -> Result<()> {
 fn is_exposed(snapshot: &TerminalSessionSnapshot) -> bool {
     snapshot.connection_kind == TerminalConnectionKind::Ssh
         && matches!(snapshot.connection_state, ConnectionState::Connected)
+}
+
+fn is_listable_session(snapshot: &TerminalSessionSnapshot) -> bool {
+    matches!(snapshot.connection_state, ConnectionState::Connected)
 }
 
 fn diagnostics_from_snapshot(snapshot: TerminalSessionSnapshot) -> SessionDiagnosticsResult {

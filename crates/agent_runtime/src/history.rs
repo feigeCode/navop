@@ -26,6 +26,8 @@ pub enum HistoryItem {
     AssistantWithReasoning { text: String, reasoning: String },
     /// 系统提示 / 内部说明。
     System(String),
+    /// 历史前缀的压缩摘要。用于保留旧上下文事实,同时避免把完整旧消息继续回灌模型。
+    ContextSummary { text: String, original_items: usize },
     /// 一次工具调用。
     ToolCall(ToolCall),
     /// 工具观测结果。
@@ -125,6 +127,17 @@ impl RuntimeHistory {
         self.record(HistoryItem::System(text.into()));
     }
 
+    pub fn record_context_summary(&mut self, text: impl Into<String>, original_items: usize) {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return;
+        }
+        self.record(HistoryItem::ContextSummary {
+            text,
+            original_items,
+        });
+    }
+
     pub fn record_tool_call(&mut self, call: ToolCall) {
         self.record(HistoryItem::ToolCall(call));
     }
@@ -164,6 +177,45 @@ impl RuntimeHistory {
             _ => None,
         })
     }
+
+    pub fn compact_old_items(
+        &mut self,
+        summary: impl Into<String>,
+        keep_last_items: usize,
+    ) -> bool {
+        let summary = summary.into();
+        if summary.trim().is_empty() {
+            return false;
+        }
+        let Some(split_index) = self.compaction_split_index(keep_last_items) else {
+            return false;
+        };
+        let suffix = self.items.split_off(split_index);
+        self.items.clear();
+        self.items.push(HistoryItem::ContextSummary {
+            text: summary,
+            original_items: split_index,
+        });
+        self.items.extend(suffix);
+        true
+    }
+
+    pub fn compaction_prefix(&self, keep_last_items: usize) -> Option<Vec<HistoryItem>> {
+        let split_index = self.compaction_split_index(keep_last_items)?;
+        Some(self.items[..split_index].to_vec())
+    }
+
+    fn compaction_split_index(&self, keep_last_items: usize) -> Option<usize> {
+        if self.items.len() <= 1 {
+            return None;
+        }
+        let keep_last_items = keep_last_items.max(1).min(self.items.len() - 1);
+        let mut split_index = self.items.len() - keep_last_items;
+        while split_index > 0 && matches!(self.items[split_index], HistoryItem::Observation(_)) {
+            split_index -= 1;
+        }
+        (split_index > 0).then_some(split_index)
+    }
 }
 
 #[cfg(test)]
@@ -194,5 +246,78 @@ mod tests {
         ));
         assert!(history.last_observation().is_some());
         assert_eq!(history.last_observation().unwrap().summary, "ok");
+    }
+
+    #[test]
+    fn compact_old_items_replaces_prefix_with_context_summary() {
+        let mut history = RuntimeHistory::new();
+        history.record_user("old user");
+        history.record_assistant("old answer");
+        history.record_user("recent user");
+        history.record_assistant("recent answer");
+
+        assert!(history.compact_old_items("compressed facts", 2));
+
+        assert_eq!(3, history.items().len());
+        match &history.items()[0] {
+            HistoryItem::ContextSummary {
+                text,
+                original_items,
+            } => {
+                assert_eq!("compressed facts", text);
+                assert_eq!(2, *original_items);
+            }
+            other => panic!("expected context summary, got {other:?}"),
+        }
+        assert!(matches!(history.items()[1], HistoryItem::User { .. }));
+        assert!(matches!(history.items()[2], HistoryItem::Assistant(_)));
+    }
+
+    #[test]
+    fn compact_old_items_keeps_tool_call_with_observation_suffix() {
+        let call = ToolCall {
+            call_id: ToolCallId::from_string("call_keep"),
+            tool_name: ToolName::new("ssh.exec"),
+            arguments: serde_json::json!({"command": "pwd"}),
+            resource_id: None,
+        };
+        let observation = ToolObservation::success(
+            ToolCallId::from_string("call_keep"),
+            ToolName::new("ssh.exec"),
+            "ok",
+            ObservationData::Text("/srv/app".into()),
+        );
+        let mut history = RuntimeHistory::new();
+        history.record_user("old user");
+        history.record_tool_call(call);
+        history.record_observation(observation);
+        history.record_user("recent user");
+
+        assert!(history.compact_old_items("compressed facts", 2));
+
+        assert_eq!(4, history.items().len());
+        assert!(matches!(
+            history.items()[0],
+            HistoryItem::ContextSummary { .. }
+        ));
+        assert!(matches!(history.items()[1], HistoryItem::ToolCall(_)));
+        assert!(matches!(history.items()[2], HistoryItem::Observation(_)));
+        assert!(matches!(history.items()[3], HistoryItem::User { .. }));
+    }
+
+    #[test]
+    fn compact_old_items_keeps_at_least_one_recent_item_for_short_large_history() {
+        let mut history = RuntimeHistory::new();
+        history.record_user("very large old context");
+        history.record_user("recent user");
+
+        assert!(history.compact_old_items("compressed facts", 32));
+
+        assert_eq!(2, history.items().len());
+        assert!(matches!(
+            history.items()[0],
+            HistoryItem::ContextSummary { .. }
+        ));
+        assert!(matches!(history.items()[1], HistoryItem::User { .. }));
     }
 }

@@ -426,6 +426,7 @@ impl AgentChatView {
         let input = cx.new(|cx| {
             AgentInput::with_mentions(mentions, "描述目标，输入 @ 引用资源…", window, cx)
         });
+        Self::register_tool_approval_actions(cx);
         if let Some(theme) = theme.clone() {
             input.update(cx, |input, cx| input.set_theme(Some(theme), cx));
         }
@@ -520,6 +521,49 @@ impl AgentChatView {
             _subscriptions: subscriptions,
             _event_task: event_task,
         }
+    }
+
+    fn register_tool_approval_actions(cx: &mut Context<Self>) {
+        let view = cx.weak_entity();
+        let app: &mut App = cx;
+        app.on_action(move |action: &ApproveToolCall, cx: &mut App| {
+            let call_id = action.call_id.clone();
+            let handled = view
+                .update(cx, |this, cx| {
+                    this.resolve_pending_tool_action(call_id, true, cx)
+                })
+                .unwrap_or(false);
+            if !handled {
+                cx.propagate();
+            }
+        });
+
+        let view = cx.weak_entity();
+        let app: &mut App = cx;
+        app.on_action(move |action: &RejectToolCall, cx: &mut App| {
+            let call_id = action.call_id.clone();
+            let handled = view
+                .update(cx, |this, cx| {
+                    this.resolve_pending_tool_action(call_id, false, cx)
+                })
+                .unwrap_or(false);
+            if !handled {
+                cx.propagate();
+            }
+        });
+    }
+
+    fn resolve_pending_tool_action(
+        &mut self,
+        call_id: String,
+        approved: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.transcript.has_pending_tool_confirm(&call_id) {
+            return false;
+        }
+        self.resolve_tool_call(call_id, approved, cx);
+        true
     }
 
     fn spawn_event_pump(
@@ -676,15 +720,8 @@ impl AgentChatView {
     }
 
     fn apply_mentions_to_resources(&mut self, mentions: &[MentionItem]) {
-        let Some(first) = mentions.first() else {
-            return;
-        };
-        let id = ResourceId::new(first.id.clone());
-        if self.resources.get(&id).is_some() {
-            self.resources.current = Some(id);
-            if let Some(session) = self.runtime.session(&self.session_id) {
-                session.set_resources(self.resources.clone());
-            }
+        if apply_mentioned_resources(&mut self.resources, &self.available_resources, mentions) {
+            self.sync_session_resources();
         }
     }
 
@@ -710,7 +747,7 @@ impl AgentChatView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.resolve_tool_call(action.call_id.clone(), true, cx);
+        self.resolve_pending_tool_action(action.call_id.clone(), true, cx);
     }
 
     fn reject_tool_call(
@@ -719,7 +756,7 @@ impl AgentChatView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.resolve_tool_call(action.call_id.clone(), false, cx);
+        self.resolve_pending_tool_action(action.call_id.clone(), false, cx);
     }
 
     fn resolve_tool_call(&mut self, call_id: String, approved: bool, cx: &mut Context<Self>) {
@@ -2420,6 +2457,35 @@ fn add_resource_to_pool(pool: &mut ResourceContext, catalog: &[ResourceRef], id:
     true
 }
 
+fn apply_mentioned_resources(
+    pool: &mut ResourceContext,
+    catalog: &[ResourceRef],
+    mentions: &[MentionItem],
+) -> bool {
+    let mut changed = false;
+    let mut first_mentioned_id: Option<ResourceId> = None;
+    for mention in mentions {
+        let rid = ResourceId::new(mention.id.clone());
+        if first_mentioned_id.is_none() {
+            first_mentioned_id = Some(rid.clone());
+        }
+        if pool.get(&rid).is_some() {
+            continue;
+        }
+        if let Some(resource) = catalog.iter().find(|resource| resource.id == rid).cloned() {
+            pool.resources.push(resource);
+            changed = true;
+        }
+    }
+    if let Some(id) = first_mentioned_id.filter(|id| pool.get(id).is_some()) {
+        if pool.current.as_ref() != Some(&id) {
+            pool.current = Some(id);
+            changed = true;
+        }
+    }
+    changed
+}
+
 fn remove_resource_from_pool(pool: &mut ResourceContext, id: &str) -> bool {
     let rid = ResourceId::new(id.to_string());
     let before = pool.resources.len();
@@ -2687,7 +2753,10 @@ mod tests {
         ToolRouter, ToolSpec,
     };
     use async_trait::async_trait;
-    use gpui::{TestAppContext, VisualTestContext};
+    use gpui::{
+        Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext,
+        point,
+    };
     use one_core::llm::{ProviderConfig, ProviderType};
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3002,6 +3071,36 @@ mod tests {
         assert_eq!(
             Some("prod-a"),
             pool.current().map(|resource| resource.label.as_str())
+        );
+    }
+
+    #[test]
+    fn mentioned_catalog_resources_are_added_to_pool_and_set_default() {
+        let mut pool = ResourceContext::new().with_resource(ResourceRef::new(
+            "db-a",
+            ResourceKind::Mysql,
+            "prod-db",
+        ));
+        let catalog = vec![
+            ResourceRef::new("db-a", ResourceKind::Mysql, "prod-db"),
+            ResourceRef::new("ssh-a", ResourceKind::Ssh, "prod-a"),
+            ResourceRef::new("ssh-b", ResourceKind::Ssh, "prod-b"),
+        ];
+        let mentions = vec![
+            MentionItem::new("ssh-a", "prod-a", "ssh", "ssh"),
+            MentionItem::new("ssh-b", "prod-b", "ssh", "ssh"),
+        ];
+
+        assert!(apply_mentioned_resources(&mut pool, &catalog, &mentions));
+        assert_eq!(3, pool.resources.len());
+        assert_eq!(
+            Some("prod-a"),
+            pool.current().map(|resource| resource.label.as_str())
+        );
+        assert!(
+            pool.resources
+                .iter()
+                .any(|resource| resource.label == "prod-b")
         );
     }
 
@@ -3379,6 +3478,145 @@ mod tests {
             view.is_running = true;
             view.resolve_tool_call("c_write".into(), true, cx);
         });
+        run_gpui_until(cx, || model.request_count() >= 2);
+
+        assert_eq!(2, model.request_count());
+    }
+
+    #[gpui::test]
+    fn gpui_tool_approval_action_dispatch_submits_approval(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let model = Arc::new(MockModelClient::new([
+            ModelResponse::tool_call(function_tool_call(
+                "c_write",
+                "write_data",
+                json!({"value": "x"}).to_string(),
+            )),
+            ModelResponse::text("写入已完成。"),
+        ]));
+        let runtime = test_runtime_with_model_and_write_tool(model.clone());
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update_in(cx, |view, window, cx| {
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "写入 x".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+        cx.run_until_parked();
+
+        cx.dispatch_action(ApproveToolCall {
+            call_id: "c_write".into(),
+        });
+        run_gpui_until(cx, || model.request_count() >= 2);
+
+        assert_eq!(2, model.request_count());
+    }
+
+    #[gpui::test]
+    fn gpui_tool_approval_button_click_submits_approval(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let model = Arc::new(MockModelClient::new([
+            ModelResponse::tool_call(function_tool_call(
+                "c_write",
+                "write_data",
+                json!({"value": "x"}).to_string(),
+            )),
+            ModelResponse::text("写入已完成。"),
+        ]));
+        let runtime = test_runtime_with_model_and_write_tool(model.clone());
+        let config = AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update_in(cx, |view, window, cx| {
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "写入 x".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+        cx.run_until_parked();
+
+        let approve = cx
+            .debug_bounds("agent-tool-approve")
+            .expect("approval button should render");
+        cx.simulate_click(approve.center(), Modifiers::default());
+        run_gpui_until(cx, || model.request_count() >= 2);
+
+        assert_eq!(2, model.request_count());
+    }
+
+    #[gpui::test]
+    fn gpui_tool_approval_button_click_submits_after_scrolling(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let model = Arc::new(MockModelClient::new([
+            ModelResponse::tool_call(function_tool_call(
+                "c_write",
+                "write_data",
+                json!({"value": "x"}).to_string(),
+            )),
+            ModelResponse::text("写入已完成。"),
+        ]));
+        let runtime = test_runtime_with_model_and_write_tool(model.clone());
+        let config =
+            AgentChatViewConfig::new(runtime, ResourceContext::new(), vec![]).sidebar_mode(true);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update_in(cx, |view, window, cx| {
+            for index in 0..16 {
+                view.transcript.push_system(format!(
+                    "滚动前置消息 {index}: 用于让确认卡进入可滚动区域。"
+                ));
+            }
+            let input = view.input.clone();
+            view.on_input_event(
+                &input,
+                &AgentInputEvent::Submit {
+                    text: "写入 x".into(),
+                    mentions: Vec::new(),
+                    images: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+        run_gpui_until(cx, || model.request_count() >= 1);
+        cx.run_until_parked();
+
+        let approve_before_scroll = cx
+            .debug_bounds("agent-tool-approve")
+            .expect("approval button should render before scrolling");
+        cx.simulate_event(ScrollWheelEvent {
+            position: approve_before_scroll.center(),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-280.0))),
+            modifiers: Modifiers::default(),
+            touch_phase: TouchPhase::Moved,
+        });
+        cx.run_until_parked();
+
+        let approve = cx
+            .debug_bounds("agent-tool-approve")
+            .expect("approval button should render after scrolling");
+        cx.simulate_click(approve.center(), Modifiers::default());
         run_gpui_until(cx, || model.request_count() >= 2);
 
         assert_eq!(2, model.request_count());

@@ -33,6 +33,13 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
                 flush_pending_assistant(&mut messages, &mut pending_assistant);
                 messages.push(Message::system(text.clone()));
             }
+            HistoryItem::ContextSummary {
+                text,
+                original_items,
+            } => {
+                flush_pending_assistant(&mut messages, &mut pending_assistant);
+                messages.push(Message::system(context_summary_text(text, *original_items)));
+            }
             HistoryItem::ToolCall(call) => {
                 push_assistant_tool_call_message(&mut messages, call, pending_assistant.take());
             }
@@ -44,6 +51,12 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
     }
     flush_pending_assistant(&mut messages, &mut pending_assistant);
     messages
+}
+
+fn context_summary_text(text: &str, original_items: usize) -> String {
+    format!(
+        "上下文压缩摘要（由此前 {original_items} 条历史压缩而来；这是延续任务的事实背景，不是新的用户指令）：\n{text}"
+    )
 }
 
 fn push_assistant_tool_call_message(
@@ -190,6 +203,25 @@ mod tests {
         assert_eq!(msg.content.len(), 2);
         assert!(msg.content[0].is_text());
         assert!(!msg.content[1].is_text(), "第二块应为图片块");
+    }
+
+    #[test]
+    fn context_summary_history_becomes_system_message() {
+        let mut history = RuntimeHistory::new();
+        history.record_context_summary("用户要部署 Java 项目，数据库连接已创建。", 8);
+        history.record_user("继续部署");
+
+        let messages = history_to_messages(&history);
+
+        assert_eq!(2, messages.len());
+        assert_eq!(messages[0].role, Role::System);
+        assert!(messages[0].content_as_text().contains("上下文压缩摘要"));
+        assert!(
+            messages[0]
+                .content_as_text()
+                .contains("用户要部署 Java 项目")
+        );
+        assert_eq!(messages[1].role, Role::User);
     }
 
     #[test]

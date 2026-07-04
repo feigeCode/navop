@@ -35,6 +35,11 @@ pub fn build_agent_context_single_with_catalog(
     connections: &[StoredConnection],
 ) -> (ResourceContext, Vec<MentionItem>, Vec<ResourceRef>) {
     let (pool, mentions) = build_agent_context_single(connection);
+    let mentions = if connections.is_empty() {
+        mentions
+    } else {
+        build_mentions_from_connections(connections)
+    };
     (pool, mentions, build_resource_catalog(connections))
 }
 
@@ -74,18 +79,26 @@ pub fn build_agent_context_all(
     )
 }
 
+/// 从所有连接构建工作台模式所需的资源池、`@` 提及项与可添加资源 catalog。
+pub fn build_workbench_agent_context(
+    connections: &[StoredConnection],
+) -> (ResourceContext, Vec<MentionItem>, Vec<ResourceRef>) {
+    let (resources, mentions) = build_agent_context_all(connections.first(), connections);
+    let catalog = build_resource_catalog(connections);
+    (resources, mentions, catalog)
+}
+
 /// 从单个连接构建 `@` 提及项。
-///
-/// 连接本身通过顶部上下文选择器切换,不进入输入框 `@` 补全。
-pub fn build_mentions_single(_connection: &StoredConnection) -> Vec<MentionItem> {
-    Vec::new()
+pub fn build_mentions_single(connection: &StoredConnection) -> Vec<MentionItem> {
+    connection_to_mention(connection).into_iter().collect()
 }
 
 /// 从连接列表构建 `@` 提及项。
-///
-/// 连接本身通过顶部上下文选择器切换,不进入输入框 `@` 补全。
-pub fn build_mentions_from_connections(_connections: &[StoredConnection]) -> Vec<MentionItem> {
-    Vec::new()
+pub fn build_mentions_from_connections(connections: &[StoredConnection]) -> Vec<MentionItem> {
+    connections
+        .iter()
+        .filter_map(connection_to_mention)
+        .collect()
 }
 
 /// 将 StoredConnection 转换为 ResourceRef。
@@ -114,6 +127,27 @@ fn connection_to_resource_ref(connection: &StoredConnection) -> ResourceRef {
         resource = resource.with_capability(capability);
     }
     resource
+}
+
+fn connection_to_mention(connection: &StoredConnection) -> Option<MentionItem> {
+    let resource = connection_to_resource_ref(connection);
+    let id = connection.id?.to_string();
+    let label = resource.label.clone();
+    let detail = mention_detail(&resource);
+    let kind = resource.kind.as_str().to_string();
+    Some(MentionItem::new(id, label, detail, kind))
+}
+
+fn mention_detail(resource: &ResourceRef) -> String {
+    let mut parts = vec![resource.kind.as_str().to_string()];
+    parts.extend(resource.aliases.iter().cloned());
+    parts.extend(
+        resource
+            .scopes
+            .iter()
+            .map(|scope| format!("{}: {}", scope.label, scope.value)),
+    );
+    parts.join(" · ")
 }
 
 fn connection_capabilities(connection: &StoredConnection) -> Vec<ResourceCapability> {

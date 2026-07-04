@@ -271,6 +271,7 @@ mod tests {
             cwd: Some("/root".to_string()),
             rows: 24,
             cols: 120,
+            connection_kind: public_mcp::registry::TerminalConnectionKind::Ssh,
             connected: true,
             capabilities: vec![ResourceCapability::TerminalExec],
         });

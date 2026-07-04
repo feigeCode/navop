@@ -101,6 +101,22 @@ impl DefaultAgentChatPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let available_resources = resources.resources.clone();
+        Self::new_workbench_with_context_and_catalog(
+            resources,
+            mentions,
+            available_resources,
+            window,
+            cx,
+        )
+    }
+
+    pub fn new_workbench_with_context_and_catalog(
+        resources: agent_runtime::ResourceContext,
+        mentions: Vec<MentionItem>,
+        available_resources: Vec<agent_runtime::ResourceRef>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self::new_with_context_and_catalog_for_mode(
             resources,
             mentions,

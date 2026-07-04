@@ -216,6 +216,65 @@ fn runtime_provider_reads_resource_pool_at_call_time() {
 }
 
 #[test]
+fn runtime_provider_exposes_unified_connection_sessions_list_with_resource_pool() {
+    let registry = registry_with_pool(
+        Arc::new(RuntimeConnectionTool::new("db.query")),
+        ResourcePool::new().with_resource(resource("db-prod", "prod database", "primary-db")),
+    );
+    let tools = registry.tools();
+    let list_sessions = tools
+        .iter()
+        .find(|tool| tool.name == "connections.list_sessions")
+        .expect("unified list sessions tool should be exposed");
+    let schema = list_sessions.input_schema.as_ref();
+
+    assert!(
+        schema["properties"]
+            .as_object()
+            .expect("schema properties should be object")
+            .contains_key("kind")
+    );
+    assert!(schema.get("required").is_none());
+}
+
+#[test]
+fn runtime_provider_lists_resource_pool_sessions_with_kind_filter() {
+    let registry = registry_with_pool(
+        Arc::new(RuntimeConnectionTool::new("db.query")),
+        ResourcePool::new()
+            .with_resource(resource("db-prod", "prod database", "primary-db"))
+            .with_resource(ResourceRef::new(
+                "redis-prod",
+                ResourceKind::Redis,
+                "prod redis",
+            ))
+            .with_resource(ResourceRef::new("ssh-prod", ResourceKind::Ssh, "prod ssh")),
+    );
+
+    let all = futures::executor::block_on(registry.call_tool(
+        "connections.list_sessions",
+        Some(rmcp::model::JsonObject::new()),
+        context(),
+    ))
+    .expect("unfiltered list sessions should run");
+    let redis = futures::executor::block_on(registry.call_tool(
+        "connections.list_sessions",
+        Some(rmcp::model::JsonObject::from_iter([(
+            "kind".to_string(),
+            json!("redis"),
+        )])),
+        context(),
+    ))
+    .expect("filtered list sessions should run");
+
+    assert_eq!(json!(3), all.structured_content.unwrap()["total"]);
+    let redis_content = redis.structured_content.unwrap();
+    assert_eq!(json!(1), redis_content["total"]);
+    assert_eq!("redis-prod", redis_content["sessions"][0]["id"]);
+    assert_eq!("redis", redis_content["sessions"][0]["kind"]);
+}
+
+#[test]
 fn runtime_provider_rejects_ambiguous_resource_target() {
     let registry = registry_with_pool(
         Arc::new(RuntimeConnectionTool::new("db.query")),

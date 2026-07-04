@@ -11,6 +11,7 @@
 //! (`update_plan` 本地拦截更新计划;其余走 [`ToolRouter`](crate::tools::ToolRouter)),
 //! 把调用与观测写回历史后再次采样(follow-up),直到模型给出最终回答或达上限。
 
+use crate::error::RuntimeError;
 use crate::ids::{ToolCallId, TurnId};
 use crate::model::{ModelRequest, ModelResponse, ModelStreamEvent};
 use crate::planner::history_to_messages;
@@ -23,6 +24,9 @@ use crate::runtime::{
 use crate::tasks::agent_prompt::build_system_prompt;
 use crate::tasks::agent_tool_validation::{
     available_tool_names, malformed_tool_call_reason, specs_for_task, tool_is_available,
+};
+use crate::tasks::context_compaction::{
+    ContextCompactionPolicy, compact_session_context_if_needed,
 };
 use crate::tasks::delegate_task::{DELEGATE_TASK_TOOL, handle_delegate_task};
 use crate::tasks::update_plan::{UPDATE_PLAN_TOOL, parse_plan};
@@ -146,6 +150,22 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
     for iteration in 0..MAX_ITERATIONS {
         if cancellation.is_cancelled() {
             return TaskOutcome::Cancelled;
+        }
+        match compact_session_context_if_needed(
+            &ctx.session,
+            &ctx.services,
+            ContextCompactionPolicy::default(),
+            &cancellation,
+        )
+        .await
+        {
+            Ok(_) => {}
+            Err(RuntimeError::Cancelled) => return TaskOutcome::Cancelled,
+            Err(error) => {
+                return TaskOutcome::Failed {
+                    reason: format!("上下文压缩失败:{error}"),
+                };
+            }
         }
 
         let tool_specs =

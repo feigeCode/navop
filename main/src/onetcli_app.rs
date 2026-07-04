@@ -96,7 +96,7 @@ use std::path::{Path, PathBuf};
 
 use crate::setting_tab;
 use db::GlobalDbState;
-use one_core::storage::{ConnectionRepository, GlobalStorageState};
+use one_core::storage::{ConnectionRepository, GlobalStorageState, traits::Repository};
 
 fn activate_tab_by_number(number: usize, cx: &mut App) {
     let Some(active_window) = cx.active_window() else {
@@ -674,8 +674,19 @@ impl OnetCliApp {
                 let home_tab = TabItem::new(layout.home_tab_id, "app", home_page);
                 tc.add_pinned_tab(home_tab, cx);
 
-                let workbench =
-                    cx.new(|cx| ai_chat_view::DefaultAgentChatPanel::new_workbench(window, cx));
+                let connections = cx
+                    .global::<GlobalStorageState>()
+                    .storage
+                    .get::<ConnectionRepository>()
+                    .and_then(|repo| repo.list().ok())
+                    .unwrap_or_default();
+                let (resources, mentions, catalog) =
+                    ai_chat_view::build_workbench_agent_context(&connections);
+                let workbench = cx.new(|cx| {
+                    ai_chat_view::DefaultAgentChatPanel::new_workbench_with_context_and_catalog(
+                        resources, mentions, catalog, window, cx,
+                    )
+                });
                 let workbench_tab = TabItem::new(layout.workbench_tab_id, "app", workbench);
                 tc.add_pinned_tab(workbench_tab, cx);
                 tc.activate_pinned_tab_at(layout.active_pinned_index, window, cx);

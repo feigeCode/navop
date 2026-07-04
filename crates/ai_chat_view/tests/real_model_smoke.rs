@@ -237,6 +237,12 @@ fn summarize_history(history: &agent_runtime::RuntimeHistory) -> String {
             agent_runtime::HistoryItem::System(text) => {
                 format!("system:{}", truncate(text))
             }
+            agent_runtime::HistoryItem::ContextSummary {
+                text,
+                original_items,
+            } => {
+                format!("context_summary:{original_items} {}", truncate(text))
+            }
             agent_runtime::HistoryItem::ToolCall(call) => {
                 format!("tool_call:{} {}", call.tool_name, call.arguments)
             }

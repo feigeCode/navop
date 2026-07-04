@@ -204,6 +204,11 @@ mod tests {
         });
 
         assert!(tools.iter().any(|tool| tool.name == "connections.list"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "connections.list_sessions")
+        );
         assert!(tools.iter().any(|tool| tool.name == "connections.show"));
         assert!(tools.iter().any(|tool| tool.name == "connections.validate"));
         assert!(tools.iter().any(|tool| tool.name == "connections.find"));

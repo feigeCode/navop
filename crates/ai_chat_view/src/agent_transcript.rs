@@ -73,6 +73,12 @@ impl AgentTranscript {
         &self.active_subagents
     }
 
+    /// 是否存在等待用户处理的工具确认卡。
+    pub fn has_pending_tool_confirm(&self, call_id: &str) -> bool {
+        self.find_confirm_card(call_id)
+            .is_some_and(|data| data.status == "pending")
+    }
+
     /// 用持久化的历史条目重建转录(切换 / 恢复会话时调用)。
     ///
     /// 复用与实时事件相同的归约逻辑:工具调用 + 观测合并为一张完成态卡片,
@@ -92,6 +98,12 @@ impl AgentTranscript {
                     );
                 }
                 HistoryItem::System(text) => self.push_system(text.clone()),
+                HistoryItem::ContextSummary {
+                    text,
+                    original_items,
+                } => self.push_system(format!(
+                    "上下文摘要（压缩 {original_items} 条历史）:\n{text}"
+                )),
                 HistoryItem::ToolCall(call) => {
                     if !self.push_delegate_task_from_history(call) {
                         self.push_tool_call(

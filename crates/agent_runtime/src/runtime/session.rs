@@ -118,6 +118,14 @@ impl Session {
         self.state.lock().expect("session 锁中毒").history.clone()
     }
 
+    pub fn compact_history(&self, summary: impl Into<String>, keep_last_items: usize) -> bool {
+        self.state
+            .lock()
+            .expect("session 锁中毒")
+            .history
+            .compact_old_items(summary, keep_last_items)
+    }
+
     pub fn current_plan(&self) -> Option<Plan> {
         self.state
             .lock()

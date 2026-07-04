@@ -1,4 +1,4 @@
-use crate::registry::PublicMcpRegistry;
+use crate::registry::{PublicMcpRegistry, TerminalConnectionKind};
 use crate::remote_ops::{
     RemoteCommandCancelRequest, RemoteCommandMode, RemoteCommandOutputRequest,
     RemoteCommandPollRequest, RemoteCommandSignal, RemoteExecRequest, SessionDiagnosticsRequest,
@@ -26,9 +26,10 @@ impl RemoteOpsRuntime {
         Self { registry }
     }
 
-    fn list_sessions(&self) -> Result<CallToolResult, McpError> {
+    fn list_sessions(&self, arguments: Option<JsonObject>) -> Result<CallToolResult, McpError> {
+        let kind = parse_list_sessions_args(arguments)?;
         Ok(CallToolResult::structured(json!({
-            "sessions": self.registry.list_sessions()
+            "sessions": self.registry.list_sessions_with_kind(kind)
         })))
     }
 
@@ -158,7 +159,7 @@ impl RemoteOpsRuntimeTool {
     fn call_sync(&self, input: Value) -> Result<CallToolResult, McpError> {
         let arguments = value_to_arguments(input)?;
         match self.spec.id {
-            "ssh.list_sessions" => self.provider.list_sessions(),
+            "ssh.list_sessions" => self.provider.list_sessions(Some(arguments)),
             "ssh.session_diagnostics" => self.provider.session_diagnostics(Some(arguments)),
             "ssh.command.poll" => self.provider.remote_command_poll(Some(arguments)),
             "ssh.command.output" => self.provider.remote_command_output(Some(arguments)),
@@ -218,9 +219,9 @@ fn remote_ops_specs() -> Vec<RemoteOpsToolSpec> {
 fn list_sessions_spec() -> RemoteOpsToolSpec {
     RemoteOpsToolSpec {
         id: "ssh.list_sessions",
-        title: "List terminal sessions",
-        description: "List active SSH terminal sessions that OnetCli can expose to MCP. Use this first to find the target for ssh.exec, ssh.session_diagnostics, or background command tools. This does not list saved connection profiles; use connections.list for saved profiles.",
-        schema: empty_schema_value,
+        title: "List connection sessions",
+        description: "List active OnetCli terminal sessions, optionally filtered by kind or connection_type. Omit filters to list all active sessions. Use SSH sessions with remote_exec capability for ssh.exec, ssh.session_diagnostics, or background command tools. Use connections.list for saved connection profiles.",
+        schema: list_sessions_schema_value,
         read_only: true,
         open_world: false,
     }
@@ -307,8 +308,19 @@ fn schema_to_value(schema: Arc<JsonObject>) -> Value {
     Value::Object(schema.as_ref().clone())
 }
 
-fn empty_schema_value() -> Value {
-    schema_to_value(object_schema([]))
+fn list_sessions_schema_value() -> Value {
+    let mut props = JsonObject::new();
+    let kind_schema = json!({
+        "type": "string",
+        "enum": ["local", "ssh", "ssh_sftp", "serial", "all"],
+        "description": "Terminal connection type filter. Omit or pass all to return all active sessions."
+    });
+    props.insert("kind".to_string(), kind_schema.clone());
+    props.insert("connection_type".to_string(), kind_schema);
+    let mut schema = JsonObject::new();
+    schema.insert("type".to_string(), Value::String("object".to_string()));
+    schema.insert("properties".to_string(), Value::Object(props));
+    schema_to_value(Arc::new(schema))
 }
 
 fn diagnostics_schema_value() -> Value {
@@ -447,6 +459,26 @@ fn parse_exec_args(
             mode,
         },
     ))
+}
+
+fn parse_list_sessions_args(
+    arguments: Option<JsonObject>,
+) -> Result<Option<TerminalConnectionKind>, McpError> {
+    let Some(value) = optional_string(arguments.as_ref(), "kind")
+        .or_else(|| optional_string(arguments.as_ref(), "connection_type"))
+    else {
+        return Ok(None);
+    };
+    match value {
+        "all" => Ok(None),
+        "local" => Ok(Some(TerminalConnectionKind::Local)),
+        "ssh" | "ssh_sftp" => Ok(Some(TerminalConnectionKind::Ssh)),
+        "serial" => Ok(Some(TerminalConnectionKind::Serial)),
+        other => Err(McpError::invalid_params(
+            format!("unknown session kind: {other}"),
+            None,
+        )),
+    }
 }
 
 fn required_target(arguments: Option<&JsonObject>) -> Result<&str, McpError> {

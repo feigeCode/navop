@@ -20,8 +20,8 @@ use agent_runtime::tools::{
     ObservationData, Tool, ToolInvocation, ToolName, ToolObservation, ToolSpec,
 };
 use agent_runtime::{
-    ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, RiskLevel, Runtime,
-    RuntimeError, RuntimeEvent, RuntimeServices, StepStatus, TaskKind, TaskOutcome,
+    HistoryItem, ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, RiskLevel,
+    Runtime, RuntimeError, RuntimeEvent, RuntimeServices, StepStatus, TaskKind, TaskOutcome,
     ToolExecutionMode, ToolRegistry, ToolRouter,
 };
 use async_trait::async_trait;
@@ -365,6 +365,46 @@ async fn agent_simple_question_answers_without_plan() {
             .iter()
             .any(|e| matches!(e, RuntimeEvent::PlanUpdated { .. })),
         "简单问答不应产生任何计划"
+    );
+}
+
+#[tokio::test]
+async fn agent_loop_compacts_large_history_before_model_request() {
+    let model = Arc::new(MockModelClient::new([
+        ModelResponse::text("摘要: 旧上下文说明用户要部署 Java 项目。"),
+        ModelResponse::text("继续部署。"),
+    ]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(ToolRegistry::new())),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+    session.record_user_input("旧上下文 ".repeat(7000));
+
+    runtime
+        .run_turn_blocking(session.id(), "继续".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn with compaction");
+
+    let requests = model.received_requests();
+    assert_eq!(2, requests.len());
+    assert!(
+        requests[0].messages[0]
+            .content_as_text()
+            .contains("上下文压缩")
+    );
+    assert!(
+        requests[1]
+            .messages
+            .iter()
+            .any(|message| message.content_as_text().contains("旧上下文说明用户要部署"))
+    );
+    assert!(
+        session
+            .history_snapshot()
+            .items()
+            .iter()
+            .any(|item| matches!(item, HistoryItem::ContextSummary { .. }))
     );
 }
 

@@ -11,11 +11,13 @@ use rmcp::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tool_runtime::{
-    ResourcePool, ToolAdapter, ToolAnnotations as RuntimeToolAnnotations, ToolContext,
-    ToolDescriptor, ToolError, ToolRegistry, ToolResult,
+    ResourceCapability, ResourceKind, ResourcePool, ResourceRef, ToolAdapter,
+    ToolAnnotations as RuntimeToolAnnotations, ToolContext, ToolDescriptor, ToolError,
+    ToolRegistry, ToolResult,
 };
 
 pub type ResourcePoolProvider = Arc<dyn Fn() -> Option<ResourcePool> + Send + Sync>;
+const CONNECTIONS_LIST_SESSIONS_TOOL: &str = "connections.list_sessions";
 
 #[derive(Clone)]
 pub struct ToolRuntimeMcpProvider {
@@ -44,11 +46,18 @@ impl ToolRuntimeMcpProvider {
 
 impl PublicMcpToolProvider for ToolRuntimeMcpProvider {
     fn tools(&self) -> Vec<Tool> {
-        self.registry
-            .list(ToolAdapter::Mcp)
+        let descriptors = self.registry.list(ToolAdapter::Mcp);
+        let has_unified_sessions_tool = descriptors
+            .iter()
+            .any(|tool| tool.id == CONNECTIONS_LIST_SESSIONS_TOOL);
+        let mut tools = descriptors
             .into_iter()
             .map(runtime_tool_to_mcp_tool)
-            .collect()
+            .collect::<Vec<_>>();
+        if self.resource_pool_provider.is_some() && !has_unified_sessions_tool {
+            tools.push(resource_sessions_tool());
+        }
+        tools
     }
 
     fn call_tool(
@@ -57,6 +66,9 @@ impl PublicMcpToolProvider for ToolRuntimeMcpProvider {
         arguments: Option<JsonObject>,
         context: PublicMcpToolContext,
     ) -> Option<PublicMcpToolFuture> {
+        if name == CONNECTIONS_LIST_SESSIONS_TOOL && self.resource_pool_provider.is_some() {
+            return Some(self.call_resource_sessions(arguments));
+        }
         let runtime_descriptor = self.registry.get_runtime(name, ToolAdapter::Mcp)?;
         let target_spec = runtime_descriptor.target.clone();
         let descriptor = runtime_descriptor.legacy_descriptor();
@@ -82,6 +94,18 @@ impl PublicMcpToolProvider for ToolRuntimeMcpProvider {
                 .unwrap_or_else(|| descriptor.annotations.clone());
             call_runtime_tool(registry, descriptor, call_annotations, name, input, context).await
         }))
+    }
+}
+
+impl ToolRuntimeMcpProvider {
+    fn call_resource_sessions(&self, arguments: Option<JsonObject>) -> PublicMcpToolFuture {
+        let resource_pool = self
+            .resource_pool_provider
+            .as_ref()
+            .and_then(|provider| provider())
+            .unwrap_or_default();
+        let input = Value::Object(arguments.unwrap_or_default());
+        Box::pin(async move { list_resource_sessions(resource_pool, input) })
     }
 }
 
@@ -155,6 +179,114 @@ fn runtime_tool_to_mcp_tool(descriptor: ToolDescriptor) -> Tool {
     .with_annotations(runtime_annotations_to_mcp_annotations(
         descriptor.annotations,
     ))
+}
+
+fn resource_sessions_tool() -> Tool {
+    Tool::new(
+        CONNECTIONS_LIST_SESSIONS_TOOL,
+        "List saved and active OnetCli connection sessions from the current resource pool. Pass kind or connection_type to filter; omit filters to return all available resources.",
+        schema_object(resource_sessions_schema()),
+    )
+    .with_annotations(
+        ToolAnnotations::with_title("List connection sessions")
+            .read_only(true)
+            .destructive(false)
+            .idempotent(true)
+            .open_world(false),
+    )
+}
+
+fn resource_sessions_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "description": "Resource or connection type filter, for example database, ssh_sftp, redis, mongodb, terminal, mysql, postgres, or sqlite."
+            },
+            "connection_type": {
+                "type": "string",
+                "description": "Alias of kind. Omit both filters to list all resources."
+            }
+        }
+    })
+}
+
+fn list_resource_sessions(
+    resource_pool: ResourcePool,
+    input: Value,
+) -> Result<CallToolResult, McpError> {
+    let kind = resource_session_kind_filter(&input)?;
+    let sessions = resource_pool
+        .resources
+        .into_iter()
+        .filter(|resource| resource_matches_session_kind(resource, kind.as_deref()))
+        .map(resource_session_value)
+        .collect::<Vec<_>>();
+    let total = sessions.len();
+    Ok(CallToolResult::structured(json!({
+        "sessions": sessions,
+        "total": total,
+        "kind": kind
+    })))
+}
+
+fn resource_session_value(resource: ResourceRef) -> Value {
+    let id = resource.id.as_str().to_string();
+    let kind = resource.kind.as_str().to_string();
+    json!({
+        "id": id,
+        "label": resource.label,
+        "kind": kind,
+        "aliases": resource.aliases,
+        "scopes": resource.scopes,
+        "capabilities": resource.capabilities,
+        "origin": resource.origin
+    })
+}
+
+fn resource_session_kind_filter(input: &Value) -> Result<Option<String>, McpError> {
+    for field in ["kind", "connection_type"] {
+        match input.get(field) {
+            Some(Value::String(value)) if !value.trim().is_empty() => {
+                return Ok(Some(value.trim().to_ascii_lowercase()));
+            }
+            Some(Value::String(_)) | Some(Value::Null) | None => {}
+            Some(_) => {
+                return Err(McpError::invalid_params(
+                    format!("field `{field}` must be a string"),
+                    None,
+                ));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn resource_matches_session_kind(resource: &ResourceRef, kind: Option<&str>) -> bool {
+    let Some(kind) = kind else {
+        return true;
+    };
+    match kind {
+        "all" => true,
+        "database" | "db" => is_database_resource(&resource.kind),
+        "ssh" | "ssh_sftp" => {
+            matches!(resource.kind, ResourceKind::Ssh | ResourceKind::Sftp)
+                || resource
+                    .capabilities
+                    .contains(&ResourceCapability::RemoteExec)
+        }
+        "mongodb" | "mongo" => matches!(resource.kind, ResourceKind::Mongo),
+        "terminal" | "local" | "serial" => matches!(resource.kind, ResourceKind::Terminal),
+        other => resource.kind.as_str() == other,
+    }
+}
+
+fn is_database_resource(kind: &ResourceKind) -> bool {
+    matches!(
+        kind,
+        ResourceKind::Mysql | ResourceKind::Postgres | ResourceKind::Sqlite
+    ) || kind.as_str() == "database"
 }
 
 fn schema_object(schema: Value) -> Arc<JsonObject> {
