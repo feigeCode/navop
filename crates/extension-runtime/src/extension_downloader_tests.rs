@@ -288,6 +288,76 @@ fn install_from_staging_generic_installs_acp_agent() {
 }
 
 #[test]
+fn install_from_staging_generic_installs_language_bundle_children_and_marker() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("extensions");
+    let staging = tmp.path().join("staging");
+    write_language_bundle_staging(&staging);
+
+    let mut registry = ExtensionRegistry::new(root.clone());
+    registry.register_provider(Arc::new(LanguageExtensionProvider));
+
+    let summary =
+        install_from_staging_generic(&staging, &registry, Some(ExtensionKind::LanguageBundle))
+            .unwrap();
+
+    assert_eq!(ExtensionKind::LanguageBundle, summary.kind);
+    assert_eq!("tree-sitter-languages", summary.name);
+    assert_eq!("0.1.0", summary.version);
+    assert_eq!(
+        vec!["js".to_string(), "rs".to_string()],
+        summary.file_extensions
+    );
+    assert!(root.join("languages/rust/manifest.json").exists());
+    assert!(root.join("languages/javascript/manifest.json").exists());
+    assert!(
+        root.join("language_bundles/tree-sitter-languages/manifest.json")
+            .exists()
+    );
+}
+
+#[test]
+fn install_from_staging_generic_rejects_malformed_language_bundle_before_copy() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("extensions");
+    let staging = tmp.path().join("staging");
+    fs::create_dir_all(staging.join("rust")).unwrap();
+    fs::create_dir_all(staging.join("javascript")).unwrap();
+    fs::write(
+        staging.join("manifest.json"),
+        r#"{
+            "id": "tree-sitter-languages",
+            "name": "Tree-sitter Languages",
+            "version": "0.1.0",
+            "languages": ["javascript", "rust"]
+        }"#,
+    )
+    .unwrap();
+    fs::write(
+        staging.join("rust/manifest.json"),
+        r#"{"name":"rust","version":"0.24.0","file_extensions":["rs"]}"#,
+    )
+    .unwrap();
+    fs::write(staging.join("rust/parser.wasm"), [0u8; 4]).unwrap();
+    fs::write(
+        staging.join("javascript/manifest.json"),
+        r#"{"name":"javascript","version":"0.23.1","file_extensions":["js"]}"#,
+    )
+    .unwrap();
+
+    let mut registry = ExtensionRegistry::new(root.clone());
+    registry.register_provider(Arc::new(LanguageExtensionProvider));
+
+    let err =
+        install_from_staging_generic(&staging, &registry, Some(ExtensionKind::LanguageBundle))
+            .unwrap_err();
+
+    assert!(err.to_string().contains("parser.wasm"));
+    assert!(!root.join("languages/rust").exists());
+    assert!(!root.join("language_bundles/tree-sitter-languages").exists());
+}
+
+#[test]
 fn install_from_staging_generic_rejects_composite_high_risk_permissions() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("extensions");
@@ -486,6 +556,33 @@ fn write_acp_agent_manifest(dir: &std::path::Path) {
         }"#,
     )
     .unwrap();
+}
+
+fn write_language_bundle_staging(staging: &std::path::Path) {
+    fs::create_dir_all(staging.join("rust")).unwrap();
+    fs::create_dir_all(staging.join("javascript")).unwrap();
+    fs::write(
+        staging.join("manifest.json"),
+        r#"{
+            "id": "tree-sitter-languages",
+            "name": "Tree-sitter Languages",
+            "version": "0.1.0",
+            "languages": ["javascript", "rust"]
+        }"#,
+    )
+    .unwrap();
+    fs::write(
+        staging.join("rust/manifest.json"),
+        r#"{"name":"rust","version":"0.24.0","file_extensions":["rs"]}"#,
+    )
+    .unwrap();
+    fs::write(staging.join("rust/parser.wasm"), [0u8; 4]).unwrap();
+    fs::write(
+        staging.join("javascript/manifest.json"),
+        r#"{"name":"javascript","version":"0.23.1","file_extensions":["js"]}"#,
+    )
+    .unwrap();
+    fs::write(staging.join("javascript/parser.wasm"), [0u8; 4]).unwrap();
 }
 
 #[cfg(unix)]

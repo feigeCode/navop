@@ -2,6 +2,7 @@ mod acp_agent_provider;
 mod composite_provider;
 mod database_driver_provider;
 mod kind;
+mod language_bundle_provider;
 mod language_provider;
 pub mod manifest;
 mod mcp_helper_provider;
@@ -15,6 +16,7 @@ pub use acp_agent_provider::{
 pub use composite_provider::CompositeExtensionProvider;
 pub use database_driver_provider::DatabaseDriverExtensionProvider;
 pub use kind::ExtensionKind;
+pub use language_bundle_provider::LanguageBundleExtensionProvider;
 pub use language_provider::LanguageExtensionProvider;
 pub use mcp_helper_provider::McpHelperExtensionProvider;
 pub use provider::{ExtensionProvider, ExtensionRegistry, init_global};
@@ -45,6 +47,7 @@ pub fn init(cx: &mut App) {
 pub fn builtin_registry(extensions_root: PathBuf) -> ExtensionRegistry {
     let mut registry = ExtensionRegistry::new(extensions_root);
     registry.register_provider(Arc::new(LanguageExtensionProvider));
+    registry.register_provider(Arc::new(LanguageBundleExtensionProvider));
     registry.register_provider(Arc::new(DatabaseDriverExtensionProvider));
     registry.register_provider(Arc::new(RemoteDesktopProviderExtensionProvider));
     registry.register_provider(Arc::new(McpHelperExtensionProvider));
