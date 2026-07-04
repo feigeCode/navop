@@ -20,6 +20,7 @@ pub mod ids;
 pub mod model;
 pub mod planner;
 pub mod resource;
+pub mod resource_scope;
 pub mod risk;
 pub mod runtime;
 pub mod tasks;
@@ -33,6 +34,7 @@ pub use planner::{Plan, PlanSource, PlanStatus, PlanStep, StepStatus};
 pub use resource::{
     ResourceCapability, ResourceContext, ResourceId, ResourceKind, ResourceRef, ResourceScope,
 };
+pub use resource_scope::{AgentResourceScope, DefaultTarget, DefaultTargetReason, ResourceCatalog};
 pub use risk::RiskLevel;
 pub use runtime::{InputImage, TurnInput};
 pub use runtime::{
