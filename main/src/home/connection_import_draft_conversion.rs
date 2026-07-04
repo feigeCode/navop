@@ -61,6 +61,28 @@ pub(crate) fn stored_connection_duplicate_identity(
             .to_db_connection()
             .map(|config| Some(database_config_duplicate_identity(&config)))
             .map_err(|error| error.to_string()),
+        ConnectionType::Redis => connection
+            .to_redis_params()
+            .map(|params| {
+                Some(redis_identity(
+                    &params.host,
+                    params.port,
+                    params.username.as_deref().unwrap_or_default(),
+                    params.db_index,
+                ))
+            })
+            .map_err(|error| error.to_string()),
+        ConnectionType::MongoDB => connection
+            .to_mongodb_params()
+            .map(|params| {
+                Some(mongodb_identity(
+                    &params.host,
+                    params.port.unwrap_or(27017),
+                    params.username.as_deref().unwrap_or_default(),
+                    params.database.as_deref().unwrap_or_default(),
+                ))
+            })
+            .map_err(|error| error.to_string()),
         _ => Ok(None),
     }
 }
@@ -142,6 +164,26 @@ fn ssh_identity(host: &str, port: u16, username: &str) -> String {
         normalize_identity_part(host),
         port,
         normalize_identity_part(username)
+    )
+}
+
+pub(super) fn redis_identity(host: &str, port: u16, username: &str, db_index: u8) -> String {
+    format!(
+        "redis:{}:{}:{}:{}",
+        normalize_identity_part(host),
+        port,
+        normalize_identity_part(username),
+        db_index
+    )
+}
+
+pub(super) fn mongodb_identity(host: &str, port: u16, username: &str, database: &str) -> String {
+    format!(
+        "mongodb:{}:{}:{}:{}",
+        normalize_identity_part(host),
+        port,
+        normalize_identity_part(username),
+        normalize_identity_part(database)
     )
 }
 

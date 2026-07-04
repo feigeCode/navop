@@ -280,6 +280,8 @@ fn build_redis_form(
         home.editing_connection_id = None;
         Some(RedisFormWindowConfig {
             editing_connection,
+            initial_connection: None,
+            on_saved: None,
             workspaces: home.workspaces.clone(),
             teams: get_cached_team_options(cx),
             ssh_connections,
@@ -310,6 +312,8 @@ fn build_mongo_form(
         home.editing_connection_id = None;
         Some(MongoFormWindowConfig {
             editing_connection,
+            initial_connection: None,
+            on_saved: None,
             workspaces: home.workspaces.clone(),
             teams: get_cached_team_options(cx),
         })

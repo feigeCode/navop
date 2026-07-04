@@ -90,6 +90,36 @@ fn sqlite_database_draft_without_file_path_can_open_editor_prefill() {
 }
 
 #[test]
+fn external_mongodb_import_converts_to_native_mongodb_connection() {
+    let draft = EditableImportDraft::new(external_database_import("mongo-prod", "mongodb", 27017));
+
+    let stored = draft.to_editor_connection().unwrap();
+    let params = stored.to_mongodb_params().unwrap();
+
+    assert_eq!(ConnectionType::MongoDB, stored.connection_type);
+    assert_eq!("mongo-prod", stored.name);
+    assert_eq!("db.example.test", params.host);
+    assert_eq!(Some(27017), params.port);
+    assert_eq!(Some("app".to_string()), params.database);
+    assert_eq!(Some("root".to_string()), params.username);
+}
+
+#[test]
+fn external_redis_import_converts_to_native_redis_connection() {
+    let draft = EditableImportDraft::new(external_database_import("redis-prod", "redis", 6379));
+
+    let stored = draft.to_editor_connection().unwrap();
+    let params = stored.to_redis_params().unwrap();
+
+    assert_eq!(ConnectionType::Redis, stored.connection_type);
+    assert_eq!("redis-prod", stored.name);
+    assert_eq!("db.example.test", params.host);
+    assert_eq!(6379, params.port);
+    assert_eq!(Some("root".to_string()), params.username);
+    assert_eq!(Some("secret".to_string()), params.password);
+}
+
+#[test]
 fn only_selected_drafts_are_converted() {
     let selected = EditableImportDraft::new(database_import("selected"));
     let mut skipped = EditableImportDraft::new(database_import("skipped"));
@@ -157,6 +187,28 @@ fn duplicate_detection_matches_existing_connection_identity() {
     );
 }
 
+#[test]
+fn mongodb_import_duplicate_detection_matches_native_connection() {
+    let draft = EditableImportDraft::new(external_database_import("mongo-prod", "mongodb", 27017));
+    let existing = draft.to_stored_connection().unwrap();
+
+    assert_eq!(
+        Some("mongo-prod".to_string()),
+        duplicate_connection_name(&draft, &[existing]).unwrap()
+    );
+}
+
+#[test]
+fn redis_import_duplicate_detection_matches_native_connection() {
+    let draft = EditableImportDraft::new(external_database_import("redis-prod", "redis", 6379));
+    let existing = draft.to_stored_connection().unwrap();
+
+    assert_eq!(
+        Some("redis-prod".to_string()),
+        duplicate_connection_name(&draft, &[existing]).unwrap()
+    );
+}
+
 fn database_import(name: &str) -> ImportRecord {
     ImportRecord {
         id: format!("datagrip:{name}"),
@@ -203,6 +255,33 @@ fn sqlite_import(name: &str, path: Option<&str>) -> ImportRecord {
         ssh: None,
         port_forwarding: None,
         password_status: PasswordImportStatus::Missing,
+        warnings: Vec::new(),
+    }
+}
+
+fn external_database_import(name: &str, driver_id: &str, port: u16) -> ImportRecord {
+    ImportRecord {
+        id: format!("external:{name}"),
+        importer_id: "com.onetcli.importer.external/external".to_string(),
+        source_label: "External".to_string(),
+        source_id: None,
+        kind: ImportRecordKind::Database,
+        display_name: name.to_string(),
+        database: Some(DatabaseImportRecord {
+            database_type: ImportDatabaseType::External {
+                id: driver_id.to_string(),
+            },
+            name: name.to_string(),
+            host: "db.example.test".to_string(),
+            port: Some(port),
+            username: "root".to_string(),
+            password: Some("secret".to_string()),
+            database: Some("app".to_string()),
+            extra_params: BTreeMap::new(),
+        }),
+        ssh: None,
+        port_forwarding: None,
+        password_status: PasswordImportStatus::Included,
         warnings: Vec::new(),
     }
 }

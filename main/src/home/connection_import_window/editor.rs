@@ -2,9 +2,11 @@ use db_view::connection_form_window::{
     ConnectionFormPostSaveAction, ConnectionFormWindow, ConnectionFormWindowConfig,
 };
 use gpui::{App, AppContext, Context, Window};
+use mongodb_view::{MongoFormSavedCallback, MongoFormWindow, MongoFormWindowConfig};
 use one_core::cloud_sync::get_cached_team_options;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::{ConnectionType, StoredConnection};
+use redis_view::{RedisFormSavedCallback, RedisFormWindow, RedisFormWindowConfig};
 use rust_i18n::t;
 use std::sync::Arc;
 use terminal_view::{SshFormPostSaveAction, SshFormWindow, SshFormWindowConfig};
@@ -36,6 +38,8 @@ impl ConnectionImportWindow {
     ) {
         match connection.connection_type {
             ConnectionType::Database => self.open_database_editor(record_id, connection, cx),
+            ConnectionType::Redis => self.open_redis_editor(record_id, connection, cx),
+            ConnectionType::MongoDB => self.open_mongodb_editor(record_id, connection, cx),
             ConnectionType::SshSftp => self.open_ssh_editor(record_id, connection, cx),
             _ => {}
         }
@@ -66,6 +70,49 @@ impl ConnectionImportWindow {
         open_popup_window(
             PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 650.0),
             move |window, cx| cx.new(|cx| ConnectionFormWindow::new(form_config, window, cx)),
+            cx,
+        );
+    }
+
+    fn open_redis_editor(
+        &self,
+        record_id: String,
+        connection: StoredConnection,
+        cx: &mut Context<Self>,
+    ) {
+        let (workspaces, ssh_connections, _) = self.parent.read(cx).import_editor_context();
+        let form_config = RedisFormWindowConfig {
+            editing_connection: None,
+            initial_connection: Some(connection),
+            on_saved: Some(self.redis_editor_saved_callback(record_id, cx)),
+            workspaces,
+            teams: get_cached_team_options(cx),
+            ssh_connections,
+        };
+        open_popup_window(
+            PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 650.0),
+            move |window, cx| cx.new(|cx| RedisFormWindow::new(form_config, window, cx)),
+            cx,
+        );
+    }
+
+    fn open_mongodb_editor(
+        &self,
+        record_id: String,
+        connection: StoredConnection,
+        cx: &mut Context<Self>,
+    ) {
+        let (workspaces, _, _) = self.parent.read(cx).import_editor_context();
+        let form_config = MongoFormWindowConfig {
+            editing_connection: None,
+            initial_connection: Some(connection),
+            on_saved: Some(self.mongodb_editor_saved_callback(record_id, cx)),
+            workspaces,
+            teams: get_cached_team_options(cx),
+        };
+        open_popup_window(
+            PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 520.0),
+            move |window, cx| cx.new(|cx| MongoFormWindow::new(form_config, window, cx)),
             cx,
         );
     }
@@ -112,6 +159,36 @@ impl ConnectionImportWindow {
                     matches!(action, ConnectionFormPostSaveAction::Continue),
                     cx,
                 );
+            });
+        })
+    }
+
+    fn redis_editor_saved_callback(
+        &self,
+        record_id: String,
+        cx: &mut Context<Self>,
+    ) -> RedisFormSavedCallback {
+        let import_window = cx.entity();
+        Arc::new(move |saved_connection, cx| {
+            let record_id = record_id.clone();
+            let import_window = import_window.clone();
+            let _ = import_window.update(cx, |this, cx| {
+                this.handle_editor_saved(record_id, saved_connection.id, false, cx);
+            });
+        })
+    }
+
+    fn mongodb_editor_saved_callback(
+        &self,
+        record_id: String,
+        cx: &mut Context<Self>,
+    ) -> MongoFormSavedCallback {
+        let import_window = cx.entity();
+        Arc::new(move |saved_connection, cx| {
+            let record_id = record_id.clone();
+            let import_window = import_window.clone();
+            let _ = import_window.update(cx, |this, cx| {
+                this.handle_editor_saved(record_id, saved_connection.id, false, cx);
             });
         })
     }

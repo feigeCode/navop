@@ -35,9 +35,26 @@ use crate::{RedisConnectionConfig, RedisConnectionMode, RedisManager};
 /// Redis 表单窗口配置
 pub struct RedisFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
+    pub initial_connection: Option<StoredConnection>,
+    pub on_saved: Option<RedisFormSavedCallback>,
     pub workspaces: Vec<Workspace>,
     pub teams: Vec<TeamOption>,
     pub ssh_connections: Vec<StoredConnection>,
+}
+
+pub type RedisFormSavedCallback =
+    std::sync::Arc<dyn Fn(StoredConnection, &mut gpui::App) + Send + Sync + 'static>;
+
+impl RedisFormWindowConfig {
+    fn is_editing(&self) -> bool {
+        self.editing_connection.is_some()
+    }
+
+    fn connection_to_load(&self) -> Option<&StoredConnection> {
+        self.editing_connection
+            .as_ref()
+            .or(self.initial_connection.as_ref())
+    }
 }
 
 #[derive(Clone, Default, PartialEq)]
@@ -248,11 +265,13 @@ pub struct RedisFormWindow {
     // 测试状态
     is_testing: bool,
     test_result: Option<Result<(), String>>,
+    on_saved: Option<RedisFormSavedCallback>,
 }
 
 impl RedisFormWindow {
     pub fn new(config: RedisFormWindowConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let is_editing = config.editing_connection.is_some();
+        let is_editing = config.is_editing();
+        let connection_to_load = config.connection_to_load().cloned();
         let editing_id = config.editing_connection.as_ref().and_then(|c| c.id);
         let editing_cloud_id = config
             .editing_connection
@@ -275,15 +294,14 @@ impl RedisFormWindow {
         .into();
 
         // 解析现有连接参数
-        let existing_params = config
-            .editing_connection
+        let existing_params = connection_to_load
             .as_ref()
             .and_then(|c| c.to_redis_params().ok());
 
         // 基本信息输入框
         let name_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx).placeholder(t!("Redis.name_placeholder"));
-            if let Some(ref c) = config.editing_connection {
+            if let Some(ref c) = connection_to_load {
                 state.set_value(c.name.clone(), window, cx);
             }
             state
@@ -514,7 +532,7 @@ impl RedisFormWindow {
             let mut state = InputState::new(window, cx)
                 .placeholder(t!("Redis.remark_placeholder"))
                 .auto_grow(3, 10);
-            if let Some(ref c) = config.editing_connection {
+            if let Some(ref c) = connection_to_load {
                 if let Some(ref remark) = c.remark {
                     state.set_value(remark.clone(), window, cx);
                 }
@@ -531,10 +549,7 @@ impl RedisFormWindow {
                 .map(WorkspaceSelectItem::from_workspace),
         );
 
-        let selected_workspace_id = config
-            .editing_connection
-            .as_ref()
-            .and_then(|c| c.workspace_id);
+        let selected_workspace_id = connection_to_load.as_ref().and_then(|c| c.workspace_id);
 
         let workspace_select = cx.new(|cx| {
             let mut state = SelectState::new(workspace_items, None, window, cx);
@@ -548,10 +563,7 @@ impl RedisFormWindow {
         let mut team_items = vec![TeamSelectItem::personal()];
         team_items.extend(config.teams.iter().map(TeamSelectItem::from_team));
 
-        let selected_team_id = config
-            .editing_connection
-            .as_ref()
-            .and_then(|c| c.team_id.clone());
+        let selected_team_id = connection_to_load.as_ref().and_then(|c| c.team_id.clone());
 
         let team_select = cx.new(|cx| {
             let mut state = SelectState::new(team_items, Some(Default::default()), window, cx);
@@ -571,7 +583,7 @@ impl RedisFormWindow {
             use_tls = p.use_tls;
         }
 
-        if let Some(ref c) = config.editing_connection {
+        if let Some(ref c) = connection_to_load {
             sync_enabled = c.sync_enabled;
         }
 
@@ -618,6 +630,7 @@ impl RedisFormWindow {
             sync_enabled,
             is_testing: false,
             test_result: None,
+            on_saved: config.on_saved,
         }
     }
 
@@ -909,6 +922,7 @@ impl RedisFormWindow {
         let editing_cloud_id = self.editing_cloud_id.clone();
         let editing_last_synced_at = self.editing_last_synced_at;
         let editing_owner_id = self.editing_owner_id.clone();
+        let on_saved = self.on_saved.clone();
 
         let storage = cx
             .global::<one_core::storage::GlobalStorageState>()
@@ -949,16 +963,19 @@ impl RedisFormWindow {
                         if let Some(notifier) = get_notifier(cx) {
                             let event = if is_editing {
                                 ConnectionDataEvent::ConnectionUpdated {
-                                    connection: saved_conn,
+                                    connection: saved_conn.clone(),
                                 }
                             } else {
                                 ConnectionDataEvent::ConnectionCreated {
-                                    connection: saved_conn,
+                                    connection: saved_conn.clone(),
                                 }
                             };
                             notifier.update(cx, |_, cx| {
                                 cx.emit(event);
                             });
+                        }
+                        if let Some(on_saved) = &on_saved {
+                            on_saved(saved_conn, cx);
                         }
                     });
                 }
@@ -1364,5 +1381,71 @@ impl Render for RedisFormWindow {
                             })),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn redis_connection(name: &str) -> StoredConnection {
+        StoredConnection::new_redis(
+            name.to_string(),
+            RedisParams {
+                host: "127.0.0.1".to_string(),
+                port: 6379,
+                password: None,
+                username: None,
+                db_index: 0,
+                mode: RedisMode::Standalone,
+                use_tls: false,
+                connect_timeout: None,
+                sentinel: None,
+                cluster: None,
+                ssh_tunnel: None,
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn initial_connection_prefills_without_edit_mode() {
+        let connection = redis_connection("imported redis");
+        let config = RedisFormWindowConfig {
+            editing_connection: None,
+            initial_connection: Some(connection),
+            on_saved: None,
+            workspaces: Vec::new(),
+            teams: Vec::new(),
+            ssh_connections: Vec::new(),
+        };
+
+        assert!(!config.is_editing());
+        assert_eq!(
+            Some("imported redis"),
+            config
+                .connection_to_load()
+                .map(|connection| connection.name.as_str())
+        );
+    }
+
+    #[test]
+    fn editing_connection_takes_precedence_over_initial_connection() {
+        let config = RedisFormWindowConfig {
+            editing_connection: Some(redis_connection("existing redis")),
+            initial_connection: Some(redis_connection("imported redis")),
+            on_saved: None,
+            workspaces: Vec::new(),
+            teams: Vec::new(),
+            ssh_connections: Vec::new(),
+        };
+
+        assert!(config.is_editing());
+        assert_eq!(
+            Some("existing redis"),
+            config
+                .connection_to_load()
+                .map(|connection| connection.name.as_str())
+        );
     }
 }

@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
 use connection_import_protocol::{DatabaseImportRecord, ImportDatabaseType, ImportRecord};
-use one_core::storage::{DatabaseType, DbConnectionConfig, StoredConnection};
+use one_core::storage::{
+    DatabaseType, DbConnectionConfig, MongoDBParams, RedisMode, RedisParams, StoredConnection,
+};
 
 use super::connection_import_draft::EditableImportDraft;
 use super::connection_import_draft_conversion::{
-    ConversionMode, normalize_identity_part, optional_port, optional_text, required_text,
+    ConversionMode, mongodb_identity, normalize_identity_part, optional_port, optional_text,
+    redis_identity, required_text,
 };
 
 struct DatabaseIdentity<'a> {
@@ -26,6 +29,10 @@ pub(crate) fn to_database_connection(
         .as_ref()
         .ok_or_else(|| "数据库导入记录缺少数据库配置".to_string())?;
     let name = required_text(&draft.name, "连接名称")?;
+    if let Some(connection) = native_external_connection(draft, imported, &name, mode)? {
+        return Ok(connection);
+    }
+
     let database_type = storage_database_type(&imported.database_type);
     let port = optional_port(&draft.port)?
         .or_else(|| default_database_port(&database_type))
@@ -49,6 +56,90 @@ pub(crate) fn to_database_connection(
     Ok(StoredConnection::from_db_connection(config))
 }
 
+fn native_external_connection(
+    draft: &EditableImportDraft,
+    imported: &DatabaseImportRecord,
+    name: &str,
+    mode: ConversionMode,
+) -> Result<Option<StoredConnection>, String> {
+    let ImportDatabaseType::External { id } = &imported.database_type else {
+        return Ok(None);
+    };
+
+    match normalize_external_driver_id(id).as_str() {
+        "mongodb" | "mongo" => Ok(Some(StoredConnection::new_mongodb(
+            name.to_string(),
+            mongodb_params(draft, mode)?,
+            None,
+        ))),
+        "redis" => Ok(Some(StoredConnection::new_redis(
+            name.to_string(),
+            redis_params(draft, mode)?,
+            None,
+        ))),
+        _ => Ok(None),
+    }
+}
+
+fn normalize_external_driver_id(driver_id: &str) -> String {
+    driver_id
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['_', '-', ' '], "")
+}
+
+fn mongodb_params(
+    draft: &EditableImportDraft,
+    mode: ConversionMode,
+) -> Result<MongoDBParams, String> {
+    Ok(MongoDBParams {
+        connection_string: String::new(),
+        host: host_for_native_external(draft, mode)?,
+        port: Some(optional_port(&draft.port)?.unwrap_or(27017)),
+        database: optional_text(&draft.database),
+        username: optional_text(&draft.username),
+        password: optional_text(&draft.password),
+        auth_source: None,
+        replica_set: None,
+        read_preference: None,
+        use_srv_record: false,
+        direct_connection: false,
+        use_tls: false,
+        connect_timeout_seconds: None,
+        application_name: None,
+    })
+}
+
+fn redis_params(draft: &EditableImportDraft, mode: ConversionMode) -> Result<RedisParams, String> {
+    Ok(RedisParams {
+        host: host_for_native_external(draft, mode)?,
+        port: optional_port(&draft.port)?.unwrap_or(6379),
+        password: optional_text(&draft.password),
+        username: optional_text(&draft.username),
+        db_index: redis_db_index(&draft.database),
+        mode: RedisMode::Standalone,
+        use_tls: false,
+        connect_timeout: None,
+        sentinel: None,
+        cluster: None,
+        ssh_tunnel: None,
+    })
+}
+
+fn host_for_native_external(
+    draft: &EditableImportDraft,
+    mode: ConversionMode,
+) -> Result<String, String> {
+    match mode {
+        ConversionMode::StrictSave => required_text(&draft.host, "主机"),
+        ConversionMode::EditorPrefill => Ok(optional_text(&draft.host).unwrap_or_default()),
+    }
+}
+
+fn redis_db_index(database: &str) -> u8 {
+    database.trim().parse().unwrap_or_default()
+}
+
 pub(crate) fn database_duplicate_identity(
     draft: &EditableImportDraft,
     record: &ImportRecord,
@@ -57,6 +148,10 @@ pub(crate) fn database_duplicate_identity(
         .database
         .as_ref()
         .ok_or_else(|| "数据库导入记录缺少数据库配置".to_string())?;
+    if let Some(identity) = native_external_duplicate_identity(draft, imported)? {
+        return Ok(identity);
+    }
+
     let database_type = storage_database_type(&imported.database_type);
     let port = optional_port(&draft.port)?
         .or_else(|| default_database_port(&database_type))
@@ -74,6 +169,31 @@ pub(crate) fn database_duplicate_identity(
         username: &draft.username,
         database,
     }))
+}
+
+fn native_external_duplicate_identity(
+    draft: &EditableImportDraft,
+    imported: &DatabaseImportRecord,
+) -> Result<Option<String>, String> {
+    let ImportDatabaseType::External { id } = &imported.database_type else {
+        return Ok(None);
+    };
+
+    match normalize_external_driver_id(id).as_str() {
+        "mongodb" | "mongo" => Ok(Some(mongodb_identity(
+            &draft.host,
+            optional_port(&draft.port)?.unwrap_or(27017),
+            &draft.username,
+            &draft.database,
+        ))),
+        "redis" => Ok(Some(redis_identity(
+            &draft.host,
+            optional_port(&draft.port)?.unwrap_or(6379),
+            &draft.username,
+            redis_db_index(&draft.database),
+        ))),
+        _ => Ok(None),
+    }
 }
 
 pub(crate) fn database_config_duplicate_identity(config: &DbConnectionConfig) -> String {
