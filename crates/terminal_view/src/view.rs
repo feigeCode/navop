@@ -746,6 +746,7 @@ pub struct TerminalView {
     font_fallbacks: Vec<SharedString>,
     line_height_scale: f32,
     cell_width: Pixels,
+    font_metrics: Option<TerminalFontMetrics>,
 
     last_size: Option<(usize, usize)>,
     /// 上一帧 alacritty 是否处于 alt screen 模式。
@@ -848,6 +849,28 @@ impl Default for TerminalScrollbarMetrics {
             line_height: px(1.0),
             cell_width: px(1.0),
         }
+    }
+}
+
+#[derive(Clone)]
+struct TerminalFontMetrics {
+    requested_family: SharedString,
+    fallbacks: Vec<SharedString>,
+    font_size: Pixels,
+    effective_family: SharedString,
+    cell_width: Pixels,
+}
+
+impl TerminalFontMetrics {
+    fn matches(
+        &self,
+        requested_family: &SharedString,
+        fallbacks: &[SharedString],
+        font_size: Pixels,
+    ) -> bool {
+        &self.requested_family == requested_family
+            && self.fallbacks == fallbacks
+            && self.font_size == font_size
     }
 }
 
@@ -1211,6 +1234,7 @@ impl TerminalView {
             font_fallbacks: default_font_fallbacks,
             line_height_scale: default_line_height_scale,
             cell_width: DEFAULT_CELL_WIDTH,
+            font_metrics: None,
             // 初始化为 None，确保首次渲染时会触发 resize，
             // 将正确的终端尺寸发送给 PTY
             last_size: None,
@@ -2218,11 +2242,13 @@ impl TerminalView {
         if (current - clamped).abs() >= f32::EPSILON {
             self.font_size = px(clamped);
             self.line_height = self.font_size * self.line_height_scale;
+            self.font_metrics = None;
             self.last_size = None;
         }
         let font_family = SharedString::from(normalize_terminal_primary_font(&font_family));
         if self.font_family != font_family {
             self.font_family = font_family.clone();
+            self.font_metrics = None;
             self.last_size = None;
         }
 
@@ -2436,6 +2462,7 @@ impl TerminalView {
     /// 设置主字体
     pub fn set_font_family(&mut self, family: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.font_family = normalize_terminal_primary_font(family.into().as_ref()).into();
+        self.font_metrics = None;
         self.last_size = None;
         cx.notify();
     }
@@ -3218,6 +3245,74 @@ impl TerminalView {
         let text: String = line[..].iter().map(|cell| cell.c).collect();
         text.trim_end_matches(|c: char| c == ' ' || c == '\0')
             .to_string()
+    }
+
+    fn terminal_font_metrics(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TerminalFontMetrics {
+        if let Some(metrics) = &self.font_metrics {
+            if metrics.matches(&self.font_family, &self.font_fallbacks, self.font_size) {
+                return metrics.clone();
+            }
+        }
+
+        let metrics = self.refresh_terminal_font_metrics(window, cx);
+        self.font_metrics = Some(metrics.clone());
+        metrics
+    }
+
+    fn refresh_terminal_font_metrics(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> TerminalFontMetrics {
+        let installed_font_names = cx.text_system().all_font_names();
+        let effective_family: SharedString = resolve_installed_grid_monospace_font_family(
+            self.font_family.as_ref(),
+            &installed_font_names,
+        )
+        .into();
+        let font = self.terminal_font(effective_family.clone());
+        let font_id = window.text_system().resolve_font(&font);
+        let measured_widths = "mMW@#0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            .chars()
+            .filter_map(|ch| {
+                window
+                    .text_system()
+                    .advance(font_id, self.font_size, ch)
+                    .map(|size| size.width)
+                    .ok()
+            });
+        TerminalFontMetrics {
+            requested_family: self.font_family.clone(),
+            fallbacks: self.font_fallbacks.clone(),
+            font_size: self.font_size,
+            effective_family,
+            cell_width: terminal_cell_width_from_advances(self.font_size, measured_widths),
+        }
+    }
+
+    fn terminal_font(&self, family: SharedString) -> Font {
+        let fallbacks = if self.font_fallbacks.is_empty() {
+            None
+        } else {
+            Some(FontFallbacks::from_fonts(
+                self.font_fallbacks
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
+            ))
+        };
+        let features = FontFeatures(Arc::new(vec![("calt".to_string(), 0)]));
+        Font {
+            family,
+            weight: FontWeight::NORMAL,
+            style: FontStyle::Normal,
+            features,
+            fallbacks,
+        }
     }
 
     fn render_terminal(
@@ -4297,49 +4392,11 @@ impl TabContent for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let installed_font_names = cx.text_system().all_font_names();
-        let effective_font_family: SharedString = resolve_installed_grid_monospace_font_family(
-            self.font_family.as_ref(),
-            &installed_font_names,
-        )
-        .into();
+        let font_metrics = self.terminal_font_metrics(window, cx);
+        let effective_font_family = font_metrics.effective_family.clone();
 
-        // 创建与 terminal_element 一致的字体配置（包含 fallbacks）
-        let fallbacks = if self.font_fallbacks.is_empty() {
-            None
-        } else {
-            Some(FontFallbacks::from_fonts(
-                self.font_fallbacks
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>(),
-            ))
-        };
-        let features = FontFeatures(std::sync::Arc::new(vec![("calt".to_string(), 0)]));
-
-        let font = Font {
-            family: effective_font_family.clone(),
-            weight: FontWeight::NORMAL,
-            style: FontStyle::Normal,
-            features,
-            fallbacks,
-        };
-        let font_id = window.text_system().resolve_font(&font);
-        // 使用一组 ASCII glyph 的最大 advance 计算 cell_width。
-        // 部分字体虽然被系统标记为 monospace，但单个 'm' 不能代表最宽终端 glyph。
-        let measured_widths = "mMW@#0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            .chars()
-            .filter_map(|ch| {
-                window
-                    .text_system()
-                    .advance(font_id, self.font_size, ch)
-                    .map(|size| size.width)
-                    .ok()
-            });
-        let new_cell_width = terminal_cell_width_from_advances(self.font_size, measured_widths);
-
-        if self.cell_width != new_cell_width {
-            self.cell_width = new_cell_width;
+        if self.cell_width != font_metrics.cell_width {
+            self.cell_width = font_metrics.cell_width;
             self.last_size = None;
         }
 
@@ -4946,6 +5003,22 @@ mod tests {
         assert!(!source.contains("pub font_family"));
         assert!(!source.contains("pub font_fallbacks"));
         assert!(!source.contains("pub line_height_scale"));
+    }
+
+    #[test]
+    fn terminal_render_uses_cached_font_metrics() {
+        let source = include_str!("view.rs");
+        let render_start = source
+            .find("fn render(&mut self, window: &mut Window, cx: &mut Context<Self>)")
+            .expect("render method should exist");
+        let render_end = render_start
+            + source[render_start..]
+                .find("        self.line_height = self.font_size * self.line_height_scale;")
+                .expect("render setup should update line height");
+        let render_setup = &source[render_start..render_end];
+
+        assert!(source.contains("fn refresh_terminal_font_metrics("));
+        assert!(!render_setup.contains("cx.text_system().all_font_names()"));
     }
 
     #[test]

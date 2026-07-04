@@ -4,9 +4,9 @@ use super::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
 use super::data_grid::DataGrid;
 use db::{ColumnInfo, FieldType};
 use gpui::{
-    App, AppContext, ClipboardItem, Context, InteractiveElement, IntoElement, ParentElement as _,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
-    prelude::FluentBuilder, px,
+    App, AppContext, ClipboardItem, Context, Font, InteractiveElement, IntoElement,
+    ParentElement as _, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::calendar::Date;
 use gpui_component::date_picker::{DatePickerEvent, DatePickerState};
@@ -119,6 +119,13 @@ pub struct EditorTableDelegate {
     primary_key_indices: Vec<usize>,
     /// Data grid handle for context menu actions
     data_grid: Option<WeakEntity<DataGrid>>,
+    preview_font_cache: Option<PreviewFontCache>,
+}
+
+#[derive(Clone)]
+struct PreviewFontCache {
+    requested_family: String,
+    font: Font,
 }
 
 fn parse_primary_order_by_clause(order_by_clause: &str) -> Option<(String, ColumnSort)> {
@@ -204,6 +211,7 @@ impl Clone for EditorTableDelegate {
             table_name: self.table_name.clone(),
             primary_key_indices: self.primary_key_indices.clone(),
             data_grid: self.data_grid.clone(),
+            preview_font_cache: self.preview_font_cache.clone(),
         }
     }
 }
@@ -243,7 +251,25 @@ impl EditorTableDelegate {
             table_name: SharedString::default(),
             primary_key_indices: Vec::new(),
             data_grid: None,
+            preview_font_cache: None,
         }
+    }
+
+    fn preview_font(&mut self, cx: &mut Context<EditTableState<Self>>) -> Font {
+        let font_family = AppSettings::global(cx).table_preview_font_family.clone();
+        if let Some(cache) = &self.preview_font_cache
+            && cache.requested_family == font_family
+        {
+            return cache.font.clone();
+        }
+
+        let installed_font_names = cx.text_system().all_font_names();
+        let font = installed_grid_monospace_font(&font_family, &installed_font_names);
+        self.preview_font_cache = Some(PreviewFontCache {
+            requested_family: font_family,
+            font: font.clone(),
+        });
+        font
     }
 
     pub fn set_data_grid(&mut self, data_grid: WeakEntity<DataGrid>) {
@@ -876,14 +902,11 @@ impl EditTableDelegate for EditorTableDelegate {
             })
             .unwrap_or_default();
 
-        let installed_font_names = cx.text_system().all_font_names();
+        let font = self.preview_font(cx);
 
         h_flex()
             .id(SharedString::from(format!("col-{}", col_ix)))
-            .font(installed_grid_monospace_font(
-                &AppSettings::global(cx).table_preview_font_family,
-                &installed_font_names,
-            ))
+            .font(font)
             .size_full()
             .items_center()
             .justify_between()
@@ -1360,9 +1383,7 @@ impl EditTableDelegate for EditorTableDelegate {
             .cloned()
             .unwrap_or(None);
 
-        let font_family = &AppSettings::global(cx).table_preview_font_family;
-        let installed_font_names = cx.text_system().all_font_names();
-        let font = installed_grid_monospace_font(font_family, &installed_font_names);
+        let font = self.preview_font(cx);
 
         match value {
             None => div()

@@ -113,7 +113,18 @@ fn connection_node(id: String, name: String, config: &DbConnectionConfig) -> DbN
 }
 
 fn external_driver_metadata(config: &DbConnectionConfig) -> HashMap<String, String> {
-    let registry = db::ipc::IpcDriverRegistry::load_default();
+    external_driver_metadata_with_registry_loader(config, db::ipc::IpcDriverRegistry::load_default)
+}
+
+fn external_driver_metadata_with_registry_loader(
+    config: &DbConnectionConfig,
+    load_registry: impl FnOnce() -> db::ipc::IpcDriverRegistry,
+) -> HashMap<String, String> {
+    if !config.database_type.is_external() {
+        return HashMap::new();
+    }
+
+    let registry = load_registry();
     external_driver_metadata_from_registry(config, &registry)
 }
 
@@ -798,6 +809,32 @@ impl DbTreeView {
                 depth: 0,
             })
             .collect()
+    }
+
+    pub fn selected_or_first_node_id(&self) -> Option<String> {
+        self.selected_node_id
+            .clone()
+            .or_else(|| self.flat_entries.first().map(|entry| entry.node_id.clone()))
+    }
+
+    pub fn selected_or_first_node_id_for_types(&self, node_types: &[DbNodeType]) -> Option<String> {
+        if let Some(node_id) = self.selected_node_id_for_types(node_types) {
+            return Some(node_id);
+        }
+        self.flat_entries.iter().find_map(|entry| {
+            self.db_nodes
+                .get(&entry.node_id)
+                .filter(|node| node_types.contains(&node.node_type))
+                .map(|_| entry.node_id.clone())
+        })
+    }
+
+    fn selected_node_id_for_types(&self, node_types: &[DbNodeType]) -> Option<String> {
+        let node_id = self.selected_node_id.as_ref()?;
+        self.db_nodes
+            .get(node_id)
+            .filter(|node| node_types.contains(&node.node_type))
+            .map(|_| node_id.clone())
     }
 
     /// 处理全局连接数据变更事件
@@ -3091,6 +3128,18 @@ mod tests {
             Some(&"icons/duckdb.svg".to_string()),
             metadata.get(EXTERNAL_DRIVER_ICON_METADATA)
         );
+    }
+
+    #[test]
+    fn builtin_connection_metadata_does_not_load_external_display() {
+        let mut config = external_config("demo");
+        config.database_type = DatabaseType::MySQL;
+
+        let metadata = external_driver_metadata_with_registry_loader(&config, || {
+            panic!("builtin database metadata should not load external driver registry")
+        });
+
+        assert!(metadata.is_empty());
     }
 
     #[test]
