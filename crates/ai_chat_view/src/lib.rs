@@ -50,6 +50,7 @@ mod resource_builder_tests;
 mod send_button;
 mod session_service;
 mod session_sidebar;
+mod theme;
 
 pub use acp::{
     AcpAgentConfig, AcpConnection, AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome,
@@ -110,6 +111,7 @@ pub use resource_builder::{
 pub use send_button::{SendButton, SendButtonEvent, SendButtonState};
 pub use session_service::{SessionError, SessionService, extract_session_name};
 pub use session_sidebar::{SessionSummary, format_timestamp, session_row};
+pub use theme::AgentChatTheme;
 
 /// 初始化 `ai_chat_view`:确保全局卡片注册表存在。
 ///

@@ -5,10 +5,11 @@
 //! 通过 [`CardRegistry::register_global`] 注册。
 
 use crate::card::{CardMessage, CardRegistry, ChatCard};
+use crate::theme::active_agent_chat_theme;
 use crate::{ChartJsonBlock, ChartType, parse_chart_json_block};
 use gpui::prelude::FluentBuilder;
 use gpui::{AnyElement, App, FontWeight, IntoElement, ParentElement, Styled, Window, div, px};
-use gpui_component::{ActiveTheme, h_flex, v_flex};
+use gpui_component::{h_flex, v_flex};
 use std::sync::Arc;
 
 /// 示例卡片：把消息内容当作 JSON 美化后逐行展示。
@@ -22,6 +23,7 @@ impl ChatCard for JsonCard {
     }
 
     fn render(&self, msg: &CardMessage, _window: &mut Window, cx: &mut App) -> AnyElement {
+        let theme = active_agent_chat_theme(cx);
         let pretty = serde_json::from_str::<serde_json::Value>(msg.content)
             .ok()
             .and_then(|value| serde_json::to_string_pretty(&value).ok())
@@ -32,7 +34,7 @@ impl ChatCard for JsonCard {
             .map(|line| {
                 div()
                     .text_sm()
-                    .text_color(cx.theme().foreground)
+                    .text_color(theme.foreground)
                     .child(line.to_string())
                     .into_any_element()
             })
@@ -44,12 +46,12 @@ impl ChatCard for JsonCard {
             .p_3()
             .rounded_lg()
             .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().muted)
+            .border_color(theme.border)
+            .bg(theme.panel)
             .child(
                 div()
                     .text_xs()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(theme.muted_foreground)
                     .child("JSON 卡片(示例)"),
             )
             .child(v_flex().w_full().children(lines))
@@ -71,14 +73,15 @@ impl ChatCard for ChartJsonCard {
         let Some(chart) = parse_chart_json_block(msg.content, Some("chart-json")) else {
             return invalid_chart_card(msg.content, cx);
         };
+        let theme = active_agent_chat_theme(cx);
         v_flex()
             .w_full()
             .gap_2()
             .p_3()
             .rounded_lg()
             .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
+            .border_color(theme.border)
+            .bg(theme.background)
             .child(render_chart_header(&chart, cx))
             .child(render_chart_body(&chart, cx))
             .into_any_element()
@@ -92,6 +95,7 @@ pub fn register_builtin_cards(cx: &mut App) {
 }
 
 fn render_chart_header(chart: &ChartJsonBlock, cx: &mut App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     let title = chart.title.as_deref().unwrap_or(match chart.chart_type {
         ChartType::Line => "Line Chart",
         ChartType::Bar => "Bar Chart",
@@ -109,7 +113,7 @@ fn render_chart_header(chart: &ChartJsonBlock, cx: &mut App) -> AnyElement {
             this.child(
                 div()
                     .text_xs()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(theme.muted_foreground)
                     .child(description),
             )
         })
@@ -124,6 +128,7 @@ fn render_chart_body(chart: &ChartJsonBlock, cx: &mut App) -> AnyElement {
 }
 
 fn render_xy_points(chart: &ChartJsonBlock, cx: &mut App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     let points = chart.to_xy_points();
     let max_y = points.iter().map(|point| point.y).fold(0.0_f64, f64::max);
     v_flex()
@@ -139,23 +144,18 @@ fn render_xy_points(chart: &ChartJsonBlock, cx: &mut App) -> AnyElement {
                     div()
                         .w(px(88.0))
                         .text_xs()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(theme.muted_foreground)
                         .child(point.x),
                 )
-                .child(
-                    div()
-                        .h(px(10.0))
-                        .w(px(width))
-                        .rounded_sm()
-                        .bg(cx.theme().accent),
-                )
+                .child(div().h(px(10.0)).w(px(width)).rounded_sm().bg(theme.accent))
                 .child(div().text_xs().child(format_number(point.y)))
                 .into_any_element()
         }))
         .into_any_element()
 }
 
-fn render_pie_points(chart: &ChartJsonBlock, _cx: &mut App) -> AnyElement {
+fn render_pie_points(chart: &ChartJsonBlock, cx: &mut App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     v_flex()
         .w_full()
         .gap_1()
@@ -165,25 +165,37 @@ fn render_pie_points(chart: &ChartJsonBlock, _cx: &mut App) -> AnyElement {
                 .items_center()
                 .justify_between()
                 .gap_2()
-                .child(div().text_xs().child(point.category))
-                .child(div().text_xs().child(format_number(point.value)))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(point.category),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.foreground)
+                        .child(format_number(point.value)),
+                )
                 .into_any_element()
         }))
         .into_any_element()
 }
 
 fn invalid_chart_card(content: &str, cx: &mut App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     v_flex()
         .w_full()
         .gap_1()
         .p_3()
         .rounded_lg()
         .border_1()
-        .border_color(cx.theme().border)
+        .border_color(theme.border)
+        .bg(theme.panel)
         .child(
             div()
                 .text_xs()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(theme.muted_foreground)
                 .child("无效 chart-json 卡片"),
         )
         .child(div().text_sm().child(content.to_string()))

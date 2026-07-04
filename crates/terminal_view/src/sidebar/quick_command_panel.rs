@@ -6,7 +6,7 @@ use gpui::prelude::*;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, ParentElement, Render,
-    SharedString, Styled, UniformListScrollHandle, Window, div, px, uniform_list,
+    SharedString, Styled, UniformListScrollHandle, Window, div, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, WindowExt,
@@ -343,38 +343,8 @@ impl QuickCommandPanel {
         });
     }
 
-    /// 渲染面板操作栏。标题和关闭由终端侧边栏宿主统一渲染。
-    fn render_action_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border = self.colors.border;
-        let muted_bg = self.colors.muted;
-
-        h_flex()
-            .flex_shrink_0()
-            .w_full()
-            .h(px(32.0))
-            .px_2()
-            .items_center()
-            .justify_end()
-            .border_b_1()
-            .border_color(border)
-            .bg(muted_bg)
-            .child(
-                h_flex().gap_1().child(
-                    Button::new("add-command")
-                        .icon(IconName::Plus)
-                        .ghost()
-                        .xsmall()
-                        .tooltip(t!("QuickCommand.add_tooltip").to_string())
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.show_add_input = true;
-                            cx.notify();
-                        })),
-                ),
-            )
-    }
-
     /// 渲染搜索栏
-    fn render_search_bar(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_search_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let has_query = !self.search_query.is_empty();
         let border = self.colors.border;
         let muted_fg = self.colors.muted_foreground;
@@ -395,6 +365,17 @@ impl QuickCommandPanel {
                         .appearance(false)
                         .cleanable(has_query),
                 ),
+            )
+            .child(
+                Button::new("add-command")
+                    .icon(IconName::Plus)
+                    .ghost()
+                    .xsmall()
+                    .tooltip(t!("QuickCommand.add_tooltip").to_string())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.show_add_input = true;
+                        cx.notify();
+                    })),
             )
     }
 
@@ -649,7 +630,6 @@ impl Render for QuickCommandPanel {
             .size_full()
             .bg(self.colors.background)
             .text_color(self.colors.foreground)
-            .child(self.render_action_bar(cx))
             .child(self.render_search_bar(cx))
             .when(show_add, |this| this.child(self.render_add_input(cx)))
             .when(is_loading, |this| this.child(self.render_loading_state(cx)))

@@ -16,8 +16,8 @@ use one_core::{
 };
 
 use crate::{
-    AcpAgentConfig, AgentChatView, AgentChatViewConfig, AgentChatViewEvent, CodeBlockAction,
-    MentionItem, build_acp_agent_configs, build_plan_tool_registry,
+    AcpAgentConfig, AgentChatTheme, AgentChatView, AgentChatViewConfig, AgentChatViewEvent,
+    CodeBlockAction, MentionItem, build_acp_agent_configs, build_plan_tool_registry,
 };
 
 #[derive(Clone, Debug)]
@@ -37,6 +37,7 @@ pub struct DefaultAgentChatPanel {
         Vec<agent_runtime::ResourceRef>,
     )>,
     pending_code_block_actions: Vec<CodeBlockAction>,
+    theme: Option<AgentChatTheme>,
     error: Option<String>,
 }
 
@@ -75,6 +76,7 @@ impl DefaultAgentChatPanel {
             pending_system_instruction: None,
             pending_resource_context: None,
             pending_code_block_actions: Vec::new(),
+            theme: None,
             error: None,
         };
         Self::spawn_build_view(resources, mentions, available_resources, window, cx);
@@ -140,6 +142,14 @@ impl DefaultAgentChatPanel {
         }
     }
 
+    pub fn set_theme(&mut self, theme: Option<AgentChatTheme>, cx: &mut Context<Self>) {
+        self.theme = theme.clone();
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.set_theme(theme, cx));
+        }
+        cx.notify();
+    }
+
     fn spawn_build_view(
         resources: agent_runtime::ResourceContext,
         mentions: Vec<MentionItem>,
@@ -179,7 +189,10 @@ impl DefaultAgentChatPanel {
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 if let Some(panel) = this.upgrade() {
                     panel.update(cx, |panel, cx| match config {
-                        Ok(config) => {
+                        Ok(mut config) => {
+                            if let Some(theme) = panel.theme.clone() {
+                                config = config.with_theme(theme);
+                            }
                             let view = AgentChatView::view_with_config(config, window, cx);
                             let view_subscription =
                                 cx.subscribe(&view, |_, _, event: &AgentChatViewEvent, cx| {
@@ -244,9 +257,20 @@ impl Focusable for DefaultAgentChatPanel {
 
 impl Render for DefaultAgentChatPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted_foreground = self
+            .theme
+            .as_ref()
+            .map(|theme| theme.muted_foreground)
+            .unwrap_or(cx.theme().muted_foreground);
+        let background = self
+            .theme
+            .as_ref()
+            .map(|theme| theme.background)
+            .unwrap_or(cx.theme().background);
         div()
             .track_focus(&self.focus_handle)
             .size_full()
+            .bg(background)
             .when_some(self.view.clone(), |this, view| this.child(view))
             .when(self.view.is_none(), |this| {
                 this.child(
@@ -255,7 +279,7 @@ impl Render for DefaultAgentChatPanel {
                         .items_center()
                         .justify_center()
                         .gap_2()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(muted_foreground)
                         .child(
                             self.error
                                 .clone()

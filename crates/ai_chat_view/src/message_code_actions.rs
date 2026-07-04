@@ -2,6 +2,7 @@ use crate::card::{CardMessage, ChatCard};
 use crate::cards::ChartJsonCard;
 use crate::code_block::CodeBlockActionRegistry;
 use crate::parse_chart_json_block;
+use crate::theme::{AgentChatTheme, active_agent_chat_theme, with_agent_chat_theme};
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{
@@ -16,15 +17,24 @@ const COPY_CODE_ACTION_ID: &str = "copy-code";
 pub(crate) fn apply_code_block_features(
     text_view: TextView,
     registry: Option<&CodeBlockActionRegistry>,
+    theme: Option<&AgentChatTheme>,
 ) -> TextView {
     let toolbar_registry = registry.cloned();
+    let toolbar_theme = theme.cloned();
+    let renderer_theme = theme.cloned();
     text_view
         .code_block_actions(move |block, _window, cx| {
-            render_code_block_toolbar(block, toolbar_registry.as_ref(), cx)
+            let theme = toolbar_theme
+                .clone()
+                .unwrap_or_else(|| active_agent_chat_theme(cx));
+            render_code_block_toolbar(block, toolbar_registry.as_ref(), &theme, cx)
         })
-        .code_block_renderer(|block, _options, default, window, cx| {
+        .code_block_renderer(move |block, _options, default, window, cx| {
             if is_renderable_chart_code_block(block.code().as_ref(), block.lang().as_deref()) {
-                render_chart_code_block(block, window, cx)
+                let theme = renderer_theme
+                    .clone()
+                    .unwrap_or_else(|| active_agent_chat_theme(cx));
+                with_agent_chat_theme(&theme, || render_chart_code_block(block, window, cx))
             } else {
                 default
             }
@@ -34,6 +44,7 @@ pub(crate) fn apply_code_block_features(
 fn render_code_block_toolbar(
     block: &CodeBlock,
     registry: Option<&CodeBlockActionRegistry>,
+    theme: &AgentChatTheme,
     _cx: &App,
 ) -> AnyElement {
     let code = block.code();
@@ -43,7 +54,7 @@ fn render_code_block_toolbar(
         lang.as_deref().unwrap_or("text"),
         code.len()
     ));
-    let mut row = h_flex().gap_1().child(
+    let mut row = h_flex().gap_1().text_color(theme.code_foreground).child(
         Clipboard::new(copy_id)
             .value(code.clone())
             .tooltip("复制代码"),

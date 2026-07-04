@@ -6,7 +6,7 @@ use std::{
 
 use gpui::{
     AnyElement, App, DefiniteLength, Div, ElementId, FontStyle, FontWeight, Half, HighlightStyle,
-    InteractiveElement as _, IntoElement, Length, ObjectFit, ParentElement, SharedString,
+    Hsla, InteractiveElement as _, IntoElement, Length, ObjectFit, ParentElement, SharedString,
     SharedUri, StatefulInteractiveElement, Styled, StyledImage as _, Window, div, img,
     prelude::FluentBuilder as _, px, relative, rems,
 };
@@ -26,6 +26,38 @@ use crate::{
 };
 
 use super::{TextViewStyle, utils::list_item_prefix};
+
+fn text_foreground(style: &TextViewStyle, cx: &App) -> Hsla {
+    style.foreground.unwrap_or(cx.theme().foreground)
+}
+
+fn muted_foreground(style: &TextViewStyle, cx: &App) -> Hsla {
+    style
+        .muted_foreground
+        .unwrap_or(cx.theme().muted_foreground)
+}
+
+fn markdown_border(style: &TextViewStyle, cx: &App) -> Hsla {
+    style.border.unwrap_or(cx.theme().border)
+}
+
+fn code_background(style: &TextViewStyle, cx: &App) -> Hsla {
+    style.code_background.unwrap_or(cx.theme().muted)
+}
+
+fn code_foreground(style: &TextViewStyle, cx: &App) -> Hsla {
+    style.code_foreground.unwrap_or(cx.theme().foreground)
+}
+
+fn table_row_background(style: &TextViewStyle, row_ix: usize) -> Option<Hsla> {
+    if row_ix == 0 {
+        style.table_header
+    } else if row_ix % 2 == 0 {
+        style.table_row_alt
+    } else {
+        style.table_row
+    }
+}
 
 /// The block-level nodes.
 #[derive(Debug, Clone, PartialEq)]
@@ -564,7 +596,8 @@ impl CodeBlock {
                     .id(("codeblock", options.ix))
                     .p_3()
                     .rounded(cx.theme().radius)
-                    .bg(cx.theme().muted)
+                    .bg(code_background(style, cx))
+                    .text_color(code_foreground(style, cx))
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(cx.theme().mono_font_size)
                     .relative()
@@ -582,7 +615,7 @@ impl CodeBlock {
                                 .absolute()
                                 .top_2()
                                 .right_2()
-                                .bg(cx.theme().muted)
+                                .bg(code_background(style, cx))
                                 .rounded(cx.theme().radius)
                                 .child(actions(&self, window, cx)),
                         )
@@ -710,11 +743,12 @@ impl Paragraph {
                         });
                     }
                     if style.code {
-                        highlight.background_color = Some(cx.theme().accent);
+                        highlight.background_color = Some(code_background(&node_cx.style, cx));
+                        highlight.color = Some(code_foreground(&node_cx.style, cx));
                     }
 
                     if let Some(mut link_mark) = style.link.clone() {
-                        highlight.color = Some(cx.theme().link);
+                        highlight.color = Some(node_cx.style.link.unwrap_or(cx.theme().link));
                         highlight.underline = Some(gpui::UnderlineStyle {
                             thickness: gpui::px(1.),
                             ..Default::default()
@@ -1096,7 +1130,7 @@ impl BlockNode {
                         .id(("table", options.ix))
                         .w_full()
                         .border_1()
-                        .border_color(cx.theme().border)
+                        .border_color(markdown_border(&node_cx.style, cx))
                         .rounded(cx.theme().radius)
                         .children({
                             let mut rows = Vec::with_capacity(table.children.len());
@@ -1108,9 +1142,14 @@ impl BlockNode {
                                         .when(row_ix < table.children.len() - 1, |this| {
                                             this.border_b_1()
                                         })
-                                        .border_color(cx.theme().border)
+                                        .border_color(markdown_border(&node_cx.style, cx))
                                         .flex()
                                         .flex_row()
+                                        .text_color(text_foreground(&node_cx.style, cx))
+                                        .when_some(
+                                            table_row_background(&node_cx.style, row_ix),
+                                            |this, bg| this.bg(bg),
+                                        )
                                         .children({
                                             let mut cells = Vec::with_capacity(row.children.len());
                                             for (ix, cell) in row.children.iter().enumerate() {
@@ -1139,8 +1178,9 @@ impl BlockNode {
                                                         .px_2()
                                                         .py_1()
                                                         .when(!is_last_col, |this| {
-                                                            this.border_r_1()
-                                                                .border_color(cx.theme().border)
+                                                            this.border_r_1().border_color(
+                                                                markdown_border(&node_cx.style, cx),
+                                                            )
                                                         })
                                                         .child(
                                                             cell.children
@@ -1220,9 +1260,14 @@ impl BlockNode {
                     div()
                         .id(("blockquote", ix))
                         .w_full()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(muted_foreground(&node_cx.style, cx))
                         .border_l_3()
-                        .border_color(cx.theme().secondary_active)
+                        .border_color(
+                            node_cx
+                                .style
+                                .quote_border
+                                .unwrap_or(cx.theme().secondary_active),
+                        )
                         .px_4()
                         .children({
                             let children_len = children.len();

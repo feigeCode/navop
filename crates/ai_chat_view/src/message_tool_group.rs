@@ -1,11 +1,12 @@
 use crate::agent_cards::{TOOL_CARD, ToolCardData};
+use crate::theme::AgentChatTheme;
 use crate::{ChatMessageUI, MessageVariant};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div,
 };
-use gpui_component::{ActiveTheme, Icon, IconName, Sizable, h_flex, v_flex};
+use gpui_component::{Icon, IconName, Sizable, h_flex, v_flex};
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
@@ -92,7 +93,8 @@ pub(crate) fn message_render_items(messages: &[ChatMessageUI]) -> Vec<MessageRen
 pub(crate) fn render_tool_target_group(
     group: ToolTargetGroup<'_>,
     children: Vec<AnyElement>,
-    cx: &mut App,
+    theme: &AgentChatTheme,
+    _cx: &mut App,
 ) -> AnyElement {
     let expanded = !is_tool_target_group_collapsed(&group.id);
     let group_id = group.id.clone();
@@ -102,7 +104,7 @@ pub(crate) fn render_tool_target_group(
     } else {
         IconName::ChevronRight
     };
-    let hover_bg = cx.theme().muted;
+    let hover_bg = theme.panel_hover;
     let target_title = group.target_title();
 
     v_flex()
@@ -128,7 +130,7 @@ pub(crate) fn render_tool_target_group(
                 .child(
                     Icon::new(chevron)
                         .xsmall()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(theme.muted_foreground)
                         .flex_shrink_0(),
                 )
                 .child(
@@ -137,7 +139,7 @@ pub(crate) fn render_tool_target_group(
                         .min_w_0()
                         .text_xs()
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(theme.muted_foreground)
                         .truncate()
                         .child(format!(
                             "{target_title} · {} 个工具结果",

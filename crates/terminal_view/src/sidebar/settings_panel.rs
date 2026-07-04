@@ -1546,6 +1546,7 @@ impl Render for SettingsPanel {
                     .child(
                         v_flex()
                             .flex_shrink_0()
+                            .pb_4()
                             .child(self.render_search_section(cx))
                             .child(self.render_font_section(cx))
                             .child(self.render_cursor_section(cx))

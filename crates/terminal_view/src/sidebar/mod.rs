@@ -21,8 +21,8 @@ use crate::{
     theme::{TerminalColors, TerminalTheme},
 };
 use ai_chat_view::{
-    CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent, LanguageMatcher,
-    build_agent_context_single,
+    AgentChatTheme, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent,
+    LanguageMatcher, build_agent_context_single,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -53,6 +53,29 @@ const TERMINAL_AI_SYSTEM_INSTRUCTION: &str = r#"你是终端侧边栏中的 Linu
 5. 解释、注意事项、风险提示、步骤标题必须写在代码块外面，保持简洁。
 6. 如果命令依赖 sudo、包管理器或发行版差异，请先简短说明再给命令。
 7. 如果用户明确要求非 Linux 平台、非命令答案或更详细的解释，再按用户要求调整。"#;
+
+fn agent_theme_from_terminal_theme(theme: &TerminalTheme) -> AgentChatTheme {
+    let colors = theme.colors();
+    AgentChatTheme {
+        is_dark: theme.is_dark(),
+        background: colors.background,
+        foreground: colors.foreground,
+        muted: colors.muted,
+        muted_foreground: colors.muted_foreground,
+        border: colors.border,
+        panel: colors.muted,
+        panel_hover: colors.muted.opacity(0.72),
+        accent: colors.accent,
+        accent_foreground: colors.accent_foreground,
+        code_background: colors.muted,
+        code_foreground: colors.foreground,
+        table_header: colors.muted,
+        table_row: colors.background,
+        table_row_alt: colors.muted.opacity(0.35),
+        quote_border: colors.border,
+        link: colors.accent,
+    }
+}
 
 /// 侧边栏面板类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -403,7 +426,9 @@ impl TerminalSidebar {
 
         // 注册 bash/sh 代码块操作，并注入终端专属提示词
         let sidebar_entity = cx.entity();
+        let ai_theme = agent_theme_from_terminal_theme(initial_theme);
         ai_chat_panel.update(cx, |panel, cx| {
+            panel.set_theme(Some(ai_theme), cx);
             panel.set_system_instruction(Some(TERMINAL_AI_SYSTEM_INSTRUCTION.to_string()), cx);
             // 注册复制操作（默认已有，这里只是确保）
             // 注册粘贴到终端操作
@@ -702,6 +727,9 @@ impl TerminalSidebar {
         });
         self.quick_command_panel.update(cx, |panel, cx| {
             panel.set_colors(self.colors.clone(), cx);
+        });
+        self.ai_chat_panel.update(cx, |panel, cx| {
+            panel.set_theme(Some(agent_theme_from_terminal_theme(theme)), cx);
         });
         if let Some(ref monitor_panel) = self.server_monitor_panel {
             monitor_panel.update(cx, |panel, cx| {
@@ -1143,7 +1171,8 @@ impl Render for TerminalSidebar {
 
 #[cfg(test)]
 mod tests {
-    use super::{SidebarPanel, TerminalToolDockState};
+    use super::{SidebarPanel, TerminalToolDockState, agent_theme_from_terminal_theme};
+    use crate::theme::TerminalTheme;
     use one_core::sidebar_contribution::SidebarPlacement;
 
     #[test]
@@ -1152,6 +1181,23 @@ mod tests {
 
         assert!(dock.toolbar_visible());
         assert!(dock.open_panels().is_empty());
+    }
+
+    #[test]
+    fn agent_theme_preserves_terminal_dark_mode_for_markdown() {
+        let terminal_theme = TerminalTheme::matrix();
+        let agent_theme = agent_theme_from_terminal_theme(&terminal_theme);
+        let markdown_style = agent_theme.markdown_style();
+
+        assert!(terminal_theme.is_dark());
+        assert!(agent_theme.is_dark);
+        assert!(markdown_style.is_dark);
+        assert_eq!(
+            Some(agent_theme.code_background),
+            markdown_style.code_background
+        );
+        assert_eq!(Some(agent_theme.table_header), markdown_style.table_header);
+        assert_eq!(Some(agent_theme.quote_border), markdown_style.quote_border);
     }
 
     #[test]

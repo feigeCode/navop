@@ -10,6 +10,7 @@
 //! 这里定义共享的数据结构(序列化契约)与渲染实现,二者共用同一份 schema。
 
 use crate::card::{CardMessage, CardRegistry, ChatCard};
+use crate::theme::{active_agent_chat_theme, themed_markdown};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, AnyElement, App, AppContext, Entity, InteractiveElement, IntoElement, ParentElement,
@@ -20,7 +21,6 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState},
-    text::TextView,
     v_flex,
 };
 use serde::{Deserialize, Serialize};
@@ -240,18 +240,19 @@ impl ChatCard for ToolCard {
     }
 
     fn render(&self, msg: &CardMessage, window: &mut Window, cx: &mut App) -> AnyElement {
+        let theme = active_agent_chat_theme(cx);
         let Some(data) = ToolCardData::from_json(msg.content) else {
             return fallback(msg.content, cx);
         };
 
         let (status_glyph, status_color) = if data.running {
-            ("●", cx.theme().muted_foreground)
+            ("●", theme.muted_foreground)
         } else if data.success == Some(true) {
             ("✓", cx.theme().success)
         } else if data.success == Some(false) {
             ("✗", cx.theme().danger)
         } else {
-            ("•", cx.theme().muted_foreground)
+            ("•", theme.muted_foreground)
         };
         let has_details =
             !data.input_json.is_empty() || !data.summary.is_empty() || !data.data_text.is_empty();
@@ -259,7 +260,7 @@ impl ChatCard for ToolCard {
         let toggle_state = self.expanded.clone();
         let message_id = msg.id.to_string();
         let toggle_id = SharedString::from(format!("agent-tool-card-toggle-{}", data.call_id));
-        let hover_bg = cx.theme().background;
+        let hover_bg = theme.panel_hover;
 
         let mut card = v_flex()
             .w_full()
@@ -267,8 +268,8 @@ impl ChatCard for ToolCard {
             .p_2()
             .rounded_lg()
             .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().muted)
+            .border_color(theme.border)
+            .bg(theme.panel)
             .child(
                 h_flex()
                     .id(toggle_id)
@@ -302,7 +303,7 @@ impl ChatCard for ToolCard {
                         div()
                             .flex_shrink_0()
                             .text_xs()
-                            .text_color(cx.theme().muted_foreground)
+                            .text_color(theme.muted_foreground)
                             .child(tool_status_label(&data)),
                     )
                     .when(has_details, |this| {
@@ -310,7 +311,7 @@ impl ChatCard for ToolCard {
                             div()
                                 .flex_shrink_0()
                                 .text_xs()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(theme.muted_foreground)
                                 .child(if expanded {
                                     "收起详情"
                                 } else {
@@ -430,6 +431,7 @@ impl ChatCard for ToolConfirmCard {
     }
 
     fn render(&self, msg: &CardMessage, window: &mut Window, cx: &mut App) -> AnyElement {
+        let theme = active_agent_chat_theme(cx);
         let Some(data) = ToolConfirmCardData::from_json(msg.content) else {
             return fallback(msg.content, cx);
         };
@@ -446,7 +448,7 @@ impl ChatCard for ToolConfirmCard {
             .rounded_lg()
             .border_1()
             .border_color(cx.theme().warning.opacity(0.35))
-            .bg(cx.theme().muted)
+            .bg(theme.panel)
             .child(
                 h_flex()
                     .items_center()
@@ -456,7 +458,7 @@ impl ChatCard for ToolConfirmCard {
                         div()
                             .text_sm()
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(cx.theme().foreground)
+                            .text_color(theme.foreground)
                             .child(confirm_card_header(&data)),
                     ),
             )
@@ -471,7 +473,7 @@ impl ChatCard for ToolConfirmCard {
                             .flex_1()
                             .min_w_0()
                             .text_sm()
-                            .text_color(cx.theme().foreground)
+                            .text_color(theme.foreground)
                             .child(confirm_card_title(&data)),
                     )
                     .child(
@@ -483,10 +485,11 @@ impl ChatCard for ToolConfirmCard {
                     ),
             )
             .child(
-                div().text_sm().text_color(cx.theme().foreground).child(
-                    TextView::markdown(
+                div().text_sm().text_color(theme.foreground).child(
+                    themed_markdown(
                         SharedString::from(format!("agent-tool-confirm-{}", msg.id)),
                         data.question.clone(),
+                        &theme,
                     )
                     .selectable(true),
                 ),
@@ -561,11 +564,12 @@ impl ChatCard for ToolConfirmCard {
 // ============================================================================
 
 fn tool_card_title(data: &ToolCardData, cx: &App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     div()
         .flex_1()
         .min_w_0()
         .text_sm()
-        .text_color(cx.theme().foreground)
+        .text_color(theme.foreground)
         .truncate()
         .child(tool_card_title_text(data))
         .into_any_element()
@@ -616,6 +620,7 @@ fn confirm_card_title(data: &ToolConfirmCardData) -> String {
 }
 
 fn render_confirm_batch_items(data: &ToolConfirmCardData, cx: &App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     v_flex()
         .w_full()
         .min_w_0()
@@ -628,12 +633,12 @@ fn render_confirm_batch_items(data: &ToolConfirmCardData, cx: &App) -> AnyElemen
                 .px_2()
                 .py_1()
                 .rounded_md()
-                .bg(cx.theme().background)
+                .bg(theme.background)
                 .child(
                     div()
                         .flex_shrink_0()
                         .text_xs()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(theme.muted_foreground)
                         .child(item.tool_name.clone()),
                 )
                 .child(
@@ -642,7 +647,7 @@ fn render_confirm_batch_items(data: &ToolConfirmCardData, cx: &App) -> AnyElemen
                         .min_w_0()
                         .truncate()
                         .text_xs()
-                        .text_color(cx.theme().foreground)
+                        .text_color(theme.foreground)
                         .child(item.input_summary.clone()),
                 )
         }))
@@ -728,6 +733,7 @@ fn tool_card_json_block(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     let height = tool_json_height(&content);
     let input = tool_json_input(id.clone(), content, window, cx);
     v_flex()
@@ -738,7 +744,7 @@ fn tool_card_json_block(
         .child(
             div()
                 .text_xs()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(theme.muted_foreground)
                 .child(label),
         )
         .child(
@@ -757,6 +763,7 @@ fn tool_card_text_block(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     let height = tool_json_height(&content);
     let input = tool_text_input(id.clone(), content, window, cx);
     v_flex()
@@ -767,7 +774,7 @@ fn tool_card_text_block(
         .child(
             div()
                 .text_xs()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(theme.muted_foreground)
                 .child(label),
         )
         .child(
@@ -858,16 +865,18 @@ fn tool_json_input(
 }
 
 fn fallback(content: &str, cx: &App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     div()
         .w_full()
         .min_w_0()
         .p_2()
         .text_xs()
-        .text_color(cx.theme().muted_foreground)
+        .text_color(theme.muted_foreground)
         .child(
-            TextView::markdown(
+            themed_markdown(
                 SharedString::from("agent-card-fallback"),
                 format!("[无法解析的 Agent 卡片] {content}"),
+                &theme,
             )
             .text_xs()
             .selectable(true),
@@ -908,6 +917,7 @@ fn render_subagent_card(
     expanded_ids: Arc<Mutex<HashSet<String>>>,
     cx: &mut App,
 ) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     let has_details = !data.task.is_empty() || !data.summary.is_empty();
     let expanded = has_details && is_expanded;
     let mut card = v_flex()
@@ -917,8 +927,8 @@ fn render_subagent_card(
         .p_2()
         .rounded_lg()
         .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().muted)
+        .border_color(theme.border)
+        .bg(theme.panel)
         .child(subagent_header(
             data,
             message_id,
@@ -941,7 +951,8 @@ fn subagent_header(
 ) -> AnyElement {
     let (status_glyph, status_color) = subagent_status_style(data, cx);
     let message_id = message_id.to_string();
-    let hover_bg = cx.theme().background;
+    let theme = active_agent_chat_theme(cx);
+    let hover_bg = theme.panel_hover;
     h_flex()
         .id(SharedString::from(format!(
             "agent-subagent-card-toggle-{}",
@@ -981,34 +992,37 @@ fn toggle_expanded(expanded_ids: &Arc<Mutex<HashSet<String>>>, message_id: &str)
 }
 
 fn subagent_title(data: &SubAgentCardData, cx: &App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     div()
         .flex_1()
         .min_w_0()
         .text_sm()
-        .text_color(cx.theme().foreground)
+        .text_color(theme.foreground)
         .truncate()
         .child(format!("子代理 · {}", data.name))
         .into_any_element()
 }
 
 fn subagent_status(data: &SubAgentCardData, cx: &App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     div()
         .flex_shrink_0()
         .text_xs()
-        .text_color(cx.theme().muted_foreground)
+        .text_color(theme.muted_foreground)
         .child(subagent_status_label(data))
         .into_any_element()
 }
 
 fn subagent_status_style(data: &SubAgentCardData, cx: &App) -> (&'static str, gpui::Hsla) {
+    let theme = active_agent_chat_theme(cx);
     if data.running {
-        ("●", cx.theme().muted_foreground)
+        ("●", theme.muted_foreground)
     } else if data.success == Some(true) {
         ("✓", cx.theme().success)
     } else if data.success == Some(false) {
         ("✗", cx.theme().danger)
     } else {
-        ("•", cx.theme().muted_foreground)
+        ("•", theme.muted_foreground)
     }
 }
 
@@ -1023,6 +1037,7 @@ fn subagent_status_label(data: &SubAgentCardData) -> &'static str {
 }
 
 fn subagent_details(data: &SubAgentCardData, cx: &App) -> AnyElement {
+    let theme = active_agent_chat_theme(cx);
     v_flex()
         .w_full()
         .min_w_0()
@@ -1034,11 +1049,12 @@ fn subagent_details(data: &SubAgentCardData, cx: &App) -> AnyElement {
                     .w_full()
                     .min_w_0()
                     .text_sm()
-                    .text_color(cx.theme().foreground)
+                    .text_color(theme.foreground)
                     .child(
-                        TextView::markdown(
+                        themed_markdown(
                             SharedString::from(format!("agent-subagent-task-{}", data.subagent_id)),
                             format!("**用途**\n\n{}", data.task),
+                            &theme,
                         )
                         .selectable(true),
                     ),
@@ -1050,14 +1066,15 @@ fn subagent_details(data: &SubAgentCardData, cx: &App) -> AnyElement {
                     .w_full()
                     .min_w_0()
                     .text_xs()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(theme.muted_foreground)
                     .child(
-                        TextView::markdown(
+                        themed_markdown(
                             SharedString::from(format!(
                                 "agent-subagent-summary-{}",
                                 data.subagent_id
                             )),
                             data.summary.clone(),
+                            &theme,
                         )
                         .text_xs()
                         .selectable(true),
