@@ -90,6 +90,7 @@ struct WorkspaceRow {
     created_at: i64,
     updated_at: i64,
     cloud_id: Option<String>,
+    sort_order: Option<i32>,
 }
 
 impl FromSqliteRow for WorkspaceRow {
@@ -102,6 +103,7 @@ impl FromSqliteRow for WorkspaceRow {
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
             cloud_id: row.get("cloud_id")?,
+            sort_order: row.get("sort_order").unwrap_or(Some(0)),
         })
     }
 }
@@ -116,6 +118,7 @@ impl From<WorkspaceRow> for Workspace {
             created_at: Some(row.created_at),
             updated_at: Some(row.updated_at),
             cloud_id: row.cloud_id,
+            sort_order: row.sort_order,
         }
     }
 }
@@ -444,12 +447,13 @@ impl WorkspaceRepository {
         let color = item.color.clone();
         let icon = item.icon.clone();
         let cloud_id = item.cloud_id.clone();
+        let sort_order = item.sort_order;
         let updated_at = item.updated_at.unwrap_or_else(now);
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, cloud_id = ?4, updated_at = ?5 WHERE id = ?6",
-                params![name, color, icon, cloud_id, updated_at, id],
+                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, cloud_id = ?4, sort_order = COALESCE(?5, sort_order), updated_at = ?6 WHERE id = ?7",
+                params![name, color, icon, cloud_id, sort_order, updated_at, id],
             )?;
             Ok(())
         })
@@ -463,6 +467,31 @@ impl WorkspaceRepository {
                 params![cloud_id, local_id],
             )?;
             Ok(())
+        })
+    }
+
+    pub fn update_sort_orders(&self, orders: &[(i64, i32)]) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let ts = now();
+            for (id, sort_order) in orders {
+                tx.execute(
+                    "UPDATE workspaces SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![sort_order, ts, id],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    fn next_sort_order(&self) -> Result<i32> {
+        self.conn.with_connection(|conn| {
+            let max_order: Option<i32> =
+                conn.query_row("SELECT MAX(sort_order) FROM workspaces", [], |row| {
+                    row.get(0)
+                })?;
+            Ok(max_order.unwrap_or(-1) + 1)
         })
     }
 }
@@ -479,17 +508,19 @@ impl Repository for WorkspaceRepository {
         let color = item.color.clone();
         let icon = item.icon.clone();
         let cloud_id = item.cloud_id.clone();
+        let sort_order = item.sort_order.unwrap_or(self.next_sort_order()?);
         let ts = now();
 
         let id = self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO workspaces (name, color, icon, cloud_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![name, color, icon, cloud_id, ts, ts],
+                "INSERT INTO workspaces (name, color, icon, cloud_id, sort_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![name, color, icon, cloud_id, sort_order, ts, ts],
             )?;
             Ok(conn.last_insert_rowid())
         })?;
 
         item.id = Some(id);
+        item.sort_order = Some(sort_order);
         item.created_at = Some(ts);
         item.updated_at = Some(ts);
 
@@ -504,12 +535,13 @@ impl Repository for WorkspaceRepository {
         let color = item.color.clone();
         let icon = item.icon.clone();
         let cloud_id = item.cloud_id.clone();
+        let sort_order = item.sort_order;
         let ts = now();
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, cloud_id = ?4, updated_at = ?5 WHERE id = ?6",
-                params![name, color, icon, cloud_id, ts, id],
+                "UPDATE workspaces SET name = ?1, color = ?2, icon = ?3, cloud_id = ?4, sort_order = COALESCE(?5, sort_order), updated_at = ?6 WHERE id = ?7",
+                params![name, color, icon, cloud_id, sort_order, ts, id],
             )?;
             Ok(())
         })
@@ -528,7 +560,7 @@ impl Repository for WorkspaceRepository {
 
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, color, icon, created_at, updated_at, cloud_id FROM workspaces WHERE id = ?1")?;
+            let mut stmt = conn.prepare("SELECT id, name, color, icon, created_at, updated_at, cloud_id, sort_order FROM workspaces WHERE id = ?1")?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
                 Ok(Some(WorkspaceRow::from_row(row)?.into()))
@@ -540,7 +572,7 @@ impl Repository for WorkspaceRepository {
 
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
-            let mut stmt = conn.prepare("SELECT id, name, color, icon, created_at, updated_at, cloud_id FROM workspaces ORDER BY updated_at DESC")?;
+            let mut stmt = conn.prepare("SELECT id, name, color, icon, created_at, updated_at, cloud_id, sort_order FROM workspaces ORDER BY sort_order ASC, updated_at DESC, id DESC")?;
             let rows = stmt.query_map([], |row| WorkspaceRow::from_row(row))?;
             let mut results = Vec::new();
             for row in rows {
@@ -781,12 +813,12 @@ impl TeamKeyCacheRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::ConnectionRepository;
-    use crate::storage::StoredConnection;
+    use super::{ConnectionRepository, WorkspaceRepository};
     use crate::storage::connection::SqliteConnection;
     use crate::storage::migration::run_migrations;
     use crate::storage::models::{SshAuthMethod, SshParams};
     use crate::storage::traits::Repository;
+    use crate::storage::{StoredConnection, Workspace};
     use rusqlite::params;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -829,6 +861,61 @@ mod tests {
             },
             None,
         )
+    }
+
+    fn workspace(name: &str) -> Workspace {
+        Workspace::new(name.to_string())
+    }
+
+    #[test]
+    fn workspace_list_uses_manual_sort_order() {
+        let (conn, _) = test_repository();
+        let repo = WorkspaceRepository::new(conn);
+        let mut first = workspace("first");
+        let mut second = workspace("second");
+        let mut third = workspace("third");
+        let first_id = repo.insert(&mut first).unwrap();
+        let second_id = repo.insert(&mut second).unwrap();
+        let third_id = repo.insert(&mut third).unwrap();
+
+        repo.update_sort_orders(&[(third_id, 0), (first_id, 1), (second_id, 2)])
+            .unwrap();
+
+        let listed_ids = repo
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|workspace| workspace.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            vec![Some(third_id), Some(first_id), Some(second_id)],
+            listed_ids
+        );
+    }
+
+    #[test]
+    fn workspace_update_persists_sort_order() {
+        let (conn, _) = test_repository();
+        let repo = WorkspaceRepository::new(conn);
+        let mut first = workspace("first");
+        first.sort_order = Some(0);
+        let first_id = repo.insert(&mut first).unwrap();
+        let mut second = workspace("second");
+        second.sort_order = Some(1);
+        let second_id = repo.insert(&mut second).unwrap();
+
+        second.sort_order = Some(-1);
+        repo.update(&second).unwrap();
+
+        let listed_ids = repo
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|workspace| workspace.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(vec![Some(second_id), Some(first_id)], listed_ids);
     }
 
     #[test]

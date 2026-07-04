@@ -12,6 +12,7 @@ use gpui_component::{
     h_flex, v_flex,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
+pub const CHAT_TASK_SIDEBAR_TITLE: &str = "历史任务";
 
 pub struct ChatView {
     state: ChatViewState,
@@ -47,7 +48,7 @@ impl ChatView {
         Self::from_state(Self::sample_state())
     }
 
-    fn from_state(state: ChatViewState) -> Self {
+    pub(crate) fn from_state(state: ChatViewState) -> Self {
         Self {
             state,
             sidebar_collapsed: false,
@@ -109,9 +110,9 @@ impl ChatView {
             ChatMessageUI::assistant("上面是由 `JsonCard` 自定义渲染的卡片。"),
         ];
         let sessions = vec![
-            SessionSummary::new("s1", "当前会话", now),
-            SessionSummary::new("s2", "昨天的排查", now - 90_000),
-            SessionSummary::new("s3", "上周的笔记", now - 700_000),
+            SessionSummary::new("s1", "当前任务", now),
+            SessionSummary::new("s2", "昨天的排查任务", now - 90_000),
+            SessionSummary::new("s3", "上周的笔记任务", now - 700_000),
         ];
         ChatViewState::with_messages(messages).with_sessions(sessions)
     }
@@ -130,7 +131,7 @@ impl ChatView {
     fn new_session(&mut self, cx: &mut Context<Self>) {
         let mut sessions = self.state.sessions().to_vec();
         let id = format!("s{}", sessions.len() + 1);
-        sessions.insert(0, SessionSummary::new(id, "新会话", now_secs()));
+        sessions.insert(0, SessionSummary::new(id, "新任务", now_secs()));
         self.state.replace_sessions(sessions);
         self.state.clear_messages();
         cx.notify();
@@ -223,7 +224,7 @@ impl ChatView {
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child("历史会话"),
+                                    .child(CHAT_TASK_SIDEBAR_TITLE),
                             ),
                     )
                     .child(
@@ -235,7 +236,7 @@ impl ChatView {
                                     .icon(IconName::Plus)
                                     .ghost()
                                     .small()
-                                    .tooltip("新建会话")
+                                    .tooltip("新建任务")
                                     .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                             )
                             .child(

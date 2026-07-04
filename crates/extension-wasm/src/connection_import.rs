@@ -2,8 +2,9 @@ use extension_component::{CandidateFileAccess, ExtensionConnectionImportHost, Pe
 use std::path::Path;
 use wasmtime::{
     Config, Engine, Store,
-    component::{Component, HasSelf, Linker},
+    component::{Component, HasSelf, Linker, ResourceTable},
 };
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::{
     WasmError, WasmResult,
@@ -124,6 +125,8 @@ impl ConnectionImportComponentRuntime {
         let mut linker = Linker::new(&self.engine);
         Host::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
             .map_err(|error| WasmError::ComponentLoad(error.to_string()))?;
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)
+            .map_err(|error| WasmError::ComponentLoad(error.to_string()))?;
         let mut store = Store::new(&self.engine, state);
         let importer = connection_import_bindings::ConnectionImporter::instantiate_async(
             &mut store,
@@ -144,6 +147,8 @@ where
     importer_id: String,
     host: H,
     permissions: PermissionSet,
+    wasi_ctx: WasiCtx,
+    table: ResourceTable,
 }
 
 fn connection_import_engine() -> WasmResult<Engine> {
@@ -175,6 +180,8 @@ where
             importer_id: importer_id.into(),
             host,
             permissions,
+            wasi_ctx: WasiCtxBuilder::new().build(),
+            table: ResourceTable::new(),
         }
     }
 
@@ -191,6 +198,18 @@ where
             self.host.list_candidate_files(&self.importer_id),
             self.permissions.clone(),
         )
+    }
+}
+
+impl<H> WasiView for ConnectionImportHostState<H>
+where
+    H: ExtensionConnectionImportHost + Send,
+{
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi_ctx,
+            table: &mut self.table,
+        }
     }
 }
 

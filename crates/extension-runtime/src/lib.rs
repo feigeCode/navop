@@ -17,7 +17,7 @@ pub mod remote_desktop_provider_install;
 mod types;
 
 pub use catalog::ExtensionRuntimeCatalog;
-pub use extension::init;
+pub use extension::{init, manifest::set_current_host_version};
 pub use extension_view_host::MainExtensionViewHost;
 pub use global::{GlobalExtensionRuntimeCatalog, refresh_global_runtime_catalog};
 

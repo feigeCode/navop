@@ -16,8 +16,8 @@ use one_core::{
 };
 
 use crate::{
-    AcpAgentConfig, AgentChatView, AgentChatViewConfig, AgentChatViewEvent, CodeBlockAction,
-    MentionItem, build_acp_agent_configs, build_plan_tool_registry,
+    AcpAgentConfig, AgentChatTheme, AgentChatView, AgentChatViewConfig, AgentChatViewEvent,
+    CodeBlockAction, MentionItem, build_acp_agent_configs, build_plan_tool_registry,
 };
 
 #[derive(Clone, Debug)]
@@ -25,8 +25,15 @@ pub enum DefaultAgentChatPanelEvent {
     Close,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DefaultAgentChatPanelMode {
+    Sidebar,
+    Workbench,
+}
+
 pub struct DefaultAgentChatPanel {
     focus_handle: FocusHandle,
+    mode: DefaultAgentChatPanelMode,
     view: Option<Entity<AgentChatView>>,
     view_subscription: Option<Subscription>,
     pending_message: Option<String>,
@@ -37,6 +44,7 @@ pub struct DefaultAgentChatPanel {
         Vec<agent_runtime::ResourceRef>,
     )>,
     pending_code_block_actions: Vec<CodeBlockAction>,
+    theme: Option<AgentChatTheme>,
     error: Option<String>,
 }
 
@@ -67,17 +75,63 @@ impl DefaultAgentChatPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_with_context_and_catalog_for_mode(
+            resources,
+            mentions,
+            available_resources,
+            DefaultAgentChatPanelMode::Sidebar,
+            window,
+            cx,
+        )
+    }
+
+    pub fn new_workbench(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_workbench_with_context(
+            agent_runtime::ResourceContext::new(),
+            Vec::new(),
+            window,
+            cx,
+        )
+    }
+
+    pub fn new_workbench_with_context(
+        resources: agent_runtime::ResourceContext,
+        mentions: Vec<MentionItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let available_resources = resources.resources.clone();
+        Self::new_with_context_and_catalog_for_mode(
+            resources,
+            mentions,
+            available_resources,
+            DefaultAgentChatPanelMode::Workbench,
+            window,
+            cx,
+        )
+    }
+
+    fn new_with_context_and_catalog_for_mode(
+        resources: agent_runtime::ResourceContext,
+        mentions: Vec<MentionItem>,
+        available_resources: Vec<agent_runtime::ResourceRef>,
+        mode: DefaultAgentChatPanelMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let panel = Self {
             focus_handle: cx.focus_handle(),
+            mode,
             view: None,
             view_subscription: None,
             pending_message: None,
             pending_system_instruction: None,
             pending_resource_context: None,
             pending_code_block_actions: Vec::new(),
+            theme: None,
             error: None,
         };
-        Self::spawn_build_view(resources, mentions, available_resources, window, cx);
+        Self::spawn_build_view(resources, mentions, available_resources, mode, window, cx);
         panel
     }
 
@@ -95,6 +149,15 @@ impl DefaultAgentChatPanel {
             view.update(cx, |view, cx| view.set_system_instruction(instruction, cx));
         } else {
             self.pending_system_instruction = instruction;
+            cx.notify();
+        }
+    }
+
+    pub fn set_theme(&mut self, theme: Option<AgentChatTheme>, cx: &mut Context<Self>) {
+        self.theme = theme;
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| view.set_theme(theme, cx));
+        } else {
             cx.notify();
         }
     }
@@ -144,6 +207,7 @@ impl DefaultAgentChatPanel {
         resources: agent_runtime::ResourceContext,
         mentions: Vec<MentionItem>,
         available_resources: Vec<agent_runtime::ResourceRef>,
+        mode: DefaultAgentChatPanelMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -170,16 +234,20 @@ impl DefaultAgentChatPanel {
             )
             .await
             .map(|config| {
-                build_sidebar_config(
-                    config.with_available_resources(available_resources),
-                    acp_agents,
-                )
+                let config = config.with_available_resources(available_resources);
+                match mode {
+                    DefaultAgentChatPanelMode::Sidebar => build_sidebar_config(config, acp_agents),
+                    DefaultAgentChatPanelMode::Workbench => {
+                        build_workbench_config(config, acp_agents)
+                    }
+                }
             });
 
             let _ = cx.update_window(window_handle, |_, window, cx| {
                 if let Some(panel) = this.upgrade() {
                     panel.update(cx, |panel, cx| match config {
                         Ok(config) => {
+                            let config = config.with_theme(panel.theme);
                             let view = AgentChatView::view_with_config(config, window, cx);
                             let view_subscription =
                                 cx.subscribe(&view, |_, _, event: &AgentChatViewEvent, cx| {
@@ -244,9 +312,14 @@ impl Focusable for DefaultAgentChatPanel {
 
 impl Render for DefaultAgentChatPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let background = self
+            .theme
+            .map(|theme| theme.background)
+            .unwrap_or(cx.theme().background);
         div()
             .track_focus(&self.focus_handle)
             .size_full()
+            .bg(background)
             .when_some(self.view.clone(), |this, view| this.child(view))
             .when(self.view.is_none(), |this| {
                 this.child(
@@ -255,7 +328,11 @@ impl Render for DefaultAgentChatPanel {
                         .items_center()
                         .justify_center()
                         .gap_2()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_color(
+                            self.theme
+                                .map(|theme| theme.muted_foreground)
+                                .unwrap_or(cx.theme().muted_foreground),
+                        )
                         .child(
                             self.error
                                 .clone()
@@ -272,11 +349,15 @@ impl TabContent for DefaultAgentChatPanel {
     }
 
     fn title(&self, _cx: &App) -> SharedString {
-        SharedString::from("AI Chat")
+        SharedString::from(panel_title_for_mode(self.mode))
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
         Some(IconName::AI.color().with_size(Size::Medium))
+    }
+
+    fn closeable(&self, _cx: &App) -> bool {
+        false
     }
 
     fn width_size(&self, _cx: &App) -> Option<Size> {
@@ -317,4 +398,18 @@ pub(crate) fn build_sidebar_config(
     acp_agents: Vec<AcpAgentConfig>,
 ) -> AgentChatViewConfig {
     config.sidebar_mode(true).with_acp_agents(acp_agents)
+}
+
+pub(crate) fn build_workbench_config(
+    config: AgentChatViewConfig,
+    acp_agents: Vec<AcpAgentConfig>,
+) -> AgentChatViewConfig {
+    config.sidebar_mode(false).with_acp_agents(acp_agents)
+}
+
+pub(crate) fn panel_title_for_mode(mode: DefaultAgentChatPanelMode) -> &'static str {
+    match mode {
+        DefaultAgentChatPanelMode::Sidebar => "AI Chat",
+        DefaultAgentChatPanelMode::Workbench => "AI 工作台",
+    }
 }

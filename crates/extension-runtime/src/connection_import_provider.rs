@@ -1,10 +1,15 @@
+#[cfg(any(feature = "wasm-components", test))]
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use connection_import_protocol::{
-    CandidateFile, DirectoryEntry, HostAccessError, ImportRecord, ImportRecordKind,
-    ImporterCapabilities, ImporterDescriptor, Platform, SecretQuery, SecretResult,
+    CandidateFile, ImportRecord, ImportRecordKind, ImporterCapabilities, ImporterDescriptor,
+    Platform,
 };
+#[cfg(feature = "wasm-components")]
+use connection_import_protocol::{DirectoryEntry, HostAccessError, SecretQuery, SecretResult};
+#[cfg(feature = "wasm-components")]
 use extension_component::{CandidateFileAccess, ExtensionConnectionImportHost, PermissionSet};
 #[cfg(feature = "wasm-components")]
 use extension_wasm::{ConnectionImportComponentRuntime, ConnectionImportHostState};
@@ -123,6 +128,15 @@ pub async fn preview_manifest_connection_importers(
     Ok(records)
 }
 
+#[cfg(not(feature = "wasm-components"))]
+pub async fn preview_manifest_connection_importers(
+    _composite_root: &Path,
+    _importer_ids: &[String],
+    _include_passwords: bool,
+) -> Result<Vec<ImportRecord>> {
+    Err(anyhow::anyhow!("wasm component runtime is disabled"))
+}
+
 fn runtime_id(manifest: &Manifest, contrib: &ConnectionImporterContrib) -> String {
     if !contrib.runtime_id.is_empty() {
         return contrib.runtime_id.clone();
@@ -186,11 +200,13 @@ fn parse_output_kind(value: &str) -> Option<ImportRecordKind> {
     }
 }
 
+#[cfg(feature = "wasm-components")]
 pub(crate) struct ManifestConnectionImportHost {
     candidates: Vec<CandidateFile>,
     permissions: PermissionSet,
 }
 
+#[cfg(feature = "wasm-components")]
 impl ManifestConnectionImportHost {
     pub(crate) fn new<I, S>(candidates: Vec<CandidateFile>, permissions: I) -> Self
     where
@@ -208,6 +224,7 @@ impl ManifestConnectionImportHost {
     }
 }
 
+#[cfg(feature = "wasm-components")]
 impl ExtensionConnectionImportHost for ManifestConnectionImportHost {
     fn current_platform(&self) -> Platform {
         current_platform()
@@ -219,7 +236,7 @@ impl ExtensionConnectionImportHost for ManifestConnectionImportHost {
 
     fn read_file(&self, candidate_id: &str) -> Result<Vec<u8>, HostAccessError> {
         let candidate = self.candidate_access().candidate(candidate_id)?.clone();
-        std::fs::read(expand_tilde(&candidate.path)).map_err(|error| {
+        std::fs::read(expand_connection_import_path(&candidate.path)).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 HostAccessError::NotFound(candidate.path)
             } else {
@@ -230,7 +247,7 @@ impl ExtensionConnectionImportHost for ManifestConnectionImportHost {
 
     fn read_directory(&self, candidate_id: &str) -> Result<Vec<DirectoryEntry>, HostAccessError> {
         let candidate = self.candidate_access().candidate(candidate_id)?.clone();
-        let entries = std::fs::read_dir(expand_tilde(&candidate.path))
+        let entries = std::fs::read_dir(expand_connection_import_path(&candidate.path))
             .map_err(|error| HostAccessError::Io(error.to_string()))?;
         let mut out = Vec::new();
         for entry in entries.flatten() {
@@ -252,6 +269,7 @@ impl ExtensionConnectionImportHost for ManifestConnectionImportHost {
     }
 }
 
+#[cfg(feature = "wasm-components")]
 fn current_platform() -> Platform {
     if cfg!(target_os = "windows") {
         Platform::Windows
@@ -262,11 +280,76 @@ fn current_platform() -> Platform {
     }
 }
 
-fn expand_tilde(path: &str) -> PathBuf {
+#[cfg(any(feature = "wasm-components", test))]
+fn expand_connection_import_path(path: &str) -> PathBuf {
+    expand_connection_import_path_with(path, |name| std::env::var_os(name))
+}
+
+#[cfg(any(feature = "wasm-components", test))]
+fn expand_connection_import_path_with<F>(path: &str, env_var: F) -> PathBuf
+where
+    F: FnMut(&str) -> Option<OsString>,
+{
+    expand_tilde_or_env(path, env_var)
+}
+
+#[cfg(any(feature = "wasm-components", test))]
+fn expand_tilde_or_env<F>(path: &str, mut env_var: F) -> PathBuf
+where
+    F: FnMut(&str) -> Option<OsString>,
+{
     if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
+        if let Some(home) = env_var("HOME") {
+            return join_expanded_path(home, rest);
+        }
+    }
+    if let Some((name, rest)) = windows_env_prefix(path) {
+        if let Some(value) = env_var(name) {
+            return join_expanded_path(value, rest);
         }
     }
     PathBuf::from(path)
+}
+
+#[cfg(any(feature = "wasm-components", test))]
+fn windows_env_prefix(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix('%')?;
+    let end = rest.find('%')?;
+    let name = &rest[..end];
+    if name.is_empty() {
+        return None;
+    }
+    let tail = &rest[end + 1..];
+    if !tail.is_empty() && !tail.starts_with('/') && !tail.starts_with('\\') {
+        return None;
+    }
+    Some((name, tail))
+}
+
+#[cfg(any(feature = "wasm-components", test))]
+fn join_expanded_path(base: OsString, rest: &str) -> PathBuf {
+    let mut path = PathBuf::from(base);
+    let rest = rest.trim_start_matches(['/', '\\']);
+    if !rest.is_empty() {
+        path.push(rest);
+    }
+    path
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_connection_import_path_with;
+
+    #[test]
+    fn expands_windows_style_env_prefix_for_connection_import_candidates() {
+        let path = expand_connection_import_path_with("%APPDATA%/DBeaverData/workspace6", |name| {
+            (name == "APPDATA").then(|| "C:\\Users\\me\\AppData\\Roaming".into())
+        });
+
+        assert_eq!(
+            std::path::PathBuf::from("C:\\Users\\me\\AppData\\Roaming")
+                .join("DBeaverData/workspace6"),
+            path
+        );
+    }
 }

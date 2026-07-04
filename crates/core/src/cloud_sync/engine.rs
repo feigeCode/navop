@@ -162,27 +162,9 @@ impl SyncEngine {
 
         self.ensure_unlocked()?;
 
-        // 获取并缓存团队列表
-        match self.cloud_client.list_teams().await {
-            Ok(teams) => {
-                tracing::info!("[同步] 获取到 {} 个团队", teams.len());
-
-                // 获取当前用户 ID
-                let user_id = self
-                    .crypto_service
-                    .read()
-                    .ok()
-                    .and_then(|s| s.user_id().map(|id| id.to_string()));
-
-                // 缓存团队角色信息到 team_key_cache
-                if let Some(uid) = &user_id {
-                    self.cache_team_roles(&teams, uid).await;
-                }
-                self.restore_cached_team_keys(&teams);
-
-                if let Ok(mut cache) = self.cached_teams.write() {
-                    *cache = teams;
-                }
+        match self.refresh_team_key_cache().await {
+            Ok(count) => {
+                tracing::info!("[同步] 已缓存 {} 个团队", count);
             }
             Err(e) => {
                 tracing::warn!("[同步] 获取团队列表失败: {}（将仅同步个人数据）", e);
@@ -258,34 +240,76 @@ impl SyncEngine {
             .unwrap_or(false)
     }
 
+    /// 刷新当前用户团队列表并写入本地团队密钥缓存。
+    ///
+    /// 只同步团队元数据和当前用户角色，不上传或下载连接/工作空间数据。
+    pub async fn refresh_team_key_cache(&self) -> Result<usize, SyncError> {
+        let user_id = self
+            .crypto_service
+            .read()
+            .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?
+            .user_id()
+            .map(str::to_string)
+            .ok_or(SyncError::NotLoggedIn)?;
+        let teams = self
+            .cloud_client
+            .list_teams()
+            .await
+            .map_err(|e| SyncError::NetworkError(e.to_string()))?;
+        tracing::info!("[同步] 获取到 {} 个团队", teams.len());
+        let cached_count = self.cache_team_roles(&teams, &user_id).await;
+        self.restore_cached_team_keys(&teams);
+        self.cached_teams
+            .write()
+            .map_err(|_| SyncError::StorageError("团队缓存锁获取失败".to_string()))?
+            .clone_from(&teams);
+        Ok(cached_count)
+    }
+
     /// 缓存团队角色信息到 team_key_cache 表
-    async fn cache_team_roles(&self, teams: &[Team], user_id: &str) {
+    async fn cache_team_roles(&self, teams: &[Team], user_id: &str) -> usize {
         let repo = match self.storage.get::<TeamKeyCacheRepository>() {
             Some(repo) => repo,
-            None => return,
+            None => return 0,
         };
-
+        let mut cached_count = 0;
         for team in teams {
-            match self.cloud_client.list_team_members(&team.id).await {
-                Ok(members) => {
-                    if let Some(member) = members.iter().find(|m| m.user_id == user_id) {
-                        let existing_cache = match repo.get(&team.id) {
-                            Ok(cache) => cache,
-                            Err(e) => {
-                                tracing::warn!("[同步] 读取团队 {} 缓存失败: {}", team.id, e);
-                                None
-                            }
-                        };
-                        let cache =
-                            team_key_cache_for_cloud_team(team, member.role, existing_cache);
-                        if let Err(e) = repo.upsert(&cache) {
-                            tracing::warn!("[同步] 更新团队 {} 缓存失败: {}", team.id, e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("[同步] 获取团队 {} 成员列表失败: {}", team.id, e);
-                }
+            if self.cache_team_role(repo.as_ref(), team, user_id).await {
+                cached_count += 1;
+            }
+        }
+        cached_count
+    }
+
+    async fn cache_team_role(
+        &self,
+        repo: &TeamKeyCacheRepository,
+        team: &Team,
+        user_id: &str,
+    ) -> bool {
+        let members = match self.cloud_client.list_team_members(&team.id).await {
+            Ok(members) => members,
+            Err(e) => {
+                tracing::warn!("[同步] 获取团队 {} 成员列表失败: {}", team.id, e);
+                return false;
+            }
+        };
+        let Some(member) = members.iter().find(|m| m.user_id == user_id) else {
+            return false;
+        };
+        let existing_cache = match repo.get(&team.id) {
+            Ok(cache) => cache,
+            Err(e) => {
+                tracing::warn!("[同步] 读取团队 {} 缓存失败: {}", team.id, e);
+                None
+            }
+        };
+        let cache = team_key_cache_for_cloud_team(team, member.role, existing_cache);
+        match repo.upsert(&cache) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!("[同步] 更新团队 {} 缓存失败: {}", team.id, e);
+                false
             }
         }
     }
@@ -558,8 +582,16 @@ fn team_key_cache_for_cloud_team(
 #[cfg(test)]
 mod tests {
     use super::team_key_cache_for_cloud_team;
-    use crate::cloud_sync::models::{Team, TeamRole};
-    use crate::storage::TeamKeyCache;
+    use crate::cloud_sync::client::{
+        AuthResponse, CloudApiClient, CloudApiError, OAuthResponse, UserInfo,
+    };
+    use crate::cloud_sync::models::{CloudSyncData, CloudUserConfig, Team, TeamMember, TeamRole};
+    use crate::cloud_sync::{CloudSyncService, SyncEngine};
+    use crate::storage::connection::SqliteConnection;
+    use crate::storage::migration::run_migrations;
+    use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
+    use async_trait::async_trait;
+    use std::sync::{Arc, RwLock};
 
     fn team() -> Team {
         Team {
@@ -571,6 +603,173 @@ mod tests {
             key_version: 7,
             created_at: 100,
             updated_at: 200,
+        }
+    }
+
+    fn member(role: TeamRole) -> TeamMember {
+        TeamMember {
+            id: "member-1".to_string(),
+            team_id: "team-1".to_string(),
+            user_id: "user-1".to_string(),
+            role,
+            joined_at: 300,
+        }
+    }
+
+    fn test_storage() -> (StorageManager, TeamKeyCacheRepository) {
+        let db_path = std::env::temp_dir().join(format!(
+            "onetcli-refresh-team-key-cache-{}-{}.db",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let _ = std::fs::remove_file(&db_path);
+        let conn = SqliteConnection::open_with_pool_size(&db_path, 1).expect("open sqlite");
+        conn.with_connection(|conn| run_migrations(conn))
+            .expect("run migrations");
+        let storage = StorageManager::new_with_connection(conn.clone());
+        let repo = TeamKeyCacheRepository::new(conn);
+        storage.register(repo.clone());
+        (storage, repo)
+    }
+
+    fn unique_suffix() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+    }
+
+    struct FakeCloudClient {
+        teams: Vec<Team>,
+        members: Vec<TeamMember>,
+    }
+
+    #[async_trait]
+    impl CloudApiClient for FakeCloudClient {
+        async fn sign_in_with_password(
+            &self,
+            _email: &str,
+            _password: &str,
+        ) -> Result<AuthResponse, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn sign_in_with_oauth(
+            &self,
+            _provider: &str,
+            _redirect_url: &str,
+        ) -> Result<OAuthResponse, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn sign_up(
+            &self,
+            _email: &str,
+            _password: &str,
+        ) -> Result<AuthResponse, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn sign_out(&self) -> Result<(), CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn get_current_user(&self) -> Result<Option<UserInfo>, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn refresh_token(&self, _refresh_token: &str) -> Result<AuthResponse, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn sign_in_with_otp(&self, _email: &str) -> Result<(), CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn verify_otp(
+            &self,
+            _email: &str,
+            _token: &str,
+        ) -> Result<AuthResponse, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn get_user_config(&self) -> Result<Option<CloudUserConfig>, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn save_user_config(&self, _config: &CloudUserConfig) -> Result<(), CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn get_subscription(
+            &self,
+        ) -> Result<Option<crate::license::SubscriptionInfo>, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn list_models(&self) -> Result<Vec<String>, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn list_sync_data(
+            &self,
+            _data_type: Option<&str>,
+            _team_id: Option<&str>,
+            _since: Option<i64>,
+        ) -> Result<Vec<CloudSyncData>, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn create_sync_data(
+            &self,
+            _data: &CloudSyncData,
+        ) -> Result<CloudSyncData, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn update_sync_data(
+            &self,
+            _data: &CloudSyncData,
+        ) -> Result<CloudSyncData, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn delete_sync_data(&self, _id: &str) -> Result<(), CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn list_teams(&self) -> Result<Vec<Team>, CloudApiError> {
+            Ok(self.teams.clone())
+        }
+
+        async fn list_team_members(
+            &self,
+            _team_id: &str,
+        ) -> Result<Vec<TeamMember>, CloudApiError> {
+            Ok(self.members.clone())
+        }
+
+        async fn rotate_team_key(
+            &self,
+            _team: &Team,
+            _records: &[CloudSyncData],
+        ) -> Result<(), CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn chat(
+            &self,
+            _request: &llm_connector::ChatRequest,
+        ) -> Result<String, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: &llm_connector::ChatRequest,
+        ) -> Result<crate::llm::ChatStream, CloudApiError> {
+            Err(CloudApiError::Unknown("not used".to_string()))
         }
     }
 
@@ -606,6 +805,38 @@ mod tests {
         assert_eq!(Some("encrypted-key".to_string()), cache.encrypted_team_key);
         assert_eq!(team().key_verification, cache.key_verification);
         assert_eq!(Some(1234), cache.last_verified_at);
+        assert_eq!(Some("owner".to_string()), cache.role);
+    }
+
+    #[tokio::test]
+    async fn refresh_team_key_cache_loads_cloud_team_metadata() {
+        let (storage, repo) = test_storage();
+        let service = Arc::new(RwLock::new(CloudSyncService::new()));
+        service
+            .write()
+            .expect("service lock")
+            .set_logged_in("user-1".to_string());
+        let engine = SyncEngine::new(
+            Arc::new(FakeCloudClient {
+                teams: vec![Team {
+                    key_verification: Some("verification".to_string()),
+                    ..team()
+                }],
+                members: vec![member(TeamRole::Owner)],
+            }),
+            service,
+            storage,
+        );
+
+        let refreshed = engine.refresh_team_key_cache().await.unwrap();
+
+        let cache = repo
+            .get("team-1")
+            .expect("cache read")
+            .expect("team cache exists");
+        assert_eq!(1, refreshed);
+        assert_eq!("Platform", cache.team_name);
+        assert_eq!(Some("verification".to_string()), cache.key_verification);
         assert_eq!(Some("owner".to_string()), cache.role);
     }
 }

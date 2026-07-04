@@ -1246,10 +1246,26 @@ fn render_team_key_management_section(_window: &mut Window, cx: &mut App) -> gpu
         .w_full()
         .gap_3()
         .child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(t!("TeamSync.page_desc").to_string()),
+            h_flex()
+                .w_full()
+                .items_start()
+                .justify_between()
+                .gap_3()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("TeamSync.page_desc").to_string()),
+                )
+                .child(
+                    Button::new("team-key-refresh")
+                        .icon(IconName::Refresh)
+                        .label(t!("TeamSync.refresh_teams").to_string())
+                        .small()
+                        .on_click(|_, window, cx| {
+                            refresh_team_key_cache_from_settings(window, cx);
+                        }),
+                ),
         )
         .when(teams.is_empty(), |this| {
             this.child(render_team_key_empty(cx))
@@ -1542,6 +1558,46 @@ fn set_team_key_dialog_error(error: &Entity<Option<String>>, message: String, cx
         *msg = Some(message);
         cx.notify();
     });
+}
+
+fn team_key_refresh_success_message(count: usize) -> String {
+    t!("TeamSync.refresh_success", count = count).to_string()
+}
+
+fn refresh_team_key_cache_from_settings(window: &mut Window, cx: &mut App) {
+    let Some(user) = GlobalCloudUser::get_user(cx) else {
+        window.push_notification(t!("Home.cloud_need_login").to_string(), cx);
+        return;
+    };
+    let Some(storage) = cx.try_global::<GlobalStorageState>() else {
+        window.push_notification("GlobalStorageState not found".to_string(), cx);
+        return;
+    };
+    let sync_service = Arc::new(std::sync::RwLock::new(CloudSyncService::new()));
+    if let Ok(mut service) = sync_service.write() {
+        service.set_logged_in(user.id);
+    }
+    let engine = SyncEngine::new(
+        get_auth_service(cx).cloud_client(),
+        sync_service,
+        storage.storage.clone(),
+    );
+    let target_window = window.window_handle();
+    window.push_notification(t!("TeamSync.refresh_started").to_string(), cx);
+    window
+        .spawn(cx, async move |cx| {
+            let result = engine.refresh_team_key_cache().await;
+            let message = result
+                .map(team_key_refresh_success_message)
+                .unwrap_or_else(|error| error.to_string());
+            let _ = cx.update(|_view, cx: &mut App| {
+                let _ = cx.update_window(target_window, |_, window, cx| {
+                    window.push_notification(message, cx);
+                    window.refresh();
+                });
+            });
+        })
+        .detach();
 }
 
 fn forget_team_key_from_settings(team_id: String, window: &mut Window, cx: &mut App) {
@@ -3090,6 +3146,7 @@ mod tests {
         build_app_http_client, builtin_monospace_font_options, is_supported_font_file,
         merge_font_options_with_custom_fonts, parse_font_families, personal_sync_backend_options,
         personal_sync_status_label, personal_sync_status_view_model,
+        team_key_refresh_success_message,
     };
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
     use std::path::Path;
@@ -3132,6 +3189,16 @@ mod tests {
         assert_eq!(
             proxy_url.as_str(),
             "http://demo-user:demo-pass@proxy.example.com:8080/"
+        );
+    }
+
+    #[test]
+    fn team_key_refresh_success_message_reports_cached_count() {
+        rust_i18n::set_locale("en");
+
+        assert_eq!(
+            "Team list refreshed. 2 teams cached.",
+            team_key_refresh_success_message(2)
         );
     }
 

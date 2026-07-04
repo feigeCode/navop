@@ -19,7 +19,7 @@ use agent_runtime::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AppContext, Context, Entity, EventEmitter, FontWeight, InteractiveElement,
+    Anchor, App, AppContext, Context, Entity, EventEmitter, FontWeight, Hsla, InteractiveElement,
     IntoElement, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
     Styled, Subscription, Task, Window, div, px,
 };
@@ -85,6 +85,18 @@ fn sidebar_mode_header_action_ids() -> [&'static str; 3] {
     ["new", "history", "close"]
 }
 
+fn agent_history_title(show_archived: bool) -> &'static str {
+    if show_archived {
+        "已归档任务"
+    } else {
+        "历史任务"
+    }
+}
+
+fn current_agent_task_title() -> &'static str {
+    "当前 Agent 任务"
+}
+
 impl RuntimeBinding {
     fn new(
         runtime: Arc<Runtime>,
@@ -129,6 +141,35 @@ pub struct AgentChatViewConfig {
     pub sidebar_mode: bool,
     /// 可接入的外部 ACP agent(自定义命令)。非空时头部显示后端切换控件。
     pub acp_agents: Vec<AcpAgentConfig>,
+    /// 可选的局部主题色,用于嵌入终端等非全局应用主题的容器。
+    pub theme: Option<AgentChatTheme>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AgentChatTheme {
+    pub background: Hsla,
+    pub foreground: Hsla,
+    pub muted: Hsla,
+    pub muted_foreground: Hsla,
+    pub border: Hsla,
+}
+
+impl AgentChatTheme {
+    pub fn new(
+        background: Hsla,
+        foreground: Hsla,
+        muted: Hsla,
+        muted_foreground: Hsla,
+        border: Hsla,
+    ) -> Self {
+        Self {
+            background,
+            foreground,
+            muted,
+            muted_foreground,
+            border,
+        }
+    }
 }
 
 impl AgentChatViewConfig {
@@ -149,6 +190,7 @@ impl AgentChatViewConfig {
             runtime_factory: None,
             sidebar_mode: false,
             acp_agents: Vec::new(),
+            theme: None,
         }
     }
 
@@ -161,6 +203,11 @@ impl AgentChatViewConfig {
     /// 注入可接入的外部 ACP agent 列表。
     pub fn with_acp_agents(mut self, agents: Vec<AcpAgentConfig>) -> Self {
         self.acp_agents = agents;
+        self
+    }
+
+    pub fn with_theme(mut self, theme: Option<AgentChatTheme>) -> Self {
+        self.theme = theme;
         self
     }
 
@@ -334,6 +381,8 @@ pub struct AgentChatView {
     is_running: bool,
     /// 系统提示词（可选，用于自定义 AI 行为）。
     system_instruction: Option<String>,
+    /// 局部主题色覆盖。
+    theme: Option<AgentChatTheme>,
     /// 代码块操作注册表。
     code_block_actions: CodeBlockActionRegistry,
     /// 是否侧边栏模式。
@@ -373,6 +422,7 @@ impl AgentChatView {
     ) -> Self {
         let selected_model = selected_model_from_config(&config);
         let sidebar_mode = config.sidebar_mode;
+        let theme = config.theme;
         let acp_agents = config.acp_agents;
         let resources = config.resources;
         let available_resources = config.available_resources;
@@ -441,7 +491,11 @@ impl AgentChatView {
         if !sessions.iter().any(|s| s.id == current_session) {
             sessions.insert(
                 0,
-                SessionSummary::new(current_session.clone(), "当前 Agent 会话", now_secs()),
+                SessionSummary::new(
+                    current_session.clone(),
+                    current_agent_task_title(),
+                    now_secs(),
+                ),
             );
         }
 
@@ -473,10 +527,16 @@ impl AgentChatView {
             runtime_factory,
             is_running: false,
             system_instruction: None,
+            theme,
             code_block_actions: CodeBlockActionRegistry::new(),
             _subscriptions: subscriptions,
             _event_task: event_task,
         }
+    }
+
+    pub fn set_theme(&mut self, theme: Option<AgentChatTheme>, cx: &mut Context<Self>) {
+        self.theme = theme;
+        cx.notify();
     }
 
     fn spawn_event_pump(
@@ -1026,7 +1086,7 @@ impl AgentChatView {
                 .iter()
                 .find(|s| s.id == self.current_session)
                 .map(|s| s.name.clone())
-                .unwrap_or_else(|| SharedString::from("当前 Agent 会话"));
+                .unwrap_or_else(|| SharedString::from(current_agent_task_title()));
             list.insert(
                 0,
                 SessionSummary::new(self.current_session.clone(), name, now_secs()),
@@ -1471,7 +1531,7 @@ impl AgentChatView {
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("ACP 会话由外部 agent 管理,不在此持久化。"),
+                        .child("ACP 任务由外部 agent 管理,不在此持久化。"),
                 )
                 .into_any_element()
         } else {
@@ -1505,11 +1565,7 @@ impl AgentChatView {
     }
 
     fn render_sidebar_header(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let title = if self.show_archived {
-            "已归档会话"
-        } else {
-            "Agent 会话"
-        };
+        let title = agent_history_title(self.show_archived);
         h_flex()
             .w_full()
             .items_center()
@@ -1587,7 +1643,7 @@ impl AgentChatView {
                             .icon(IconName::Plus)
                             .ghost()
                             .small()
-                            .tooltip("新建对话")
+                            .tooltip("新建任务")
                             .on_click(cx.listener(|this, _, _, cx| this.new_session(cx))),
                     )
                     .child(
@@ -1607,7 +1663,7 @@ impl AgentChatView {
                                     .icon(IconName::BookOpen)
                                     .ghost()
                                     .small()
-                                    .tooltip("历史记录"),
+                                    .tooltip("历史任务"),
                             )
                             .when_some(history_list, |popover, list| popover.child(list)),
                     )
@@ -1637,15 +1693,11 @@ impl AgentChatView {
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("ACP 会话由外部 agent 管理,不在此持久化。"),
+                        .child("ACP 任务由外部 agent 管理,不在此持久化。"),
                 )
                 .into_any_element();
         }
-        let title = if self.show_archived {
-            "已归档会话"
-        } else {
-            "历史记录"
-        };
+        let title = agent_history_title(self.show_archived);
         let sessions = self.sessions.clone();
         let rows: Vec<gpui::AnyElement> = sessions
             .iter()
@@ -1773,6 +1825,15 @@ impl Render for AgentChatView {
         if self.auto_scroll.take_pending_for_render() {
             self.scroll_handle.scroll_to_bottom();
         }
+        let theme = self.theme.unwrap_or_else(|| {
+            AgentChatTheme::new(
+                cx.theme().background,
+                cx.theme().foreground,
+                cx.theme().muted,
+                cx.theme().muted_foreground,
+                cx.theme().border,
+            )
+        });
         let messages = render_messages_with_code_actions(
             &self.transcript.messages,
             &self.scroll_handle,
@@ -1785,8 +1846,9 @@ impl Render for AgentChatView {
             .w_full()
             .flex_shrink_0()
             .border_t_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
+            .border_color(theme.border)
+            .bg(theme.background)
+            .text_color(theme.foreground)
             .child(
                 v_flex()
                     .w_full()
@@ -1799,7 +1861,8 @@ impl Render for AgentChatView {
             let header = self.render_sidebar_mode_header(cx);
             div()
                 .size_full()
-                .bg(cx.theme().background)
+                .bg(theme.background)
+                .text_color(theme.foreground)
                 .on_action(cx.listener(Self::approve_tool_call))
                 .on_action(cx.listener(Self::reject_tool_call))
                 .child(
@@ -1815,7 +1878,8 @@ impl Render for AgentChatView {
             let toolbar = self.render_toolbar(cx);
             div()
                 .size_full()
-                .bg(cx.theme().background)
+                .bg(theme.background)
+                .text_color(theme.foreground)
                 .on_action(cx.listener(Self::approve_tool_call))
                 .on_action(cx.listener(Self::reject_tool_call))
                 .child(
@@ -3428,6 +3492,13 @@ mod tests {
             vec!["new", "history", "close"],
             sidebar_mode_header_action_ids()
         );
+    }
+
+    #[test]
+    fn agent_history_labels_use_task_language() {
+        assert_eq!("历史任务", agent_history_title(false));
+        assert_eq!("已归档任务", agent_history_title(true));
+        assert_eq!("当前 Agent 任务", current_agent_task_title());
     }
 
     #[gpui::test]

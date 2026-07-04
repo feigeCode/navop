@@ -304,6 +304,18 @@ TeamSync:
     en: Team keys
     zh-CN: 团队密钥
     zh-HK: 團隊密鑰
+  refresh_teams:
+    en: Refresh teams
+    zh-CN: 刷新团队列表
+    zh-HK: 重新整理團隊列表
+  refresh_started:
+    en: Refreshing team list...
+    zh-CN: 正在刷新团队列表...
+    zh-HK: 正在重新整理團隊列表...
+  refresh_success:
+    en: Team list refreshed. %{count} teams cached.
+    zh-CN: 团队列表已刷新，已缓存 %{count} 个团队。
+    zh-HK: 團隊列表已重新整理，已快取 %{count} 個團隊。
   key_label:
     en: Team key
     zh-CN: 团队密钥
@@ -341,9 +353,9 @@ TeamSync:
     zh-CN: 请选择团队
     zh-HK: 請選擇團隊
   no_teams:
-    en: No teams found. Sync teams first.
-    zh-CN: 暂无团队，请先同步团队列表。
-    zh-HK: 暫無團隊，請先同步團隊列表。
+    en: No cached teams. Create or join a team, then refresh the team list.
+    zh-CN: 暂无已缓存团队。创建或加入团队后，请刷新团队列表。
+    zh-HK: 暫無已快取團隊。建立或加入團隊後，請重新整理團隊列表。
   page_desc:
     en: Manage local keys for each team you joined or administer. Team keys are encrypted and stored only on this device.
     zh-CN: 管理你加入或管理的各个团队的本地密钥。团队密钥只会加密保存在本机。
@@ -641,6 +653,10 @@ Workspace:
     en: Workspace name
     zh-CN: 工作区名称
     zh-HK: 工作區名稱
+  sort_order:
+    en: Sort order
+    zh-CN: 排序值
+    zh-HK: 排序值
   new:
     en: New Workspace
     zh-CN: 新建工作区

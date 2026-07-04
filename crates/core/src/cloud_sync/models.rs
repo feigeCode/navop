@@ -334,4 +334,7 @@ pub struct WorkspacePlainData {
     /// 图标
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// 工作空间排序值
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<i32>,
 }

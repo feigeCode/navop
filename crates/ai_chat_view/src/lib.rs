@@ -27,6 +27,7 @@ mod card;
 mod cards;
 mod chart_json;
 mod chat_state;
+mod chat_tab;
 mod chat_view;
 mod code_block;
 mod code_block_parse;
@@ -50,6 +51,8 @@ mod resource_builder_tests;
 mod send_button;
 mod session_service;
 mod session_sidebar;
+#[cfg(test)]
+mod workbench_tab_tests;
 
 pub use acp::{
     AcpAgentConfig, AcpConnection, AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome,
@@ -59,7 +62,9 @@ pub use acp::{
 pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData};
 pub use agent_tab::{AGENT_TAB_CONTENT_KEY, AgentTabContent};
 pub use agent_transcript::AgentTranscript;
-pub use agent_view::{AgentChatView, AgentChatViewConfig, AgentChatViewEvent, AgentRuntimeFactory};
+pub use agent_view::{
+    AgentChatTheme, AgentChatView, AgentChatViewConfig, AgentChatViewEvent, AgentRuntimeFactory,
+};
 pub use ask_ai::{
     AskAiButton, AskAiEvent, AskAiNotifier, emit_ask_ai_event, emit_ask_ai_event_app,
     format_ask_ai_message, get_ask_ai_notifier, init_ask_ai_notifier,
@@ -74,7 +79,8 @@ pub use chart_json::{
     ChartJsonBlock, ChartPiePoint, ChartType, ChartXYPoint, parse_chart_json_block,
 };
 pub use chat_state::ChatViewState;
-pub use chat_view::ChatView;
+pub use chat_tab::{CHAT_TAB_CONTENT_KEY, ChatTabContent};
+pub use chat_view::{CHAT_TASK_SIDEBAR_TITLE, ChatView};
 pub use code_block::{
     CodeBlockAction, CodeBlockActionBuilder, CodeBlockActionCallback, CodeBlockActionPreview,
     CodeBlockActionRegistry, FencedCodeBlock, LanguageMatcher, extract_fenced_code_blocks,

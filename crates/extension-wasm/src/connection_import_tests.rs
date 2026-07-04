@@ -16,7 +16,7 @@ fn generated_connection_import_host_reports_current_platform() {
         TestImportHost {
             candidates: Vec::new(),
         },
-        PermissionSet::default(),
+        PermissionSet::new(["fs:read:data-sources.json"]),
     );
 
     let platform = futures::executor::block_on(
@@ -68,7 +68,7 @@ fn dbeaver_wasm_fixture_returns_database_preview_record() {
         TestImportHost {
             candidates: Vec::new(),
         },
-        PermissionSet::default(),
+        PermissionSet::new(["fs:read:data-sources.json"]),
     );
 
     let preview = futures::executor::block_on(runtime.preview(state, true)).unwrap();
@@ -77,6 +77,32 @@ fn dbeaver_wasm_fixture_returns_database_preview_record() {
     assert_eq!(ImportRecordKind::Database, preview[0].kind);
     assert_eq!("DBeaver", preview[0].source_label);
     assert_eq!("prod-mysql", preview[0].display_name);
+}
+
+#[test]
+fn wasip2_importer_component_returns_preview_record() {
+    let runtime = ConnectionImportComponentRuntime::from_bytes_for_tests(
+        "dbeaver",
+        include_bytes!("../fixtures/connection-import/dbeaver_importer_wasip2.wasm"),
+    )
+    .unwrap();
+    let state = ConnectionImportHostState::new(
+        "com.onetcli.importer.dbeaver",
+        "dbeaver",
+        TestImportHost {
+            candidates: vec![CandidateFile {
+                id: "dbeaver-data-sources".to_string(),
+                platform: Some(Platform::Macos),
+                path: "data-sources.json".to_string(),
+            }],
+        },
+        PermissionSet::new(["fs:read:data-sources.json"]),
+    );
+
+    let preview = futures::executor::block_on(runtime.preview(state, true)).unwrap();
+
+    assert_eq!(1, preview.len());
+    assert_eq!("Prod MySQL", preview[0].display_name);
 }
 
 #[test]
@@ -170,12 +196,12 @@ impl ExtensionConnectionImportHost for TestImportHost {
     }
 
     fn read_file(&self, candidate_id: &str) -> Result<Vec<u8>, HostAccessError> {
-        if candidate_id == "navicat-conn" {
-            Ok(b"plist".to_vec())
-        } else {
-            Err(HostAccessError::UndeclaredCandidate(
+        match candidate_id {
+            "navicat-conn" => Ok(b"plist".to_vec()),
+            "dbeaver-data-sources" => Ok(dbeaver_data_sources_json().to_vec()),
+            _ => Err(HostAccessError::UndeclaredCandidate(
                 candidate_id.to_string(),
-            ))
+            )),
         }
     }
 
@@ -193,4 +219,21 @@ impl ExtensionConnectionImportHost for TestImportHost {
     }
 
     fn log(&self, _level: &str, _message: &str) {}
+}
+
+fn dbeaver_data_sources_json() -> &'static [u8] {
+    br#"{
+      "connections": {
+        "mysql-prod": {
+          "provider": "mysql",
+          "name": "Prod MySQL",
+          "configuration": {
+            "host": "db.example.com",
+            "port": "3307",
+            "database": "app",
+            "user": "root"
+          }
+        }
+      }
+    }"#
 }

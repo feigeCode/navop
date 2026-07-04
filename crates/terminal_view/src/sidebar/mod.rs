@@ -21,8 +21,8 @@ use crate::{
     theme::{TerminalColors, TerminalTheme},
 };
 use ai_chat_view::{
-    CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent, LanguageMatcher,
-    build_agent_context_single,
+    AgentChatTheme, CodeBlockAction, DefaultAgentChatPanel, DefaultAgentChatPanelEvent,
+    LanguageMatcher, build_agent_context_single,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -53,6 +53,16 @@ const TERMINAL_AI_SYSTEM_INSTRUCTION: &str = r#"你是终端侧边栏中的 Linu
 5. 解释、注意事项、风险提示、步骤标题必须写在代码块外面，保持简洁。
 6. 如果命令依赖 sudo、包管理器或发行版差异，请先简短说明再给命令。
 7. 如果用户明确要求非 Linux 平台、非命令答案或更详细的解释，再按用户要求调整。"#;
+
+fn agent_theme_from_terminal_colors(colors: &TerminalColors) -> AgentChatTheme {
+    AgentChatTheme::new(
+        colors.background,
+        colors.foreground,
+        colors.muted,
+        colors.muted_foreground,
+        colors.border,
+    )
+}
 
 /// 侧边栏面板类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -403,7 +413,9 @@ impl TerminalSidebar {
 
         // 注册 bash/sh 代码块操作，并注入终端专属提示词
         let sidebar_entity = cx.entity();
+        let ai_theme = agent_theme_from_terminal_colors(&colors);
         ai_chat_panel.update(cx, |panel, cx| {
+            panel.set_theme(Some(ai_theme), cx);
             panel.set_system_instruction(Some(TERMINAL_AI_SYSTEM_INSTRUCTION.to_string()), cx);
             // 注册复制操作（默认已有，这里只是确保）
             // 注册粘贴到终端操作
@@ -702,6 +714,9 @@ impl TerminalSidebar {
         });
         self.quick_command_panel.update(cx, |panel, cx| {
             panel.set_colors(self.colors.clone(), cx);
+        });
+        self.ai_chat_panel.update(cx, |panel, cx| {
+            panel.set_theme(Some(agent_theme_from_terminal_colors(&self.colors)), cx);
         });
         if let Some(ref monitor_panel) = self.server_monitor_panel {
             monitor_panel.update(cx, |panel, cx| {

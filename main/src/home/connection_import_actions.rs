@@ -12,19 +12,20 @@ use one_core::storage::{
     ConnectionRepository, GlobalStorageState, StoredConnection, traits::Repository,
 };
 
-pub(crate) fn preview_import_drafts(
-    importer_ids: &[String],
+pub(crate) async fn preview_import_drafts(
+    importer_ids: Vec<String>,
 ) -> Result<Vec<EditableImportDraft>, String> {
     if importer_ids.is_empty() {
         return Ok(Vec::new());
     }
     let root = extensions_root().ok_or_else(|| "扩展目录不可用".to_string())?;
     let composite_root = root.join(ExtensionKind::Composite.dir_name());
-    let records = futures::executor::block_on(preview_manifest_connection_importers(
+    let records = preview_manifest_connection_importers(
         &composite_root,
-        importer_ids,
+        &importer_ids,
         true,
-    ))
+    )
+    .await
     .map_err(|error| error.to_string())?;
     Ok(records.into_iter().map(EditableImportDraft::new).collect())
 }

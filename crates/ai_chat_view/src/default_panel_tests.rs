@@ -1,4 +1,7 @@
-use crate::default_panel::{build_sidebar_config, enabled_provider_configs};
+use crate::default_panel::{
+    DefaultAgentChatPanelMode, build_sidebar_config, build_workbench_config,
+    enabled_provider_configs, panel_title_for_mode,
+};
 use crate::{AcpAgentConfig, AgentChatViewConfig};
 use agent_runtime::model::{MockModelClient, ModelClient};
 use agent_runtime::{
@@ -60,6 +63,31 @@ fn sidebar_config_preserves_available_resource_catalog() {
 
     assert!(config.sidebar_mode);
     assert_eq!(catalog, config.available_resources);
+}
+
+#[test]
+fn workbench_config_uses_full_view_task_history_sidebar() {
+    let config = AgentChatViewConfig::new(test_runtime(), ResourceContext::new(), Vec::new())
+        .sidebar_mode(true);
+    let agents = vec![AcpAgentConfig::new("codex", "Codex ACP", "codex")];
+
+    let config = build_workbench_config(config, agents);
+
+    assert!(!config.sidebar_mode);
+    assert_eq!(1, config.acp_agents.len());
+    assert_eq!(config.acp_agents[0].id.as_ref(), "codex");
+}
+
+#[test]
+fn workbench_mode_uses_workbench_tab_title() {
+    assert_eq!(
+        "AI 工作台",
+        panel_title_for_mode(DefaultAgentChatPanelMode::Workbench)
+    );
+    assert_eq!(
+        "AI Chat",
+        panel_title_for_mode(DefaultAgentChatPanelMode::Sidebar)
+    );
 }
 
 fn test_runtime() -> Arc<Runtime> {

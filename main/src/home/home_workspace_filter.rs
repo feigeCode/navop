@@ -1,16 +1,17 @@
 use std::collections::HashSet;
 
 use crate::home_tab::HomePage;
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Task, Window, div, px,
+    App, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Task, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, IconName, IndexPath, Sizable, WindowExt,
+    ActiveTheme, Icon, IconName, IndexPath, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputState, MaskPattern},
     list::{ListDelegate, ListItem, ListState},
     tooltip::Tooltip,
     v_flex,
@@ -22,6 +23,7 @@ pub(crate) fn show_workspace_dialog(
     parent: Entity<HomePage>,
     workspace_id: Option<i64>,
     initial_name: String,
+    initial_sort_order: Option<i32>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -34,6 +36,16 @@ pub(crate) fn show_workspace_dialog(
         }
         state
     });
+    let sort_order_input = cx.new(|cx| {
+        let mut state = InputState::new(window, cx)
+            .placeholder(t!("Workspace.sort_order"))
+            .mask_pattern(MaskPattern::number(None))
+            .clean_on_escape();
+        if let Some(sort_order) = initial_sort_order {
+            state.set_value(sort_order.to_string(), window, cx);
+        }
+        state
+    });
 
     name_input.update(cx, |state, cx| {
         state.focus(window, cx);
@@ -41,9 +53,12 @@ pub(crate) fn show_workspace_dialog(
 
     let input_for_render = name_input.clone();
     let input_for_ok = name_input.clone();
+    let sort_input_for_render = sort_order_input.clone();
+    let sort_input_for_ok = sort_order_input.clone();
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let parent_for_ok = parent.clone();
         let input_for_ok = input_for_ok.clone();
+        let sort_input_for_ok = sort_input_for_ok.clone();
         dialog
             .title(
                 if workspace_id.is_some() {
@@ -57,7 +72,8 @@ pub(crate) fn show_workspace_dialog(
                 v_flex()
                     .gap_3()
                     .w(px(360.0))
-                    .child(Input::new(&input_for_render).w_full()),
+                    .child(Input::new(&input_for_render).w_full())
+                    .child(Input::new(&sort_input_for_render).w_full()),
             )
             .confirm()
             .on_ok(move |_, _, cx| {
@@ -65,9 +81,22 @@ pub(crate) fn show_workspace_dialog(
                 if name.is_empty() {
                     return false;
                 }
+                let sort_text = sort_input_for_ok
+                    .read(cx)
+                    .text()
+                    .to_string()
+                    .trim()
+                    .to_string();
+                let sort_order = if sort_text.is_empty() {
+                    None
+                } else if let Ok(sort_order) = sort_text.parse::<i32>() {
+                    Some(sort_order)
+                } else {
+                    return false;
+                };
 
                 let _ = parent_for_ok.update(cx, |home, cx| {
-                    home.handle_save_workspace(workspace_id, name, cx);
+                    home.handle_save_workspace(workspace_id, name, sort_order, cx);
                 });
                 true
             })
@@ -80,6 +109,50 @@ struct WorkspaceFilterItem {
     name: String,
     count: usize,
     checked: bool,
+    sort_order: Option<i32>,
+}
+
+#[derive(Clone)]
+struct DragWorkspace {
+    source_id: i64,
+    name: String,
+    count: usize,
+}
+
+impl Render for DragWorkspace {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .id("drag-workspace")
+            .cursor_grabbing()
+            .w(px(240.0))
+            .px_3()
+            .py_2()
+            .items_center()
+            .gap_2()
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().popover)
+            .shadow_md()
+            .child(IconName::AppsColor.color().with_size(px(18.0)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .child(self.name.clone()),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("({})", self.count)),
+            )
+    }
 }
 
 pub(crate) struct WorkspaceFilterDelegate {
@@ -124,6 +197,7 @@ impl WorkspaceFilterDelegate {
                         name: ws.name.clone(),
                         count,
                         checked,
+                        sort_order: ws.sort_order,
                     })
                 } else {
                     None
@@ -174,10 +248,14 @@ impl ListDelegate for WorkspaceFilterDelegate {
         let item_id = item.id;
         let item_id_for_edit = item.id;
         let item_name_for_edit = item.name.clone();
+        let item_sort_order_for_edit = item.sort_order;
         let item_id_for_delete = item.id;
+        let item_id_for_drop = item.id;
         let group_name: SharedString = format!("workspace-item-{}", item.id).into();
+        let drag_enabled = self.search_query.is_empty();
+        let drag_border_color = cx.theme().drag_border;
 
-        Some(
+        let list_item =
             ListItem::new(ix)
                 .px_3()
                 .py_2()
@@ -186,85 +264,121 @@ impl ListDelegate for WorkspaceFilterDelegate {
                     parent.update(cx, |this, cx| {
                         this.toggle_workspace_filter(item_id, cx);
                     });
+                });
+
+        let row = h_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .group(group_name.clone());
+
+        let row = if drag_enabled {
+            let parent_for_drop = self.parent.clone();
+            row.drag_over::<DragWorkspace>(move |this, _, _, _| {
+                this.border_t_2().border_color(drag_border_color)
+            })
+            .on_drop(window.listener_for(
+                &parent_for_drop,
+                move |this, drag: &DragWorkspace, _window, cx| {
+                    this.reorder_workspace_by_id(drag.source_id, item_id_for_drop, cx);
+                },
+            ))
+        } else {
+            row
+        };
+
+        Some(
+            list_item.child(
+                row.child(
+                    div()
+                        .id(SharedString::from(format!("ws-sort-handle-{}", item.id)))
+                        .w(px(18.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_grab()
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .when(drag_enabled, |this| {
+                            this.on_drag(
+                                DragWorkspace {
+                                    source_id: item.id,
+                                    name: item.name.clone(),
+                                    count: item.count,
+                                },
+                                |drag, _, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.new(|_| drag.clone())
+                                },
+                            )
+                        })
+                        .child(
+                            Icon::new(IconName::Menu)
+                                .with_size(Size::Small)
+                                .text_color(cx.theme().muted_foreground),
+                        ),
+                )
+                .child(
+                    Checkbox::new(SharedString::from(format!("ws-check-{}", item.id)))
+                        .checked(item.checked),
+                )
+                .child({
+                    let tooltip_text =
+                        SharedString::from(format!("{} ({})", item.name, item.count));
+                    h_flex()
+                        .id(SharedString::from(format!("ws-name-{}", item.id)))
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(item.name.clone())
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!("({})", item.count)),
+                        )
+                        .tooltip(move |window, cx| {
+                            Tooltip::new(tooltip_text.clone()).build(window, cx)
+                        })
                 })
                 .child(
                     h_flex()
-                        .w_full()
-                        .items_center()
-                        .gap_2()
-                        .group(group_name.clone())
+                        .gap_0p5()
+                        .invisible()
+                        .group_hover(group_name, |this| this.visible())
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(
-                            Checkbox::new(SharedString::from(format!("ws-check-{}", item.id)))
-                                .checked(item.checked),
+                            Button::new(SharedString::from(format!("ws-edit-{}", item.id)))
+                                .icon(IconName::Edit)
+                                .primary()
+                                .xsmall()
+                                .on_click(move |_, window, cx| {
+                                    show_workspace_dialog(
+                                        parent_for_edit.clone(),
+                                        Some(item_id_for_edit),
+                                        item_name_for_edit.clone(),
+                                        item_sort_order_for_edit,
+                                        window,
+                                        cx,
+                                    );
+                                }),
                         )
-                        .child({
-                            let tooltip_text =
-                                SharedString::from(format!("{} ({})", item.name, item.count));
-                            h_flex()
-                                .id(SharedString::from(format!("ws-name-{}", item.id)))
-                                .flex_1()
-                                .min_w_0()
-                                .text_sm()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .text_ellipsis()
-                                .child(item.name.clone())
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(format!("({})", item.count)),
-                                )
-                                .tooltip(move |window, cx| {
-                                    Tooltip::new(tooltip_text.clone()).build(window, cx)
-                                })
-                        })
                         .child(
-                            h_flex()
-                                .gap_0p5()
-                                .invisible()
-                                .group_hover(group_name, |this| this.visible())
-                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                                    cx.stop_propagation()
-                                })
-                                .child(
-                                    Button::new(SharedString::from(format!("ws-edit-{}", item.id)))
-                                        .icon(IconName::Edit)
-                                        .primary()
-                                        .xsmall()
-                                        .on_click(move |_, window, cx| {
-                                            show_workspace_dialog(
-                                                parent_for_edit.clone(),
-                                                Some(item_id_for_edit),
-                                                item_name_for_edit.clone(),
-                                                window,
-                                                cx,
-                                            );
-                                        }),
-                                )
-                                .child(
-                                    Button::new(SharedString::from(format!(
-                                        "ws-delete-{}",
-                                        item.id
-                                    )))
-                                    .icon(IconName::Remove)
-                                    .danger()
-                                    .xsmall()
-                                    .on_click(
-                                        window.listener_for(
-                                            &parent_for_delete,
-                                            move |this, _, window, cx| {
-                                                this.delete_workspace(
-                                                    item_id_for_delete,
-                                                    window,
-                                                    cx,
-                                                );
-                                            },
-                                        ),
-                                    ),
-                                ),
+                            Button::new(SharedString::from(format!("ws-delete-{}", item.id)))
+                                .icon(IconName::Remove)
+                                .danger()
+                                .xsmall()
+                                .on_click(window.listener_for(
+                                    &parent_for_delete,
+                                    move |this, _, window, cx| {
+                                        this.delete_workspace(item_id_for_delete, window, cx);
+                                    },
+                                )),
                         ),
                 ),
+            ),
         )
     }
 

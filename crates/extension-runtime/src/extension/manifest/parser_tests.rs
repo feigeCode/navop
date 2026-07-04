@@ -117,6 +117,50 @@ fn manifest_parses_connection_importers() {
 }
 
 #[test]
+fn manifest_accepts_windows_env_fs_permissions_for_connection_importers() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "schema_version": 1,
+            "id": "com.onetcli.importer.dbeaver",
+            "name": "DBeaver Importer",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.7.0" },
+            "runtime": {
+                "wasm": [{
+                    "id": "dbeaver-importer",
+                    "module": "wasm/dbeaver_importer_wasm.wasm",
+                    "kind": "component"
+                }]
+            },
+            "permissions": [
+                "fs:read:%APPDATA%/DBeaverData/workspace6/General/.dbeaver/data-sources.json"
+            ],
+            "contributes": {
+                "connectionImporters": [{
+                    "id": "dbeaver",
+                    "runtimeId": "dbeaver-importer",
+                    "displayName": "DBeaver",
+                    "outputKinds": ["database"],
+                    "platforms": ["windows"],
+                    "candidateFiles": [{
+                        "id": "dbeaver-windows-data-sources",
+                        "platform": "windows",
+                        "path": "%APPDATA%/DBeaverData/workspace6/General/.dbeaver/data-sources.json"
+                    }]
+                }]
+            }
+        }"#,
+    );
+
+    let manifest = load_from_dir(tmp.path()).unwrap();
+
+    assert_eq!("com.onetcli.importer.dbeaver", manifest.id);
+    assert_eq!(1, manifest.contributes.connection_importers.len());
+}
+
+#[test]
 fn manifest_rejects_wasm_module_path_escape() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_manifest(

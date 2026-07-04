@@ -6,8 +6,9 @@ use extension_runtime::{
     connection_import_provider::list_manifest_connection_importers,
     extension::{ExtensionKind, extensions_root},
 };
-use gpui::{App, AppContext, ParentElement, Window, px};
+use gpui::{App, AppContext, AsyncApp, ParentElement, Window, px};
 use gpui_component::{WindowExt, dialog::DialogButtonProps};
+use one_core::gpui_tokio::Tokio;
 use rust_i18n::t;
 
 pub(crate) fn show_connection_import_dialog(window: &mut Window, cx: &mut App) {
@@ -73,13 +74,28 @@ fn show_connection_import_preview_dialog(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let (drafts, preview_error) = match preview_import_drafts(&importer_ids) {
-        Ok(drafts) => (drafts, None),
-        Err(error) => (Vec::new(), Some(error)),
-    };
-    let preview = cx.new(|cx| ConnectionImportPreview::new(drafts, preview_error, window, cx));
+    let preview = cx.new(|_| ConnectionImportPreview::loading());
     let preview_for_render = preview.clone();
     let preview_for_ok = preview.clone();
+    let window_handle = window.window_handle();
+    let preview_task = Tokio::spawn(cx, async move { preview_import_drafts(importer_ids).await });
+
+    cx.spawn({
+        let preview = preview.clone();
+        async move |cx: &mut AsyncApp| {
+            let result = match preview_task.await {
+                Ok(result) => result,
+                Err(error) => Err(format!("导入预览任务失败: {}", error)),
+            };
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                preview.update(cx, |preview, cx| match result {
+                    Ok(drafts) => preview.set_preview_result(drafts, None, window, cx),
+                    Err(error) => preview.set_preview_result(Vec::new(), Some(error), window, cx),
+                });
+            });
+        }
+    })
+    .detach();
 
     window.open_dialog(cx, move |dialog, _window, _cx| {
         dialog

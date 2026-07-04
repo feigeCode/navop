@@ -55,6 +55,21 @@ pub struct GlobalHomePage {
 
 impl gpui::Global for GlobalHomePage {}
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InitialPinnedTabLayout {
+    home_tab_id: &'static str,
+    workbench_tab_id: &'static str,
+    active_pinned_index: usize,
+}
+
+fn initial_home_tab_layout() -> InitialPinnedTabLayout {
+    InitialPinnedTabLayout {
+        home_tab_id: "home",
+        workbench_tab_id: "ai-workbench",
+        active_pinned_index: 1,
+    }
+}
+
 #[cfg(target_os = "macos")]
 use gpui::px;
 
@@ -65,7 +80,9 @@ use one_core::settings::AppSettings;
 use one_core::split_tab_container::{SplitTabContainer, TabPaneFactory};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{TabContainer, TabContentRegistry, TabItem};
-use one_core::tab_navigation::{TabCycleDirection, tab_index_after_cycle};
+use one_core::tab_navigation::{
+    ActiveTabSlot, TabCycleDirection, tab_number_target, tab_slot_after_cycle,
+};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -86,19 +103,14 @@ fn activate_tab_by_number(number: usize, cx: &mut App) {
     cx.defer(move |cx| {
         _ = active_window.update(cx, |_, window, cx| {
             container.update(cx, |tc, cx| {
-                if number == 1 && tc.has_pinned_tab() {
-                    tc.activate_pinned_tab(window, cx);
-                    return;
-                }
-
-                let index = if tc.has_pinned_tab() {
-                    number.saturating_sub(2)
-                } else {
-                    number.saturating_sub(1)
-                };
-
-                if index < tc.tabs().len() {
-                    tc.set_active_index(index, window, cx);
+                match tab_number_target(number, tc.pinned_tab_count(), tc.tabs().len()) {
+                    Some(ActiveTabSlot::Pinned(index)) => {
+                        tc.activate_pinned_tab_at(index, window, cx);
+                    }
+                    Some(ActiveTabSlot::Regular(index)) => {
+                        tc.set_active_index(index, window, cx);
+                    }
+                    None => {}
                 }
             });
         });
@@ -117,15 +129,22 @@ fn switch_tab(direction: TabCycleDirection, cx: &mut App) {
     cx.defer(move |cx| {
         _ = active_window.update(cx, |_, window, cx| {
             container.update(cx, |tc, cx| {
-                let Some(index) = tab_index_after_cycle(
-                    tc.active_index(),
+                let active_slot = tc
+                    .active_pinned_index()
+                    .map(ActiveTabSlot::Pinned)
+                    .unwrap_or_else(|| ActiveTabSlot::Regular(tc.active_index()));
+                let Some(next_slot) = tab_slot_after_cycle(
+                    active_slot,
+                    tc.pinned_tab_count(),
                     tc.tabs().len(),
-                    tc.is_pinned_tab_active(),
                     direction,
                 ) else {
                     return;
                 };
-                tc.set_active_index(index, window, cx);
+                match next_slot {
+                    ActiveTabSlot::Pinned(index) => tc.activate_pinned_tab_at(index, window, cx),
+                    ActiveTabSlot::Regular(index) => tc.set_active_index(index, window, cx),
+                }
             });
         });
     });
@@ -636,17 +655,23 @@ impl OnetCliApp {
         cx.set_global(GlobalTabContainer {
             tab_container: tab_container.clone(),
         });
-        // Set HomePage as the pinned tab (always visible, not scrollable)
+        // Initialize fixed tabs before the scrollable workspace tabs.
         {
+            let layout = initial_home_tab_layout();
             let tab_container_clone = tab_container.clone();
             tab_container.update(cx, |tc, cx| {
                 let home_page = cx.new(|cx| HomePage::new(tab_container_clone, window, cx));
                 cx.set_global(GlobalHomePage {
                     home_page: home_page.clone(),
                 });
-                let home_tab = TabItem::new("home", "app", home_page);
-                tc.set_pinned_tab(home_tab, cx);
-                tc.activate_pinned_tab(window, cx);
+                let home_tab = TabItem::new(layout.home_tab_id, "app", home_page);
+                tc.add_pinned_tab(home_tab, cx);
+
+                let workbench =
+                    cx.new(|cx| ai_chat_view::DefaultAgentChatPanel::new_workbench(window, cx));
+                let workbench_tab = TabItem::new(layout.workbench_tab_id, "app", workbench);
+                tc.add_pinned_tab(workbench_tab, cx);
+                tc.activate_pinned_tab_at(layout.active_pinned_index, window, cx);
             });
         }
 
@@ -656,8 +681,19 @@ impl OnetCliApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{configured_log_file_path, default_log_file_path, log_file_appender};
+    use super::{
+        configured_log_file_path, default_log_file_path, initial_home_tab_layout, log_file_appender,
+    };
     use std::io::Write;
+
+    #[test]
+    fn initial_layout_pins_home_and_ai_workbench_with_ai_active() {
+        let layout = initial_home_tab_layout();
+
+        assert_eq!("home", layout.home_tab_id);
+        assert_eq!("ai-workbench", layout.workbench_tab_id);
+        assert_eq!(1, layout.active_pinned_index);
+    }
 
     #[test]
     fn configured_log_file_path_uses_default_for_empty_value() {

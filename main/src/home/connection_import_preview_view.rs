@@ -19,6 +19,7 @@ use gpui_component::{
 pub(crate) struct ConnectionImportPreview {
     rows: Vec<ConnectionImportDraftRow>,
     preview_error: Option<String>,
+    loading: bool,
 }
 
 struct ConnectionImportDraftRow {
@@ -33,23 +34,38 @@ struct ConnectionImportDraftRow {
 }
 
 impl ConnectionImportPreview {
-    pub(crate) fn new(
+    pub(crate) fn loading() -> Self {
+        Self {
+            rows: Vec::new(),
+            preview_error: None,
+            loading: true,
+        }
+    }
+
+    pub(crate) fn set_preview_result(
+        &mut self,
         drafts: Vec<EditableImportDraft>,
         preview_error: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Self {
+    ) {
         let rows = drafts
             .into_iter()
             .map(|draft| ConnectionImportDraftRow::new(draft, window, cx))
             .collect();
-        Self {
-            rows,
-            preview_error,
-        }
+        self.rows = rows;
+        self.preview_error = preview_error;
+        self.loading = false;
+        cx.notify();
     }
 
     pub(crate) fn collect_drafts(&self, cx: &App) -> Result<Vec<EditableImportDraft>, String> {
+        if self.loading {
+            return Err("正在读取导入来源，请稍后".to_string());
+        }
+        if let Some(error) = &self.preview_error {
+            return Err(format!("读取导入来源失败：{}", error));
+        }
         self.rows.iter().map(|row| row.collect_draft(cx)).collect()
     }
 
@@ -80,11 +96,14 @@ impl ConnectionImportPreview {
     }
 
     fn render_empty_or_error(&self, cx: &mut Context<Self>) -> AnyElement {
-        let message = self
-            .preview_error
-            .as_ref()
-            .map(|error| format!("读取导入来源失败：{}", error))
-            .unwrap_or_else(|| "未发现可导入的连接".to_string());
+        let message = if self.loading {
+            "正在读取导入来源...".to_string()
+        } else {
+            self.preview_error
+                .as_ref()
+                .map(|error| format!("读取导入来源失败：{}", error))
+                .unwrap_or_else(|| "未发现可导入的连接".to_string())
+        };
         div()
             .p_4()
             .border_1()

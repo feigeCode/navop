@@ -1,3 +1,5 @@
+use std::sync::{OnceLock, RwLock};
+
 use semver::{Version, VersionReq};
 use thiserror::Error;
 
@@ -181,6 +183,27 @@ pub fn check_compatibility(
     Ok(())
 }
 
+static HOST_VERSION_OVERRIDE: OnceLock<RwLock<Option<Version>>> = OnceLock::new();
+
+pub fn set_current_host_version(version: &str) -> Result<(), semver::Error> {
+    let version = Version::parse(version)?;
+    if let Ok(mut current) = host_version_override().write() {
+        *current = Some(version);
+    }
+    Ok(())
+}
+
 pub fn current_host_version() -> Version {
+    if let Some(version) = host_version_override()
+        .read()
+        .ok()
+        .and_then(|version| version.clone())
+    {
+        return version;
+    }
     Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| Version::new(0, 0, 0))
+}
+
+fn host_version_override() -> &'static RwLock<Option<Version>> {
+    HOST_VERSION_OVERRIDE.get_or_init(|| RwLock::new(None))
 }

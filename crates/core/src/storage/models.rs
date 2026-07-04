@@ -832,6 +832,9 @@ pub struct Workspace {
     /// 云端 ID（用于同步）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloud_id: Option<String>,
+    /// 手动排序位序，仅用于本地工作区列表排序，不参与云同步。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<i32>,
 }
 
 impl Entity for Workspace {
@@ -860,6 +863,7 @@ impl Workspace {
             created_at: None,
             updated_at: None,
             cloud_id: None,
+            sort_order: None,
         }
     }
 }

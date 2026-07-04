@@ -406,6 +406,7 @@ impl CloudSyncService {
             name: ws.name.clone(),
             color: ws.color.clone(),
             icon: ws.icon.clone(),
+            sort_order: ws.sort_order,
         };
 
         let plaintext = serde_json::to_string(&plain_data)
@@ -493,6 +494,7 @@ impl CloudSyncService {
             created_at: None,
             updated_at: Some(cloud_data.updated_at / 1000),
             cloud_id: Some(cloud_data.id.clone()),
+            sort_order: plain_data.sort_order,
         })
     }
 
@@ -615,5 +617,51 @@ mod tests {
         assert_eq!(Some("workspace-cloud-1".to_string()), workspace_cloud_id);
         assert_eq!("db", decrypted.name);
         assert_eq!(None, decrypted.workspace_id);
+    }
+
+    #[test]
+    fn workspace_sync_data_preserves_sort_order() {
+        let mut service = CloudSyncService::new();
+        service.set_master_key_directly("test_blob_key".to_string());
+        let mut workspace = crate::storage::Workspace::new("backend".to_string());
+        workspace.sort_order = Some(7);
+
+        let cloud_data = service
+            .prepare_workspace_sync_data_upload(&workspace, None, &[])
+            .unwrap();
+        let plaintext = service
+            .decrypt_blob(&cloud_data.encrypted_data, None)
+            .unwrap();
+        let plain_data: WorkspacePlainData = serde_json::from_str(&plaintext).unwrap();
+        let decrypted = service.decrypt_sync_data_workspace(&cloud_data).unwrap();
+
+        assert_eq!(Some(7), plain_data.sort_order);
+        assert_eq!(Some(7), decrypted.sort_order);
+    }
+
+    #[test]
+    fn workspace_sync_data_accepts_legacy_payload_without_sort_order() {
+        let mut service = CloudSyncService::new();
+        service.set_master_key_directly("test_blob_key".to_string());
+        let encrypted_data = service
+            .encrypt_blob(r#"{"name":"legacy","color":null,"icon":null}"#, None)
+            .unwrap();
+        let cloud_data = CloudSyncData {
+            id: "workspace-cloud-legacy".to_string(),
+            owner_id: "owner".to_string(),
+            team_id: None,
+            data_type: data_type::WORKSPACE.to_string(),
+            encrypted_data,
+            key_version: 1,
+            checksum: String::new(),
+            version: 1,
+            updated_at: current_timestamp(),
+            deleted_at: None,
+        };
+
+        let decrypted = service.decrypt_sync_data_workspace(&cloud_data).unwrap();
+
+        assert_eq!("legacy", decrypted.name);
+        assert_eq!(None, decrypted.sort_order);
     }
 }
