@@ -978,6 +978,7 @@ impl AgentInput {
         v_flex()
             .gap_3()
             .child(div().text_sm().child(item.label.clone()))
+            .child(div().text_xs().child(format!("资源 ID: {}", item.id)))
             .child(div().text_xs().child(format!("类型: {}", item.kind)))
             .child(div().text_xs().child(format!("状态: {}", item.status)))
             .child(
@@ -1006,6 +1007,13 @@ impl AgentInput {
                 .w(px(420.0))
                 .child(Self::render_resource_detail_dialog(item.clone()))
         });
+    }
+
+    fn close_resource_popover_for_dialog(&mut self, cx: &mut Context<Self>) {
+        if self.open_menu == Some(ComposerMenuKind::Target) {
+            self.open_menu = None;
+            cx.notify();
+        }
     }
 
     fn show_add_resource_dialog(
@@ -1840,12 +1848,20 @@ fn resource_pool_item_row(
     let in_pool = item.in_pool;
     let is_default = item.is_default;
     let detail_item = item.clone();
+    let detail_view = view.clone();
     let detail_button = Button::new(SharedString::from(format!("resource-detail-{}", item.id)))
+        .debug_selector({
+            let detail_selector = format!("resource-detail-{}", item.id);
+            move || detail_selector.clone()
+        })
         .icon(IconName::Info)
         .ghost()
         .xsmall()
         .tooltip("资源详情")
         .on_click(move |_, window, cx| {
+            detail_view.update(cx, |this, cx| {
+                this.close_resource_popover_for_dialog(cx);
+            });
             AgentInput::show_resource_detail_dialog(detail_item.clone(), window, cx);
         });
     let action_button = Button::new(SharedString::from(format!(
@@ -1931,7 +1947,14 @@ fn resource_pool_item_row(
                         .min_w_0()
                         .items_center()
                         .gap(px(4.0))
-                        .child(div().min_w_0().text_sm().truncate().child(item.label))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .truncate()
+                                .child(item.label),
+                        )
                         .when(item.is_default, |this| {
                             this.child(resource_pool_badge(
                                 SharedString::from("默认"),
@@ -2514,6 +2537,23 @@ mod tests {
             input.origin.y < toolbar.origin.y,
             "input editor should have vertical room above toolbar for completion popup"
         );
+    }
+
+    #[gpui::test]
+    fn resource_detail_dialog_closes_resource_popover_state(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (view, cx) = cx.add_window_view(AgentInputLayoutRoot::with_resource_pool);
+
+        view.update(cx, |root, cx| {
+            root.input.update(cx, |input, cx| {
+                input.open_menu = Some(ComposerMenuKind::Target);
+                input.close_resource_popover_for_dialog(cx);
+                assert!(input.open_menu.is_none());
+            });
+        });
     }
 
     #[test]

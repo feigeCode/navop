@@ -2468,7 +2468,7 @@ fn resource_primary_meta(resource: &ResourceRef) -> String {
                 .first()
                 .map(|scope| format!("{}: {}", scope.label, scope.value))
         })
-        .unwrap_or_else(|| resource.id.to_string())
+        .unwrap_or_else(|| resource.kind.as_str().to_string())
 }
 
 fn resource_pool_status(in_pool: bool) -> &'static str {
@@ -2604,7 +2604,12 @@ fn kind_icon(kind: &ResourceKind) -> &'static str {
         ResourceKind::Redis => "RD",
         ResourceKind::Mongo => "MG",
         ResourceKind::Terminal => "TM",
-        ResourceKind::Other(_) => "··",
+        ResourceKind::Other(kind) => match kind.as_str() {
+            "rdp" => "RD",
+            "vnc" => "VN",
+            "port-forwarding" => "PF",
+            _ => "OT",
+        },
     }
 }
 
@@ -3048,6 +3053,27 @@ mod tests {
         assert_eq!(items[1].id.as_ref(), "ssh-b");
         assert!(!items[1].in_pool);
         assert!(!items[1].is_default);
+    }
+
+    #[test]
+    fn resource_pool_item_primary_meta_does_not_fallback_to_uuid() {
+        let resource = ResourceRef::new(
+            "fa9476d8-de90-4f7d-9b63-6f4783594211",
+            ResourceKind::Other("rdp".into()),
+            "a82 bi 服务",
+        );
+
+        assert_eq!(resource_primary_meta(&resource), "rdp");
+    }
+
+    #[test]
+    fn resource_pool_item_uses_specific_icons_for_known_other_kinds() {
+        assert_eq!(kind_icon(&ResourceKind::Other("rdp".into())), "RD");
+        assert_eq!(kind_icon(&ResourceKind::Other("vnc".into())), "VN");
+        assert_eq!(
+            kind_icon(&ResourceKind::Other("port-forwarding".into())),
+            "PF"
+        );
     }
 
     #[test]
