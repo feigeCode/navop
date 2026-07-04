@@ -93,6 +93,29 @@ async fn runtime_registry_agent_tool_maps_default_target_to_runtime_connection()
 }
 
 #[tokio::test]
+async fn target_tool_without_target_or_default_returns_clear_error() {
+    let handler =
+        Arc::new(RuntimeEchoTool::new("db.query").with_input_schema(connection_sql_schema()));
+    let registry = ToolRegistry::new(vec![handler]);
+    let agent_registry = agent_runtime::tools::tool_runtime_agent_tool_registry(
+        registry,
+        tool_runtime::ToolAdapter::FunctionCalling,
+    );
+    let tool = agent_registry.get(&ToolName::new("db.query")).unwrap();
+
+    let error = tool
+        .execute(agent_invocation(
+            "db.query",
+            json!({ "sql": "select 1" }),
+            ResourceContext::new(),
+        ))
+        .await
+        .expect_err("targeted tool should require target or default scope resource");
+
+    assert!(error.to_string().contains("target is required"));
+}
+
+#[tokio::test]
 async fn runtime_registry_agent_tool_resolves_target_with_tool_resource_kind() {
     let handler = Arc::new(
         RuntimeEchoTool::new("terminal.exec")

@@ -157,6 +157,18 @@ fn normalize_agent_arguments(
         explicit_resource,
         &descriptor.target,
     )?;
+    if has_target && resource_id.is_none() {
+        return Err(ToolError::InvalidArguments(
+            "target is required: specify a resource target or select a default resource"
+                .to_string(),
+        ));
+    }
+    if provider_field.is_some() && resource_id.is_none() {
+        return Err(ToolError::InvalidArguments(
+            "target is required: specify a resource target or select a default resource"
+                .to_string(),
+        ));
+    }
     if has_target {
         if let Some(id) = &resource_id {
             arguments.insert("target".to_string(), Value::String(id.to_string()));
