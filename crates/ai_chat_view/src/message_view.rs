@@ -14,7 +14,7 @@ use crate::{
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    StatefulInteractiveElement, Styled, Window, div, px, relative,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, h_flex, scroll::Scrollbar, v_flex,
@@ -137,7 +137,7 @@ fn render_user_message_themed<E: MessageExtension>(
         .justify_end()
         .child(
             div()
-                .max_w(px(720.0))
+                .max_w(relative(0.82))
                 .min_w_0()
                 .px_3()
                 .py_2()
