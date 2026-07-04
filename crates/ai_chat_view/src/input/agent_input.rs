@@ -852,6 +852,7 @@ impl AgentInput {
         let count = self.attachments.len();
 
         h_flex()
+            .debug_selector(|| "agent-input-toolbar".to_string())
             .w_full()
             .items_center()
             .justify_between()
@@ -2268,7 +2269,6 @@ impl Render for AgentInput {
                     .px_3()
                     .pt_1()
                     .max_h(px(220.0))
-                    .overflow_hidden()
                     .child(
                         div()
                             .w_full()
@@ -2499,6 +2499,28 @@ mod tests {
         assert!(
             row.size.width <= root.size.width,
             "resource row should stay within input width: row={row:?}, root={root:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn mention_completion_popup_stays_above_bottom_toolbar(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::init(cx);
+        });
+        let (_, cx) = cx.add_window_view(AgentInputLayoutRoot::new);
+        let cx: &mut VisualTestContext = cx;
+
+        let input = cx
+            .debug_bounds("agent-input-root")
+            .expect("input root should render");
+        let toolbar = cx
+            .debug_bounds("agent-input-toolbar")
+            .expect("toolbar should render");
+
+        assert!(
+            input.origin.y < toolbar.origin.y,
+            "input editor should have vertical room above toolbar for completion popup"
         );
     }
 

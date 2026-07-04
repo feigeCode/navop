@@ -177,8 +177,12 @@ impl CompletionProvider for MentionCompletionProvider {
         new_text: &str,
         _cx: &mut Context<InputState>,
     ) -> bool {
-        new_text.chars().last().is_some_and(|c| !c.is_whitespace())
+        mention_completion_trigger_text(new_text)
     }
+}
+
+pub(crate) fn mention_completion_trigger_text(new_text: &str) -> bool {
+    new_text.chars().last().is_some_and(|c| !c.is_whitespace())
 }
 
 /// 是否为可直接插入(无需引号)的简单名称:首字符为字母 / 下划线,其余为字母数字 / 下划线。
@@ -225,5 +229,12 @@ mod tests {
     fn name_with_space_is_quoted() {
         let item = MentionItem::new("c2", "my db", "mysql", "mysql");
         assert_eq!(item.mention_text(), "@`my db` ");
+    }
+
+    #[test]
+    fn mention_completion_trigger_text_accepts_at_character() {
+        assert!(mention_completion_trigger_text("@"));
+        assert!(mention_completion_trigger_text("p"));
+        assert!(!mention_completion_trigger_text(" "));
     }
 }
