@@ -178,6 +178,56 @@ fn detect_package_kind_identifies_language_database_composite() {
 }
 
 #[test]
+fn detect_package_kind_identifies_language_bundle() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let bundle_dir = tmp.path().join("tree-sitter-languages");
+    fs::create_dir_all(bundle_dir.join("rust")).unwrap();
+    fs::create_dir_all(bundle_dir.join("javascript")).unwrap();
+    fs::write(
+        bundle_dir.join("manifest.json"),
+        r#"{
+            "id": "tree-sitter-languages",
+            "name": "Tree-sitter Languages",
+            "version": "0.1.0",
+            "languages": ["javascript", "rust"]
+        }"#,
+    )
+    .unwrap();
+    fs::write(
+        bundle_dir.join("rust/manifest.json"),
+        r#"{"name":"rust","version":"0.24.0","file_extensions":["rs"]}"#,
+    )
+    .unwrap();
+    fs::write(bundle_dir.join("rust/parser.wasm"), [0u8; 4]).unwrap();
+    fs::write(
+        bundle_dir.join("javascript/manifest.json"),
+        r#"{"name":"javascript","version":"0.23.1","file_extensions":["js"]}"#,
+    )
+    .unwrap();
+    fs::write(bundle_dir.join("javascript/parser.wasm"), [0u8; 4]).unwrap();
+
+    assert_eq!(
+        ExtensionKind::LanguageBundle,
+        detect_package_kind(&bundle_dir).unwrap()
+    );
+}
+
+#[test]
+fn detect_package_kind_keeps_single_wrapped_language_as_language() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let wrapped = tmp.path().join("wrapped");
+    let language = wrapped.join("rust");
+    fs::create_dir_all(&language).unwrap();
+    fs::write(language.join("manifest.json"), r#"{"name":"rust"}"#).unwrap();
+    fs::write(language.join("parser.wasm"), [0u8; 4]).unwrap();
+
+    assert_eq!(
+        ExtensionKind::Language,
+        detect_package_kind(&wrapped).unwrap()
+    );
+}
+
+#[test]
 fn install_from_staging_generic_installs_database_driver() {
     let tmp = tempfile::TempDir::new().unwrap();
     let root = tmp.path().join("extensions");

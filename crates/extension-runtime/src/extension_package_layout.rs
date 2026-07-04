@@ -41,7 +41,44 @@ pub(crate) fn direct_package_kind(dir: &Path) -> Option<ExtensionKind> {
     if dir.join("manifest.json").exists() && dir.join("parser.wasm").exists() {
         return Some(ExtensionKind::Language);
     }
+    if is_language_bundle_root(dir) {
+        return Some(ExtensionKind::LanguageBundle);
+    }
     None
+}
+
+fn is_language_bundle_root(dir: &Path) -> bool {
+    if dir.join("parser.wasm").exists() || !dir.join("manifest.json").exists() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let mut language_dirs = 0usize;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let name = entry.file_name();
+        if ignored_archive_metadata(&name) {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            return false;
+        };
+        if !file_type.is_dir() {
+            if name == OsStr::new("manifest.json") {
+                continue;
+            }
+            return false;
+        }
+        let path = entry.path();
+        if !(path.join("manifest.json").exists() && path.join("parser.wasm").exists()) {
+            return false;
+        }
+        language_dirs += 1;
+    }
+    language_dirs >= 2
 }
 
 fn single_wrapped_package_root(staging_dir: &Path) -> Result<Option<PathBuf>> {
@@ -80,7 +117,7 @@ fn ignored_archive_metadata(name: &OsStr) -> bool {
 
 fn unrecognized_package_kind(staging_dir: &Path) -> anyhow::Error {
     anyhow!(
-        "无法识别扩展包类型,缺少 extension.json / driver.json / remote_desktop_provider.json / mcp_helper.json / acp_agent.json / manifest.json+parser.wasm: {}",
+        "无法识别扩展包类型,缺少 extension.json / driver.json / remote_desktop_provider.json / mcp_helper.json / acp_agent.json / manifest.json+parser.wasm / language bundle manifest: {}",
         staging_dir.display()
     )
 }
