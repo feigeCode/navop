@@ -12,8 +12,8 @@ use one_core::storage::{GlobalStorageState, StorageManager};
 
 use crate::personal_sync_runtime::{
     actions_enabled, build_conflict_sink, list_personal_conflicts,
-    personal_sync_event_from_connection_event, resolve_personal_conflict, runtime_status,
-    should_start_drain_after_enqueue,
+    personal_sync_event_from_connection_event, resolve_personal_conflict,
+    resolve_personal_conflicts, runtime_status, should_start_drain_after_enqueue,
 };
 use crate::personal_sync_status::PersonalSyncRuntimeStatus;
 
@@ -215,6 +215,12 @@ fn personal_sync_lists_registered_conflicts(cx: &mut TestAppContext) {
 #[test]
 fn personal_sync_resolve_entrypoint_uses_conflict_resolution_strategy() {
     let _entrypoint: fn(String, ConflictResolution, &mut gpui::App) = resolve_personal_conflict;
+}
+
+#[test]
+fn personal_sync_batch_resolve_entrypoint_uses_conflict_resolution_strategies() {
+    let _entrypoint: fn(Vec<(String, ConflictResolution)>, &mut gpui::App) =
+        resolve_personal_conflicts;
 }
 
 fn test_connection(id: i64) -> StoredConnection {

@@ -10,7 +10,6 @@ use gpui::{
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
     UniformListScrollHandle, WeakEntity, Window, actions, div, px, uniform_list,
 };
-use gpui_component::button::ButtonVariant;
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
     button::{Button, ButtonVariants as _},
@@ -952,186 +951,62 @@ impl HomePage {
 
         let conflicts = self.pending_conflicts.clone();
         let view = cx.entity().clone();
-
-        // 为每个冲突创建默认策略（使用建议的策略）
-        let mut default_strategies = std::collections::HashMap::new();
-        for conflict in &conflicts {
-            let suggested = match conflict.conflict_type {
-                one_core::cloud_sync::ConflictType::BothModified => ConflictResolution::KeepBoth,
-                one_core::cloud_sync::ConflictType::LocalDeletedCloudModified => {
-                    ConflictResolution::UseCloud
+        let conflict_count = conflicts.len();
+        let options = vec![
+            crate::sync_conflict_dialog::SyncConflictResolutionOption {
+                strategy: ConflictResolution::UseCloud,
+                label: SharedString::from(t!("Home.sync_conflict_use_cloud").to_string()),
+            },
+            crate::sync_conflict_dialog::SyncConflictResolutionOption {
+                strategy: ConflictResolution::UseLocal,
+                label: SharedString::from(t!("Home.sync_conflict_use_local").to_string()),
+            },
+            crate::sync_conflict_dialog::SyncConflictResolutionOption {
+                strategy: ConflictResolution::KeepBoth,
+                label: SharedString::from(t!("Home.sync_conflict_keep_both").to_string()),
+            },
+        ];
+        let items = conflicts
+            .iter()
+            .map(|conflict| {
+                let suggested = match conflict.conflict_type {
+                    one_core::cloud_sync::ConflictType::BothModified => {
+                        ConflictResolution::KeepBoth
+                    }
+                    one_core::cloud_sync::ConflictType::LocalDeletedCloudModified => {
+                        ConflictResolution::UseCloud
+                    }
+                    one_core::cloud_sync::ConflictType::LocalModifiedCloudDeleted => {
+                        ConflictResolution::UseLocal
+                    }
+                };
+                crate::sync_conflict_dialog::SyncConflictDialogItem {
+                    id: conflict.cloud.id.clone(),
+                    title: conflict.local.name.clone(),
+                    detail: t!(
+                        "Home.sync_conflict_type",
+                        conflict_type = format!("{}", conflict.conflict_type)
+                    )
+                    .to_string(),
+                    default_strategy: suggested,
+                    options: options.clone(),
                 }
-                one_core::cloud_sync::ConflictType::LocalModifiedCloudDeleted => {
-                    ConflictResolution::UseLocal
-                }
-            };
-            default_strategies.insert(conflict.cloud.id.clone(), suggested);
-        }
+            })
+            .collect();
 
-        // 创建策略选择状态
-        let strategies = cx.new(|_| default_strategies);
-
-        window.open_dialog(cx, move |dialog, _window, cx| {
-            let conflicts_count = conflicts.len();
-            let conflict_items: Vec<AnyElement> = conflicts
-                .iter()
-                .map(|conflict| {
-                    let local_name = conflict.local.name.clone();
-                    let conflict_type = format!("{}", conflict.conflict_type);
-                    let cloud_id = conflict.cloud.id.clone();
-                    let strategies_clone = strategies.clone();
-
-                    // 获取当前选择的策略
-                    let current_strategy = strategies
-                        .read(cx)
-                        .get(&cloud_id)
-                        .copied()
-                        .unwrap_or(ConflictResolution::UseCloud);
-
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .p_3()
-                        .bg(gpui::hsla(0.0, 0.0, 0.5, 0.1))
-                        .rounded_md()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(format!("📄 {}", local_name)),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(gpui::hsla(0.0, 0.0, 0.5, 1.0))
-                                .child(
-                                    t!("Home.sync_conflict_type", conflict_type = conflict_type)
-                                        .to_string(),
-                                ),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .mt_2()
-                                .child(
-                                    Button::new(ElementId::Name(
-                                        format!("use_cloud_{}", cloud_id).into(),
-                                    ))
-                                    .label(t!("Home.sync_conflict_use_cloud"))
-                                    .with_variant(
-                                        if current_strategy == ConflictResolution::UseCloud {
-                                            ButtonVariant::Primary
-                                        } else {
-                                            ButtonVariant::Ghost
-                                        },
-                                    )
-                                    .xsmall()
-                                    .on_click({
-                                        let cloud_id = cloud_id.clone();
-                                        let strategies = strategies_clone.clone();
-                                        move |_, _, cx| {
-                                            strategies.update(cx, |s, cx| {
-                                                s.insert(
-                                                    cloud_id.clone(),
-                                                    ConflictResolution::UseCloud,
-                                                );
-                                                cx.notify();
-                                            });
-                                        }
-                                    }),
-                                )
-                                .child(
-                                    Button::new(ElementId::Name(
-                                        format!("use_local_{}", cloud_id).into(),
-                                    ))
-                                    .label(t!("Home.sync_conflict_use_local"))
-                                    .with_variant(
-                                        if current_strategy == ConflictResolution::UseLocal {
-                                            ButtonVariant::Primary
-                                        } else {
-                                            ButtonVariant::Ghost
-                                        },
-                                    )
-                                    .xsmall()
-                                    .on_click({
-                                        let cloud_id = cloud_id.clone();
-                                        let strategies = strategies_clone.clone();
-                                        move |_, _, cx| {
-                                            strategies.update(cx, |s, cx| {
-                                                s.insert(
-                                                    cloud_id.clone(),
-                                                    ConflictResolution::UseLocal,
-                                                );
-                                                cx.notify();
-                                            });
-                                        }
-                                    }),
-                                )
-                                .child(
-                                    Button::new(ElementId::Name(
-                                        format!("keep_both_{}", cloud_id).into(),
-                                    ))
-                                    .label(t!("Home.sync_conflict_keep_both"))
-                                    .with_variant(
-                                        if current_strategy == ConflictResolution::KeepBoth {
-                                            ButtonVariant::Primary
-                                        } else {
-                                            ButtonVariant::Ghost
-                                        },
-                                    )
-                                    .xsmall()
-                                    .on_click({
-                                        let strategies = strategies_clone.clone();
-                                        move |_, _, cx| {
-                                            strategies.update(cx, |s, cx| {
-                                                s.insert(
-                                                    cloud_id.clone(),
-                                                    ConflictResolution::KeepBoth,
-                                                );
-                                                cx.notify();
-                                            });
-                                        }
-                                    }),
-                                ),
-                        )
-                        .into_any_element()
-                })
-                .collect();
-
-            let view_clone = view.clone();
-            let strategies_for_ok = strategies.clone();
-
-            dialog
-                .title(
-                    t!("Home.sync_conflict_dialog_title", count = conflicts_count)
-                        .to_string()
-                        .into_any_element(),
-                )
-                .child(
-                    div()
-                        .id("conflict_items")
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .max_h(px(400.0))
-                        .overflow_y_scroll()
-                        .children(conflict_items)
-                        .into_any_element(),
-                )
-                .confirm()
-                .button_props(
-                    gpui_component::dialog::DialogButtonProps::default()
-                        .ok_text(t!("Home.sync_conflict_apply")),
-                )
-                .on_ok(move |_event, _window, cx| {
-                    let selected_strategies = strategies_for_ok.read(cx).clone();
-                    view_clone.update(cx, |this, cx| {
-                        this.resolve_conflicts_individually(selected_strategies, cx);
-                    });
-                    true
-                })
-        });
+        crate::sync_conflict_dialog::show_sync_conflict_dialog(
+            window,
+            cx,
+            t!("Home.sync_conflict_dialog_title", count = conflict_count).to_string(),
+            t!("Home.sync_conflict_apply").to_string(),
+            items,
+            move |selected, _window, cx| {
+                let selected_strategies = selected.into_iter().collect();
+                view.update(cx, |this, cx| {
+                    this.resolve_conflicts_individually(selected_strategies, cx);
+                });
+            },
+        );
     }
 
     /// 使用单独的策略解决每个冲突
@@ -2470,8 +2345,16 @@ impl HomePage {
             HomeSyncRoute::Personal => !personal_sync_ready || personal_syncing,
         };
         let has_master_key = crypto::has_master_key();
-        let has_conflicts = !self.pending_conflicts.is_empty();
-        let conflict_count = self.pending_conflicts.len();
+        let personal_conflict_count = if route == HomeSyncRoute::Personal {
+            crate::personal_sync_conflicts::current_personal_conflict_count(cx)
+        } else {
+            0
+        };
+        let conflict_count = match route {
+            HomeSyncRoute::OnetCloud => self.pending_conflicts.len(),
+            HomeSyncRoute::Personal => personal_conflict_count,
+        };
+        let has_conflicts = conflict_count > 0;
 
         h_flex()
             .w_full()
@@ -2561,9 +2444,24 @@ impl HomePage {
                                 .label(format!("{}", conflict_count))
                                 .ghost()
                                 .text_color(cx.theme().warning)
-                                .tooltip(t!("Home.conflict_tooltip", count = conflict_count))
+                                .tooltip(if route == HomeSyncRoute::Personal {
+                                    t!(
+                                        "Home.personal_sync_conflict_tooltip",
+                                        count = conflict_count
+                                    )
+                                    .to_string()
+                                } else {
+                                    t!("Home.conflict_tooltip", count = conflict_count).to_string()
+                                })
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    this.show_conflict_dialog(window, cx);
+                                    if sync_route(cx) == HomeSyncRoute::Personal {
+                                        crate::personal_sync_conflicts::show_personal_conflict_dialog(
+                                            window,
+                                            cx,
+                                        );
+                                    } else {
+                                        this.show_conflict_dialog(window, cx);
+                                    }
                                 })),
                         )
                     })

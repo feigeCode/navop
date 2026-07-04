@@ -16,7 +16,7 @@ use crate::cloud_sync::client::CloudApiClient;
 use crate::cloud_sync::models::{ConflictResolution, SyncResult, Team, TeamRole};
 use crate::cloud_sync::queue::OperationQueue;
 use crate::cloud_sync::service::{CloudSyncService, SyncError};
-use crate::cloud_sync::team_key_manager::{TeamKeyManager, TeamKeyStatus};
+use crate::cloud_sync::team_key_manager::{TeamKeyError, TeamKeyManager, TeamKeyStatus};
 use crate::crypto;
 use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
 use std::future::Future;
@@ -378,6 +378,42 @@ impl SyncEngine {
         })
     }
 
+    pub async fn save_or_initialize_team_key_for_cached_team(
+        &self,
+        team_id: &str,
+        team_key: &str,
+        personal_key: &str,
+    ) -> Result<TeamKeyStatus, SyncError> {
+        let repo = self
+            .storage
+            .get::<TeamKeyCacheRepository>()
+            .ok_or_else(|| {
+                SyncError::StorageError("TeamKeyCacheRepository not found".to_string())
+            })?;
+        let cache = repo
+            .get(team_id)
+            .map_err(|e| SyncError::StorageError(e.to_string()))?
+            .ok_or_else(|| SyncError::StorageError("团队缓存不存在".to_string()))?;
+        let manager = TeamKeyManager::new((*repo).clone(), self.crypto_service.clone());
+        if cache.key_verification.is_some() {
+            return manager
+                .save_key_for_cached_team(team_id, team_key, personal_key)
+                .map_err(team_key_error_to_sync_error);
+        }
+
+        let team = initial_team_key_team_from_cache(&cache, team_key);
+        let initialized = self
+            .cloud_client
+            .initialize_team_key(&team)
+            .await
+            .map_err(|e| SyncError::NetworkError(e.to_string()))?;
+        let status = manager
+            .save_verified_team_key(&initialized, team_key, personal_key)
+            .map_err(team_key_error_to_sync_error)?;
+        self.update_cached_team(initialized)?;
+        Ok(status)
+    }
+
     fn save_rotated_team_key(&self, team: &Team, new_key: &str) -> Result<(), SyncError> {
         let personal_key = crypto::get_raw_master_key().ok_or(SyncError::NotUnlocked)?;
         let repo = self
@@ -389,12 +425,18 @@ impl SyncEngine {
         TeamKeyManager::new((*repo).clone(), self.crypto_service.clone())
             .save_verified_team_key(team, new_key, &personal_key)
             .map_err(|e| SyncError::StorageError(e.to_string()))?;
-        if let Ok(mut cache) = self.cached_teams.write() {
-            if let Some(existing) = cache.iter_mut().find(|cached| cached.id == team.id) {
-                *existing = team.clone();
-            } else {
-                cache.push(team.clone());
-            }
+        self.update_cached_team(team.clone())
+    }
+
+    fn update_cached_team(&self, team: Team) -> Result<(), SyncError> {
+        let mut cache = self
+            .cached_teams
+            .write()
+            .map_err(|_| SyncError::StorageError("团队缓存锁获取失败".to_string()))?;
+        if let Some(existing) = cache.iter_mut().find(|cached| cached.id == team.id) {
+            *existing = team;
+        } else {
+            cache.push(team);
         }
         Ok(())
     }
@@ -579,6 +621,27 @@ fn team_key_cache_for_cloud_team(
     }
 }
 
+fn initial_team_key_team_from_cache(cache: &TeamKeyCache, team_key: &str) -> Team {
+    Team {
+        id: cache.team_id.clone(),
+        name: cache.team_name.clone(),
+        owner_id: String::new(),
+        description: None,
+        key_verification: Some(crypto::generate_key_verification(team_key)),
+        key_version: cache.key_version.max(1),
+        created_at: 0,
+        updated_at: cache.updated_at,
+    }
+}
+
+fn team_key_error_to_sync_error(error: TeamKeyError) -> SyncError {
+    match error {
+        TeamKeyError::Storage(message) => SyncError::StorageError(message),
+        TeamKeyError::ServiceLock => SyncError::StorageError(error.to_string()),
+        _ => SyncError::DataFormatError(error.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::team_key_cache_for_cloud_team;
@@ -586,12 +649,13 @@ mod tests {
         AuthResponse, CloudApiClient, CloudApiError, OAuthResponse, UserInfo,
     };
     use crate::cloud_sync::models::{CloudSyncData, CloudUserConfig, Team, TeamMember, TeamRole};
-    use crate::cloud_sync::{CloudSyncService, SyncEngine};
+    use crate::cloud_sync::{CloudSyncService, SyncEngine, TeamKeyStatus};
+    use crate::crypto;
     use crate::storage::connection::SqliteConnection;
     use crate::storage::migration::run_migrations;
     use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
     use async_trait::async_trait;
-    use std::sync::{Arc, RwLock};
+    use std::sync::{Arc, Mutex, RwLock};
 
     fn team() -> Team {
         Team {
@@ -642,6 +706,7 @@ mod tests {
     struct FakeCloudClient {
         teams: Vec<Team>,
         members: Vec<TeamMember>,
+        initialized_team: Arc<Mutex<Option<Team>>>,
     }
 
     #[async_trait]
@@ -758,6 +823,11 @@ mod tests {
             Err(CloudApiError::Unknown("not used".to_string()))
         }
 
+        async fn initialize_team_key(&self, team: &Team) -> Result<Team, CloudApiError> {
+            *self.initialized_team.lock().expect("init lock") = Some(team.clone());
+            Ok(team.clone())
+        }
+
         async fn chat(
             &self,
             _request: &llm_connector::ChatRequest,
@@ -823,6 +893,7 @@ mod tests {
                     ..team()
                 }],
                 members: vec![member(TeamRole::Owner)],
+                initialized_team: Arc::new(Mutex::new(None)),
             }),
             service,
             storage,
@@ -838,5 +909,61 @@ mod tests {
         assert_eq!("Platform", cache.team_name);
         assert_eq!(Some("verification".to_string()), cache.key_verification);
         assert_eq!(Some("owner".to_string()), cache.role);
+    }
+
+    #[tokio::test]
+    async fn save_or_initialize_team_key_initializes_missing_verification() {
+        let (storage, repo) = test_storage();
+        repo.upsert(&TeamKeyCache {
+            team_id: "team-1".to_string(),
+            team_name: "Platform".to_string(),
+            key_version: 0,
+            key_verification: None,
+            encrypted_team_key: None,
+            last_verified_at: None,
+            updated_at: 200,
+            role: Some("owner".to_string()),
+        })
+        .expect("cache seed");
+        let initialized_team = Arc::new(Mutex::new(None));
+        let service = Arc::new(RwLock::new(CloudSyncService::new()));
+        let engine = SyncEngine::new(
+            Arc::new(FakeCloudClient {
+                teams: Vec::new(),
+                members: Vec::new(),
+                initialized_team: initialized_team.clone(),
+            }),
+            service.clone(),
+            storage,
+        );
+
+        let status = engine
+            .save_or_initialize_team_key_for_cached_team("team-1", "team-secret", "personal-secret")
+            .await
+            .unwrap();
+
+        let initialized = initialized_team
+            .lock()
+            .expect("init lock")
+            .clone()
+            .expect("team initialized");
+        let cache = repo
+            .get("team-1")
+            .expect("cache read")
+            .expect("cache exists");
+        assert_eq!(TeamKeyStatus::Unlocked, status);
+        assert_eq!(1, initialized.key_version);
+        assert!(crypto::verify_master_key(
+            "team-secret",
+            initialized.key_verification.as_deref().unwrap()
+        ));
+        assert!(cache.key_verification.is_some());
+        assert!(cache.encrypted_team_key.is_some());
+        assert!(
+            service
+                .read()
+                .expect("service lock")
+                .is_team_unlocked("team-1")
+        );
     }
 }

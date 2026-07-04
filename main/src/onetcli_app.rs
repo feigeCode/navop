@@ -62,11 +62,18 @@ struct InitialPinnedTabLayout {
     active_pinned_index: usize,
 }
 
-fn initial_home_tab_layout() -> InitialPinnedTabLayout {
+fn initial_home_tab_layout(startup_default_page: StartupDefaultPage) -> InitialPinnedTabLayout {
     InitialPinnedTabLayout {
         home_tab_id: "home",
         workbench_tab_id: "ai-workbench",
-        active_pinned_index: 1,
+        active_pinned_index: active_pinned_index_for_startup_default_page(startup_default_page),
+    }
+}
+
+fn active_pinned_index_for_startup_default_page(startup_default_page: StartupDefaultPage) -> usize {
+    match startup_default_page {
+        StartupDefaultPage::Home => 0,
+        StartupDefaultPage::AiWorkbench => 1,
     }
 }
 
@@ -76,7 +83,7 @@ use gpui::px;
 use gpui_component::dock::{ClosePanel, ToggleZoom};
 use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
-use one_core::settings::AppSettings;
+use one_core::settings::{AppSettings, StartupDefaultPage};
 use one_core::split_tab_container::{SplitTabContainer, TabPaneFactory};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{TabContainer, TabContentRegistry, TabItem};
@@ -657,7 +664,7 @@ impl OnetCliApp {
         });
         // Initialize fixed tabs before the scrollable workspace tabs.
         {
-            let layout = initial_home_tab_layout();
+            let layout = initial_home_tab_layout(AppSettings::current(cx).startup_default_page);
             let tab_container_clone = tab_container.clone();
             tab_container.update(cx, |tc, cx| {
                 let home_page = cx.new(|cx| HomePage::new(tab_container_clone, window, cx));
@@ -684,15 +691,25 @@ mod tests {
     use super::{
         configured_log_file_path, default_log_file_path, initial_home_tab_layout, log_file_appender,
     };
+    use one_core::settings::StartupDefaultPage;
     use std::io::Write;
 
     #[test]
     fn initial_layout_pins_home_and_ai_workbench_with_ai_active() {
-        let layout = initial_home_tab_layout();
+        let layout = initial_home_tab_layout(StartupDefaultPage::AiWorkbench);
 
         assert_eq!("home", layout.home_tab_id);
         assert_eq!("ai-workbench", layout.workbench_tab_id);
         assert_eq!(1, layout.active_pinned_index);
+    }
+
+    #[test]
+    fn initial_layout_uses_startup_default_page_for_active_pinned_tab() {
+        let home_layout = initial_home_tab_layout(StartupDefaultPage::Home);
+        let ai_layout = initial_home_tab_layout(StartupDefaultPage::AiWorkbench);
+
+        assert_eq!(0, home_layout.active_pinned_index);
+        assert_eq!(1, ai_layout.active_pinned_index);
     }
 
     #[test]

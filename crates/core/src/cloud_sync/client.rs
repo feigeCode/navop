@@ -160,6 +160,9 @@ pub trait CloudApiClient: Send + Sync {
     /// 获取团队成员列表
     async fn list_team_members(&self, team_id: &str) -> Result<Vec<TeamMember>, CloudApiError>;
 
+    /// 初始化尚未设置验证数据的团队密钥。
+    async fn initialize_team_key(&self, team: &Team) -> Result<Team, CloudApiError>;
+
     /// 原子更新团队密钥验证数据并批量重写该团队同步数据。
     async fn rotate_team_key(
         &self,

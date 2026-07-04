@@ -1,6 +1,9 @@
 use std::fs;
 
-use super::{CompositeExtensionProvider, ExtensionKind, ExtensionProvider};
+use super::{
+    CompositeExtensionProvider, ExtensionKind, ExtensionProvider,
+    manifest::set_current_host_version,
+};
 
 #[test]
 fn composite_provider_lists_compatible_extensions_and_skips_noise() {
@@ -34,6 +37,7 @@ fn composite_provider_lists_compatible_extensions_and_skips_noise() {
 #[test]
 fn composite_provider_lists_connection_importer_with_windows_env_permission() {
     let tmp = tempfile::TempDir::new().unwrap();
+    set_current_host_version("0.7.2").unwrap();
     write_manifest(
         tmp.path(),
         "dbeaver",
@@ -43,7 +47,7 @@ fn composite_provider_lists_connection_importer_with_windows_env_permission() {
             "name": "DBeaver Importer",
             "version": "0.1.0",
             "description": "Import database connections from DBeaver",
-            "engines": { "onetcli": ">=0.1.0" },
+            "engines": { "onetcli": ">=0.7.0" },
             "runtime": {
                 "wasm": [{
                     "id": "dbeaver-importer",
@@ -84,7 +88,10 @@ fn composite_provider_lists_connection_importer_with_windows_env_permission() {
     assert_eq!(1, list.len());
     assert_eq!(ExtensionKind::Composite, list[0].kind);
     assert_eq!("com.onetcli.importer.dbeaver", list[0].name);
-    assert_eq!("Import database connections from DBeaver", list[0].description);
+    assert_eq!(
+        "Import database connections from DBeaver",
+        list[0].description
+    );
 }
 
 #[test]

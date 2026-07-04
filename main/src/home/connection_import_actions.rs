@@ -20,13 +20,9 @@ pub(crate) async fn preview_import_drafts(
     }
     let root = extensions_root().ok_or_else(|| "扩展目录不可用".to_string())?;
     let composite_root = root.join(ExtensionKind::Composite.dir_name());
-    let records = preview_manifest_connection_importers(
-        &composite_root,
-        &importer_ids,
-        true,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
+    let records = preview_manifest_connection_importers(&composite_root, &importer_ids, true)
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(records.into_iter().map(EditableImportDraft::new).collect())
 }
 

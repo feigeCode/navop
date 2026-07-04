@@ -199,6 +199,50 @@ Home:
     en: "%{count} sync conflicts need to be resolved"
     zh-CN: "%{count} 个同步冲突需要解决"
     zh-HK: "%{count} 個同步衝突需要解決"
+  personal_sync_conflict_tooltip:
+    en: "%{count} personal sync conflicts need to be resolved"
+    zh-CN: "%{count} 个个人同步冲突需要解决"
+    zh-HK: "%{count} 個個人同步衝突需要解決"
+  personal_sync_conflict_dialog_title:
+    en: "Personal sync conflicts (%{count})"
+    zh-CN: "个人同步冲突（%{count} 个）"
+    zh-HK: "個人同步衝突（%{count} 個）"
+  personal_sync_conflict_type:
+    en: "Conflict type: %{conflict_type}"
+    zh-CN: "冲突类型: %{conflict_type}"
+    zh-HK: "衝突類型: %{conflict_type}"
+  personal_sync_conflict_use_remote:
+    en: Use remote version
+    zh-CN: 使用远端版本
+    zh-HK: 使用遠端版本
+  personal_sync_conflict_use_local:
+    en: Use local version
+    zh-CN: 使用本地版本
+    zh-HK: 使用本地版本
+  personal_sync_conflict_apply:
+    en: Apply
+    zh-CN: 应用
+    zh-HK: 套用
+  personal_sync_conflict_connection:
+    en: Connection
+    zh-CN: 连接
+    zh-HK: 連線
+  personal_sync_conflict_workspace:
+    en: Workspace
+    zh-CN: 工作区
+    zh-HK: 工作區
+  personal_sync_conflict_both_modified:
+    en: Local and remote both changed
+    zh-CN: 本地和远端都有修改
+    zh-HK: 本地和遠端都有修改
+  personal_sync_conflict_local_deleted_remote_modified:
+    en: Local deleted, remote changed
+    zh-CN: 本地已删除，远端有更新
+    zh-HK: 本地已刪除，遠端有更新
+  personal_sync_conflict_local_modified_remote_deleted:
+    en: Local changed, remote deleted
+    zh-CN: 本地有更新，远端已删除
+    zh-HK: 本地有更新，遠端已刪除
   sync_conflict_type:
     en: "Conflict type: %{conflict_type}"
     zh-CN: "冲突类型: %{conflict_type}"
@@ -316,6 +360,18 @@ TeamSync:
     en: Team list refreshed. %{count} teams cached.
     zh-CN: 团队列表已刷新，已缓存 %{count} 个团队。
     zh-HK: 團隊列表已重新整理，已快取 %{count} 個團隊。
+  initialize_started:
+    en: Initializing team key...
+    zh-CN: 正在初始化团队密钥...
+    zh-HK: 正在初始化團隊密鑰...
+  initialize_success:
+    en: Team key initialized and saved locally
+    zh-CN: 团队密钥已初始化，并已保存到本机
+    zh-HK: 團隊密鑰已初始化，並已保存到本機
+  initialize_requires_manager:
+    en: This team has no key verification data. Ask an owner or admin to initialize the team key.
+    zh-CN: 该团队尚未初始化密钥验证数据，请让 owner 或 admin 初始化团队密钥。
+    zh-HK: 該團隊尚未初始化密鑰驗證資料，請讓 owner 或 admin 初始化團隊密鑰。
   key_label:
     en: Team key
     zh-CN: 团队密钥
@@ -865,6 +921,29 @@ Settings:
         en: English
         zh-CN: English
         zh-HK: English
+
+    # 启动设置
+    Startup:
+      group_title:
+        en: Startup
+        zh-CN: 启动
+        zh-HK: 啟動
+      default_page:
+        en: Default Startup Page
+        zh-CN: 默认启动页
+        zh-HK: 預設啟動頁
+      default_page_desc:
+        en: Select which fixed tab is active when the application opens
+        zh-CN: 选择应用启动时默认激活的固定标签页
+        zh-HK: 選擇應用程式啟動時預設啟用的固定標籤頁
+      default_page_home:
+        en: Home
+        zh-CN: 首页
+        zh-HK: 首頁
+      default_page_ai_workbench:
+        en: AI Workbench
+        zh-CN: AI 工作台
+        zh-HK: AI 工作台
 
     # 外观设置
     Appearance:

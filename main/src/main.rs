@@ -13,6 +13,7 @@ mod home_tab;
 mod license;
 pub mod new_connection;
 mod onetcli_app;
+mod personal_sync_conflicts;
 mod personal_sync_runtime;
 #[cfg(test)]
 mod personal_sync_runtime_tests;
@@ -21,6 +22,7 @@ mod public_mcp_approval;
 mod public_mcp_runtime;
 mod setting_tab;
 mod settings;
+mod sync_conflict_dialog;
 mod team_management;
 mod update;
 mod user_avatar;

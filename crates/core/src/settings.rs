@@ -76,6 +76,30 @@ pub enum LargeTextCellEditorOpenMode {
     Dialog,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartupDefaultPage {
+    Home,
+    #[default]
+    AiWorkbench,
+}
+
+impl StartupDefaultPage {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StartupDefaultPage::Home => "home",
+            StartupDefaultPage::AiWorkbench => "ai_workbench",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "home" => StartupDefaultPage::Home,
+            _ => StartupDefaultPage::AiWorkbench,
+        }
+    }
+}
+
 impl LargeTextCellEditorOpenMode {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -502,6 +526,8 @@ pub struct AppSettings {
     pub database_open_mode: DatabaseOpenMode,
     #[serde(default)]
     pub large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode,
+    #[serde(default)]
+    pub startup_default_page: StartupDefaultPage,
     /// 是否启用SQL查询的自动保存功能
     #[serde(default = "default_true")]
     pub enable_sql_auto_save: bool,
@@ -778,6 +804,7 @@ impl Default for AppSettings {
             personal_sync: PersonalSyncSettings::default(),
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
+            startup_default_page: StartupDefaultPage::default(),
             enable_sql_auto_save: true,
             sql_auto_save_interval: default_auto_save_interval(),
             system_hotkey_macos: default_system_hotkey_macos(),
@@ -932,9 +959,10 @@ impl AppSettings {
 mod tests {
     use super::{
         AppSettings, CustomFont, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, McpPermissionMode,
-        McpServerMode, PersonalSyncBackendKind, SyncProvider, default_grid_font_fallback_families,
-        default_grid_monospace_font_family, grid_monospace_font, installed_grid_monospace_font,
-        is_installed_font_family, resolve_installed_grid_monospace_font_family,
+        McpServerMode, PersonalSyncBackendKind, StartupDefaultPage, SyncProvider,
+        default_grid_font_fallback_families, default_grid_monospace_font_family,
+        grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
+        resolve_installed_grid_monospace_font_family,
     };
 
     #[test]
@@ -979,6 +1007,40 @@ mod tests {
         let settings = AppSettings::default();
 
         assert_eq!(1000, settings.sql_query_max_rows);
+    }
+
+    #[test]
+    fn app_settings_default_opens_ai_workbench_on_startup() {
+        let settings = AppSettings::default();
+
+        assert_eq!(
+            StartupDefaultPage::AiWorkbench,
+            settings.startup_default_page
+        );
+    }
+
+    #[test]
+    fn app_settings_deserializes_startup_default_page_from_legacy_json() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark"
+        }))
+        .expect("旧版 settings.json 应能读取");
+
+        assert_eq!(
+            StartupDefaultPage::AiWorkbench,
+            settings.startup_default_page
+        );
+    }
+
+    #[test]
+    fn app_settings_deserializes_home_startup_default_page() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "startup_default_page": "home"
+        }))
+        .expect("startup_default_page 应能读取");
+
+        assert_eq!(StartupDefaultPage::Home, settings.startup_default_page);
     }
 
     #[test]

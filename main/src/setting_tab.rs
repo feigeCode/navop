@@ -39,6 +39,7 @@ use one_core::cloud_sync::{
     forget_team_key_for_cached_team, get_cached_team_options, personal::SyncStoreHealth,
     save_team_key_for_cached_team,
 };
+use one_core::crypto;
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::action_id;
 use one_core::llm::manager::GlobalProviderState;
@@ -52,7 +53,7 @@ use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
     LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LargeTextCellEditorOpenMode,
-    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, SyncProvider,
+    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, StartupDefaultPage, SyncProvider,
     effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
@@ -427,6 +428,45 @@ impl SettingsPanel {
                             )
                             .description(
                                 t!("Settings.General.Language.ui_language_desc").to_string(),
+                            ),
+                        ]),
+                    SettingGroup::new()
+                        .title(t!("Settings.General.Startup.group_title"))
+                        .items(vec![
+                            SettingItem::new(
+                                t!("Settings.General.Startup.default_page"),
+                                SettingField::dropdown(
+                                    vec![
+                                        (
+                                            StartupDefaultPage::Home.as_str().into(),
+                                            t!("Settings.General.Startup.default_page_home").into(),
+                                        ),
+                                        (
+                                            StartupDefaultPage::AiWorkbench.as_str().into(),
+                                            t!(
+                                                "Settings.General.Startup.default_page_ai_workbench"
+                                            )
+                                            .into(),
+                                        ),
+                                    ],
+                                    |cx: &App| {
+                                        SharedString::from(
+                                            AppSettings::global(cx).startup_default_page.as_str(),
+                                        )
+                                    },
+                                    |val: SharedString, cx: &mut App| {
+                                        let page = StartupDefaultPage::from_str(val.as_ref());
+                                        AppSettings::update_and_save(cx, |settings| {
+                                            settings.startup_default_page = page;
+                                        });
+                                    },
+                                )
+                                .default_value(SharedString::from(
+                                    default_settings.startup_default_page.as_str(),
+                                )),
+                            )
+                            .description(
+                                t!("Settings.General.Startup.default_page_desc").to_string(),
                             ),
                         ]),
                     SettingGroup::new()
@@ -1178,6 +1218,7 @@ fn render_personal_sync_actions(_window: &mut Window, cx: &mut App) -> gpui::Any
     let status = crate::personal_sync_runtime::runtime_status(cx);
     let status_view = personal_sync_status_view_model(&status);
     let enabled = crate::personal_sync_runtime::actions_enabled(cx) && !status_view.syncing;
+    let conflict_count = crate::personal_sync_conflicts::current_personal_conflict_count(cx);
     h_flex()
         .w_full()
         .justify_between()
@@ -1227,7 +1268,26 @@ fn render_personal_sync_actions(_window: &mut Window, cx: &mut App) -> gpui::Any
                         .on_click(|_, _, cx| {
                             crate::personal_sync_runtime::sync_now(cx);
                         }),
-                ),
+                )
+                .when(conflict_count > 0, |this| {
+                    this.child(
+                        Button::new("personal-sync-conflicts")
+                            .icon(IconName::TriangleAlert)
+                            .label(format!("{}", conflict_count))
+                            .tooltip(
+                                t!(
+                                    "Home.personal_sync_conflict_tooltip",
+                                    count = conflict_count
+                                )
+                                .to_string(),
+                            )
+                            .on_click(|_, window, cx| {
+                                crate::personal_sync_conflicts::show_personal_conflict_dialog(
+                                    window, cx,
+                                );
+                            }),
+                    )
+                }),
         )
         .into_any_element()
 }
@@ -1438,9 +1498,11 @@ fn show_team_key_entry_dialog(team: TeamOption, window: &mut Window, cx: &mut Ap
     let key_input_for_render = key_input.clone();
     let error_for_ok = error_message.clone();
     let error_for_render = error_message.clone();
+    let team_for_ok = team.clone();
 
     window.open_dialog(cx, move |dialog, _window, cx| {
         let team_id_ok = team_id.clone();
+        let team_ok = team_for_ok.clone();
         let key_input_ok = key_input_for_ok.clone();
         let error_ok = error_for_ok.clone();
         dialog
@@ -1452,6 +1514,18 @@ fn show_team_key_entry_dialog(team: TeamOption, window: &mut Window, cx: &mut Ap
                 if team_key.is_empty() {
                     set_team_key_dialog_error(&error_ok, t!("TeamSync.key_empty").to_string(), cx);
                     return false;
+                }
+                if team_ok.key_verification.is_none() {
+                    if !team_key_role_can_rotate(team_ok.role.as_deref()) {
+                        set_team_key_dialog_error(
+                            &error_ok,
+                            t!("TeamSync.initialize_requires_manager").to_string(),
+                            cx,
+                        );
+                        return false;
+                    }
+                    initialize_team_key_from_settings(team_id_ok.clone(), team_key, window, cx);
+                    return true;
                 }
                 match save_team_key_for_cached_team(&team_id_ok, &team_key, cx) {
                     Ok(()) => {
@@ -1590,6 +1664,54 @@ fn refresh_team_key_cache_from_settings(window: &mut Window, cx: &mut App) {
             let message = result
                 .map(team_key_refresh_success_message)
                 .unwrap_or_else(|error| error.to_string());
+            let _ = cx.update(|_view, cx: &mut App| {
+                let _ = cx.update_window(target_window, |_, window, cx| {
+                    window.push_notification(message, cx);
+                    window.refresh();
+                });
+            });
+        })
+        .detach();
+}
+
+fn initialize_team_key_from_settings(
+    team_id: String,
+    team_key: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(user) = GlobalCloudUser::get_user(cx) else {
+        window.push_notification(t!("Home.cloud_need_login").to_string(), cx);
+        return;
+    };
+    let Some(personal_key) = crypto::get_raw_master_key() else {
+        window.push_notification(t!("Encryption.key_locked_tooltip").to_string(), cx);
+        return;
+    };
+    let Some(storage) = cx.try_global::<GlobalStorageState>() else {
+        window.push_notification("GlobalStorageState not found".to_string(), cx);
+        return;
+    };
+    let sync_service = Arc::new(std::sync::RwLock::new(CloudSyncService::new()));
+    if let Ok(mut service) = sync_service.write() {
+        service.set_logged_in(user.id);
+    }
+    let engine = SyncEngine::new(
+        get_auth_service(cx).cloud_client(),
+        sync_service,
+        storage.storage.clone(),
+    );
+    let target_window = window.window_handle();
+    window.push_notification(t!("TeamSync.initialize_started").to_string(), cx);
+    window
+        .spawn(cx, async move |cx| {
+            let result = engine
+                .save_or_initialize_team_key_for_cached_team(&team_id, &team_key, &personal_key)
+                .await;
+            let message = match result {
+                Ok(_) => t!("TeamSync.initialize_success").to_string(),
+                Err(error) => error.to_string(),
+            };
             let _ = cx.update(|_view, cx: &mut App| {
                 let _ = cx.update_window(target_window, |_, window, cx| {
                     window.push_notification(message, cx);

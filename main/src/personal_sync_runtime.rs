@@ -175,6 +175,56 @@ pub fn resolve_personal_conflict(record_id: String, strategy: ConflictResolution
     .detach();
 }
 
+pub fn resolve_personal_conflicts(strategies: Vec<(String, ConflictResolution)>, cx: &mut App) {
+    if strategies.is_empty() {
+        return;
+    }
+    if let [(record_id, strategy)] = strategies.as_slice() {
+        resolve_personal_conflict(record_id.clone(), *strategy, cx);
+        return;
+    }
+    sync_master_key_and_user(cx);
+    let Some(config) = active_or_current_config(cx) else {
+        set_status(cx, PersonalSyncRuntimeStatus::Disabled);
+        return;
+    };
+    let Some(source) = build_local_source(cx) else {
+        set_status(
+            cx,
+            PersonalSyncRuntimeStatus::failed("personal sync storage is unavailable"),
+        );
+        return;
+    };
+    let Some(conflicts) = build_conflict_repository(cx) else {
+        set_status(
+            cx,
+            PersonalSyncRuntimeStatus::failed("personal sync conflict storage is unavailable"),
+        );
+        return;
+    };
+
+    let generation = begin_operation(cx, PersonalSyncRuntimeStatus::Syncing);
+    let task = Tokio::spawn(cx, async move {
+        for (record_id, strategy) in strategies {
+            resolve_personal_conflict_once(
+                config.clone(),
+                source.clone(),
+                (*conflicts).clone(),
+                record_id,
+                strategy,
+            )
+            .await?;
+        }
+        Ok(())
+    });
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let status = personal_sync_status_from_task(task.await);
+        let _ = cx.update(move |cx| finish_operation(cx, generation, status));
+        Ok::<(), anyhow::Error>(())
+    })
+    .detach();
+}
+
 fn run_temporary_full_scan(
     cx: &mut App,
     config: PersonalSyncRuntimeConfig,

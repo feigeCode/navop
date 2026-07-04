@@ -1726,6 +1726,50 @@ impl CloudApiClient for SupabaseClient {
         }
     }
 
+    async fn initialize_team_key(&self, team: &Team) -> Result<Team, CloudApiError> {
+        let key_verification = team
+            .key_verification
+            .as_deref()
+            .ok_or_else(|| CloudApiError::ServerError("团队密钥验证数据为空".to_string()))?;
+        let url = format!(
+            "{}?id=eq.{}&key_verification=is.null",
+            self.rest_url("teams"),
+            team.id
+        );
+
+        #[derive(Serialize)]
+        struct InitializeTeamKeyPayload<'a> {
+            key_verification: &'a str,
+            key_version: i32,
+        }
+
+        let payload = InitializeTeamKeyPayload {
+            key_verification,
+            key_version: team.key_version as i32,
+        };
+        let extra_headers = vec![("Prefer", "return=representation".to_string())];
+        let (status, result) = self
+            .patch_json_with_retry::<Vec<TeamRow>, _>(&url, extra_headers, &payload)
+            .await?;
+
+        if status.is_success() {
+            let rows = result.map_err(CloudApiError::ParseError)?;
+            rows.into_iter().next().map(Team::from).ok_or_else(|| {
+                CloudApiError::Conflict("团队密钥已初始化，请刷新团队列表后重试".to_string())
+            })
+        } else if status == StatusCode::CONFLICT || status.as_u16() == 409 {
+            Err(CloudApiError::Conflict(
+                "团队密钥初始化冲突，请刷新团队列表后重试".to_string(),
+            ))
+        } else {
+            let error_body = Self::format_error_summary(&result);
+            Err(CloudApiError::ServerError(format!(
+                "团队密钥初始化失败: {}",
+                error_body
+            )))
+        }
+    }
+
     async fn rotate_team_key(
         &self,
         team: &Team,

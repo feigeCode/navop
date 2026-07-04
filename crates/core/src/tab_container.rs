@@ -3087,6 +3087,7 @@ impl TabContainer {
         let drag_border_color = theme.drag_border;
         let active_index = self.active_index;
         let left_padding = self.left_padding.unwrap_or(px(8.0));
+        let pinned_tab_count = self.pinned_tabs.len();
 
         let tab_list = self.tab_list.clone();
 
@@ -3172,6 +3173,7 @@ impl TabContainer {
                             .h(px(32.0))
                             .px_3()
                             .when(!is_macos && pinned_index == 0, |el| el.ml(left_padding))
+                            .when(pinned_index + 1 < pinned_tab_count, |el| el.mr_1())
                             .when_some(top_padding, |el, padding| el.mt(padding))
                             .rounded(px(6.0))
                             .when(is_pinned_active, |el| el.bg(active_tab_color))
