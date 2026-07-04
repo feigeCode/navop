@@ -60,7 +60,6 @@
 
 | 工具名 | 说明 | 风险语义 |
 |---|---|---|
-| `ssh.list_sessions` | 列出当前 App 暴露给 MCP 的活跃 SSH terminal session | 只读 |
 | `ssh.session_diagnostics` | 查看一个活跃 SSH session 的诊断信息 | 只读 |
 | `ssh.command.poll` | 轮询后台 SSH command 状态 | 只读 |
 | `ssh.command.output` | 读取后台 SSH command 输出 | 只读 |
@@ -92,14 +91,12 @@
 | `connections.list_kinds` | 列出可创建的连接类型 |
 | `connections.get_schema` | 获取连接创建 schema |
 | `connections.validate` | 校验连接创建请求 |
-| `connections.create` | 创建保存连接 |
+| `connections.save` | 创建或更新保存连接；不传 `id` 创建，传 `id` + `patch` 更新 |
 | `connections.find` | 查找保存连接 |
-| `connections.update` | 更新保存连接 |
 | `connections.delete` | 删除保存连接 |
-| `connections.move_workspace` | 移动连接到 workspace |
-| `connections.set_sync_enabled` | 设置同步开关 |
 | `connections.test` | 测试数据库连接 |
-| `connections.open_session` | 打开连接 session |
+| `connections.open_session` | 在运行中的 App UI 里打开保存连接；headless runtime 只解析连接并返回 `opened=false` |
+| `connections.list_sessions` | 列出当前 resource pool 中已打开/可用的连接会话 |
 | `workspaces.list` | 列出 workspace |
 | `workspaces.show` | 查看 workspace |
 | `internal_functions.list` | 列出 App 内部函数 |

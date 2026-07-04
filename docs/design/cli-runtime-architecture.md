@@ -32,7 +32,7 @@ onetcli (main binary)
         ├── onetcli.connections.list_kinds
         ├── onetcli.connections.get_schema
         ├── onetcli.connections.validate
-        └── onetcli.connections.create
+        └── connections.save
 
 MCP runtime (main 内)
 └── 复用同一个 ToolRegistry
@@ -83,7 +83,7 @@ headless runtime，不依赖 GPUI。
 | `onetcli.connections.list_kinds` | 列出可创建的连接类型 | ✅ 已实现 |
 | `onetcli.connections.get_schema` | 获取连接字段 schema | ✅ 已实现 |
 | `onetcli.connections.validate` | 验证连接配置 | ✅ 已实现 |
-| `onetcli.connections.create` | 创建连接 | ✅ 已实现 |
+| `connections.save` | 创建或更新连接 | ✅ 已实现 |
 | `db.schema` | 数据库 schema | ⏳ handler 待实现 |
 | `db.query` | 数据库只读查询 | ⏳ handler 待实现 |
 | `db.exec` | 数据库写操作 | ⏳ handler 待实现 |

@@ -85,44 +85,6 @@ pub(super) fn delete(
     })))
 }
 
-pub(super) fn move_workspace(
-    repo: &ConnectionRepository,
-    workspace_repo: Option<&Arc<WorkspaceRepository>>,
-    input: Value,
-) -> Result<ToolResult, ToolError> {
-    let id = required_i64(&input, "id")?;
-    let workspace_id = optional_i64_or_null(&input, "workspace_id")?;
-    ensure_workspace_exists(workspace_repo, workspace_id)?;
-    let mut connection = load_connection(repo, id)?;
-    connection.workspace_id = workspace_id;
-    repo.update(&connection).map_err(input::tool_error)?;
-    Ok(ToolResult::structured(json!({
-        "ok": true,
-        "connection": summarize(&connection, workspace_repo, true)?
-    })))
-}
-
-pub(super) fn set_sync_enabled(
-    repo: &ConnectionRepository,
-    workspace_repo: Option<&Arc<WorkspaceRepository>>,
-    input: Value,
-) -> Result<ToolResult, ToolError> {
-    let id = required_i64(&input, "id")?;
-    let enabled = input
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| ToolError::Failed {
-            message: "missing boolean field: enabled".to_string(),
-        })?;
-    let mut connection = load_connection(repo, id)?;
-    connection.sync_enabled = enabled;
-    repo.update(&connection).map_err(input::tool_error)?;
-    Ok(ToolResult::structured(json!({
-        "ok": true,
-        "connection": summarize(&connection, workspace_repo, true)?
-    })))
-}
-
 pub(super) async fn test_connection(
     repo: &ConnectionRepository,
     workspace_repo: Option<&Arc<WorkspaceRepository>>,

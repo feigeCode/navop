@@ -119,7 +119,7 @@ impl PublicMcpApprover for FixedApprover {
 }
 
 #[tokio::test]
-async fn tools_call_list_sessions_returns_connected_sessions() {
+async fn tools_call_rejects_ssh_list_sessions() {
     let registry = PublicMcpRegistry::default();
     registry.register(FakeRemoteSession {
         executed_commands: Arc::new(Mutex::new(Vec::new())),
@@ -139,9 +139,12 @@ async fn tools_call_list_sessions_returns_connected_sessions() {
         .await;
 
     assert_eq!(json!(2), response["id"]);
-    assert_eq!(
-        "ssh-1",
-        response["result"]["structuredContent"]["sessions"][0]["session_id"]
+    assert_eq!(-32602, response["error"]["code"]);
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("unknown public MCP tool")
     );
 }
 

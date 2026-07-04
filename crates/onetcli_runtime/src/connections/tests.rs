@@ -13,26 +13,40 @@ mod create_extended;
 mod management;
 
 #[test]
-fn connection_registry_lists_creation_tools() {
+fn connection_registry_lists_save_tools() {
     let registry = connection_tool_registry(repo());
     let tools = registry.list(ToolAdapter::Mcp);
     let tool_ids = tools.iter().map(|tool| tool.id.clone()).collect::<Vec<_>>();
-    let create = tools
+    let save = tools
         .iter()
-        .find(|tool| tool.id == "connections.create")
-        .expect("create tool should be registered");
+        .find(|tool| tool.id == "connections.save")
+        .expect("save tool should be registered");
 
-    assert_eq!(json!(["kind", "values"]), create.input_schema["required"]);
+    assert_eq!(
+        json!([
+            { "required": ["kind", "values"] },
+            { "required": ["id", "patch"] }
+        ]),
+        save.input_schema["oneOf"]
+    );
     assert!(
-        create
-            .description
+        save.description
             .contains("Call connections.get_schema first")
+    );
+    assert_eq!(
+        json!("integer"),
+        save.input_schema["properties"]["id"]["type"]
     );
 
     assert!(tool_ids.contains(&"connections.list_kinds".to_string()));
     assert!(tool_ids.contains(&"connections.get_schema".to_string()));
     assert!(tool_ids.contains(&"connections.validate".to_string()));
-    assert!(tool_ids.contains(&"connections.create".to_string()));
+    assert!(tool_ids.contains(&"connections.save".to_string()));
+    assert!(tool_ids.contains(&"connections.open_session".to_string()));
+    assert!(!tool_ids.contains(&"connections.create".to_string()));
+    assert!(!tool_ids.contains(&"connections.update".to_string()));
+    assert!(!tool_ids.contains(&"connections.move_workspace".to_string()));
+    assert!(!tool_ids.contains(&"connections.set_sync_enabled".to_string()));
     assert!(!tool_ids.iter().any(|id| id.starts_with("onetcli.")));
 }
 
@@ -55,7 +69,7 @@ fn connection_show_descriptor_identifies_connection_reference() {
 }
 
 #[test]
-fn connection_registry_exposes_creation_tools_to_cli() {
+fn connection_registry_exposes_save_tools_to_cli() {
     let registry = connection_tool_registry(repo());
     let tool_ids = registry
         .list(ToolAdapter::Cli)
@@ -66,38 +80,20 @@ fn connection_registry_exposes_creation_tools_to_cli() {
     assert!(tool_ids.contains(&"connections.list".to_string()));
     assert!(tool_ids.contains(&"connections.show".to_string()));
     assert!(tool_ids.contains(&"connections.list_kinds".to_string()));
-    assert!(tool_ids.contains(&"connections.create".to_string()));
+    assert!(tool_ids.contains(&"connections.save".to_string()));
     assert!(tool_ids.contains(&"connections.open_session".to_string()));
 }
 
 #[test]
-fn open_session_is_exposed_to_mcp_function_calling_and_cli() {
-    let registry = connection_tool_registry(repo());
-
-    for adapter in [
-        ToolAdapter::Mcp,
-        ToolAdapter::FunctionCalling,
-        ToolAdapter::Cli,
-    ] {
-        let tool = registry
-            .get("connections.open_session", adapter)
-            .expect("open_session tool should be exposed");
-
-        assert_eq!(json!(["connection"]), tool.input_schema["required"]);
-        assert!(!tool.annotations.read_only);
-    }
-}
-
-#[test]
-fn set_sync_enabled_is_low_risk_non_destructive_write() {
+fn save_is_mutating_and_non_destructive() {
     let registry = connection_tool_registry(repo());
     let tool = registry
-        .get("connections.set_sync_enabled", ToolAdapter::FunctionCalling)
-        .expect("set_sync_enabled tool should be exposed");
+        .get("connections.save", ToolAdapter::FunctionCalling)
+        .expect("save tool should be exposed");
 
     assert!(!tool.annotations.read_only);
     assert!(!tool.annotations.destructive);
-    assert_eq!(RiskLevel::Low, tool.annotations.risk);
+    assert_eq!(RiskLevel::Medium, tool.annotations.risk);
 }
 
 #[test]
@@ -118,42 +114,12 @@ fn connection_reference_tools_target_saved_connection_resources() {
 
     let open_session = registry
         .get_runtime("connections.open_session", ToolAdapter::FunctionCalling)
-        .expect("connections.open_session should be registered");
+        .expect("open_session tool should be registered");
     assert!(open_session.target.required);
     assert_eq!(
         vec![ResourceCapability::OpenSession],
         open_session.target.required_capabilities
     );
-}
-
-#[test]
-fn open_session_without_ui_opener_resolves_connection_for_cli() {
-    let repo = repo();
-    let registry = connection_tool_registry(repo);
-    let id = create_connection(
-        &registry,
-        json!({
-            "kind": "database",
-            "database_type": "MySQL",
-            "values": {
-                "name": "prod mysql",
-                "host": "10.0.1.20",
-                "username": "app"
-            }
-        }),
-    );
-
-    let result = futures::executor::block_on(registry.call(
-        "connections.open_session",
-        json!({ "connection": id.to_string() }),
-        ToolContext::for_adapter(ToolAdapter::Cli),
-    ))
-    .expect("open session should resolve saved connection");
-
-    assert_eq!(json!(true), result.structured_content["ok"]);
-    assert_eq!(json!(false), result.structured_content["opened"]);
-    assert_eq!(json!("cli"), result.structured_content["adapter"]);
-    assert_eq!(id, result.structured_content["connection"]["id"]);
 }
 
 #[test]
@@ -488,7 +454,7 @@ fn create_database_connection_persists_mysql_config() {
     let registry = connection_tool_registry(repo.clone());
 
     let result = futures::executor::block_on(registry.call(
-        "connections.create",
+        "connections.save",
         json!({
             "kind": "database",
             "database_type": "MySQL",
@@ -503,7 +469,7 @@ fn create_database_connection_persists_mysql_config() {
         }),
         ToolContext::for_adapter(ToolAdapter::Mcp),
     ))
-    .expect("create tool should run");
+    .expect("save tool should run");
 
     assert_eq!(json!(true), result.structured_content["ok"]);
     assert_eq!("database", result.structured_content["connection"]["kind"]);
@@ -562,7 +528,7 @@ fn validate_rejects_invalid_numeric_fields_without_writing() {
     let registry = connection_tool_registry(repo.clone());
 
     let result = futures::executor::block_on(registry.call(
-        "connections.create",
+        "connections.save",
         json!({
             "kind": "database",
             "database_type": "MySQL",
@@ -575,7 +541,7 @@ fn validate_rejects_invalid_numeric_fields_without_writing() {
         }),
         ToolContext::for_adapter(ToolAdapter::Mcp),
     ))
-    .expect("create tool should return validation output");
+    .expect("save tool should return validation output");
 
     assert_eq!(json!(false), result.structured_content["ok"]);
     assert_eq!(json!(false), result.structured_content["can_apply"]);
@@ -594,11 +560,11 @@ pub(super) fn create_connection(
     input: serde_json::Value,
 ) -> i64 {
     let result = futures::executor::block_on(registry.call(
-        "connections.create",
+        "connections.save",
         input,
         ToolContext::for_adapter(ToolAdapter::Mcp),
     ))
-    .expect("create tool should run");
+    .expect("save tool should run");
 
     assert_eq!(json!(true), result.structured_content["ok"]);
     result.structured_content["connection"]["id"]

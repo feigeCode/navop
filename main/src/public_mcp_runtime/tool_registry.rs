@@ -212,7 +212,7 @@ mod tests {
         assert!(tools.iter().any(|tool| tool.name == "connections.show"));
         assert!(tools.iter().any(|tool| tool.name == "connections.validate"));
         assert!(tools.iter().any(|tool| tool.name == "connections.find"));
-        assert!(tools.iter().any(|tool| tool.name == "connections.update"));
+        assert!(tools.iter().any(|tool| tool.name == "connections.save"));
         assert!(tools.iter().any(|tool| tool.name == "connections.delete"));
         assert!(tools.iter().any(|tool| tool.name == "connections.test"));
         assert!(

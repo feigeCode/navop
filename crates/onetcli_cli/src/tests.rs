@@ -70,7 +70,7 @@ fn parses_tool_call_command_with_allow_write() {
         "onetcli",
         "tool",
         "call",
-        "onetcli.connections.create",
+        "connections.save",
         "--input",
         r#"{"kind":"database","values":{}}"#,
         "--allow-write",
@@ -79,7 +79,7 @@ fn parses_tool_call_command_with_allow_write() {
 
     assert_eq!(
         Some(OnetCliCommand::Tool(ToolCommand::Call {
-            tool_id: "onetcli.connections.create".to_string(),
+            tool_id: "connections.save".to_string(),
             input: Some(r#"{"kind":"database","values":{}}"#.to_string()),
             positional_input: None,
             allow_write: true,

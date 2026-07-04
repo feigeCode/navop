@@ -128,13 +128,10 @@ fn load_terminal_ai_connections(cx: &App) -> Vec<StoredConnection> {
     let Some(repo) = storage.storage.get::<ConnectionRepository>() else {
         return Vec::new();
     };
-    match repo.list() {
-        Ok(connections) => connections,
-        Err(error) => {
-            tracing::warn!(%error, "Failed to load terminal AI connection catalog");
-            Vec::new()
-        }
-    }
+    repo.list().unwrap_or_else(|error| {
+        tracing::warn!(%error, "Failed to load terminal AI connection catalog");
+        Vec::new()
+    })
 }
 
 /// 侧边栏面板类型
@@ -620,12 +617,7 @@ impl TerminalSidebar {
         );
 
         let mut subs = vec![set_sub, quick_sub, rich_input_sub, ai_chat_sub];
-        let mut available_panels = vec![
-            SidebarPanel::Settings,
-            SidebarPanel::QuickCommand,
-            SidebarPanel::RichInput,
-            SidebarPanel::AiChat,
-        ];
+        let mut available_panels = vec![SidebarPanel::Settings, SidebarPanel::AiChat];
 
         // 订阅文件管理器面板事件
         if let Some(ref fm_panel) = file_manager_panel {
@@ -661,6 +653,8 @@ impl TerminalSidebar {
             available_panels.push(SidebarPanel::ServerMonitor);
         }
 
+        available_panels.push(SidebarPanel::QuickCommand);
+        available_panels.push(SidebarPanel::RichInput);
         Self {
             tool_dock: TerminalToolDockState::new(available_panels),
             settings_panel,

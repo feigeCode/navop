@@ -31,14 +31,6 @@ impl FakeRemoteSession {
         }
     }
 
-    fn connected_serial(id: &str) -> Self {
-        Self {
-            id: id.to_string(),
-            kind: TerminalConnectionKind::Serial,
-            state: ConnectionState::Connected,
-        }
-    }
-
     fn snapshot_inner(&self) -> TerminalSessionSnapshot {
         TerminalSessionSnapshot {
             session_id: self.id.clone(),
@@ -122,11 +114,11 @@ fn remote_ops_tools_are_registered() {
         .collect();
 
     assert!(names.contains(&"ssh.exec".to_string()));
-    assert!(names.contains(&"ssh.list_sessions".to_string()));
     assert!(names.contains(&"ssh.session_diagnostics".to_string()));
     assert!(names.contains(&"ssh.command.poll".to_string()));
     assert!(names.contains(&"ssh.command.output".to_string()));
     assert!(names.contains(&"ssh.command.cancel".to_string()));
+    assert!(!names.contains(&"ssh.list_sessions".to_string()));
     assert!(!names.contains(&"ssh.remote_file_write".to_string()));
     assert!(!names.iter().any(|name| name.starts_with("public_mcp.")));
     assert!(!names.iter().any(|name| name == "remote_exec"));
@@ -134,46 +126,6 @@ fn remote_ops_tools_are_registered() {
     assert!(!names.contains(&"ssh.remote_command_poll".to_string()));
     assert!(!names.contains(&"ssh.remote_command_output".to_string()));
     assert!(!names.contains(&"ssh.remote_command_cancel".to_string()));
-}
-
-#[test]
-fn list_sessions_schema_supports_optional_kind_filter() {
-    let runtime_registry = remote_ops_tool_registry(PublicMcpRegistry::default());
-    let list_sessions = runtime_registry
-        .list(ToolAdapter::Mcp)
-        .into_iter()
-        .find(|tool| tool.id == "ssh.list_sessions")
-        .expect("ssh.list_sessions should be listed");
-
-    assert!(
-        list_sessions.input_schema["properties"]
-            .as_object()
-            .expect("list_sessions schema should have properties")
-            .contains_key("kind")
-    );
-    assert!(list_sessions.input_schema.get("required").is_none());
-}
-
-#[test]
-fn list_sessions_filters_by_terminal_connection_kind() {
-    let registry = PublicMcpRegistry::default();
-    registry.register(FakeRemoteSession::connected_ssh("ssh-1"));
-    registry.register(FakeRemoteSession::connected_serial("serial-1"));
-    let runtime_registry = remote_ops_tool_registry(registry);
-
-    let result = futures::executor::block_on(runtime_registry.call(
-        "ssh.list_sessions",
-        json!({ "kind": "serial" }),
-        ToolContext::for_adapter(ToolAdapter::Mcp),
-    ))
-    .expect("list_sessions should support kind filtering");
-    let sessions = result.structured_content["sessions"]
-        .as_array()
-        .expect("sessions should be an array");
-
-    assert_eq!(1, sessions.len());
-    assert_eq!("serial-1", sessions[0]["session_id"]);
-    assert_eq!("serial", sessions[0]["connection_kind"]);
 }
 
 #[test]

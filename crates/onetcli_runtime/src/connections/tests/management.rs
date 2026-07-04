@@ -19,11 +19,12 @@ fn connection_registry_lists_management_tools() {
         .collect::<Vec<_>>();
 
     assert!(tool_ids.contains(&"connections.find".to_string()));
-    assert!(tool_ids.contains(&"connections.update".to_string()));
+    assert!(tool_ids.contains(&"connections.save".to_string()));
     assert!(tool_ids.contains(&"connections.delete".to_string()));
-    assert!(tool_ids.contains(&"connections.move_workspace".to_string()));
-    assert!(tool_ids.contains(&"connections.set_sync_enabled".to_string()));
     assert!(tool_ids.contains(&"connections.test".to_string()));
+    assert!(!tool_ids.contains(&"connections.update".to_string()));
+    assert!(!tool_ids.contains(&"connections.move_workspace".to_string()));
+    assert!(!tool_ids.contains(&"connections.set_sync_enabled".to_string()));
 }
 
 #[test]
@@ -166,7 +167,7 @@ fn update_connection_changes_fields_and_values() {
 
     let result = call(
         &registry,
-        "connections.update",
+        "connections.save",
         json!({
             "id": id,
             "patch": {
@@ -207,7 +208,7 @@ fn update_connection_rejects_unknown_database_type() {
     let id = create_mysql(&registry, "prod mysql", "10.0.1.20");
 
     let error = futures::executor::block_on(registry.call(
-        "connections.update",
+        "connections.save",
         json!({
             "id": id,
             "patch": { "database_type": "UnknownDB" }
@@ -247,7 +248,7 @@ fn delete_connection_removes_saved_connection() {
 }
 
 #[test]
-fn move_workspace_updates_workspace_id() {
+fn save_updates_workspace_id() {
     let (connection_repo, workspace_repo) = repos();
     let target_workspace_id = insert_workspace(&workspace_repo, "Target");
     let registry = connection_tool_registry_with_workspaces(
@@ -258,8 +259,11 @@ fn move_workspace_updates_workspace_id() {
 
     let result = call(
         &registry,
-        "connections.move_workspace",
-        json!({ "id": id, "workspace_id": target_workspace_id }),
+        "connections.save",
+        json!({
+            "id": id,
+            "patch": { "workspace_id": target_workspace_id }
+        }),
     );
     let stored = connection_repo
         .get(id)
@@ -272,7 +276,7 @@ fn move_workspace_updates_workspace_id() {
 }
 
 #[test]
-fn set_sync_enabled_updates_flag() {
+fn save_updates_sync_enabled_flag() {
     let (connection_repo, workspace_repo) = repos();
     let registry =
         connection_tool_registry_with_workspaces(connection_repo.clone(), Some(workspace_repo));
@@ -280,8 +284,11 @@ fn set_sync_enabled_updates_flag() {
 
     let result = call(
         &registry,
-        "connections.set_sync_enabled",
-        json!({ "id": id, "enabled": false }),
+        "connections.save",
+        json!({
+            "id": id,
+            "patch": { "sync_enabled": false }
+        }),
     );
     let stored = connection_repo
         .get(id)
