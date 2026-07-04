@@ -30,6 +30,11 @@ impl Default for DatabaseUiManifest {
 pub struct DatabaseUiCapabilities {
     pub supports_schema: bool,
     pub uses_schema_as_database: bool,
+    pub supports_users: bool,
+    pub supports_user_create: bool,
+    pub supports_user_edit: bool,
+    pub supports_user_delete: bool,
+    pub supports_user_privileges: bool,
     pub supports_sequences: bool,
     pub supports_functions: bool,
     pub supports_procedures: bool,
@@ -54,6 +59,10 @@ pub enum DatabaseFormKind {
     CreateDatabase,
     EditDatabase,
     CreateSchema,
+    CreateUser,
+    EditUser,
+    DeleteUser,
+    UserPrivileges,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,4 +235,32 @@ pub enum DatabaseActionToolbarScope {
 pub struct DatabaseFormSubmission {
     pub kind: DatabaseFormKind,
     pub field_values: HashMap<String, String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_user_capabilities_are_disabled() {
+        let capabilities = DatabaseUiCapabilities::default();
+
+        assert!(!capabilities.supports_users);
+        assert!(!capabilities.supports_user_create);
+        assert!(!capabilities.supports_user_edit);
+        assert!(!capabilities.supports_user_delete);
+        assert!(!capabilities.supports_user_privileges);
+    }
+
+    #[test]
+    fn manifest_can_describe_user_operation_forms() {
+        let kinds = [
+            DatabaseFormKind::CreateUser,
+            DatabaseFormKind::EditUser,
+            DatabaseFormKind::DeleteUser,
+            DatabaseFormKind::UserPrivileges,
+        ];
+
+        assert_eq!(4, kinds.len());
+    }
 }

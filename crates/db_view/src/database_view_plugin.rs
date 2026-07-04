@@ -1,6 +1,6 @@
 use db::DbNodeType;
 use db::ipc::{IpcDriverManifest, IpcDriverRegistry};
-use db::plugin::DatabasePlugin;
+use db::plugin::{DatabasePlugin, DatabaseUserOperationRequest};
 use db::plugin_manifest::{
     DatabaseActionDescriptor, DatabaseActionId, DatabaseActionPlacement,
     DatabaseActionToolbarScope, DatabaseCapabilities, DatabaseFormKind, DatabaseUiManifest,
@@ -17,7 +17,10 @@ use crate::common::manifest_bridge::{
     find_form, matches_node_type, to_column_editor_capabilities, to_connection_form_config,
     to_connection_form_config_with_text_resolver, to_table_designer_capabilities, translate,
 };
-use crate::common::{DatabaseEditorView, GenericDatabaseForm, GenericSchemaForm, SchemaEditorView};
+use crate::common::{
+    DatabaseEditorView, GenericDatabaseForm, GenericSchemaForm, GenericUserForm, SchemaEditorView,
+    UserEditorView,
+};
 use crate::database_objects_tab::DatabaseObjectsEvent;
 use crate::db_tree_view::{DbTreeViewEvent, SqlDumpMode};
 use std::collections::HashMap;
@@ -308,6 +311,31 @@ impl ManifestDatabaseViewPlugin {
         Some(cx.new(|cx| {
             let form = cx.new(|cx| GenericSchemaForm::new(manifest, window, cx));
             SchemaEditorView::new(form, database_type, window, cx)
+        }))
+    }
+
+    fn create_user_editor_view(
+        &self,
+        operation: DatabaseFormKind,
+        initial: Option<DatabaseUserOperationRequest>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Entity<UserEditorView>> {
+        let manifest = find_form(&self.manifest, operation)?;
+        let database_type = self.database_type.clone();
+        let text_resolver = self.text_resolver();
+        Some(cx.new(|cx| {
+            let form = cx.new(|cx| {
+                GenericUserForm::new_with_text_resolver(
+                    database_type.clone(),
+                    manifest,
+                    initial,
+                    text_resolver,
+                    window,
+                    cx,
+                )
+            });
+            UserEditorView::new(form, database_type, operation, window, cx)
         }))
     }
 
@@ -975,6 +1003,16 @@ pub fn create_schema_editor_view_for(
         window,
         cx,
     )
+}
+
+pub fn create_user_editor_view_for(
+    database_type: DatabaseType,
+    operation: DatabaseFormKind,
+    initial: Option<DatabaseUserOperationRequest>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Entity<UserEditorView>> {
+    manifest_plugin(database_type, cx).create_user_editor_view(operation, initial, window, cx)
 }
 
 pub fn build_context_menu_for(

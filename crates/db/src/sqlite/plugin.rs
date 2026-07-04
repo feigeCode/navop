@@ -1530,6 +1530,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_user_management_defaults_to_unsupported() {
+        let plugin = create_plugin();
+        let request = crate::plugin::DatabaseUserOperationRequest {
+            user_name: "alice".to_string(),
+            host: None,
+            database: None,
+            field_values: HashMap::new(),
+        };
+
+        assert_eq!(None, plugin.build_list_users_sql(None));
+        assert_eq!(None, plugin.build_create_user_sql(&request));
+        assert_eq!(None, plugin.build_modify_user_sql(&request));
+        assert_eq!(None, plugin.build_drop_user_sql(&request));
+        assert_eq!(None, plugin.build_user_privileges_sql(&request));
+    }
+
     // ==================== DDL SQL Generation Tests ====================
 
     #[test]

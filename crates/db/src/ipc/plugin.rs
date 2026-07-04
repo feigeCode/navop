@@ -7,7 +7,7 @@ use crate::import_export::{
 };
 use crate::ipc::client::JsonRpcClient;
 use crate::ipc::connection::ExternalDbConnection;
-use crate::ipc::protocol::{WIRE_PREFIX, driver_config_value_with_target};
+use crate::ipc::protocol::{WIRE_PREFIX, driver_config_value_with_target, schema_users_wire_sql};
 use crate::ipc::registry::{
     IpcDriverManifest, IpcDriverRegistry, LimitStyle, TableReferenceSchemaMode,
 };
@@ -1390,6 +1390,24 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         Ok(join_ddl_statements(result.statements, None))
     }
 
+    fn build_list_users_sql(&self, database: Option<&str>) -> Option<String> {
+        let fallback = self
+            .compatible_plugin()
+            .and_then(|plugin| plugin.build_list_users_sql(database));
+        let declares_methods = !self.driver.methods.is_empty();
+        let supports_users_method = self
+            .driver
+            .methods
+            .iter()
+            .any(|method| method == wire_method::SCHEMA_USERS);
+
+        if supports_users_method || !declares_methods {
+            return Some(schema_users_wire_sql(fallback.as_deref()));
+        }
+
+        fallback
+    }
+
     async fn drop_database_async(&self, database: &str) -> Result<String> {
         self.build_drop_database_sql_async(database).await
     }
@@ -2443,6 +2461,42 @@ mod tests {
             Some("singlefile:/tmp/from-extra.db".to_string()),
             lifecycle.physical_open_lock_key
         );
+    }
+
+    #[test]
+    fn external_user_listing_uses_schema_users_wire_method() {
+        let mut driver = driver_manifest("users", false, "users.connection");
+        driver.methods = vec![wire_method::SCHEMA_USERS.to_string()];
+        driver.dialect.compatible_database_type = Some(DatabaseType::PostgreSQL);
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        let sql = plugin
+            .build_list_users_sql(None)
+            .expect("schema/users should be available");
+        let envelope: serde_json::Value =
+            serde_json::from_str(sql.strip_prefix(WIRE_PREFIX).unwrap()).unwrap();
+
+        assert_eq!(Some(wire_method::SCHEMA_USERS), envelope["method"].as_str());
+        assert!(
+            envelope["params"]["fallback_sql"]
+                .as_str()
+                .is_some_and(|sql| sql.contains("pg_catalog.pg_roles"))
+        );
+    }
+
+    #[test]
+    fn external_user_listing_falls_back_when_declared_method_set_excludes_users() {
+        let mut driver = driver_manifest("users", false, "users.connection");
+        driver.methods = vec![wire_method::SCHEMA_DATABASES.to_string()];
+        driver.dialect.compatible_database_type = Some(DatabaseType::PostgreSQL);
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        let sql = plugin
+            .build_list_users_sql(None)
+            .expect("compatible PostgreSQL fallback should be available");
+
+        assert!(sql.contains("pg_catalog.pg_roles"));
+        assert!(!sql.starts_with(WIRE_PREFIX));
     }
 
     #[test]

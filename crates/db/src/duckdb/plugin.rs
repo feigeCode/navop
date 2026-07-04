@@ -1543,6 +1543,13 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_user_listing_is_not_supported() {
+        let plugin = create_plugin();
+
+        assert_eq!(None, plugin.build_list_users_sql(None));
+    }
+
     #[tokio::test]
     async fn test_list_indexes_returns_secondary_indexes() {
         let (_temp_dir, mut connection) = create_connection().await;

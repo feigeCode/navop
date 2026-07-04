@@ -99,6 +99,15 @@ pub struct DatabaseOperationRequest {
     pub field_values: HashMap<String, String>,
 }
 
+/// Database user operation request.
+#[derive(Clone, Debug)]
+pub struct DatabaseUserOperationRequest {
+    pub user_name: String,
+    pub host: Option<String>,
+    pub database: Option<String>,
+    pub field_values: HashMap<String, String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConnectionLifecycle {
     pub close_on_release: bool,
@@ -574,6 +583,32 @@ pub trait DatabasePlugin: Send + Sync {
 
     async fn build_drop_database_sql_async(&self, database_name: &str) -> Result<String> {
         Ok(self.build_drop_database_sql(database_name))
+    }
+
+    // === User Management Operations ===
+    /// Build SQL for listing database users.
+    fn build_list_users_sql(&self, _database: Option<&str>) -> Option<String> {
+        None
+    }
+
+    /// Build SQL for creating a database user.
+    fn build_create_user_sql(&self, _request: &DatabaseUserOperationRequest) -> Option<String> {
+        None
+    }
+
+    /// Build SQL for modifying a database user.
+    fn build_modify_user_sql(&self, _request: &DatabaseUserOperationRequest) -> Option<String> {
+        None
+    }
+
+    /// Build SQL for dropping a database user.
+    fn build_drop_user_sql(&self, _request: &DatabaseUserOperationRequest) -> Option<String> {
+        None
+    }
+
+    /// Build SQL for changing database user privileges.
+    fn build_user_privileges_sql(&self, _request: &DatabaseUserOperationRequest) -> Option<String> {
+        None
     }
 
     // === Schema Management Operations ===
@@ -3001,6 +3036,24 @@ mod tests {
         let capabilities = DatabasePlugin::capabilities(&plugin);
         assert!(capabilities.supports_functions);
         assert!(capabilities.supports_procedures);
+    }
+
+    #[test]
+    fn database_user_operation_request_keeps_context() {
+        let request = DatabaseUserOperationRequest {
+            user_name: "alice".to_string(),
+            host: Some("10.%".to_string()),
+            database: Some("appdb".to_string()),
+            field_values: HashMap::from([("password".to_string(), "secret".to_string())]),
+        };
+
+        assert_eq!("alice", request.user_name);
+        assert_eq!(Some("10.%"), request.host.as_deref());
+        assert_eq!(Some("appdb"), request.database.as_deref());
+        assert_eq!(
+            Some("secret"),
+            request.field_values.get("password").map(String::as_str)
+        );
     }
 
     #[test]
