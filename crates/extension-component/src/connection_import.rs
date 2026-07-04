@@ -1,6 +1,7 @@
 use connection_import_protocol::{
     CandidateFile, DirectoryEntry, HostAccessError, Platform, SecretQuery, SecretResult,
 };
+use std::path::{Component, Path, PathBuf};
 
 use crate::PermissionSet;
 
@@ -12,6 +13,16 @@ pub trait ExtensionConnectionImportHost: Send + Sync {
     fn read_file(&self, candidate_id: &str) -> Result<Vec<u8>, HostAccessError>;
 
     fn read_directory(&self, candidate_id: &str) -> Result<Vec<DirectoryEntry>, HostAccessError>;
+
+    fn read_candidate_child_file(
+        &self,
+        candidate_id: &str,
+        _relative_path: &str,
+    ) -> Result<Vec<u8>, HostAccessError> {
+        Err(HostAccessError::UndeclaredCandidate(
+            candidate_id.to_string(),
+        ))
+    }
 
     fn read_secret(&self, query: SecretQuery) -> SecretResult;
 
@@ -43,6 +54,26 @@ impl CandidateFileAccess {
         } else {
             Err(HostAccessError::PermissionDenied(candidate.path.clone()))
         }
+    }
+
+    pub fn validate_child(
+        &self,
+        candidate_id: &str,
+        relative_path: &str,
+    ) -> Result<(CandidateFile, PathBuf), HostAccessError> {
+        let candidate = self.candidate(candidate_id)?.clone();
+        let child = Path::new(relative_path);
+        if child.is_absolute()
+            || child.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+        {
+            return Err(HostAccessError::PermissionDenied(relative_path.to_string()));
+        }
+        Ok((candidate, child.to_path_buf()))
     }
 }
 
@@ -108,12 +139,35 @@ mod tests {
     }
 
     #[test]
+    fn candidate_child_read_rejects_parent_escape() {
+        let access = CandidateFileAccess::new(
+            vec![CandidateFile {
+                id: "termius-db".to_string(),
+                platform: None,
+                path: "~/Library/Application Support/Termius/IndexedDB/file__0.indexeddb.leveldb"
+                    .to_string(),
+            }],
+            PermissionSet::new([
+                "fs:read:~/Library/Application Support/Termius/IndexedDB/file__0.indexeddb.leveldb",
+            ]),
+        );
+
+        let error = access
+            .validate_child("termius-db", "../Login Data")
+            .unwrap_err();
+
+        assert!(matches!(error, HostAccessError::PermissionDenied(_)));
+    }
+
+    #[test]
     fn noop_secret_backend_reports_unsupported() {
         let host = NoopConnectionImportHost::default();
 
         let result = host.read_secret(SecretQuery {
             service: "Navicat".to_string(),
             account: "root@localhost".to_string(),
+            namespace: None,
+            key: None,
         });
 
         assert_eq!(SecretResult::Unsupported, result);

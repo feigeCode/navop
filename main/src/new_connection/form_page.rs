@@ -197,6 +197,8 @@ fn build_database_form(
             db_type,
             external_driver_id: external_driver_id.clone(),
             editing_connection,
+            initial_connection: None,
+            on_saved: None,
             workspaces: home.workspaces.clone(),
             teams: get_cached_team_options(cx),
             ssh_connections,
@@ -230,6 +232,8 @@ fn build_ssh_form(
         home.editing_connection_id = None;
         Some(SshFormWindowConfig {
             editing_connection,
+            initial_connection: None,
+            on_saved: None,
             workspaces: home.workspaces.clone(),
             teams: get_cached_team_options(cx),
         })

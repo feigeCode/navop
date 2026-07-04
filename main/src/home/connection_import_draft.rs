@@ -1,18 +1,18 @@
-use std::collections::HashMap;
+use connection_import_protocol::{ImportRecord, ImportRecordKind, PasswordImportStatus};
+use one_core::storage::StoredConnection;
 
-use connection_import_protocol::{
-    DatabaseImportRecord, ImportDatabaseType, ImportRecord, ImportRecordKind, SshImportAuthMethod,
-};
-use one_core::storage::{
-    DatabaseType, DbConnectionConfig, SshAuthMethod, SshParams, StoredConnection,
+use super::connection_import_draft_conversion::{
+    import_draft_duplicate_identity, import_draft_to_stored_connection, ssh_auth_edit_values,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ImportDraftKind {
     Database,
     Ssh,
+    Unsupported,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ImportDraftField {
     Name,
@@ -24,6 +24,7 @@ pub(crate) enum ImportDraftField {
     PrivateKeyPath,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ImportDraftEdit {
     Selected(bool),
@@ -56,6 +57,7 @@ impl EditableImportDraft {
         match record.kind {
             ImportRecordKind::Database => Self::database(record),
             ImportRecordKind::Ssh => Self::ssh(record),
+            ImportRecordKind::PortForwarding => Self::unsupported(record),
         }
     }
 
@@ -114,11 +116,26 @@ impl EditableImportDraft {
         }
     }
 
+    fn unsupported(record: ImportRecord) -> Self {
+        Self {
+            selected: true,
+            name: record.display_name.clone(),
+            host: String::new(),
+            port: String::new(),
+            username: String::new(),
+            password: String::new(),
+            database: String::new(),
+            private_key_path: String::new(),
+            payload: ImportDraftPayload::Record(record),
+        }
+    }
+
     pub(crate) fn kind(&self) -> ImportDraftKind {
         match &self.payload {
             ImportDraftPayload::Record(record) => match record.kind {
                 ImportRecordKind::Database => ImportDraftKind::Database,
                 ImportRecordKind::Ssh => ImportDraftKind::Ssh,
+                ImportRecordKind::PortForwarding => ImportDraftKind::Unsupported,
             },
         }
     }
@@ -129,9 +146,28 @@ impl EditableImportDraft {
         }
     }
 
-    pub(crate) fn source_icon_hint(&self) -> &str {
+    pub(crate) fn password_status_text(&self) -> &'static str {
         match &self.payload {
-            ImportDraftPayload::Record(record) => &record.importer_id,
+            ImportDraftPayload::Record(record) => match record.password_status {
+                PasswordImportStatus::Included => "密码已导入",
+                PasswordImportStatus::Missing => "密码缺失",
+                PasswordImportStatus::Unsupported => "密码不支持导入",
+                PasswordImportStatus::PermissionDenied => "密码导入被拒绝",
+            },
+        }
+    }
+
+    pub(crate) fn warning_text(&self) -> Option<String> {
+        match &self.payload {
+            ImportDraftPayload::Record(record) if record.warnings.is_empty() => None,
+            ImportDraftPayload::Record(record) => Some(
+                record
+                    .warnings
+                    .iter()
+                    .map(|warning| warning.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("；"),
+            ),
         }
     }
 
@@ -141,31 +177,7 @@ impl EditableImportDraft {
         }
     }
 
-    pub(crate) fn supports_database_edit(&self) -> bool {
-        self.kind() == ImportDraftKind::Database
-    }
-
-    pub(crate) fn supports_password_edit(&self) -> bool {
-        match &self.payload {
-            ImportDraftPayload::Record(record) if record.kind == ImportRecordKind::Database => true,
-            ImportDraftPayload::Record(record) => record
-                .ssh
-                .as_ref()
-                .map(|ssh| matches!(ssh.auth_method, SshImportAuthMethod::Password { .. }))
-                .unwrap_or(false),
-        }
-    }
-
-    pub(crate) fn supports_private_key_edit(&self) -> bool {
-        match &self.payload {
-            ImportDraftPayload::Record(record) => record
-                .ssh
-                .as_ref()
-                .map(|ssh| matches!(ssh.auth_method, SshImportAuthMethod::PrivateKey { .. }))
-                .unwrap_or(false),
-        }
-    }
-
+    #[cfg(test)]
     pub(crate) fn apply_edit(&mut self, edit: ImportDraftEdit) -> Result<(), String> {
         match edit {
             ImportDraftEdit::Selected(selected) => self.selected = selected,
@@ -176,13 +188,17 @@ impl EditableImportDraft {
 
     pub(crate) fn to_stored_connection(&self) -> Result<StoredConnection, String> {
         match &self.payload {
-            ImportDraftPayload::Record(record) => match record.kind {
-                ImportRecordKind::Database => self.to_database_connection(record),
-                ImportRecordKind::Ssh => self.to_ssh_connection(record),
-            },
+            ImportDraftPayload::Record(record) => import_draft_to_stored_connection(self, record),
         }
     }
 
+    pub(crate) fn duplicate_identity(&self) -> Result<String, String> {
+        match &self.payload {
+            ImportDraftPayload::Record(record) => import_draft_duplicate_identity(self, record),
+        }
+    }
+
+    #[cfg(test)]
     fn set_text(&mut self, field: ImportDraftField, value: String) {
         match field {
             ImportDraftField::Name => self.name = value,
@@ -194,121 +210,13 @@ impl EditableImportDraft {
             ImportDraftField::PrivateKeyPath => self.private_key_path = value,
         }
     }
-
-    fn to_database_connection(&self, record: &ImportRecord) -> Result<StoredConnection, String> {
-        let imported = record
-            .database
-            .as_ref()
-            .ok_or_else(|| "数据库导入记录缺少数据库配置".to_string())?;
-        let name = required_text(&self.name, "连接名称")?;
-        let database_type = database_type(&imported.database_type);
-        let port = optional_port(&self.port)?
-            .or_else(|| default_database_port(&database_type))
-            .unwrap_or_default();
-        let config = DbConnectionConfig {
-            id: String::new(),
-            database_type,
-            name: name.clone(),
-            host: required_text(&self.host, "主机")?,
-            port,
-            username: self.username.trim().to_string(),
-            password: optional_text(&self.password).unwrap_or_default(),
-            database: optional_text(&self.database),
-            service_name: None,
-            sid: None,
-            workspace_id: None,
-            extra_params: extra_params(imported),
-        };
-        Ok(StoredConnection::from_db_connection(config))
-    }
-
-    fn to_ssh_connection(&self, record: &ImportRecord) -> Result<StoredConnection, String> {
-        let imported = record
-            .ssh
-            .as_ref()
-            .ok_or_else(|| "SSH 导入记录缺少 SSH 配置".to_string())?;
-        let name = required_text(&self.name, "连接名称")?;
-        let params = SshParams {
-            host: required_text(&self.host, "主机")?,
-            port: required_port(&self.port)?,
-            username: self.username.trim().to_string(),
-            auth_method: self.edited_ssh_auth_method(&imported.auth_method),
-            connect_timeout: None,
-            keepalive_interval: None,
-            keepalive_max: None,
-            default_directory: None,
-            init_script: None,
-            disable_shell_integration: None,
-            jump_server: None,
-            proxy: None,
-        };
-        Ok(StoredConnection::new_ssh(name, params, None))
-    }
-
-    fn edited_ssh_auth_method(&self, auth_method: &SshImportAuthMethod) -> SshAuthMethod {
-        match auth_method {
-            SshImportAuthMethod::Password { .. } => SshAuthMethod::Password {
-                password: optional_text(&self.password).unwrap_or_default(),
-            },
-            SshImportAuthMethod::PrivateKey { passphrase, .. } => SshAuthMethod::PrivateKey {
-                key_path: self.private_key_path.trim().to_string(),
-                passphrase: passphrase.clone(),
-            },
-            SshImportAuthMethod::Agent => SshAuthMethod::Agent,
-            SshImportAuthMethod::AutoPublicKey => SshAuthMethod::AutoPublicKey,
-        }
-    }
 }
-
-fn database_type(database_type: &ImportDatabaseType) -> DatabaseType {
-    match database_type {
-        ImportDatabaseType::MySql => DatabaseType::MySQL,
-        ImportDatabaseType::PostgreSql => DatabaseType::PostgreSQL,
-        ImportDatabaseType::Sqlite => DatabaseType::SQLite,
-        ImportDatabaseType::DuckDb => DatabaseType::DuckDB,
-        ImportDatabaseType::SqlServer => DatabaseType::MSSQL,
-        ImportDatabaseType::Oracle => DatabaseType::Oracle,
-        ImportDatabaseType::ClickHouse => DatabaseType::ClickHouse,
-        ImportDatabaseType::External { id } => DatabaseType::External {
-            driver_id: id.clone(),
-        },
-    }
-}
-
-fn default_database_port(database_type: &DatabaseType) -> Option<u16> {
-    match database_type {
-        DatabaseType::MySQL => Some(3306),
-        DatabaseType::PostgreSQL => Some(5432),
-        DatabaseType::MSSQL => Some(1433),
-        DatabaseType::Oracle => Some(1521),
-        DatabaseType::ClickHouse => Some(8123),
-        DatabaseType::SQLite | DatabaseType::DuckDB | DatabaseType::External { .. } => None,
-    }
-}
-
-fn extra_params(imported: &DatabaseImportRecord) -> HashMap<String, String> {
-    imported
-        .extra_params
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
-}
-
-fn ssh_auth_edit_values(auth_method: &SshImportAuthMethod) -> (String, String) {
-    match auth_method {
-        SshImportAuthMethod::Password { password } => {
-            (password.clone().unwrap_or_default(), String::new())
-        }
-        SshImportAuthMethod::PrivateKey { key_path, .. } => (String::new(), key_path.clone()),
-        SshImportAuthMethod::Agent | SshImportAuthMethod::AutoPublicKey => {
-            (String::new(), String::new())
-        }
-    }
-}
+#[cfg(test)]
 pub(crate) fn selected_import_count(drafts: &[EditableImportDraft]) -> usize {
     drafts.iter().filter(|draft| draft.selected).count()
 }
 
+#[cfg(test)]
 pub(crate) fn selected_import_drafts_to_connections(
     drafts: &[EditableImportDraft],
 ) -> Result<Vec<StoredConnection>, String> {
@@ -317,32 +225,4 @@ pub(crate) fn selected_import_drafts_to_connections(
         .filter(|draft| draft.selected)
         .map(EditableImportDraft::to_stored_connection)
         .collect()
-}
-
-fn required_text(value: &str, label: &str) -> Result<String, String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(format!("{}不能为空", label));
-    }
-    Ok(trimmed.to_string())
-}
-
-fn optional_text(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
-fn optional_port(value: &str) -> Result<Option<u16>, String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-    trimmed
-        .parse::<u16>()
-        .map(Some)
-        .map_err(|_| "端口必须是 1-65535".to_string())
-}
-
-fn required_port(value: &str) -> Result<u16, String> {
-    optional_port(value)?.ok_or_else(|| "端口不能为空".to_string())
 }

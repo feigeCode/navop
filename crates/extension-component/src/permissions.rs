@@ -6,6 +6,7 @@ use crate::SqlAccess;
 pub struct PermissionSet {
     db: BTreeSet<DbPermission>,
     fs_read: BTreeSet<String>,
+    secret_read: BTreeSet<(String, String)>,
     ui: BTreeSet<String>,
     connection_list: bool,
 }
@@ -41,6 +42,14 @@ impl PermissionSet {
         self.fs_read.contains(path)
     }
 
+    pub fn allows_secret_read(&self, namespace: &str, key: &str) -> bool {
+        self.secret_read
+            .contains(&(namespace.to_string(), key.to_string()))
+            || self
+                .secret_read
+                .contains(&(namespace.to_string(), "*".to_string()))
+    }
+
     fn add(&mut self, permission: &str) {
         if permission == "db:connections:list" {
             self.connection_list = true;
@@ -48,6 +57,11 @@ impl PermissionSet {
             self.db.insert(db);
         } else if let Some(path) = permission.strip_prefix("fs:read:") {
             self.fs_read.insert(path.to_string());
+        } else if let Some(scope) = permission.strip_prefix("secrets:read:") {
+            if let Some((namespace, key)) = scope.split_once('.') {
+                self.secret_read
+                    .insert((namespace.to_string(), key.to_string()));
+            }
         } else if permission.starts_with("ui:") {
             self.ui.insert(permission.to_string());
         }
@@ -156,5 +170,13 @@ mod tests {
 
         assert!(permissions.allows_fs_read("~/Library/Application Support/Navicat/conn.plist"));
         assert!(!permissions.allows_fs_read("~/Library/Application Support/Navicat/other.plist"));
+    }
+
+    #[test]
+    fn secret_read_permission_matches_namespace_and_key() {
+        let permissions = PermissionSet::new(["secrets:read:termius.localkey"]);
+
+        assert!(permissions.allows_secret_read("termius", "localkey"));
+        assert!(!permissions.allows_secret_read("termius", "other"));
     }
 }

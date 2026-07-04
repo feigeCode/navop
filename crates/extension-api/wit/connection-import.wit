@@ -10,6 +10,7 @@ interface connection-import {
     enum import-record-kind {
         database,
         ssh,
+        port-forwarding,
     }
 
     record importer-capabilities {
@@ -94,6 +95,7 @@ interface connection-import {
     enum ssh-auth-kind {
         password,
         private-key,
+        private-key-material,
         agent,
         auto-public-key,
     }
@@ -102,7 +104,29 @@ interface connection-import {
         kind: ssh-auth-kind,
         password: option<string>,
         key-path: option<string>,
+        private-key: option<string>,
         passphrase: option<string>,
+        file-name-hint: option<string>,
+    }
+
+    enum ssh-proxy-kind {
+        socks5,
+        http,
+    }
+
+    record ssh-proxy-import-record {
+        kind: ssh-proxy-kind,
+        host: string,
+        port: u16,
+        username: option<string>,
+        password: option<string>,
+    }
+
+    record ssh-jump-server-import-record {
+        host: string,
+        port: u16,
+        username: string,
+        auth-method: ssh-import-auth-method,
     }
 
     record ssh-import-record {
@@ -111,6 +135,25 @@ interface connection-import {
         port: option<u16>,
         username: string,
         auth-method: ssh-import-auth-method,
+        init-script: option<string>,
+        jump-server: option<ssh-jump-server-import-record>,
+        proxy: option<ssh-proxy-import-record>,
+    }
+
+    enum port-forwarding-kind {
+        local,
+        dynamic,
+        remote,
+    }
+
+    record port-forwarding-import-record {
+        name: string,
+        ssh-source-id: string,
+        kind: port-forwarding-kind,
+        bind-host: string,
+        bind-port: u16,
+        target-host: string,
+        target-port: u16,
     }
 
     enum password-import-status {
@@ -124,10 +167,12 @@ interface connection-import {
         id: string,
         importer-id: string,
         source-label: string,
+        source-id: option<string>,
         kind: import-record-kind,
         display-name: string,
         database: option<database-import-record>,
         ssh: option<ssh-import-record>,
+        port-forwarding: option<port-forwarding-import-record>,
         password-status: password-import-status,
         warnings: list<import-warning>,
     }
@@ -156,6 +201,8 @@ interface connection-import {
     record secret-query {
         service: string,
         account: string,
+        namespace: option<string>,
+        key: option<string>,
     }
 
     variant secret-result {
@@ -185,6 +232,7 @@ interface connection-import-host {
     list-candidate-files: func(importer-id: string) -> list<candidate-file>;
     read-file: func(candidate-id: string) -> result<list<u8>, host-error>;
     read-directory: func(candidate-id: string) -> result<list<directory-entry>, host-error>;
+    read-candidate-child-file: func(candidate-id: string, relative-path: string) -> result<list<u8>, host-error>;
     read-secret: func(query: secret-query) -> secret-result;
     log: func(level: string, message: string);
 }

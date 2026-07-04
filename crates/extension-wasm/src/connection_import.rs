@@ -257,6 +257,23 @@ where
             .map_err(wit_host_error))
     }
 
+    async fn read_candidate_child_file(
+        &mut self,
+        candidate_id: String,
+        relative_path: String,
+    ) -> wasmtime::Result<Result<Vec<u8>, Wit::HostError>> {
+        if let Err(error) = self
+            .candidate_access()
+            .validate_child(&candidate_id, &relative_path)
+        {
+            return Ok(Err(wit_host_error(error)));
+        }
+        Ok(self
+            .host
+            .read_candidate_child_file(&candidate_id, &relative_path)
+            .map_err(wit_host_error))
+    }
+
     async fn read_secret(
         &mut self,
         query: Wit::SecretQuery,
@@ -265,6 +282,8 @@ where
             connection_import_protocol::SecretQuery {
                 service: query.service,
                 account: query.account,
+                namespace: query.namespace,
+                key: query.key,
             },
         )))
     }

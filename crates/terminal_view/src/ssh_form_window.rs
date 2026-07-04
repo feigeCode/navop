@@ -39,10 +39,51 @@ use crate::ssh_form_mfa::{
     form_mfa_request_from_keyboard_interactive, is_jump_mfa_required_error,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SshFormPostSaveAction {
+    Close,
+    Continue,
+}
+
+pub type SshFormSavedCallback = Arc<
+    dyn Fn(StoredConnection, SshFormPostSaveAction, &mut Window, &mut App) + Send + Sync + 'static,
+>;
+
 pub struct SshFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
+    pub initial_connection: Option<StoredConnection>,
+    pub on_saved: Option<SshFormSavedCallback>,
     pub workspaces: Vec<Workspace>,
     pub teams: Vec<TeamOption>,
+}
+
+impl SshFormWindowConfig {
+    pub fn is_editing(&self) -> bool {
+        self.editing_connection.is_some()
+    }
+
+    pub fn supports_save_and_continue(&self) -> bool {
+        self.on_saved.is_some()
+    }
+
+    fn connection_to_load(&self) -> Option<&StoredConnection> {
+        self.editing_connection
+            .as_ref()
+            .or(self.initial_connection.as_ref())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SaveAction {
+    Close,
+    Continue,
+}
+
+fn post_save_action(action: SaveAction) -> SshFormPostSaveAction {
+    match action {
+        SaveAction::Close => SshFormPostSaveAction::Close,
+        SaveAction::Continue => SshFormPostSaveAction::Continue,
+    }
 }
 
 #[derive(Clone, Default, PartialEq)]
@@ -192,6 +233,8 @@ pub struct SshFormWindow {
 
     is_testing: bool,
     test_result: Option<Result<(), String>>,
+    on_saved: Option<SshFormSavedCallback>,
+    save_action: SaveAction,
 }
 
 #[derive(Clone)]
@@ -247,7 +290,8 @@ pub enum ProxyTypeSelection {
 
 impl SshFormWindow {
     pub fn new(config: SshFormWindowConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let is_editing = config.editing_connection.is_some();
+        let is_editing = config.is_editing();
+        let on_saved = config.on_saved.clone();
         let editing_id = config.editing_connection.as_ref().and_then(|c| c.id);
         let editing_cloud_id = config
             .editing_connection
@@ -391,7 +435,7 @@ impl SshFormWindow {
         let mut sync_enabled = true; // 默认启用云同步
         let mut disable_shell_integration = false;
 
-        if let Some(ref conn) = config.editing_connection {
+        if let Some(conn) = config.connection_to_load() {
             // 加载同步状态
             sync_enabled = conn.sync_enabled;
 
@@ -569,6 +613,8 @@ impl SshFormWindow {
             disable_shell_integration,
             is_testing: false,
             test_result: None,
+            on_saved,
+            save_action: SaveAction::Close,
         }
     }
 
@@ -960,6 +1006,16 @@ impl SshFormWindow {
     }
 
     fn on_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_action = SaveAction::Close;
+        self.save(window, cx);
+    }
+
+    fn on_save_and_continue(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_action = SaveAction::Continue;
+        self.save(window, cx);
+    }
+
+    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if validate_save_state(self.is_testing).is_err() {
             self.test_result = Some(Err(t!("SSH.save_while_testing").to_string()));
             cx.notify();
@@ -1030,16 +1086,19 @@ impl SshFormWindow {
                 if let Some(notifier) = get_notifier(cx) {
                     let event = if is_editing {
                         ConnectionDataEvent::ConnectionUpdated {
-                            connection: saved_conn,
+                            connection: saved_conn.clone(),
                         }
                     } else {
                         ConnectionDataEvent::ConnectionCreated {
-                            connection: saved_conn,
+                            connection: saved_conn.clone(),
                         }
                     };
                     notifier.update(cx, |_, cx| {
                         cx.emit(event);
                     });
+                }
+                if let Some(callback) = self.on_saved.as_ref() {
+                    callback(saved_conn, post_save_action(self.save_action), window, cx);
                 }
                 window.remove_window();
             }
@@ -1588,6 +1647,18 @@ impl Render for SshFormWindow {
                                 this.on_test(window, cx);
                             })),
                     )
+                    .when(self.on_saved.is_some(), |this| {
+                        this.child(
+                            Button::new("save-continue")
+                                .small()
+                                .outline()
+                                .label("保存并继续")
+                                .disabled(is_testing)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.on_save_and_continue(window, cx);
+                                })),
+                        )
+                    })
                     .child(
                         Button::new("ok")
                             .small()
@@ -1608,7 +1679,8 @@ mod tests {
         AuthMethodSelection, build_connection_test_signature, build_jump_auth_method,
         validate_save_state,
     };
-    use one_core::storage::{SshAuthMethod, SshParams};
+    use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
+    use std::sync::Arc;
 
     fn sample_params() -> SshParams {
         SshParams {
@@ -1625,6 +1697,38 @@ mod tests {
             jump_server: None,
             proxy: None,
         }
+    }
+
+    #[test]
+    fn ssh_form_prefill_does_not_enter_edit_mode() {
+        let initial_connection =
+            StoredConnection::new_ssh("imported".to_string(), sample_params(), None);
+        let config = super::SshFormWindowConfig {
+            editing_connection: None,
+            initial_connection: Some(initial_connection),
+            on_saved: None,
+            workspaces: Vec::new(),
+            teams: Vec::new(),
+        };
+
+        assert!(!config.is_editing());
+        assert!(config.initial_connection.is_some());
+    }
+
+    #[test]
+    fn ssh_form_prefill_can_enable_save_and_continue() {
+        let initial_connection =
+            StoredConnection::new_ssh("imported".to_string(), sample_params(), None);
+        let config = super::SshFormWindowConfig {
+            editing_connection: None,
+            initial_connection: Some(initial_connection),
+            on_saved: Some(Arc::new(|_, _, _, _| {})),
+            workspaces: Vec::new(),
+            teams: Vec::new(),
+        };
+
+        assert!(config.supports_save_and_continue());
+        assert!(!config.is_editing());
     }
 
     #[test]

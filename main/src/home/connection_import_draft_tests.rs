@@ -6,6 +6,7 @@ use connection_import_protocol::{
 };
 use one_core::storage::{ConnectionType, SshAuthMethod};
 
+use super::connection_import_actions::duplicate_connection_name;
 use super::connection_import_draft::{
     EditableImportDraft, ImportDraftEdit, ImportDraftField, selected_import_count,
     selected_import_drafts_to_connections,
@@ -94,11 +95,43 @@ fn edited_ssh_private_key_path_is_converted_to_stored_connection() {
     ));
 }
 
+#[test]
+fn database_duplicate_identity_uses_type_host_port_username_and_database() {
+    let draft = EditableImportDraft::new(database_import("prod"));
+
+    assert_eq!(
+        "db:mysql:mysql.example.test:3306:root:app",
+        draft.duplicate_identity().unwrap()
+    );
+}
+
+#[test]
+fn ssh_duplicate_identity_uses_host_port_and_username() {
+    let draft = EditableImportDraft::new(ssh_import("jump"));
+
+    assert_eq!(
+        "ssh:ssh.example.test:2222:deploy",
+        draft.duplicate_identity().unwrap()
+    );
+}
+
+#[test]
+fn duplicate_detection_matches_existing_connection_identity() {
+    let draft = EditableImportDraft::new(database_import("prod"));
+    let existing = draft.to_stored_connection().unwrap();
+
+    assert_eq!(
+        Some("prod".to_string()),
+        duplicate_connection_name(&draft, &[existing]).unwrap()
+    );
+}
+
 fn database_import(name: &str) -> ImportRecord {
     ImportRecord {
         id: format!("datagrip:{name}"),
         importer_id: "com.onetcli.importer.datagrip/datagrip".to_string(),
         source_label: "DataGrip".to_string(),
+        source_id: None,
         kind: ImportRecordKind::Database,
         display_name: name.to_string(),
         database: Some(DatabaseImportRecord {
@@ -112,6 +145,7 @@ fn database_import(name: &str) -> ImportRecord {
             extra_params: BTreeMap::new(),
         }),
         ssh: None,
+        port_forwarding: None,
         password_status: PasswordImportStatus::Included,
         warnings: Vec::new(),
     }
@@ -122,6 +156,7 @@ fn ssh_import(name: &str) -> ImportRecord {
         id: format!("xshell:{name}"),
         importer_id: "com.onetcli.importer.xshell/xshell".to_string(),
         source_label: "Xshell".to_string(),
+        source_id: None,
         kind: ImportRecordKind::Ssh,
         display_name: name.to_string(),
         database: None,
@@ -134,7 +169,11 @@ fn ssh_import(name: &str) -> ImportRecord {
                 key_path: "~/.ssh/id_rsa".to_string(),
                 passphrase: None,
             },
+            init_script: None,
+            jump_server: None,
+            proxy: None,
         }),
+        port_forwarding: None,
         password_status: PasswordImportStatus::Unsupported,
         warnings: Vec::new(),
     }
