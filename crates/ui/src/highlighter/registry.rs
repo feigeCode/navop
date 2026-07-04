@@ -5,12 +5,13 @@ use serde_repr::{Deserialize_repr, Serialize_repr};
 use std::{
     collections::HashMap,
     ops::Deref,
+    path::PathBuf,
     sync::{Arc, LazyLock, Mutex},
 };
 
 use crate::{
     ActiveTheme, DEFAULT_THEME_COLORS, ThemeMode,
-    highlighter::{Language, languages, wasm_store},
+    highlighter::{InstalledExtension, Language, LanguageManifest, languages, wasm_store},
 };
 
 pub(super) const HIGHLIGHT_NAMES: [&str; 40] = [
@@ -505,16 +506,21 @@ impl HighlightTheme {
 /// Registry for code highlighter languages.
 pub struct LanguageRegistry {
     languages: Mutex<HashMap<SharedString, LanguageConfig>>,
+    file_extensions: Mutex<HashMap<SharedString, SharedString>>,
+    wasm_extensions: Mutex<HashMap<SharedString, LazyWasmExtension>>,
+}
+
+#[derive(Debug, Clone)]
+struct LazyWasmExtension {
+    source_path: PathBuf,
 }
 
 impl LanguageRegistry {
     fn with_default_languages() -> Self {
         Self {
-            languages: Mutex::new(
-                languages::Language::all()
-                    .map(|language| (language.name().into(), language.config()))
-                    .collect(),
-            ),
+            languages: Mutex::new(HashMap::new()),
+            file_extensions: Mutex::new(HashMap::new()),
+            wasm_extensions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -527,10 +533,32 @@ impl LanguageRegistry {
 
     /// Registers a new language configuration to the registry.
     pub fn register(&self, lang: &str, config: &LanguageConfig) {
+        self.register_with_file_extensions(lang, config, &[]);
+    }
+
+    /// Registers a language configuration and associates it with file extensions.
+    pub fn register_with_file_extensions(
+        &self,
+        lang: &str,
+        config: &LanguageConfig,
+        file_extensions: &[String],
+    ) {
+        let lang = SharedString::from(lang.to_string());
         self.languages
             .lock()
             .unwrap()
-            .insert(lang.to_string().into(), config.clone());
+            .insert(lang.clone(), config.clone());
+        self.register_file_extensions(&lang, file_extensions);
+    }
+
+    /// Registers language extension metadata without loading the wasm parser yet.
+    pub fn register_wasm_manifest(&self, manifest: LanguageManifest, source_path: PathBuf) {
+        let lang = SharedString::from(manifest.name.clone());
+        self.register_file_extensions(&lang, &manifest.file_extensions);
+        self.wasm_extensions
+            .lock()
+            .unwrap()
+            .insert(lang, LazyWasmExtension { source_path });
     }
 
     /// 注册一个通过 wasm 加载的语言扩展。
@@ -538,6 +566,7 @@ impl LanguageRegistry {
         &self,
         name: &str,
         wasm_bytes: impl Into<Arc<[u8]>>,
+        file_extensions: &[String],
         injection_languages: Vec<SharedString>,
         highlights: &str,
         injections: &str,
@@ -561,12 +590,24 @@ impl LanguageRegistry {
             .lock()
             .unwrap()
             .insert(name.to_string().into(), config);
+        self.wasm_extensions
+            .lock()
+            .unwrap()
+            .remove(&SharedString::from(name.to_string()));
+        self.register_file_extensions(&SharedString::from(name.to_string()), file_extensions);
         Ok(())
     }
 
     /// Returns a list of all registered language names.
     pub fn languages(&self) -> Vec<SharedString> {
-        self.languages.lock().unwrap().keys().cloned().collect()
+        let mut languages: Vec<_> = languages::Language::all()
+            .map(|language| SharedString::from(language.name()))
+            .collect();
+        languages.extend(self.languages.lock().unwrap().keys().cloned());
+        languages.extend(self.wasm_extensions.lock().unwrap().keys().cloned());
+        languages.sort();
+        languages.dedup();
+        languages
     }
 
     /// Returns the language configuration for the given language name.
@@ -574,9 +615,31 @@ impl LanguageRegistry {
         // Try to get by name first, there may have a custom language registered
         // Then try to get built-in language to support short language names, e.g. "js" for "javascript"
         let languages = self.languages.lock().unwrap();
-        languages.get(name).cloned().or_else(|| {
-            Language::from_name(name).and_then(|language| languages.get(language.name()).cloned())
-        })
+        if let Some(config) = languages.get(name).cloned() {
+            return Some(config);
+        }
+        if let Some(language) = Language::from_name(name) {
+            return Some(
+                languages
+                    .get(language.name())
+                    .cloned()
+                    .unwrap_or_else(|| language.config()),
+            );
+        }
+        drop(languages);
+
+        self.load_lazy_wasm_language(name)
+    }
+
+    /// Returns the registered language name for a file extension, without the leading dot.
+    pub fn language_name_for_extension(&self, extension: &str) -> Option<String> {
+        let extension = normalize_file_extension(extension)?;
+        self.file_extensions
+            .lock()
+            .unwrap()
+            .get(extension.as_str())
+            .map(|language| language.to_string())
+            .or_else(|| Language::from_name(&extension).map(|language| language.name().to_string()))
     }
 
     /// 移除一个已注册的语言。返回是否真的有条目被删除。
@@ -589,12 +652,17 @@ impl LanguageRegistry {
             Some(current) if builtin.as_ref().is_some_and(|config| current == config) => false,
             Some(_) => {
                 languages.remove(&key);
-                if let Some(config) = builtin {
-                    languages.insert(key, config);
-                }
+                self.unregister_file_extensions(name);
+                self.wasm_extensions.lock().unwrap().remove(&key);
                 true
             }
-            None => false,
+            None => {
+                let removed = self.wasm_extensions.lock().unwrap().remove(&key).is_some();
+                if removed {
+                    self.unregister_file_extensions(name);
+                }
+                removed
+            }
         }
     }
 
@@ -602,6 +670,49 @@ impl LanguageRegistry {
     pub fn is_wasm(&self, name: &str) -> Option<bool> {
         self.language(name)
             .map(|config| matches!(config.kind, LanguageKind::Wasm { .. }))
+    }
+}
+
+impl LanguageRegistry {
+    fn load_lazy_wasm_language(&self, name: &str) -> Option<LanguageConfig> {
+        let extension = self.wasm_extensions.lock().unwrap().get(name).cloned()?;
+        match InstalledExtension::load_from_dir(&extension.source_path)
+            .and_then(|extension| extension.register(self))
+        {
+            Ok(()) => self.languages.lock().unwrap().get(name).cloned(),
+            Err(error) => {
+                tracing::warn!("failed to lazy load language extension {name:?}: {error:?}");
+                None
+            }
+        }
+    }
+
+    fn register_file_extensions(&self, lang: &SharedString, file_extensions: &[String]) {
+        let mut extensions = self.file_extensions.lock().unwrap();
+        for extension in file_extensions {
+            if let Some(extension) = normalize_file_extension(extension) {
+                extensions.insert(extension.into(), lang.clone());
+            }
+        }
+    }
+
+    fn unregister_file_extensions(&self, lang: &str) {
+        self.file_extensions
+            .lock()
+            .unwrap()
+            .retain(|_, language| language.as_ref() != lang);
+    }
+}
+
+fn normalize_file_extension(extension: &str) -> Option<String> {
+    let normalized = extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
     }
 }
 
@@ -653,10 +764,61 @@ mod tests {
     }
 
     #[test]
+    fn registry_resolves_registered_file_extensions() {
+        let registry = LanguageRegistry::with_default_languages();
+        registry.register_with_file_extensions(
+            "__test_custom_language__",
+            &LanguageConfig::new(
+                "__test_custom_language__",
+                tree_sitter_json::LANGUAGE.into(),
+                vec![],
+                "",
+                "",
+                "",
+            ),
+            &["custom_ext".to_string()],
+        );
+
+        assert_eq!(
+            registry
+                .language_name_for_extension("custom_ext")
+                .as_deref(),
+            Some("__test_custom_language__")
+        );
+        assert_eq!(
+            registry
+                .language_name_for_extension(".CUSTOM_EXT")
+                .as_deref(),
+            Some("__test_custom_language__")
+        );
+    }
+
+    #[test]
+    fn unregister_removes_registered_file_extensions() {
+        let registry = LanguageRegistry::with_default_languages();
+        registry.register_with_file_extensions(
+            "__test_extension_cleanup__",
+            &LanguageConfig::new(
+                "__test_extension_cleanup__",
+                tree_sitter_json::LANGUAGE.into(),
+                vec![],
+                "",
+                "",
+                "",
+            ),
+            &["cleanup_ext".to_string()],
+        );
+
+        assert!(registry.unregister("__test_extension_cleanup__"));
+        assert_eq!(registry.language_name_for_extension("cleanup_ext"), None);
+    }
+
+    #[test]
     fn register_wasm_rejects_invalid_bytes() {
         let registry = LanguageRegistry::with_default_languages();
         let invalid = vec![0u8, 1, 2, 3, 4];
-        let result = registry.register_wasm("__test_invalid_wasm__", invalid, vec![], "", "", "");
+        let result =
+            registry.register_wasm("__test_invalid_wasm__", invalid, &[], vec![], "", "", "");
 
         assert!(result.is_err(), "expected error for non-wasm bytes");
         assert!(

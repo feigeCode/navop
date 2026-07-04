@@ -3,8 +3,8 @@ use std::{collections::HashMap, fs, io::Write, path::Path};
 use tempfile::TempDir;
 
 use crate::highlighter::{
-    InstalledExtension, LanguageConfig, LanguageRegistry, SyntaxHighlighter, list_installed,
-    load_extensions_dir,
+    HighlightTheme, InstalledExtension, LanguageConfig, LanguageRegistry, SyntaxHighlighter,
+    list_installed, load_extensions_dir, register_extension_manifests_dir,
 };
 
 use super::extension_loader::topological_sort;
@@ -110,6 +110,40 @@ fn list_installed_skips_dirs_without_manifest() {
 }
 
 #[test]
+fn register_extension_manifests_dir_registers_file_extensions_without_loading_wasm() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let ext_dir = root.join("__test_lazy_manifest__");
+    fs::create_dir_all(&ext_dir).unwrap();
+    let manifest = serde_json::json!({
+        "name": "__test_lazy_manifest__",
+        "version": "0.1.0",
+        "file_extensions": ["lazy_manifest"],
+    });
+    fs::write(
+        ext_dir.join("manifest.json"),
+        serde_json::to_string(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let registry = LanguageRegistry::singleton();
+    let report = register_extension_manifests_dir(root, registry).unwrap();
+
+    assert!(
+        report
+            .loaded
+            .contains(&"__test_lazy_manifest__".to_string())
+    );
+    assert_eq!(
+        registry
+            .language_name_for_extension("lazy_manifest")
+            .as_deref(),
+        Some("__test_lazy_manifest__")
+    );
+    assert!(registry.unregister("__test_lazy_manifest__"));
+}
+
+#[test]
 fn uninstall_removes_directory_and_unregisters() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
@@ -166,5 +200,36 @@ fn load_extensions_dir_loads_real_wasm_extension() {
     assert!(report.loaded.contains(&"rust".to_string()));
 
     let mut hl = SyntaxHighlighter::new("rust");
+    assert_eq!(hl.language().as_ref(), "rust");
     assert!(hl.update(None, &ropey::Rope::from_str("fn x() {}"), None));
+}
+
+#[test]
+#[ignore = "需要 ONETCLI_TEST_LANGUAGE_EXT 指向真实语言扩展目录"]
+fn language_extension_smoke_highlights_real_extension() {
+    let Ok(ext_dir) = std::env::var("ONETCLI_TEST_LANGUAGE_EXT") else {
+        eprintln!("ONETCLI_TEST_LANGUAGE_EXT not set; skipping");
+        return;
+    };
+    let ext_dir = std::path::PathBuf::from(ext_dir);
+    let manifest = crate::highlighter::extension::read_manifest_only(&ext_dir).unwrap();
+    let registry = LanguageRegistry::singleton();
+    registry.register_wasm_manifest(manifest.clone(), ext_dir);
+
+    let language = registry
+        .language_name_for_extension(&manifest.file_extensions[0])
+        .unwrap();
+    assert_eq!(language, manifest.name);
+
+    let html = "<!doctype html><html><body><script>var x = 1;</script></body></html>";
+    let mut highlighter = SyntaxHighlighter::new(&manifest.name);
+    assert_eq!(highlighter.language().as_ref(), manifest.name.as_str());
+    assert!(highlighter.update(None, &ropey::Rope::from_str(html), None));
+    let styles = highlighter.styles(&(0..html.len()), &HighlightTheme::default_dark());
+    assert!(
+        styles.iter().any(|(_, style)| style.color.is_some()),
+        "expected real highlight styles for {:?}",
+        manifest.name
+    );
+    registry.unregister(&manifest.name);
 }

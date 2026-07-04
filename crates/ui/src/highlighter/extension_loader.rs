@@ -100,6 +100,49 @@ pub fn load_extensions_dir(root: &Path, registry: &LanguageRegistry) -> Result<L
     Ok(report)
 }
 
+/// 扫描 `root` 下的语言扩展 manifest,只注册语言名与文件后缀映射。
+///
+/// 该路径不读取 `parser.wasm`,用于启动时快速建立后缀索引;真实 wasm
+/// parser 会在首次请求该语言时由 [`LanguageRegistry`] 按需加载。
+pub fn register_extension_manifests_dir(
+    root: &Path,
+    registry: &LanguageRegistry,
+) -> Result<LoadReport> {
+    if !root.exists() {
+        return Ok(LoadReport::default());
+    }
+
+    let mut report = LoadReport::default();
+    let mut seen = HashSet::new();
+    for dir in list_subdirs(root)? {
+        match crate::highlighter::extension::read_manifest_only(&dir) {
+            Ok(manifest) => {
+                if !seen.insert(manifest.name.clone()) {
+                    report
+                        .failed
+                        .push((manifest.name.clone(), "duplicate".into()));
+                    continue;
+                }
+                registry.register_wasm_manifest(manifest.clone(), dir);
+                report.loaded.push(manifest.name);
+            }
+            Err(error) => {
+                let id = dir
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| dir.display().to_string());
+                tracing::warn!(
+                    "failed to read language extension manifest at {}: {:?}",
+                    dir.display(),
+                    error
+                );
+                report.failed.push((id, format!("{error:?}")));
+            }
+        }
+    }
+    Ok(report)
+}
+
 /// 列出 `root` 下所有可读的扩展(仅解析 manifest,不加载 wasm)。
 ///
 /// 失败的子目录会被静默跳过(通过 tracing 报告),返回的列表只包含

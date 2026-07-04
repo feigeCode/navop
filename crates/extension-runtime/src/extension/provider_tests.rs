@@ -4,6 +4,7 @@ use super::{
     AcpAgentExtensionProvider, DatabaseDriverExtensionProvider, ExtensionKind, ExtensionProvider,
     ExtensionRegistry, LanguageExtensionProvider, RemoteDesktopProviderExtensionProvider,
     builtin_registry, load_language_extensions_from_root,
+    register_language_extension_manifests_from_root,
 };
 
 #[test]
@@ -353,4 +354,31 @@ fn load_language_extensions_from_root_scans_languages_directory() {
     assert!(report.loaded.is_empty());
     assert_eq!(1, report.failed.len());
     assert_eq!("broken", report.failed[0].0);
+}
+
+#[test]
+fn register_language_extension_manifests_from_root_does_not_load_wasm() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path().join("extensions");
+    let language_dir = root.join("languages").join("__runtime_lazy_manifest__");
+    fs::create_dir_all(&language_dir).unwrap();
+    fs::write(
+        language_dir.join("manifest.json"),
+        r#"{"name":"__runtime_lazy_manifest__","version":"0.1.0","file_extensions":["lazy_manifest"]}"#,
+    )
+    .unwrap();
+    fs::write(language_dir.join("parser.wasm"), [0u8; 4]).unwrap();
+
+    let registry = gpui_component::highlighter::LanguageRegistry::singleton();
+    let report = register_language_extension_manifests_from_root(&root).unwrap();
+
+    assert_eq!(vec!["__runtime_lazy_manifest__".to_string()], report.loaded);
+    assert!(report.failed.is_empty());
+    assert_eq!(
+        registry
+            .language_name_for_extension("lazy_manifest")
+            .as_deref(),
+        Some("__runtime_lazy_manifest__")
+    );
+    assert!(registry.unregister("__runtime_lazy_manifest__"));
 }

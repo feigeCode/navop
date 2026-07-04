@@ -117,6 +117,7 @@ impl InstalledExtension {
         registry.register_wasm(
             &self.manifest.name,
             self.wasm_bytes.clone(),
+            &self.manifest.file_extensions,
             injections_langs,
             &self.highlights,
             &self.injections,

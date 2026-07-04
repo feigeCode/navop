@@ -1,4 +1,6 @@
-use crate::highlighter::{HighlightTheme, LanguageRegistry};
+use crate::highlighter::{
+    HighlightTheme, LanguageConfig, LanguageKind, LanguageRegistry, wasm_store,
+};
 
 use anyhow::{Context, Result, anyhow};
 use gpui::{HighlightStyle, SharedString};
@@ -128,6 +130,19 @@ impl<'a> Iterator for ByteChunks<'a> {
     }
 }
 
+pub(crate) fn parser_for_config(config: &LanguageConfig) -> Result<Parser> {
+    let mut parser = Parser::new();
+    if matches!(&config.kind, LanguageKind::Wasm { .. }) {
+        parser
+            .set_wasm_store(wasm_store::new_parser_store()?)
+            .context("set parser wasm store")?;
+    }
+    parser
+        .set_language(&config.language)
+        .context("parse set_language")?;
+    Ok(parser)
+}
+
 #[derive(Debug, Default, Clone)]
 struct HighlightSummary {
     count: usize,
@@ -234,10 +249,7 @@ impl SyntaxHighlighter {
             ));
         };
 
-        let mut parser = Parser::new();
-        parser
-            .set_language(&config.language)
-            .context("parse set_language")?;
+        let parser = parser_for_config(&config)?;
 
         // Concatenate the query strings, keeping track of the start offset of each section.
         let mut query_source = String::new();
@@ -602,8 +614,7 @@ impl SyntaxHighlighter {
             Some(start..end)
         }
         let config = LanguageRegistry::singleton().language(language_name)?;
-        let mut parser = Parser::new();
-        parser.set_language(&config.language).ok()?;
+        let mut parser = parser_for_config(&config).ok()?;
         parser.set_included_ranges(&ranges).ok()?;
 
         let new_tree = parser.parse_with_options(

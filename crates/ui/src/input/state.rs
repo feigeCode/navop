@@ -2383,10 +2383,7 @@ impl InputState {
                         return None;
                     };
 
-                    let mut parser = tree_sitter::Parser::new();
-                    if parser.set_language(&config.language).is_err() {
-                        return None;
-                    }
+                    let mut parser = crate::highlighter::parser_for_config(&config).ok()?;
 
                     let new_tree = parser.parse_with_options(
                         &mut |offset, _| {

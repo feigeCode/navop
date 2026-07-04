@@ -25,7 +25,9 @@ use std::{path::PathBuf, sync::Arc};
 
 use db_view::extension_menu::DbTreeExtensionMenuRegistry;
 use gpui::{App, BorrowAppContext};
-use gpui_component::highlighter::{LanguageRegistry, LoadReport, load_extensions_dir};
+use gpui_component::highlighter::{
+    LanguageRegistry, LoadReport, load_extensions_dir, register_extension_manifests_dir,
+};
 
 pub fn init(cx: &mut App) {
     let Some(root) = extensions_root() else {
@@ -34,7 +36,7 @@ pub fn init(cx: &mut App) {
     };
     let registry = builtin_registry(root.clone());
     init_global(registry);
-    load_language_extensions(&root);
+    register_language_extension_manifests(&root);
     crate::refresh_global_runtime_catalog(cx);
     refresh_runtime_contributions(cx);
     crate::extension_action_handler::register_db_tree_extension_action_handler(cx);
@@ -63,26 +65,35 @@ pub fn load_language_extensions_from_root(root: &std::path::Path) -> anyhow::Res
     )
 }
 
-fn load_language_extensions(root: &std::path::Path) {
-    match load_language_extensions_from_root(root) {
+pub fn register_language_extension_manifests_from_root(
+    root: &std::path::Path,
+) -> anyhow::Result<LoadReport> {
+    register_extension_manifests_dir(
+        &root.join(ExtensionKind::Language.dir_name()),
+        LanguageRegistry::singleton(),
+    )
+}
+
+fn register_language_extension_manifests(root: &std::path::Path) {
+    match register_language_extension_manifests_from_root(root) {
         Ok(report) => {
             if !report.loaded.is_empty() {
                 tracing::info!(
-                    "已加载 {} 个语言扩展: {:?}",
+                    "已注册 {} 个语言扩展 manifest: {:?}",
                     report.loaded.len(),
                     report.loaded
                 );
             }
             if !report.failed.is_empty() {
                 tracing::warn!(
-                    "有 {} 个语言扩展加载失败: {:?}",
+                    "有 {} 个语言扩展 manifest 注册失败: {:?}",
                     report.failed.len(),
                     report.failed
                 );
             }
         }
         Err(err) => {
-            tracing::warn!("加载语言扩展失败: {err:?}");
+            tracing::warn!("注册语言扩展 manifest 失败: {err:?}");
         }
     }
 }
