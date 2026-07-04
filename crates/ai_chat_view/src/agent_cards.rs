@@ -751,7 +751,20 @@ fn tool_card_json_block(
             div()
                 .w_full()
                 .h(height)
-                .child(Input::new(&input).bare().h_full().disabled(true).text_xs()),
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.code_background)
+                .overflow_hidden()
+                .child(
+                    Input::new(&input)
+                        .bare()
+                        .h_full()
+                        .appearance(false)
+                        .disabled(true)
+                        .text_xs()
+                        .text_color(theme.code_foreground),
+                ),
         )
         .into_any_element()
 }
@@ -781,7 +794,20 @@ fn tool_card_text_block(
             div()
                 .w_full()
                 .h(height)
-                .child(Input::new(&input).bare().h_full().disabled(true).text_xs()),
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.code_background)
+                .overflow_hidden()
+                .child(
+                    Input::new(&input)
+                        .bare()
+                        .h_full()
+                        .appearance(false)
+                        .disabled(true)
+                        .text_xs()
+                        .text_color(theme.code_foreground),
+                ),
         )
         .into_any_element()
 }

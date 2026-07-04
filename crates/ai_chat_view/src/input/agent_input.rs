@@ -2048,6 +2048,11 @@ impl Render for AgentInput {
         let editor_top_bar = self.render_editor_top_bar(cx);
         let toolbar = self.render_toolbar(cx);
         let theme = self.local_theme(cx);
+        let input_focused = self
+            .input_state
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(_window);
 
         v_flex()
             .debug_selector(|| "agent-input-root".to_string())
@@ -2082,11 +2087,22 @@ impl Render for AgentInput {
                     .max_h(px(220.0))
                     .overflow_hidden()
                     .child(
-                        Input::new(&self.input_state)
-                            .size_full()
+                        div()
+                            .w_full()
+                            .border_1()
+                            .rounded(cx.theme().radius)
+                            .border_color(if input_focused {
+                                theme.accent
+                            } else {
+                                theme.border
+                            })
                             .bg(theme.background)
-                            .text_color(theme.foreground)
-                            .border_color(theme.border),
+                            .child(
+                                Input::new(&self.input_state)
+                                    .size_full()
+                                    .appearance(false)
+                                    .text_color(theme.foreground),
+                            ),
                     ),
             )
             // 底部：执行参数、模型和发送按钮
