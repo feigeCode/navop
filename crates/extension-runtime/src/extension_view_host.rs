@@ -351,6 +351,9 @@ fn to_host_entry(entry: extension_view::MarketplaceEntry) -> host_downloader::Ma
 fn to_view_kind(kind: host_extension::ExtensionKind) -> extension_view::ExtensionKind {
     match kind {
         host_extension::ExtensionKind::Language => extension_view::ExtensionKind::Language,
+        host_extension::ExtensionKind::LanguageBundle => {
+            extension_view::ExtensionKind::LanguageBundle
+        }
         host_extension::ExtensionKind::DatabaseDriver => {
             extension_view::ExtensionKind::DatabaseDriver
         }
@@ -366,6 +369,9 @@ fn to_view_kind(kind: host_extension::ExtensionKind) -> extension_view::Extensio
 fn to_host_kind(kind: extension_view::ExtensionKind) -> host_extension::ExtensionKind {
     match kind {
         extension_view::ExtensionKind::Language => host_extension::ExtensionKind::Language,
+        extension_view::ExtensionKind::LanguageBundle => {
+            host_extension::ExtensionKind::LanguageBundle
+        }
         extension_view::ExtensionKind::DatabaseDriver => {
             host_extension::ExtensionKind::DatabaseDriver
         }

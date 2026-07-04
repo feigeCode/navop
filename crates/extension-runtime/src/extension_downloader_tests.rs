@@ -49,6 +49,42 @@ fn marketplace_manifest_accepts_v2_universal_language_artifact() {
 }
 
 #[test]
+fn marketplace_manifest_accepts_language_bundle_artifact() {
+    let manifest: MarketplaceManifest = serde_json::from_str(
+        r#"{
+            "schema_version": 2,
+            "release_version": "2026.07",
+            "extensions": [{
+                "id": "tree-sitter-languages",
+                "kind": "language_bundle",
+                "name": "Tree-sitter Languages",
+                "version": "0.1.0",
+                "release_tag": "tree-sitter-languages-v0.1.0",
+                "description": "Tree-sitter syntax bundle",
+                "file_extensions": ["js", "rs"],
+                "artifacts": {
+                    "universal": {
+                        "file": "tree-sitter-languages-language-bundle-universal.tar.gz",
+                        "sha256": "abc"
+                    }
+                }
+            }]
+        }"#,
+    )
+    .unwrap();
+
+    let entries = manifest.into_entries();
+
+    assert_eq!(1, entries.len());
+    assert_eq!("tree-sitter-languages", entries[0].id);
+    assert_eq!(ExtensionKind::LanguageBundle, entries[0].kind);
+    assert_eq!(
+        vec!["js".to_string(), "rs".to_string()],
+        entries[0].file_extensions
+    );
+}
+
+#[test]
 fn marketplace_manifest_accepts_string_schema_version() {
     let manifest: MarketplaceManifest = serde_json::from_str(
         r#"{

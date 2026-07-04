@@ -154,6 +154,7 @@ pub fn stage_local_tarball(source: &Path) -> Result<PathBuf> {
 fn package_install_name(staging_dir: &Path, kind: ExtensionKind) -> Result<String> {
     let manifest_file = match kind {
         ExtensionKind::Language => "manifest.json",
+        ExtensionKind::LanguageBundle => "manifest.json",
         ExtensionKind::DatabaseDriver => "driver.json",
         ExtensionKind::RemoteDesktopProvider => "remote_desktop_provider.json",
         ExtensionKind::McpHelper => "mcp_helper.json",

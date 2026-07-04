@@ -10,6 +10,7 @@ use super::{
 #[test]
 fn extension_kind_maps_stable_directories() {
     assert_eq!("languages", ExtensionKind::Language.dir_name());
+    assert_eq!("language_bundles", ExtensionKind::LanguageBundle.dir_name());
     assert_eq!("database_drivers", ExtensionKind::DatabaseDriver.dir_name());
     assert_eq!(
         "remote_desktop_providers",
@@ -18,6 +19,13 @@ fn extension_kind_maps_stable_directories() {
     assert_eq!("mcp_helpers", ExtensionKind::McpHelper.dir_name());
     assert_eq!("acp_agents", ExtensionKind::AcpAgent.dir_name());
     assert_eq!("composite", ExtensionKind::Composite.dir_name());
+}
+
+#[test]
+fn extension_kind_parses_language_bundle() {
+    let kind: ExtensionKind = serde_json::from_str(r#""language_bundle""#).unwrap();
+
+    assert_eq!(ExtensionKind::LanguageBundle, kind);
 }
 
 #[test]
