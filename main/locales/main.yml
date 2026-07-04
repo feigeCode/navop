@@ -2360,9 +2360,13 @@ LlmProviders:
 
 Serial:
   new:
-    en: Serial
-    zh-CN: 串口
-    zh-HK: 串口
+    en: New Serial Connection
+    zh-CN: 新建串口连接
+    zh-HK: 新建串口連接
+  edit:
+    en: Edit Serial Connection
+    zh-CN: 编辑串口连接
+    zh-HK: 編輯串口連接
 
 RemoteDesktopForm:
   title_new:
@@ -2373,3 +2377,16 @@ RemoteDesktopForm:
     en: "Edit %{protocol} Connection"
     zh-CN: "编辑 %{protocol} 连接"
     zh-HK: "編輯 %{protocol} 連線"
+
+
+SSH:
+  new:
+    en: New SSH Connection
+    zh-CN: 新建 SSH 连接
+    zh-HK: 新建 SSH 連線
+  edit:
+    en: Edit SSH Connection
+    zh-CN: 编辑 SSH 连接
+    zh-HK: 編輯 SSH 連線
+
+

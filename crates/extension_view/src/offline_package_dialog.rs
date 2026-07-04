@@ -3,7 +3,7 @@ use gpui::{
     SharedString, Styled, Window, div,
 };
 use gpui_component::{
-    ActiveTheme, Sizable, TitleBar,
+    ActiveTheme, Sizable,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     h_flex, v_flex,
@@ -53,19 +53,6 @@ impl Render for OfflinePackageDialogView {
         v_flex()
             .gap_3()
             .size_full()
-            .bg(cx.theme().background)
-            .child(
-                TitleBar::new().child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_1()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(t!("Extension.offline_package_title").to_string()),
-                ),
-            )
             .child(
                 div().flex_1().p_4().child(
                     v_flex()

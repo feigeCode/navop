@@ -4,7 +4,7 @@ use gpui::{
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, IndexPath, Sizable, TitleBar,
+    ActiveTheme, Disableable, IconName, IndexPath, Sizable,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -214,7 +214,6 @@ impl SelectItem for PortItem {
 
 pub struct SerialFormWindow {
     focus_handle: FocusHandle,
-    title: SharedString,
     is_editing: bool,
     editing_id: Option<i64>,
     editing_cloud_id: Option<String>,
@@ -273,13 +272,6 @@ impl SerialFormWindow {
             .editing_connection
             .as_ref()
             .and_then(|c| c.owner_id.clone());
-
-        let title: SharedString = if is_editing {
-            t!("Serial.edit").to_string()
-        } else {
-            t!("Serial.new").to_string()
-        }
-        .into();
 
         let name_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("Serial.name_placeholder")));
@@ -431,7 +423,6 @@ impl SerialFormWindow {
 
         Self {
             focus_handle: cx.focus_handle(),
-            title,
             is_editing,
             editing_id,
             editing_cloud_id,
@@ -767,19 +758,6 @@ impl Render for SerialFormWindow {
         v_flex()
             .justify_center()
             .size_full()
-            .bg(cx.theme().background)
-            .child(
-                TitleBar::new().child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_1()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(self.title.clone()),
-                ),
-            )
             // 表单内容
             .child(
                 div()

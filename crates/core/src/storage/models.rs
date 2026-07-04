@@ -1722,8 +1722,8 @@ mod serial_tests {
         assert_eq!(parsed.port, 3389);
         assert_eq!(parsed.username.as_deref(), Some("administrator"));
         assert_eq!(parsed.domain.as_deref(), Some("corp"));
-        let raw_params = serde_json::from_str::<serde_json::Value>(&conn.params)
-            .expect("RDP params parse as JSON");
+        let raw_params =
+            serde_json::from_str::<Value>(&conn.params).expect("RDP params parse as JSON");
         assert!(raw_params.get("width").is_none());
         assert!(raw_params.get("height").is_none());
         assert_eq!(RemoteDesktopProtocol::Vnc.default_port(), 5900);

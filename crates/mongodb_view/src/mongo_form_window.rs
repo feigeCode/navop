@@ -6,7 +6,7 @@ use gpui::{
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable, Size, TitleBar,
+    ActiveTheme, Disableable, IconName, Sizable, Size,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -39,7 +39,7 @@ pub struct MongoFormWindowConfig {
 }
 
 pub type MongoFormSavedCallback =
-    std::sync::Arc<dyn Fn(StoredConnection, &mut gpui::App) + Send + Sync + 'static>;
+    std::sync::Arc<dyn Fn(StoredConnection, &mut App) + Send + Sync + 'static>;
 
 impl MongoFormWindowConfig {
     fn is_editing(&self) -> bool {
@@ -135,7 +135,6 @@ impl SelectItem for TeamSelectItem {
 /// MongoDB 连接表单窗口
 pub struct MongoFormWindow {
     focus_handle: FocusHandle,
-    title: SharedString,
     is_editing: bool,
     editing_id: Option<i64>,
     editing_cloud_id: Option<String>,
@@ -187,13 +186,6 @@ impl MongoFormWindow {
             .editing_connection
             .as_ref()
             .and_then(|c| c.owner_id.clone());
-
-        let title: SharedString = if is_editing {
-            t!("MongoForm.edit_connection_title").to_string()
-        } else {
-            t!("MongoForm.new_connection_title").to_string()
-        }
-        .into();
 
         let existing_parameters = connection_to_load
             .as_ref()
@@ -404,7 +396,6 @@ impl MongoFormWindow {
 
         Self {
             focus_handle: cx.focus_handle(),
-            title,
             is_editing,
             editing_id,
             editing_cloud_id,
@@ -987,19 +978,6 @@ impl Render for MongoFormWindow {
         v_flex()
             .justify_center()
             .size_full()
-            .bg(cx.theme().background)
-            .child(
-                TitleBar::new().child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_1()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(self.title.clone()),
-                ),
-            )
             .child(
                 div().flex().justify_center().px_3().pt_2().child(
                     TabBar::new("mongodb-form-tabs")

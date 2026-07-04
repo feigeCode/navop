@@ -1,10 +1,10 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString,
-    Styled, Window, div, px,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled,
+    Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable, TitleBar,
+    ActiveTheme, Disableable, IconName, Sizable,
     button::{Button, ButtonVariants as _},
     h_flex,
     scroll::ScrollableElement,
@@ -13,7 +13,6 @@ use gpui_component::{
 use one_core::cloud_sync::TeamOption;
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
 use one_core::storage::{DatabaseType, StoredConnection, Workspace};
-use rust_i18n::locale;
 use rust_i18n::t;
 use std::sync::Arc;
 
@@ -83,7 +82,6 @@ fn post_save_action(action: SaveAction) -> ConnectionFormPostSaveAction {
 pub struct ConnectionFormWindow {
     focus_handle: FocusHandle,
     form: Entity<DbConnectionForm>,
-    title: SharedString,
     on_saved: Option<ConnectionFormSavedCallback>,
     save_action: SaveAction,
 }
@@ -109,26 +107,6 @@ fn external_driver_id_for_form(
         .or_else(|| external_driver_id_from_connection(conn))
 }
 
-fn external_driver_name_for_title(
-    driver_id: Option<&str>,
-    registry: &db::ipc::IpcDriverRegistry,
-) -> Option<String> {
-    driver_id.and_then(|driver_id| registry.find(driver_id).map(|driver| driver.name))
-}
-
-fn connection_title_for_locale(
-    locale: &str,
-    is_editing: bool,
-    db_type: &DatabaseType,
-    external_driver_name: Option<&str>,
-) -> String {
-    let db_type_label = external_driver_name
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| db_type.as_str());
-
-    db::translate_connection_title_for_locale(locale, is_editing, db_type_label)
-}
-
 impl ConnectionFormWindow {
     pub fn new(
         config: ConnectionFormWindowConfig,
@@ -145,18 +123,6 @@ impl ConnectionFormWindow {
             config.external_driver_id.as_deref(),
             connection_to_load,
         );
-        let external_driver_name = external_driver_name_for_title(
-            external_driver_id.as_deref(),
-            &config.external_driver_registry,
-        );
-        let title: SharedString = connection_title_for_locale(
-            locale().as_ref(),
-            is_editing,
-            &db_type,
-            external_driver_name.as_deref(),
-        )
-        .into();
-
         let form = external_driver_id
             .as_deref()
             .and_then(|driver_id| {
@@ -228,7 +194,6 @@ impl ConnectionFormWindow {
         Self {
             focus_handle: cx.focus_handle(),
             form,
-            title,
             on_saved,
             save_action: SaveAction::Close,
         }
@@ -281,19 +246,6 @@ impl Render for ConnectionFormWindow {
 
         v_flex()
             .size_full()
-            .bg(cx.theme().background)
-            .child(
-                TitleBar::new().child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_1()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(self.title.clone()),
-                ),
-            )
             .child(
                 div()
                     .flex_1()
@@ -535,26 +487,5 @@ mod tests {
         let connection = stored_connection_with_extra_driver_param();
 
         assert_eq!(None, external_driver_id_from_connection(Some(&connection)));
-    }
-
-    #[test]
-    fn connection_title_uses_external_driver_name() {
-        assert_eq!(
-            "新建 Dameng DM 连接",
-            connection_title_for_locale(
-                "zh-CN",
-                false,
-                &DatabaseType::external("dm"),
-                Some("Dameng DM")
-            )
-        );
-    }
-
-    #[test]
-    fn connection_title_falls_back_to_database_type_name() {
-        assert_eq!(
-            "新建 External 连接",
-            connection_title_for_locale("zh-CN", false, &DatabaseType::external("dm"), None)
-        );
     }
 }

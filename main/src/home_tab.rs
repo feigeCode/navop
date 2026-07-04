@@ -330,6 +330,11 @@ fn external_driver_id_for_connection_form(
         })
 }
 
+fn non_empty_name(name: &str) -> Option<&str> {
+    let name = name.trim();
+    if name.is_empty() { None } else { Some(name) }
+}
+
 #[cfg(test)]
 mod external_driver_form_tests {
     use super::*;
@@ -364,6 +369,94 @@ mod external_driver_form_tests {
         assert_eq!(
             Some("dm".to_string()),
             external_driver_id_for_connection_form(&DatabaseType::MySQL, Some(&connection))
+        );
+    }
+
+    #[test]
+    fn connection_title_prefers_external_driver_name() {
+        assert_eq!(
+            HomePage::connection_title_for_locale(
+                "zh-CN",
+                false,
+                &DatabaseType::MySQL,
+                None,
+                Some("DM"),
+            ),
+            "新建 DM 连接"
+        );
+        assert_eq!(
+            HomePage::connection_title_for_locale(
+                "zh-CN",
+                true,
+                &DatabaseType::MySQL,
+                None,
+                Some("DM"),
+            ),
+            "编辑 DM 连接"
+        );
+    }
+
+    #[test]
+    fn connection_title_prefers_connection_name_when_editing() {
+        assert_eq!(
+            HomePage::connection_title_for_locale(
+                "zh-CN",
+                true,
+                &DatabaseType::MySQL,
+                Some("生产库"),
+                Some("DM"),
+            ),
+            "编辑 生产库 连接"
+        );
+        assert_eq!(
+            HomePage::connection_title_for_locale(
+                "zh-CN",
+                false,
+                &DatabaseType::MySQL,
+                Some("生产库"),
+                Some("DM"),
+            ),
+            "新建 DM 连接"
+        );
+    }
+
+    #[test]
+    fn editing_title_or_default_prefers_connection_name() {
+        let mut connection = stored_external_connection("dm");
+        connection.name = "生产库".to_string();
+
+        assert_eq!(
+            HomePage::editing_title_or_default(
+                "zh-CN",
+                Some(&connection),
+                "编辑 SSH 连接".to_string(),
+            ),
+            "编辑 生产库 连接"
+        );
+
+        connection.name = "  ".to_string();
+        assert_eq!(
+            HomePage::editing_title_or_default(
+                "zh-CN",
+                Some(&connection),
+                "编辑 SSH 连接".to_string(),
+            ),
+            "编辑 SSH 连接"
+        );
+    }
+
+    #[test]
+    fn typed_connection_title_uses_connection_name_only_when_editing() {
+        let mut connection = stored_external_connection("dm");
+        connection.name = "缓存集群".to_string();
+
+        assert_eq!(
+            HomePage::typed_connection_title_for_locale("zh-CN", true, "Redis", Some(&connection),),
+            "编辑 缓存集群 连接"
+        );
+        assert_eq!(
+            HomePage::typed_connection_title_for_locale("zh-CN", false, "Redis", Some(&connection),),
+            "新建 Redis 连接"
         );
     }
 
@@ -1739,6 +1832,51 @@ impl HomePage {
         .detach();
     }
 
+    fn external_driver_name_for_title(
+        driver_id: Option<&str>,
+        registry: &IpcDriverRegistry,
+    ) -> Option<String> {
+        driver_id.and_then(|driver_id| registry.find(driver_id).map(|driver| driver.name))
+    }
+
+    fn connection_title_for_locale(
+        locale: &str,
+        is_editing: bool,
+        db_type: &DatabaseType,
+        connection_name: Option<&str>,
+        external_driver_name: Option<&str>,
+    ) -> String {
+        let db_type_label = connection_name
+            .filter(|name| is_editing && !name.trim().is_empty())
+            .or_else(|| external_driver_name.filter(|name| !name.trim().is_empty()))
+            .unwrap_or_else(|| db_type.as_str());
+
+        db::translate_connection_title_for_locale(locale, is_editing, db_type_label)
+    }
+
+    fn editing_title_or_default(
+        locale: &str,
+        editing_connection: Option<&StoredConnection>,
+        default_title: String,
+    ) -> String {
+        editing_connection
+            .and_then(|connection| non_empty_name(&connection.name))
+            .map(|name| db::translate_connection_title_for_locale(locale, true, name))
+            .unwrap_or(default_title)
+    }
+
+    fn typed_connection_title_for_locale(
+        locale: &str,
+        is_editing: bool,
+        type_label: &str,
+        editing_connection: Option<&StoredConnection>,
+    ) -> String {
+        let label = editing_connection
+            .filter(|_| is_editing)
+            .and_then(|connection| non_empty_name(&connection.name))
+            .unwrap_or(type_label);
+        db::translate_connection_title_for_locale(locale, is_editing, label)
+    }
     pub(crate) fn show_connection_form(
         &mut self,
         db_type: DatabaseType,
@@ -1789,14 +1927,26 @@ impl HomePage {
         };
 
         self.editing_connection_id = None;
-
+        let external_driver_id = external_driver_id_for_connection_form(
+            &config.db_type,
+            config.editing_connection.as_ref(),
+        );
+        let external_driver_name = Self::external_driver_name_for_title(
+            external_driver_id.as_deref(),
+            &config.external_driver_registry,
+        );
+        let title = Self::connection_title_for_locale(
+            rust_i18n::locale().as_ref(),
+            config.editing_connection.is_some(),
+            &config.db_type,
+            config
+                .editing_connection
+                .as_ref()
+                .map(|connection| connection.name.as_str()),
+            external_driver_name.as_deref(),
+        );
         open_popup_window(
-            PopupWindowOptions::new(if config.editing_connection.is_some() {
-                t!("Connection.edit", db_type = db_type.as_str()).to_string()
-            } else {
-                t!("Connection.new", db_type = db_type.as_str()).to_string()
-            })
-            .size(700.0, 650.0),
+            PopupWindowOptions::new(title).size(700.0, 650.0),
             move |window, cx| cx.new(|cx| ConnectionFormWindow::new(config, window, cx)),
             cx,
         );
@@ -1824,13 +1974,17 @@ impl HomePage {
 
         self.editing_connection_id = None;
 
-        open_popup_window(
-            PopupWindowOptions::new(if config.editing_connection.is_some() {
+        let title = Self::editing_title_or_default(
+            rust_i18n::locale().as_ref(),
+            config.editing_connection.as_ref(),
+            if config.editing_connection.is_some() {
                 t!("SSH.edit").to_string()
             } else {
                 t!("SSH.new").to_string()
-            })
-            .size(700.0, 650.0),
+            },
+        );
+        open_popup_window(
+            PopupWindowOptions::new(title).size(700.0, 650.0),
             move |window, cx| cx.new(|cx| SshFormWindow::new(config, window, cx)),
             cx,
         );
@@ -1864,13 +2018,14 @@ impl HomePage {
 
         self.editing_connection_id = None;
 
+        let title = Self::typed_connection_title_for_locale(
+            rust_i18n::locale().as_ref(),
+            config.editing_connection.is_some(),
+            "Redis",
+            config.editing_connection.as_ref(),
+        );
         open_popup_window(
-            PopupWindowOptions::new(if config.editing_connection.is_some() {
-                t!("Connection.edit", db_type = "Redis").to_string()
-            } else {
-                t!("Connection.new", db_type = "Redis").to_string()
-            })
-            .size(700.0, 650.0),
+            PopupWindowOptions::new(title).size(700.0, 650.0),
             move |window, cx| cx.new(|cx| RedisFormWindow::new(config, window, cx)),
             cx,
         );
@@ -1898,13 +2053,14 @@ impl HomePage {
 
         self.editing_connection_id = None;
 
+        let title = Self::typed_connection_title_for_locale(
+            rust_i18n::locale().as_ref(),
+            config.editing_connection.is_some(),
+            "MongoDB",
+            config.editing_connection.as_ref(),
+        );
         open_popup_window(
-            PopupWindowOptions::new(if config.editing_connection.is_some() {
-                t!("Connection.edit", db_type = "MongoDB").to_string()
-            } else {
-                t!("Connection.new", db_type = "MongoDB").to_string()
-            })
-            .size(700.0, 520.0),
+            PopupWindowOptions::new(title).size(700.0, 650.0),
             move |window, cx| cx.new(|cx| MongoFormWindow::new(config, window, cx)),
             cx,
         );
@@ -1930,13 +2086,17 @@ impl HomePage {
 
         self.editing_connection_id = None;
 
-        open_popup_window(
-            PopupWindowOptions::new(if config.editing_connection.is_some() {
+        let title = Self::editing_title_or_default(
+            rust_i18n::locale().as_ref(),
+            config.editing_connection.as_ref(),
+            if config.editing_connection.is_some() {
                 t!("Serial.edit").to_string()
             } else {
                 t!("Serial.new").to_string()
-            })
-            .size(700.0, 600.0),
+            },
+        );
+        open_popup_window(
+            PopupWindowOptions::new(title).size(700.0, 600.0),
             move |window, cx| cx.new(|cx| SerialFormWindow::new(config, window, cx)),
             cx,
         );
@@ -1973,13 +2133,17 @@ impl HomePage {
 
         self.editing_connection_id = None;
 
-        open_popup_window(
-            PopupWindowOptions::new(if config.editing_connection.is_some() {
+        let title = Self::editing_title_or_default(
+            rust_i18n::locale().as_ref(),
+            config.editing_connection.as_ref(),
+            if config.editing_connection.is_some() {
                 t!("PortForwarding.edit").to_string()
             } else {
                 t!("PortForwarding.new").to_string()
-            })
-            .size(700.0, 520.0),
+            },
+        );
+        open_popup_window(
+            PopupWindowOptions::new(title).size(700.0, 520.0),
             move |window, cx| cx.new(|cx| PortForwardingFormWindow::new(config, window, cx)),
             cx,
         );
@@ -2124,13 +2288,17 @@ impl HomePage {
 
         self.editing_connection_id = None;
 
-        open_popup_window(
-            PopupWindowOptions::new(if config.editing_connection.is_some() {
+        let title = Self::editing_title_or_default(
+            rust_i18n::locale().as_ref(),
+            config.editing_connection.as_ref(),
+            if config.editing_connection.is_some() {
                 t!("RemoteDesktopForm.title_edit", protocol = protocol.label()).to_string()
             } else {
                 t!("RemoteDesktopForm.title_new", protocol = protocol.label()).to_string()
-            })
-            .size(700.0, 560.0),
+            },
+        );
+        open_popup_window(
+            PopupWindowOptions::new(title).size(700.0, 560.0),
             move |window, cx| cx.new(|cx| RemoteDesktopFormWindow::new(config, window, cx)),
             cx,
         );

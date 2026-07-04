@@ -10,7 +10,7 @@ use gpui::{
     KeyBinding, ParentElement, PromptLevel, Render, Styled, WeakEntity, Window, actions, div, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, Size, TitleBar, WindowExt,
+    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, Size, WindowExt,
     button::Button,
     h_flex,
     input::{Input, InputEvent, InputState, Search},
@@ -374,7 +374,7 @@ impl RemoteFileEditorWindow {
             let file_size = bytes.len();
             let policy = determine_file_policy(file_size)?;
             let text = decode_text_content(&bytes)?;
-            let language = language_for_path(&task_remote_path, policy.is_large_file).to_string();
+            let language = language_for_path(&task_remote_path, policy.is_large_file);
             Ok::<_, anyhow::Error>(LoadedFile {
                 text,
                 policy,
@@ -1073,28 +1073,11 @@ impl RemoteFileEditorWindow {
 
 impl Render for RemoteFileEditorWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let title = self
-            .active_tab()
-            .map(|tab| tab.display_name.clone())
-            .unwrap_or_default();
-
         v_flex()
             .size_full()
             .key_context(REMOTE_FILE_EDITOR_CONTEXT)
             .on_action(cx.listener(Self::on_action_open_search))
             .on_action(cx.listener(Self::on_action_open_replace))
-            .bg(cx.theme().background)
-            .child(
-                TitleBar::new().child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_1()
-                        .text_sm()
-                        .child(title),
-                ),
-            )
             .child(self.render_tabs(cx))
             .child(self.render_toolbar(cx))
             .child(v_flex().flex_1().child(self.render_body(window, cx)))

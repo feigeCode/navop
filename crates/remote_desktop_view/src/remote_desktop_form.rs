@@ -3,7 +3,7 @@ mod persistence;
 mod selects;
 mod view;
 
-use gpui::{App, Context, Entity, FocusHandle, SharedString, Window};
+use gpui::{App, Context, Entity, FocusHandle, Window};
 use gpui_component::input::InputState;
 use gpui_component::select::SelectState;
 use one_core::cloud_sync::{
@@ -29,7 +29,6 @@ pub struct RemoteDesktopFormWindowConfig {
 pub struct RemoteDesktopFormWindow {
     protocol: RemoteDesktopProtocol,
     focus_handle: FocusHandle,
-    title: SharedString,
     is_editing: bool,
     editing_id: Option<i64>,
     editing_cloud_id: Option<String>,
@@ -71,7 +70,6 @@ impl RemoteDesktopFormWindow {
         Self {
             protocol: config.protocol,
             focus_handle: cx.focus_handle(),
-            title: form_title(config.protocol, is_editing).into(),
             is_editing,
             editing_id: config.editing_connection.as_ref().and_then(|c| c.id),
             editing_cloud_id: config
@@ -251,13 +249,5 @@ impl RemoteDesktopFormWindow {
             .selected_value()
             .cloned()
             .flatten()
-    }
-}
-
-fn form_title(protocol: RemoteDesktopProtocol, is_editing: bool) -> String {
-    if is_editing {
-        t!("RemoteDesktopForm.title_edit", protocol = protocol.label()).to_string()
-    } else {
-        t!("RemoteDesktopForm.title_new", protocol = protocol.label()).to_string()
     }
 }

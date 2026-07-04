@@ -2,7 +2,7 @@ use gpui::{
     AnyView, App, AppContext, Bounds, Context, IntoElement, ParentElement, Render, SharedString,
     Size, Styled, Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
 };
-use gpui_component::{Root, TitleBar};
+use gpui_component::{ActiveTheme, Root, TitleBar, v_flex};
 
 /// 弹出窗口的配置选项
 pub struct PopupWindowOptions {
@@ -112,7 +112,11 @@ where
 
         let window = cx.open_window(window_opts, |window, cx| {
             let view = create_view_fn(window, cx);
-            let content = cx.new(|_| PopupWindowContent { view: view.into() });
+            let title = title.to_string();
+            let content = cx.new(|_| PopupWindowContent {
+                view: view.into(),
+                title,
+            });
             cx.new(|cx| Root::new(content, window, cx))
         })?;
 
@@ -128,6 +132,7 @@ where
 
 struct PopupWindowContent {
     view: AnyView,
+    title: String,
 }
 
 impl Render for PopupWindowContent {
@@ -136,9 +141,22 @@ impl Render for PopupWindowContent {
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
 
-        div()
-            .relative()
+        v_flex()
+            .justify_center()
             .size_full()
+            .bg(cx.theme().background)
+            .child(
+                TitleBar::new().child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .flex_1()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(self.title.clone()),
+                ),
+            )
             .child(self.view.clone())
             .children(sheet_layer)
             .children(dialog_layer)

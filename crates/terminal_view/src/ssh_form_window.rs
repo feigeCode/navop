@@ -5,7 +5,7 @@ use gpui::{
     WeakEntity, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable, Size, TitleBar,
+    ActiveTheme, Disableable, IconName, Sizable, Size,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -167,7 +167,6 @@ impl SelectItem for TeamSelectItem {
 
 pub struct SshFormWindow {
     focus_handle: FocusHandle,
-    title: SharedString,
     is_editing: bool,
     editing_id: Option<i64>,
     editing_cloud_id: Option<String>,
@@ -305,13 +304,6 @@ impl SshFormWindow {
             .editing_connection
             .as_ref()
             .and_then(|c| c.owner_id.clone());
-
-        let title: SharedString = if is_editing {
-            t!("SSH.edit").to_string()
-        } else {
-            t!("SSH.new").to_string()
-        }
-        .into();
 
         // 基本信息
         let name_input =
@@ -568,7 +560,6 @@ impl SshFormWindow {
 
         Self {
             focus_handle: cx.focus_handle(),
-            title,
             is_editing,
             editing_id,
             editing_cloud_id,
@@ -1563,19 +1554,6 @@ impl Render for SshFormWindow {
         v_flex()
             .justify_center()
             .size_full()
-            .bg(cx.theme().background)
-            .child(
-                TitleBar::new().child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_1()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(self.title.clone()),
-                ),
-            )
             // TabBar
             .child(
                 div().flex().justify_center().px_3().pt_2().child(

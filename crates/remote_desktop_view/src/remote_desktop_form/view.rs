@@ -4,7 +4,7 @@ use gpui::{
     px,
 };
 use gpui_component::{
-    ActiveTheme, IconName, Sizable, TitleBar,
+    ActiveTheme, IconName, Sizable,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -131,19 +131,6 @@ impl Render for RemoteDesktopFormWindow {
         v_flex()
             .justify_center()
             .size_full()
-            .bg(cx.theme().background)
-            .child(
-                TitleBar::new().child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .flex_1()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(self.title.clone()),
-                ),
-            )
             .child(
                 div()
                     .flex_1()

@@ -7,7 +7,7 @@ use gpui::{
     Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, IndexPath, TitleBar, VirtualListScrollHandle,
+    ActiveTheme, Disableable, IconName, IndexPath, VirtualListScrollHandle,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputState},
@@ -1390,11 +1390,7 @@ impl Render for TableImportView {
                     }),
             );
 
-        v_flex()
-            .w_full()
-            .h(px(600.0))
-            .child(TitleBar::new())
-            .child(content)
+        v_flex().w_full().h(px(600.0)).child(content)
     }
 }
 

@@ -9,7 +9,7 @@ use gpui::{
     prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Sizable, TitleBar, VirtualListScrollHandle,
+    ActiveTheme, Disableable, Sizable, VirtualListScrollHandle,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputState},
@@ -696,11 +696,7 @@ impl Render for SqlRunView {
                     }),
             );
 
-        v_flex()
-            .w_full()
-            .h(px(520.0))
-            .child(TitleBar::new())
-            .child(content)
+        v_flex().w_full().h(px(520.0)).child(content)
     }
 }
 

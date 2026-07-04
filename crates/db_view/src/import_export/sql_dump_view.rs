@@ -3,7 +3,7 @@ use gpui::{
     IntoElement, ParentElement, Render, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, TitleBar, VirtualListScrollHandle,
+    ActiveTheme, VirtualListScrollHandle,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex, v_virtual_list,
 };
@@ -728,11 +728,7 @@ impl Render for SqlDumpView {
                     }),
             );
 
-        v_flex()
-            .w_full()
-            .h(px(510.0))
-            .child(TitleBar::new())
-            .child(content)
+        v_flex().w_full().h(px(510.0)).child(content)
     }
 }
 

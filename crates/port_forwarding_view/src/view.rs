@@ -4,7 +4,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Sizable, TitleBar,
+    ActiveTheme, Sizable,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
@@ -29,7 +29,6 @@ impl Render for PortForwardingFormWindow {
         v_flex()
             .size_full()
             .bg(cx.theme().background)
-            .child(self.render_title_bar())
             .child(self.render_content(kind, cx))
             .when_some(self.validation_error.clone(), |this, error| {
                 this.child(
@@ -61,18 +60,6 @@ impl PortForwardingFormWindow {
             .items_center()
             .child(div().w(px(110.0)).text_sm().text_right().child(label))
             .child(div().flex_1().child(child))
-    }
-
-    fn render_title_bar(&self) -> impl IntoElement {
-        TitleBar::new().child(
-            div()
-                .flex()
-                .justify_center()
-                .flex_1()
-                .text_sm()
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .child(self.title.clone()),
-        )
     }
 
     fn render_content(&self, kind: PortForwardingKind, cx: &mut Context<Self>) -> impl IntoElement {

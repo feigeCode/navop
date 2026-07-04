@@ -104,7 +104,7 @@ impl NewConnectionKind {
             Self::Vnc => "VNC".to_string(),
             Self::Redis => "Redis".to_string(),
             Self::MongoDB => "MongoDB".to_string(),
-            Self::Serial => t!("Serial.new").to_string(),
+            Self::Serial => "Serial".to_string(),
             Self::PortForwarding => t!("PortForwarding.new").to_string(),
             Self::MoreConnections => t!("NewConnection.more_connections").to_string(),
             Self::Database(db_type) => db_type.as_str().to_string(),
