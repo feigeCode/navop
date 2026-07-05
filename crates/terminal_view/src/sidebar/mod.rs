@@ -232,14 +232,14 @@ fn terminal_sidebar_available_panels(
     history_supported: bool,
 ) -> Vec<SidebarPanel> {
     let mut panels = vec![SidebarPanel::Settings, SidebarPanel::AiChat];
-    if history_supported {
-        panels.push(SidebarPanel::HistoryCommand);
-    }
     if has_file_manager {
         panels.push(SidebarPanel::FileManager);
     }
     if has_server_monitor {
         panels.push(SidebarPanel::ServerMonitor);
+    }
+    if history_supported {
+        panels.push(SidebarPanel::HistoryCommand);
     }
     panels.push(SidebarPanel::QuickCommand);
     panels.push(SidebarPanel::RichInput);
