@@ -22,28 +22,23 @@ fn transform_output_updates_preview_without_replacing_source() {
 fn preview_is_hidden_initially() {
     let view = HtmlCodeBlockView {
         document: HtmlPreviewDocument::new("html", "<main>Original</main>"),
-        preview_visible: false,
-        webview: None,
-        webview_error: None,
         action_status: None,
     };
 
-    assert!(!view.preview_visible);
+    assert!(view.inline_preview_is_hidden());
 }
 
 #[test]
-fn webview_content_uses_render_html() {
+fn dialog_webview_content_uses_render_html() {
     let mut document = HtmlPreviewDocument::new("html", "<main>Original</main>");
     document.apply_transform(HtmlPreviewTransformOutput {
         html: "<section>Rendered</section>".to_string(),
         assets: vec![],
     });
-    let view = HtmlCodeBlockView {
+    let view = HtmlPreviewDialogView {
         document,
-        preview_visible: true,
         webview: None,
         webview_error: None,
-        action_status: None,
     };
 
     let preview_html = view.webview_html();

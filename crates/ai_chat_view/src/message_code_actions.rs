@@ -278,9 +278,9 @@ fn html_preview_button(state_id: &SharedString, preview: &Entity<HtmlCodeBlockVi
     .icon(gpui_component::IconName::Eye)
     .ghost()
     .xsmall()
-    .tooltip("切换预览")
-    .on_click(move |_, _, cx| {
-        preview.update(cx, |preview, cx| preview.toggle_preview(cx));
+    .tooltip("弹出预览")
+    .on_click(move |_, window, cx| {
+        preview.update(cx, |preview, cx| preview.open_preview_dialog(window, cx));
     })
 }
 

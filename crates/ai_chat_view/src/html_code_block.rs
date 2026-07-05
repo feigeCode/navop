@@ -4,17 +4,20 @@ use gpui::{
     AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     Render, SharedString, Styled, Window, div, prelude::FluentBuilder, px,
 };
-use gpui_component::ActiveTheme;
+use gpui_component::{ActiveTheme, WindowExt};
 use html_preview::{HtmlPreviewDocument, HtmlPreviewTransformOutput, resolve_extension_asset_url};
 use wry::WebViewBuilder;
 use wry::http::{Request, Response, StatusCode};
 
 pub struct HtmlCodeBlockView {
     document: HtmlPreviewDocument,
-    preview_visible: bool,
+    action_status: Option<String>,
+}
+
+struct HtmlPreviewDialogView {
+    document: HtmlPreviewDocument,
     webview: Option<Entity<gpui_wry::WebView>>,
     webview_error: Option<String>,
-    action_status: Option<String>,
 }
 
 impl HtmlCodeBlockView {
@@ -24,15 +27,10 @@ impl HtmlCodeBlockView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (webview, webview_error) = create_webview(&document, window, cx);
         let view = Self {
             document,
-            preview_visible: false,
-            webview,
-            webview_error,
             action_status: None,
         };
-        view.sync_webview_visibility(cx);
         view.spawn_transform(window, cx);
         view
     }
@@ -62,33 +60,25 @@ impl HtmlCodeBlockView {
     fn apply_transform(
         &mut self,
         transform: HtmlPreviewTransformOutput,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.document.apply_transform(transform);
-        let (webview, webview_error) = create_webview(&self.document, window, cx);
-        self.webview = webview;
-        self.webview_error = webview_error;
-        self.sync_webview_visibility(cx);
         cx.notify();
     }
 
-    pub(crate) fn toggle_preview(&mut self, cx: &mut Context<Self>) {
-        self.preview_visible = !self.preview_visible;
-        self.sync_webview_visibility(cx);
+    pub(crate) fn open_preview_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let document = self.document.clone();
+        let preview = cx.new(|cx| HtmlPreviewDialogView::new(document, window, cx));
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let preview = preview.clone();
+            dialog
+                .title("HTML 预览")
+                .w(px(920.0))
+                .content(move |content, _window, _cx| content.child(preview.clone()))
+        });
+        self.action_status = Some("已打开预览弹窗".to_string());
         cx.notify();
-    }
-
-    fn sync_webview_visibility(&self, cx: &mut App) {
-        if let Some(webview) = &self.webview {
-            webview.update(cx, |webview, _| {
-                if self.preview_visible {
-                    webview.show();
-                } else {
-                    webview.hide();
-                }
-            });
-        }
     }
 
     pub(crate) fn open_in_browser(&mut self, cx: &mut Context<Self>) {
@@ -123,31 +113,90 @@ impl HtmlCodeBlockView {
         cx.notify();
     }
 
-    fn render_preview_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        let frame = div()
-            .id("html-code-block-preview-panel")
-            .relative()
-            .h(px(420.0))
-            .max_h(px(640.0))
-            .overflow_hidden()
-            .bg(cx.theme().background)
+    #[cfg(test)]
+    fn inline_preview_is_hidden(&self) -> bool {
+        true
+    }
+}
+
+impl Render for HtmlCodeBlockView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("html-code-block-preview-hidden")
+            .hidden()
             .when_some(self.action_status.clone(), |this, status| {
                 this.child(
                     div()
                         .id("html-code-block-action-status")
-                        .absolute()
-                        .top_2()
-                        .right_2()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(status),
                 )
-            });
+            })
+    }
+}
+
+impl HtmlPreviewDialogView {
+    fn new(document: HtmlPreviewDocument, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let (webview, webview_error) = create_webview(&document, window, cx);
+        let view = Self {
+            document,
+            webview,
+            webview_error,
+        };
+        view.spawn_transform(window, cx);
+        view
+    }
+
+    fn spawn_transform(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let language = self.document.language().to_string();
+        let source_html = self.document.source_html().to_string();
+        cx.spawn_in(
+            window,
+            async move |this, cx| match html_preview::transform_html_preview(language, source_html)
+                .await
+            {
+                Ok(Some(transform)) => {
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.apply_transform(transform, window, cx);
+                    });
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!("HTML 预览弹窗 transform 失败: {error}");
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn apply_transform(
+        &mut self,
+        transform: HtmlPreviewTransformOutput,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.document.apply_transform(transform);
+        let (webview, webview_error) = create_webview(&self.document, window, cx);
+        self.webview = webview;
+        self.webview_error = webview_error;
+        cx.notify();
+    }
+
+    fn render_preview(&self, cx: &mut Context<Self>) -> AnyElement {
+        let frame = div()
+            .id("html-preview-dialog-webview")
+            .h(px(560.0))
+            .w_full()
+            .overflow_hidden()
+            .bg(cx.theme().background);
         if let Some(webview) = &self.webview {
             frame.child(webview.clone()).into_any_element()
         } else {
             frame
-                .p_3()
+                .flex()
+                .items_center()
+                .justify_center()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(
@@ -165,18 +214,15 @@ impl HtmlCodeBlockView {
     }
 }
 
-impl Render for HtmlCodeBlockView {
+impl Render for HtmlPreviewDialogView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.preview_visible {
-            return div().id("html-code-block-preview-hidden").hidden();
-        }
         div()
-            .id("html-code-block")
+            .id("html-preview-dialog")
             .border_1()
             .border_color(cx.theme().border)
             .rounded(cx.theme().radius)
             .overflow_hidden()
-            .child(self.render_preview_panel(cx))
+            .child(self.render_preview(cx))
     }
 }
 
