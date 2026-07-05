@@ -36,7 +36,7 @@ __onetcli_last_history_command() {
     if [[ -n "${ZSH_VERSION:-}" ]]; then
         fc -ln -1 2>/dev/null | sed 's/^[[:space:]]*//'
     else
-        history 1 2>/dev/null | sed 's/^[[:space:]]*[0-9][0-9]*[* ]*[[:space:]]*//'
+        HISTTIMEFORMAT= history 1 2>/dev/null | sed 's/^[[:space:]]*[0-9][0-9]*[* ]*[[:space:]]*//'
     fi
 }
 
