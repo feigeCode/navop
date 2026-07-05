@@ -115,11 +115,11 @@ fn main() {
             .expect("main package version must be valid semver");
         extension_runtime::init(cx);
 
-        let mut window_size = size(px(1600.0), px(1200.0));
+        let mut window_size = size(px(1800.0), px(1260.0));
         if let Some(display) = cx.primary_display() {
             let display_size = display.bounds().size;
-            window_size.width = window_size.width.min(display_size.width * 0.85);
-            window_size.height = window_size.height.min(display_size.height * 0.85);
+            window_size.width = window_size.width.min(display_size.width * 0.92);
+            window_size.height = window_size.height.min(display_size.height * 0.92);
         }
 
         let window_bounds = Bounds::centered(None, window_size, cx);
