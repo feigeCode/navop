@@ -264,6 +264,7 @@ impl ChatCard for ToolCard {
 
         let mut card = v_flex()
             .w_full()
+            .min_w_0()
             .gap_2()
             .p_2()
             .rounded_lg()
@@ -451,14 +452,19 @@ impl ChatCard for ToolConfirmCard {
             .bg(theme.panel)
             .child(
                 h_flex()
+                    .w_full()
+                    .min_w_0()
                     .items_center()
                     .gap_2()
                     .child(div().text_lg().text_color(cx.theme().danger).child("?"))
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
                             .text_sm()
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.foreground)
+                            .truncate()
                             .child(confirm_card_header(&data)),
                     ),
             )
@@ -485,14 +491,19 @@ impl ChatCard for ToolConfirmCard {
                     ),
             )
             .child(
-                div().text_sm().text_color(theme.foreground).child(
-                    themed_markdown(
-                        SharedString::from(format!("agent-tool-confirm-{}", msg.id)),
-                        data.question.clone(),
-                        &theme,
-                    )
-                    .selectable(true),
-                ),
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(
+                        themed_markdown(
+                            SharedString::from(format!("agent-tool-confirm-{}", msg.id)),
+                            data.question.clone(),
+                            &theme,
+                        )
+                        .selectable(true),
+                    ),
             );
 
         if data.items.len() > 1 {
@@ -639,6 +650,8 @@ fn render_confirm_batch_items(data: &ToolConfirmCardData, cx: &App) -> AnyElemen
                 .child(
                     div()
                         .flex_shrink_0()
+                        .max_w(px(120.0))
+                        .truncate()
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(item.tool_name.clone()),
@@ -752,6 +765,7 @@ fn tool_card_json_block(
         .child(
             div()
                 .w_full()
+                .min_w_0()
                 .h(height)
                 .rounded(cx.theme().radius)
                 .border_1()
@@ -761,6 +775,8 @@ fn tool_card_json_block(
                 .child(
                     Input::new(&input)
                         .bare()
+                        .w_full()
+                        .min_w_0()
                         .h_full()
                         .appearance(false)
                         .disabled(true)
@@ -795,6 +811,7 @@ fn tool_card_text_block(
         .child(
             div()
                 .w_full()
+                .min_w_0()
                 .h(height)
                 .rounded(cx.theme().radius)
                 .border_1()
@@ -804,6 +821,8 @@ fn tool_card_text_block(
                 .child(
                     Input::new(&input)
                         .bare()
+                        .w_full()
+                        .min_w_0()
                         .h_full()
                         .appearance(false)
                         .disabled(true)

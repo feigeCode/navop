@@ -278,6 +278,12 @@ impl AcpConnection {
             session_id: self.session_id.clone(),
             turn_id: turn_id.clone(),
         });
+        let _ = self.events_tx.send(RuntimeEvent::Status {
+            session_id: self.session_id.clone(),
+            turn_id: turn_id.clone(),
+            title: "ACP 正在响应…".to_string(),
+            is_done: false,
+        });
 
         let conn = self.conn.clone();
         let acp_session_id = self.acp_session_id.clone();

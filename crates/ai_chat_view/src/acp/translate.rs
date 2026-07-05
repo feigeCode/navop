@@ -59,37 +59,11 @@ pub(crate) fn session_update_to_events(
             turn_id: turn_id.clone(),
             plan: acp_plan_to_runtime(plan),
         }],
-        SessionUpdate::AvailableCommandsUpdate(update) => {
-            let names = update
-                .available_commands
-                .iter()
-                .map(|command| command.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            vec![status_done(
-                format!("ACP 可用命令已更新: {names}"),
-                session_id,
-                turn_id,
-            )]
-        }
-        SessionUpdate::CurrentModeUpdate(update) => vec![status_done(
-            format!("ACP 当前模式: {}", update.current_mode_id.0.as_ref()),
-            session_id,
-            turn_id,
-        )],
-        SessionUpdate::ConfigOptionUpdate(update) => vec![status_done(
-            format!("ACP 配置选项已更新({} 项)", update.config_options.len()),
-            session_id,
-            turn_id,
-        )],
-        SessionUpdate::SessionInfoUpdate(update) => {
-            vec![status_done(session_info_title(update), session_id, turn_id)]
-        }
-        SessionUpdate::UsageUpdate(update) => vec![status_done(
-            usage_title(update.used, update.size, update.cost.as_ref()),
-            session_id,
-            turn_id,
-        )],
+        SessionUpdate::AvailableCommandsUpdate(_)
+        | SessionUpdate::CurrentModeUpdate(_)
+        | SessionUpdate::ConfigOptionUpdate(_)
+        | SessionUpdate::SessionInfoUpdate(_)
+        | SessionUpdate::UsageUpdate(_) => Vec::new(),
         _ => {
             tracing::debug!(
                 update = acp_update_kind(update),
@@ -294,34 +268,6 @@ fn content_block_text(block: &ContentBlock) -> String {
     }
 }
 
-fn session_info_title(update: &agent_client_protocol::schema::SessionInfoUpdate) -> String {
-    let title = update
-        .title
-        .as_opt_ref()
-        .flatten()
-        .filter(|title| !title.is_empty());
-    let updated_at = update
-        .updated_at
-        .as_opt_ref()
-        .flatten()
-        .filter(|updated_at| !updated_at.is_empty());
-    match (title, updated_at) {
-        (Some(title), Some(updated_at)) => format!("ACP 会话信息已更新: {title} · {updated_at}"),
-        (Some(title), None) => format!("ACP 会话信息已更新: {title}"),
-        (None, Some(updated_at)) => format!("ACP 会话信息已更新: {updated_at}"),
-        (None, None) => "ACP 会话信息已更新".to_string(),
-    }
-}
-
-fn usage_title(used: u64, size: u64, cost: Option<&agent_client_protocol::schema::Cost>) -> String {
-    let usage = format!("ACP 用量: {used}/{size} tokens");
-    if let Some(cost) = cost {
-        format!("{usage} · {:.4} {}", cost.amount, cost.currency)
-    } else {
-        usage
-    }
-}
-
 fn acp_plan_to_runtime(plan: &AcpPlan) -> Plan {
     let goal = plan
         .entries
@@ -445,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn acp_metadata_updates_become_status_events() {
+    fn acp_metadata_updates_do_not_emit_chat_events() {
         let (sid, tid) = ids();
         let updates = vec![
             SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(vec![
@@ -460,11 +406,7 @@ mod tests {
 
         for update in updates {
             let events = session_update_to_events(&update, &sid, &tid);
-            assert_eq!(events.len(), 1, "update should produce one status event");
-            assert!(matches!(
-                &events[0],
-                RuntimeEvent::Status { title, is_done: true, .. } if title.starts_with("ACP ")
-            ));
+            assert!(events.is_empty(), "metadata update should stay out of chat");
         }
     }
 

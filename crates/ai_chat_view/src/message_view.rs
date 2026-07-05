@@ -336,6 +336,8 @@ fn render_card(
     {
         return div()
             .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .text_color(theme.foreground)
             .child(element)
             .into_any_element();

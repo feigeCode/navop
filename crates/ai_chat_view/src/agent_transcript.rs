@@ -214,6 +214,7 @@ impl AgentTranscript {
                 pending_tool_calls,
                 ..
             } => {
+                self.finish_active_status();
                 let tool_name_text = tool_name
                     .as_ref()
                     .map(ToString::to_string)
@@ -245,6 +246,7 @@ impl AgentTranscript {
             }
             RuntimeEvent::TurnFailed { reason, .. } => {
                 self.streaming_id = None;
+                self.finish_active_status();
                 self.messages
                     .push(ChatMessageUI::system(format!("⚠️ 任务失败:{reason}")));
             }
@@ -336,14 +338,8 @@ impl AgentTranscript {
     }
 
     fn finish_active_status(&mut self) {
-        if let Some(id) = self.active_status_id.take()
-            && let Some(msg) = self.messages.iter_mut().find(|m| m.id == id)
-        {
-            msg.variant = MessageVariant::Status {
-                title: "思考完成".to_string(),
-                is_done: true,
-            };
-            msg.is_streaming = false;
+        if let Some(id) = self.active_status_id.take() {
+            self.messages.retain(|msg| msg.id != id);
         }
     }
 
@@ -817,6 +813,51 @@ mod tests {
     }
 
     #[test]
+    fn pending_status_is_visible_until_assistant_output_arrives() {
+        let mut tr = AgentTranscript::new();
+        tr.apply(&RuntimeEvent::Status {
+            session_id: sid(),
+            turn_id: tid(),
+            title: "ACP 正在响应…".to_string(),
+            is_done: false,
+        });
+
+        assert_eq!(1, tr.messages.len());
+        assert!(matches!(
+            &tr.messages[0].variant,
+            MessageVariant::Status { title, is_done: false } if title == "ACP 正在响应…"
+        ));
+
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "回答".to_string(),
+        });
+
+        assert_eq!(1, tr.messages.len());
+        assert_eq!("回答", tr.messages[0].content);
+        assert!(matches!(tr.messages[0].variant, MessageVariant::Text));
+    }
+
+    #[test]
+    fn pending_status_is_removed_when_turn_completes_without_output() {
+        let mut tr = AgentTranscript::new();
+        tr.apply(&RuntimeEvent::Status {
+            session_id: sid(),
+            turn_id: tid(),
+            title: "ACP 正在响应…".to_string(),
+            is_done: false,
+        });
+        tr.apply(&RuntimeEvent::TurnCompleted {
+            session_id: sid(),
+            turn_id: tid(),
+            answer: None,
+        });
+
+        assert!(tr.messages.is_empty());
+    }
+
+    #[test]
     fn load_history_preserves_tool_input_display() {
         let mut tr = AgentTranscript::new();
         let call = ToolCall::new(
@@ -1209,7 +1250,7 @@ mod tests {
     }
 
     #[test]
-    fn status_is_closed_when_assistant_text_starts() {
+    fn status_is_removed_when_assistant_text_starts() {
         let mut tr = AgentTranscript::new();
         tr.apply(&RuntimeEvent::Status {
             session_id: sid(),
@@ -1223,13 +1264,9 @@ mod tests {
             delta: "开始回答".into(),
         });
 
-        assert_eq!(tr.messages.len(), 2);
-        assert!(matches!(
-            &tr.messages[0].variant,
-            MessageVariant::Status { title, is_done: true } if title == "思考完成"
-        ));
-        assert_eq!(tr.messages[1].content, "开始回答");
-        assert!(tr.messages[1].is_streaming);
+        assert_eq!(tr.messages.len(), 1);
+        assert_eq!(tr.messages[0].content, "开始回答");
+        assert!(tr.messages[0].is_streaming);
     }
 
     #[test]

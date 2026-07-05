@@ -42,6 +42,7 @@ impl ChatCard for JsonCard {
 
         v_flex()
             .w_full()
+            .min_w_0()
             .gap_1()
             .p_3()
             .rounded_lg()
@@ -54,7 +55,7 @@ impl ChatCard for JsonCard {
                     .text_color(theme.muted_foreground)
                     .child("JSON 卡片(示例)"),
             )
-            .child(v_flex().w_full().children(lines))
+            .child(v_flex().w_full().min_w_0().children(lines))
             .into_any_element()
     }
 }
@@ -76,6 +77,7 @@ impl ChatCard for ChartJsonCard {
         let theme = active_agent_chat_theme(cx);
         v_flex()
             .w_full()
+            .min_w_0()
             .gap_2()
             .p_3()
             .rounded_lg()
@@ -133,11 +135,13 @@ fn render_xy_points(chart: &ChartJsonBlock, cx: &mut App) -> AnyElement {
     let max_y = points.iter().map(|point| point.y).fold(0.0_f64, f64::max);
     v_flex()
         .w_full()
+        .min_w_0()
         .gap_1()
         .children(points.into_iter().map(|point| {
             let width = scaled_width(point.y, max_y);
             h_flex()
                 .w_full()
+                .min_w_0()
                 .items_center()
                 .gap_2()
                 .child(
@@ -158,10 +162,12 @@ fn render_pie_points(chart: &ChartJsonBlock, cx: &mut App) -> AnyElement {
     let theme = active_agent_chat_theme(cx);
     v_flex()
         .w_full()
+        .min_w_0()
         .gap_1()
         .children(chart.to_pie_points().into_iter().map(|point| {
             h_flex()
                 .w_full()
+                .min_w_0()
                 .items_center()
                 .justify_between()
                 .gap_2()
@@ -186,6 +192,7 @@ fn invalid_chart_card(content: &str, cx: &mut App) -> AnyElement {
     let theme = active_agent_chat_theme(cx);
     v_flex()
         .w_full()
+        .min_w_0()
         .gap_1()
         .p_3()
         .rounded_lg()
