@@ -92,11 +92,13 @@ fn schema_compare_params_use_editable_source_selection() {
             connection_id: "source-2".to_string(),
             database: "source_db".to_string(),
             schema: "source_schema".to_string(),
+            tables: vec![],
         },
         SchemaCompareSelection {
             connection_id: "target-1".to_string(),
             database: "target_db".to_string(),
             schema: "target_schema".to_string(),
+            tables: vec![],
         },
         SchemaCompareSettings::default(),
     )
@@ -115,11 +117,13 @@ fn schema_compare_params_can_enable_case_sensitive_identifiers() {
             connection_id: "source-1".to_string(),
             database: "source_db".to_string(),
             schema: String::new(),
+            tables: vec![],
         },
         SchemaCompareSelection {
             connection_id: "target-1".to_string(),
             database: "target_db".to_string(),
             schema: String::new(),
+            tables: vec![],
         },
         SchemaCompareSettings {
             case_sensitive_identifiers: true,
@@ -138,11 +142,13 @@ fn schema_compare_params_include_object_and_rule_settings() {
             connection_id: "source-1".to_string(),
             database: "source_db".to_string(),
             schema: String::new(),
+            tables: vec![],
         },
         SchemaCompareSelection {
             connection_id: "target-1".to_string(),
             database: "target_db".to_string(),
             schema: String::new(),
+            tables: vec![],
         },
         SchemaCompareSettings {
             compare_indexes: false,
@@ -162,6 +168,50 @@ fn schema_compare_params_include_object_and_rule_settings() {
     assert!(params.ignore_auto_increment);
     assert!(params.ignore_charset_collation);
     assert!(params.ignore_table_options);
+}
+
+#[test]
+fn schema_compare_params_include_selected_tables() {
+    let params = schema_compare_params(
+        SchemaCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+            tables: vec![" Users ".to_string(), "orders".to_string()],
+        },
+        SchemaCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+            tables: vec!["users".to_string(), " Orders ".to_string()],
+        },
+        SchemaCompareSettings::default(),
+    )
+    .unwrap();
+
+    assert_eq!(params.source_tables, vec!["Users", "orders"]);
+    assert_eq!(params.target_tables, vec!["users", "Orders"]);
+}
+
+#[test]
+fn schema_compare_params_reject_duplicate_selected_tables() {
+    let result = schema_compare_params(
+        SchemaCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+            tables: vec!["Users".to_string(), "users".to_string()],
+        },
+        SchemaCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+            tables: vec![],
+        },
+        SchemaCompareSettings::default(),
+    );
+
+    assert!(result.is_err());
 }
 
 #[test]

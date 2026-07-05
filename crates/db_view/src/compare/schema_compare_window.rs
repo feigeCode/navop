@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use db::{DbNode, GlobalDbState};
+use db::{DbNode, DbNodeType, GlobalDbState};
 use extension_component::DbSelectorKind;
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
+    Render, ScrollHandle, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     ActiveTheme, Disableable, IconName, Sizable, StyledExt,
@@ -24,6 +24,10 @@ use crate::compare::sync_statement_picker::{
     SyncStatementListState, clear_sync_statement_list, default_selected_statement_ids,
     refresh_sync_statement_list, selected_sync_sql_text_for_ids, sync_statement_list_state,
 };
+use crate::compare::table_picker::{
+    TableSelectionListState, replace_table_selection_list, table_selection_list_state,
+    table_selection_list_tables, table_selection_panel,
+};
 use crate::compare::target_picker::{
     StringSelect, selected_string, set_connection_select, set_string_select, string_select_state,
 };
@@ -35,7 +39,7 @@ use crate::compare::window_ui::{
     close_button, connection_select_state, ignore_identifier_case_option,
     register_connection_for_compare, reset_sync_sql_execution_log, section_title,
     selected_connection_id, sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
-    sync_sql_execution_log_panel, sync_sql_execution_options_row,
+    sync_sql_execution_continue_on_error_row, sync_sql_execution_log_panel,
     sync_sql_execution_start_log_entries,
 };
 use crate::compare::{
@@ -56,12 +60,18 @@ pub struct SchemaCompareWindow {
     pub(super) source_database_select: StringSelect,
     pub(super) source_schema: Entity<InputState>,
     pub(super) source_schema_select: StringSelect,
+    pub(super) source_table: Entity<InputState>,
+    pub(super) selected_source_tables: Entity<HashSet<String>>,
+    pub(super) source_table_list: TableSelectionListState,
     pub(super) target_connection_id: Entity<InputState>,
     pub(super) target_connection_select: Entity<SelectState<SearchableVec<ConnectionSelectItem>>>,
     pub(super) target_database: Entity<InputState>,
     pub(super) target_database_select: StringSelect,
     pub(super) target_schema: Entity<InputState>,
     pub(super) target_schema_select: StringSelect,
+    pub(super) target_table: Entity<InputState>,
+    pub(super) selected_target_tables: Entity<HashSet<String>>,
+    pub(super) target_table_list: TableSelectionListState,
     pub(super) ignore_identifier_case: Entity<bool>,
     compare_indexes: Entity<bool>,
     compare_foreign_keys: Entity<bool>,
@@ -75,7 +85,7 @@ pub struct SchemaCompareWindow {
     pub(super) sync_statement_list: SyncStatementListState,
     pub(super) sync_sql_editor: Entity<InputState>,
     pub(super) execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
-    use_transaction: Entity<bool>,
+    pub(super) execution_log_scroll: ScrollHandle,
     continue_on_error: Entity<bool>,
     pub(super) progress: Entity<Option<CompareProgress>>,
     compare_target: Entity<Option<CompareTargetScope>>,
@@ -103,6 +113,12 @@ impl SchemaCompareWindow {
         } else {
             String::new()
         };
+        let default_selected_tables = Self::initial_selected_tables_for_node(&source_node);
+        let default_table = default_selected_tables
+            .iter()
+            .next()
+            .cloned()
+            .unwrap_or_default();
 
         let source_connection_id = cx
             .new(|cx| InputState::new(window, cx).default_value(source_node.connection_id.clone()));
@@ -114,6 +130,8 @@ impl SchemaCompareWindow {
         let source_schema =
             cx.new(|cx| InputState::new(window, cx).default_value(default_schema.clone()));
         let source_schema_select = string_select_state(default_schema.clone(), window, cx);
+        let source_table =
+            cx.new(|cx| InputState::new(window, cx).default_value(default_table.clone()));
         let target_connection_id = cx
             .new(|cx| InputState::new(window, cx).default_value(source_node.connection_id.clone()));
         let target_connection_select =
@@ -124,6 +142,8 @@ impl SchemaCompareWindow {
         let target_schema =
             cx.new(|cx| InputState::new(window, cx).default_value(default_schema.clone()));
         let target_schema_select = string_select_state(default_schema.clone(), window, cx);
+        let target_table =
+            cx.new(|cx| InputState::new(window, cx).default_value(default_table.clone()));
         let ignore_identifier_case = cx.new(|_| true);
         let compare_indexes = cx.new(|_| true);
         let compare_foreign_keys = cx.new(|_| true);
@@ -132,11 +152,24 @@ impl SchemaCompareWindow {
         let ignore_charset_collation = cx.new(|_| false);
         let ignore_table_options = cx.new(|_| false);
         let sync_sql_editor = sync_sql_editor_state(window, cx);
+        let execution_log_scroll = ScrollHandle::new();
 
         let view = cx.new(|cx: &mut Context<Self>| {
             let selected_statement_ids = cx.new(|_| HashSet::new());
             let sync_statement_list =
                 sync_statement_list_state(selected_statement_ids.clone(), window, cx);
+            let selected_source_tables = cx.new({
+                let default_selected_tables = default_selected_tables.clone();
+                move |_| default_selected_tables.clone()
+            });
+            let source_table_list =
+                table_selection_list_state(selected_source_tables.clone(), window, cx);
+            let selected_target_tables = cx.new({
+                let default_selected_tables = default_selected_tables.clone();
+                move |_| default_selected_tables.clone()
+            });
+            let target_table_list =
+                table_selection_list_state(selected_target_tables.clone(), window, cx);
             let mut window_state = Self {
                 source_connection_id,
                 source_connection_select,
@@ -144,12 +177,18 @@ impl SchemaCompareWindow {
                 source_database_select,
                 source_schema,
                 source_schema_select,
+                source_table,
+                selected_source_tables,
+                source_table_list,
                 target_connection_id,
                 target_connection_select,
                 target_database,
                 target_database_select,
                 target_schema,
                 target_schema_select,
+                target_table,
+                selected_target_tables,
+                target_table_list,
                 ignore_identifier_case,
                 compare_indexes,
                 compare_foreign_keys,
@@ -163,7 +202,7 @@ impl SchemaCompareWindow {
                 selected_statement_ids,
                 sync_statement_list,
                 execution_log: cx.new(|_| Vec::new()),
-                use_transaction: cx.new(|_| CompareSyncExecutionOptions::default().use_transaction),
+                execution_log_scroll,
                 continue_on_error: cx
                     .new(|_| CompareSyncExecutionOptions::default().continue_on_error),
                 progress: cx.new(|_| None),
@@ -197,6 +236,13 @@ impl SchemaCompareWindow {
                 &window_state.source_database_select,
                 |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
                     this.load_source_schemas(cx);
+                    this.load_source_tables(cx);
+                },
+            ));
+            window_state._subscriptions.push(cx.subscribe(
+                &window_state.source_schema_select,
+                |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
+                    this.load_source_tables(cx);
                 },
             ));
             // 目标级联:连接 → 数据库 → Schema
@@ -210,6 +256,13 @@ impl SchemaCompareWindow {
                 &window_state.target_database_select,
                 |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
                     this.load_target_schemas(cx);
+                    this.load_target_tables(cx);
+                },
+            ));
+            window_state._subscriptions.push(cx.subscribe(
+                &window_state.target_schema_select,
+                |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
+                    this.load_target_tables(cx);
                 },
             ));
             window_state
@@ -225,6 +278,7 @@ impl SchemaCompareWindow {
             {
                 this.load_source_databases(cx);
                 this.load_source_schemas(cx);
+                this.load_source_tables(cx);
             }
             if !selected_connection_id(
                 &this.target_connection_select,
@@ -236,9 +290,21 @@ impl SchemaCompareWindow {
             {
                 this.load_target_databases(cx);
                 this.load_target_schemas(cx);
+                this.load_target_tables(cx);
             }
         });
         view
+    }
+
+    pub(crate) fn initial_selected_tables_for_node(source_node: &DbNode) -> HashSet<String> {
+        if source_node.node_type != DbNodeType::Table {
+            return HashSet::new();
+        }
+        source_node
+            .get_table_name()
+            .filter(|table| !table.trim().is_empty())
+            .into_iter()
+            .collect()
     }
 
     pub fn popup_title_for(source_node: &DbNode) -> String {
@@ -258,7 +324,7 @@ impl SchemaCompareWindow {
             }
         };
         let compare_target = CompareTargetScope::from_schema_params(&params);
-        clear_sync_sql_execution_log(&self.execution_log, cx);
+        clear_sync_sql_execution_log(&self.execution_log, &self.execution_log_scroll, cx);
         self.clear_compare_preview(window, cx);
         register_connection_for_compare(&params.source_connection_id, cx);
         register_connection_for_compare(&params.target_connection_id, cx);
@@ -349,6 +415,12 @@ impl SchemaCompareWindow {
     fn swap_source_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let source = self.source_selection(cx);
         let target = self.target_selection(cx);
+        let source_tables = source.tables.clone();
+        let target_tables = target.tables.clone();
+        let source_list_tables = table_selection_list_tables(&self.source_table_list, cx);
+        let target_list_tables = table_selection_list_tables(&self.target_table_list, cx);
+        let source_list_tables = table_items_or_selection(source_list_tables, &source_tables);
+        let target_list_tables = table_items_or_selection(target_list_tables, &target_tables);
 
         set_connection_select(
             &self.source_connection_select,
@@ -392,6 +464,26 @@ impl SchemaCompareWindow {
             window,
             cx,
         );
+        self.source_table.update(cx, |state, cx| {
+            state.set_value(first_table_name(&target_tables), window, cx);
+        });
+        self.target_table.update(cx, |state, cx| {
+            state.set_value(first_table_name(&source_tables), window, cx);
+        });
+        replace_table_selection_list(
+            &self.source_table_list,
+            &self.selected_source_tables,
+            target_list_tables,
+            target_tables.iter().cloned().collect(),
+            cx,
+        );
+        replace_table_selection_list(
+            &self.target_table_list,
+            &self.selected_target_tables,
+            source_list_tables,
+            source_tables.iter().cloned().collect(),
+            cx,
+        );
 
         self.result.update(cx, |slot, cx| {
             *slot = None;
@@ -405,7 +497,7 @@ impl SchemaCompareWindow {
             *slot = None;
             cx.notify();
         });
-        clear_sync_sql_execution_log(&self.execution_log, cx);
+        clear_sync_sql_execution_log(&self.execution_log, &self.execution_log_scroll, cx);
         self.current_step = CompareStep::Objects;
         self.set_status(t!("Compare.swapped_source_target").to_string(), cx);
     }
@@ -458,6 +550,7 @@ impl SchemaCompareWindow {
             self.status.clone(),
             self.is_executing.clone(),
             self.execution_log.clone(),
+            self.execution_log_scroll.clone(),
             window,
             cx,
         );
@@ -485,7 +578,12 @@ impl SchemaCompareWindow {
             if let Some(entry) = entries.first() {
                 self.set_status(entry.message.clone(), cx);
             }
-            reset_sync_sql_execution_log(&self.execution_log, entries, cx);
+            reset_sync_sql_execution_log(
+                &self.execution_log,
+                &self.execution_log_scroll,
+                entries,
+                cx,
+            );
             self.current_step = CompareStep::SqlExecute;
             cx.notify();
         }
@@ -535,10 +633,7 @@ impl SchemaCompareWindow {
     }
 
     fn sync_execution_options(&self, cx: &Context<Self>) -> CompareSyncExecutionOptions {
-        CompareSyncExecutionOptions {
-            use_transaction: *self.use_transaction.read(cx),
-            continue_on_error: *self.continue_on_error.read(cx),
-        }
+        CompareSyncExecutionOptions::schema_ddl(*self.continue_on_error.read(cx))
     }
 
     fn set_progress(&self, progress: Option<CompareProgress>, cx: &mut Context<Self>) {
@@ -556,12 +651,22 @@ impl SchemaCompareWindow {
     }
 
     fn render_source(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        db_object_selector_panel(
-            t!("Compare.source").to_string(),
-            DbSelectorKind::Schema,
-            self.source_controls(cx),
-            cx,
-        )
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .gap_2()
+            .child(db_object_selector_panel(
+                t!("Compare.source").to_string(),
+                DbSelectorKind::Schema,
+                self.source_controls(cx),
+                cx,
+            ))
+            .child(table_selection_panel(
+                t!("Compare.source_tables").to_string(),
+                self.source_table_list.clone(),
+                self.selected_source_tables.clone(),
+                cx,
+            ))
     }
 
     fn render_schema_compare_options(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -679,6 +784,11 @@ impl SchemaCompareWindow {
             ),
             database,
             schema,
+            tables: selected_schema_table_names(
+                &self.source_table_list,
+                &self.selected_source_tables,
+                cx,
+            ),
         }
     }
 
@@ -698,7 +808,45 @@ impl SchemaCompareWindow {
             ),
             database,
             schema,
+            tables: selected_schema_table_names(
+                &self.target_table_list,
+                &self.selected_target_tables,
+                cx,
+            ),
         }
+    }
+}
+
+fn selected_schema_table_names<T>(
+    list_state: &TableSelectionListState,
+    selected_tables: &Entity<HashSet<String>>,
+    cx: &Context<T>,
+) -> Vec<String> {
+    let selected = selected_tables.read(cx);
+    if selected.is_empty() {
+        return Vec::new();
+    }
+    let ordered = table_selection_list_tables(list_state, cx)
+        .into_iter()
+        .filter(|table| selected.contains(table))
+        .collect::<Vec<_>>();
+    if !ordered.is_empty() {
+        return ordered;
+    }
+    let mut selected = selected.iter().cloned().collect::<Vec<_>>();
+    selected.sort();
+    selected
+}
+
+fn first_table_name(tables: &[String]) -> String {
+    tables.first().cloned().unwrap_or_default()
+}
+
+fn table_items_or_selection(items: Vec<String>, selected: &[String]) -> Vec<String> {
+    if items.is_empty() {
+        selected.to_vec()
+    } else {
+        items
     }
 }
 
@@ -876,14 +1024,14 @@ impl Render for SchemaCompareWindow {
                                 .min_h_0()
                                 .overflow_hidden()
                                 .gap_2()
-                                .child(sync_sql_execution_options_row(
-                                    self.use_transaction.clone(),
+                                .child(sync_sql_execution_continue_on_error_row(
                                     self.continue_on_error.clone(),
                                     is_executing,
                                     cx,
                                 ))
                                 .child(sync_sql_execution_log_panel(
                                     &self.execution_log,
+                                    &self.execution_log_scroll,
                                     is_executing,
                                     cx,
                                 )),

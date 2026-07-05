@@ -48,6 +48,13 @@ impl Default for CompareSyncExecutionOptions {
 }
 
 impl CompareSyncExecutionOptions {
+    pub fn schema_ddl(continue_on_error: bool) -> Self {
+        Self {
+            use_transaction: false,
+            continue_on_error,
+        }
+    }
+
     pub fn to_exec_options(self) -> ExecOptions {
         ExecOptions {
             stop_on_error: !self.continue_on_error,
@@ -118,6 +125,16 @@ mod tests {
 
         assert!(options.stop_on_error);
         assert!(options.transactional);
+        assert_eq!(None, options.max_rows);
+        assert!(options.streaming);
+    }
+
+    #[test]
+    fn schema_sync_execution_options_are_non_transactional() {
+        let options = CompareSyncExecutionOptions::schema_ddl(false).to_exec_options();
+
+        assert!(options.stop_on_error);
+        assert!(!options.transactional);
         assert_eq!(None, options.max_rows);
         assert!(options.streaming);
     }

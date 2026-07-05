@@ -4,7 +4,7 @@ use std::sync::Arc;
 use db::{DbNode, DbNodeType, GlobalDbState};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
+    Render, ScrollHandle, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
     ActiveTheme, Disableable, IconName, StyledExt,
@@ -75,6 +75,7 @@ pub struct DataCompareWindow {
     pub(super) sync_statement_list: SyncStatementListState,
     pub(super) sync_sql_editor: Entity<InputState>,
     pub(super) execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
+    pub(super) execution_log_scroll: ScrollHandle,
     use_transaction: Entity<bool>,
     continue_on_error: Entity<bool>,
     pub(super) progress: Entity<Option<CompareProgress>>,
@@ -139,6 +140,7 @@ impl DataCompareWindow {
         let key_columns = cx.new(|cx| InputState::new(window, cx).placeholder("id, tenant_id"));
         let ignore_identifier_case = cx.new(|_| true);
         let sync_sql_editor = sync_sql_editor_state(window, cx);
+        let execution_log_scroll = ScrollHandle::new();
 
         let view = cx.new(|cx: &mut Context<Self>| {
             let selected_statement_ids = cx.new(|_| HashSet::new());
@@ -185,6 +187,7 @@ impl DataCompareWindow {
                 selected_statement_ids,
                 sync_statement_list,
                 execution_log: cx.new(|_| Vec::new()),
+                execution_log_scroll,
                 use_transaction: cx.new(|_| CompareSyncExecutionOptions::default().use_transaction),
                 continue_on_error: cx
                     .new(|_| CompareSyncExecutionOptions::default().continue_on_error),
@@ -307,7 +310,7 @@ impl DataCompareWindow {
             }
         };
         let compare_target = CompareTargetScope::from_data_params(&params);
-        clear_sync_sql_execution_log(&self.execution_log, cx);
+        clear_sync_sql_execution_log(&self.execution_log, &self.execution_log_scroll, cx);
         self.clear_compare_preview(window, cx);
         register_connection_for_compare(&params.source_connection_id, cx);
         register_connection_for_compare(&params.target_connection_id, cx);
@@ -496,7 +499,7 @@ impl DataCompareWindow {
             *slot = None;
             cx.notify();
         });
-        clear_sync_sql_execution_log(&self.execution_log, cx);
+        clear_sync_sql_execution_log(&self.execution_log, &self.execution_log_scroll, cx);
         self.current_step = CompareStep::Objects;
         self.set_status(t!("Compare.swapped_source_target").to_string(), cx);
     }
@@ -542,6 +545,7 @@ impl DataCompareWindow {
             self.status.clone(),
             self.is_executing.clone(),
             self.execution_log.clone(),
+            self.execution_log_scroll.clone(),
             window,
             cx,
         );
@@ -573,7 +577,12 @@ impl DataCompareWindow {
             if let Some(entry) = entries.first() {
                 self.set_status(entry.message.clone(), cx);
             }
-            reset_sync_sql_execution_log(&self.execution_log, entries, cx);
+            reset_sync_sql_execution_log(
+                &self.execution_log,
+                &self.execution_log_scroll,
+                entries,
+                cx,
+            );
             self.current_step = CompareStep::SqlExecute;
             cx.notify();
         }
@@ -838,6 +847,7 @@ impl Render for DataCompareWindow {
                                 ))
                                 .child(sync_sql_execution_log_panel(
                                     &self.execution_log,
+                                    &self.execution_log_scroll,
                                     is_executing,
                                     cx,
                                 )),

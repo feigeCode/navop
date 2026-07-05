@@ -15,6 +15,7 @@ pub(super) struct SchemaCompareSelection {
     pub connection_id: String,
     pub database: String,
     pub schema: String,
+    pub tables: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -155,14 +156,25 @@ pub(super) fn schema_compare_params(
     if target.connection_id.trim().is_empty() || target.database.trim().is_empty() {
         return Err("Target connection and database are required");
     }
+    let mut source_tables =
+        normalized_table_list(&source.tables, settings.case_sensitive_identifiers)?;
+    let mut target_tables =
+        normalized_table_list(&target.tables, settings.case_sensitive_identifiers)?;
+    if source_tables.is_empty() && !target_tables.is_empty() {
+        source_tables = target_tables.clone();
+    } else if target_tables.is_empty() && !source_tables.is_empty() {
+        target_tables = source_tables.clone();
+    }
 
     Ok(SchemaCompareParams {
         source_connection_id: source.connection_id,
         source_database: source.database,
         source_schema: empty_to_none(source.schema),
+        source_tables,
         target_connection_id: target.connection_id,
         target_database: target.database,
         target_schema: empty_to_none(target.schema),
+        target_tables,
         case_sensitive_identifiers: settings.case_sensitive_identifiers,
         compare_indexes: settings.compare_indexes,
         compare_foreign_keys: settings.compare_foreign_keys,

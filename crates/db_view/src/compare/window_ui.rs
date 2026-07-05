@@ -4,8 +4,9 @@ use std::time::Instant;
 
 use db::{GlobalDbState, SqlResult, StreamingProgress};
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, Hsla, IntoElement, ParentElement, Styled, Window,
-    div, prelude::FluentBuilder, px,
+    App, AppContext, AsyncApp, Context, Entity, Hsla, InteractiveElement, IntoElement,
+    ParentElement, ScrollHandle, StatefulInteractiveElement, Styled, Window, div,
+    prelude::FluentBuilder, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, IndexPath, Sizable, StyledExt, WindowExt,
@@ -17,7 +18,7 @@ use gpui_component::{
     highlighter::Language,
     input::{Input, InputState},
     progress::Progress,
-    scroll::ScrollableElement,
+    scroll::Scrollbar,
     select::{SearchableVec, Select, SelectItem, SelectState},
     switch::Switch,
     v_flex,
@@ -63,6 +64,7 @@ struct SyncSqlExecutionRuntime {
     options: CompareSyncExecutionOptions,
     status: Entity<String>,
     execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
+    execution_log_scroll: ScrollHandle,
 }
 
 impl SyncSqlExecutionRuntime {
@@ -148,7 +150,12 @@ impl SyncSqlExecutionRuntime {
     }
 
     fn append_app(&self, entry: SyncSqlExecutionLogEntry, cx: &mut App) {
-        append_sync_sql_execution_log_app(&self.execution_log, entry, cx);
+        append_sync_sql_execution_log_app(
+            &self.execution_log,
+            &self.execution_log_scroll,
+            entry,
+            cx,
+        );
     }
 
     fn set_status(&self, message: String, cx: &mut App) {
@@ -419,19 +426,30 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
     status: Entity<String>,
     is_executing: Entity<bool>,
     execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
+    execution_log_scroll: ScrollHandle,
     window: &mut Window,
     cx: &mut Context<T>,
 ) {
     let Some(target) = target else {
         let message = t!("Compare.sync_sql_compare_first").to_string();
         set_sync_sql_execution_status(&status, message.clone(), cx);
-        append_sync_sql_execution_log(&execution_log, SyncSqlExecutionLogEntry::error(message), cx);
+        append_sync_sql_execution_log(
+            &execution_log,
+            &execution_log_scroll,
+            SyncSqlExecutionLogEntry::error(message),
+            cx,
+        );
         return;
     };
     if sql.trim().is_empty() {
         let message = t!("Compare.sync_sql_empty").to_string();
         set_sync_sql_execution_status(&status, message.clone(), cx);
-        append_sync_sql_execution_log(&execution_log, SyncSqlExecutionLogEntry::error(message), cx);
+        append_sync_sql_execution_log(
+            &execution_log,
+            &execution_log_scroll,
+            SyncSqlExecutionLogEntry::error(message),
+            cx,
+        );
         return;
     }
 
@@ -443,6 +461,7 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
             status,
             is_executing,
             execution_log,
+            execution_log_scroll,
             window,
             cx,
         );
@@ -456,6 +475,7 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
         status,
         is_executing,
         execution_log,
+        execution_log_scroll,
         cx,
     );
 }
@@ -467,6 +487,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
     status: Entity<String>,
     is_executing: Entity<bool>,
     execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
+    execution_log_scroll: ScrollHandle,
     window: &mut Window,
     cx: &mut Context<T>,
 ) {
@@ -478,6 +499,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
         let status = status.clone();
         let is_executing = is_executing.clone();
         let execution_log = execution_log.clone();
+        let execution_log_scroll = execution_log_scroll.clone();
         let view = view.clone();
 
         dialog
@@ -503,6 +525,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
                 let status = status.clone();
                 let is_executing = is_executing.clone();
                 let execution_log = execution_log.clone();
+                let execution_log_scroll = execution_log_scroll.clone();
                 view.update(cx, |_, cx| {
                     execute_sync_sql_now(
                         target,
@@ -511,6 +534,7 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
                         status,
                         is_executing,
                         execution_log,
+                        execution_log_scroll,
                         cx,
                     );
                 });
@@ -526,6 +550,7 @@ fn execute_sync_sql_now<T: 'static>(
     status: Entity<String>,
     is_executing: Entity<bool>,
     execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
+    execution_log_scroll: ScrollHandle,
     cx: &mut Context<T>,
 ) {
     let db_state = Arc::new(cx.global::<GlobalDbState>().clone());
@@ -537,6 +562,7 @@ fn execute_sync_sql_now<T: 'static>(
     set_sync_sql_execution_status(&status, executing_message.clone(), cx);
     append_sync_sql_execution_log(
         &execution_log,
+        &execution_log_scroll,
         SyncSqlExecutionLogEntry::info(executing_message),
         cx,
     );
@@ -546,6 +572,7 @@ fn execute_sync_sql_now<T: 'static>(
             options,
             status,
             execution_log,
+            execution_log_scroll,
         };
         let mut rx = match execute_sync_sql(target, sql, db_state, options, cx) {
             Ok(rx) => rx,
@@ -651,6 +678,7 @@ fn sync_sql_progress_error_log_entry(
 
 pub(super) fn reset_sync_sql_execution_log<T: 'static>(
     execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
+    execution_log_scroll: &ScrollHandle,
     entries: Vec<SyncSqlExecutionLogEntry>,
     cx: &mut Context<T>,
 ) {
@@ -658,17 +686,20 @@ pub(super) fn reset_sync_sql_execution_log<T: 'static>(
         *log = entries;
         cx.notify();
     });
+    execution_log_scroll.scroll_to_bottom();
 }
 
 pub(super) fn clear_sync_sql_execution_log<T: 'static>(
     execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
+    execution_log_scroll: &ScrollHandle,
     cx: &mut Context<T>,
 ) {
-    reset_sync_sql_execution_log(execution_log, Vec::new(), cx);
+    reset_sync_sql_execution_log(execution_log, execution_log_scroll, Vec::new(), cx);
 }
 
 fn append_sync_sql_execution_log<T: 'static>(
     execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
+    execution_log_scroll: &ScrollHandle,
     entry: SyncSqlExecutionLogEntry,
     cx: &mut Context<T>,
 ) {
@@ -676,10 +707,12 @@ fn append_sync_sql_execution_log<T: 'static>(
         log.push(entry);
         cx.notify();
     });
+    execution_log_scroll.scroll_to_bottom();
 }
 
 fn append_sync_sql_execution_log_app(
     execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
+    execution_log_scroll: &ScrollHandle,
     entry: SyncSqlExecutionLogEntry,
     cx: &mut App,
 ) {
@@ -687,6 +720,7 @@ fn append_sync_sql_execution_log_app(
         log.push(entry);
         cx.notify();
     });
+    execution_log_scroll.scroll_to_bottom();
 }
 
 fn set_sync_sql_execution_status<T: 'static>(
@@ -896,8 +930,31 @@ pub(super) fn sync_sql_execution_options_row<T: 'static>(
         )
 }
 
+pub(super) fn sync_sql_execution_continue_on_error_row<T: 'static>(
+    continue_on_error: Entity<bool>,
+    is_executing: bool,
+    cx: &mut Context<T>,
+) -> impl IntoElement {
+    let continue_checked = *continue_on_error.read(cx);
+    let continue_toggle = continue_on_error.clone();
+    h_flex().gap_4().items_center().child(
+        Switch::new("compare-sync-continue-on-error")
+            .small()
+            .checked(continue_checked)
+            .disabled(is_executing)
+            .label(t!("Compare.continue_on_error").to_string())
+            .on_click(move |checked, _, cx| {
+                continue_toggle.update(cx, |value, cx| {
+                    *value = *checked;
+                    cx.notify();
+                });
+            }),
+    )
+}
+
 pub(super) fn sync_sql_execution_log_panel(
     execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
+    execution_log_scroll: &ScrollHandle,
     is_executing: bool,
     cx: &App,
 ) -> impl IntoElement {
@@ -933,15 +990,30 @@ pub(super) fn sync_sql_execution_log_panel(
                 .border_color(cx.theme().border)
                 .rounded_md()
                 .bg(cx.theme().background)
+                .relative()
                 .overflow_hidden()
-                .overflow_y_scrollbar()
                 .child(
-                    v_flex().w_full().p_2().gap_1().children(
-                        entries
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, entry)| sync_sql_execution_log_row(index, entry, cx)),
-                    ),
+                    div()
+                        .id("compare-sync-sql-execution-log-scroll")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(execution_log_scroll)
+                        .child(
+                            v_flex().w_full().p_2().pr_4().gap_1().children(
+                                entries.into_iter().enumerate().map(|(index, entry)| {
+                                    sync_sql_execution_log_row(index, entry, cx)
+                                }),
+                            ),
+                        ),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .w(px(16.0))
+                        .child(Scrollbar::vertical(execution_log_scroll)),
                 ),
         )
 }
@@ -977,7 +1049,9 @@ fn sync_sql_execution_log_row(
 
 #[cfg(test)]
 mod tests {
-    use gpui::{AppContext, Context, Entity, IntoElement, Render, TestAppContext, Window, div};
+    use gpui::{
+        AppContext, Context, Entity, IntoElement, Render, ScrollHandle, TestAppContext, Window, div,
+    };
     use gpui_component::{
         input::InputState,
         select::{SearchableVec, SelectState},
@@ -999,6 +1073,7 @@ mod tests {
         status: Entity<String>,
         is_executing: Entity<bool>,
         execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
+        execution_log_scroll: ScrollHandle,
     }
 
     impl Render for ConnectionSelectTestRoot {
@@ -1053,6 +1128,7 @@ mod tests {
             status: cx.new(|_| "compare complete".to_string()),
             is_executing: cx.new(|_| false),
             execution_log: cx.new(|_| Vec::new()),
+            execution_log_scroll: ScrollHandle::new(),
         });
 
         root.update_in(cx, |root, window, cx| {
@@ -1063,6 +1139,7 @@ mod tests {
                 root.status.clone(),
                 root.is_executing.clone(),
                 root.execution_log.clone(),
+                root.execution_log_scroll.clone(),
                 window,
                 cx,
             );

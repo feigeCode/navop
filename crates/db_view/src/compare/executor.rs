@@ -64,9 +64,11 @@ pub struct SchemaCompareParams {
     pub source_connection_id: String,
     pub source_database: String,
     pub source_schema: Option<String>,
+    pub source_tables: Vec<String>,
     pub target_connection_id: String,
     pub target_database: String,
     pub target_schema: Option<String>,
+    pub target_tables: Vec<String>,
     pub case_sensitive_identifiers: bool,
     pub compare_indexes: bool,
     pub compare_foreign_keys: bool,
@@ -354,6 +356,8 @@ pub async fn execute_schema_compare(
         params.source_connection_id,
         params.source_database,
         params.source_schema,
+        &params.source_tables,
+        params.case_sensitive_identifiers,
         &progress_tx,
         &source_label,
     )
@@ -364,6 +368,8 @@ pub async fn execute_schema_compare(
         params.target_connection_id,
         params.target_database,
         params.target_schema,
+        &params.target_tables,
+        params.case_sensitive_identifiers,
         &progress_tx,
         &target_label,
     )
@@ -510,6 +516,8 @@ async fn load_schema_tables(
     connection_id: String,
     database: String,
     schema: Option<String>,
+    selected_tables: &[String],
+    case_sensitive_identifiers: bool,
     progress_tx: &mpsc::UnboundedSender<CompareProgress>,
     side_label: &str,
 ) -> anyhow::Result<Vec<TableSchema>> {
@@ -522,6 +530,7 @@ async fn load_schema_tables(
     let tables = db_state
         .list_tables(cx, connection_id.clone(), database.clone(), schema.clone())
         .await?;
+    let tables = filter_schema_tables(tables, selected_tables, case_sensitive_identifiers);
     let total = tables.len();
     let mut schemas = Vec::with_capacity(total);
 
@@ -552,6 +561,24 @@ async fn load_schema_tables(
     }
 
     Ok(schemas)
+}
+
+fn filter_schema_tables(
+    tables: Vec<TableInfo>,
+    selected_tables: &[String],
+    case_sensitive_identifiers: bool,
+) -> Vec<TableInfo> {
+    if selected_tables.is_empty() {
+        return tables;
+    }
+    let selected = selected_tables
+        .iter()
+        .map(|table| identifier_key(table, case_sensitive_identifiers))
+        .collect::<HashSet<_>>();
+    tables
+        .into_iter()
+        .filter(|table| selected.contains(&identifier_key(&table.name, case_sensitive_identifiers)))
+        .collect()
 }
 
 async fn load_single_table_schema(
@@ -1578,9 +1605,11 @@ mod tests {
                 source_connection_id: connection_id.to_string(),
                 source_database: "onetcli_compare_src".to_string(),
                 source_schema: None,
+                source_tables: vec!["users".to_string()],
                 target_connection_id: connection_id.to_string(),
                 target_database: "onetcli_compare_dst".to_string(),
                 target_schema: None,
+                target_tables: vec!["users".to_string()],
                 case_sensitive_identifiers: false,
                 compare_indexes: true,
                 compare_foreign_keys: true,
@@ -1630,11 +1659,13 @@ mod tests {
             connection_id,
             "onetcli_compare_dst",
             selected_default_sql(&plan),
-            CompareSyncExecutionOptions::default(),
+            CompareSyncExecutionOptions::schema_ddl(false),
             cx,
         )
         .await?;
         assert_no_streaming_errors(&schema_results);
+        let synced_schema = execute_real_schema_compare(db_state, connection_id, cx).await?;
+        assert_schema_fixture_synced(&synced_schema);
         Ok(())
     }
 
@@ -1664,7 +1695,10 @@ mod tests {
         )
         .await?;
         assert_no_streaming_errors(&data_results);
-        assert_target_users_match_source(db_state, connection_id, cx).await
+        assert_target_users_match_source(db_state, connection_id, cx).await?;
+        let synced_data = execute_real_data_compare(db_state, connection_id, cx).await?;
+        assert_data_fixture_synced(&synced_data);
+        Ok(())
     }
 
     async fn execute_real_data_compare(
@@ -1750,6 +1784,7 @@ mod tests {
     }
 
     fn assert_schema_fixture_diff(result: &SchemaCompareResult) {
+        assert_eq!(1, result.table_diffs.len());
         let users = result
             .table_diffs
             .iter()
@@ -1771,6 +1806,14 @@ mod tests {
         );
     }
 
+    fn assert_schema_fixture_synced(result: &SchemaCompareResult) {
+        assert!(
+            result.table_diffs.is_empty(),
+            "schema compare should converge after sync: {:?}",
+            result.table_diffs
+        );
+    }
+
     fn assert_data_fixture_diff(result: &DataCompareBatchResult) {
         let users = result.table_results.first().expect("users data diff");
         assert_eq!(1, users.added.len());
@@ -1779,6 +1822,20 @@ mod tests {
             users.modified.iter().any(|row| {
                 row.changes.contains_key("email") && row.changes.contains_key("name")
             })
+        );
+    }
+
+    fn assert_data_fixture_synced(result: &DataCompareBatchResult) {
+        let users = result.table_results.first().expect("users data diff");
+        assert!(users.added.is_empty(), "unexpected added rows after sync");
+        assert!(
+            users.removed.is_empty(),
+            "unexpected removed rows after sync"
+        );
+        assert!(
+            users.modified.is_empty(),
+            "unexpected modified rows after sync: {:?}",
+            users.modified
         );
     }
 

@@ -5,6 +5,7 @@ use super::{
 use crate::plugin::DatabasePlugin;
 use crate::types::{ColumnDefinition, ForeignKeyDefinition, IndexDefinition, TableDesign};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 /// 同步计划类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -571,7 +572,7 @@ fn table_designer_sync_statement(
     let source = table_diff.source.as_ref()?;
     let target = table_diff.target.as_ref()?;
     let original = table_schema_to_design(target_database, target);
-    let new = table_schema_to_design(target_database, source);
+    let new = table_schema_to_compare_design(target_database, source, target);
     let sql = dialect.build_alter_table_sql(&original, &new)?;
     if !has_executable_sync_sql(&sql) {
         return None;
@@ -1231,6 +1232,70 @@ fn table_schema_to_design(database: &str, table: &TableSchema) -> TableDesign {
     design.options.charset = table.charset.clone();
     design.options.collation = table.collation.clone();
     design
+}
+
+fn table_schema_to_compare_design(
+    database: &str,
+    source: &TableSchema,
+    target: &TableSchema,
+) -> TableDesign {
+    let mut design = table_schema_to_design(database, source);
+    design.columns = compare_sync_columns_ignoring_order(design.columns, target);
+    design
+}
+
+fn compare_sync_columns_ignoring_order(
+    source_columns: Vec<ColumnDefinition>,
+    target: &TableSchema,
+) -> Vec<ColumnDefinition> {
+    let source_by_exact_name = source_columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| (column.name.trim().to_string(), index))
+        .collect::<HashMap<_, _>>();
+    let source_by_folded_name = folded_source_column_map(&source_columns);
+    let mut used_indexes = HashSet::new();
+    let mut ordered = Vec::with_capacity(source_columns.len());
+    for target_column in &target.columns {
+        let index = source_by_exact_name
+            .get(target_column.name.trim())
+            .copied()
+            .or_else(|| {
+                source_by_folded_name
+                    .get(&sync_identifier_key(&target_column.name))
+                    .and_then(|indexes| {
+                        indexes
+                            .iter()
+                            .copied()
+                            .find(|index| !used_indexes.contains(index))
+                    })
+            });
+        if let Some(index) = index {
+            used_indexes.insert(index);
+            ordered.push(source_columns[index].clone());
+        }
+    }
+    for (index, column) in source_columns.into_iter().enumerate() {
+        if !used_indexes.contains(&index) {
+            ordered.push(column);
+        }
+    }
+    ordered
+}
+
+fn folded_source_column_map(source_columns: &[ColumnDefinition]) -> HashMap<String, Vec<usize>> {
+    let mut source_by_key = HashMap::<String, Vec<usize>>::new();
+    for (index, column) in source_columns.iter().enumerate() {
+        source_by_key
+            .entry(sync_identifier_key(&column.name))
+            .or_default()
+            .push(index);
+    }
+    source_by_key
+}
+
+fn sync_identifier_key(value: &str) -> String {
+    value.trim().to_lowercase()
 }
 
 fn column_schema_to_definition(column: &ColumnSchema) -> ColumnDefinition {
@@ -1943,6 +2008,66 @@ mod tests {
             "ALTER TABLE `users` ADD COLUMN `email` varchar(255) AFTER `id`;"
         );
         assert!(plan.statements.first().unwrap().selected_by_default);
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_ignores_existing_column_order_changes() {
+        use super::super::{ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema};
+
+        fn column(name: &str) -> ColumnSchema {
+            ColumnSchema {
+                name: name.to_string(),
+                data_type: "varchar(64)".to_string(),
+                nullable: true,
+                default_value: None,
+                comment: None,
+                ..Default::default()
+            }
+        }
+
+        let source = TableSchema {
+            name: "users".to_string(),
+            columns: vec![column("name"), column("id")],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: Some("source comment".to_string()),
+            ..Default::default()
+        };
+        let target = TableSchema {
+            name: "users".to_string(),
+            columns: vec![column("id"), column("name")],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: Some("target comment".to_string()),
+            ..Default::default()
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(source),
+                target: Some(target),
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: true,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+
+        assert_eq!(1, plan.statements.len());
+        assert_eq!(
+            plan.statements.first().unwrap().sql,
+            "ALTER TABLE `users` COMMENT='source comment';"
+        );
+        assert!(!plan.sql_text.contains("MODIFY COLUMN"));
+        assert!(!plan.sql_text.contains(" AFTER "));
+        assert!(!plan.sql_text.contains(" FIRST"));
     }
 
     #[test]
