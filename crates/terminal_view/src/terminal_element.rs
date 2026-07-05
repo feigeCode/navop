@@ -339,9 +339,17 @@ impl DecorationManager {
 #[derive(Clone)]
 pub struct CachedLine {
     pub background_rects: Vec<(usize, usize, Hsla)>,
+    pub underline_rects: Vec<CachedUnderlineRect>,
     pub text_runs: Vec<CachedTextRun>,
     /// 块状字符（U+2580..U+259F）使用几何绘制，避免字体回退导致的接缝
     pub block_glyphs: Vec<CachedBlockGlyph>,
+}
+
+#[derive(Clone)]
+pub struct CachedUnderlineRect {
+    pub start_col: usize,
+    pub end_col: usize,
+    pub color: Hsla,
 }
 
 #[derive(Clone)]
@@ -437,6 +445,7 @@ impl RenderCache {
             lines: vec![
                 CachedLine {
                     background_rects: Vec::new(),
+                    underline_rects: Vec::new(),
                     text_runs: Vec::new(),
                     block_glyphs: Vec::new(),
                 };
@@ -594,6 +603,7 @@ impl RenderCache {
             num_lines,
             CachedLine {
                 background_rects: Vec::new(),
+                underline_rects: Vec::new(),
                 text_runs: Vec::new(),
                 block_glyphs: Vec::new(),
             },
@@ -615,6 +625,7 @@ impl RenderCache {
         // Clear all lines
         for line in &mut self.lines {
             line.background_rects.clear();
+            line.underline_rects.clear();
             line.text_runs.clear();
             line.block_glyphs.clear();
         }
@@ -722,6 +733,7 @@ impl RenderCache {
         for &line_idx in &lines_set {
             if line_idx < self.num_lines {
                 self.lines[line_idx].background_rects.clear();
+                self.lines[line_idx].underline_rects.clear();
                 self.lines[line_idx].text_runs.clear();
                 self.lines[line_idx].block_glyphs.clear();
                 let cells = std::mem::take(&mut line_cells[line_idx]);
@@ -853,6 +865,7 @@ impl RenderCache {
 
         let line = &mut self.lines[line_idx];
         let mut bg_span: Option<(usize, Hsla)> = None;
+        let mut underline_span: Option<(usize, Hsla)> = None;
         let mut text_run: Option<CachedTextRun> = None;
 
         for cell in &cells {
@@ -876,6 +889,9 @@ impl RenderCache {
                 fg = deco_fg;
                 bg = deco_bg;
                 underline = deco_underline;
+            }
+            if !cell.is_selected && terminal_underline_flags(cell.flags) {
+                underline = true;
             }
 
             // Apply custom foreground for default foreground color (lowest priority)
@@ -925,6 +941,29 @@ impl RenderCache {
                         bg_span = Some((cell.column, bg));
                     }
                 }
+            }
+
+            if underline {
+                match &mut underline_span {
+                    Some((_, span_color)) if hsla_eq(*span_color, fg) => {}
+                    Some((start, color)) => {
+                        line.underline_rects.push(CachedUnderlineRect {
+                            start_col: *start,
+                            end_col: cell.column,
+                            color: *color,
+                        });
+                        underline_span = Some((cell.column, fg));
+                    }
+                    None => {
+                        underline_span = Some((cell.column, fg));
+                    }
+                }
+            } else if let Some((start, color)) = underline_span.take() {
+                line.underline_rects.push(CachedUnderlineRect {
+                    start_col: start,
+                    end_col: cell.column,
+                    color,
+                });
             }
 
             // Skip wide character spacer
@@ -1001,6 +1040,13 @@ impl RenderCache {
         // Flush remaining
         if let Some((start, color)) = bg_span {
             line.background_rects.push((start, self.num_cols, color));
+        }
+        if let Some((start, color)) = underline_span {
+            line.underline_rects.push(CachedUnderlineRect {
+                start_col: start,
+                end_col: self.num_cols,
+                color,
+            });
         }
         if let Some(run) = text_run {
             line.text_runs.push(run);
@@ -1360,6 +1406,22 @@ impl Element for TerminalElementImpl {
             }
         }
 
+        // Paint terminal underline attributes as cell-level decorations so
+        // cursorline underlines remain visible even on blank cells.
+        for line_idx in first_visible..visible_end {
+            let line = &self.lines[line_idx];
+            for underline in &line.underline_rects {
+                let thickness = px(1.0);
+                let origin = tb.cell_origin(line_idx, underline.start_col);
+                let width = tb.cell_width * (underline.end_col - underline.start_col) as f32;
+                let rect = Bounds::new(
+                    Point::new(origin.x, origin.y + tb.cell_height - thickness),
+                    size(width, thickness),
+                );
+                window.paint_quad(fill(rect, underline.color));
+            }
+        }
+
         // Paint cursor (if visible and in visible range)
         if self.cursor_visible {
             if let Some(cursor) = &self.cursor {
@@ -1428,6 +1490,17 @@ fn colors_equal(a: &Colors, b: &Colors) -> bool {
         }
     }
     true
+}
+
+#[inline]
+fn terminal_underline_flags(flags: Flags) -> bool {
+    flags.intersects(
+        Flags::UNDERLINE
+            | Flags::DOUBLE_UNDERLINE
+            | Flags::UNDERCURL
+            | Flags::DOTTED_UNDERLINE
+            | Flags::DASHED_UNDERLINE,
+    )
 }
 
 #[inline]
@@ -1672,6 +1745,24 @@ mod tests {
         assert_eq!(1, runs[2].cell_width_cols);
         assert_eq!(1, runs[2].column_count);
         assert_eq!(TextRunFontRole::Primary, runs[2].font_role);
+    }
+
+    #[test]
+    fn terminal_underline_flags_create_cell_decorations_including_spaces() {
+        let mut cache = RenderCache::new(1, 8, Colors::default());
+        cache.build_line_cache(
+            0,
+            vec![
+                plain_cell(0, 'A', Flags::UNDERLINE),
+                plain_cell(1, ' ', Flags::UNDERLINE),
+                plain_cell(2, 'B', Flags::empty()),
+            ],
+        );
+
+        let underlines = &cache.lines[0].underline_rects;
+        assert_eq!(1, underlines.len());
+        assert_eq!(0, underlines[0].start_col);
+        assert_eq!(2, underlines[0].end_col);
     }
 
     #[test]
