@@ -275,8 +275,66 @@ fn data_compare_params_build_multiple_case_insensitive_table_pairs() {
 }
 
 #[test]
-fn data_compare_params_can_match_table_names_case_sensitively() {
-    let result = data_compare_params(
+fn data_compare_params_pairs_unmatched_source_tables_to_same_target_name() {
+    let params = data_compare_params(
+        DataCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+            tables: vec!["users".to_string(), "apps".to_string()],
+        },
+        DataCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+            tables: vec!["users".to_string()],
+        },
+        "id".to_string(),
+        false,
+    )
+    .unwrap();
+
+    let pairs = params
+        .table_pairs
+        .iter()
+        .map(|pair| (pair.source_table.as_str(), pair.target_table.as_str()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(pairs, vec![("users", "users"), ("apps", "apps")]);
+}
+
+#[test]
+fn data_compare_params_allows_empty_target_table_selection() {
+    let params = data_compare_params(
+        DataCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+            tables: vec!["users".to_string(), "apps".to_string()],
+        },
+        DataCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+            tables: vec![],
+        },
+        "id".to_string(),
+        false,
+    )
+    .unwrap();
+
+    let pairs = params
+        .table_pairs
+        .iter()
+        .map(|pair| (pair.source_table.as_str(), pair.target_table.as_str()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(pairs, vec![("users", "users"), ("apps", "apps")]);
+}
+
+#[test]
+fn data_compare_params_pairs_case_sensitive_misses_to_same_target_name() {
+    let params = data_compare_params(
         DataCompareSelection {
             connection_id: "source-1".to_string(),
             database: "source_db".to_string(),
@@ -291,9 +349,16 @@ fn data_compare_params_can_match_table_names_case_sensitively() {
         },
         "id".to_string(),
         true,
-    );
+    )
+    .unwrap();
 
-    assert!(result.is_err());
+    let pairs = params
+        .table_pairs
+        .iter()
+        .map(|pair| (pair.source_table.as_str(), pair.target_table.as_str()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(pairs, vec![("Users", "Users"), ("Orders", "Orders")]);
 }
 
 #[test]

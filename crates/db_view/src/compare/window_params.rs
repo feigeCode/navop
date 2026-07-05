@@ -82,7 +82,13 @@ fn data_compare_table_pairs(
         return Err("Select at least one source table");
     }
     if target_tables.is_empty() {
-        return Err("Select at least one target table");
+        return Ok(source_tables
+            .into_iter()
+            .map(|source| DataCompareTablePair {
+                target_table: source.clone(),
+                source_table: source,
+            })
+            .collect());
     }
     if source_tables.len() == 1 && target_tables.len() == 1 {
         return Ok(vec![DataCompareTablePair {
@@ -93,18 +99,19 @@ fn data_compare_table_pairs(
 
     let target_by_normalized =
         table_map_by_identifier_key(&target_tables, case_sensitive_identifiers)?;
-    source_tables
+    Ok(source_tables
         .iter()
         .map(|source| {
-            target_by_normalized
+            let target_table = target_by_normalized
                 .get(&identifier_key(source, case_sensitive_identifiers))
-                .map(|target| DataCompareTablePair {
-                    source_table: source.clone(),
-                    target_table: (*target).clone(),
-                })
-                .ok_or("Each selected source table must have a matching target table")
+                .cloned()
+                .unwrap_or_else(|| source.clone());
+            DataCompareTablePair {
+                source_table: source.clone(),
+                target_table,
+            }
         })
-        .collect()
+        .collect())
 }
 
 fn normalized_table_list(

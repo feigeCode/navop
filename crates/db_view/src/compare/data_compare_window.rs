@@ -221,14 +221,13 @@ impl DataCompareWindow {
             window_state._subscriptions.push(cx.subscribe(
                 &window_state.source_database_select,
                 |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
-                    this.load_source_schemas(cx);
-                    this.load_source_tables(cx);
+                    this.load_source_after_database_change(cx);
                 },
             ));
             window_state._subscriptions.push(cx.subscribe(
                 &window_state.source_schema_select,
                 |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
-                    this.load_source_tables(cx);
+                    this.load_source_after_schema_change(cx);
                 },
             ));
             // 目标级联:连接 → 数据库 → Schema → 表
@@ -241,14 +240,13 @@ impl DataCompareWindow {
             window_state._subscriptions.push(cx.subscribe(
                 &window_state.target_database_select,
                 |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
-                    this.load_target_schemas(cx);
-                    this.load_target_tables(cx);
+                    this.load_target_after_database_change(cx);
                 },
             ));
             window_state._subscriptions.push(cx.subscribe(
                 &window_state.target_schema_select,
                 |this, _, _event: &SelectEvent<SearchableVec<String>>, cx| {
-                    this.load_target_tables(cx);
+                    this.load_target_after_schema_change(cx);
                 },
             ));
             window_state
@@ -262,9 +260,7 @@ impl DataCompareWindow {
             .trim()
             .is_empty()
             {
-                this.load_source_databases(cx);
-                this.load_source_schemas(cx);
-                this.load_source_tables(cx);
+                this.load_source_initial_cascade(cx);
             }
             if !selected_connection_id(
                 &this.target_connection_select,
@@ -274,9 +270,7 @@ impl DataCompareWindow {
             .trim()
             .is_empty()
             {
-                this.load_target_databases(cx);
-                this.load_target_schemas(cx);
-                this.load_target_tables(cx);
+                this.load_target_initial_cascade(cx);
             }
         });
         view

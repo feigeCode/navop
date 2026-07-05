@@ -16,8 +16,9 @@ use crate::compare::table_picker::{
     table_selection_panel,
 };
 use crate::compare::target_picker::{
-    TargetConnectionControls, TargetStringControls, clear_string_select, load_databases,
-    load_schemas, selected_string,
+    CompareTargetCascadeAction, TargetConnectionControls, TargetStringControls,
+    clear_string_select, database_change_cascade_actions, initial_compare_target_cascade_actions,
+    load_databases, load_schemas, schema_change_cascade_actions, selected_string,
 };
 use crate::compare::window_ui::{
     compare_progress_view, input_row, register_connection_for_compare, section_title,
@@ -59,6 +60,39 @@ impl DataCompareWindow {
         );
     }
 
+    pub(super) fn load_source_initial_cascade(&mut self, cx: &mut Context<Self>) {
+        let policy = policy_for_connection(&self.source_connection_controls(), cx);
+        self.run_source_cascade_actions(initial_compare_target_cascade_actions(policy), cx);
+    }
+
+    pub(super) fn load_source_after_database_change(&mut self, cx: &mut Context<Self>) {
+        let policy = policy_for_connection(&self.source_connection_controls(), cx);
+        self.run_source_cascade_actions(database_change_cascade_actions(policy), cx);
+    }
+
+    pub(super) fn load_source_after_schema_change(&mut self, cx: &mut Context<Self>) {
+        let has_selected_schema = self
+            .source_schema_select
+            .read(cx)
+            .selected_value()
+            .is_some();
+        self.run_source_cascade_actions(schema_change_cascade_actions(has_selected_schema), cx);
+    }
+
+    fn run_source_cascade_actions(
+        &mut self,
+        actions: Vec<CompareTargetCascadeAction>,
+        cx: &mut Context<Self>,
+    ) {
+        for action in actions {
+            match action {
+                CompareTargetCascadeAction::LoadDatabases => self.load_source_databases(cx),
+                CompareTargetCascadeAction::LoadSchemas => self.load_source_schemas(cx),
+                CompareTargetCascadeAction::LoadTables => self.load_source_tables(cx),
+            }
+        }
+    }
+
     pub(super) fn load_source_schemas(&mut self, cx: &mut Context<Self>) {
         clear_table_selection_list(&self.source_table_list, &self.selected_source_tables, cx);
         load_schemas(
@@ -92,6 +126,39 @@ impl DataCompareWindow {
             self.status.clone(),
             cx,
         );
+    }
+
+    pub(super) fn load_target_initial_cascade(&mut self, cx: &mut Context<Self>) {
+        let policy = policy_for_connection(&self.connection_controls(), cx);
+        self.run_target_cascade_actions(initial_compare_target_cascade_actions(policy), cx);
+    }
+
+    pub(super) fn load_target_after_database_change(&mut self, cx: &mut Context<Self>) {
+        let policy = policy_for_connection(&self.connection_controls(), cx);
+        self.run_target_cascade_actions(database_change_cascade_actions(policy), cx);
+    }
+
+    pub(super) fn load_target_after_schema_change(&mut self, cx: &mut Context<Self>) {
+        let has_selected_schema = self
+            .target_schema_select
+            .read(cx)
+            .selected_value()
+            .is_some();
+        self.run_target_cascade_actions(schema_change_cascade_actions(has_selected_schema), cx);
+    }
+
+    fn run_target_cascade_actions(
+        &mut self,
+        actions: Vec<CompareTargetCascadeAction>,
+        cx: &mut Context<Self>,
+    ) {
+        for action in actions {
+            match action {
+                CompareTargetCascadeAction::LoadDatabases => self.load_target_databases(cx),
+                CompareTargetCascadeAction::LoadSchemas => self.load_target_schemas(cx),
+                CompareTargetCascadeAction::LoadTables => self.load_target_tables(cx),
+            }
+        }
     }
 
     pub(super) fn load_target_schemas(&mut self, cx: &mut Context<Self>) {
@@ -274,6 +341,7 @@ impl DataCompareWindow {
             policy_for_connection(&connection, cx),
         );
         let preferred = preferred_table.read(cx).text().to_string();
+        clear_table_selection_list(&list_state, &selected_tables, cx);
 
         if connection_id.trim().is_empty() || database_name.trim().is_empty() {
             set_status(
