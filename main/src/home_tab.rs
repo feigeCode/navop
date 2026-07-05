@@ -70,8 +70,8 @@ use remote_desktop_view::remote_desktop_form::{
 
 actions!(home_tab, [OpenConnectionQuickOpen, NewConnectionShortcut]);
 
-const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(200.0);
-const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(64.0);
+const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(220.0);
+const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(68.0);
 const HOME_CONNECTION_LIST_ACTIONS_WIDTH: gpui::Pixels = px(136.0);
 
 pub fn init(cx: &mut App) {
@@ -2628,8 +2628,8 @@ impl HomePage {
                     .child(
                         Button::new("import-connection-button")
                             .icon(IconName::Upload)
-                            .label(t!("Home.import"))
-                            .tooltip(t!("Home.import"))
+                            .label(t!("Home.other_app_import"))
+                            .tooltip(t!("Home.other_app_import"))
                             .on_click({
                                 let view = view.clone();
                                 move |_, window, cx| {

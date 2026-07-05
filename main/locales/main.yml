@@ -127,6 +127,10 @@ Home:
     en: Import
     zh-CN: 导入
     zh-HK: 導入
+  other_app_import:
+    en: Import from other apps
+    zh-CN: 从其他应用导入
+    zh-HK: 從其他應用導入
   card_view:
     en: Card View
     zh-CN: 卡片视图
