@@ -49,6 +49,24 @@ fn edited_database_draft_is_converted_to_stored_connection() {
             value: "3307".to_string(),
         })
         .unwrap();
+    draft
+        .apply_edit(ImportDraftEdit::Text {
+            field: ImportDraftField::Username,
+            value: "app_user".to_string(),
+        })
+        .unwrap();
+    draft
+        .apply_edit(ImportDraftEdit::Text {
+            field: ImportDraftField::Password,
+            value: "changed-secret".to_string(),
+        })
+        .unwrap();
+    draft
+        .apply_edit(ImportDraftEdit::Text {
+            field: ImportDraftField::Database,
+            value: "reporting".to_string(),
+        })
+        .unwrap();
 
     let stored = selected_import_drafts_to_connections(&[draft]).unwrap();
     let config = stored[0].to_db_connection().unwrap();
@@ -56,6 +74,9 @@ fn edited_database_draft_is_converted_to_stored_connection() {
     assert_eq!("local mysql", stored[0].name);
     assert_eq!("127.0.0.1", config.host);
     assert_eq!(3307, config.port);
+    assert_eq!("app_user", config.username);
+    assert_eq!("changed-secret", config.password);
+    assert_eq!(Some("reporting".to_string()), config.database);
 }
 
 #[test]
