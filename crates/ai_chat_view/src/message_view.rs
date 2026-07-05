@@ -271,7 +271,7 @@ fn render_assistant_text_with_code_actions<E: MessageExtension>(
         &theme,
     )
     .selectable(true);
-    let text = apply_code_block_features(text, code_actions, Some(&theme));
+    let text = apply_code_block_features(text, code_actions, Some(&theme), msg.is_streaming);
 
     div()
         .w_full()

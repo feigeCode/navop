@@ -588,6 +588,11 @@ impl CodeBlock {
         cx: &mut App,
     ) -> AnyElement {
         let style = &node_cx.style;
+        let render_options = CodeBlockRenderOptions {
+            index: options.ix,
+            is_last: options.is_last,
+            in_list: options.in_list,
+        };
 
         div()
             .when(!options.is_last, |this| this.pb(style.paragraph_gap))
@@ -617,7 +622,7 @@ impl CodeBlock {
                                 .right_2()
                                 .bg(code_background(style, cx))
                                 .rounded(cx.theme().radius)
-                                .child(actions(&self, window, cx)),
+                                .child(actions(&self, render_options, window, cx)),
                         )
                     }),
             )
@@ -1311,12 +1316,12 @@ impl BlockNode {
                 .into_any_element(),
             BlockNode::CodeBlock(code_block) => {
                 if let Some(renderer) = node_cx.code_block_renderer.as_ref() {
-                    let default_element = code_block.render(&options, node_cx, window, cx);
                     let render_options = CodeBlockRenderOptions {
                         index: options.ix,
                         is_last: options.is_last,
                         in_list: options.in_list,
                     };
+                    let default_element = code_block.render(&options, node_cx, window, cx);
                     renderer(code_block, render_options, default_element, window, cx)
                 } else {
                     code_block.render(&options, node_cx, window, cx)

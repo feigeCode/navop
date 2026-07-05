@@ -16,7 +16,7 @@ use crate::{global_state::GlobalState, text::TextViewStyle};
 
 /// Type for code block actions generator function.
 pub(crate) type CodeBlockActionsFn =
-    dyn Fn(&CodeBlock, &mut Window, &mut App) -> AnyElement + Send + Sync;
+    dyn Fn(&CodeBlock, CodeBlockRenderOptions, &mut Window, &mut App) -> AnyElement + Send + Sync;
 
 /// A text view that can render Markdown or HTML.
 ///
@@ -103,6 +103,10 @@ impl TextView {
         }
     }
 
+    pub fn element_id(&self) -> ElementId {
+        self.id.clone()
+    }
+
     /// Set [`TextViewStyle`].
     pub fn style(mut self, style: TextViewStyle) -> Self {
         self.text_view_style = style;
@@ -138,11 +142,14 @@ impl TextView {
     /// and returns an element to display.
     pub fn code_block_actions<F, E>(mut self, f: F) -> Self
     where
-        F: Fn(&CodeBlock, &mut Window, &mut App) -> E + Send + Sync + 'static,
+        F: Fn(&CodeBlock, CodeBlockRenderOptions, &mut Window, &mut App) -> E
+            + Send
+            + Sync
+            + 'static,
         E: IntoElement,
     {
-        self.code_block_actions = Some(Arc::new(move |code_block, window, cx| {
-            f(&code_block, window, cx).into_any_element()
+        self.code_block_actions = Some(Arc::new(move |code_block, options, window, cx| {
+            f(&code_block, options, window, cx).into_any_element()
         }));
         self
     }

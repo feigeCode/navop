@@ -2,8 +2,9 @@ use futures::FutureExt;
 use html_preview::{
     HtmlPreviewAction, HtmlPreviewAssetResolver, HtmlPreviewDocument, HtmlPreviewTransformOutput,
     clear_html_preview_transform_provider, normalize_html_document, register_extension_asset_root,
-    resolve_extension_asset_url, set_html_preview_transform_provider,
-    transform_html_preview_document, write_html_preview_document_to_dir,
+    resolve_extension_asset_url, set_html_preview_transform_provider, system_browser_open_command,
+    transform_html_preview_document, write_browser_html_preview_document_to_dir,
+    write_html_preview_document_to_dir,
 };
 
 #[test]
@@ -151,6 +152,59 @@ fn writes_complete_html_preview_document_without_overwriting_existing_file() {
         "existing",
         std::fs::read_to_string(dir.path().join("onetcli-html-preview.html")).unwrap()
     );
+}
+
+#[test]
+fn writes_browser_ready_html_with_extension_assets_rewritten_to_file_urls() {
+    let assets_dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(assets_dir.path().join("app.css"), "body{}").unwrap();
+    std::fs::write(assets_dir.path().join("chart.js"), "window.loaded=true").unwrap();
+    register_extension_asset_root("com.example.preview", assets_dir.path());
+    let document = HtmlPreviewDocument::from_transform(
+        "html",
+        HtmlPreviewTransformOutput {
+            html: r#"<link rel="stylesheet" href="onet-extension://com.example.preview/app.css"><script src="onet-extension://com.example.preview/chart.js"></script>"#.to_string(),
+            assets: vec![
+                html_preview::HtmlPreviewAsset {
+                    path: "app.css".to_string(),
+                    url: "onet-extension://com.example.preview/app.css".to_string(),
+                },
+                html_preview::HtmlPreviewAsset {
+                    path: "chart.js".to_string(),
+                    url: "onet-extension://com.example.preview/chart.js".to_string(),
+                },
+            ],
+        },
+    );
+    let output_dir = tempfile::TempDir::new().unwrap();
+
+    let path = write_browser_html_preview_document_to_dir(&document, output_dir.path()).unwrap();
+
+    let saved = std::fs::read_to_string(path).unwrap();
+    assert!(!saved.contains("onet-extension://"));
+    assert!(saved.contains("href=\"file://"));
+    assert!(saved.contains("src=\"file://"));
+    assert!(saved.contains("app.css"));
+    assert!(saved.contains("chart.js"));
+}
+
+#[test]
+fn system_browser_open_command_targets_platform_default_opener() {
+    let command = system_browser_open_command(std::path::Path::new("/tmp/onetcli-preview.html"));
+
+    if cfg!(target_os = "macos") {
+        assert_eq!("open", command.program);
+        assert_eq!(vec!["/tmp/onetcli-preview.html"], command.args);
+    } else if cfg!(target_os = "windows") {
+        assert_eq!("cmd", command.program);
+        assert_eq!(
+            vec!["/C", "start", "", "/tmp/onetcli-preview.html"],
+            command.args
+        );
+    } else {
+        assert_eq!("xdg-open", command.program);
+        assert_eq!(vec!["/tmp/onetcli-preview.html"], command.args);
+    }
 }
 
 #[test]
