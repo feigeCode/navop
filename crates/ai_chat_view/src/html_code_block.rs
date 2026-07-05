@@ -1,11 +1,13 @@
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div,
-    prelude::FluentBuilder, px,
+    Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::ActiveTheme;
+use gpui_component::text::TextView;
 use html_preview::{HtmlPreviewDocument, HtmlPreviewTransformOutput};
 
 pub struct HtmlCodeBlockView {
+    view_id: SharedString,
     document: HtmlPreviewDocument,
     preview_visible: bool,
     action_status: Option<String>,
@@ -13,12 +15,13 @@ pub struct HtmlCodeBlockView {
 
 impl HtmlCodeBlockView {
     pub fn new(
-        _view_id: impl Into<gpui::SharedString>,
+        view_id: impl Into<SharedString>,
         document: HtmlPreviewDocument,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let view = Self {
+            view_id: view_id.into(),
             document,
             preview_visible: false,
             action_status: None,
@@ -99,13 +102,12 @@ impl HtmlCodeBlockView {
     fn render_preview_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("html-code-block-preview-panel")
-            .flex()
-            .items_center()
-            .justify_center()
-            .min_h(px(320.0))
+            .relative()
+            .min_h(px(420.0))
+            .max_h(px(640.0))
+            .overflow_y_scroll()
             .bg(cx.theme().background)
-            .text_sm()
-            .text_color(cx.theme().muted_foreground)
+            .p_3()
             .when_some(self.action_status.clone(), |this, status| {
                 this.child(
                     div()
@@ -118,7 +120,17 @@ impl HtmlCodeBlockView {
                         .child(status),
                 )
             })
-            .child("HTML 预览")
+            .child(
+                TextView::html(
+                    SharedString::from(format!("{}/preview-content", self.view_id)),
+                    self.preview_html(),
+                )
+                .selectable(true),
+            )
+    }
+
+    fn preview_html(&self) -> SharedString {
+        SharedString::from(self.document.render_html().to_string())
     }
 }
 
