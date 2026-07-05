@@ -24,11 +24,16 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
+mod broadcast;
+mod history_prompt_rules;
+mod mouse_input;
+mod paste_safety;
+
 use crate::addon::{
     AddonManager, CustomHighlightAddon, SearchAddon, TerminalAddonFrameContext,
     TerminalAddonMouseContext, register_default_addons,
 };
-use crate::broadcast_input::{BroadcastClientId, BroadcastInputHub};
+use crate::broadcast_input::BroadcastClientId;
 use crate::cd_completion::{
     CdCompletionQuery, build_cd_completion_suggestions, parse_cd_completion_query,
 };
@@ -47,6 +52,23 @@ use crate::theme::{
     DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, default_font_fallbacks,
     default_monospace_font, normalize_terminal_primary_font, terminal_cell_width_from_advances,
 };
+use broadcast::{BroadcastInputRegistry, init_broadcast_input_registry};
+#[cfg(test)]
+use history_prompt_rules::should_refresh_history_commands_for_terminal_event;
+use history_prompt_rules::{
+    HISTORY_PROMPT_DROPDOWN_MAX_WIDTH, HISTORY_PROMPT_DROPDOWN_MIN_WIDTH, history_prompt_available,
+    history_prompt_dropdown_origin, history_prompt_overlay_bounds,
+    should_confirm_local_terminal_close, should_dismiss_history_prompt_for_keystroke,
+    should_dismiss_history_prompt_for_mouse, should_dismiss_history_prompt_for_scroll,
+    should_reset_history_prompt_for_terminal_event, terminal_history_scope,
+};
+use mouse_input::{
+    encode_mouse_modifiers, mouse_button_code, sgr_mouse_button_report, sgr_mouse_mode_enabled,
+    sgr_mouse_wheel_report, should_defer_inline_history_prompt_input_to_text_system,
+    should_defer_sgr_left_press, should_extend_selection_on_shift_click,
+    should_scroll_to_bottom_on_user_input, should_start_selection_from_pending_sgr_press,
+    take_whole_scroll_lines,
+};
 use one_core::layout::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
 };
@@ -54,12 +76,14 @@ use one_core::sidebar_contribution::{
     SidebarContribution, SidebarContributionActions, SidebarPanelChrome, SidebarPanelId,
     SidebarPanelPolicy, SidebarPanelSize, SidebarPanelStyle, SidebarPlacement, SidebarPlacementSet,
 };
-use one_core::storage::{
-    TerminalHistoryScope,
-    models::{ActiveConnections, StoredConnection},
-};
+use one_core::storage::models::{ActiveConnections, StoredConnection};
 use one_core::tab_container::{TabContent, TabContentEvent, TabContentView};
 use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
+use paste_safety::{
+    UnbracketedPasteHazard, detect_unbracketed_paste_hazard, multiline_non_empty_line_count,
+};
+#[cfg(test)]
+use paste_safety::{has_trailing_line_continuation, has_unterminated_shell_quote};
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient};
 use std::ops::Deref;
@@ -130,235 +154,6 @@ const DEFAULT_ROWS: usize = 24;
 const TERMINAL_RESET_FONT_SIZE: f32 = 15.0;
 const HISTORY_SUGGESTION_LIMIT: usize = 6;
 
-#[derive(Default)]
-struct BroadcastInputRegistry {
-    hub: BroadcastInputHub,
-    clients: HashMap<BroadcastClientId, WeakEntity<TerminalView>>,
-}
-
-impl gpui::Global for BroadcastInputRegistry {}
-
-impl BroadcastInputRegistry {
-    fn register(
-        &mut self,
-        connection_id: i64,
-        view: WeakEntity<TerminalView>,
-    ) -> BroadcastClientId {
-        let id = self.hub.register(connection_id);
-        self.clients.insert(id, view);
-        id
-    }
-
-    fn unregister(&mut self, id: BroadcastClientId) {
-        self.hub.unregister(id);
-        self.clients.remove(&id);
-    }
-
-    fn set_enabled(&mut self, id: BroadcastClientId, enabled: bool) {
-        self.hub.set_enabled(id, enabled);
-    }
-
-    fn is_enabled(&self, id: BroadcastClientId) -> bool {
-        self.hub.is_enabled(id)
-    }
-
-    fn deliveries_from(
-        &self,
-        source: BroadcastClientId,
-        data: &[u8],
-    ) -> Vec<(WeakEntity<TerminalView>, Vec<u8>)> {
-        self.hub
-            .deliveries_from(source, data)
-            .into_iter()
-            .filter_map(|delivery| {
-                self.clients
-                    .get(&delivery.target)
-                    .cloned()
-                    .map(|view| (view, delivery.data))
-            })
-            .collect()
-    }
-}
-
-fn init_broadcast_input_registry(cx: &mut App) {
-    if cx.try_global::<BroadcastInputRegistry>().is_none() {
-        cx.set_global(BroadcastInputRegistry::default());
-    }
-}
-
-fn take_whole_scroll_lines(scroll_lines_accumulated: &mut f32) -> i32 {
-    let lines = scroll_lines_accumulated.trunc() as i32;
-    *scroll_lines_accumulated -= lines as f32;
-    lines
-}
-
-fn sgr_mouse_wheel_report(lines: i32, col: usize, row: usize) -> Option<String> {
-    if lines == 0 {
-        return None;
-    }
-
-    let button = if lines > 0 { 64 } else { 65 };
-    Some(format!("\x1b[<{};{};{}M", button, col + 1, row + 1))
-}
-
-/// 生成 SGR 鼠标按钮报告。
-///
-/// - `button`：xterm 按钮编码（0=左键、1=中键、2=右键，加上 shift/alt/ctrl/拖动等位）
-/// - `pressed`：true 用 `M` 表示按下，false 用 `m` 表示释放（SGR 协议规定）
-/// - `col` / `row`：0-based，输出转为 1-based
-///
-/// 抽出为独立纯函数，便于单元测试和后续扩展（拖动 32 位、wheel-with-modifiers 等）。
-fn sgr_mouse_button_report(button: u8, col: usize, row: usize, pressed: bool) -> String {
-    let suffix = if pressed { 'M' } else { 'm' };
-    format!("\x1b[<{};{};{}{}", button, col + 1, row + 1, suffix)
-}
-
-/// 将 GPUI 鼠标按钮映射为 xterm 按钮基础编码：左=0、中=1、右=2。
-/// 其它按钮（X1/X2 等）当前未在 SGR 报告中使用，返回 None。
-fn mouse_button_code(button: MouseButton) -> Option<u8> {
-    match button {
-        MouseButton::Left => Some(0),
-        MouseButton::Middle => Some(1),
-        MouseButton::Right => Some(2),
-        _ => None,
-    }
-}
-
-/// 将修饰键编码到 xterm 鼠标按钮的高位：shift=4、alt=8、control=16。
-fn encode_mouse_modifiers(modifiers: Modifiers) -> u8 {
-    let mut bits = 0u8;
-    if modifiers.shift {
-        bits |= 4;
-    }
-    if modifiers.alt {
-        bits |= 8;
-    }
-    if modifiers.control {
-        bits |= 16;
-    }
-    bits
-}
-
-fn sgr_mouse_mode_enabled(mode: TermMode) -> bool {
-    mode.contains(TermMode::SGR_MOUSE) && mode.intersects(TermMode::MOUSE_MODE)
-}
-
-fn should_defer_sgr_left_press(button: MouseButton, modifiers: Modifiers, mode: TermMode) -> bool {
-    button == MouseButton::Left
-        && !modifiers.shift
-        && !modifiers.alt
-        && !modifiers.control
-        && !modifiers.platform
-        && sgr_mouse_mode_enabled(mode)
-}
-
-fn should_start_selection_from_pending_sgr_press(start: AlacPoint, current: AlacPoint) -> bool {
-    start != current
-}
-
-fn should_extend_selection_on_shift_click(
-    button: MouseButton,
-    modifiers: Modifiers,
-    has_selection: bool,
-) -> bool {
-    button == MouseButton::Left && modifiers.shift && has_selection
-}
-
-fn should_scroll_to_bottom_on_user_input(
-    display_offset: usize,
-    pending_display_offset: &StdCell<Option<usize>>,
-) -> bool {
-    pending_display_offset.take();
-    display_offset > 0
-}
-
-fn should_defer_inline_history_prompt_input_to_text_system(keystroke: &Keystroke) -> bool {
-    let modifiers = keystroke.modifiers;
-    !modifiers.control
-        && !modifiers.alt
-        && !modifiers.platform
-        && (keystroke.key == "space" || keystroke.key.chars().count() == 1)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UnbracketedPasteHazard {
-    HereDoc,
-    UnterminatedQuote,
-    LineContinuation,
-}
-
-fn multiline_non_empty_line_count(text: &str) -> usize {
-    text.lines().filter(|line| !line.trim().is_empty()).count()
-}
-
-fn contains_heredoc_operator(text: &str) -> bool {
-    text.lines().any(|line| {
-        let line = line.trim_start();
-        !line.is_empty() && !line.starts_with('#') && line.contains("<<")
-    })
-}
-
-fn has_trailing_line_continuation(text: &str) -> bool {
-    let mut lines = text.lines().peekable();
-    while let Some(line) = lines.next() {
-        if lines.peek().is_none() {
-            break;
-        }
-
-        let trimmed = line.trim_end();
-        if !trimmed.is_empty() && trimmed.ends_with('\\') {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn has_unterminated_shell_quote(text: &str) -> bool {
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut escaped = false;
-
-    for ch in text.chars() {
-        if in_single_quote {
-            if ch == '\'' {
-                in_single_quote = false;
-            }
-            continue;
-        }
-
-        if escaped {
-            escaped = false;
-            continue;
-        }
-
-        match ch {
-            '\\' => escaped = true,
-            '\'' => in_single_quote = true,
-            '"' => in_double_quote = !in_double_quote,
-            _ => {}
-        }
-    }
-
-    in_single_quote || in_double_quote
-}
-
-fn detect_unbracketed_paste_hazard(text: &str) -> Option<UnbracketedPasteHazard> {
-    if contains_heredoc_operator(text) {
-        return Some(UnbracketedPasteHazard::HereDoc);
-    }
-
-    if has_trailing_line_continuation(text) {
-        return Some(UnbracketedPasteHazard::LineContinuation);
-    }
-
-    if has_unterminated_shell_quote(text) {
-        return Some(UnbracketedPasteHazard::UnterminatedQuote);
-    }
-
-    None
-}
-
 fn terminal_shortcut_label(shortcut: &str) -> SharedString {
     Kbd::format(&Keystroke::parse(shortcut).expect("终端快捷键定义非法")).into()
 }
@@ -372,172 +167,6 @@ fn shell_escape(s: &str) -> String {
     } else {
         format!("'{}'", s.replace('\'', "'\\''"))
     }
-}
-
-fn should_dismiss_history_prompt_for_keystroke(keystroke: &Keystroke) -> bool {
-    let modifiers = keystroke.modifiers;
-    let key = keystroke.key.as_str();
-
-    if modifiers.platform {
-        return true;
-    }
-
-    if modifiers.control && !modifiers.alt {
-        return !matches!(key, "r" | "u" | "c");
-    }
-
-    if modifiers.alt && !modifiers.control {
-        return key != "f";
-    }
-
-    if !modifiers.control && !modifiers.alt {
-        return matches!(
-            key,
-            "left" | "home" | "end" | "delete" | "pageup" | "pagedown" | "escape" | "tab"
-        );
-    }
-
-    true
-}
-
-fn should_dismiss_history_prompt_for_mouse(button: MouseButton) -> bool {
-    matches!(
-        button,
-        MouseButton::Left | MouseButton::Middle | MouseButton::Right
-    )
-}
-
-fn should_dismiss_history_prompt_for_scroll(lines: i32) -> bool {
-    lines != 0
-}
-
-fn should_reset_history_prompt_for_terminal_event(event: &TerminalModelEvent) -> bool {
-    matches!(
-        event,
-        TerminalModelEvent::PromptStart
-            | TerminalModelEvent::InputStart
-            | TerminalModelEvent::CommandStart
-    )
-}
-
-#[cfg(test)]
-fn should_refresh_history_commands_for_terminal_event(event: &TerminalModelEvent) -> bool {
-    matches!(event, TerminalModelEvent::CommandHistoryChanged)
-}
-
-fn history_prompt_available(
-    autocomplete_enabled: bool,
-    connection_kind: TerminalConnectionKind,
-    mode: TermMode,
-    shell_prompt_input_active: bool,
-) -> bool {
-    autocomplete_enabled
-        && history_prompt_connection_supported(connection_kind)
-        && shell_prompt_input_active
-        && !terminal_application_mode_active(mode)
-        && !mode.contains(TermMode::ALT_SCREEN)
-        && !mode.contains(TermMode::VI)
-}
-
-fn history_prompt_connection_supported(connection_kind: TerminalConnectionKind) -> bool {
-    matches!(
-        connection_kind,
-        TerminalConnectionKind::Local | TerminalConnectionKind::Ssh
-    )
-}
-
-fn terminal_history_scope(
-    connection_kind: TerminalConnectionKind,
-    connection_id: Option<i64>,
-) -> Option<TerminalHistoryScope> {
-    match connection_kind {
-        TerminalConnectionKind::Local => Some(TerminalHistoryScope::local()),
-        TerminalConnectionKind::Ssh => connection_id.map(TerminalHistoryScope::ssh),
-        TerminalConnectionKind::Serial => None,
-    }
-}
-
-fn terminal_application_mode_active(mode: TermMode) -> bool {
-    mode.intersects(TermMode::MOUSE_MODE)
-        || mode.contains(TermMode::FOCUS_IN_OUT)
-        || mode.contains(TermMode::DISAMBIGUATE_ESC_CODES)
-}
-
-fn local_tui_application_active(mode: TermMode) -> bool {
-    mode.contains(TermMode::ALT_SCREEN) || terminal_application_mode_active(mode)
-}
-
-fn should_confirm_local_terminal_close(
-    connection_kind: TerminalConnectionKind,
-    command_running: bool,
-    mode: TermMode,
-    child_exited: Option<i32>,
-) -> bool {
-    connection_kind == TerminalConnectionKind::Local
-        && child_exited.is_none()
-        && (command_running || local_tui_application_active(mode))
-}
-
-const HISTORY_PROMPT_DROPDOWN_MIN_WIDTH: f32 = 300.0;
-const HISTORY_PROMPT_DROPDOWN_MAX_WIDTH: f32 = 500.0;
-const HISTORY_PROMPT_DROPDOWN_GAP_Y: f32 = 6.0;
-const HISTORY_PROMPT_DROPDOWN_EDGE_PADDING: f32 = 8.0;
-const HISTORY_PROMPT_DROPDOWN_ROW_PADDING_Y: f32 = 12.0;
-const HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y: f32 = 16.0;
-const HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT: f32 = 20.0;
-
-fn estimate_history_prompt_dropdown_height(
-    line_height: Pixels,
-    match_count: usize,
-    search_mode: bool,
-) -> Pixels {
-    let row_count = match_count.max(1) as f32;
-    let rows_height = (line_height + px(HISTORY_PROMPT_DROPDOWN_ROW_PADDING_Y)) * row_count;
-    let header_height = if search_mode {
-        px(HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT)
-    } else {
-        px(0.0)
-    };
-
-    px(HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y) + header_height + rows_height
-}
-
-fn history_prompt_dropdown_origin(
-    terminal_bounds: Bounds<Pixels>,
-    cell_width: Pixels,
-    line_height: Pixels,
-    cursor_line: i32,
-    cursor_col: usize,
-    match_count: usize,
-    search_mode: bool,
-) -> Point<Pixels> {
-    let cursor_left = terminal_bounds.origin.x + cell_width * cursor_col as f32;
-    let cursor_top = terminal_bounds.origin.y + line_height * cursor_line as f32;
-    let dropdown_width = (terminal_bounds.size.width
-        - px(HISTORY_PROMPT_DROPDOWN_EDGE_PADDING * 2.0))
-    .min(px(HISTORY_PROMPT_DROPDOWN_MAX_WIDTH))
-    .max(px(HISTORY_PROMPT_DROPDOWN_MIN_WIDTH));
-    let dropdown_height =
-        estimate_history_prompt_dropdown_height(line_height, match_count, search_mode);
-    let min_left = terminal_bounds.origin.x;
-    let max_left = (terminal_bounds.right() - dropdown_width).max(min_left);
-    let left = cursor_left.min(max_left).max(min_left);
-    let below_top = cursor_top + line_height + px(HISTORY_PROMPT_DROPDOWN_GAP_Y);
-    let min_top = terminal_bounds.origin.y;
-    let max_top = (terminal_bounds.bottom() - dropdown_height).max(min_top);
-    let fits_below = below_top + dropdown_height <= terminal_bounds.bottom();
-    let preferred_above_top = cursor_top - dropdown_height - px(HISTORY_PROMPT_DROPDOWN_GAP_Y);
-    let top = if fits_below {
-        below_top.min(max_top)
-    } else {
-        preferred_above_top.max(min_top).min(max_top)
-    };
-
-    Point::new(left, top)
-}
-
-fn history_prompt_overlay_bounds(terminal_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
-    Bounds::new(Point::new(px(0.0), px(0.0)), terminal_bounds.size)
 }
 
 /// 正在调整大小的面板
