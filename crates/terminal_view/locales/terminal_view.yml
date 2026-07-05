@@ -189,6 +189,10 @@ SSH:
     en: Please wait for connection testing to complete.
     zh-CN: 请等待连接测试完成后再保存。
     zh-HK: 請等待連線測試完成後再儲存。
+  save_while_uninstalling_shell_integration:
+    en: Please wait for remote Shell integration uninstall to complete.
+    zh-CN: 请等待远端 Shell 集成卸载完成后再保存。
+    zh-HK: 請等待遠端 Shell 整合解除安裝完成後再儲存。
   workspace:
     en: Workspace
     zh-CN: 工作区
@@ -339,9 +343,33 @@ SSH:
     zh-CN: 禁用 Shell 集成
     zh-HK: 禁用 Shell 集成
   disable_shell_integration_desc:
-    en: Run native login shell without OSC injection (no prompt hook or command recording)
-    zh-CN: 走裸 login shell，不注入 OSC（失去命令记录 / prompt hook）
-    zh-HK: 走裸 login shell，不注入 OSC（失去命令記錄 / prompt hook）
+    en: Disable OSC shell hooks; command history, prompt status, working-directory tracking, and terminal/file-manager path sync will be unavailable
+    zh-CN: 关闭 OSC Shell hook，将无法使用命令历史、prompt 状态、工作目录跟踪，以及终端/文件管理器路径同步
+    zh-HK: 關閉 OSC Shell hook，將無法使用命令歷史、prompt 狀態、工作目錄追蹤，以及終端/文件管理器路徑同步
+  remote_shell_integration:
+    en: Remote Shell Integration
+    zh-CN: 远端 Shell 集成
+    zh-HK: 遠端 Shell 整合
+  uninstall_shell_integration:
+    en: Uninstall
+    zh-CN: 卸载
+    zh-HK: 解除安裝
+  uninstalling_shell_integration:
+    en: Uninstalling...
+    zh-CN: 卸载中...
+    zh-HK: 解除安裝中...
+  uninstall_shell_integration_desc:
+    en: Remove OnetCli managed rc blocks and ~/.config/onetcli shell integration scripts from the remote host. Future sessions will reinstall them when Shell integration is enabled.
+    zh-CN: 删除远端主机上由 OnetCli 管理的 rc 配置块和 ~/.config/onetcli Shell 集成脚本。后续会话在启用 Shell 集成时会重新安装。
+    zh-HK: 刪除遠端主機上由 OnetCli 管理的 rc 設定區塊和 ~/.config/onetcli Shell 整合腳本。後續工作階段在啟用 Shell 整合時會重新安裝。
+  uninstall_shell_integration_success:
+    en: Remote Shell integration uninstalled.
+    zh-CN: 已卸载远端 Shell 集成。
+    zh-HK: 已解除安裝遠端 Shell 整合。
+  uninstall_shell_integration_failed:
+    en: "Failed to uninstall remote Shell integration: %{error}"
+    zh-CN: "卸载远端 Shell 集成失败：%{error}"
+    zh-HK: "解除安裝遠端 Shell 整合失敗：%{error}"
   # 其他设置
   remark:
     en: Remark
@@ -442,9 +470,9 @@ Settings:
     zh-CN: 路径与终端同步
     zh-HK: 路徑與終端同步
   sync_path_help:
-    en: Automatically sync the current SSH working directory to the file manager through the shell integration script.
-    zh-CN: 通过 Shell 集成脚本自动将当前 SSH 工作目录同步到文件管理器。
-    zh-HK: 透過 Shell 整合腳本自動將目前 SSH 工作目錄同步到文件管理器。
+    en: Automatically sync the current SSH terminal working directory to the file manager through the shell integration script. Enabled by default for new installs.
+    zh-CN: 通过 Shell 集成脚本自动将当前 SSH 终端工作目录同步到文件管理器。新安装默认开启。
+    zh-HK: 透過 Shell 整合腳本自動將目前 SSH 終端工作目錄同步到文件管理器。新安裝預設開啟。
 
 CustomHighlight:
   title:

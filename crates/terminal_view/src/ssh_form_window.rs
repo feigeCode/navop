@@ -29,10 +29,11 @@ use one_core::storage::{
 use rust_i18n::t;
 use ssh::{
     JumpServerConnectConfig, ProxyConnectConfig, ProxyType, RusshClient, SshAuth, SshClient,
-    SshConnectConfig,
+    SshConnectConfig, SshSessionManager,
 };
 use std::sync::Arc;
 use std::time::Duration;
+use terminal::SshBackend;
 
 use crate::ssh_form_mfa::{
     CapturedMfaRequest, FormMfaPrompt, FormMfaRequest, JumpServerMfaResponder,
@@ -231,7 +232,9 @@ pub struct SshFormWindow {
     disable_shell_integration: bool,
 
     is_testing: bool,
+    is_uninstalling_shell_integration: bool,
     test_result: Option<Result<(), String>>,
+    shell_integration_uninstall_result: Option<Result<(), String>>,
     on_saved: Option<SshFormSavedCallback>,
     save_action: SaveAction,
 }
@@ -255,8 +258,27 @@ fn build_connection_test_signature(params: &SshParams) -> String {
     format!("{:?}", params)
 }
 
-fn validate_save_state(is_testing: bool) -> Result<(), &'static str> {
-    if is_testing { Err("testing") } else { Ok(()) }
+fn validate_save_state(
+    is_testing: bool,
+    is_uninstalling_shell_integration: bool,
+) -> Result<(), &'static str> {
+    if is_testing {
+        Err("testing")
+    } else if is_uninstalling_shell_integration {
+        Err("uninstalling_shell_integration")
+    } else {
+        Ok(())
+    }
+}
+
+fn save_block_message(reason: &str) -> String {
+    match reason {
+        "testing" => t!("SSH.save_while_testing").to_string(),
+        "uninstalling_shell_integration" => {
+            t!("SSH.save_while_uninstalling_shell_integration").to_string()
+        }
+        _ => t!("SSH.validation_error").to_string(),
+    }
 }
 
 fn build_jump_auth_method(
@@ -603,7 +625,9 @@ impl SshFormWindow {
             sync_enabled,
             disable_shell_integration,
             is_testing: false,
+            is_uninstalling_shell_integration: false,
             test_result: None,
+            shell_integration_uninstall_result: None,
             on_saved,
             save_action: SaveAction::Close,
         }
@@ -996,6 +1020,65 @@ impl SshFormWindow {
         .detach();
     }
 
+    fn on_uninstall_shell_integration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(params) = self.build_ssh_params(cx) else {
+            self.shell_integration_uninstall_result =
+                Some(Err(t!("SSH.validation_error").to_string()));
+            cx.notify();
+            return;
+        };
+
+        self.is_uninstalling_shell_integration = true;
+        self.shell_integration_uninstall_result = None;
+        cx.notify();
+
+        let signature = build_connection_test_signature(&params);
+        let mut config = self.build_ssh_connect_config(&params);
+        let jump_mfa_capture = CapturedMfaRequest::default();
+        let jump_mfa_responses = self.collect_jump_mfa_responses(cx, &signature);
+        if let Some(jump_server) = &config.jump_server {
+            let jump_password = match &jump_server.auth {
+                SshAuth::Password(password) => Some(password.clone()),
+                _ => None,
+            };
+            config.keyboard_interactive_responder = Some(Arc::new(JumpServerMfaResponder::new(
+                jump_mfa_responses,
+                jump_password,
+                jump_mfa_capture.clone(),
+            )));
+        }
+        let window_handle = window.window_handle();
+
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let spawn_result = Tokio::spawn_result(cx, async move {
+                let session_manager = Arc::new(SshSessionManager::new(config));
+                SshBackend::uninstall_shell_integration(session_manager).await
+            })
+            .await;
+
+            let jump_mfa_request = match &spawn_result {
+                Err(error) if is_jump_mfa_required_error(error.as_ref()) => jump_mfa_capture.take(),
+                _ => None,
+            };
+            let uninstall_result = spawn_result.map_err(|error| error.to_string());
+
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.is_uninstalling_shell_integration = false;
+                    if let Some(request) = jump_mfa_request {
+                        this.apply_jump_mfa_request(request, signature, window, cx);
+                        this.shell_integration_uninstall_result =
+                            Some(Err(t!("SSH.jump_mfa_required").to_string()));
+                    } else {
+                        this.shell_integration_uninstall_result = Some(uninstall_result);
+                    }
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
     fn on_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.save_action = SaveAction::Close;
         self.save(window, cx);
@@ -1007,8 +1090,10 @@ impl SshFormWindow {
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if validate_save_state(self.is_testing).is_err() {
-            self.test_result = Some(Err(t!("SSH.save_while_testing").to_string()));
+        if let Err(reason) =
+            validate_save_state(self.is_testing, self.is_uninstalling_shell_integration)
+        {
+            self.test_result = Some(Err(save_block_message(reason)));
             cx.notify();
             return;
         }
@@ -1275,6 +1360,38 @@ impl SshFormWindow {
                         ),
                 ),
             )
+            .child(
+                self.render_form_row(
+                    &t!("SSH.remote_shell_integration"),
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            h_flex().gap_2().child(
+                                Button::new("uninstall-shell-integration")
+                                    .icon(IconName::Remove)
+                                    .danger()
+                                    .small()
+                                    .label(if self.is_uninstalling_shell_integration {
+                                        t!("SSH.uninstalling_shell_integration").to_string()
+                                    } else {
+                                        t!("SSH.uninstall_shell_integration").to_string()
+                                    })
+                                    .disabled(
+                                        self.is_testing || self.is_uninstalling_shell_integration,
+                                    )
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.on_uninstall_shell_integration(window, cx);
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.uninstall_shell_integration_desc").to_string()),
+                        ),
+                ),
+            )
     }
 
     /// 渲染跳板机标签页
@@ -1533,6 +1650,8 @@ impl Focusable for SshFormWindow {
 impl Render for SshFormWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_testing = self.is_testing;
+        let is_uninstalling_shell_integration = self.is_uninstalling_shell_integration;
+        let is_busy = is_testing || is_uninstalling_shell_integration;
         let active_tab = self.active_tab;
 
         let test_result_element = match &self.test_result {
@@ -1548,6 +1667,19 @@ impl Render for SshFormWindow {
                     .text_color(cx.theme().danger)
                     .child(e.clone()),
             ),
+            None => None,
+        };
+
+        let uninstall_result_element = match &self.shell_integration_uninstall_result {
+            Some(Ok(())) => Some(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().success)
+                    .child(t!("SSH.uninstall_shell_integration_success").to_string()),
+            ),
+            Some(Err(e)) => Some(div().text_sm().text_color(cx.theme().danger).child(
+                t!("SSH.uninstall_shell_integration_failed", error = e.as_str()).to_string(),
+            )),
             None => None,
         };
 
@@ -1594,6 +1726,9 @@ impl Render for SshFormWindow {
             .when_some(test_result_element, |this, elem| {
                 this.child(h_flex().justify_center().pb_2().child(elem))
             })
+            .when_some(uninstall_result_element, |this, elem| {
+                this.child(h_flex().justify_center().pb_2().child(elem))
+            })
             // 底部按钮
             .child(
                 h_flex()
@@ -1620,7 +1755,7 @@ impl Render for SshFormWindow {
                             } else {
                                 t!("Connection.test").to_string()
                             })
-                            .disabled(is_testing)
+                            .disabled(is_busy)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.on_test(window, cx);
                             })),
@@ -1631,7 +1766,7 @@ impl Render for SshFormWindow {
                                 .small()
                                 .outline()
                                 .label("保存并继续")
-                                .disabled(is_testing)
+                                .disabled(is_busy)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.on_save_and_continue(window, cx);
                                 })),
@@ -1642,7 +1777,7 @@ impl Render for SshFormWindow {
                             .small()
                             .primary()
                             .label(t!("Common.ok").to_string())
-                            .disabled(is_testing)
+                            .disabled(is_busy)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.on_save(window, cx);
                             })),
@@ -1725,12 +1860,20 @@ mod tests {
 
     #[test]
     fn save_gate_allows_saving_without_successful_connection_test() {
-        assert_eq!(validate_save_state(false), Ok(()));
+        assert_eq!(validate_save_state(false, false), Ok(()));
     }
 
     #[test]
     fn save_gate_keeps_blocking_while_connection_test_is_running() {
-        assert_eq!(validate_save_state(true), Err("testing"));
+        assert_eq!(validate_save_state(true, false), Err("testing"));
+    }
+
+    #[test]
+    fn save_gate_keeps_blocking_while_shell_integration_uninstall_is_running() {
+        assert_eq!(
+            validate_save_state(false, true),
+            Err("uninstalling_shell_integration")
+        );
     }
 
     #[test]

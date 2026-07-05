@@ -542,7 +542,7 @@ pub struct AppSettings {
     pub terminal_enable_autocomplete: bool,
     #[serde(default = "default_true")]
     pub terminal_middle_click_paste: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub terminal_sync_path_with_terminal: bool,
     #[serde(default = "default_terminal_theme")]
     pub terminal_theme: String,
@@ -836,7 +836,7 @@ impl Default for AppSettings {
             terminal_auto_copy: default_true(),
             terminal_enable_autocomplete: default_true(),
             terminal_middle_click_paste: default_true(),
-            terminal_sync_path_with_terminal: false,
+            terminal_sync_path_with_terminal: true,
             terminal_theme: default_terminal_theme(),
             terminal_cursor_blink: false,
             terminal_confirm_multiline_paste: default_true(),
@@ -1073,6 +1073,24 @@ mod tests {
         let settings = AppSettings::default();
 
         assert_eq!(1000, settings.sql_query_max_rows);
+    }
+
+    #[test]
+    fn app_settings_default_enables_terminal_file_manager_path_sync() {
+        let settings = AppSettings::default();
+
+        assert!(settings.terminal_sync_path_with_terminal);
+    }
+
+    #[test]
+    fn app_settings_deserializes_terminal_file_manager_path_sync_enabled_by_default() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark"
+        }))
+        .expect("旧版 settings.json 应能读取");
+
+        assert!(settings.terminal_sync_path_with_terminal);
     }
 
     #[test]
