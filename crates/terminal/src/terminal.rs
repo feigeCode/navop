@@ -572,18 +572,26 @@ fn prepare_shell_integration(shell: Option<&str>) -> (Vec<(String, String)>, Vec
             return (extra_env, extra_args);
         }
 
-        let script = integration_path.display();
+        let script = shell_escape_arg(&integration_path.to_string_lossy());
+        let onetcli_zdotdir = shell_escape_arg(&zsh_dir.to_string_lossy());
 
         // .zshenv — 恢复原始 ZDOTDIR 并 source 用户的 .zshenv
-        let zshenv = "ZDOTDIR=\"${_ONETCLI_ORIG_ZDOTDIR:-$HOME}\"\n\
-                       [[ -f \"$ZDOTDIR/.zshenv\" ]] && source \"$ZDOTDIR/.zshenv\"\n";
+        let zshenv = format!(
+            "_ONETCLI_ZDOTDIR={onetcli_zdotdir}\n\
+             _ONETCLI_USER_ZDOTDIR=\"${{_ONETCLI_ORIG_ZDOTDIR:-$HOME}}\"\n\
+             ZDOTDIR=\"$_ONETCLI_USER_ZDOTDIR\"\n\
+             [[ -f \"$ZDOTDIR/.zshenv\" ]] && source \"$ZDOTDIR/.zshenv\"\n\
+             _ONETCLI_USER_ZDOTDIR=\"${{ZDOTDIR:-$_ONETCLI_USER_ZDOTDIR}}\"\n\
+             export _ONETCLI_USER_ZDOTDIR\n\
+             export ZDOTDIR=\"$_ONETCLI_ZDOTDIR\"\n"
+        );
         let _ = fs::write(zsh_dir.join(".zshenv"), zshenv);
 
         // .zshrc — 恢复 ZDOTDIR，source 用户 .zshrc，再 source 集成脚本
         let zshrc = format!(
-            "ZDOTDIR=\"${{_ONETCLI_ORIG_ZDOTDIR:-$HOME}}\"\n\
+            "ZDOTDIR=\"${{_ONETCLI_USER_ZDOTDIR:-${{_ONETCLI_ORIG_ZDOTDIR:-$HOME}}}}\"\n\
              [[ -f \"$ZDOTDIR/.zshrc\" ]] && source \"$ZDOTDIR/.zshrc\"\n\
-             source \"{script}\"\n"
+             source {script}\n"
         );
         let _ = fs::write(zsh_dir.join(".zshrc"), zshrc);
 
@@ -2157,6 +2165,7 @@ mod tests {
     use ssh::{KeyboardInteractiveRequest, KeyboardInteractiveResponder};
     use std::collections::VecDeque;
     use std::fs;
+    use std::process::Command;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
@@ -2402,6 +2411,51 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&session_dir);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn zsh_shell_integration_sources_generated_zshrc() {
+        let zsh = std::path::Path::new("/bin/zsh");
+        if !zsh.exists() {
+            return;
+        }
+
+        let session_dir = std::env::temp_dir().join(format!("onetcli-{}", std::process::id()));
+        let home_dir =
+            std::env::temp_dir().join(format!("onetcli-zsh-home-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&session_dir);
+        let _ = fs::remove_dir_all(&home_dir);
+        fs::create_dir_all(&home_dir).expect("应创建临时 HOME");
+
+        let (env_pairs, args) = super::prepare_shell_integration(Some("/bin/zsh"));
+        assert!(args.is_empty(), "zsh 注入不应依赖额外启动参数");
+
+        let mut command = Command::new(zsh);
+        command
+            .arg("-i")
+            .arg("-c")
+            .arg("print -r -- ${_ONETCLI_SHELL_INTEGRATED:-missing}")
+            .env("HOME", &home_dir);
+        for (key, value) in env_pairs {
+            command.env(key, value);
+        }
+        command.env("_ONETCLI_ORIG_ZDOTDIR", &home_dir);
+
+        let output = command.output().expect("应能启动 zsh");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stdout.lines().any(|line| line == "1"),
+            "zsh 应加载生成的 .zshrc 并 source shell integration，stdout: {stdout:?}"
+        );
+        assert!(
+            !stderr.contains("recursion limit") && !stderr.contains("job table full"),
+            "zsh integration 不应递归 source 临时 .zshrc，stderr: {stderr:?}"
+        );
+
+        let _ = fs::remove_dir_all(&session_dir);
+        let _ = fs::remove_dir_all(&home_dir);
     }
 
     #[test]
