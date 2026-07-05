@@ -1,13 +1,14 @@
 use std::fmt::Display;
 use std::sync::Arc;
+use std::time::Instant;
 
-use db::GlobalDbState;
+use db::{GlobalDbState, SqlResult, StreamingProgress};
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, Hsla, IntoElement, ParentElement, Styled, Window,
     div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, IndexPath, Sizable, StyledExt, WindowExt,
+    ActiveTheme, Disableable, IndexPath, Sizable, StyledExt, WindowExt,
     button::Button,
     checkbox::Checkbox,
     clipboard::Clipboard,
@@ -18,14 +19,18 @@ use gpui_component::{
     progress::Progress,
     scroll::ScrollableElement,
     select::{SearchableVec, Select, SelectItem, SelectState},
+    switch::Switch,
     v_flex,
 };
 use one_core::storage::{
     ConnectionRepository, ConnectionType, GlobalStorageState, StoredConnection, traits::Repository,
 };
 use rust_i18n::t;
+use tokio::sync::mpsc;
 
-use crate::compare::{CompareProgress, CompareTargetScope, execute_sync_sql};
+use crate::compare::{
+    CompareProgress, CompareSyncExecutionOptions, CompareTargetScope, execute_sync_sql,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompareStep {
@@ -38,6 +43,123 @@ pub(crate) enum CompareStep {
 pub(crate) struct SyncSqlExecutionLogEntry {
     pub message: String,
     pub is_error: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SyncSqlExecutionSummary {
+    success_count: usize,
+    error_count: usize,
+    stopped_on_error: bool,
+}
+
+impl SyncSqlExecutionSummary {
+    fn total_count(&self) -> usize {
+        self.success_count + self.error_count
+    }
+}
+
+#[derive(Clone)]
+struct SyncSqlExecutionRuntime {
+    options: CompareSyncExecutionOptions,
+    status: Entity<String>,
+    execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
+}
+
+impl SyncSqlExecutionRuntime {
+    async fn consume_progress(
+        &self,
+        rx: &mut mpsc::Receiver<StreamingProgress>,
+        cx: &mut AsyncApp,
+    ) -> SyncSqlExecutionSummary {
+        let mut summary = SyncSqlExecutionSummary::default();
+        let mut last_progress_log = Instant::now();
+        while let Some(progress) = rx.recv().await {
+            if self.handle_progress(progress, &mut summary, &mut last_progress_log, cx) {
+                break;
+            }
+        }
+        summary
+    }
+
+    fn handle_progress(
+        &self,
+        progress: StreamingProgress,
+        summary: &mut SyncSqlExecutionSummary,
+        last_progress_log: &mut Instant,
+        cx: &mut AsyncApp,
+    ) -> bool {
+        match &progress.result {
+            SqlResult::Error(error) => {
+                summary.error_count += 1;
+                self.append_async(
+                    sync_sql_progress_error_log_entry(progress.current, &error.message),
+                    cx,
+                );
+                summary.stopped_on_error = !self.options.continue_on_error;
+                summary.stopped_on_error
+            }
+            _ => {
+                summary.success_count += 1;
+                self.handle_success_progress(progress, last_progress_log, cx)
+            }
+        }
+    }
+
+    fn handle_success_progress(
+        &self,
+        progress: StreamingProgress,
+        last_progress_log: &mut Instant,
+        cx: &mut AsyncApp,
+    ) -> bool {
+        let should_log =
+            progress.current == progress.total || last_progress_log.elapsed().as_millis() >= 200;
+        if should_log {
+            *last_progress_log = Instant::now();
+            self.append_async(
+                sync_sql_statement_progress_log_entry(
+                    progress.current,
+                    progress.progress_percent(),
+                ),
+                cx,
+            );
+        }
+        false
+    }
+
+    fn fail_start(&self, is_executing: &Entity<bool>, error: impl Display, cx: &mut App) {
+        self.set_executing(is_executing, false, cx);
+        let entry = sync_sql_execution_error_log_entry(error);
+        self.set_status(entry.message.clone(), cx);
+        self.append_app(entry, cx);
+    }
+
+    fn finish(&self, is_executing: &Entity<bool>, summary: SyncSqlExecutionSummary, cx: &mut App) {
+        self.set_executing(is_executing, false, cx);
+        let entry = sync_sql_execution_summary_log_entry(&summary);
+        self.set_status(entry.message.clone(), cx);
+        self.append_app(entry, cx);
+    }
+
+    fn set_executing(&self, is_executing: &Entity<bool>, value: bool, cx: &mut App) {
+        is_executing.update(cx, |executing, cx| {
+            *executing = value;
+            cx.notify();
+        });
+    }
+
+    fn append_app(&self, entry: SyncSqlExecutionLogEntry, cx: &mut App) {
+        append_sync_sql_execution_log_app(&self.execution_log, entry, cx);
+    }
+
+    fn set_status(&self, message: String, cx: &mut App) {
+        set_sync_sql_execution_status_app(&self.status, message, cx);
+    }
+
+    fn append_async(&self, entry: SyncSqlExecutionLogEntry, cx: &mut AsyncApp) {
+        let _ = cx.update(|cx| {
+            self.append_app(entry, cx);
+        });
+    }
 }
 
 impl SyncSqlExecutionLogEntry {
@@ -293,7 +415,8 @@ pub(super) fn compare_progress_view(progress: &CompareProgress, cx: &App) -> imp
 pub(super) fn start_sync_sql_execution<T: 'static>(
     target: Option<CompareTargetScope>,
     sql: String,
-    _status: Entity<String>,
+    options: CompareSyncExecutionOptions,
+    status: Entity<String>,
     is_executing: Entity<bool>,
     execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
     window: &mut Window,
@@ -301,26 +424,47 @@ pub(super) fn start_sync_sql_execution<T: 'static>(
 ) {
     let Some(target) = target else {
         let message = t!("Compare.sync_sql_compare_first").to_string();
+        set_sync_sql_execution_status(&status, message.clone(), cx);
         append_sync_sql_execution_log(&execution_log, SyncSqlExecutionLogEntry::error(message), cx);
         return;
     };
     if sql.trim().is_empty() {
         let message = t!("Compare.sync_sql_empty").to_string();
+        set_sync_sql_execution_status(&status, message.clone(), cx);
         append_sync_sql_execution_log(&execution_log, SyncSqlExecutionLogEntry::error(message), cx);
         return;
     }
 
     if contains_destructive_sync_sql(&sql) {
-        open_destructive_sync_sql_dialog(target, sql, is_executing, execution_log, window, cx);
+        open_destructive_sync_sql_dialog(
+            target,
+            sql,
+            options,
+            status,
+            is_executing,
+            execution_log,
+            window,
+            cx,
+        );
         return;
     }
 
-    execute_sync_sql_now(target, sql, is_executing, execution_log, cx);
+    execute_sync_sql_now(
+        target,
+        sql,
+        options,
+        status,
+        is_executing,
+        execution_log,
+        cx,
+    );
 }
 
 fn open_destructive_sync_sql_dialog<T: 'static>(
     target: CompareTargetScope,
     sql: String,
+    options: CompareSyncExecutionOptions,
+    status: Entity<String>,
     is_executing: Entity<bool>,
     execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
     window: &mut Window,
@@ -330,6 +474,8 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
     window.open_dialog(cx, move |dialog, _window, _cx| {
         let target = target.clone();
         let sql = sql.clone();
+        let options = options;
+        let status = status.clone();
         let is_executing = is_executing.clone();
         let execution_log = execution_log.clone();
         let view = view.clone();
@@ -353,10 +499,20 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
             .on_ok(move |_, _, cx| {
                 let target = target.clone();
                 let sql = sql.clone();
+                let options = options;
+                let status = status.clone();
                 let is_executing = is_executing.clone();
                 let execution_log = execution_log.clone();
                 view.update(cx, |_, cx| {
-                    execute_sync_sql_now(target, sql, is_executing, execution_log, cx);
+                    execute_sync_sql_now(
+                        target,
+                        sql,
+                        options,
+                        status,
+                        is_executing,
+                        execution_log,
+                        cx,
+                    );
                 });
                 true
             })
@@ -366,6 +522,8 @@ fn open_destructive_sync_sql_dialog<T: 'static>(
 fn execute_sync_sql_now<T: 'static>(
     target: CompareTargetScope,
     sql: String,
+    options: CompareSyncExecutionOptions,
+    status: Entity<String>,
     is_executing: Entity<bool>,
     execution_log: Entity<Vec<SyncSqlExecutionLogEntry>>,
     cx: &mut Context<T>,
@@ -376,6 +534,7 @@ fn execute_sync_sql_now<T: 'static>(
         cx.notify();
     });
     let executing_message = t!("Compare.sync_sql_executing").to_string();
+    set_sync_sql_execution_status(&status, executing_message.clone(), cx);
     append_sync_sql_execution_log(
         &execution_log,
         SyncSqlExecutionLogEntry::info(executing_message),
@@ -383,22 +542,23 @@ fn execute_sync_sql_now<T: 'static>(
     );
 
     cx.spawn(async move |_, cx: &mut AsyncApp| {
-        let result = execute_sync_sql(target, sql, db_state, cx).await;
-        let _ = cx.update(|cx| {
-            is_executing.update(cx, |executing, cx| {
-                *executing = false;
-                cx.notify();
-            });
-            match result {
-                Ok(count) => {
-                    let entry = sync_sql_execution_success_log_entry(count);
-                    append_sync_sql_execution_log_app(&execution_log, entry, cx);
-                }
-                Err(error) => {
-                    let entry = sync_sql_execution_error_log_entry(error);
-                    append_sync_sql_execution_log_app(&execution_log, entry, cx);
-                }
+        let runtime = SyncSqlExecutionRuntime {
+            options,
+            status,
+            execution_log,
+        };
+        let mut rx = match execute_sync_sql(target, sql, db_state, options, cx) {
+            Ok(rx) => rx,
+            Err(error) => {
+                let _ = cx.update(|cx| {
+                    runtime.fail_start(&is_executing, error, cx);
+                });
+                return;
             }
+        };
+        let summary = runtime.consume_progress(&mut rx, cx).await;
+        let _ = cx.update(|cx| {
+            runtime.finish(&is_executing, summary, cx);
         });
     })
     .detach();
@@ -418,10 +578,75 @@ pub(crate) fn sync_sql_execution_success_log_entry(count: usize) -> SyncSqlExecu
     SyncSqlExecutionLogEntry::info(t!("Compare.sync_sql_executed", count = count).to_string())
 }
 
+fn sync_sql_execution_summary_log_entry(
+    summary: &SyncSqlExecutionSummary,
+) -> SyncSqlExecutionLogEntry {
+    if summary.stopped_on_error {
+        return SyncSqlExecutionLogEntry::error(
+            t!(
+                "Compare.sync_sql_stopped_on_error",
+                success = summary.success_count,
+                error = summary.error_count
+            )
+            .to_string(),
+        );
+    }
+    if summary.error_count > 0 {
+        return SyncSqlExecutionLogEntry::error(
+            t!(
+                "Compare.sync_sql_finished_with_errors",
+                success = summary.success_count,
+                error = summary.error_count
+            )
+            .to_string(),
+        );
+    }
+    sync_sql_execution_success_log_entry(summary.total_count())
+}
+
 pub(crate) fn sync_sql_execution_error_log_entry(error: impl Display) -> SyncSqlExecutionLogEntry {
     SyncSqlExecutionLogEntry::error(
         t!("Compare.execution_failed", error = error.to_string()).to_string(),
     )
+}
+
+fn sync_sql_statement_progress_log_entry(
+    statement: usize,
+    progress: f32,
+) -> SyncSqlExecutionLogEntry {
+    SyncSqlExecutionLogEntry::info(
+        t!(
+            "Compare.sync_sql_statement_progress",
+            statement = statement,
+            progress = format!("{progress:.1}")
+        )
+        .to_string(),
+    )
+}
+
+fn sync_sql_statement_failed_log_entry(
+    statement: usize,
+    error: impl Display,
+) -> SyncSqlExecutionLogEntry {
+    SyncSqlExecutionLogEntry::error(
+        t!(
+            "Compare.sync_sql_statement_failed",
+            statement = statement,
+            error = error.to_string()
+        )
+        .to_string(),
+    )
+}
+
+fn sync_sql_progress_error_log_entry(
+    statement: usize,
+    error: impl Display,
+) -> SyncSqlExecutionLogEntry {
+    if statement == 0 {
+        sync_sql_execution_error_log_entry(error)
+    } else {
+        sync_sql_statement_failed_log_entry(statement, error)
+    }
 }
 
 pub(super) fn reset_sync_sql_execution_log<T: 'static>(
@@ -460,6 +685,24 @@ fn append_sync_sql_execution_log_app(
 ) {
     execution_log.update(cx, |log, cx| {
         log.push(entry);
+        cx.notify();
+    });
+}
+
+fn set_sync_sql_execution_status<T: 'static>(
+    status: &Entity<String>,
+    message: String,
+    cx: &mut Context<T>,
+) {
+    status.update(cx, |status, cx| {
+        *status = message;
+        cx.notify();
+    });
+}
+
+fn set_sync_sql_execution_status_app(status: &Entity<String>, message: String, cx: &mut App) {
+    status.update(cx, |status, cx| {
+        *status = message;
         cx.notify();
     });
 }
@@ -598,6 +841,61 @@ pub(super) fn sql_editor_panel(
         )
 }
 
+pub(super) fn sync_sql_execution_options_row<T: 'static>(
+    use_transaction: Entity<bool>,
+    continue_on_error: Entity<bool>,
+    is_executing: bool,
+    cx: &mut Context<T>,
+) -> impl IntoElement {
+    let transaction_checked = *use_transaction.read(cx);
+    let continue_checked = *continue_on_error.read(cx);
+    let transaction_toggle = use_transaction.clone();
+    let transaction_continue = continue_on_error.clone();
+    let continue_toggle = continue_on_error.clone();
+    let continue_transaction = use_transaction.clone();
+    h_flex()
+        .gap_4()
+        .items_center()
+        .child(
+            Switch::new("compare-sync-use-transaction")
+                .small()
+                .checked(transaction_checked)
+                .disabled(is_executing)
+                .label(t!("Compare.use_transaction").to_string())
+                .on_click(move |checked, _, cx| {
+                    transaction_toggle.update(cx, |value, cx| {
+                        *value = *checked;
+                        if *value {
+                            transaction_continue.update(cx, |continue_value, cx| {
+                                *continue_value = false;
+                                cx.notify();
+                            });
+                        }
+                        cx.notify();
+                    });
+                }),
+        )
+        .child(
+            Switch::new("compare-sync-continue-on-error")
+                .small()
+                .checked(continue_checked)
+                .disabled(is_executing)
+                .label(t!("Compare.continue_on_error").to_string())
+                .on_click(move |checked, _, cx| {
+                    continue_toggle.update(cx, |value, cx| {
+                        *value = *checked;
+                        if *value {
+                            continue_transaction.update(cx, |transaction_value, cx| {
+                                *transaction_value = false;
+                                cx.notify();
+                            });
+                        }
+                        cx.notify();
+                    });
+                }),
+        )
+}
+
 pub(super) fn sync_sql_execution_log_panel(
     execution_log: &Entity<Vec<SyncSqlExecutionLogEntry>>,
     is_executing: bool,
@@ -608,6 +906,7 @@ pub(super) fn sync_sql_execution_log_panel(
     v_flex()
         .size_full()
         .min_h_0()
+        .overflow_hidden()
         .gap_2()
         .child(
             h_flex()
@@ -628,14 +927,16 @@ pub(super) fn sync_sql_execution_log_panel(
         .child(
             div()
                 .flex_1()
+                .h_full()
                 .min_h_0()
                 .border_1()
                 .border_color(cx.theme().border)
                 .rounded_md()
                 .bg(cx.theme().background)
+                .overflow_hidden()
                 .overflow_y_scrollbar()
                 .child(
-                    v_flex().p_2().gap_1().children(
+                    v_flex().w_full().p_2().gap_1().children(
                         entries
                             .into_iter()
                             .enumerate()
@@ -683,8 +984,10 @@ mod tests {
     };
 
     use super::{
-        ConnectionSelectItem, SyncSqlExecutionLogEntry, connection_select_state,
-        selected_connection_id, start_sync_sql_execution,
+        CompareSyncExecutionOptions, ConnectionSelectItem, SyncSqlExecutionLogEntry,
+        SyncSqlExecutionSummary, connection_select_state, selected_connection_id,
+        start_sync_sql_execution, sync_sql_execution_summary_log_entry,
+        sync_sql_progress_error_log_entry,
     };
 
     struct ConnectionSelectTestRoot {
@@ -745,7 +1048,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn sync_sql_execution_error_is_logged_without_changing_footer_status(cx: &mut TestAppContext) {
+    fn sync_sql_execution_error_updates_footer_status(cx: &mut TestAppContext) {
         let (root, cx) = cx.add_window_view(|_, cx| SyncSqlExecutionTestRoot {
             status: cx.new(|_| "compare complete".to_string()),
             is_executing: cx.new(|_| false),
@@ -756,6 +1059,7 @@ mod tests {
             start_sync_sql_execution(
                 None,
                 "SELECT 1;".to_string(),
+                CompareSyncExecutionOptions::default(),
                 root.status.clone(),
                 root.is_executing.clone(),
                 root.execution_log.clone(),
@@ -770,9 +1074,46 @@ mod tests {
                 root.execution_log.read(cx).clone(),
             )
         });
-        assert_eq!("compare complete", status);
         assert_eq!(1, logs.len());
         assert!(logs[0].is_error);
+        assert_eq!(logs[0].message, status);
+    }
+
+    #[test]
+    fn sync_sql_execution_summary_distinguishes_success_continue_and_stop() {
+        let success = sync_sql_execution_summary_log_entry(&SyncSqlExecutionSummary {
+            success_count: 3,
+            error_count: 0,
+            stopped_on_error: false,
+        });
+        assert!(!success.is_error);
+        assert!(success.message.contains('3'));
+
+        let continued = sync_sql_execution_summary_log_entry(&SyncSqlExecutionSummary {
+            success_count: 2,
+            error_count: 4,
+            stopped_on_error: false,
+        });
+        assert!(continued.is_error);
+        assert!(continued.message.contains('2'));
+        assert!(continued.message.contains('4'));
+
+        let stopped = sync_sql_execution_summary_log_entry(&SyncSqlExecutionSummary {
+            success_count: 1,
+            error_count: 1,
+            stopped_on_error: true,
+        });
+        assert!(stopped.is_error);
+        assert!(stopped.message.contains('1'));
+    }
+
+    #[test]
+    fn sync_sql_zero_statement_error_uses_execution_failure_message() {
+        let entry = sync_sql_progress_error_log_entry(0, "session failed");
+
+        assert!(entry.is_error);
+        assert!(entry.message.contains("session failed"));
+        assert!(!entry.message.contains(" 0 "));
     }
 
     #[test]

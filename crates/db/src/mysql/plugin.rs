@@ -71,6 +71,17 @@ const MYSQL_ENGINES: &[&str] = &[
 
 static MYSQL_UI_MANIFEST: LazyLock<DatabaseUiManifest> = LazyLock::new(build_mysql_ui_manifest);
 
+fn executable_mysql_option(value: Option<&str>) -> Option<&str> {
+    let value = value?.trim();
+    if value.is_empty() || value.to_ascii_lowercase().starts_with("default ") {
+        return None;
+    }
+    value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '$')
+        .then_some(value)
+}
+
 impl MySqlPlugin {
     pub fn new() -> Self {
         Self
@@ -2788,13 +2799,13 @@ ORDER BY User, Host;"#
         sql.push_str(&definitions.join(",\n"));
         sql.push_str("\n)");
 
-        if let Some(engine) = &design.options.engine {
+        if let Some(engine) = executable_mysql_option(design.options.engine.as_deref()) {
             sql.push_str(&format!(" ENGINE={}", engine));
         }
-        if let Some(charset) = &design.options.charset {
+        if let Some(charset) = executable_mysql_option(design.options.charset.as_deref()) {
             sql.push_str(&format!(" DEFAULT CHARSET={}", charset));
         }
-        if let Some(collation) = &design.options.collation {
+        if let Some(collation) = executable_mysql_option(design.options.collation.as_deref()) {
             sql.push_str(&format!(" COLLATE={}", collation));
         }
         if !design.options.comment.is_empty() {
@@ -3031,7 +3042,7 @@ ORDER BY User, Host;"#
             && original.options.engine.is_some()
             && new.options.engine.is_some()
         {
-            if let Some(engine) = &new.options.engine {
+            if let Some(engine) = executable_mysql_option(new.options.engine.as_deref()) {
                 option_parts.push(format!("ENGINE={}", engine));
                 options_changed = true;
             }
@@ -3041,7 +3052,7 @@ ORDER BY User, Host;"#
             && original.options.charset.is_some()
             && new.options.charset.is_some()
         {
-            if let Some(charset) = &new.options.charset {
+            if let Some(charset) = executable_mysql_option(new.options.charset.as_deref()) {
                 option_parts.push(format!("DEFAULT CHARSET={}", charset));
                 options_changed = true;
             }
@@ -3051,7 +3062,7 @@ ORDER BY User, Host;"#
             && original.options.collation.is_some()
             && new.options.collation.is_some()
         {
-            if let Some(collation) = &new.options.collation {
+            if let Some(collation) = executable_mysql_option(new.options.collation.as_deref()) {
                 option_parts.push(format!("COLLATE={}", collation));
                 options_changed = true;
             }
@@ -3600,6 +3611,31 @@ mod tests {
     }
 
     #[test]
+    fn test_build_create_table_sql_skips_display_labels_in_options() {
+        let plugin = create_plugin();
+        let design = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "products".to_string(),
+            columns: vec![ColumnDefinition::new("id").data_type("INT").nullable(false)],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions {
+                engine: Some("Default InnoDB".to_string()),
+                charset: Some("utf8mb4 - UTF-8 Unicode (4 bytes)".to_string()),
+                collation: Some("Default UTF-8".to_string()),
+                comment: String::new(),
+                auto_increment: None,
+            },
+        };
+
+        let sql = plugin.build_create_table_sql(&design);
+        assert!(!sql.contains("Default InnoDB"));
+        assert!(!sql.contains("UTF-8"));
+        assert!(!sql.contains("DEFAULT CHARSET"));
+        assert!(!sql.contains("COLLATE="));
+    }
+
+    #[test]
     fn test_build_create_table_sql_with_indexes() {
         let plugin = create_plugin();
         let design = TableDesign {
@@ -3697,6 +3733,42 @@ mod tests {
         let sql = plugin.build_alter_table_sql(&original, &new);
         assert!(sql.contains("ADD COLUMN"));
         assert!(sql.contains("`email`"));
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_skips_display_labels_in_options() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![ColumnDefinition::new("id").data_type("INT")],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions {
+                engine: Some("InnoDB".to_string()),
+                charset: Some("utf8mb4".to_string()),
+                collation: Some("utf8mb4_general_ci".to_string()),
+                comment: String::new(),
+                auto_increment: None,
+            },
+        };
+        let new = TableDesign {
+            options: TableOptions {
+                engine: Some("Default InnoDB".to_string()),
+                charset: Some("utf8mb4 - UTF-8 Unicode (4 bytes)".to_string()),
+                collation: Some("Default UTF-8".to_string()),
+                comment: String::new(),
+                auto_increment: None,
+            },
+            ..original.clone()
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+        assert!(!sql.contains("Default InnoDB"));
+        assert!(!sql.contains("UTF-8"));
+        assert!(!sql.contains("DEFAULT CHARSET"));
+        assert!(!sql.contains("COLLATE="));
     }
 
     #[test]
