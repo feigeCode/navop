@@ -664,6 +664,47 @@ fn load_local_history(preferred_shell: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+#[cfg(target_os = "macos")]
+fn with_local_terminal_default_env(mut env: Vec<(String, String)>) -> Vec<(String, String)> {
+    const GUI_FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+    const MACOS_CLI_PATHS: &[&str] = &[
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+    ];
+
+    let path = env
+        .iter()
+        .find_map(|(key, value)| (key == "PATH").then_some(value.clone()))
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_else(|| GUI_FALLBACK_PATH.to_string());
+    let mut path_parts: Vec<String> = path
+        .split(':')
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect();
+
+    for cli_path in MACOS_CLI_PATHS.iter().rev() {
+        if !path_parts.iter().any(|part| part == cli_path) {
+            path_parts.insert(0, (*cli_path).to_string());
+        }
+    }
+
+    let merged_path = path_parts.join(":");
+    if let Some((_, value)) = env.iter_mut().find(|(key, _)| key == "PATH") {
+        *value = merged_path;
+    } else {
+        env.push(("PATH".to_string(), merged_path));
+    }
+    env
+}
+
+#[cfg(not(target_os = "macos"))]
+fn with_local_terminal_default_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
+    env
+}
+
 fn build_remote_history_load_command() -> String {
     [
         "sh -lc",
@@ -972,6 +1013,7 @@ impl Terminal {
         // 合并用户环境变量与 Shell Integration 环境变量
         let mut env_pairs = env;
         env_pairs.extend(integration_env);
+        env_pairs = with_local_terminal_default_env(env_pairs);
 
         let pty_options = PtyOptions {
             shell: build_local_shell(shell, shell_args),
@@ -2151,7 +2193,7 @@ mod tests {
         build_ssh_init_commands, clear_screen_remote_redraw_bytes, compose_ssh_init_commands,
         format_connection_error, keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, resolve_default_windows_shell_from_env,
-        resolve_local_working_dir, shell_escape_arg,
+        resolve_local_working_dir, shell_escape_arg, with_local_terminal_default_env,
     };
     use crate::TerminalEvent;
     use crate::history::{
@@ -2316,6 +2358,24 @@ mod tests {
             dirs::home_dir(),
             resolve_local_working_dir(Some("  ".to_string()))
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn with_local_terminal_default_env_adds_homebrew_paths_to_existing_path() {
+        let env = with_local_terminal_default_env(vec![(
+            "PATH".to_string(),
+            "/usr/bin:/bin".to_string(),
+        )]);
+        let path = env
+            .iter()
+            .find_map(|(key, value)| (key == "PATH").then_some(value.as_str()))
+            .expect("local terminal env should include PATH");
+
+        assert!(path.contains("/opt/homebrew/bin"));
+        assert!(path.contains("/opt/homebrew/sbin"));
+        assert!(path.contains("/usr/local/bin"));
+        assert!(path.ends_with("/usr/bin:/bin"));
     }
 
     #[test]
