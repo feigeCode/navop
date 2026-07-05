@@ -119,15 +119,6 @@ fn reasoning_delta_events(
     }]
 }
 
-fn status_done(title: String, session_id: &SessionId, turn_id: &TurnId) -> RuntimeEvent {
-    RuntimeEvent::Status {
-        session_id: session_id.clone(),
-        turn_id: turn_id.clone(),
-        title,
-        is_done: true,
-    }
-}
-
 fn chunk_text(text: &str, max_chars: usize) -> Vec<String> {
     if text.is_empty() || max_chars == 0 {
         return Vec::new();

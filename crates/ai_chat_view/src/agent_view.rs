@@ -2275,11 +2275,11 @@ fn current_agent_label(
         .unwrap_or_else(|| SharedString::from("ACP Agent"))
 }
 
-fn current_agent_icon(backend: Backend) -> IconName {
+fn current_agent_icon(backend: Backend) -> Icon {
     if backend == Backend::Acp {
-        IconName::Bot
+        Icon::new(IconName::Bot)
     } else {
-        IconName::AI
+        Icon::new(IconName::AI).color()
     }
 }
 
@@ -2401,11 +2401,11 @@ fn header_agent_option_row(
         .into_any_element()
 }
 
-fn current_agent_icon_for_option(agent: &ComposerAgentOption) -> IconName {
+fn current_agent_icon_for_option(agent: &ComposerAgentOption) -> Icon {
     if agent.id.is_some() {
-        IconName::Bot
+        Icon::new(IconName::Bot)
     } else {
-        IconName::AI
+        Icon::new(IconName::AI).color()
     }
 }
 
