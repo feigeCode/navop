@@ -185,8 +185,9 @@ impl ProviderForm {
         });
 
         let api_key_input = cx.new(|cx| {
-            let mut state =
-                InputState::new(window, cx).masked(true).placeholder(t!("LlmProviders.api_key_placeholder"));
+            let mut state = InputState::new(window, cx)
+                .masked(true)
+                .placeholder(t!("LlmProviders.api_key_placeholder"));
             if let Some(ref cfg) = config {
                 if let Some(ref key) = cfg.api_key {
                     state = state.default_value(key);

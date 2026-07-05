@@ -6,7 +6,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, actions, div, px,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable, Size, TitleBar,
+    ActiveTheme, Disableable, Icon, InteractiveElementExt, Sizable, Size,
     button::{Button, ButtonVariants as _},
     h_flex,
     scroll::ScrollableElement,
@@ -176,24 +176,12 @@ impl NewConnectionWindow {
         self.open_selected(window, cx);
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        TitleBar::new().child(
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .flex_1()
-                .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(cx.theme().foreground)
-                .child(t!("Home.new_connection").to_string()),
-        )
-    }
-
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
+            .flex_none()
             .w(px(180.0))
             .h_full()
+            .min_h_0()
             .bg(cx.theme().sidebar)
             .border_r_1()
             .border_color(cx.theme().border)
@@ -254,6 +242,8 @@ impl NewConnectionWindow {
         v_flex()
             .flex_1()
             .h_full()
+            .min_h_0()
+            .min_w_0()
             .overflow_y_scrollbar()
             .bg(cx.theme().muted)
             .p_6()
@@ -370,11 +360,14 @@ impl NewConnectionWindow {
 
     fn render_selection_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
+            .flex_none()
+            .w_full()
             .justify_end()
             .gap_2()
             .p_4()
             .border_t_1()
             .border_color(cx.theme().border)
+            .bg(cx.theme().background)
             .child(
                 Button::new("cancel-new-connection")
                     .small()
@@ -397,17 +390,23 @@ impl NewConnectionWindow {
     }
 
     fn render_form_page(&self, form: AnyView, cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().relative().child(form).child(
-            div().absolute().left(px(16.0)).bottom(px(16.0)).child(
-                Button::new("back-to-new-connection-kind")
-                    .small()
-                    .outline()
-                    .label(t!("Common.previous").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.go_back_to_selection(cx);
-                    })),
-            ),
-        )
+        div()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .relative()
+            .child(form)
+            .child(
+                div().absolute().left(px(16.0)).bottom(px(16.0)).child(
+                    Button::new("back-to-new-connection-kind")
+                        .small()
+                        .outline()
+                        .label(t!("Common.previous").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.go_back_to_selection(cx);
+                        })),
+                ),
+            )
     }
 }
 
@@ -425,16 +424,18 @@ impl Render for NewConnectionWindow {
 
         v_flex()
             .key_context(KEY_CONTEXT)
-            .size_full()
+            .flex_1()
+            .min_h_0()
+            .w_full()
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_action_select_previous))
             .on_action(cx.listener(Self::on_action_select_next))
             .on_action(cx.listener(Self::on_action_open_selected))
             .bg(cx.theme().background)
-            .child(self.render_header(cx))
             .child(
                 h_flex()
                     .flex_1()
+                    .min_h_0()
                     .w_full()
                     .overflow_hidden()
                     .child(self.render_sidebar(cx))
@@ -477,5 +478,23 @@ mod tests {
         assert!(visible_items.contains("self.connection_kinds"));
         assert!(!visible_items.contains("NewConnectionKind::all()"));
         assert!(!render.contains("NewConnectionKind::all()"));
+    }
+
+    #[test]
+    fn new_connection_render_fits_with_popup_title_bar() {
+        let source = include_str!("connection_window.rs");
+        let render = source
+            .split("impl Render for NewConnectionWindow")
+            .nth(1)
+            .expect("render impl exists")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("render impl has an end marker");
+
+        assert!(!source.contains(concat!("Title", "Bar")));
+        assert!(render.contains(".flex_1()"));
+        assert!(render.contains(".min_h_0()"));
+        assert!(render.contains(".child(self.render_selection_footer(cx))"));
+        assert!(!render.contains(".size_full()"));
     }
 }
