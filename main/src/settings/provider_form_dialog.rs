@@ -186,7 +186,7 @@ impl ProviderForm {
 
         let api_key_input = cx.new(|cx| {
             let mut state =
-                InputState::new(window, cx).placeholder(t!("LlmProviders.api_key_placeholder"));
+                InputState::new(window, cx).masked(true).placeholder(t!("LlmProviders.api_key_placeholder"));
             if let Some(ref cfg) = config {
                 if let Some(ref key) = cfg.api_key {
                     state = state.default_value(key);
@@ -682,7 +682,7 @@ impl Render for ProviderForm {
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .child(t!("LlmProviders.api_key_label").to_string()),
                         )
-                        .child(Input::new(&self.api_key_input)),
+                        .child(Input::new(&self.api_key_input).mask_toggle()),
                 )
                 .child(
                     v_flex()
