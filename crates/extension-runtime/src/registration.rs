@@ -14,8 +14,9 @@ use crate::extension::manifest::{
 
 use super::catalog::ExtensionRuntimeCatalog;
 use super::types::{
-    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredKeybindingContribution,
-    WasmRuntimeBinding, command_descriptor, runtime_key, slot_item_from_menu,
+    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredHtmlPreviewTransform,
+    RegisteredKeybindingContribution, WasmRuntimeBinding, command_descriptor, runtime_key,
+    slot_item_from_menu,
 };
 
 static WASM_REGISTRATION_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -26,6 +27,7 @@ impl ExtensionRuntimeCatalog {
         manifest: Manifest,
     ) -> Result<(), ExtensionRuntimeError> {
         self.register_wasm_runtimes(&manifest)?;
+        self.register_html_preview_transforms(&manifest)?;
         self.register_commands(&manifest)?;
         self.register_menu_slots(&manifest);
         self.register_toolbar_slots(&manifest);
@@ -107,6 +109,33 @@ impl ExtensionRuntimeCatalog {
                 runtime_id,
                 function,
             ))?;
+        }
+        Ok(())
+    }
+
+    fn register_html_preview_transforms(
+        &mut self,
+        manifest: &Manifest,
+    ) -> Result<(), ExtensionRuntimeError> {
+        for transform in &manifest.contributes.html_preview_transforms {
+            let runtime_id = runtime_key(&manifest.id, &transform.runtime_id);
+            if !self.wasm_runtimes.contains_key(&runtime_id) {
+                return Err(ExtensionRuntimeError::UnknownRuntime {
+                    command_id: transform.id.clone(),
+                    runtime_id: transform.runtime_id.clone(),
+                });
+            }
+            let assets_root = resolve_asset_root(&manifest.manifest_dir, &transform.assets);
+            html_preview::register_extension_asset_root(&manifest.id, assets_root.clone());
+            self.html_preview_transforms
+                .push(RegisteredHtmlPreviewTransform {
+                    extension_id: manifest.id.clone(),
+                    id: transform.id.clone(),
+                    runtime_id,
+                    function: transform.function.clone(),
+                    languages: transform.languages.clone(),
+                    assets_root,
+                });
         }
         Ok(())
     }
@@ -198,6 +227,13 @@ fn resolve_module_path(manifest_dir: &Path, module: &str) -> PathBuf {
         return path.to_path_buf();
     }
     manifest_dir.join(path).components().collect()
+}
+
+fn resolve_asset_root(manifest_dir: &Path, assets: &str) -> PathBuf {
+    if assets.trim().is_empty() {
+        return manifest_dir.to_path_buf();
+    }
+    manifest_dir.join(assets).components().collect()
 }
 
 pub(super) fn load_installed_composite_manifests(

@@ -242,4 +242,14 @@ mod tests {
         assert!(ui_wit.contains("current-action-context: func() -> option<action-context>;"));
         assert!(ui_wit.contains("open-view: func(view: view-spec);"));
     }
+
+    #[test]
+    fn wit_html_preview_transform_world_declares_transform_contract() {
+        let wit = include_str!("../wit/html-preview.wit");
+
+        assert!(wit.contains("world html-preview-transform"));
+        assert!(wit.contains("record html-transform-input"));
+        assert!(wit.contains("record html-transform-output"));
+        assert!(wit.contains("export transform-html: func"));
+    }
 }

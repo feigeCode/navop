@@ -1,0 +1,12 @@
+[package]
+name = "html-preview"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+futures.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

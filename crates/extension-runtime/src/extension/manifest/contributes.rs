@@ -23,6 +23,8 @@ pub struct ContributesManifest {
     pub toolbars: BTreeMap<String, Vec<ToolbarContrib>>,
     #[serde(default)]
     pub keybindings: Vec<KeybindingContrib>,
+    #[serde(default, rename = "htmlPreviewTransforms")]
+    pub html_preview_transforms: Vec<HtmlPreviewTransformContrib>,
     #[serde(default)]
     pub views: Vec<Value>,
     #[serde(default)]
@@ -55,6 +57,7 @@ impl ContributesManifest {
             + self.menus.len()
             + self.toolbars.len()
             + self.keybindings.len()
+            + self.html_preview_transforms.len()
             + self.views.len()
             + self.tasks.len()
             + self.data_types.len()
@@ -66,6 +69,23 @@ impl ContributesManifest {
             + self.themes.len()
             + self.icons.len()
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct HtmlPreviewTransformContrib {
+    pub id: String,
+    #[serde(default, rename = "runtimeId")]
+    pub runtime_id: String,
+    #[serde(default = "default_html_transform_function")]
+    pub function: String,
+    #[serde(default)]
+    pub languages: Vec<String>,
+    #[serde(default)]
+    pub assets: String,
+}
+
+fn default_html_transform_function() -> String {
+    "transform-html".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

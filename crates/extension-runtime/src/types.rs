@@ -1,5 +1,7 @@
 #[cfg(feature = "wasm-components")]
 use std::path::PathBuf;
+#[cfg(not(feature = "wasm-components"))]
+use std::path::PathBuf;
 
 use db_view::extension_menu::DbTreeExtensionMenuItem;
 use one_core::{
@@ -25,6 +27,16 @@ pub struct RegisteredKeybindingContribution {
 pub(super) struct RegisteredDbTreeMenuContribution {
     pub position: String,
     pub item: DbTreeExtensionMenuItem,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredHtmlPreviewTransform {
+    pub extension_id: String,
+    pub id: String,
+    pub runtime_id: String,
+    pub function: String,
+    pub languages: Vec<String>,
+    pub assets_root: PathBuf,
 }
 
 #[derive(Debug, Clone)]

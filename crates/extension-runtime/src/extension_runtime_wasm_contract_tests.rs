@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{fs, path::PathBuf, process::Command};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -54,6 +54,53 @@ fn db_tree_action_runs_registered_wasm_component() {
     .unwrap();
 
     assert!(views.is_empty());
+}
+
+#[test]
+fn html_preview_transform_runs_registered_wasm_component() {
+    let root = tempfile::TempDir::new().unwrap();
+    let extension_dir = root.path().join("com.example.html");
+    let wasm_dir = extension_dir.join("wasm");
+    fs::create_dir_all(&wasm_dir).unwrap();
+    fs::write(
+        wasm_dir.join("plugin.wasm"),
+        html_preview_transform_component_bytes(),
+    )
+    .unwrap();
+    fs::write(
+        extension_dir.join("extension.json"),
+        r#"{
+            "schema_version": 1,
+            "id": "com.example.html",
+            "name": "HTML Preview",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.1.0" },
+            "runtime": {
+                "wasm": [{
+                    "id": "main",
+                    "module": "./wasm/plugin.wasm",
+                    "kind": "component"
+                }]
+            },
+            "contributes": {
+                "htmlPreviewTransforms": [{
+                    "id": "html.decorate",
+                    "runtimeId": "main",
+                    "languages": ["html"],
+                    "assets": "assets"
+                }]
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let manifest = crate::extension::manifest::load_from_dir(&extension_dir).unwrap();
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let result = futures::executor::block_on(catalog.transform_html_preview("html", "<main>Hi"))
+        .unwrap()
+        .unwrap();
+
+    assert_eq!("<main>Changed</main>", result.html);
 }
 
 #[test]
@@ -121,6 +168,67 @@ fn wit_form_view() -> WitUi::ViewSpec {
         }],
         window: None,
     }
+}
+
+fn html_preview_transform_component_bytes() -> Vec<u8> {
+    let dir = tempfile::TempDir::new().unwrap();
+    let core_wat = dir.path().join("html_transform.wat");
+    let embedded = dir.path().join("embedded.wasm");
+    let component = dir.path().join("html_transform.component.wasm");
+    fs::write(
+        &core_wat,
+        r#"
+(module
+  (memory (export "cm32p2_memory") 1)
+  (data (i32.const 512) "\00\00\00\00\00\04\00\00\14\00\00\00\00\00\00\00\00\00\00\00")
+  (data (i32.const 1024) "<main>Changed</main>")
+  (func (export "cm32p2_realloc") (param i32 i32 i32 i32) (result i32)
+    i32.const 2048)
+  (func (export "cm32p2_initialize"))
+  (func (export "cm32p2||transform-html") (param i32 i32 i32 i32) (result i32)
+    i32.const 512)
+  (func (export "cm32p2||transform-html_post") (param i32))
+)
+"#,
+    )
+    .unwrap();
+    let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../extension-api/wit");
+    let embed_output = Command::new("wasm-tools")
+        .args([
+            "component",
+            "embed",
+            wit_dir.to_str().unwrap(),
+            "--world",
+            "html-preview-transform",
+            core_wat.to_str().unwrap(),
+            "-o",
+            embedded.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        embed_output.status.success(),
+        "component embed failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&embed_output.stdout),
+        String::from_utf8_lossy(&embed_output.stderr)
+    );
+    let new_output = Command::new("wasm-tools")
+        .args([
+            "component",
+            "new",
+            embedded.to_str().unwrap(),
+            "-o",
+            component.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        new_output.status.success(),
+        "component new failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&new_output.stdout),
+        String::from_utf8_lossy(&new_output.stderr)
+    );
+    fs::read(component).unwrap()
 }
 
 struct NoopDbHost;

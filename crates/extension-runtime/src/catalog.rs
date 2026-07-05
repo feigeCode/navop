@@ -12,8 +12,8 @@ use crate::extension::manifest::{Manifest, WasmRuntimeKind};
 
 use super::registration::load_installed_composite_manifests;
 use super::types::{
-    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredKeybindingContribution,
-    WasmRuntimeBinding,
+    ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredHtmlPreviewTransform,
+    RegisteredKeybindingContribution, WasmRuntimeBinding,
 };
 
 static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -26,6 +26,7 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) toolbar_slots: SlotRegistry,
     pub(super) menu_slots: SlotRegistry,
     pub(super) keybindings: Vec<RegisteredKeybindingContribution>,
+    pub(super) html_preview_transforms: Vec<RegisteredHtmlPreviewTransform>,
 }
 
 #[derive(Debug)]
@@ -52,6 +53,7 @@ impl ExtensionRuntimeCatalog {
             toolbar_slots: SlotRegistry::default(),
             menu_slots: SlotRegistry::default(),
             keybindings: Vec::new(),
+            html_preview_transforms: Vec::new(),
         }
     }
 
@@ -107,6 +109,64 @@ impl ExtensionRuntimeCatalog {
             .component_binding_for_command(command_id)?
             .permissions
             .clone())
+    }
+
+    pub fn html_preview_transforms_for_language(
+        &self,
+        language: &str,
+    ) -> Vec<&RegisteredHtmlPreviewTransform> {
+        let language = language.to_ascii_lowercase();
+        self.html_preview_transforms
+            .iter()
+            .filter(|transform| {
+                transform
+                    .languages
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(&language))
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "wasm-components")]
+    pub async fn transform_html_preview(
+        &self,
+        language: &str,
+        html: &str,
+    ) -> extension_wasm::WasmResult<Option<html_preview::HtmlPreviewTransformOutput>> {
+        let Some(transform) = self
+            .html_preview_transforms_for_language(language)
+            .into_iter()
+            .next()
+        else {
+            return Ok(None);
+        };
+        let Some(binding) = self.wasm_runtimes.get(&transform.runtime_id) else {
+            return Err(extension_wasm::WasmError::FunctionNotFound(
+                transform.runtime_id.clone(),
+            ));
+        };
+        if binding.kind != WasmRuntimeKind::Component {
+            return Err(extension_wasm::WasmError::FunctionNotFound(
+                transform.runtime_id.clone(),
+            ));
+        }
+        let runtime = extension_wasm::HtmlPreviewTransformRuntime::from_file(
+            transform.id.clone(),
+            &binding.module_path,
+        )?;
+        runtime
+            .transform_html(language.to_string(), html.to_string())
+            .await
+            .map(Some)
+    }
+
+    #[cfg(not(feature = "wasm-components"))]
+    pub async fn transform_html_preview(
+        &self,
+        _language: &str,
+        _html: &str,
+    ) -> Result<Option<html_preview::HtmlPreviewTransformOutput>, ExtensionRuntimeError> {
+        Ok(None)
     }
 
     pub(super) fn component_binding_for_command(
