@@ -217,6 +217,16 @@ impl TerminalCommandHistoryRepository {
             Ok(next != 0)
         })
     }
+
+    pub fn delete_command(&self, id: i64) -> Result<()> {
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "DELETE FROM terminal_command_history WHERE id = ?1",
+                params![id],
+            )?;
+            Ok(())
+        })
+    }
 }
 
 pub(super) const BASE_SELECT: &str =

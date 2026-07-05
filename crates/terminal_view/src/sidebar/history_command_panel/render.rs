@@ -129,7 +129,8 @@ impl HistoryCommandPanel {
                                 favorite_color,
                                 cx,
                             ))
-                            .child(self.render_paste_button(index, command_for_paste, cx)),
+                            .child(self.render_paste_button(index, command_for_paste, cx))
+                            .child(self.render_delete_button(index, id, cx)),
                     ),
             )
     }
@@ -232,6 +233,22 @@ impl HistoryCommandPanel {
             .tooltip("Paste")
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.paste_command(command.clone(), cx);
+            }))
+    }
+
+    fn render_delete_button(
+        &self,
+        index: usize,
+        id: i64,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        Button::new(SharedString::from(format!("history-delete-{index}")))
+            .icon(IconName::Delete)
+            .ghost()
+            .xsmall()
+            .tooltip("Delete")
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.delete_command(id, cx);
             }))
     }
 

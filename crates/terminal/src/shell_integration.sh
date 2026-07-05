@@ -44,10 +44,8 @@ __onetcli_emit_recorded_command() {
     local command_text encoded
     command_text="$(__onetcli_last_history_command)"
     [[ -z "$command_text" ]] && return
-    [[ "$command_text" == "${__ONETCLI_LAST_EMITTED:-}" ]] && return
 
     encoded="$(__onetcli_encode_command "$command_text")" || return 0
-    __ONETCLI_LAST_EMITTED="$command_text"
     __onetcli_emit_osc "1337;Command=${encoded}"
 }
 

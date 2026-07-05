@@ -89,6 +89,26 @@ fn record_success_rejects_blank_and_non_success_exit_codes() {
 }
 
 #[test]
+fn delete_command_removes_history_row() {
+    let repo = test_repository();
+    let local = TerminalHistoryScope::local();
+
+    let item = repo
+        .record_success(&local, "git status", None, Some(0))
+        .unwrap()
+        .expect("successful command should be stored");
+
+    repo.delete_command(item.id.expect("id")).unwrap();
+
+    assert_eq!(
+        0,
+        repo.list(&local, TerminalCommandHistorySort::Latest, None, 20)
+            .unwrap()
+            .len()
+    );
+}
+
+#[test]
 fn favorite_survives_upsert_and_pins_sorting() {
     let repo = test_repository();
     let local = TerminalHistoryScope::local();

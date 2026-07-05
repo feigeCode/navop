@@ -75,6 +75,10 @@ impl HistoryCommandPanel {
         cx.notify();
     }
 
+    pub fn refresh_commands(&mut self, cx: &mut Context<Self>) {
+        self.load_commands(cx);
+    }
+
     fn repository(&self, cx: &App) -> Option<std::sync::Arc<TerminalCommandHistoryRepository>> {
         cx.try_global::<GlobalStorageState>()
             .and_then(|state| state.storage.get::<TerminalCommandHistoryRepository>())
@@ -114,6 +118,17 @@ impl HistoryCommandPanel {
         };
         if let Err(error) = repo.toggle_favorite(id) {
             tracing::warn!(%error, "failed to toggle terminal command favorite");
+            return;
+        }
+        self.load_commands(cx);
+    }
+
+    fn delete_command(&mut self, id: i64, cx: &mut Context<Self>) {
+        let Some(repo) = self.repository(cx) else {
+            return;
+        };
+        if let Err(error) = repo.delete_command(id) {
+            tracing::warn!(%error, "failed to delete terminal command history");
             return;
         }
         self.load_commands(cx);

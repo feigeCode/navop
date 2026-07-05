@@ -83,6 +83,8 @@ pub enum TerminalModelEvent {
     Bell,
     /// 子进程已退出
     ChildExit(i32),
+    /// 成功命令历史已写入数据库
+    CommandHistoryChanged,
     /// 终端程序请求存储到剪贴板
     ClipboardStore(String),
     /// 远程工作目录变更（OSC 7）
@@ -1583,12 +1585,18 @@ impl Terminal {
             .with_exit_code(Some(exit_code));
         let changed =
             push_rich_history_entry(&mut self.session_history, entry, SESSION_HISTORY_LIMIT);
+        let mut command_history_changed = false;
         if let (Some(repo), Some(scope)) = (&self.history_repository, &self.history_scope) {
-            if let Err(error) =
-                repo.record_success(scope, &command, cwd.as_deref(), Some(exit_code))
-            {
-                tracing::warn!(%error, "failed to record terminal command history");
+            match repo.record_success(scope, &command, cwd.as_deref(), Some(exit_code)) {
+                Ok(Some(_)) => command_history_changed = true,
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "failed to record terminal command history");
+                }
             }
+        }
+        if command_history_changed {
+            cx.emit(TerminalModelEvent::CommandHistoryChanged);
         }
         if changed {
             cx.emit(TerminalModelEvent::Wakeup);

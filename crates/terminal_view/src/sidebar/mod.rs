@@ -903,6 +903,14 @@ impl TerminalSidebar {
         cx.notify();
     }
 
+    pub fn refresh_history_commands(&mut self, cx: &mut Context<Self>) {
+        if let Some(ref history_panel) = self.history_command_panel {
+            history_panel.update(cx, |panel, cx| {
+                panel.refresh_commands(cx);
+            });
+        }
+    }
+
     pub fn set_font_size(&mut self, font_size: f32, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_font_size(font_size, window, cx);

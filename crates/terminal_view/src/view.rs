@@ -363,6 +363,11 @@ fn should_reset_history_prompt_for_terminal_event(event: &TerminalModelEvent) ->
     )
 }
 
+#[cfg(test)]
+fn should_refresh_history_commands_for_terminal_event(event: &TerminalModelEvent) -> bool {
+    matches!(event, TerminalModelEvent::CommandHistoryChanged)
+}
+
 fn history_prompt_available(
     autocomplete_enabled: bool,
     connection_kind: TerminalConnectionKind,
@@ -2087,6 +2092,12 @@ impl TerminalView {
                 self.refresh_history_prompt_matches(cx);
                 cx.emit(TabContentEvent::ContentChanged);
                 cx.notify();
+            }
+            TerminalModelEvent::CommandHistoryChanged => {
+                self.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.refresh_history_commands(cx);
+                });
+                self.refresh_history_prompt_matches(cx);
             }
             TerminalModelEvent::SshMfaChanged => {
                 self.sync_ssh_mfa_inputs(window, cx);
@@ -4853,6 +4864,7 @@ mod tests {
         should_defer_inline_history_prompt_input_to_text_system, should_defer_sgr_left_press,
         should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
         should_dismiss_history_prompt_for_scroll, should_extend_selection_on_shift_click,
+        should_refresh_history_commands_for_terminal_event,
         should_reset_history_prompt_for_terminal_event, should_scroll_to_bottom_on_user_input,
         should_start_selection_from_pending_sgr_press, take_whole_scroll_lines,
         terminal_history_scope, terminal_tab_duplicate_supported,
@@ -4951,6 +4963,16 @@ mod tests {
         assert_eq!("ssh:42", ssh.scope_key);
         assert!(terminal_history_scope(TerminalConnectionKind::Ssh, None).is_none());
         assert!(terminal_history_scope(TerminalConnectionKind::Serial, Some(7)).is_none());
+    }
+
+    #[test]
+    fn command_history_changed_refreshes_history_command_panel() {
+        assert!(should_refresh_history_commands_for_terminal_event(
+            &TerminalModelEvent::CommandHistoryChanged
+        ));
+        assert!(!should_refresh_history_commands_for_terminal_event(
+            &TerminalModelEvent::Wakeup
+        ));
     }
 
     #[test]

@@ -62,4 +62,38 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("RESULT:cd /data/Seeyon/Comi/comi-install/config/nginx"));
     }
+
+    #[test]
+    fn repeated_same_command_emits_record_each_time() {
+        let bash = std::path::Path::new("/bin/bash");
+        if !bash.exists() {
+            return;
+        }
+
+        let script_path = std::env::temp_dir().join(format!(
+            "onetcli-shell-integration-repeat-test-{}.sh",
+            std::process::id()
+        ));
+        let script = embedded_shell_integration_script()
+            .replace("[[ $- != *i* ]] && return", ":")
+            .replace("[[ -n \"${_ONETCLI_SHELL_INTEGRATED:-}\" ]] && return", ":");
+        std::fs::write(&script_path, script).expect("write shell integration script");
+
+        let output = Command::new(bash)
+            .arg("--noprofile")
+            .arg("--norc")
+            .arg("-c")
+            .arg(format!(
+                "source '{}'; trap - DEBUG; \
+                 __onetcli_last_history_command() {{ printf 'git status'; }}; \
+                 __onetcli_emit_recorded_command; __onetcli_emit_recorded_command",
+                script_path.display()
+            ))
+            .output()
+            .expect("run bash");
+        let _ = std::fs::remove_file(&script_path);
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(2, stdout.matches("1337;Command=").count());
+    }
 }
