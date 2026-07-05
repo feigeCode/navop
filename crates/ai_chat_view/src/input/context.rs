@@ -12,6 +12,8 @@
 
 use gpui::SharedString;
 
+use super::skill::{ComposerSkillItem, ComposerSkillSummary};
+
 /// 顶部主「目标」chip 的展示数据。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ComposerTarget {
@@ -434,6 +436,10 @@ pub struct AgentComposerContext {
     pub resource_source_options: Vec<ComposerResourceSourceOption>,
     /// 资源池成员与池外候选资源列表。
     pub resource_pool_items: Vec<ComposerResourcePoolItem>,
+    /// Skill 面板摘要。
+    pub skill_summary: ComposerSkillSummary,
+    /// 可管理/选择的 Skill 列表。
+    pub skill_items: Vec<ComposerSkillItem>,
     /// 派生上下文 chip(动态数量)。
     pub scopes: Vec<ComposerScope>,
     /// 右侧能力标签。

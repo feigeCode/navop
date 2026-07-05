@@ -23,6 +23,7 @@ pub mod resource;
 pub mod resource_scope;
 pub mod risk;
 pub mod runtime;
+pub mod skill;
 pub mod tasks;
 pub mod tools;
 
@@ -41,6 +42,10 @@ pub use runtime::{
     PendingToolCallSummary, Runtime, RuntimeCommand, RuntimeEvent, RuntimeEventReceiver,
     RuntimeServices, Session, SessionSnapshot, TaskKind, TaskOutcome, ToolExecutionMode,
     TurnContext, UserInput,
+};
+pub use skill::{
+    SkillCatalog, SkillContext, SkillImportError, SkillLoadError, SkillMetadata, SkillRef,
+    SkillSummary, import_skill_dir,
 };
 pub use tasks::AgentTask;
 pub use tools::{

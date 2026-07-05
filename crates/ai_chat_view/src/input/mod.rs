@@ -4,6 +4,7 @@ mod agent_input;
 mod attachment;
 mod context;
 mod mention;
+mod skill;
 
 pub use agent_input::{AgentInput, AgentInputEvent};
 pub use attachment::ImageAttachment;
@@ -14,3 +15,4 @@ pub use context::{
     ComposerTarget,
 };
 pub use mention::{MentionCompletionProvider, MentionItem};
+pub use skill::{ComposerSkillItem, ComposerSkillSummary};

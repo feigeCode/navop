@@ -1,5 +1,6 @@
 use agent_runtime::{
-    ResourceContext, ResourceKind, ResourceRef, SessionId, ToolCallId, ToolName, TurnId,
+    ResourceContext, ResourceKind, ResourceRef, SessionId, SkillContext, ToolCallId, ToolName,
+    TurnId,
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -300,6 +301,7 @@ fn agent_invocation(
         arguments,
         resource_id: None,
         resources,
+        skills: SkillContext::new(),
         cancellation: tokio_util::sync::CancellationToken::new(),
     }
 }

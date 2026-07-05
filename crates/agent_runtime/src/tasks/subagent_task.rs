@@ -25,6 +25,7 @@ pub(super) async fn run_subagent_model(
     let dispatch_ctx = ToolDispatchContext {
         session_id: session.id().clone(),
         turn_id: turn_id.clone(),
+        skills: session.skills(),
         resources,
     };
     let mut messages = vec![

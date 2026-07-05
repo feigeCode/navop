@@ -211,10 +211,49 @@ impl RuntimeHistory {
         }
         let keep_last_items = keep_last_items.max(1).min(self.items.len() - 1);
         let mut split_index = self.items.len() - keep_last_items;
-        while split_index > 0 && matches!(self.items[split_index], HistoryItem::Observation(_)) {
+        split_index = self.compaction_tool_boundary(split_index);
+        (split_index > 0).then_some(split_index)
+    }
+
+    fn compaction_tool_boundary(&self, mut split_index: usize) -> usize {
+        if split_index >= self.items.len() {
+            return split_index;
+        }
+        match &self.items[split_index] {
+            HistoryItem::Observation(_) => {
+                while split_index > 0
+                    && matches!(self.items[split_index - 1], HistoryItem::Observation(_))
+                {
+                    split_index -= 1;
+                }
+                while split_index > 0
+                    && matches!(self.items[split_index - 1], HistoryItem::ToolCall(_))
+                {
+                    split_index -= 1;
+                }
+            }
+            HistoryItem::ToolCall(_) => {
+                while split_index > 0
+                    && matches!(self.items[split_index - 1], HistoryItem::ToolCall(_))
+                {
+                    split_index -= 1;
+                }
+            }
+            _ => {}
+        }
+        if split_index > 0
+            && matches!(
+                self.items[split_index],
+                HistoryItem::ToolCall(_) | HistoryItem::Observation(_)
+            )
+            && matches!(
+                self.items[split_index - 1],
+                HistoryItem::AssistantWithReasoning { .. }
+            )
+        {
             split_index -= 1;
         }
-        (split_index > 0).then_some(split_index)
+        split_index
     }
 }
 
@@ -303,6 +342,54 @@ mod tests {
         assert!(matches!(history.items()[1], HistoryItem::ToolCall(_)));
         assert!(matches!(history.items()[2], HistoryItem::Observation(_)));
         assert!(matches!(history.items()[3], HistoryItem::User { .. }));
+    }
+
+    #[test]
+    fn compact_old_items_keeps_parallel_tool_group_together() {
+        let first = ToolCall {
+            call_id: ToolCallId::from_string("call_a"),
+            tool_name: ToolName::new("echo"),
+            arguments: serde_json::json!({"text": "a"}),
+            resource_id: None,
+        };
+        let second = ToolCall {
+            call_id: ToolCallId::from_string("call_b"),
+            tool_name: ToolName::new("echo"),
+            arguments: serde_json::json!({"text": "b"}),
+            resource_id: None,
+        };
+        let first_observation = ToolObservation::success(
+            ToolCallId::from_string("call_a"),
+            ToolName::new("echo"),
+            "a",
+            ObservationData::Text("a".into()),
+        );
+        let second_observation = ToolObservation::success(
+            ToolCallId::from_string("call_b"),
+            ToolName::new("echo"),
+            "b",
+            ObservationData::Text("b".into()),
+        );
+        let mut history = RuntimeHistory::new();
+        history.record_user("old user");
+        history.record_tool_call(first);
+        history.record_tool_call(second);
+        history.record_observation(first_observation);
+        history.record_observation(second_observation);
+        history.record_user("recent user");
+
+        assert!(history.compact_old_items("compressed facts", 3));
+
+        assert_eq!(6, history.items().len());
+        assert!(matches!(
+            history.items()[0],
+            HistoryItem::ContextSummary { .. }
+        ));
+        assert!(matches!(history.items()[1], HistoryItem::ToolCall(_)));
+        assert!(matches!(history.items()[2], HistoryItem::ToolCall(_)));
+        assert!(matches!(history.items()[3], HistoryItem::Observation(_)));
+        assert!(matches!(history.items()[4], HistoryItem::Observation(_)));
+        assert!(matches!(history.items()[5], HistoryItem::User { .. }));
     }
 
     #[test]

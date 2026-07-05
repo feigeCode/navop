@@ -7,6 +7,7 @@
 use crate::error::ToolError;
 use crate::ids::{SessionId, ToolCallId, TurnId};
 use crate::resource::{ResourceContext, ResourceId, ResourceRef};
+use crate::skill::SkillContext;
 use crate::tools::spec::ToolName;
 use serde::de::DeserializeOwned;
 use tokio_util::sync::CancellationToken;
@@ -23,6 +24,8 @@ pub struct ToolInvocation {
     pub resource_id: Option<ResourceId>,
     /// 会话级资源上下文。
     pub resources: ResourceContext,
+    /// 会话级 Skill 目录与选择状态。
+    pub skills: SkillContext,
     /// 取消令牌:整轮被中断时触发,工具应尽快返回。
     pub cancellation: CancellationToken,
 }

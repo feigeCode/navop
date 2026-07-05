@@ -5,6 +5,7 @@
 
 use agent_client_protocol::schema::{EnvVariable, McpServer, McpServerHttp, McpServerStdio};
 use agent_client_protocol::{AcpAgent, LineDirection};
+use agent_runtime::SkillContext;
 use gpui::SharedString;
 use std::path::PathBuf;
 
@@ -76,6 +77,20 @@ impl AcpAgentConfig {
     pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
         if let AcpTransport::Stdio { env: ref mut e, .. } = self.transport {
             *e = env;
+        }
+        self
+    }
+
+    pub fn with_skill_context(mut self, skills: &SkillContext) -> Self {
+        if skills.is_empty() {
+            return self;
+        }
+        if let AcpTransport::Stdio { env, .. } = &mut self.transport {
+            env.push(("ONETCLI_SKILLS".to_string(), skills.describe()));
+            env.push((
+                "ONETCLI_SELECTED_SKILLS".to_string(),
+                skills.selected_names_csv(),
+            ));
         }
         self
     }
@@ -200,6 +215,7 @@ fn skip_osc_escape(bytes: &[u8], mut i: usize) -> usize {
 mod tests {
     use super::{AcpStderrLevel, AcpTransport, classify_acp_stderr, strip_ansi_escapes};
     use crate::acp::config::AcpAgentConfig;
+    use agent_runtime::{SkillContext, SkillRef};
 
     #[test]
     fn acp_stderr_debug_and_info_are_debug_level() {
@@ -244,6 +260,32 @@ mod tests {
         match config.transport {
             AcpTransport::Http { url } => assert_eq!(url, "http://127.0.0.1:3100/"),
             _ => panic!("期望 Http 传输"),
+        }
+    }
+
+    #[test]
+    fn stdio_config_exposes_skill_context_to_external_acp_agent() {
+        let context = SkillContext::new().with_skill(SkillRef::new(
+            "ops",
+            "Run operational playbooks",
+            "/tmp/skills/ops/SKILL.md",
+        ));
+
+        let config =
+            AcpAgentConfig::new("codex", "Codex", "codex-acp").with_skill_context(&context);
+
+        match config.transport {
+            AcpTransport::Stdio { env, .. } => {
+                assert!(env.iter().any(|(name, value)| {
+                    name == "ONETCLI_SKILLS" && value.contains("Run operational playbooks")
+                }));
+                assert!(
+                    env.iter().any(|(name, value)| {
+                        name == "ONETCLI_SELECTED_SKILLS" && value == "ops"
+                    })
+                );
+            }
+            _ => panic!("期望 Stdio 传输"),
         }
     }
 }

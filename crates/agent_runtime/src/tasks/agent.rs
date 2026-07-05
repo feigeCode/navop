@@ -153,6 +153,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
         }
         match compact_session_context_if_needed(
             &ctx.session,
+            &ctx.turn_id,
             &ctx.services,
             ContextCompactionPolicy::default(),
             &cancellation,
@@ -177,6 +178,7 @@ async fn run_agent_loop(ctx: AgentLoopContext, cancellation: CancellationToken) 
             ctx.task_kind,
             &tool_specs,
             &ctx.resources,
+            &ctx.session.skills(),
             ctx.session.system_instruction().as_deref(),
             ctx.session.current_plan().as_ref(),
         ))];
@@ -377,6 +379,7 @@ fn dispatch_context(
         session_id: session.id().clone(),
         turn_id: turn_id.clone(),
         resources: resources.clone(),
+        skills: session.skills(),
     }
 }
 

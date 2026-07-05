@@ -39,14 +39,15 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::acp::{AcpAgentConfig, AcpConnection, AcpSessionState};
 use crate::agent_cards::{ApproveToolCall, PlanCardData, RejectToolCall, SubAgentCardData};
+use crate::agent_skills::AgentSkillState;
 use crate::agent_transcript::AgentTranscript;
 use crate::bridge::build_runtime_from_llm_provider;
 use crate::code_block::{CodeBlockAction, CodeBlockActionRegistry};
 use crate::input::{
     AgentComposerContext, AgentInput, AgentInputEvent, ComposerAgentOption, ComposerMenuOption,
     ComposerModelOption, ComposerPlanItem, ComposerResourcePoolItem, ComposerResourcePoolSummary,
-    ComposerResourceSourceOption, ComposerResourceTypeFilter, ComposerScope, ComposerSubAgentItem,
-    ComposerTarget, MentionItem,
+    ComposerResourceSourceOption, ComposerResourceTypeFilter, ComposerScope, ComposerSkillItem,
+    ComposerSkillSummary, ComposerSubAgentItem, ComposerTarget, MentionItem,
 };
 use crate::message_view::render_messages_with_code_actions;
 use crate::persistence;
@@ -360,12 +361,16 @@ pub struct AgentChatView {
     backend: Backend,
     /// 可接入的外部 ACP agent 列表。
     acp_agents: Vec<AcpAgentConfig>,
+    /// 本地 Codex-style Skill 管理状态。
+    skills: AgentSkillState,
     /// 已建立的 ACP 连接(backend == Acp 时存在)。
     acp: Option<AcpConnection>,
     /// 当前选中的 ACP agent id(用于头部切换控件高亮)。
     current_acp_id: Option<SharedString>,
     /// 正在连接 ACP agent(拉起子进程中)。
     acp_connecting: bool,
+    /// 正在连接的 ACP agent id,用于忽略已取消连接的异步回调。
+    acp_connecting_id: Option<SharedString>,
     scroll_handle: ScrollHandle,
     auto_scroll: AutoScrollState,
     task_kind: TaskKind,
@@ -452,6 +457,7 @@ impl AgentChatView {
         let tool_options = default_tool_options();
         let task_options = default_task_options();
 
+        let skills = AgentSkillState::load_default();
         let init_ctx = build_composer_context(
             &resources,
             task_kind,
@@ -465,6 +471,8 @@ impl AgentChatView {
             false,
             None,
             &available_resources,
+            skills.summary(),
+            skills.items(),
         );
         let target_options: Vec<ComposerTarget> = resources
             .resources
@@ -488,18 +496,8 @@ impl AgentChatView {
         let mut transcript = AgentTranscript::new();
         transcript.set_resource_context(&resources);
 
-        // 载入已持久化的会话列表,并把当前实时会话置顶(尚无内容,落库前为占位)。
-        let mut sessions = persistence::list_summaries(cx);
-        if !sessions.iter().any(|s| s.id == current_session) {
-            sessions.insert(
-                0,
-                SessionSummary::new(
-                    current_session.clone(),
-                    current_agent_task_title(),
-                    now_secs(),
-                ),
-            );
-        }
+        // 载入已持久化的会话列表。空的实时会话不作为历史占位展示。
+        let sessions = persistence::list_summaries(cx);
 
         Self {
             runtime,
@@ -516,9 +514,11 @@ impl AgentChatView {
             history_popover_open: false,
             backend: Backend::Local,
             acp_agents,
+            skills,
             acp: None,
             current_acp_id: None,
             acp_connecting: false,
+            acp_connecting_id: None,
             scroll_handle: ScrollHandle::new(),
             auto_scroll: AutoScrollState::default(),
             task_kind,
@@ -639,6 +639,16 @@ impl AgentChatView {
                     self.select_resource_source(&id, cx);
                 }
             }
+            AgentInputEvent::ToggleSkill { id } => {
+                if !self.is_running {
+                    self.toggle_skill(&id, cx);
+                }
+            }
+            AgentInputEvent::ImportSkill { path } => {
+                if !self.is_running {
+                    self.import_skill(&path, cx);
+                }
+            }
             AgentInputEvent::PickScope { key: _ } => {}
             AgentInputEvent::SelectModel {
                 id,
@@ -680,7 +690,7 @@ impl AgentChatView {
             self.request_scroll_to_bottom();
             self.set_running(true, cx);
             if let Some(acp) = &self.acp {
-                acp.prompt(text);
+                acp.prompt(self.skills.selected_context().wrap_user_prompt(&text));
             }
             cx.notify();
             return;
@@ -869,6 +879,8 @@ impl AgentChatView {
             self.acp_connecting,
             self.acp.as_ref().map(|acp| acp.state()),
             &self.available_resources,
+            self.skills.summary(),
+            self.skills.items(),
         );
         self.input.update(cx, |inp, cx| inp.set_context(ctx, cx));
     }
@@ -901,6 +913,34 @@ impl AgentChatView {
         }
     }
 
+    fn toggle_skill(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.skills.toggle(id) {
+            self.sync_session_skills();
+            self.sync_composer(cx);
+            cx.notify();
+        }
+    }
+
+    fn import_skill(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        match self.skills.import_skill(path) {
+            Ok(()) => {
+                self.sync_session_skills();
+                self.sync_composer(cx);
+            }
+            Err(error) => {
+                self.transcript
+                    .push_system(format!("导入 Skill 失败:{error}"));
+            }
+        }
+        cx.notify();
+    }
+
+    fn sync_session_skills(&self) {
+        if let Some(session) = self.runtime.session(&self.session_id) {
+            session.set_skills(self.skills.selected_context());
+        }
+    }
+
     fn select_resource_source(&mut self, id: &str, cx: &mut Context<Self>) {
         if apply_resource_source(&mut self.resources, &self.available_resources, id) {
             self.sync_session_resources();
@@ -930,6 +970,7 @@ impl AgentChatView {
             self.runtime = binding.runtime;
             self.session_id = binding.session_id;
             self.apply_system_instruction_to_current_session();
+            self.sync_session_skills();
             self.selected_model = binding.selected_model;
             self.current_session = self.session_id.to_string();
             self.sessions.insert(
@@ -1027,13 +1068,14 @@ impl AgentChatView {
         match agent_id {
             // 切回自研 One_Agent。
             None => {
-                if self.backend == Backend::Local {
+                if self.backend == Backend::Local && !self.acp_connecting {
                     return;
                 }
                 self.acp = None;
                 self.current_acp_id = None;
                 self.backend = Backend::Local;
                 self.acp_connecting = false;
+                self.acp_connecting_id = None;
                 self.transcript.clear();
                 self.set_running(false, cx);
                 self._event_task =
@@ -1052,7 +1094,9 @@ impl AgentChatView {
                 let Some(config) = self.acp_agents.iter().find(|a| a.id == id).cloned() else {
                     return;
                 };
+                let config = config.with_skill_context(&self.skills.selected_context());
                 self.acp_connecting = true;
+                self.acp_connecting_id = Some(config.id.clone());
                 self.set_running(false, cx);
                 self.transcript.clear();
                 self.transcript
@@ -1064,19 +1108,27 @@ impl AgentChatView {
                     let connected = AcpConnection::connect(&config, cx).await;
                     let _ = this.update(cx, |this, cx| match connected {
                         Ok(conn) => {
+                            if this.acp_connecting_id.as_ref() != Some(&config.id) {
+                                return;
+                            }
                             let rx = conn.subscribe();
                             let sid = conn.session_id();
                             this.acp = Some(conn);
                             this.backend = Backend::Acp;
                             this.current_acp_id = Some(config.id.clone());
                             this.acp_connecting = false;
+                            this.acp_connecting_id = None;
                             this.transcript.clear();
                             this._event_task = Self::spawn_event_pump(rx, sid, cx);
                             this.sync_composer(cx);
                             cx.notify();
                         }
                         Err(err) => {
+                            if this.acp_connecting_id.as_ref() != Some(&config.id) {
+                                return;
+                            }
                             this.acp_connecting = false;
+                            this.acp_connecting_id = None;
                             this.backend = Backend::Local;
                             this.current_acp_id = None;
                             this.transcript
@@ -1099,6 +1151,7 @@ impl AgentChatView {
         let session = self.runtime.create_session(self.resources.clone());
         self.session_id = session.id().clone();
         self.apply_system_instruction_to_current_session();
+        self.sync_session_skills();
         self.current_session = self.session_id.to_string();
         self.transcript.clear();
         self._event_task =
@@ -1112,8 +1165,11 @@ impl AgentChatView {
         } else {
             persistence::list_summaries(cx)
         };
-        // 活跃视图:把当前实时会话(可能尚未落库)置顶,保留其已有显示名。
-        if !self.show_archived && !list.iter().any(|s| s.id == self.current_session) {
+        // 活跃视图:仅当当前实时会话已有内容时才置顶,避免空会话在历史中凭空新增。
+        if !self.show_archived
+            && !list.iter().any(|s| s.id == self.current_session)
+            && self.current_runtime_session_has_history()
+        {
             let name = self
                 .sessions
                 .iter()
@@ -1126,6 +1182,12 @@ impl AgentChatView {
             );
         }
         self.sessions = list;
+    }
+
+    fn current_runtime_session_has_history(&self) -> bool {
+        self.runtime
+            .session(&self.session_id)
+            .is_some_and(|session| !session.snapshot().history.is_empty())
     }
 
     /// 切换「活跃 / 已归档」视图。
@@ -1210,6 +1272,7 @@ impl AgentChatView {
         self.transcript.load_history(&history, plan.as_ref());
         self._event_task =
             Self::spawn_event_pump(self.runtime.subscribe(), self.session_id.clone(), cx);
+        self.reload_sessions(cx);
         self.request_scroll_to_bottom();
         cx.notify();
     }
@@ -1372,6 +1435,8 @@ impl AgentChatView {
             self.acp_connecting,
             self.acp.as_ref().map(|acp| acp.state()),
             &self.available_resources,
+            self.skills.summary(),
+            self.skills.items(),
         );
         self.input.update(cx, |input, cx| {
             input.set_target_options(target_options, cx);
@@ -1440,6 +1505,8 @@ impl AgentChatView {
             self.acp_connecting,
             self.acp.as_ref().map(|acp| acp.state()),
             &self.available_resources,
+            self.skills.summary(),
+            self.skills.items(),
         );
         self.input.update(cx, |input, cx| {
             input.set_mentions(mentions, cx);
@@ -1976,10 +2043,14 @@ fn build_composer_context(
     acp_connecting: bool,
     acp_state: Option<AcpSessionState>,
     available_resources: &[ResourceRef],
+    skill_summary: ComposerSkillSummary,
+    skill_items: Vec<ComposerSkillItem>,
 ) -> AgentComposerContext {
     let mut context = build_context(resources, task_kind, tool_label, model);
     context.resource_source_options = resource_source_options(resources, available_resources);
     context.resource_pool_items = resource_pool_items(resources, available_resources);
+    context.skill_summary = skill_summary;
+    context.skill_items = skill_items;
     context.plan_items = composer_plan_items(plan);
     context.subagent_items = composer_subagent_items(subagents);
     context.agent_options =
@@ -2110,6 +2181,8 @@ fn build_context(
         resource_type_filters: resource_type_filters(resources),
         resource_source_options: Vec::new(),
         resource_pool_items: Vec::new(),
+        skill_summary: Default::default(),
+        skill_items: Vec::new(),
         scopes,
         capabilities,
         plan_items: Vec::new(),
@@ -2281,7 +2354,7 @@ fn header_agent_option_row(
     let selected_fg = theme.foreground;
     let icon_fg = if agent.selected { theme.accent } else { muted };
     let target = agent.id.clone();
-    let disabled = agent.connecting;
+    let disabled = agent_option_disabled(&agent);
 
     h_flex()
         .id(SharedString::from(format!(
@@ -2334,6 +2407,10 @@ fn current_agent_icon_for_option(agent: &ComposerAgentOption) -> IconName {
     } else {
         IconName::AI
     }
+}
+
+fn agent_option_disabled(agent: &ComposerAgentOption) -> bool {
+    agent.connecting && agent.id.is_some()
 }
 
 fn resource_pool_summary(resources: &ResourceContext) -> ComposerResourcePoolSummary {
@@ -3392,6 +3469,8 @@ mod tests {
             false,
             None,
             &[],
+            ComposerSkillSummary::default(),
+            Vec::new(),
         );
         let acp = build_composer_context(
             &ResourceContext::new(),
@@ -3406,6 +3485,8 @@ mod tests {
             false,
             None,
             &[],
+            ComposerSkillSummary::default(),
+            Vec::new(),
         );
 
         assert_eq!(local.plan_items, acp.plan_items);
@@ -3435,6 +3516,8 @@ mod tests {
             false,
             None,
             &[],
+            ComposerSkillSummary::default(),
+            Vec::new(),
         );
 
         assert_eq!(ctx.agent_options[0].label.as_ref(), "One Agent");
@@ -3474,6 +3557,8 @@ mod tests {
             false,
             None,
             &[],
+            ComposerSkillSummary::default(),
+            Vec::new(),
         );
 
         assert_eq!(ctx.subagent_items.len(), 2);
@@ -3505,6 +3590,19 @@ mod tests {
         assert_eq!(
             "OpenCode",
             current_agent_label(Backend::Acp, &acp_agents, Some(&opencode_id), false).as_ref()
+        );
+    }
+
+    #[test]
+    fn header_agent_switcher_keeps_local_available_while_acp_connects() {
+        let acp_agents = vec![AcpAgentConfig::new("codex", "Codex", "codex")];
+        let options = composer_agent_options(Backend::Local, &acp_agents, None, true);
+
+        assert!(!agent_option_disabled(&options[0]));
+        assert!(agent_option_disabled(&options[1]));
+        assert_eq!(
+            "连接中...",
+            current_agent_label(Backend::Local, &acp_agents, None, true).as_ref()
         );
     }
 
@@ -3552,6 +3650,8 @@ mod tests {
             false,
             Some(state),
             &[],
+            ComposerSkillSummary::default(),
+            Vec::new(),
         );
 
         assert_eq!(ctx.target.unwrap().label.as_ref(), "ACP 工作会话");

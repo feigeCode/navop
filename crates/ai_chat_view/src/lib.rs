@@ -20,6 +20,7 @@ pub use agent_runtime::{
 
 mod acp;
 mod agent_cards;
+mod agent_skills;
 mod agent_tab;
 mod agent_tool_input;
 mod agent_transcript;

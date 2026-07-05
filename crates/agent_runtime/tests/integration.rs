@@ -15,14 +15,14 @@ use agent_runtime::error::ToolError;
 use agent_runtime::model::{
     MockModelClient, ModelRequest, ModelResponse, ModelStream, ModelStreamEvent, function_tool_call,
 };
-use agent_runtime::tools::builtin::EchoTool;
+use agent_runtime::tools::builtin::{EchoTool, default_agent_tools};
 use agent_runtime::tools::{
     ObservationData, Tool, ToolInvocation, ToolName, ToolObservation, ToolSpec,
 };
 use agent_runtime::{
     HistoryItem, ModelClient, ResourceContext, ResourceKind, ResourceRef, ResourceScope, RiskLevel,
-    Runtime, RuntimeError, RuntimeEvent, RuntimeServices, StepStatus, TaskKind, TaskOutcome,
-    ToolExecutionMode, ToolRegistry, ToolRouter,
+    Runtime, RuntimeError, RuntimeEvent, RuntimeServices, SkillContext, SkillRef, SkillSummary,
+    StepStatus, TaskKind, TaskOutcome, ToolExecutionMode, ToolRegistry, ToolRouter,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -379,6 +379,7 @@ async fn agent_loop_compacts_large_history_before_model_request() {
         Arc::new(ToolRouter::new(ToolRegistry::new())),
     ));
     let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
     session.record_user_input("旧上下文 ".repeat(7000));
 
     runtime
@@ -405,6 +406,78 @@ async fn agent_loop_compacts_large_history_before_model_request() {
             .items()
             .iter()
             .any(|item| matches!(item, HistoryItem::ContextSummary { .. }))
+    );
+    let events = drain_events(&mut rx);
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::Status {
+                title,
+                is_done: false,
+                ..
+            } if title == "正在压缩上下文..."
+        )
+    }));
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::Status {
+                title,
+                is_done: true,
+                ..
+            } if title == "上下文压缩完成"
+        )
+    }));
+}
+
+#[tokio::test]
+async fn selected_skills_are_exposed_as_metadata_with_load_skill_tool() {
+    let model = Arc::new(MockModelClient::new([ModelResponse::text(
+        "已按 skill 处理。",
+    )]));
+    let runtime = Runtime::new(RuntimeServices::new(
+        model.clone(),
+        Arc::new(ToolRouter::new(default_agent_tools())),
+    ));
+    let session = runtime.create_session(ResourceContext::new());
+    session.set_skills(
+        SkillContext::new()
+            .with_available_skill(SkillSummary::new(
+                "ops",
+                "Run operational playbooks",
+                "/tmp/skills/ops/SKILL.md",
+            ))
+            .with_skill(SkillRef::new(
+                "ops",
+                "Run operational playbooks",
+                "/tmp/skills/ops/SKILL.md",
+            )),
+    );
+
+    runtime
+        .run_turn_blocking(session.id(), "执行 ops playbook".into(), TaskKind::Agent)
+        .await
+        .expect("run agent turn with selected skill");
+
+    let requests = model.received_requests();
+    assert_eq!(1, requests.len());
+    let system_prompt = requests[0].messages[0].content_as_text();
+    assert!(system_prompt.contains("Selected skills for this turn"));
+    assert!(system_prompt.contains("ops"));
+    assert!(system_prompt.contains("Run operational playbooks"));
+    assert!(system_prompt.contains("load_skill"));
+    assert!(!system_prompt.contains("Follow the ops checklist."));
+    assert!(
+        requests[0]
+            .tools
+            .iter()
+            .any(|tool| tool.function.name == "load_skill")
+    );
+    assert!(
+        requests[0]
+            .tools
+            .iter()
+            .any(|tool| tool.function.name == "read_skill_file")
     );
 }
 

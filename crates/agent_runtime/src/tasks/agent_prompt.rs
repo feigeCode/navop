@@ -1,4 +1,6 @@
 use crate::runtime::TaskKind;
+use crate::skill::SkillContext;
+use crate::tasks::skill_prompt::append_skill_context;
 use crate::tools::ToolSpec;
 use crate::{Plan, ResourceContext};
 
@@ -22,12 +24,14 @@ pub(super) fn build_system_prompt(
     kind: TaskKind,
     tools: &[ToolSpec],
     resources: &ResourceContext,
+    skills: &SkillContext,
     system_instruction: Option<&str>,
     current_plan: Option<&Plan>,
 ) -> String {
     let mut prompt = system_prompt(kind).to_string();
     append_system_instruction(&mut prompt, system_instruction);
     append_resource_context(&mut prompt, resources);
+    append_skill_context(&mut prompt, skills);
     if let Some(plan) = current_plan {
         append_current_plan(&mut prompt, plan);
     }
@@ -179,5 +183,60 @@ fn system_prompt(kind: TaskKind) -> &'static str {
         TaskKind::Agent => AGENT_SYSTEM,
         TaskKind::Ask => ASK_SYSTEM,
         TaskKind::Plan => PLAN_SYSTEM,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skill::{SkillContext, SkillRef, SkillSummary};
+
+    #[test]
+    fn system_prompt_includes_selected_skill_metadata_without_contents() {
+        let skills = SkillContext::new().with_skill(SkillRef::new(
+            "ops",
+            "Run operational playbooks",
+            "/tmp/skills/ops/SKILL.md",
+        ));
+
+        let prompt = build_system_prompt(
+            TaskKind::Agent,
+            &[],
+            &ResourceContext::new(),
+            &skills,
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("Selected skills for this turn"));
+        assert!(prompt.contains("ops"));
+        assert!(prompt.contains("Run operational playbooks"));
+        assert!(prompt.contains("load_skill"));
+        assert!(prompt.contains("read_skill_file"));
+        assert!(!prompt.contains("Follow the ops checklist."));
+        assert!(!prompt.contains("Instructions:"));
+    }
+
+    #[test]
+    fn system_prompt_includes_available_skill_catalog_metadata() {
+        let skills = SkillContext::new().with_available_skill(SkillSummary::new(
+            "using-superpowers",
+            "Use Superpowers workflows",
+            "/tmp/skills/using-superpowers/SKILL.md",
+        ));
+
+        let prompt = build_system_prompt(
+            TaskKind::Agent,
+            &[],
+            &ResourceContext::new(),
+            &skills,
+            None,
+            None,
+        );
+
+        assert!(prompt.contains("Available skill catalog"));
+        assert!(prompt.contains("using-superpowers"));
+        assert!(prompt.contains("Use Superpowers workflows"));
+        assert!(!prompt.contains("Instructions:"));
     }
 }

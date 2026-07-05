@@ -3,7 +3,7 @@
 //! 避免模型把观测文本误解为用户输入并跳过 function calling 循环。
 
 use crate::history::{HistoryItem, RuntimeHistory};
-use crate::tools::ToolCall;
+use crate::tools::{ToolCall, ToolObservation};
 use llm_connector::types::{Message, MessageBlock, Role};
 
 /// 将历史转换为消息序列(不含 system 提示,由调用方在最前面拼接)。
@@ -11,7 +11,10 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
     let max = history.max_observation_bytes();
     let mut messages = Vec::with_capacity(history.len());
     let mut pending_assistant: Option<(String, String)> = None;
-    for item in history.items() {
+    let items = history.items();
+    let mut index = 0;
+    while index < items.len() {
+        let item = &items[index];
         match item {
             HistoryItem::User { text, images } => {
                 flush_pending_assistant(&mut messages, &mut pending_assistant);
@@ -40,17 +43,88 @@ pub fn history_to_messages(history: &RuntimeHistory) -> Vec<Message> {
                 flush_pending_assistant(&mut messages, &mut pending_assistant);
                 messages.push(Message::system(context_summary_text(text, *original_items)));
             }
-            HistoryItem::ToolCall(call) => {
-                push_assistant_tool_call_message(&mut messages, call, pending_assistant.take());
+            HistoryItem::ToolCall(_) => {
+                let (next_index, calls, observations) = collect_tool_exchange(items, index);
+                if tool_exchange_is_complete(&calls, &observations) {
+                    for call in calls {
+                        push_assistant_tool_call_message(
+                            &mut messages,
+                            call,
+                            pending_assistant.take(),
+                        );
+                    }
+                    for obs in observations {
+                        messages.push(tool_result_message(obs, max));
+                    }
+                } else {
+                    flush_pending_assistant(&mut messages, &mut pending_assistant);
+                    messages.push(Message::system(incomplete_tool_exchange_text(
+                        &calls,
+                        &observations,
+                    )));
+                }
+                index = next_index;
+                continue;
             }
             HistoryItem::Observation(obs) => {
                 flush_pending_assistant(&mut messages, &mut pending_assistant);
-                messages.push(tool_result_message(obs, max));
+                messages.push(Message::system(orphan_observation_text(obs)));
             }
         }
+        index += 1;
     }
     flush_pending_assistant(&mut messages, &mut pending_assistant);
     messages
+}
+
+fn collect_tool_exchange(
+    items: &[HistoryItem],
+    start: usize,
+) -> (usize, Vec<&ToolCall>, Vec<&ToolObservation>) {
+    let mut index = start;
+    let mut calls = Vec::new();
+    while let Some(HistoryItem::ToolCall(call)) = items.get(index) {
+        calls.push(call);
+        index += 1;
+    }
+    let mut observations = Vec::new();
+    while let Some(HistoryItem::Observation(obs)) = items.get(index) {
+        observations.push(obs);
+        index += 1;
+    }
+    (index, calls, observations)
+}
+
+fn tool_exchange_is_complete(calls: &[&ToolCall], observations: &[&ToolObservation]) -> bool {
+    if calls.is_empty() || calls.len() != observations.len() {
+        return false;
+    }
+    calls
+        .iter()
+        .all(|call| observations.iter().any(|obs| obs.call_id == call.call_id))
+}
+
+fn incomplete_tool_exchange_text(calls: &[&ToolCall], observations: &[&ToolObservation]) -> String {
+    let mut text = String::from(
+        "历史中存在未完成的工具调用序列，已转为文本上下文以避免发送非法 tool protocol。",
+    );
+    for call in calls {
+        text.push_str(&format!(
+            "\n[工具调用]\nid: {}\nname: {}\narguments: {}",
+            call.call_id, call.tool_name, call.arguments
+        ));
+    }
+    for obs in observations {
+        text.push_str(&format!("\n[工具结果]\n{}", obs.model_text(4096)));
+    }
+    text
+}
+
+fn orphan_observation_text(obs: &ToolObservation) -> String {
+    format!(
+        "历史中存在没有对应工具调用的工具结果，已转为文本上下文。\n[工具结果]\n{}",
+        obs.model_text(4096)
+    )
 }
 
 fn context_summary_text(text: &str, original_items: usize) -> String {
@@ -225,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_history_item_becomes_assistant_tool_call() {
+    fn dangling_tool_call_history_item_becomes_system_text() {
         let call_id = ToolCallId::from_string("call_test_1");
         let tool_call = ToolCall {
             call_id: call_id.clone(),
@@ -244,19 +318,14 @@ mod tests {
         assert_eq!(messages.len(), 1);
 
         let msg = &messages[0];
-        assert_eq!(msg.role, Role::Assistant);
-        assert!(msg.tool_calls.is_some());
-        let tool_calls = msg
-            .tool_calls
-            .as_ref()
-            .expect("assistant tool message should carry tool_calls");
-        assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0].id, call_id.to_string());
-        assert_eq!(tool_calls[0].function.name, "db_query");
+        assert_eq!(msg.role, Role::System);
+        assert!(msg.tool_calls.is_none());
+        assert!(msg.content_as_text().contains(call_id.as_str()));
+        assert!(msg.content_as_text().contains("db_query"));
     }
 
     #[test]
-    fn reasoning_before_tool_call_is_attached_to_tool_call_message() {
+    fn reasoning_before_dangling_tool_call_is_flushed_as_assistant_text() {
         let call_id = ToolCallId::from_string("call_reasoning_tool");
         let tool_call = ToolCall {
             call_id: call_id.clone(),
@@ -270,15 +339,16 @@ mod tests {
         history.record_tool_call(tool_call);
         let messages = history_to_messages(&history);
 
-        assert_eq!(messages.len(), 1);
+        assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, Role::Assistant);
         assert_eq!(messages[0].reasoning_content.as_deref(), Some("需要先查库"));
-        let tool_calls = messages[0].tool_calls.as_ref().expect("tool call");
-        assert_eq!(tool_calls[0].id, call_id.to_string());
+        assert_eq!(messages[1].role, Role::System);
+        assert!(messages[1].tool_calls.is_none());
+        assert!(messages[1].content_as_text().contains(call_id.as_str()));
     }
 
     #[test]
-    fn observation_history_item_becomes_tool_role_with_call_id() {
+    fn orphan_observation_history_item_becomes_system_text() {
         let call_id = ToolCallId::from_string("call_test_2");
         let observation = ToolObservation::success(
             call_id,
@@ -292,10 +362,9 @@ mod tests {
         assert_eq!(messages.len(), 1);
 
         let msg = &messages[0];
-        assert_eq!(msg.role, Role::Tool);
-        assert_eq!(msg.tool_call_id, Some("call_test_2".to_string()));
-        assert_eq!(msg.content.len(), 1);
-        assert!(msg.content[0].is_text());
+        assert_eq!(msg.role, Role::System);
+        assert_eq!(msg.tool_call_id, None);
+        assert!(msg.content_as_text().contains("count success"));
     }
 
     #[test]

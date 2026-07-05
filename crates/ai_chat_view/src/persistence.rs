@@ -119,6 +119,7 @@ fn load_legacy_chat_snapshot(cx: &App, uid: &str) -> Option<SessionSnapshot> {
             .collect(),
         plan: None,
         system_instruction: None,
+        skills: agent_runtime::SkillContext::new(),
     })
 }
 
@@ -186,6 +187,7 @@ mod tests {
             ],
             plan: None,
             system_instruction: None,
+            skills: agent_runtime::SkillContext::new(),
         }
     }
 
@@ -257,6 +259,7 @@ mod tests {
             history: vec![HistoryItem::System("only system".into())],
             plan: None,
             system_instruction: None,
+            skills: agent_runtime::SkillContext::new(),
         };
         assert_eq!(derive_title(&snap), "新 Agent 会话");
     }

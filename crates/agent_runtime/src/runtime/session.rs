@@ -13,6 +13,7 @@ use crate::runtime::event::{RuntimeEvent, RuntimeEventSender};
 use crate::runtime::input_queue::{InputQueue, TurnInput};
 use crate::runtime::session_state::SessionState;
 use crate::runtime::task::PendingToolApproval;
+use crate::skill::SkillContext;
 use crate::tools::{ToolCall, ToolObservation};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -33,6 +34,8 @@ pub struct SessionSnapshot {
     pub plan: Option<Plan>,
     #[serde(default)]
     pub system_instruction: Option<String>,
+    #[serde(default)]
+    pub skills: SkillContext,
 }
 
 /// 一次会话。
@@ -40,6 +43,7 @@ pub struct Session {
     id: SessionId,
     state: Mutex<SessionState>,
     resources: Mutex<ResourceContext>,
+    skills: Mutex<SkillContext>,
     input_queue: Mutex<InputQueue>,
     active_turn: Mutex<Option<ActiveTurn>>,
     pending_tool_approval: Mutex<Option<PendingToolApproval>>,
@@ -52,6 +56,7 @@ impl Session {
             id,
             state: Mutex::new(SessionState::new()),
             resources: Mutex::new(resources),
+            skills: Mutex::new(SkillContext::new()),
             input_queue: Mutex::new(InputQueue::new()),
             active_turn: Mutex::new(None),
             pending_tool_approval: Mutex::new(None),
@@ -72,6 +77,7 @@ impl Session {
             id: snapshot.id,
             state: Mutex::new(state),
             resources: Mutex::new(snapshot.resources),
+            skills: Mutex::new(snapshot.skills),
             input_queue: Mutex::new(InputQueue::new()),
             active_turn: Mutex::new(None),
             pending_tool_approval: Mutex::new(None),
@@ -96,6 +102,7 @@ impl Session {
         SessionSnapshot {
             id: self.id.clone(),
             resources: self.resources(),
+            skills: self.skills(),
             history,
             plan,
             system_instruction,
@@ -110,6 +117,14 @@ impl Session {
 
     pub fn set_resources(&self, resources: ResourceContext) {
         *self.resources.lock().expect("session 锁中毒") = resources;
+    }
+
+    pub fn skills(&self) -> SkillContext {
+        self.skills.lock().expect("session 锁中毒").clone()
+    }
+
+    pub fn set_skills(&self, skills: SkillContext) {
+        *self.skills.lock().expect("session 锁中毒") = skills;
     }
 
     // ===== 状态快照 =====

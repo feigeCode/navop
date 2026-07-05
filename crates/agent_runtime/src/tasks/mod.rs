@@ -8,6 +8,7 @@ mod agent_prompt;
 mod agent_tool_validation;
 mod context_compaction;
 mod delegate_task;
+mod skill_prompt;
 mod subagent_task;
 mod update_plan;
 

@@ -11,6 +11,7 @@
 //! scope 仅 emit `PickScope` 交上层;模型 / 工具 / 任务模式同样用注入选项渲染内置下拉。
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -34,6 +35,7 @@ use crate::input::context::{
     ComposerScope, ComposerSubAgentItem, ComposerTarget,
 };
 use crate::input::mention::{MentionCompletionProvider, MentionItem};
+use crate::input::skill::{render_skill_mode_content, skill_trigger_label};
 use crate::theme::{AgentChatTheme, active_agent_chat_theme};
 
 /// AgentInput 对外事件。
@@ -58,6 +60,10 @@ pub enum AgentInputEvent {
     RemoveResourceFromPool { id: SharedString },
     /// 选择资源池来源预设。
     SelectResourceSource { id: SharedString },
+    /// 切换某个 Skill 是否注入本会话。
+    ToggleSkill { id: SharedString },
+    /// 从本地目录导入一个 Codex-style Skill。
+    ImportSkill { path: PathBuf },
     /// 点击某个派生上下文 chip —— 上层据 `key` 弹出对应选择器。
     PickScope { key: SharedString },
     /// 在内置下拉中选择了模型。
@@ -78,6 +84,7 @@ pub enum AgentInputEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ComposerMenuKind {
     Target,
+    Skill,
     Plan,
     SubAgent,
     Mode,
@@ -413,6 +420,16 @@ impl AgentInput {
         .detach();
     }
 
+    pub(super) fn toggle_skill(&mut self, id: SharedString, cx: &mut Context<Self>) {
+        if !self.is_running {
+            cx.emit(AgentInputEvent::ToggleSkill { id });
+        }
+    }
+
+    pub(super) fn is_running(&self) -> bool {
+        self.is_running
+    }
+
     fn remove_attachment(&mut self, id: &str, cx: &mut Context<Self>) {
         self.attachments.retain(|a| a.id != id);
         cx.notify();
@@ -446,7 +463,9 @@ impl AgentInput {
                 .child(self.render_mode_separator(cx))
                 .child(self.render_subagent_mode_tab(cx))
                 .child(self.render_mode_separator(cx))
-                .child(self.render_context_mode_tab(cx)),
+                .child(self.render_context_mode_tab(cx))
+                .child(self.render_mode_separator(cx))
+                .child(self.render_skill_mode_tab(cx)),
         )
     }
 
@@ -639,6 +658,39 @@ impl AgentInput {
                             .child(resource_pool_trigger_label(&self.context)),
                     ),
             )
+    }
+
+    fn render_skill_mode_tab(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let view = cx.entity();
+        let is_open = self.open_menu == Some(ComposerMenuKind::Skill);
+        let summary = self.context.skill_summary.clone();
+        let items = self.context.skill_items.clone();
+
+        Popover::new("agent-skill-popover")
+            .p_0()
+            .open(is_open)
+            .on_open_change({
+                let view = view.clone();
+                move |open, _window, cx| {
+                    let open = *open;
+                    view.update(cx, |this, cx| {
+                        this.open_menu =
+                            menu_state_after_open_change(open, ComposerMenuKind::Skill);
+                        cx.notify();
+                    });
+                }
+            })
+            .trigger(self.render_capability_trigger(
+                "agent-skill-trigger",
+                skill_trigger_label(&summary),
+                IconName::BookOpen,
+                cx,
+            ))
+            .content({
+                move |_state, _window, cx| {
+                    render_skill_mode_content(view.clone(), summary.clone(), items.clone(), cx)
+                }
+            })
     }
 
     fn render_mode_separator(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {

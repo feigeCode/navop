@@ -371,7 +371,9 @@ enum StreamState {
 /// Runtime 运行 codex 风格的 `AgentTask`:模型驱动,按需调用业务工具与
 /// `update_plan` checklist,简单问答直接回答、不规划。
 pub fn build_runtime(model: Arc<dyn ModelClient>, registry: ToolRegistry) -> Arc<Runtime> {
-    let tools = Arc::new(ToolRouter::new(registry));
+    let mut merged_registry = agent_runtime::tools::builtin::default_agent_tools();
+    merged_registry.extend(registry);
+    let tools = Arc::new(ToolRouter::new(merged_registry));
     Arc::new(Runtime::new(RuntimeServices::new(model, tools)))
 }
 

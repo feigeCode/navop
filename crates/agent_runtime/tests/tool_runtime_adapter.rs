@@ -2,8 +2,8 @@ use agent_runtime::tools::{
     ObservationData, permission_policy_for_tool_mode, runtime_tool_invocation_from_call,
 };
 use agent_runtime::{
-    ResourceContext, ResourceKind, ResourceRef, ResourceScope, RiskLevel, SessionId, ToolCall,
-    ToolCallId, ToolExecutionMode, ToolName, ToolSpec, TurnId,
+    ResourceContext, ResourceKind, ResourceRef, ResourceScope, RiskLevel, SessionId, SkillContext,
+    ToolCall, ToolCallId, ToolExecutionMode, ToolName, ToolSpec, TurnId,
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -216,6 +216,7 @@ fn agent_invocation(
         arguments,
         resource_id: None,
         resources: ResourceContext::new(),
+        skills: SkillContext::new(),
         cancellation: tokio_util::sync::CancellationToken::new(),
     }
 }

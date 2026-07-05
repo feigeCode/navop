@@ -3,6 +3,7 @@
 use crate::error::ToolError;
 use crate::ids::{SessionId, ToolCallId, TurnId};
 use crate::resource::{ResourceContext, ResourceId};
+use crate::skill::SkillContext;
 use crate::tools::invocation::ToolInvocation;
 use crate::tools::observation::ToolObservation;
 use crate::tools::registry::ToolRegistry;
@@ -73,6 +74,7 @@ pub struct ToolDispatchContext {
     pub session_id: SessionId,
     pub turn_id: TurnId,
     pub resources: ResourceContext,
+    pub skills: SkillContext,
 }
 
 /// 工具路由器。
@@ -133,6 +135,7 @@ impl ToolRouter {
             arguments: call.arguments,
             resource_id: resource_id.clone(),
             resources: ctx.resources.clone(),
+            skills: ctx.skills.clone(),
             cancellation: cancellation.clone(),
         };
 
