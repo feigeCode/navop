@@ -28,6 +28,7 @@ use crate::addon::{
     AddonManager, CustomHighlightAddon, SearchAddon, TerminalAddonFrameContext,
     TerminalAddonMouseContext, register_default_addons,
 };
+use crate::broadcast_input::{BroadcastClientId, BroadcastInputHub};
 use crate::cd_completion::{
     CdCompletionQuery, build_cd_completion_suggestions, parse_cd_completion_query,
 };
@@ -128,6 +129,62 @@ const DEFAULT_COLS: usize = 80;
 const DEFAULT_ROWS: usize = 24;
 const TERMINAL_RESET_FONT_SIZE: f32 = 15.0;
 const HISTORY_SUGGESTION_LIMIT: usize = 6;
+
+#[derive(Default)]
+struct BroadcastInputRegistry {
+    hub: BroadcastInputHub,
+    clients: HashMap<BroadcastClientId, WeakEntity<TerminalView>>,
+}
+
+impl gpui::Global for BroadcastInputRegistry {}
+
+impl BroadcastInputRegistry {
+    fn register(
+        &mut self,
+        connection_id: i64,
+        view: WeakEntity<TerminalView>,
+    ) -> BroadcastClientId {
+        let id = self.hub.register(connection_id);
+        self.clients.insert(id, view);
+        id
+    }
+
+    fn unregister(&mut self, id: BroadcastClientId) {
+        self.hub.unregister(id);
+        self.clients.remove(&id);
+    }
+
+    fn set_enabled(&mut self, id: BroadcastClientId, enabled: bool) {
+        self.hub.set_enabled(id, enabled);
+    }
+
+    fn is_enabled(&self, id: BroadcastClientId) -> bool {
+        self.hub.is_enabled(id)
+    }
+
+    fn deliveries_from(
+        &self,
+        source: BroadcastClientId,
+        data: &[u8],
+    ) -> Vec<(WeakEntity<TerminalView>, Vec<u8>)> {
+        self.hub
+            .deliveries_from(source, data)
+            .into_iter()
+            .filter_map(|delivery| {
+                self.clients
+                    .get(&delivery.target)
+                    .cloned()
+                    .map(|view| (view, delivery.data))
+            })
+            .collect()
+    }
+}
+
+fn init_broadcast_input_registry(cx: &mut App) {
+    if cx.try_global::<BroadcastInputRegistry>().is_none() {
+        cx.set_global(BroadcastInputRegistry::default());
+    }
+}
 
 fn take_whole_scroll_lines(scroll_lines_accumulated: &mut f32) -> i32 {
     let lines = scroll_lines_accumulated.trunc() as i32;
@@ -492,6 +549,7 @@ enum ResizingPanel {
 pub fn init(cx: &mut App) {
     crate::settings::init_settings(cx);
     crate::public_mcp::init(cx);
+    init_broadcast_input_registry(cx);
     cx.bind_keys(init_keybindings(cx));
 }
 
@@ -831,6 +889,9 @@ pub struct TerminalView {
     middle_click_paste: bool,
     /// 在 vim/less/man 等 alt-screen TUI 中,把鼠标滚轮转为方向键发送到 PTY
     vim_scroll_to_arrow_keys: bool,
+    /// SSH 多窗口同步输入开关，按同一连接 ID 分组。
+    broadcast_input_enabled: bool,
+    broadcast_client_id: Option<BroadcastClientId>,
 
     /// 侧边栏面板大小
     sidebar_panel_size: Pixels,
@@ -972,6 +1033,7 @@ impl TerminalView {
     }
 
     fn close_terminal_now(&mut self, cx: &mut Context<Self>) {
+        self.unregister_broadcast_input(cx);
         self.unregister_public_mcp_session(cx);
         self.release_active_connection(cx);
         self.terminal.read(cx).shutdown();
@@ -1178,6 +1240,7 @@ impl TerminalView {
                 default_font_size,
                 default_font_family.clone(),
                 sync_path_enabled,
+                false,
                 history_scope,
                 window,
                 cx,
@@ -1295,6 +1358,8 @@ impl TerminalView {
             autocomplete_enabled: true,
             middle_click_paste: true,
             vim_scroll_to_arrow_keys: true,
+            broadcast_input_enabled: false,
+            broadcast_client_id: None,
             sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
             sidebar_render_mode: TerminalSidebarRenderMode::Embedded,
             resizing: None,
@@ -1305,6 +1370,7 @@ impl TerminalView {
         };
         let initial_settings = current_settings(cx);
         this.apply_settings_snapshot(&initial_settings, window, cx);
+        this.register_broadcast_input(cx);
         this.register_public_mcp_session(cx);
         this
     }
@@ -1320,6 +1386,76 @@ impl TerminalView {
             return;
         };
         self.public_mcp_registration = Some(registration);
+    }
+
+    fn register_broadcast_input(&mut self, cx: &mut Context<Self>) {
+        if self.broadcast_client_id.is_some() {
+            return;
+        }
+
+        let connection_id = {
+            let terminal = self.terminal.read(cx);
+            if terminal.connection_kind() != TerminalConnectionKind::Ssh {
+                return;
+            }
+            let Some(connection_id) = terminal.connection_id() else {
+                return;
+            };
+            connection_id
+        };
+
+        init_broadcast_input_registry(cx);
+        let view = cx.entity().downgrade();
+        let client_id = cx
+            .global_mut::<BroadcastInputRegistry>()
+            .register(connection_id, view);
+        self.broadcast_client_id = Some(client_id);
+    }
+
+    fn unregister_broadcast_input(&mut self, cx: &mut Context<Self>) {
+        let Some(client_id) = self.broadcast_client_id.take() else {
+            return;
+        };
+        if cx.try_global::<BroadcastInputRegistry>().is_some() {
+            cx.global_mut::<BroadcastInputRegistry>()
+                .unregister(client_id);
+        }
+        self.broadcast_input_enabled = false;
+    }
+
+    fn apply_broadcast_input_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.terminal.read(cx).connection_kind() != TerminalConnectionKind::Ssh {
+            return;
+        }
+        self.register_broadcast_input(cx);
+        let Some(client_id) = self.broadcast_client_id else {
+            return;
+        };
+        init_broadcast_input_registry(cx);
+        cx.global_mut::<BroadcastInputRegistry>()
+            .set_enabled(client_id, enabled);
+        self.broadcast_input_enabled = cx
+            .try_global::<BroadcastInputRegistry>()
+            .is_some_and(|registry| registry.is_enabled(client_id));
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_broadcast_input_enabled(self.broadcast_input_enabled, cx);
+        });
+        cx.notify();
+    }
+
+    fn broadcast_user_input(&self, data: &[u8], cx: &mut Context<Self>) {
+        let Some(client_id) = self.broadcast_client_id else {
+            return;
+        };
+        let Some(registry) = cx.try_global::<BroadcastInputRegistry>() else {
+            return;
+        };
+        let deliveries = registry.deliveries_from(client_id, data);
+        for (view, data) in deliveries {
+            let _ = view.update(cx, |view, cx| {
+                view.write_broadcast_input(data, cx);
+            });
+        }
     }
 
     fn refresh_public_mcp_session(&self, cx: &mut Context<Self>) {
@@ -1433,6 +1569,9 @@ impl TerminalView {
             }
             TerminalSidebarEvent::VimScrollToArrowKeysChanged(enabled) => {
                 self.set_vim_scroll_to_arrow_keys(*enabled, cx);
+            }
+            TerminalSidebarEvent::BroadcastInputChanged(enabled) => {
+                self.apply_broadcast_input_enabled(*enabled, cx);
             }
             TerminalSidebarEvent::SyncPathChanged(enabled) => {
                 let enabled = *enabled;
@@ -2563,6 +2702,15 @@ impl TerminalView {
     }
 
     fn write_to_pty(&mut self, data: Vec<u8>, cx: &mut Context<Self>) {
+        self.write_input_to_terminal(&data, cx);
+        self.broadcast_user_input(&data, cx);
+    }
+
+    fn write_broadcast_input(&mut self, data: Vec<u8>, cx: &mut Context<Self>) {
+        self.write_input_to_terminal(&data, cx);
+    }
+
+    fn write_input_to_terminal(&mut self, data: &[u8], cx: &mut Context<Self>) {
         // 用户输入时自动滚动到底部
         let display_offset = self.terminal.read(cx).term().lock().grid().display_offset();
         if should_scroll_to_bottom_on_user_input(
@@ -2576,7 +2724,7 @@ impl TerminalView {
                     .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
             });
         }
-        self.terminal.read(cx).write(&data);
+        self.terminal.read(cx).write(data);
     }
 
     fn commit_text(&mut self, text: &str, cx: &mut Context<Self>) {

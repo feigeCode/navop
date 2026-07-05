@@ -431,6 +431,8 @@ pub enum TerminalSidebarEvent {
     MiddleClickPasteChanged(bool),
     /// vim/TUI 滚轮转方向键开关
     VimScrollToArrowKeysChanged(bool),
+    /// SSH 多窗口同步输入开关
+    BroadcastInputChanged(bool),
     /// 路径与终端同步开关
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
@@ -479,6 +481,7 @@ impl TerminalSidebar {
         initial_font_size: Pixels,
         initial_font_family: SharedString,
         sync_path_enabled: bool,
+        broadcast_input_enabled: bool,
         history_scope: Option<TerminalHistoryScope>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -501,6 +504,7 @@ impl TerminalSidebar {
                 true,
                 sync_path_enabled,
                 true,
+                broadcast_input_enabled,
                 window,
                 cx,
             )
@@ -620,6 +624,9 @@ impl TerminalSidebar {
                 }
                 settings_panel::SettingsPanelEvent::VimScrollToArrowKeysChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::VimScrollToArrowKeysChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::BroadcastInputChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::BroadcastInputChanged(*enabled));
                 }
                 settings_panel::SettingsPanelEvent::SyncPathChanged(enabled) => {
                     this.sync_path_enabled = *enabled;
@@ -949,6 +956,12 @@ impl TerminalSidebar {
     pub fn set_vim_scroll_to_arrow_keys(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_vim_scroll_to_arrow_keys(enabled, cx);
+        });
+    }
+
+    pub fn set_broadcast_input_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_broadcast_input(enabled, cx);
         });
     }
 

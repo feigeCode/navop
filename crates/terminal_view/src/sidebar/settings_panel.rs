@@ -129,6 +129,8 @@ pub enum SettingsPanelEvent {
     MiddleClickPasteChanged(bool),
     /// vim/TUI 滚轮转方向键开关
     VimScrollToArrowKeysChanged(bool),
+    /// SSH 多窗口同步输入开关
+    BroadcastInputChanged(bool),
     /// 路径同步开关变更
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
@@ -165,6 +167,8 @@ pub struct SettingsPanel {
     middle_click_paste: bool,
     /// vim/TUI 滚轮转方向键
     vim_scroll_to_arrow_keys: bool,
+    /// SSH 多窗口同步输入
+    broadcast_input: bool,
     /// 路径与终端同步开关
     sync_path: bool,
     /// 全局自定义高亮规则
@@ -188,6 +192,7 @@ impl SettingsPanel {
         middle_click_paste: bool,
         sync_path: bool,
         vim_scroll_to_arrow_keys: bool,
+        broadcast_input: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -311,6 +316,7 @@ impl SettingsPanel {
             auto_copy,
             autocomplete_enabled,
             middle_click_paste,
+            broadcast_input,
             sync_path,
             vim_scroll_to_arrow_keys,
             custom_highlights: Vec::new(),
@@ -377,6 +383,11 @@ impl SettingsPanel {
 
     pub fn set_vim_scroll_to_arrow_keys(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.vim_scroll_to_arrow_keys = enabled;
+        cx.notify();
+    }
+
+    pub fn set_broadcast_input(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.broadcast_input = enabled;
         cx.notify();
     }
 
@@ -1033,6 +1044,53 @@ impl SettingsPanel {
             )
     }
 
+    fn render_ssh_session_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = self.colors();
+        let border = colors.border;
+        let muted_fg = colors.muted_foreground;
+        let broadcast_input = self.broadcast_input;
+
+        v_flex()
+            .gap_3()
+            .p_3()
+            .border_t_1()
+            .border_color(border)
+            .child(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(muted_fg)
+                            .child(t!("Settings.ssh_session").to_uppercase()),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().text_sm().child(t!("Settings.broadcast_input")))
+                            .child(
+                                Switch::new("broadcast-input-switch")
+                                    .checked(broadcast_input)
+                                    .small()
+                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                                        this.broadcast_input = *checked;
+                                        cx.emit(SettingsPanelEvent::BroadcastInputChanged(
+                                            *checked,
+                                        ));
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted_fg)
+                            .child(t!("Settings.broadcast_input_help")),
+                    ),
+            )
+    }
+
     /// 渲染文件管理器设置区域（仅 SSH 终端有文件管理器时显示）
     fn render_file_manager_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = self.colors();
@@ -1551,6 +1609,9 @@ impl Render for SettingsPanel {
                             .child(self.render_font_section(cx))
                             .child(self.render_cursor_section(cx))
                             .child(self.render_safety_section(cx))
+                            .when(has_file_manager, |el| {
+                                el.child(self.render_ssh_session_section(cx))
+                            })
                             .when(has_file_manager, |el| {
                                 el.child(self.render_file_manager_section(cx))
                             })

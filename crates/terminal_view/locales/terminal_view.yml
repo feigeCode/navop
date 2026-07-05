@@ -461,6 +461,18 @@ Settings:
     en: Mouse wheel as arrow keys in vim/TUI
     zh-CN: vim/TUI 中鼠标滚轮映射为方向键
     zh-HK: vim/TUI 中滑鼠滾輪映射為方向鍵
+  ssh_session:
+    en: SSH SESSION
+    zh-CN: SSH 会话
+    zh-HK: SSH 會話
+  broadcast_input:
+    en: Broadcast input to same connection
+    zh-CN: 同步输入到同连接窗口
+    zh-HK: 同步輸入到同連線視窗
+  broadcast_input_help:
+    en: When enabled in this SSH window, typing or pasting here sends the same input to other windows for the same saved connection.
+    zh-CN: 在当前 SSH 窗口开启后，这里输入或粘贴的内容会同步发送到同一已保存连接的其他窗口。
+    zh-HK: 在目前 SSH 視窗開啟後，這裡輸入或貼上的內容會同步傳送到同一已儲存連線的其他視窗。
   file_manager_section:
     en: FILE MANAGER
     zh-CN: 文件管理器
