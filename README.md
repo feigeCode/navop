@@ -56,19 +56,17 @@
   </p>
 </div>
 
-## What's New in v0.7.0
+## What's New in v0.8.0
 
-- **MCP public toolchain** — complete MCP (Model Context Protocol) support: create connections, execute SQL, run Redis and SFTP operations, manage typed tools, approval queues, and helper installation, all available as MCP tools.
-- **Redis SSH tunneling** — Redis connections now support SSH tunnels, plus namespace child key display during search.
-- **SFTP MCP tools** — remote path checking, file upload, and file download exposed as structured MCP tools.
-- **Home page overhaul** — connection list now uses unified rendering with drag-and-drop reordering and layout switching.
-- **Window pin** — keep OnetCli always on top of other windows.
-- **SQL improvements** — max row limit for query results, manifest-based database schemas, custom font import for the SQL editor.
-- **Terminal font family** — configurable font family for terminal sessions.
-- **CLI / automation runtime** — unified CLI and automation tool runtime architecture, enabling structured remote operations.
-- **AI fix** — separated AI reasoning output from chat replies for cleaner message display.
-- **Perf** — optimized remote desktop frame transport.
-- **i18n** — added SSH tunnel localization strings.
+- **AI Agent and Function Calling** — AI agents can call tools to complete structured tasks, load skills through tools, and use improved resource pools, resource mentions, and catalog refreshes.
+- **HTML preview flow** — HTML code blocks can be opened in the browser or rendered in an in-app dialog, keeping chat content readable without intrusive inline previews.
+- **Database compare and sync** — improved schema/data compare windows, compare target loading, multi-table sync, and database compare sync stability.
+- **Terminal productivity** — added a terminal command history panel, SSH broadcast input across windows, and improved remote shell integration install, uninstall, and environment handling.
+- **Connection import** — added an entry for importing connections from other applications, with a refined home sidebar layout.
+- **Team entry point** — added a team management entry controlled by feature flags.
+- **Extensions and language bundles** — added language bundle extension support with detection and installation.
+- **Rendering and font fixes** — fixed font fallback/rendering issues that could cause garbled text, and reduced render-process blocking that could make connection lists and data lists stutter while scrolling.
+- **Settings and UI polish** — API key fields now support reveal/hide toggling, input components support local theme styling, and window/selector layouts have been refined.
 
 
 ## Why OnetCli?
@@ -106,7 +104,7 @@ Beyond the built-in drivers, OnetCli ships an extension marketplace that adds da
 
 ### SQL Editor & Schema Tools
 
-Work with a SQL editor backed by syntax tooling, schema-aware browsing, table structure editing, query execution, explain support, and ER diagrams.
+Work with a SQL editor backed by syntax tooling, schema-aware browsing, table structure editing, query execution, explain support, and ER diagrams. Database compare tools support schema/data comparison, target selection, sync planning, and multi-table synchronization workflows.
 
 ### Redis & MongoDB
 
@@ -114,7 +112,7 @@ Use the dedicated Redis viewer for key browsing, value inspection, and cluster c
 
 ### SSH, SFTP, Port Forwarding, Serial & Terminal
 
-Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and keep local terminals in multi-tab sessions. The terminal includes an SFTP sidebar with drag-and-drop upload support, path favorites, and quick jumps to frequently used directories.
+Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and keep local terminals in multi-tab sessions. The terminal includes command history, SSH broadcast input across windows, remote shell integration management, and an SFTP sidebar with drag-and-drop upload support, path favorites, and quick jumps to frequently used directories.
 
 ### Port Forwarding
 
@@ -134,7 +132,11 @@ Use built-in server monitoring and native rendered charts to inspect remote mach
 
 ### AI Assistant
 
-Chat with AI inside the app. OnetCli supports natural language to SQL, query explanation, BI-style data analysis, chart generation, and streaming LLM responses. It can also generate terminal commands that you can quickly paste into a terminal session and run.
+Chat with AI inside the app. OnetCli supports natural language to SQL, query explanation, BI-style data analysis, chart generation, streaming LLM responses, AI Agent workflows, and Function Calling for tool-based task execution. HTML code blocks can be opened in the browser or previewed in an in-app dialog, and generated terminal commands can be quickly pasted into a terminal session and run.
+
+### Performance & Rendering
+
+OnetCli uses native GPUI rendering and continues to tune heavy UI paths. Recent releases fixed font fallback/rendering issues that could cause garbled text, and reduced render-process blocking that could make connection lists and data lists stutter while scrolling.
 
 ### Sync, Security & i18n
 
