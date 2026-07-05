@@ -606,6 +606,7 @@ where
         });
         self.final_selected_index = selected_index;
         self.update_selected_value(window, cx);
+        cx.notify();
     }
 
     /// Set selected value for the select.
