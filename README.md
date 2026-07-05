@@ -164,6 +164,10 @@ Sync connections and settings across devices with encrypted key storage based on
 |:-:|:-:|
 | [![Remote File Editor](remote_file_editor.png)](remote_file_editor.png) | [![ER Diagram](er.png)](er.png) |
 
+| Extensions |
+|:-:|
+| [![Extensions](extension.png)](extension.png) |
+
 ## Install
 
 Download the latest build from the [Releases](https://github.com/feigeCode/onetcli/releases/latest) page.

@@ -164,6 +164,10 @@ OnetCli 基于 GPUI 原生渲染，并持续优化高负载 UI 路径。近期�
 |:-:|:-:|
 | [![远程文件编辑](remote_file_editor.png)](remote_file_editor.png) | [![ER 图](er.png)](er.png) |
 
+| 扩展市场 |
+|:-:|
+| [![扩展市场](extension.png)](extension.png) |
+
 ## 安装
 
 请从 [Releases](https://github.com/feigeCode/onetcli/releases/latest) 页面下载最新版本。
