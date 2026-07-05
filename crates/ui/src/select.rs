@@ -13,7 +13,7 @@ use crate::{
     actions::{Cancel, Confirm, SelectDown, SelectUp},
     global_state::GlobalState,
     h_flex,
-    input::{clear_button, input_style},
+    input::{LocalInputStyle, clear_button, input_style},
     list::{List, ListDelegate, ListState},
     v_flex,
 };
@@ -320,6 +320,7 @@ struct SelectOptions {
     menu_max_h: Length,
     disabled: bool,
     appearance: bool,
+    local_style: Option<LocalInputStyle>,
 }
 
 impl Default for SelectOptions {
@@ -337,6 +338,7 @@ impl Default for SelectOptions {
             disabled: false,
             appearance: true,
             search_placeholder: None,
+            local_style: None,
         }
     }
 }
@@ -748,7 +750,12 @@ where
 
     /// Returns the title element for the select input.
     fn display_title(&mut self, _: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let default_title = div().text_color(cx.theme().muted_foreground).child(
+        let muted_foreground = self
+            .options
+            .local_style
+            .filter(|_| !self.options.disabled)
+            .map_or(cx.theme().muted_foreground, |style| style.muted_foreground);
+        let default_title = div().text_color(muted_foreground).child(
             self.options
                 .placeholder
                 .clone()
@@ -802,6 +809,21 @@ where
         let popup_radius = cx.theme().radius.min(px(8.));
 
         let (bg, fg) = input_style(self.options.disabled, cx);
+        let (bg, fg, border, muted_foreground) = self.options.local_style.map_or_else(
+            || (bg, fg, cx.theme().input, cx.theme().muted_foreground),
+            |style| {
+                if self.options.disabled {
+                    (bg, fg, cx.theme().input, cx.theme().muted_foreground)
+                } else {
+                    (
+                        style.background,
+                        style.foreground,
+                        style.border,
+                        style.muted_foreground,
+                    )
+                }
+            },
+        );
 
         self.list
             .update(cx, |list, cx| list.set_searchable(searchable, cx));
@@ -822,7 +844,7 @@ where
                         this.bg(bg)
                             .text_color(fg)
                             .when(self.options.disabled, |this| this.opacity(0.5))
-                            .border_color(cx.theme().input)
+                            .border_color(border)
                             .rounded(cx.theme().radius)
                             .when(cx.theme().shadow, |this| this.shadow_xs())
                     })
@@ -872,7 +894,7 @@ where
                                     None => Icon::new(IconName::ChevronDown),
                                 };
 
-                                this.child(icon.xsmall().text_color(cx.theme().muted_foreground))
+                                this.child(icon.xsmall().text_color(muted_foreground))
                             }),
                     )
                     .on_prepaint({
@@ -894,9 +916,9 @@ where
                                     v_flex()
                                         .occlude()
                                         .mt_1p5()
-                                        .bg(cx.theme().background)
+                                        .bg(bg)
                                         .border_1()
-                                        .border_color(cx.theme().border)
+                                        .border_color(border)
                                         .rounded(popup_radius)
                                         .shadow_md()
                                         .child(
@@ -996,6 +1018,12 @@ where
     /// Set the appearance of the select, if false the select input will no border, background.
     pub fn appearance(mut self, appearance: bool) -> Self {
         self.options.appearance = appearance;
+        self
+    }
+
+    /// Override closed-control colors for a locally themed embedded panel.
+    pub fn local_style(mut self, style: LocalInputStyle) -> Self {
+        self.options.local_style = Some(style);
         self
     }
 }

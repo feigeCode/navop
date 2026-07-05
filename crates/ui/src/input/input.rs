@@ -18,6 +18,15 @@ use crate::{Sizable, StyleSized};
 
 use super::{InputState, element::EditorScrollbar};
 
+/// Local colors for input-like controls embedded in a differently themed panel.
+#[derive(Clone, Copy)]
+pub struct LocalInputStyle {
+    pub background: Hsla,
+    pub foreground: Hsla,
+    pub muted_foreground: Hsla,
+    pub border: Hsla,
+}
+
 /// Returns `(background, foreground)` colors for input-like components.
 pub(crate) fn input_style(disabled: bool, cx: &App) -> (Hsla, Hsla) {
     if disabled {
@@ -50,6 +59,7 @@ pub struct Input {
     bordered: bool,
     focus_bordered: bool,
     caret_color: Option<Hsla>,
+    local_style: Option<LocalInputStyle>,
     tab_index: isize,
     selected: bool,
     bare: bool,
@@ -96,6 +106,7 @@ impl Input {
             bordered: true,
             focus_bordered: true,
             caret_color: None,
+            local_style: None,
             tab_index: 0,
             selected: false,
             bare: false,
@@ -146,6 +157,12 @@ impl Input {
     /// Override the blinking caret color for locally themed embedded inputs.
     pub fn caret_color(mut self, color: Hsla) -> Self {
         self.caret_color = Some(color);
+        self
+    }
+
+    /// Override input colors for a locally themed embedded panel.
+    pub fn local_style(mut self, style: LocalInputStyle) -> Self {
+        self.local_style = Some(style);
         self
     }
 
@@ -270,6 +287,7 @@ impl RenderOnce for Input {
             state.disabled = self.disabled;
             state.size = self.size;
             state.caret_color = self.caret_color;
+            state.placeholder_color = self.local_style.map(|style| style.muted_foreground);
 
             // Only for single line mode
             if state.mode.is_single_line() {
@@ -289,12 +307,25 @@ impl RenderOnce for Input {
             _ => px(6.),
         };
 
-        let (bg, _) = input_style(state.disabled, cx);
+        let (bg, fg) = self.local_style.map_or_else(
+            || input_style(state.disabled, cx),
+            |style| {
+                if state.disabled {
+                    input_style(true, cx)
+                } else {
+                    (style.background, style.foreground)
+                }
+            },
+        );
         let bg = if state.mode.is_code_editor() {
             cx.theme().editor_background()
         } else {
             bg
         };
+        let border_color = self
+            .local_style
+            .filter(|_| !state.disabled)
+            .map_or(cx.theme().input, |style| style.border);
 
         let prefix = self.prefix;
         let suffix = self.suffix;
@@ -402,10 +433,11 @@ impl RenderOnce for Input {
             })
             .when(self.appearance, |this| {
                 this.bg(bg)
+                    .text_color(fg)
                     .when(self.disabled, |this| this.opacity(0.5))
                     .rounded(cx.theme().radius)
                     .when(self.bordered, |this| {
-                        this.border_color(cx.theme().input)
+                        this.border_color(border_color)
                             .border_1()
                             .when(cx.theme().shadow, |this| this.shadow_xs())
                             .when(focused && self.focus_bordered, |this| {
