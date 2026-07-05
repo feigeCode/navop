@@ -9,11 +9,12 @@ use crate::db_object_selector::state::{
     selected_connection_value, selected_string,
 };
 
-pub(crate) fn load_databases<T: 'static>(
+pub(crate) fn load_databases_then<T: 'static>(
     connection: TargetConnectionControls,
     database: TargetStringControls,
     status: Entity<String>,
     cx: &mut Context<T>,
+    after_load: impl FnOnce(&mut T, &mut Context<T>) + 'static,
 ) {
     let connection_id = selected_connection(&connection, cx);
     let policy = policy_for_connection(&connection, cx);
@@ -33,6 +34,8 @@ pub(crate) fn load_databases<T: 'static>(
     };
     prepare_load(&connection_id, &status, loading_key, cx);
     let db_state = cx.global::<GlobalDbState>().clone();
+    let view = cx.entity().clone();
+    let mut after_load = Some(after_load);
     cx.spawn(async move |_, cx: &mut AsyncApp| {
         let result = if policy.schema_as_database {
             db_state
@@ -41,17 +44,26 @@ pub(crate) fn load_databases<T: 'static>(
         } else {
             db_state.list_databases(cx, connection_id).await
         };
+        let loaded = result.is_ok();
         update_string_select_async(result, database.select, preferred, status, cx);
+        if loaded {
+            let _ = view.update(cx, move |this, cx| {
+                if let Some(after_load) = after_load.take() {
+                    after_load(this, cx);
+                }
+            });
+        }
     })
     .detach();
 }
 
-pub(crate) fn load_schemas<T: 'static>(
+pub(crate) fn load_schemas_then<T: 'static>(
     connection: TargetConnectionControls,
     database: TargetStringControls,
     schema: TargetStringControls,
     status: Entity<String>,
     cx: &mut Context<T>,
+    after_load: impl FnOnce(&mut T, &mut Context<T>) + 'static,
 ) {
     let connection_id = selected_connection(&connection, cx);
     let policy = policy_for_connection(&connection, cx);
@@ -75,11 +87,21 @@ pub(crate) fn load_schemas<T: 'static>(
         cx,
     );
     let db_state = cx.global::<GlobalDbState>().clone();
+    let view = cx.entity().clone();
+    let mut after_load = Some(after_load);
     cx.spawn(async move |_, cx: &mut AsyncApp| {
         let result = db_state
             .list_schemas(cx, connection_id, database_name)
             .await;
+        let loaded = result.is_ok();
         update_string_select_async(result, schema.select, preferred, status, cx);
+        if loaded {
+            let _ = view.update(cx, move |this, cx| {
+                if let Some(after_load) = after_load.take() {
+                    after_load(this, cx);
+                }
+            });
+        }
     })
     .detach();
 }

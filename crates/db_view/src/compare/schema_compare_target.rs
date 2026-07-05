@@ -18,7 +18,7 @@ use crate::compare::table_picker::{
 use crate::compare::target_picker::{
     CompareTargetCascadeAction, TargetConnectionControls, TargetStringControls,
     clear_string_select, database_change_cascade_actions, initial_compare_target_cascade_actions,
-    load_databases, load_schemas, schema_change_cascade_actions, selected_string,
+    load_databases_then, load_schemas_then, schema_change_cascade_actions, selected_string,
 };
 use crate::compare::window_ui::{
     compare_progress_view, register_connection_for_compare, section_title, selected_connection_id,
@@ -33,17 +33,25 @@ impl SchemaCompareWindow {
     pub(super) fn load_source_databases(&mut self, cx: &mut Context<Self>) {
         clear_string_select(&self.source_schema_select, cx);
         clear_table_selection_list(&self.source_table_list, &self.selected_source_tables, cx);
-        load_databases(
+        load_databases_then(
             self.source_connection_controls(),
             self.source_database_controls(),
             self.status.clone(),
             cx,
+            |this, cx| this.load_source_after_database_change(cx),
         );
     }
 
     pub(super) fn load_source_initial_cascade(&mut self, cx: &mut Context<Self>) {
         let policy = policy_for_connection(&self.source_connection_controls(), cx);
-        self.run_source_cascade_actions(initial_compare_target_cascade_actions(policy), cx);
+        let has_selected_database =
+            !selected_string(&self.source_database_select, &self.source_database, cx)
+                .trim()
+                .is_empty();
+        self.run_source_cascade_actions(
+            initial_compare_target_cascade_actions(policy, has_selected_database),
+            cx,
+        );
     }
 
     pub(super) fn load_source_after_database_change(&mut self, cx: &mut Context<Self>) {
@@ -76,12 +84,13 @@ impl SchemaCompareWindow {
 
     pub(super) fn load_source_schemas(&mut self, cx: &mut Context<Self>) {
         clear_table_selection_list(&self.source_table_list, &self.selected_source_tables, cx);
-        load_schemas(
+        load_schemas_then(
             self.source_connection_controls(),
             self.source_database_controls(),
             self.source_schema_controls(),
             self.status.clone(),
             cx,
+            |this, cx| this.load_source_after_schema_change(cx),
         );
     }
 
@@ -101,17 +110,25 @@ impl SchemaCompareWindow {
     pub(super) fn load_target_databases(&mut self, cx: &mut Context<Self>) {
         clear_string_select(&self.target_schema_select, cx);
         clear_table_selection_list(&self.target_table_list, &self.selected_target_tables, cx);
-        load_databases(
+        load_databases_then(
             self.connection_controls(),
             self.database_controls(),
             self.status.clone(),
             cx,
+            |this, cx| this.load_target_after_database_change(cx),
         );
     }
 
     pub(super) fn load_target_initial_cascade(&mut self, cx: &mut Context<Self>) {
         let policy = policy_for_connection(&self.connection_controls(), cx);
-        self.run_target_cascade_actions(initial_compare_target_cascade_actions(policy), cx);
+        let has_selected_database =
+            !selected_string(&self.target_database_select, &self.target_database, cx)
+                .trim()
+                .is_empty();
+        self.run_target_cascade_actions(
+            initial_compare_target_cascade_actions(policy, has_selected_database),
+            cx,
+        );
     }
 
     pub(super) fn load_target_after_database_change(&mut self, cx: &mut Context<Self>) {
@@ -144,12 +161,13 @@ impl SchemaCompareWindow {
 
     pub(super) fn load_target_schemas(&mut self, cx: &mut Context<Self>) {
         clear_table_selection_list(&self.target_table_list, &self.selected_target_tables, cx);
-        load_schemas(
+        load_schemas_then(
             self.connection_controls(),
             self.database_controls(),
             self.schema_controls(),
             self.status.clone(),
             cx,
+            |this, cx| this.load_target_after_schema_change(cx),
         );
     }
 

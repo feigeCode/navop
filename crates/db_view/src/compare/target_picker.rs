@@ -1,8 +1,8 @@
 use crate::db_object_selector::DbObjectSelectorPolicy;
 pub(super) use crate::db_object_selector::{
     StringSelect, TargetConnectionControls, TargetStringControls, clear_string_select,
-    load_databases, load_schemas, selected_string, set_connection_select, set_string_select,
-    string_select_state,
+    load_databases_then, load_schemas_then, selected_string, set_connection_select,
+    set_string_select, string_select_state,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,8 +14,12 @@ pub(super) enum CompareTargetCascadeAction {
 
 pub(super) fn initial_compare_target_cascade_actions(
     policy: DbObjectSelectorPolicy,
+    has_selected_database: bool,
 ) -> Vec<CompareTargetCascadeAction> {
     let mut actions = vec![CompareTargetCascadeAction::LoadDatabases];
+    if !has_selected_database {
+        return actions;
+    }
     actions.extend(database_change_cascade_actions(policy));
     actions
 }
@@ -45,14 +49,22 @@ mod tests {
     use crate::db_object_selector::DbObjectSelectorPolicy;
 
     #[test]
-    fn initial_compare_target_cascade_defers_table_load_for_schema_connections() {
+    fn initial_compare_target_cascade_waits_for_database_when_none_selected() {
+        assert_eq!(
+            super::initial_compare_target_cascade_actions(DbObjectSelectorPolicy::default(), false),
+            vec![super::CompareTargetCascadeAction::LoadDatabases]
+        );
+    }
+
+    #[test]
+    fn initial_compare_target_cascade_waits_for_schema_on_schema_connections_with_database() {
         let policy = DbObjectSelectorPolicy {
             show_schema: true,
             schema_as_database: false,
         };
 
         assert_eq!(
-            super::initial_compare_target_cascade_actions(policy),
+            super::initial_compare_target_cascade_actions(policy, true),
             vec![
                 super::CompareTargetCascadeAction::LoadDatabases,
                 super::CompareTargetCascadeAction::LoadSchemas,
@@ -63,7 +75,7 @@ mod tests {
     #[test]
     fn initial_compare_target_cascade_loads_tables_without_schema_step() {
         assert_eq!(
-            super::initial_compare_target_cascade_actions(DbObjectSelectorPolicy::default()),
+            super::initial_compare_target_cascade_actions(DbObjectSelectorPolicy::default(), true),
             vec![
                 super::CompareTargetCascadeAction::LoadDatabases,
                 super::CompareTargetCascadeAction::LoadTables,

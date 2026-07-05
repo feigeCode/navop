@@ -251,27 +251,30 @@ impl DataCompareWindow {
             ));
             window_state
         });
-        view.update(cx, |this, cx| {
-            if !selected_connection_id(
-                &this.source_connection_select,
-                &this.source_connection_id,
-                cx,
-            )
-            .trim()
-            .is_empty()
-            {
-                this.load_source_initial_cascade(cx);
-            }
-            if !selected_connection_id(
-                &this.target_connection_select,
-                &this.target_connection_id,
-                cx,
-            )
-            .trim()
-            .is_empty()
-            {
-                this.load_target_initial_cascade(cx);
-            }
+        let initial_view = view.clone();
+        cx.defer(move |cx| {
+            initial_view.update(cx, |this, cx| {
+                if !selected_connection_id(
+                    &this.source_connection_select,
+                    &this.source_connection_id,
+                    cx,
+                )
+                .trim()
+                .is_empty()
+                {
+                    this.load_source_initial_cascade(cx);
+                }
+                if !selected_connection_id(
+                    &this.target_connection_select,
+                    &this.target_connection_id,
+                    cx,
+                )
+                .trim()
+                .is_empty()
+                {
+                    this.load_target_initial_cascade(cx);
+                }
+            });
         });
         view
     }
