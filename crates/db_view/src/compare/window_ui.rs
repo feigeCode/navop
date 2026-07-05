@@ -807,9 +807,15 @@ pub(super) fn input_row(label: impl Into<String>, input: &Entity<InputState>) ->
     div()
         .flex()
         .items_center()
+        .min_w_0()
         .gap_2()
-        .child(div().w(px(120.0)).text_sm().child(label))
-        .child(Input::new(input).small().w_full())
+        .child(div().w(px(120.0)).flex_none().text_sm().child(label))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(Input::new(input).small().w_full()),
+        )
 }
 
 pub(crate) fn connection_select_row(
@@ -820,13 +826,22 @@ pub(crate) fn connection_select_row(
     div()
         .flex()
         .items_center()
+        .min_w_0()
         .gap_2()
-        .child(div().w(px(120.0)).text_sm().child(label.clone()))
         .child(
-            Select::new(select)
-                .small()
-                .search_placeholder(t!("DbObjectSelector.search", item = label).to_string())
-                .w_full(),
+            div()
+                .w(px(120.0))
+                .flex_none()
+                .text_sm()
+                .child(label.clone()),
+        )
+        .child(
+            div().flex_1().min_w_0().child(
+                Select::new(select)
+                    .small()
+                    .search_placeholder(t!("DbObjectSelector.search", item = label).to_string())
+                    .w_full(),
+            ),
         )
 }
 

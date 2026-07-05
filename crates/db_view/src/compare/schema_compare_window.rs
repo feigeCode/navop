@@ -4,51 +4,51 @@ use std::sync::Arc;
 use db::{DbNode, DbNodeType, GlobalDbState};
 use extension_component::DbSelectorKind;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
-    Render, ScrollHandle, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
+    div, prelude::FluentBuilder, App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, ScrollHandle, Styled, Subscription, Task, Window,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, IconName, Sizable, StyledExt,
-    button::{Button, ButtonVariants as _},
-    checkbox::Checkbox,
-    h_flex,
-    input::InputState,
+    button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, input::InputState,
     select::{SearchableVec, SelectEvent, SelectState},
     switch::Switch,
     v_flex,
+    ActiveTheme,
+    Disableable,
+    IconName,
+    Sizable,
 };
 use rust_i18n::t;
 use tokio::sync::mpsc;
 
 use crate::compare::sync_statement_picker::{
-    SyncStatementListState, clear_sync_statement_list, default_selected_statement_ids,
-    refresh_sync_statement_list, selected_sync_sql_text_for_ids, sync_statement_list_state,
+    clear_sync_statement_list, default_selected_statement_ids, refresh_sync_statement_list,
+    selected_sync_sql_text_for_ids, sync_statement_list_state, SyncStatementListState,
 };
 use crate::compare::table_picker::{
-    TableSelectionListState, replace_table_selection_list, table_selection_list_state,
-    table_selection_list_tables, table_selection_panel,
+    replace_table_selection_list, table_selection_list_state, table_selection_list_tables,
+    table_selection_panel, TableSelectionListState,
 };
 use crate::compare::target_picker::{
-    StringSelect, selected_string, set_connection_select, set_string_select, string_select_state,
+    selected_string, set_connection_select, set_string_select, string_select_state, StringSelect,
 };
 use crate::compare::window_params::{
-    SchemaCompareSelection, SchemaCompareSettings, schema_compare_params,
+    schema_compare_params, SchemaCompareSelection, SchemaCompareSettings,
 };
 use crate::compare::window_ui::{
-    CompareStep, ConnectionSelectItem, SyncSqlExecutionLogEntry, clear_sync_sql_execution_log,
-    close_button, connection_select_state, ignore_identifier_case_option,
+    clear_sync_sql_execution_log, close_button, connection_select_state, ignore_identifier_case_option,
     register_connection_for_compare, reset_sync_sql_execution_log, section_title,
-    selected_connection_id, sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
-    sync_sql_execution_continue_on_error_row, sync_sql_execution_log_panel,
-    sync_sql_execution_start_log_entries,
+    selected_connection_id, sql_editor_panel, start_sync_sql_execution,
+    sync_sql_editor_state, sync_sql_execution_continue_on_error_row, sync_sql_execution_log_panel, sync_sql_execution_start_log_entries,
+    CompareStep, ConnectionSelectItem,
+    SyncSqlExecutionLogEntry,
 };
 use crate::compare::{
-    CompareProgress, CompareSyncExecutionOptions, CompareTargetScope, SchemaCompareParams,
-    execute_schema_compare, generate_schema_sync_plan_for_target,
+    execute_schema_compare, generate_schema_sync_plan_for_target, CompareProgress, CompareSyncExecutionOptions,
+    CompareTargetScope, SchemaCompareParams,
 };
 use crate::db_object_selector::{
-    DbObjectSelectorPolicy, db_object_selector_panel, effective_database_schema,
-    policy_for_connection,
+    db_object_selector_panel, effective_database_schema, policy_for_connection,
+    DbObjectSelectorPolicy,
 };
 use db::compare::{SchemaCompareResult, SyncPlan};
 
@@ -938,11 +938,6 @@ impl Render for SchemaCompareWindow {
             .gap_3()
             .overflow_hidden()
             .child(
-                div()
-                    .font_semibold()
-                    .child(t!("Compare.schema_compare").to_string()),
-            )
-            .child(
                 v_flex()
                     .flex_1()
                     .min_h_0()
@@ -974,6 +969,7 @@ impl Render for SchemaCompareWindow {
                                                 .flex_1()
                                                 .h_full()
                                                 .min_h_0()
+                                                .min_w_0()
                                                 .child(self.render_source(cx)),
                                         )
                                         .child(
@@ -981,6 +977,7 @@ impl Render for SchemaCompareWindow {
                                                 .flex_1()
                                                 .h_full()
                                                 .min_h_0()
+                                                .min_w_0()
                                                 .child(self.render_target(cx)),
                                         ),
                                 )
