@@ -45,8 +45,8 @@ use std::path::Path;
 
 use crate::history::{
     HistoryEntry, PERSISTED_HISTORY_LIMIT, SESSION_HISTORY_LIMIT, ShellHistoryFormat,
-    collect_history_search_results, collect_history_suggestions_with_cwd, parse_shell_history,
-    push_rich_history_entry,
+    collect_history_search_results, collect_history_suggestions_with_cwd,
+    normalize_recorded_command, parse_shell_history, push_rich_history_entry,
 };
 use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 #[cfg(not(target_os = "windows"))]
@@ -1552,20 +1552,36 @@ impl Terminal {
         exit_code: i32,
         cx: &mut Context<Self>,
     ) {
+        let history_user = self.history_record_user();
+        let Some(command) = normalize_recorded_command(command, history_user.as_deref()) else {
+            return;
+        };
         let cwd = self.current_working_dir.clone();
-        let entry = HistoryEntry::new(command.to_string())
+        let entry = HistoryEntry::new(command.clone())
             .with_cwd(cwd.clone())
             .with_exit_code(Some(exit_code));
         let changed =
             push_rich_history_entry(&mut self.session_history, entry, SESSION_HISTORY_LIMIT);
         if let (Some(repo), Some(scope)) = (&self.history_repository, &self.history_scope) {
-            if let Err(error) = repo.record_success(scope, command, cwd.as_deref(), Some(exit_code))
+            if let Err(error) =
+                repo.record_success(scope, &command, cwd.as_deref(), Some(exit_code))
             {
                 tracing::warn!(%error, "failed to record terminal command history");
             }
         }
         if changed {
             cx.emit(TerminalModelEvent::Wakeup);
+        }
+    }
+
+    fn history_record_user(&self) -> Option<String> {
+        match self.connection_kind {
+            TerminalConnectionKind::Ssh => self
+                .ssh_config
+                .as_ref()
+                .map(|config| config.ssh_config.username.clone()),
+            TerminalConnectionKind::Local => std::env::var("USER").ok(),
+            TerminalConnectionKind::Serial => None,
         }
     }
 

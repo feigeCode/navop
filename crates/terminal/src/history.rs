@@ -92,6 +92,52 @@ pub fn normalize_history_command(command: &str) -> Option<String> {
     (!normalized.is_empty()).then(|| normalized.to_string())
 }
 
+pub fn normalize_recorded_command(command: &str, history_user: Option<&str>) -> Option<String> {
+    let command = normalize_history_command(command)?;
+    let command = strip_bash_history_timestamp_prefix(&command, history_user).unwrap_or(&command);
+    normalize_history_command(command)
+}
+
+fn strip_bash_history_timestamp_prefix<'a>(
+    command: &'a str,
+    history_user: Option<&str>,
+) -> Option<&'a str> {
+    if !has_bash_history_timestamp_prefix(command) {
+        return None;
+    }
+    let rest = command[20..].trim_start();
+    let Some(user) = history_user.map(str::trim).filter(|user| !user.is_empty()) else {
+        return Some(rest);
+    };
+    Some(strip_leading_user_token(rest, user).unwrap_or(rest))
+}
+
+fn has_bash_history_timestamp_prefix(command: &str) -> bool {
+    let bytes = command.as_bytes();
+    bytes.len() > 20
+        && bytes[0..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(u8::is_ascii_digit)
+        && bytes[10].is_ascii_whitespace()
+        && bytes[11..13].iter().all(u8::is_ascii_digit)
+        && bytes[13] == b':'
+        && bytes[14..16].iter().all(u8::is_ascii_digit)
+        && bytes[16] == b':'
+        && bytes[17..19].iter().all(u8::is_ascii_digit)
+        && bytes[19].is_ascii_whitespace()
+}
+
+fn strip_leading_user_token<'a>(text: &'a str, user: &str) -> Option<&'a str> {
+    let after_user = text.strip_prefix(user)?;
+    after_user
+        .chars()
+        .next()
+        .filter(|ch| ch.is_whitespace())
+        .map(|_| after_user.trim_start())
+}
+
 pub fn parse_shell_history(contents: &str, format: ShellHistoryFormat) -> Vec<String> {
     contents
         .lines()
@@ -394,6 +440,30 @@ mod tests {
         );
         assert_eq!(normalize_history_command("   "), None);
         assert_eq!(normalize_history_command("\n\t"), None);
+    }
+
+    #[test]
+    fn normalize_recorded_command_strips_bash_history_timestamp_prefix() {
+        assert_eq!(
+            normalize_recorded_command("2026-07-05 08:07:16 cd /data/app", None),
+            Some("cd /data/app".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_recorded_command_strips_matching_user_after_timestamp() {
+        assert_eq!(
+            normalize_recorded_command("2026-07-05 08:07:16 root cd /data/app", Some("root")),
+            Some("cd /data/app".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_recorded_command_keeps_unmatched_user_token_after_timestamp() {
+        assert_eq!(
+            normalize_recorded_command("2026-07-05 08:07:16 root cd /data/app", Some("deploy")),
+            Some("root cd /data/app".to_string())
+        );
     }
 
     #[test]
