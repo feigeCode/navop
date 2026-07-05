@@ -6,6 +6,7 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme, WindowExt};
 use html_preview::{HtmlPreviewDocument, HtmlPreviewTransformOutput, resolve_extension_asset_url};
+use rust_i18n::t;
 use wry::WebViewBuilder;
 use wry::http::{Request, Response, StatusCode};
 
@@ -73,22 +74,22 @@ impl HtmlCodeBlockView {
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let preview = preview.clone();
             dialog
-                .title("HTML 预览")
+                .title(t!("HtmlPreview.dialog_title").to_string())
                 .w(px(920.0))
                 .content(move |content, _window, _cx| content.child(preview.clone()))
         });
-        self.action_status = Some("已打开预览弹窗".to_string());
+        self.action_status = Some(t!("HtmlPreview.dialog_opened").to_string());
         cx.notify();
     }
 
     pub(crate) fn open_in_browser(&mut self, cx: &mut Context<Self>) {
         match html_preview::open_html_preview_document_in_browser(&self.document) {
             Ok(path) => {
-                self.action_status = Some("已在浏览器打开".to_string());
+                self.action_status = Some(t!("HtmlPreview.browser_opened").to_string());
                 tracing::info!("HTML 预览已在浏览器打开: {}", path.display());
             }
             Err(error) => {
-                self.action_status = Some("打开浏览器失败".to_string());
+                self.action_status = Some(t!("HtmlPreview.browser_open_failed").to_string());
                 tracing::warn!("HTML 预览打开浏览器失败: {error}");
             }
         }
@@ -102,11 +103,12 @@ impl HtmlCodeBlockView {
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or("onetcli-html-preview.html");
-                self.action_status = Some(format!("已下载到 Downloads/{filename}"));
+                self.action_status =
+                    Some(t!("HtmlPreview.downloaded", filename = filename).to_string());
                 tracing::info!("HTML 预览已下载到 {}", path.display());
             }
             Err(error) => {
-                self.action_status = Some("下载失败".to_string());
+                self.action_status = Some(t!("HtmlPreview.download_failed").to_string());
                 tracing::warn!("HTML 预览下载失败: {error}");
             }
         }
@@ -200,9 +202,9 @@ impl HtmlPreviewDialogView {
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
                 .child(
-                    self.webview_error.clone().unwrap_or_else(|| {
-                        "无法创建 HTML 预览 webview，已保留源码视图。".to_string()
-                    }),
+                    self.webview_error
+                        .clone()
+                        .unwrap_or_else(|| t!("HtmlPreview.webview_unavailable").to_string()),
                 )
                 .into_any_element()
         }
@@ -242,7 +244,10 @@ fn create_webview(
             Some(cx.new(|cx| gpui_wry::WebView::new(webview, window, cx))),
             None,
         ),
-        Err(error) => (None, Some(format!("创建 HTML 预览 webview 失败: {error}"))),
+        Err(error) => (
+            None,
+            Some(t!("HtmlPreview.webview_create_failed", error = error).to_string()),
+        ),
     }
 }
 

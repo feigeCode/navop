@@ -19,6 +19,7 @@ use gpui_component::{
     v_flex,
 };
 use html_preview::HtmlPreviewDocument;
+use rust_i18n::t;
 
 const COPY_CODE_ACTION_ID: &str = "copy-code";
 const HTML_DOWNLOAD_ACTION_ID: &str = "html-download";
@@ -222,7 +223,7 @@ fn render_html_code_block_toolbar(
     let row = h_flex().gap_1().text_color(theme.code_foreground).child(
         Clipboard::new(copy_id)
             .value(code.clone())
-            .tooltip("复制 HTML"),
+            .tooltip(t!("HtmlPreview.copy_html").to_string()),
     );
     if is_streaming {
         return row.into_any_element();
@@ -247,7 +248,7 @@ fn html_download_button(state_id: &SharedString, preview: &Entity<HtmlCodeBlockV
     .icon(gpui_component::IconName::ArrowDown)
     .ghost()
     .xsmall()
-    .tooltip("下载 HTML")
+    .tooltip(t!("HtmlPreview.download_html").to_string())
     .on_click(move |_, _, cx| {
         preview.update(cx, |preview, cx| preview.download_html(cx));
     })
@@ -264,7 +265,7 @@ fn html_open_browser_button(
     .icon(gpui_component::IconName::ExternalLink)
     .ghost()
     .xsmall()
-    .tooltip("在浏览器打开")
+    .tooltip(t!("HtmlPreview.open_browser").to_string())
     .on_click(move |_, _, cx| {
         preview.update(cx, |preview, cx| preview.open_in_browser(cx));
     })
@@ -278,7 +279,7 @@ fn html_preview_button(state_id: &SharedString, preview: &Entity<HtmlCodeBlockVi
     .icon(gpui_component::IconName::Eye)
     .ghost()
     .xsmall()
-    .tooltip("弹出预览")
+    .tooltip(t!("HtmlPreview.open_dialog").to_string())
     .on_click(move |_, window, cx| {
         preview.update(cx, |preview, cx| preview.open_preview_dialog(window, cx));
     })

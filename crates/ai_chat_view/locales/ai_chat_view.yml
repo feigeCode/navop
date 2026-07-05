@@ -1,0 +1,51 @@
+_version: 2
+
+HtmlPreview:
+  copy_html:
+    en: Copy HTML
+    zh-CN: 复制 HTML
+    zh-HK: 複製 HTML
+  download_html:
+    en: Download HTML
+    zh-CN: 下载 HTML
+    zh-HK: 下載 HTML
+  open_browser:
+    en: Open in browser
+    zh-CN: 在浏览器打开
+    zh-HK: 在瀏覽器打開
+  open_dialog:
+    en: Open preview
+    zh-CN: 弹出预览
+    zh-HK: 彈出預覽
+  dialog_title:
+    en: HTML Preview
+    zh-CN: HTML 预览
+    zh-HK: HTML 預覽
+  dialog_opened:
+    en: Preview dialog opened
+    zh-CN: 已打开预览弹窗
+    zh-HK: 已打開預覽彈窗
+  browser_opened:
+    en: Opened in browser
+    zh-CN: 已在浏览器打开
+    zh-HK: 已在瀏覽器打開
+  browser_open_failed:
+    en: Failed to open browser
+    zh-CN: 打开浏览器失败
+    zh-HK: 打開瀏覽器失敗
+  downloaded:
+    en: "Downloaded to Downloads/%{filename}"
+    zh-CN: "已下载到 Downloads/%{filename}"
+    zh-HK: "已下載到 Downloads/%{filename}"
+  download_failed:
+    en: Download failed
+    zh-CN: 下载失败
+    zh-HK: 下載失敗
+  webview_unavailable:
+    en: HTML preview webview could not be created. Source view is still available.
+    zh-CN: 无法创建 HTML 预览 webview，已保留源码视图。
+    zh-HK: 無法建立 HTML 預覽 webview，已保留源碼視圖。
+  webview_create_failed:
+    en: "Failed to create HTML preview webview: %{error}"
+    zh-CN: "创建 HTML 预览 webview 失败: %{error}"
+    zh-HK: "建立 HTML 預覽 webview 失敗: %{error}"

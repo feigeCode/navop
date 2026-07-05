@@ -11,6 +11,8 @@
 //!
 //! 数据模型(泛型消息、`MessageVariant::Card { kind }`)由本 crate 提供。
 
+rust_i18n::i18n!("locales", fallback = "en");
+
 use gpui::App;
 
 pub use agent_runtime::{
