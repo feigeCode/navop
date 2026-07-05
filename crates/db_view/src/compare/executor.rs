@@ -1,7 +1,7 @@
 use db::compare::{
     ColumnSchema, DataCompareOptions, DataCompareResult, ForeignKeySchema, IndexSchema, RowData,
-    SchemaCompareOptions, SchemaCompareResult, SyncPlan, SyncPlanSummary, TableSchema,
-    build_data_sync_plan, build_schema_sync_plan, compare_data_rows, compare_schemas,
+    SchemaCompareOptions, SchemaCompareResult, SyncPlan, SyncPlanSummary, SyncStatement,
+    TableSchema, build_data_sync_plan, build_schema_sync_plan, compare_data_rows, compare_schemas,
 };
 use db::{
     ColumnInfo, FieldType, ForeignKeyDefinition, GlobalDbState, IndexInfo, QueryColumnMeta,
@@ -48,6 +48,13 @@ pub struct DataCompareTablePair {
 #[derive(Debug, Clone)]
 pub struct DataCompareBatchResult {
     pub table_results: Vec<DataCompareResult>,
+    pub table_dependencies: Vec<DataCompareTableDependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataCompareTableDependency {
+    pub table: String,
+    pub referenced_table: String,
 }
 
 impl DataCompareBatchResult {
@@ -102,7 +109,11 @@ pub async fn execute_data_compare(
             .await?,
         );
     }
-    Ok(DataCompareBatchResult { table_results })
+    let table_dependencies = load_data_compare_table_dependencies(&params, &db_state, cx).await?;
+    Ok(DataCompareBatchResult {
+        table_results,
+        table_dependencies,
+    })
 }
 
 async fn execute_data_compare_pair(
@@ -148,11 +159,13 @@ async fn execute_data_compare_pair(
         &pair.target_table,
     )
     .await?;
-    let key_columns = resolve_key_columns(
+    let key_columns = resolve_key_columns_for_table(
         &params.key_columns,
         &source_columns,
         &target_columns,
         params.case_sensitive_identifiers,
+        params.table_pairs.len() > 1,
+        &pair,
     )?;
     let target_key_columns = matching_target_columns(
         &key_columns,
@@ -214,6 +227,89 @@ async fn execute_data_compare_pair(
     )
 }
 
+async fn load_data_compare_table_dependencies(
+    params: &DataCompareParams,
+    db_state: &Arc<GlobalDbState>,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<Vec<DataCompareTableDependency>> {
+    if params.table_pairs.len() < 2 {
+        return Ok(Vec::new());
+    }
+
+    let target_tables = target_table_lookup(params);
+    let mut dependencies = Vec::new();
+    let mut seen = HashSet::new();
+    for pair in &params.table_pairs {
+        let foreign_keys =
+            load_target_foreign_keys(params, db_state, cx, &pair.target_table).await?;
+        collect_selected_table_dependencies(
+            &mut dependencies,
+            &mut seen,
+            &target_tables,
+            &pair.target_table,
+            foreign_keys,
+            params.case_sensitive_identifiers,
+        );
+    }
+    Ok(dependencies)
+}
+
+async fn load_target_foreign_keys(
+    params: &DataCompareParams,
+    db_state: &Arc<GlobalDbState>,
+    cx: &mut AsyncApp,
+    table: &str,
+) -> anyhow::Result<Vec<ForeignKeyDefinition>> {
+    db_state
+        .list_foreign_keys(
+            cx,
+            params.target_connection_id.clone(),
+            params.target_database.clone(),
+            params.target_schema.clone(),
+            table.to_string(),
+        )
+        .await
+}
+
+fn target_table_lookup(params: &DataCompareParams) -> HashMap<String, String> {
+    params
+        .table_pairs
+        .iter()
+        .map(|pair| {
+            (
+                table_lookup_key(&pair.target_table, params.case_sensitive_identifiers),
+                pair.target_table.clone(),
+            )
+        })
+        .collect()
+}
+
+fn collect_selected_table_dependencies(
+    dependencies: &mut Vec<DataCompareTableDependency>,
+    seen: &mut HashSet<(String, String)>,
+    target_tables: &HashMap<String, String>,
+    table: &str,
+    foreign_keys: Vec<ForeignKeyDefinition>,
+    case_sensitive_identifiers: bool,
+) {
+    for foreign_key in foreign_keys {
+        let parent_key = table_lookup_key(&foreign_key.ref_table, case_sensitive_identifiers);
+        let Some(parent_table) = target_tables.get(&parent_key) else {
+            continue;
+        };
+        if table_lookup_key(table, case_sensitive_identifiers) == parent_key {
+            continue;
+        }
+        let edge = (table.to_string(), parent_table.clone());
+        if seen.insert(edge.clone()) {
+            dependencies.push(DataCompareTableDependency {
+                table: edge.0,
+                referenced_table: edge.1,
+            });
+        }
+    }
+}
+
 /// 生成数据同步计划
 pub fn generate_data_sync_plan(result: &DataCompareBatchResult) -> SyncPlan {
     if result.has_truncated_tables() {
@@ -226,6 +322,7 @@ pub fn generate_data_sync_plan(result: &DataCompareBatchResult) -> SyncPlan {
             .iter()
             .map(build_data_sync_plan)
             .collect(),
+        &result.table_dependencies,
     )
 }
 
@@ -257,6 +354,7 @@ pub fn generate_data_sync_plan_for_target(
                 )
             })
             .collect(),
+        &result.table_dependencies,
     ))
 }
 
@@ -284,7 +382,10 @@ fn truncated_data_sync_plan(result: &DataCompareBatchResult) -> SyncPlan {
     }
 }
 
-fn combine_sync_plans(plans: Vec<SyncPlan>) -> SyncPlan {
+fn combine_sync_plans(
+    plans: Vec<SyncPlan>,
+    dependencies: &[DataCompareTableDependency],
+) -> SyncPlan {
     let target_table = match plans.as_slice() {
         [] => String::new(),
         [plan] => plan.target_table.clone(),
@@ -311,10 +412,7 @@ fn combine_sync_plans(plans: Vec<SyncPlan>) -> SyncPlan {
         .iter()
         .flat_map(|plan| plan.warnings.iter().cloned())
         .collect::<Vec<_>>();
-    let statements = plans
-        .into_iter()
-        .flat_map(|plan| plan.statements.into_iter())
-        .collect::<Vec<_>>();
+    let statements = ordered_sync_statements(plans, dependencies);
     let sql_text = statements
         .iter()
         .map(|statement| statement.sql.as_str())
@@ -329,6 +427,143 @@ fn combine_sync_plans(plans: Vec<SyncPlan>) -> SyncPlan {
         warnings,
         sql_text,
     }
+}
+
+fn ordered_sync_statements(
+    plans: Vec<SyncPlan>,
+    dependencies: &[DataCompareTableDependency],
+) -> Vec<SyncStatement> {
+    let table_order = dependency_ordered_tables(&plans, dependencies);
+    let table_rank = table_order
+        .iter()
+        .enumerate()
+        .map(|(index, table)| (table.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let mut statements = plans
+        .into_iter()
+        .flat_map(|plan| plan.statements.into_iter())
+        .enumerate()
+        .collect::<Vec<_>>();
+    statements.sort_by(|(left_index, left), (right_index, right)| {
+        sync_statement_sort_key(left, &table_rank, table_order.len(), *left_index).cmp(
+            &sync_statement_sort_key(right, &table_rank, table_order.len(), *right_index),
+        )
+    });
+    statements
+        .into_iter()
+        .map(|(_index, statement)| statement)
+        .collect()
+}
+
+fn sync_statement_sort_key(
+    statement: &SyncStatement,
+    table_rank: &HashMap<String, usize>,
+    fallback_rank: usize,
+    original_index: usize,
+) -> (usize, usize, usize) {
+    let group = sync_statement_group(statement);
+    let rank = statement
+        .object_name
+        .as_ref()
+        .and_then(|table| table_rank.get(table))
+        .copied()
+        .unwrap_or(fallback_rank);
+    let rank = if group == 2 && rank < fallback_rank {
+        fallback_rank - rank
+    } else {
+        rank
+    };
+    (group, rank, original_index)
+}
+
+fn sync_statement_group(statement: &SyncStatement) -> usize {
+    match &statement.kind {
+        db::compare::SyncStatementKind::Insert => 0,
+        db::compare::SyncStatementKind::Update => 1,
+        db::compare::SyncStatementKind::Delete => 2,
+        _ => 3,
+    }
+}
+
+fn dependency_ordered_tables(
+    plans: &[SyncPlan],
+    dependencies: &[DataCompareTableDependency],
+) -> Vec<String> {
+    let tables = plans
+        .iter()
+        .map(|plan| plan.target_table.clone())
+        .collect::<Vec<_>>();
+    let table_set = tables.iter().cloned().collect::<HashSet<_>>();
+    let mut indegree: HashMap<String, usize> =
+        tables.iter().map(|table| (table.clone(), 0)).collect();
+    let mut children_by_parent: HashMap<String, Vec<String>> = HashMap::new();
+
+    for dependency in dependencies {
+        if !table_set.contains(&dependency.table)
+            || !table_set.contains(&dependency.referenced_table)
+        {
+            continue;
+        }
+        children_by_parent
+            .entry(dependency.referenced_table.clone())
+            .or_default()
+            .push(dependency.table.clone());
+        *indegree.entry(dependency.table.clone()).or_insert(0) += 1;
+    }
+
+    topological_table_order(&tables, children_by_parent, indegree)
+}
+
+fn topological_table_order(
+    tables: &[String],
+    children_by_parent: HashMap<String, Vec<String>>,
+    mut indegree: HashMap<String, usize>,
+) -> Vec<String> {
+    let mut ready = tables_with_zero_indegree(tables, &indegree);
+    let mut ordered = Vec::with_capacity(tables.len());
+    while let Some(table) = ready.first().cloned() {
+        ready.remove(0);
+        ordered.push(table.clone());
+        if let Some(children) = children_by_parent.get(&table) {
+            release_children(children, &mut indegree, &mut ready);
+        }
+    }
+    append_unordered_tables(tables, &mut ordered);
+    ordered
+}
+
+fn tables_with_zero_indegree(tables: &[String], indegree: &HashMap<String, usize>) -> Vec<String> {
+    tables
+        .iter()
+        .filter(|table| indegree.get(*table).copied().unwrap_or(0) == 0)
+        .cloned()
+        .collect()
+}
+
+fn release_children(
+    children: &[String],
+    indegree: &mut HashMap<String, usize>,
+    ready: &mut Vec<String>,
+) {
+    for child in children {
+        let Some(value) = indegree.get_mut(child) else {
+            continue;
+        };
+        *value = value.saturating_sub(1);
+        if *value == 0 {
+            ready.push(child.clone());
+        }
+    }
+}
+
+fn append_unordered_tables(tables: &[String], ordered: &mut Vec<String>) {
+    let ordered_set = ordered.iter().cloned().collect::<HashSet<_>>();
+    ordered.extend(
+        tables
+            .iter()
+            .filter(|table| !ordered_set.contains(*table))
+            .cloned(),
+    );
 }
 
 /// 执行结构比较任务（简化版本）
@@ -755,6 +990,49 @@ fn resolve_key_columns(
     Ok(key_columns)
 }
 
+fn resolve_key_columns_for_table(
+    requested: &[String],
+    source_columns: &[ColumnInfo],
+    target_columns: &[ColumnInfo],
+    case_sensitive_identifiers: bool,
+    allow_inferred_fallback: bool,
+    pair: &DataCompareTablePair,
+) -> anyhow::Result<Vec<String>> {
+    let result = resolve_key_columns(
+        requested,
+        source_columns,
+        target_columns,
+        case_sensitive_identifiers,
+    );
+    match result {
+        Ok(columns) => Ok(columns),
+        Err(error) if allow_inferred_fallback && !requested.is_empty() => resolve_key_columns(
+            &[],
+            source_columns,
+            target_columns,
+            case_sensitive_identifiers,
+        )
+        .map_err(|fallback_error| key_resolution_error(pair, error, fallback_error)),
+        Err(error) => Err(anyhow::anyhow!(
+            "Key columns for `{}` -> `{}`: {error}",
+            pair.source_table,
+            pair.target_table
+        )),
+    }
+}
+
+fn key_resolution_error(
+    pair: &DataCompareTablePair,
+    requested_error: anyhow::Error,
+    fallback_error: anyhow::Error,
+) -> anyhow::Error {
+    anyhow::anyhow!(
+        "Key columns for `{}` -> `{}` could not use requested keys ({requested_error}) or infer primary keys ({fallback_error})",
+        pair.source_table,
+        pair.target_table
+    )
+}
+
 fn matching_target_columns(
     source_names: &[String],
     target_columns: &[ColumnInfo],
@@ -1028,6 +1306,15 @@ fn identifier_key(value: &str, case_sensitive_identifiers: bool) -> String {
     }
 }
 
+fn table_lookup_key(value: &str, case_sensitive_identifiers: bool) -> String {
+    let table = value
+        .rsplit('.')
+        .next()
+        .unwrap_or(value)
+        .trim_matches(['`', '"', '[', ']']);
+    identifier_key(table, case_sensitive_identifiers)
+}
+
 fn value_to_cell(value: Option<&str>, meta: Option<&QueryColumnMeta>) -> serde_json::Value {
     let Some(value) = value else {
         return serde_json::Value::Null;
@@ -1268,6 +1555,28 @@ mod tests {
     }
 
     #[test]
+    fn resolve_key_columns_for_table_falls_back_to_primary_key_for_multi_table_override() {
+        let source = vec![column_info("id", true), column_info("tenant_id", false)];
+        let target = vec![column_info("id", true)];
+        let requested = vec!["tenant_id".to_string()];
+
+        let result = resolve_key_columns_for_table(
+            &requested,
+            &source,
+            &target,
+            false,
+            true,
+            &DataCompareTablePair {
+                source_table: "users".to_string(),
+                target_table: "users".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result, vec!["id".to_string()]);
+    }
+
+    #[test]
     fn order_by_clause_quotes_key_columns_with_plugin() {
         let plugin = db::mysql::MySqlPlugin::new();
         let key_columns = vec!["order".to_string(), "id".to_string()];
@@ -1382,6 +1691,7 @@ mod tests {
         .unwrap();
         let plan = generate_data_sync_plan(&DataCompareBatchResult {
             table_results: vec![table_result],
+            table_dependencies: vec![],
         });
 
         assert!(plan.sql_text.contains("INSERT INTO users (id, name)"));
@@ -1435,6 +1745,7 @@ mod tests {
                 source_truncated: true,
                 target_truncated: false,
             }],
+            table_dependencies: vec![],
         };
 
         let plan = generate_data_sync_plan(&result);
@@ -1476,6 +1787,7 @@ mod tests {
                     target_truncated: false,
                 },
             ],
+            table_dependencies: vec![],
         };
 
         let plan = generate_data_sync_plan(&result);
@@ -1485,6 +1797,60 @@ mod tests {
         assert_eq!(plan.summary.total_count, 2);
         assert!(plan.sql_text.contains("INSERT INTO users"));
         assert!(plan.sql_text.contains("INSERT INTO orders"));
+    }
+
+    #[test]
+    fn generate_data_sync_plan_orders_multi_table_rows_by_foreign_key_dependencies() {
+        let result = DataCompareBatchResult {
+            table_results: vec![
+                DataCompareResult {
+                    source_table: "users".to_string(),
+                    target_table: "users".to_string(),
+                    key_columns: vec!["id".to_string()],
+                    columns: vec!["id".to_string(), "department_id".to_string()],
+                    added: vec![row_data(vec![
+                        ("id", json!(10)),
+                        ("department_id", json!(3)),
+                    ])],
+                    removed: vec![row_data(vec![
+                        ("id", json!(11)),
+                        ("department_id", json!(4)),
+                    ])],
+                    modified: vec![],
+                    source_truncated: false,
+                    target_truncated: false,
+                },
+                DataCompareResult {
+                    source_table: "departments".to_string(),
+                    target_table: "departments".to_string(),
+                    key_columns: vec!["id".to_string()],
+                    columns: vec!["id".to_string(), "name".to_string()],
+                    added: vec![row_data(vec![("id", json!(3)), ("name", json!("AI"))])],
+                    removed: vec![row_data(vec![("id", json!(4)), ("name", json!("Old"))])],
+                    modified: vec![],
+                    source_truncated: false,
+                    target_truncated: false,
+                },
+            ],
+            table_dependencies: vec![DataCompareTableDependency {
+                table: "users".to_string(),
+                referenced_table: "departments".to_string(),
+            }],
+        };
+
+        let plan = generate_data_sync_plan(&result);
+
+        assert_sql_order(
+            &plan.sql_text,
+            "INSERT INTO departments",
+            "INSERT INTO users",
+        );
+        assert_sql_order(&plan.sql_text, "INSERT INTO users", "DELETE FROM users");
+        assert_sql_order(
+            &plan.sql_text,
+            "DELETE FROM users",
+            "DELETE FROM departments",
+        );
     }
 
     #[gpui::test]
@@ -1550,6 +1916,15 @@ mod tests {
             .into_iter()
             .map(|(key, value)| (key.to_string(), value))
             .collect()
+    }
+
+    fn assert_sql_order(sql: &str, first: &str, second: &str) {
+        let first_index = sql.find(first).expect("first SQL fragment should exist");
+        let second_index = sql.find(second).expect("second SQL fragment should exist");
+        assert!(
+            first_index < second_index,
+            "expected `{first}` before `{second}` in:\n{sql}"
+        );
     }
 
     fn mysql_test_config_from_env() -> Option<DbConnectionConfig> {
@@ -1685,6 +2060,16 @@ mod tests {
         )?;
         assert_data_delete_is_destructive_and_not_selected(&plan);
         assert_no_display_charset_labels(&plan.sql_text);
+        assert_sql_order(
+            &plan.sql_text,
+            "INSERT INTO `onetcli_compare_dst`.`departments`",
+            "INSERT INTO `onetcli_compare_dst`.`users`",
+        );
+        assert_sql_order(
+            &plan.sql_text,
+            "DELETE FROM `onetcli_compare_dst`.`users`",
+            "DELETE FROM `onetcli_compare_dst`.`departments`",
+        );
         let data_results = run_sync_sql_and_collect(
             db_state,
             connection_id,
@@ -1715,11 +2100,17 @@ mod tests {
                 target_connection_id: connection_id.to_string(),
                 target_database: "onetcli_compare_dst".to_string(),
                 target_schema: None,
-                table_pairs: vec![DataCompareTablePair {
-                    source_table: "users".to_string(),
-                    target_table: "users".to_string(),
-                }],
-                key_columns: vec!["id".to_string()],
+                table_pairs: vec![
+                    DataCompareTablePair {
+                        source_table: "users".to_string(),
+                        target_table: "users".to_string(),
+                    },
+                    DataCompareTablePair {
+                        source_table: "departments".to_string(),
+                        target_table: "departments".to_string(),
+                    },
+                ],
+                key_columns: vec![],
                 case_sensitive_identifiers: false,
             },
             db_state.clone(),
@@ -1815,7 +2206,7 @@ mod tests {
     }
 
     fn assert_data_fixture_diff(result: &DataCompareBatchResult) {
-        let users = result.table_results.first().expect("users data diff");
+        let users = table_result(result, "users");
         assert_eq!(1, users.added.len());
         assert_eq!(1, users.removed.len());
         assert!(
@@ -1823,20 +2214,38 @@ mod tests {
                 row.changes.contains_key("email") && row.changes.contains_key("name")
             })
         );
+        let departments = table_result(result, "departments");
+        assert_eq!(1, departments.added.len());
+        assert_eq!(1, departments.removed.len());
+        assert!(departments.modified.is_empty());
+        assert!(
+            result.table_dependencies.iter().any(|dependency| {
+                dependency.table == "users" && dependency.referenced_table == "departments"
+            }),
+            "expected users -> departments dependency"
+        );
     }
 
     fn assert_data_fixture_synced(result: &DataCompareBatchResult) {
-        let users = result.table_results.first().expect("users data diff");
-        assert!(users.added.is_empty(), "unexpected added rows after sync");
-        assert!(
-            users.removed.is_empty(),
-            "unexpected removed rows after sync"
-        );
-        assert!(
-            users.modified.is_empty(),
-            "unexpected modified rows after sync: {:?}",
-            users.modified
-        );
+        for table in &result.table_results {
+            assert!(table.added.is_empty(), "unexpected added rows: {table:?}");
+            assert!(
+                table.removed.is_empty(),
+                "unexpected removed rows: {table:?}"
+            );
+            assert!(
+                table.modified.is_empty(),
+                "unexpected modified rows: {table:?}"
+            );
+        }
+    }
+
+    fn table_result<'a>(result: &'a DataCompareBatchResult, table: &str) -> &'a DataCompareResult {
+        result
+            .table_results
+            .iter()
+            .find(|table_result| table_result.target_table == table)
+            .unwrap_or_else(|| panic!("{table} data diff should exist"))
     }
 
     fn assert_data_delete_is_destructive_and_not_selected(plan: &SyncPlan) {
@@ -2008,19 +2417,21 @@ CREATE TABLE onetcli_compare_dst.users (
   department_id INT NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-INSERT INTO onetcli_compare_src.departments VALUES (1, 'Engineering'), (2, 'Sales');
-INSERT INTO onetcli_compare_dst.departments VALUES (1, 'Engineering'), (2, 'Sales');
+INSERT INTO onetcli_compare_src.departments
+VALUES (1, 'Engineering'), (2, 'Sales'), (3, 'Research');
+INSERT INTO onetcli_compare_dst.departments
+VALUES (1, 'Engineering'), (2, 'Sales'), (4, 'Legacy');
 INSERT INTO onetcli_compare_src.users
   (id, name, email, department_id, status)
 VALUES
   (1, 'Ada Lovelace', 'ada@example.com', 1, 'active'),
   (2, 'Grace Hopper', 'grace@example.com', 1, 'active'),
-  (3, 'Katherine Johnson', 'katherine@example.com', 2, 'inactive');
+  (3, 'Katherine Johnson', 'katherine@example.com', 3, 'inactive');
 INSERT INTO onetcli_compare_dst.users (id, name, department_id)
 VALUES
   (1, 'Ada', 1),
   (2, 'Grace Hopper', 1),
-  (4, 'Legacy User', 2);
+  (4, 'Legacy User', 4);
 "#;
 
     const TARGET_MATCH_QUERY: &str = r#"
@@ -2043,6 +2454,20 @@ SELECT (
    AND s.email <=> d.email
    AND s.department_id <=> d.department_id
    AND s.status <=> d.status
+  WHERE s.id IS NULL
+) + (
+  SELECT COUNT(*)
+  FROM onetcli_compare_src.departments s
+  LEFT JOIN onetcli_compare_dst.departments d
+    ON s.id = d.id
+   AND s.name <=> d.name
+  WHERE d.id IS NULL
+) + (
+  SELECT COUNT(*)
+  FROM onetcli_compare_dst.departments d
+  LEFT JOIN onetcli_compare_src.departments s
+    ON s.id = d.id
+   AND s.name <=> d.name
   WHERE s.id IS NULL
 ) AS mismatch_count;
 "#;
