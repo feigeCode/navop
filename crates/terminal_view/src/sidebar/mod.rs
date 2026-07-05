@@ -485,6 +485,10 @@ impl TerminalSidebar {
     ) -> Self {
         let colors = initial_theme.colors();
         let has_file_manager = stored_connection.is_some();
+        let history_user = ssh_config
+            .as_ref()
+            .map(|config| config.ssh_config.username.clone())
+            .or_else(|| std::env::var("USER").ok());
         let auto_show_server_monitor = ServerMonitorPanel::load_monitor_enabled(connection_id);
         let settings_panel = cx.new(|cx| {
             SettingsPanel::new(
@@ -503,8 +507,11 @@ impl TerminalSidebar {
         });
         let quick_command_panel =
             cx.new(|cx| QuickCommandPanel::new(connection_id, colors.clone(), window, cx));
-        let history_command_panel = history_scope
-            .map(|scope| cx.new(|cx| HistoryCommandPanel::new(scope, colors.clone(), window, cx)));
+        let history_command_panel = history_scope.map(|scope| {
+            cx.new(|cx| {
+                HistoryCommandPanel::new(scope, history_user.clone(), colors.clone(), window, cx)
+            })
+        });
         let rich_input_panel = cx.new(|cx| RichInputPanel::new(colors.clone(), window, cx));
         let ai_chat_panel = if let Some(connection) = stored_connection.as_ref() {
             let connections = load_terminal_ai_connections(cx);

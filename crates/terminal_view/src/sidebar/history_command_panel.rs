@@ -9,6 +9,7 @@ use one_core::storage::{
     GlobalStorageState, TerminalCommandHistory, TerminalCommandHistoryRepository,
     TerminalCommandHistorySort, TerminalHistoryScope,
 };
+use terminal::history::normalize_recorded_command;
 
 mod render;
 
@@ -22,6 +23,7 @@ pub enum HistoryCommandPanelEvent {
 pub struct HistoryCommandPanel {
     search_input_state: Entity<InputState>,
     scope: TerminalHistoryScope,
+    history_user: Option<String>,
     commands: Vec<TerminalCommandHistory>,
     sort: TerminalCommandHistorySort,
     search_query: String,
@@ -34,6 +36,7 @@ pub struct HistoryCommandPanel {
 impl HistoryCommandPanel {
     pub fn new(
         scope: TerminalHistoryScope,
+        history_user: Option<String>,
         colors: crate::theme::TerminalColors,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -54,6 +57,7 @@ impl HistoryCommandPanel {
         let mut panel = Self {
             search_input_state,
             scope,
+            history_user,
             commands: Vec::new(),
             sort: TerminalCommandHistorySort::Latest,
             search_query: String::new(),
@@ -85,7 +89,9 @@ impl HistoryCommandPanel {
         };
         let query = (!self.search_query.trim().is_empty()).then_some(self.search_query.as_str());
         match repo.list(&self.scope, self.sort, query, HISTORY_PANEL_LIMIT) {
-            Ok(commands) => self.commands = commands,
+            Ok(commands) => {
+                self.commands = normalize_history_commands(commands, self.history_user.as_deref())
+            }
             Err(error) => {
                 tracing::warn!(%error, "failed to load terminal command history");
                 self.commands.clear();
@@ -123,5 +129,70 @@ impl EventEmitter<HistoryCommandPanelEvent> for HistoryCommandPanel {}
 impl Focusable for HistoryCommandPanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+fn normalize_history_commands(
+    commands: Vec<TerminalCommandHistory>,
+    history_user: Option<&str>,
+) -> Vec<TerminalCommandHistory> {
+    let mut seen = std::collections::HashSet::new();
+    let mut normalized = Vec::new();
+    for mut item in commands {
+        if let Some(command) = normalize_recorded_command(&item.command, history_user) {
+            item.command = command;
+        }
+        if seen.insert(item.command.clone()) {
+            normalized.push(item);
+        }
+    }
+    normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_history_commands;
+    use one_core::storage::TerminalCommandHistory;
+
+    #[test]
+    fn normalize_history_commands_strips_recorded_prefix_for_display() {
+        let commands = normalize_history_commands(
+            vec![item(1, "2026-07-05 08:07:16 root cd /data/Seeyon/Comi")],
+            Some("root"),
+        );
+
+        assert_eq!("cd /data/Seeyon/Comi", commands[0].command);
+    }
+
+    #[test]
+    fn normalize_history_commands_deduplicates_cleaned_commands() {
+        let commands = normalize_history_commands(
+            vec![
+                item(1, "2026-07-05 08:07:16 root cd /data/app"),
+                item(2, "cd /data/app"),
+            ],
+            Some("root"),
+        );
+
+        assert_eq!(1, commands.len());
+        assert_eq!("cd /data/app", commands[0].command);
+    }
+
+    fn item(id: i64, command: &str) -> TerminalCommandHistory {
+        TerminalCommandHistory {
+            id: Some(id),
+            scope_key: "ssh:1".to_string(),
+            scope_kind: "ssh".to_string(),
+            connection_id: Some(1),
+            command: command.to_string(),
+            use_count: 1,
+            favorite: false,
+            first_used_at: Some(1),
+            last_used_at: Some(1),
+            last_exit_code: Some(0),
+            cwd: None,
+            created_at: Some(1),
+            updated_at: Some(1),
+        }
     }
 }

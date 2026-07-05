@@ -868,6 +868,27 @@ fn merge_history_matches(primary: Vec<String>, fallback: Vec<String>, limit: usi
     merged
 }
 
+fn normalize_history_matches(
+    commands: Vec<String>,
+    history_user: Option<&str>,
+    limit: usize,
+) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut normalized = Vec::new();
+    for command in commands {
+        let Some(command) = normalize_recorded_command(&command, history_user) else {
+            continue;
+        };
+        if seen.insert(command.clone()) {
+            normalized.push(command);
+        }
+        if normalized.len() >= limit {
+            break;
+        }
+    }
+    normalized
+}
+
 impl Terminal {
     fn new_local_disconnected(error: String, cx: &mut Context<Self>) -> Self {
         let (event_tx, event_rx) = unbounded_channel::<TerminalEvent>();
@@ -1715,12 +1736,14 @@ impl Terminal {
     }
 
     pub fn history_suggestions(&self, prefix: &str, limit: usize) -> Vec<String> {
+        let history_user = self.history_record_user();
         let db_matches = self
             .history_repository
             .as_ref()
             .zip(self.history_scope.as_ref())
             .and_then(|(repo, scope)| repo.suggestions(scope, prefix, limit).ok())
             .unwrap_or_default();
+        let db_matches = normalize_history_matches(db_matches, history_user.as_deref(), limit);
         let fallback = collect_history_suggestions_with_cwd(
             &self.session_history,
             &self.persisted_history,
@@ -1732,6 +1755,7 @@ impl Terminal {
     }
 
     pub fn history_search_results(&self, query: &str, limit: usize) -> Vec<String> {
+        let history_user = self.history_record_user();
         let db_matches = self
             .history_repository
             .as_ref()
@@ -1749,6 +1773,7 @@ impl Terminal {
             .into_iter()
             .map(|item| item.command)
             .collect();
+        let db_matches = normalize_history_matches(db_matches, history_user.as_deref(), limit);
         let fallback = collect_history_search_results(
             &self.session_history,
             &self.persisted_history,
@@ -2109,7 +2134,8 @@ mod tests {
         TerminalMfaRequest, TerminalMfaResponder, build_cd_command, build_ssh_base_init_commands,
         build_ssh_init_commands, clear_screen_remote_redraw_bytes, compose_ssh_init_commands,
         format_connection_error, keyboard_interactive_answers_for_terminal, merge_history_matches,
-        resolve_default_windows_shell_from_env, resolve_local_working_dir, shell_escape_arg,
+        normalize_history_matches, resolve_default_windows_shell_from_env,
+        resolve_local_working_dir, shell_escape_arg,
     };
     use crate::TerminalEvent;
     use crate::history::{
@@ -2234,6 +2260,24 @@ mod tests {
         );
 
         assert_eq!(vec!["first".to_string(), "second".to_string()], merged);
+    }
+
+    #[test]
+    fn normalize_history_matches_strips_recorded_prefix_and_deduplicates() {
+        let matches = normalize_history_matches(
+            vec![
+                "2026-07-05 08:07:16 root cd /data/app".to_string(),
+                "cd /data/app".to_string(),
+                "git status".to_string(),
+            ],
+            Some("root"),
+            10,
+        );
+
+        assert_eq!(
+            vec!["cd /data/app".to_string(), "git status".to_string()],
+            matches
+        );
     }
 
     #[test]
