@@ -21,9 +21,10 @@ fn transform_output_updates_preview_without_replacing_source() {
 #[test]
 fn preview_is_hidden_initially() {
     let view = HtmlCodeBlockView {
-        view_id: SharedString::from("preview_is_hidden_initially"),
         document: HtmlPreviewDocument::new("html", "<main>Original</main>"),
         preview_visible: false,
+        webview: None,
+        webview_error: None,
         action_status: None,
     };
 
@@ -31,20 +32,21 @@ fn preview_is_hidden_initially() {
 }
 
 #[test]
-fn preview_content_uses_render_html() {
+fn webview_content_uses_render_html() {
     let mut document = HtmlPreviewDocument::new("html", "<main>Original</main>");
     document.apply_transform(HtmlPreviewTransformOutput {
         html: "<section>Rendered</section>".to_string(),
         assets: vec![],
     });
     let view = HtmlCodeBlockView {
-        view_id: SharedString::from("preview_content_uses_render_html"),
         document,
         preview_visible: true,
+        webview: None,
+        webview_error: None,
         action_status: None,
     };
 
-    let preview_html = view.preview_html();
+    let preview_html = view.webview_html();
 
     assert!(preview_html.contains("<body><section>Rendered</section></body>"));
     assert!(!preview_html.contains("<main>Original</main>"));
