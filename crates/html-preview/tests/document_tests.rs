@@ -3,7 +3,7 @@ use html_preview::{
     HtmlPreviewAction, HtmlPreviewAssetResolver, HtmlPreviewDocument, HtmlPreviewTransformOutput,
     clear_html_preview_transform_provider, normalize_html_document, register_extension_asset_root,
     resolve_extension_asset_url, set_html_preview_transform_provider,
-    transform_html_preview_document,
+    transform_html_preview_document, write_html_preview_document_to_dir,
 };
 
 #[test]
@@ -136,12 +136,31 @@ fn registered_extension_asset_roots_resolve_safe_protocol_urls() {
 }
 
 #[test]
+fn writes_complete_html_preview_document_without_overwriting_existing_file() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("onetcli-html-preview.html"), "existing").unwrap();
+    let document = HtmlPreviewDocument::new("html", "<main>Download</main>");
+
+    let path = write_html_preview_document_to_dir(&document, dir.path()).unwrap();
+
+    assert_eq!(dir.path().join("onetcli-html-preview-1.html"), path);
+    let saved = std::fs::read_to_string(path).unwrap();
+    assert!(saved.starts_with("<!doctype html>"));
+    assert!(saved.contains("<body><main>Download</main></body>"));
+    assert_eq!(
+        "existing",
+        std::fs::read_to_string(dir.path().join("onetcli-html-preview.html")).unwrap()
+    );
+}
+
+#[test]
 fn action_ids_are_stable_and_ordered_for_html_toolbar() {
     assert_eq!(
         vec![
             "html-preview",
             "html-source",
             "html-copy",
+            "html-download",
             "html-open-window"
         ],
         HtmlPreviewAction::toolbar_ids()

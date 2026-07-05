@@ -4,16 +4,17 @@ use crate::code_block::CodeBlockActionRegistry;
 use crate::html_code_block::HtmlCodeBlockView;
 use crate::parse_chart_json_block;
 use crate::theme::{AgentChatTheme, active_agent_chat_theme, with_agent_chat_theme};
-use gpui::{AnyElement, App, AppContext, IntoElement, ParentElement, SharedString, Styled, Window};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{
-    IconName, Sizable,
+    Sizable,
     clipboard::Clipboard,
     h_flex,
-    text::{CodeBlock, TextView},
+    text::{CodeBlock, CodeBlockRenderOptions, TextView},
 };
-#[cfg(test)]
-use html_preview::HtmlPreviewAction;
 use html_preview::HtmlPreviewDocument;
 
 const COPY_CODE_ACTION_ID: &str = "copy-code";
@@ -33,9 +34,9 @@ pub(crate) fn apply_code_block_features(
                 .unwrap_or_else(|| active_agent_chat_theme(cx));
             render_code_block_toolbar(block, toolbar_registry.as_ref(), &theme, cx)
         })
-        .code_block_renderer(move |block, _options, default, window, cx| {
+        .code_block_renderer(move |block, options, default, window, cx| {
             if is_renderable_html_code_block(block.code().as_ref(), block.lang().as_deref()) {
-                render_html_code_block(block, default, window, cx)
+                render_html_code_block(block, options, default, window, cx)
             } else if is_renderable_chart_code_block(block.code().as_ref(), block.lang().as_deref())
             {
                 let theme = renderer_theme
@@ -57,7 +58,10 @@ fn render_code_block_toolbar(
     let code = block.code();
     let lang = block.lang();
     if is_html_code_block(lang.as_deref()) {
-        return render_html_code_block_toolbar(code, theme);
+        return h_flex()
+            .gap_1()
+            .text_color(theme.code_foreground)
+            .into_any_element();
     }
 
     let copy_id = SharedString::from(format!(
@@ -96,45 +100,13 @@ fn render_code_block_toolbar(
     row.into_any_element()
 }
 
-fn render_html_code_block_toolbar(code: SharedString, theme: &AgentChatTheme) -> AnyElement {
-    h_flex()
-        .gap_1()
-        .text_color(theme.code_foreground)
-        .child(
-            Button::new("html-preview")
-                .icon(IconName::Eye)
-                .ghost()
-                .xsmall()
-                .tooltip("预览"),
-        )
-        .child(
-            Button::new("html-source")
-                .icon(IconName::SquareTerminal)
-                .ghost()
-                .xsmall()
-                .tooltip("源码"),
-        )
-        .child(Clipboard::new("html-copy").value(code).tooltip("复制 HTML"))
-        .child(
-            Button::new("html-open-window")
-                .icon(IconName::ExternalLink)
-                .ghost()
-                .xsmall()
-                .tooltip("打开新窗口"),
-        )
-        .into_any_element()
-}
-
 #[cfg(test)]
 fn code_block_toolbar_action_ids(
     lang: Option<&str>,
     registry: Option<&CodeBlockActionRegistry>,
 ) -> Vec<String> {
     if is_html_code_block(lang) {
-        return HtmlPreviewAction::toolbar_ids()
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        return Vec::new();
     }
     std::iter::once(COPY_CODE_ACTION_ID.to_string())
         .chain(
@@ -159,12 +131,23 @@ fn html_preview_document_for_block(code: &str, lang: Option<&str>) -> Option<Htm
         .then(|| HtmlPreviewDocument::new(lang.unwrap_or("html"), code))
 }
 
+fn html_preview_view_state_id(index: usize, code: &str, lang: Option<&str>) -> SharedString {
+    let mut hasher = DefaultHasher::new();
+    index.hash(&mut hasher);
+    code.hash(&mut hasher);
+    lang.unwrap_or("html")
+        .to_ascii_lowercase()
+        .hash(&mut hasher);
+    SharedString::from(format!("html-code-block-view-{:016x}", hasher.finish()))
+}
+
 fn is_renderable_chart_code_block(code: &str, lang: Option<&str>) -> bool {
     parse_chart_json_block(code, lang).is_some()
 }
 
 fn render_html_code_block(
     block: &CodeBlock,
+    options: CodeBlockRenderOptions,
     default: AnyElement,
     window: &mut Window,
     cx: &mut App,
@@ -174,7 +157,15 @@ fn render_html_code_block(
     else {
         return default;
     };
-    cx.new(|cx| HtmlCodeBlockView::new(document, window, cx))
+    let state_id = html_preview_view_state_id(
+        options.index,
+        block.code().as_ref(),
+        block.lang().as_deref(),
+    );
+    window
+        .use_keyed_state(state_id.clone(), cx, |window, cx| {
+            HtmlCodeBlockView::new(state_id.clone(), document.clone(), window, cx)
+        })
         .into_any_element()
 }
 
@@ -215,23 +206,13 @@ mod tests {
     }
 
     #[test]
-    fn html_code_block_toolbar_uses_preview_source_copy_open_actions() {
+    fn html_code_block_uses_inner_toolbar_only() {
         assert_eq!(
-            vec![
-                "html-preview",
-                "html-source",
-                "html-copy",
-                "html-open-window"
-            ],
+            Vec::<String>::new(),
             code_block_toolbar_action_ids(Some("html"), None)
         );
         assert_eq!(
-            vec![
-                "html-preview",
-                "html-source",
-                "html-copy",
-                "html-open-window"
-            ],
+            Vec::<String>::new(),
             code_block_toolbar_action_ids(Some("HTML"), None)
         );
     }
@@ -259,6 +240,16 @@ mod tests {
                 .render_html()
                 .contains("<body><main>Partial</main></body>")
         );
+    }
+
+    #[test]
+    fn html_preview_view_state_id_is_stable_and_tracks_content() {
+        let first = html_preview_view_state_id(0, "<main>A</main>", Some("HTML"));
+        let same = html_preview_view_state_id(0, "<main>A</main>", Some("html"));
+        let changed = html_preview_view_state_id(0, "<main>B</main>", Some("html"));
+
+        assert_eq!(first, same);
+        assert_ne!(first, changed);
     }
 
     #[test]

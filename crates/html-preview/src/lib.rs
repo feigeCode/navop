@@ -1,7 +1,8 @@
 //! Shared logic for rendering and transforming chat HTML previews.
 
 use std::collections::BTreeMap;
-use std::path::{Component, PathBuf};
+use std::io;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::{OnceLock, RwLock};
 
@@ -9,10 +10,11 @@ use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 const DOCTYPE: &str = "<!doctype html>";
-const TOOLBAR_ACTION_IDS: [&str; 4] = [
+const TOOLBAR_ACTION_IDS: [&str; 5] = [
     "html-preview",
     "html-source",
     "html-copy",
+    "html-download",
     "html-open-window",
 ];
 const AUTO_CLOSE_TAGS: [&str; 9] = [
@@ -198,6 +200,23 @@ pub async fn transform_html_preview_document(
     Ok(document)
 }
 
+pub fn download_html_preview_document(document: &HtmlPreviewDocument) -> io::Result<PathBuf> {
+    let dir = dirs::download_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or(std::env::current_dir()?);
+    write_html_preview_document_to_dir(document, dir)
+}
+
+pub fn write_html_preview_document_to_dir(
+    document: &HtmlPreviewDocument,
+    dir: impl AsRef<Path>,
+) -> io::Result<PathBuf> {
+    std::fs::create_dir_all(dir.as_ref())?;
+    let path = available_html_preview_path(dir.as_ref());
+    std::fs::write(&path, document.render_html())?;
+    Ok(path)
+}
+
 pub fn resolve_extension_asset_url(url: &str) -> Option<PathBuf> {
     let (extension_id, path) = parse_extension_asset_url(url)?;
     if !is_safe_relative_asset_path(path) {
@@ -215,6 +234,20 @@ fn html_preview_transform_provider() -> Option<HtmlPreviewTransformProvider> {
         .read()
         .ok()?
         .clone()
+}
+
+fn available_html_preview_path(dir: &Path) -> PathBuf {
+    let first = dir.join("onetcli-html-preview.html");
+    if !first.exists() {
+        return first;
+    }
+    for index in 1.. {
+        let candidate = dir.join(format!("onetcli-html-preview-{index}.html"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
 }
 
 fn parse_extension_asset_url(url: &str) -> Option<(&str, &str)> {
