@@ -1,5 +1,5 @@
+use crate::types::ObjectViewColumn as Column;
 use anyhow::Result;
-use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -606,6 +606,11 @@ impl DatabasePlugin for ClickHousePlugin {
     fn capabilities(&self) -> DatabaseCapabilities {
         DatabaseUiCapabilities {
             supports_functions: true,
+            supports_users: true,
+            supports_user_create: true,
+            supports_user_edit: true,
+            supports_user_delete: true,
+            supports_user_privileges: true,
             supports_table_engine: true,
             table_engines: self.engines(),
             ..DatabaseUiCapabilities::default()
@@ -724,15 +729,13 @@ impl DatabasePlugin for ClickHousePlugin {
     }
 
     async fn list_databases_view(&self, connection: &dyn DbConnection) -> Result<ObjectView> {
-        use gpui::px;
-
         let databases = self.list_databases_detailed(connection).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("engine", "Engine").width(px(120.0)),
-            Column::new("tables", "Tables").width(px(80.0)).text_right(),
-            Column::new("comment", "Comment").width(px(300.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("engine", "Engine").width(120.0),
+            Column::new("tables", "Tables").width(80.0).text_right(),
+            Column::new("comment", "Comment").width(300.0),
         ];
 
         let rows: Vec<Vec<String>> = databases
@@ -852,14 +855,12 @@ impl DatabasePlugin for ClickHousePlugin {
         database: &str,
         _schema: Option<String>,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let tables = self.list_tables(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("engine", "Engine").width(px(150.0)),
-            Column::new("comment", "Comment").width(px(300.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("engine", "Engine").width(150.0),
+            Column::new("comment", "Comment").width(300.0),
         ];
 
         let rows: Vec<Vec<String>> = tables
@@ -951,18 +952,16 @@ impl DatabasePlugin for ClickHousePlugin {
         schema: Option<String>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let columns = self
             .list_columns(connection, database, schema, table)
             .await?;
 
         let column_defs = vec![
-            Column::new("name", "Name").width(px(150.0)),
-            Column::new("type", "Type").width(px(150.0)),
-            Column::new("nullable", "Nullable").width(px(80.0)),
-            Column::new("default", "Default").width(px(150.0)),
-            Column::new("comment", "Comment").width(px(200.0)),
+            Column::new("name", "Name").width(150.0),
+            Column::new("type", "Type").width(150.0),
+            Column::new("nullable", "Nullable").width(80.0),
+            Column::new("default", "Default").width(150.0),
+            Column::new("comment", "Comment").width(200.0),
         ];
 
         let rows: Vec<Vec<String>> = columns
@@ -1046,14 +1045,12 @@ impl DatabasePlugin for ClickHousePlugin {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let indexes = self.list_indexes(connection, database, None, table).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(150.0)),
-            Column::new("type", "Type").width(px(200.0)),
-            Column::new("columns", "Expression").width(px(300.0)),
+            Column::new("name", "Name").width(150.0),
+            Column::new("type", "Type").width(200.0),
+            Column::new("columns", "Expression").width(300.0),
         ];
 
         let rows: Vec<Vec<String>> = indexes
@@ -1118,13 +1115,11 @@ impl DatabasePlugin for ClickHousePlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let views = self.list_views(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("definition", "Definition").width(px(600.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("definition", "Definition").width(600.0),
         ];
 
         let rows: Vec<Vec<String>> = views
@@ -1187,13 +1182,11 @@ impl DatabasePlugin for ClickHousePlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let functions = self.list_functions(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("definition", "Definition").width(px(400.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("definition", "Definition").width(400.0),
         ];
 
         let rows: Vec<Vec<String>> = functions
@@ -1231,12 +1224,10 @@ impl DatabasePlugin for ClickHousePlugin {
         _connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         Ok(ObjectView {
             db_node_type: DbNodeType::Procedure,
             title: "Procedures".to_string(),
-            columns: vec![Column::new("name", "Name").width(px(200.0))],
+            columns: vec![Column::new("name", "Name").width(200.0)],
             rows: Vec::new(),
         })
     }
@@ -1256,12 +1247,10 @@ impl DatabasePlugin for ClickHousePlugin {
         _connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         Ok(ObjectView {
             db_node_type: DbNodeType::Trigger,
             title: "Triggers".to_string(),
-            columns: vec![Column::new("name", "Name").width(px(200.0))],
+            columns: vec![Column::new("name", "Name").width(200.0)],
             rows: Vec::new(),
         })
     }
@@ -1282,12 +1271,10 @@ impl DatabasePlugin for ClickHousePlugin {
         _connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         Ok(ObjectView {
             db_node_type: DbNodeType::Sequence,
             title: "Sequences".to_string(),
-            columns: vec![Column::new("name", "Name").width(px(200.0))],
+            columns: vec![Column::new("name", "Name").width(200.0)],
             rows: Vec::new(),
         })
     }
@@ -1327,6 +1314,14 @@ FROM system.users
 ORDER BY name;"#
                 .to_string(),
         )
+    }
+
+    fn user_list_columns(&self) -> Vec<Column> {
+        vec![
+            Column::localized("name", "DatabaseUser.columns.name").width(180.0),
+            Column::localized("storage", "DatabaseUser.columns.storage").width(160.0),
+            Column::localized("auth_type", "DatabaseUser.columns.auth_type").width(180.0),
+        ]
     }
 
     fn build_create_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
@@ -1757,6 +1752,11 @@ mod tests {
     fn test_capabilities() {
         let capabilities = create_plugin().capabilities();
         assert!(capabilities.supports_functions);
+        assert!(capabilities.supports_users);
+        assert!(capabilities.supports_user_create);
+        assert!(capabilities.supports_user_edit);
+        assert!(capabilities.supports_user_delete);
+        assert!(capabilities.supports_user_privileges);
         assert!(!capabilities.supports_procedures);
         assert!(!capabilities.supports_sequences);
         assert_eq!(capabilities.table_engines, clickhouse_engine_names());

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use std::sync::LazyLock;
 
+use crate::types::ObjectViewColumn as Column;
 use anyhow::Result;
 use async_trait::async_trait;
-use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 
 use crate::connection::{DbConnection, DbError};
@@ -819,6 +819,11 @@ impl DatabasePlugin for PostgresPlugin {
             supports_functions: true,
             supports_procedures: true,
             supports_triggers: true,
+            supports_users: true,
+            supports_user_create: true,
+            supports_user_edit: true,
+            supports_user_delete: true,
+            supports_user_privileges: true,
             supports_table_charset: true,
             supports_table_collation: true,
             supports_tablespace: true,
@@ -1063,17 +1068,15 @@ impl DatabasePlugin for PostgresPlugin {
     }
 
     async fn list_databases_view(&self, connection: &dyn DbConnection) -> Result<ObjectView> {
-        use gpui::px;
-
         let databases = self.list_databases_detailed(connection).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("charset", "Encoding").width(px(120.0)),
-            Column::new("collation", "Collation").width(px(180.0)),
-            Column::new("size", "Size").width(px(100.0)).text_right(),
-            Column::new("tables", "Tables").width(px(80.0)).text_right(),
-            Column::new("comment", "Comment").width(px(250.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("charset", "Encoding").width(120.0),
+            Column::new("collation", "Collation").width(180.0),
+            Column::new("size", "Size").width(100.0).text_right(),
+            Column::new("tables", "Tables").width(80.0).text_right(),
+            Column::new("comment", "Comment").width(250.0),
         ];
 
         let rows: Vec<Vec<String>> = databases
@@ -1191,8 +1194,6 @@ impl DatabasePlugin for PostgresPlugin {
         connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = "SELECT
                 n.nspname AS schema_name,
                 pg_catalog.pg_get_userbyid(n.nspowner) AS owner,
@@ -1210,10 +1211,10 @@ impl DatabasePlugin for PostgresPlugin {
 
         if let SqlResult::Query(query_result) = result {
             let columns = vec![
-                Column::new("name", "Name").width(px(180.0)),
-                Column::new("owner", "Owner").width(px(120.0)),
-                Column::new("tables", "Tables").width(px(80.0)).text_right(),
-                Column::new("description", "Description").width(px(300.0)),
+                Column::new("name", "Name").width(180.0),
+                Column::new("owner", "Owner").width(120.0),
+                Column::new("tables", "Tables").width(80.0).text_right(),
+                Column::new("description", "Description").width(300.0),
             ];
 
             let rows: Vec<Vec<String>> = query_result
@@ -1305,16 +1306,14 @@ impl DatabasePlugin for PostgresPlugin {
         database: &str,
         schema: Option<String>,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let tables = self.list_tables(connection, database, schema).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("owner", "Owner").width(px(100.0)),
-            Column::new("rows", "Rows").width(px(100.0)).text_right(),
-            Column::new("size", "Size").width(px(100.0)).text_right(),
-            Column::new("comment", "Comment").width(px(300.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("owner", "Owner").width(100.0),
+            Column::new("rows", "Rows").width(100.0).text_right(),
+            Column::new("size", "Size").width(100.0).text_right(),
+            Column::new("comment", "Comment").width(300.0),
         ];
 
         let rows: Vec<Vec<String>> = tables
@@ -1417,18 +1416,16 @@ impl DatabasePlugin for PostgresPlugin {
         schema: Option<String>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let columns_data = self
             .list_columns(connection, database, schema, table)
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("type", "Type").width(px(150.0)),
-            Column::new("nullable", "Nullable").width(px(80.0)),
-            Column::new("key", "Key").width(px(80.0)),
-            Column::new("default", "Default").width(px(200.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("type", "Type").width(150.0),
+            Column::new("nullable", "Nullable").width(80.0),
+            Column::new("key", "Key").width(80.0),
+            Column::new("default", "Default").width(200.0),
         ];
 
         let rows: Vec<Vec<String>> = columns_data
@@ -1519,17 +1516,15 @@ impl DatabasePlugin for PostgresPlugin {
         schema: Option<&str>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let indexes = self
             .list_indexes(connection, database, schema.map(|s| s.to_string()), table)
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("columns", "Columns").width(px(250.0)),
-            Column::new("unique", "Unique").width(px(80.0)),
-            Column::new("type", "Type").width(px(120.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("columns", "Columns").width(250.0),
+            Column::new("unique", "Unique").width(80.0),
+            Column::new("type", "Type").width(120.0),
         ];
 
         let rows: Vec<Vec<String>> = indexes
@@ -1637,13 +1632,11 @@ impl DatabasePlugin for PostgresPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let views = self.list_views(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("definition", "Definition").width(px(400.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("definition", "Definition").width(400.0),
         ];
 
         let rows: Vec<Vec<String>> = views
@@ -1700,13 +1693,11 @@ impl DatabasePlugin for PostgresPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let functions = self.list_functions(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("return_type", "Return Type").width(px(150.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("return_type", "Return Type").width(150.0),
         ];
 
         let rows: Vec<Vec<String>> = functions
@@ -1763,11 +1754,9 @@ impl DatabasePlugin for PostgresPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let procedures = self.list_procedures(connection, database).await?;
 
-        let columns = vec![Column::new("name", "Name").width(px(200.0))];
+        let columns = vec![Column::new("name", "Name").width(200.0)];
 
         let rows: Vec<Vec<String>> = procedures
             .iter()
@@ -1821,15 +1810,13 @@ impl DatabasePlugin for PostgresPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let triggers = self.list_triggers(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("table", "Table").width(px(150.0)),
-            Column::new("event", "Event").width(px(100.0)),
-            Column::new("timing", "Timing").width(px(100.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("table", "Table").width(150.0),
+            Column::new("event", "Event").width(100.0),
+            Column::new("timing", "Timing").width(100.0),
         ];
 
         let rows: Vec<Vec<String>> = triggers
@@ -1908,18 +1895,16 @@ impl DatabasePlugin for PostgresPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sequences = self.list_sequences(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("start", "Start").width(px(100.0)).text_right(),
+            Column::new("name", "Name").width(180.0),
+            Column::new("start", "Start").width(100.0).text_right(),
             Column::new("increment", "Increment")
-                .width(px(100.0))
+                .width(100.0)
                 .text_right(),
-            Column::new("min", "Min").width(px(120.0)).text_right(),
-            Column::new("max", "Max").width(px(120.0)).text_right(),
+            Column::new("min", "Min").width(120.0).text_right(),
+            Column::new("max", "Max").width(120.0).text_right(),
         ];
 
         let rows: Vec<Vec<String>> = sequences
@@ -1985,11 +1970,25 @@ impl DatabasePlugin for PostgresPlugin {
   rolcreatedb,
   rolcreaterole,
   rolreplication,
+  rolbypassrls,
   rolvaliduntil
 FROM pg_catalog.pg_roles
 ORDER BY rolname;"#
                 .to_string(),
         )
+    }
+
+    fn user_list_columns(&self) -> Vec<Column> {
+        vec![
+            Column::localized("rolname", "DatabaseUser.columns.role_name").width(180.0),
+            Column::localized("rolcanlogin", "DatabaseUser.columns.can_login").width(120.0),
+            Column::localized("rolsuper", "DatabaseUser.columns.superuser").width(120.0),
+            Column::localized("rolcreatedb", "DatabaseUser.columns.create_database").width(140.0),
+            Column::localized("rolcreaterole", "DatabaseUser.columns.create_role").width(130.0),
+            Column::localized("rolreplication", "DatabaseUser.columns.replication").width(130.0),
+            Column::localized("rolbypassrls", "DatabaseUser.columns.bypass_rls").width(130.0),
+            Column::localized("rolvaliduntil", "DatabaseUser.columns.valid_until").width(180.0),
+        ]
     }
 
     fn build_create_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
@@ -2517,6 +2516,17 @@ mod tests {
     fn test_capabilities_support_sequences() {
         let plugin = create_plugin();
         assert!(plugin.capabilities().supports_sequences);
+    }
+
+    #[test]
+    fn test_capabilities_support_users() {
+        let capabilities = create_plugin().capabilities();
+
+        assert!(capabilities.supports_users);
+        assert!(capabilities.supports_user_create);
+        assert!(capabilities.supports_user_edit);
+        assert!(capabilities.supports_user_delete);
+        assert!(capabilities.supports_user_privileges);
     }
 
     #[test]

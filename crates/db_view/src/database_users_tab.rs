@@ -1,9 +1,13 @@
+use crate::database_table_columns::{
+    render_table_column_resize_handle, resize_table_column, table_columns_width,
+    ui_columns_from_object_columns,
+};
 use crate::database_users_list::users_list;
 use crate::database_users_toolbar::{DatabaseUsersToolbarAction, render_users_toolbar};
 use crate::database_view_plugin::create_user_editor_view_for;
 use db::plugin::DatabaseUserOperationRequest;
 use db::plugin_manifest::DatabaseFormKind;
-use db::{ExecOptions, GlobalDbState, SqlResult};
+use db::{ExecOptions, GlobalDbState, SqlResult, types::ObjectView};
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, WeakEntity,
@@ -11,28 +15,23 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, WindowExt, dialog::DialogButtonProps,
-    notification::Notification, scroll::ScrollableElement as _, v_flex,
+    notification::Notification, scroll::ScrollableElement as _, table::Column, v_flex,
 };
 use one_core::{
     storage::DbConnectionConfig,
     tab_container::{TabContent, TabContentEvent},
 };
+use rust_i18n::t;
 use std::collections::HashMap;
 
 const USER_COLUMN_WIDTH_PX: f32 = 180.0;
 const USER_ROW_HEIGHT_PX: f32 = 32.0;
 
-#[derive(Clone)]
-struct UserColumn {
-    name: SharedString,
-    width: gpui::Pixels,
-}
-
 pub struct DatabaseUsersTab {
     config: DbConnectionConfig,
     focus_handle: FocusHandle,
-    columns: Vec<UserColumn>,
-    rows: Vec<Vec<Option<String>>>,
+    columns: Vec<Column>,
+    rows: Vec<Vec<String>>,
     selected_row: Option<usize>,
     loading: bool,
     error: Option<String>,
@@ -60,29 +59,10 @@ impl DatabaseUsersTab {
 
         let config = self.config.clone();
         cx.spawn(async move |entity: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let sql = cx.update(|cx| {
-                let global_state = cx.global::<GlobalDbState>().clone();
-                global_state
-                    .get_plugin(&config.database_type)
-                    .map_err(|error| error.to_string())
-                    .map(|plugin| plugin.build_list_users_sql(config.database.as_deref()))
-            });
-            let sql = match sql {
-                Ok(Some(sql)) => sql,
-                Ok(None) => {
-                    update_error(entity, cx, "当前数据库类型暂不支持用户列表查询。").await;
-                    return;
-                }
-                Err(error) => {
-                    update_error(entity, cx, &error).await;
-                    return;
-                }
-            };
-
-            let result = execute_user_query(cx, &config, sql).await;
+            let result = load_user_view(cx, &config).await;
             entity
                 .update(cx, |this, cx| {
-                    this.apply_query_result(result);
+                    this.apply_view_result(result);
                     cx.notify();
                 })
                 .ok();
@@ -90,16 +70,14 @@ impl DatabaseUsersTab {
         .detach();
     }
 
-    fn apply_query_result(&mut self, result: Result<SqlResult, String>) {
+    fn apply_view_result(&mut self, result: Result<ObjectView, String>) {
         self.loading = false;
         match result {
-            Ok(SqlResult::Query(query)) => {
-                self.columns = columns_from_names(query.columns);
-                self.rows = query.rows;
+            Ok(view) => {
+                self.columns = ui_columns_from_object_columns(&view.columns);
+                self.rows = view.rows;
                 self.error = None;
             }
-            Ok(SqlResult::Error(error)) => self.error = Some(error.message),
-            Ok(SqlResult::Exec(_)) => self.error = Some("用户查询没有返回结果集。".to_string()),
             Err(error) => self.error = Some(error),
         }
     }
@@ -108,7 +86,7 @@ impl DatabaseUsersTab {
         let capabilities = cx
             .global::<GlobalDbState>()
             .get_plugin(&self.config.database_type)
-            .map(|plugin| plugin.capabilities())
+            .map(|plugin| plugin.ui_manifest().capabilities)
             .unwrap_or_default();
         render_users_toolbar(self.config.name.clone(), capabilities, window, cx)
     }
@@ -126,19 +104,19 @@ impl DatabaseUsersTab {
             }
             DatabaseUsersToolbarAction::Edit => self.open_selected_user_editor(
                 DatabaseFormKind::EditUser,
-                "请先选择要编辑的用户。",
+                t!("DatabaseUsers.select_edit_user").to_string(),
                 window,
                 cx,
             ),
             DatabaseUsersToolbarAction::Delete => self.open_selected_user_editor(
                 DatabaseFormKind::DeleteUser,
-                "请先选择要删除的用户。",
+                t!("DatabaseUsers.select_delete_user").to_string(),
                 window,
                 cx,
             ),
             DatabaseUsersToolbarAction::Privileges => self.open_selected_user_editor(
                 DatabaseFormKind::UserPrivileges,
-                "请先选择要授权的用户。",
+                t!("DatabaseUsers.select_privilege_user").to_string(),
                 window,
                 cx,
             ),
@@ -148,7 +126,7 @@ impl DatabaseUsersTab {
     fn open_selected_user_editor(
         &self,
         operation: DatabaseFormKind,
-        empty_message: &str,
+        empty_message: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -173,7 +151,10 @@ impl DatabaseUsersTab {
             window,
             cx,
         ) else {
-            window.push_notification(Notification::info("当前数据库类型暂不支持该用户操作。"), cx);
+            window.push_notification(
+                Notification::info(t!("DatabaseUsers.unsupported_operation").to_string()),
+                cx,
+            );
             return;
         };
 
@@ -190,13 +171,18 @@ impl DatabaseUsersTab {
                 .overlay(false)
                 .width(px(700.0))
                 .child(editor.clone())
-                .button_props(DialogButtonProps::default().ok_text("执行".to_string()))
+                .button_props(
+                    DialogButtonProps::default().ok_text(t!("DatabaseUsers.execute").to_string()),
+                )
                 .footer(|ok, cancel, window, cx| vec![cancel(window, cx), ok(window, cx)])
                 .on_ok(move |_, _window, cx| {
                     let sql = editor_ok.read(cx).get_sql(cx);
                     if sql.trim().is_empty() || sql.trim_start().starts_with("--") {
                         editor_ok.update(cx, |editor, cx| {
-                            editor.set_save_error("没有可执行的用户操作 SQL。".to_string(), cx);
+                            editor.set_save_error(
+                                t!("DatabaseUsers.empty_operation_sql").to_string(),
+                                cx,
+                            );
                         });
                         return false;
                     }
@@ -206,16 +192,18 @@ impl DatabaseUsersTab {
         });
     }
 
-    fn render_header(&self, cx: &App) -> AnyElement {
+    fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
         self.columns
             .iter()
+            .enumerate()
             .fold(
                 h_row(cx.theme().table_head)
                     .border_b_1()
                     .border_color(cx.theme().border),
-                |row, column| {
+                |row, (col_ix, column)| {
                     row.child(
                         div()
+                            .relative()
                             .w(column.width)
                             .h_full()
                             .px_2()
@@ -223,7 +211,21 @@ impl DatabaseUsersTab {
                             .text_color(cx.theme().table_head_foreground)
                             .overflow_hidden()
                             .text_ellipsis()
-                            .child(column.name.clone()),
+                            .whitespace_nowrap()
+                            .child(column.name.clone())
+                            .child(render_table_column_resize_handle(
+                                "database-user-column-resize",
+                                "database-user-column-resize",
+                                col_ix,
+                                column,
+                                cx,
+                                |this: &Self, col_ix| {
+                                    this.columns.get(col_ix).map(|column| column.width)
+                                },
+                                |this: &mut Self, col_ix, width| {
+                                    resize_table_column(&mut this.columns, col_ix, width);
+                                },
+                            )),
                     )
                 },
             )
@@ -236,10 +238,7 @@ impl DatabaseUsersTab {
             .iter()
             .enumerate()
             .fold(h_row(cx.theme().background), |row, (col_ix, column)| {
-                let value = values
-                    .get(col_ix)
-                    .and_then(Clone::clone)
-                    .unwrap_or_default();
+                let value = values.get(col_ix).cloned().unwrap_or_default();
                 row.child(
                     div()
                         .w(column.width)
@@ -248,6 +247,7 @@ impl DatabaseUsersTab {
                         .text_sm()
                         .overflow_hidden()
                         .text_ellipsis()
+                        .whitespace_nowrap()
                         .child(value),
                 )
             })
@@ -274,29 +274,30 @@ impl DatabaseUsersTab {
         })
     }
 
-    fn column_value(&self, row: &[Option<String>], names: &[&str]) -> Option<String> {
+    fn column_value(&self, row: &[String], names: &[&str]) -> Option<String> {
         self.columns
             .iter()
             .position(|column| {
-                let current = column.name.as_ref().to_ascii_lowercase();
-                names.iter().any(|name| current == *name)
+                let key = column.key.as_ref().to_ascii_lowercase();
+                let label = column.name.as_ref().to_ascii_lowercase();
+                names.iter().any(|name| key == *name || label == *name)
             })
-            .and_then(|index| row.get(index).and_then(Clone::clone))
+            .and_then(|index| row.get(index).cloned())
             .filter(|value| !value.trim().is_empty())
     }
 
     fn table_width(&self) -> gpui::Pixels {
-        px(self.columns.len().max(1) as f32 * USER_COLUMN_WIDTH_PX)
+        table_columns_width(&self.columns)
     }
 }
 
-fn user_operation_title(operation: DatabaseFormKind) -> &'static str {
+fn user_operation_title(operation: DatabaseFormKind) -> String {
     match operation {
-        DatabaseFormKind::CreateUser => "新增用户",
-        DatabaseFormKind::EditUser => "编辑用户",
-        DatabaseFormKind::DeleteUser => "删除用户",
-        DatabaseFormKind::UserPrivileges => "用户权限",
-        _ => "用户操作",
+        DatabaseFormKind::CreateUser => t!("DatabaseUsers.create_title").to_string(),
+        DatabaseFormKind::EditUser => t!("DatabaseUsers.edit_title").to_string(),
+        DatabaseFormKind::DeleteUser => t!("DatabaseUsers.delete_title").to_string(),
+        DatabaseFormKind::UserPrivileges => t!("DatabaseUsers.privileges_title").to_string(),
+        _ => t!("DatabaseUsers.operation_title").to_string(),
     }
 }
 
@@ -346,7 +347,8 @@ async fn apply_user_operation_result(
             let _ = cx.update_window(window_id, |_entity, window, cx| {
                 window.close_dialog(cx);
                 window.push_notification(
-                    Notification::success("用户操作已执行。").autohide(true),
+                    Notification::success(t!("DatabaseUsers.operation_success").to_string())
+                        .autohide(true),
                     cx,
                 );
                 tab.update(cx, |this, cx| this.reload(cx));
@@ -361,56 +363,44 @@ fn show_user_operation_error(
     cx: &mut AsyncApp,
 ) {
     let _ = editor.update(cx, |editor, cx| {
-        editor.set_save_error(format!("用户操作失败: {error}"), cx);
+        editor.set_save_error(
+            t!("DatabaseUsers.operation_failed", error = error).to_string(),
+            cx,
+        );
     });
 }
 
-async fn execute_user_query(
+async fn load_user_view(
     cx: &mut AsyncApp,
     config: &DbConnectionConfig,
-    sql: String,
-) -> Result<SqlResult, String> {
+) -> Result<ObjectView, String> {
     let global_state = cx.update(|cx| cx.global::<GlobalDbState>().clone());
     global_state
-        .execute_single(
-            cx,
-            config.id.clone(),
-            sql,
-            config.database.clone(),
-            Some(ExecOptions::default()),
-        )
+        .list_users_view(cx, config.id.clone(), config.database.clone())
         .await
         .map_err(|error| error.to_string())
 }
 
-async fn update_error(entity: WeakEntity<DatabaseUsersTab>, cx: &mut AsyncApp, message: &str) {
-    let message = message.to_string();
-    entity
-        .update(cx, |this, cx| {
-            this.loading = false;
-            this.error = Some(message);
-            cx.notify();
-        })
-        .ok();
-}
-
-fn default_columns() -> Vec<UserColumn> {
-    columns_from_names(vec![
-        "名称".to_string(),
-        "用户".to_string(),
-        "主机".to_string(),
-        "插件".to_string(),
+fn default_columns() -> Vec<Column> {
+    columns_from_pairs(vec![
+        ("user", translate_db_label("DatabaseUser.columns.user")),
+        ("host", translate_db_label("DatabaseUser.columns.host")),
+        (
+            "authentication_plugin",
+            translate_db_label("DatabaseUser.columns.authentication_plugin"),
+        ),
     ])
 }
 
-fn columns_from_names(names: Vec<String>) -> Vec<UserColumn> {
-    names
+fn columns_from_pairs(columns: Vec<(&'static str, String)>) -> Vec<Column> {
+    columns
         .into_iter()
-        .map(|name| UserColumn {
-            name: name.into(),
-            width: px(USER_COLUMN_WIDTH_PX),
-        })
+        .map(|(key, name)| Column::new(key, name).width(px(USER_COLUMN_WIDTH_PX)))
         .collect()
+}
+
+fn translate_db_label(key: &str) -> String {
+    db::translate_or_raw_for_locale(rust_i18n::locale().as_ref(), key)
 }
 
 fn h_row(bg: gpui::Hsla) -> gpui::Div {
@@ -435,7 +425,7 @@ impl Render for DatabaseUsersTab {
                         .w(table_width)
                         .child(self.render_header(cx))
                         .when(self.loading, |this| {
-                            this.child(div().p_3().child("正在加载用户..."))
+                            this.child(div().p_3().child(t!("DatabaseUsers.loading").to_string()))
                         })
                         .when_some(self.error.clone(), |this, error| {
                             this.child(div().p_3().text_color(cx.theme().danger).child(error))
@@ -447,7 +437,7 @@ impl Render for DatabaseUsersTab {
                                     div()
                                         .p_3()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child("暂无用户"),
+                                        .child(t!("DatabaseUsers.empty").to_string()),
                                 )
                             },
                         )
@@ -471,7 +461,7 @@ impl TabContent for DatabaseUsersTab {
     }
 
     fn title(&self, _cx: &App) -> SharedString {
-        "用户".into()
+        t!("DatabaseUsers.title").to_string().into()
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {

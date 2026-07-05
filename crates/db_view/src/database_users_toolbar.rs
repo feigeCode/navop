@@ -2,6 +2,7 @@ use crate::database_users_tab::DatabaseUsersTab;
 use db::plugin_manifest::DatabaseCapabilities;
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, Window, div};
 use gpui_component::{ActiveTheme, IconName, Sizable, Size, button::Button};
+use rust_i18n::t;
 
 #[derive(Clone, Copy)]
 pub(super) enum DatabaseUsersToolbarAction {
@@ -23,7 +24,7 @@ pub(super) fn render_users_toolbar(
         actions.push((
             "users-add",
             IconName::Plus,
-            "新增",
+            t!("DatabaseUsers.toolbar_add").to_string(),
             DatabaseUsersToolbarAction::Add,
         ));
     }
@@ -31,7 +32,7 @@ pub(super) fn render_users_toolbar(
         actions.push((
             "users-edit",
             IconName::Edit,
-            "编辑",
+            t!("DatabaseUsers.toolbar_edit").to_string(),
             DatabaseUsersToolbarAction::Edit,
         ));
     }
@@ -39,7 +40,7 @@ pub(super) fn render_users_toolbar(
         actions.push((
             "users-delete",
             IconName::Remove,
-            "删除",
+            t!("DatabaseUsers.toolbar_delete").to_string(),
             DatabaseUsersToolbarAction::Delete,
         ));
     }
@@ -47,14 +48,14 @@ pub(super) fn render_users_toolbar(
         actions.push((
             "users-lock",
             IconName::GoldKey,
-            "权限",
+            t!("DatabaseUsers.toolbar_privileges").to_string(),
             DatabaseUsersToolbarAction::Privileges,
         ));
     }
     actions.push((
         "users-refresh",
         IconName::Refresh,
-        "刷新",
+        t!("DatabaseUsers.toolbar_refresh").to_string(),
         DatabaseUsersToolbarAction::Refresh,
     ));
 
@@ -84,7 +85,7 @@ fn toolbar_base() -> gpui::Div {
 fn toolbar_button(
     id: &'static str,
     icon: IconName,
-    label: &'static str,
+    label: String,
     action: DatabaseUsersToolbarAction,
     window: &mut Window,
     cx: &mut Context<DatabaseUsersTab>,

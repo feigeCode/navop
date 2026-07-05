@@ -13,7 +13,18 @@ use std::collections::HashMap;
 use crate::database_view_plugin::{ColumnEditorCapabilities, TableDesignerCapabilities};
 
 pub(crate) fn translate(key: &str) -> String {
-    crate::_rust_i18n_translate(locale().as_ref(), key).into_owned()
+    translate_manifest_text_for_locale(locale().as_ref(), key)
+}
+
+fn translate_manifest_text_for_locale(locale: &str, key_or_text: &str) -> String {
+    let translated = crate::_rust_i18n_translate(locale, key_or_text).into_owned();
+    let missing_with_locale = format!("{locale}.{key_or_text}");
+
+    if translated != key_or_text && translated != missing_with_locale {
+        return translated;
+    }
+
+    db::translate_or_raw_for_locale(locale, key_or_text)
 }
 
 fn translate_connection_form_text(key_or_text: &str) -> String {
@@ -137,10 +148,13 @@ pub(crate) fn resolve_field_options(
     field.options.clone()
 }
 
-pub(crate) fn to_select_items(options: Vec<FormSelectOption>) -> Vec<FormSelectItem> {
+pub(crate) fn to_select_items(
+    options: Vec<FormSelectOption>,
+    text_resolver: &dyn Fn(&str) -> String,
+) -> Vec<FormSelectItem> {
     options
         .into_iter()
-        .map(|option| FormSelectItem::new(option.value, translate(&option.label_i18n_key)))
+        .map(|option| FormSelectItem::new(option.value, text_resolver(&option.label_i18n_key)))
         .collect()
 }
 
@@ -203,6 +217,32 @@ mod tests {
     use db::plugin_manifest::{DatabaseFormTab, FormValueCondition, FormVisibilityRule};
     use serde_json::json;
     use std::path::PathBuf;
+
+    #[test]
+    fn manifest_translation_falls_back_to_db_locale() {
+        assert_eq!(
+            "名称",
+            translate_manifest_text_for_locale("zh-CN", "DatabaseUser.name")
+        );
+        assert_eq!(
+            "28800",
+            translate_manifest_text_for_locale("zh-CN", "28800")
+        );
+    }
+
+    #[test]
+    fn select_items_use_supplied_text_resolver() {
+        let items = to_select_items(
+            vec![FormSelectOption {
+                value: "SELECT".into(),
+                label_i18n_key: "DatabaseUser.privilege_select".into(),
+            }],
+            &|key| format!("translated:{key}"),
+        );
+
+        assert_eq!("SELECT", items[0].value);
+        assert_eq!("translated:DatabaseUser.privilege_select", items[0].label);
+    }
 
     #[test]
     fn connection_form_translation_keeps_literal_placeholder() {

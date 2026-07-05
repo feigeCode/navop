@@ -36,7 +36,7 @@ pub(super) enum DatabaseToolbarTone {
 #[derive(Clone)]
 pub(super) struct DatabaseToolbarItem {
     pub id: &'static str,
-    pub label: &'static str,
+    pub label_i18n_key: &'static str,
     pub icon: IconName,
     pub action: DatabaseToolbarAction,
     pub tone: DatabaseToolbarTone,
@@ -46,70 +46,70 @@ pub(super) fn database_toolbar_items() -> Vec<DatabaseToolbarItem> {
     vec![
         toolbar_item(
             "db-toolbar-show",
-            "显示",
+            "DatabaseToolbar.show_objects",
             IconName::Eye,
             DatabaseToolbarAction::ShowObjects,
             DatabaseToolbarTone::Primary,
         ),
         toolbar_item(
             "db-toolbar-query",
-            "新建查询",
+            "DatabaseToolbar.create_query",
             IconName::Query,
             DatabaseToolbarAction::CreateQuery,
             DatabaseToolbarTone::Info,
         ),
         toolbar_item(
             "db-toolbar-users",
-            "用户",
+            "DatabaseToolbar.users",
             IconName::User,
             DatabaseToolbarAction::Users,
             DatabaseToolbarTone::Warning,
         ),
         toolbar_item(
             "db-toolbar-schema-compare",
-            "比较结构",
+            "DatabaseToolbar.compare_schema",
             IconName::SchemaCompare,
             DatabaseToolbarAction::CompareSchema,
             DatabaseToolbarTone::Primary,
         ),
         toolbar_item(
             "db-toolbar-data-compare",
-            "比较数据",
+            "DatabaseToolbar.compare_data",
             IconName::Sync,
             DatabaseToolbarAction::CompareData,
             DatabaseToolbarTone::Success,
         ),
         toolbar_item(
             "db-toolbar-data-generator",
-            "数据生成",
+            "DatabaseToolbar.data_generator",
             IconName::TableDesignTool,
             DatabaseToolbarAction::DataGenerator,
             DatabaseToolbarTone::Warning,
         ),
         toolbar_item(
             "db-toolbar-backup",
-            "备份",
+            "DatabaseToolbar.backup",
             IconName::Export,
             DatabaseToolbarAction::Backup,
             DatabaseToolbarTone::Primary,
         ),
         toolbar_item(
             "db-toolbar-automation",
-            "自动运行",
+            "DatabaseToolbar.automation",
             IconName::Play,
             DatabaseToolbarAction::Automation,
             DatabaseToolbarTone::Success,
         ),
         toolbar_item(
             "db-toolbar-model",
-            "模型",
+            "DatabaseToolbar.model",
             IconName::DataModel,
             DatabaseToolbarAction::Model,
             DatabaseToolbarTone::Info,
         ),
         toolbar_item(
             "db-toolbar-bi",
-            "BI",
+            "DatabaseToolbar.bi",
             IconName::ChartPie,
             DatabaseToolbarAction::Bi,
             DatabaseToolbarTone::Primary,
@@ -119,14 +119,14 @@ pub(super) fn database_toolbar_items() -> Vec<DatabaseToolbarItem> {
 
 fn toolbar_item(
     id: &'static str,
-    label: &'static str,
+    label_i18n_key: &'static str,
     icon: IconName,
     action: DatabaseToolbarAction,
     tone: DatabaseToolbarTone,
 ) -> DatabaseToolbarItem {
     DatabaseToolbarItem {
         id,
-        label,
+        label_i18n_key,
         icon,
         action,
         tone,
@@ -155,7 +155,7 @@ pub(super) fn toolbar_item_icon(icon: IconName, color: Hsla) -> AnyElement {
         .into_any_element()
 }
 
-pub(super) fn toolbar_item_label(label: &'static str, cx: &App) -> AnyElement {
+pub(super) fn toolbar_item_label(label: String, cx: &App) -> AnyElement {
     div()
         .w_full()
         .text_center()

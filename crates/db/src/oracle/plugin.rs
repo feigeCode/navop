@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use std::sync::LazyLock;
 
+use crate::types::ObjectViewColumn as Column;
 use anyhow::Result;
 use chrono::{DateTime, FixedOffset};
-use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use rust_i18n::t;
 
@@ -987,6 +987,11 @@ impl DatabasePlugin for OraclePlugin {
             supports_functions: true,
             supports_procedures: true,
             supports_triggers: true,
+            supports_users: true,
+            supports_user_create: true,
+            supports_user_edit: true,
+            supports_user_delete: true,
+            supports_user_privileges: true,
             supports_tablespace: true,
             ..DatabaseUiCapabilities::default()
         }
@@ -1281,8 +1286,6 @@ impl DatabasePlugin for OraclePlugin {
         connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         // 先尝试高权限视图，再逐步降级到低权限可用视图，避免普通账号 ORA-00942。
         let schema_queries = [
             (
@@ -1376,11 +1379,11 @@ impl DatabasePlugin for OraclePlugin {
         }
 
         let columns = vec![
-            Column::new("name", "Schema").width(px(180.0)),
-            Column::new("created", "Created").width(px(180.0)),
-            Column::new("tablespace", "Tablespace").width(px(150.0)),
-            Column::new("temp_tablespace", "Temp Tablespace").width(px(150.0)),
-            Column::new("status", "Status").width(px(100.0)),
+            Column::new("name", "Schema").width(180.0),
+            Column::new("created", "Created").width(180.0),
+            Column::new("tablespace", "Tablespace").width(150.0),
+            Column::new("temp_tablespace", "Temp Tablespace").width(150.0),
+            Column::new("status", "Status").width(100.0),
         ];
 
         Ok(ObjectView {
@@ -1449,7 +1452,6 @@ impl DatabasePlugin for OraclePlugin {
         _database: &str,
         schema: Option<String>,
     ) -> Result<ObjectView> {
-        use gpui::px;
         if let Some(schema) = schema {
             let sql = format!(
                 r#"
@@ -1495,10 +1497,10 @@ impl DatabasePlugin for OraclePlugin {
             };
 
             let columns = vec![
-                Column::new("name", "Name").width(px(200.0)),
-                Column::new("comment", "Comment").width(px(300.0)),
-                Column::new("rows", "Rows").width(px(100.0)),
-                Column::new("analyzed", "Last Analyzed").width(px(180.0)),
+                Column::new("name", "Name").width(200.0),
+                Column::new("comment", "Comment").width(300.0),
+                Column::new("rows", "Rows").width(100.0),
+                Column::new("analyzed", "Last Analyzed").width(180.0),
             ];
 
             return Ok(ObjectView {
@@ -1600,8 +1602,6 @@ impl DatabasePlugin for OraclePlugin {
         schema: Option<String>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let columns_data = self
             .list_columns(connection, database, schema, table)
             .await?;
@@ -1621,12 +1621,12 @@ impl DatabasePlugin for OraclePlugin {
             .collect();
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("type", "Type").width(px(150.0)),
-            Column::new("nullable", "Nullable").width(px(60.0)),
-            Column::new("pk", "PK").width(px(50.0)),
-            Column::new("default", "Default").width(px(120.0)),
-            Column::new("comment", "Comment").width(px(250.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("type", "Type").width(150.0),
+            Column::new("nullable", "Nullable").width(60.0),
+            Column::new("pk", "PK").width(50.0),
+            Column::new("default", "Default").width(120.0),
+            Column::new("comment", "Comment").width(250.0),
         ];
 
         Ok(ObjectView {
@@ -1711,8 +1711,6 @@ impl DatabasePlugin for OraclePlugin {
         schema: Option<&str>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let indexes = self
             .list_indexes(connection, database, schema.map(|s| s.to_string()), table)
             .await?;
@@ -1730,10 +1728,10 @@ impl DatabasePlugin for OraclePlugin {
             .collect();
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("columns", "Columns").width(px(250.0)),
-            Column::new("type", "Type").width(px(150.0)),
-            Column::new("unique", "Unique").width(px(80.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("columns", "Columns").width(250.0),
+            Column::new("type", "Type").width(150.0),
+            Column::new("unique", "Unique").width(80.0),
         ];
 
         Ok(ObjectView {
@@ -1790,8 +1788,6 @@ impl DatabasePlugin for OraclePlugin {
         connection: &dyn DbConnection,
         schema: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = format!(
             r#"
             SELECT
@@ -1828,8 +1824,8 @@ impl DatabasePlugin for OraclePlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(250.0)),
-            Column::new("comment", "Comment").width(px(400.0)),
+            Column::new("name", "Name").width(250.0),
+            Column::new("comment", "Comment").width(400.0),
         ];
 
         Ok(ObjectView {
@@ -1884,8 +1880,6 @@ impl DatabasePlugin for OraclePlugin {
         connection: &dyn DbConnection,
         schema: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = format!(
             r#"
             SELECT
@@ -1929,10 +1923,10 @@ impl DatabasePlugin for OraclePlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(250.0)),
-            Column::new("status", "Status").width(px(100.0)),
-            Column::new("created", "Created").width(px(180.0)),
-            Column::new("modified", "Modified").width(px(180.0)),
+            Column::new("name", "Name").width(250.0),
+            Column::new("status", "Status").width(100.0),
+            Column::new("created", "Created").width(180.0),
+            Column::new("modified", "Modified").width(180.0),
         ];
 
         Ok(ObjectView {
@@ -1986,8 +1980,6 @@ impl DatabasePlugin for OraclePlugin {
         connection: &dyn DbConnection,
         schema: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = format!(
             r#"
             SELECT
@@ -2031,10 +2023,10 @@ impl DatabasePlugin for OraclePlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(250.0)),
-            Column::new("status", "Status").width(px(100.0)),
-            Column::new("created", "Created").width(px(180.0)),
-            Column::new("modified", "Modified").width(px(180.0)),
+            Column::new("name", "Name").width(250.0),
+            Column::new("status", "Status").width(100.0),
+            Column::new("created", "Created").width(180.0),
+            Column::new("modified", "Modified").width(180.0),
         ];
 
         Ok(ObjectView {
@@ -2091,8 +2083,6 @@ impl DatabasePlugin for OraclePlugin {
         connection: &dyn DbConnection,
         schema: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = format!(
             r#"
             SELECT
@@ -2140,11 +2130,11 @@ impl DatabasePlugin for OraclePlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("table", "Table").width(px(150.0)),
-            Column::new("event", "Event").width(px(150.0)),
-            Column::new("type", "Type").width(px(150.0)),
-            Column::new("status", "Status").width(px(100.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("table", "Table").width(150.0),
+            Column::new("event", "Event").width(150.0),
+            Column::new("type", "Type").width(150.0),
+            Column::new("status", "Status").width(100.0),
         ];
 
         Ok(ObjectView {
@@ -2216,8 +2206,6 @@ impl DatabasePlugin for OraclePlugin {
         connection: &dyn DbConnection,
         schema: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = format!(
             r#"
             SELECT
@@ -2273,13 +2261,13 @@ impl DatabasePlugin for OraclePlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("min", "Min").width(px(100.0)),
-            Column::new("max", "Max").width(px(100.0)),
-            Column::new("increment", "Increment").width(px(100.0)),
-            Column::new("last", "Last Value").width(px(100.0)),
-            Column::new("cache", "Cache").width(px(80.0)),
-            Column::new("cycle", "Cycle").width(px(60.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("min", "Min").width(100.0),
+            Column::new("max", "Max").width(100.0),
+            Column::new("increment", "Increment").width(100.0),
+            Column::new("last", "Last Value").width(100.0),
+            Column::new("cache", "Cache").width(80.0),
+            Column::new("cycle", "Cycle").width(60.0),
         ];
 
         Ok(ObjectView {
@@ -2325,6 +2313,16 @@ FROM all_users
 ORDER BY username;"#
                 .to_string(),
         )
+    }
+
+    fn user_list_columns(&self) -> Vec<Column> {
+        vec![
+            Column::localized("username", "DatabaseUser.columns.username").width(180.0),
+            Column::localized("user_id", "DatabaseUser.columns.user_id")
+                .width(100.0)
+                .text_right(),
+            Column::localized("created", "DatabaseUser.columns.created_at").width(180.0),
+        ]
     }
 
     fn build_create_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
@@ -2821,6 +2819,17 @@ mod tests {
     fn test_capabilities_do_not_support_schema() {
         let plugin = create_plugin();
         assert!(!plugin.capabilities().supports_schema);
+    }
+
+    #[test]
+    fn test_capabilities_support_users() {
+        let capabilities = create_plugin().capabilities();
+
+        assert!(capabilities.supports_users);
+        assert!(capabilities.supports_user_create);
+        assert!(capabilities.supports_user_edit);
+        assert!(capabilities.supports_user_delete);
+        assert!(capabilities.supports_user_privileges);
     }
 
     #[test]

@@ -1,5 +1,4 @@
 use crate::QueryResult;
-use gpui_component::table::Column;
 use one_core::storage::DatabaseType;
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -467,11 +466,67 @@ pub struct AlterSequenceRequest {
     pub sequence: SequenceInfo,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ObjectViewColumnAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ObjectViewColumn {
+    pub key: String,
+    pub label: String,
+    pub width_px: f32,
+    pub align: ObjectViewColumnAlign,
+    pub resizable: bool,
+}
+
+impl ObjectViewColumn {
+    pub fn new(key: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            label: label.into(),
+            width_px: 100.0,
+            align: ObjectViewColumnAlign::Left,
+            resizable: true,
+        }
+    }
+
+    pub fn localized(key: impl Into<String>, label_i18n_key: &str) -> Self {
+        Self::new(
+            key,
+            crate::translate_or_raw_for_locale(rust_i18n::locale().as_ref(), label_i18n_key),
+        )
+    }
+
+    pub fn width(mut self, width_px: f32) -> Self {
+        self.width_px = width_px;
+        self
+    }
+
+    pub fn text_center(mut self) -> Self {
+        self.align = ObjectViewColumnAlign::Center;
+        self
+    }
+
+    pub fn text_right(mut self) -> Self {
+        self.align = ObjectViewColumnAlign::Right;
+        self
+    }
+
+    pub fn resizable(mut self, resizable: bool) -> Self {
+        self.resizable = resizable;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ObjectView {
     pub db_node_type: DbNodeType,
     pub title: String,
-    pub columns: Vec<Column>,
+    pub columns: Vec<ObjectViewColumn>,
     pub rows: Vec<Vec<String>>,
 }
 
@@ -1029,5 +1084,38 @@ impl ParsedColumnType {
     pub fn with_auto_increment(mut self, auto_increment: bool) -> Self {
         self.is_auto_increment = auto_increment;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_view_columns_are_serializable() {
+        let view = ObjectView {
+            db_node_type: DbNodeType::Table,
+            title: "Tables".to_string(),
+            columns: vec![
+                ObjectViewColumn::new("name", "Name").width(180.0),
+                ObjectViewColumn::new("rows", "Rows")
+                    .width(100.0)
+                    .text_right(),
+            ],
+            rows: vec![vec!["users".to_string(), "12".to_string()]],
+        };
+
+        let json = serde_json::to_string(&view).expect("ObjectView should serialize");
+        let restored: ObjectView =
+            serde_json::from_str(&json).expect("ObjectView should deserialize");
+
+        assert_eq!("Tables", restored.title);
+        assert_eq!("rows", restored.columns[1].key);
+        assert_eq!("Rows", restored.columns[1].label);
+        assert_eq!(ObjectViewColumnAlign::Right, restored.columns[1].align);
+        assert_eq!(
+            vec![vec!["users".to_string(), "12".to_string()]],
+            restored.rows
+        );
     }
 }

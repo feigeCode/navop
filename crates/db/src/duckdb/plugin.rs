@@ -1,6 +1,6 @@
+use crate::types::ObjectViewColumn as Column;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -919,13 +919,11 @@ impl DatabasePlugin for DuckDbPlugin {
         database: &str,
         schema: Option<String>,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let tables = self.list_tables(connection, database, schema).await?;
 
         let columns = vec![
-            Column::new("schema", "Schema").width(px(160.0)),
-            Column::new("name", "Name").width(px(220.0)),
+            Column::new("schema", "Schema").width(160.0),
+            Column::new("name", "Name").width(220.0),
         ];
 
         let rows: Vec<Vec<String>> = tables
@@ -1030,18 +1028,16 @@ impl DatabasePlugin for DuckDbPlugin {
         schema: Option<String>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let columns_data = self
             .list_columns(connection, database, schema, table)
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("type", "Type").width(px(160.0)),
-            Column::new("nullable", "Nullable").width(px(90.0)),
-            Column::new("primary", "Primary").width(px(90.0)),
-            Column::new("default", "Default").width(px(200.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("type", "Type").width(160.0),
+            Column::new("nullable", "Nullable").width(90.0),
+            Column::new("primary", "Primary").width(90.0),
+            Column::new("default", "Default").width(200.0),
         ];
 
         let rows: Vec<Vec<String>> = columns_data
@@ -1124,16 +1120,14 @@ impl DatabasePlugin for DuckDbPlugin {
         schema: Option<&str>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let indexes = self
             .list_indexes(connection, database, schema.map(str::to_string), table)
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("columns", "Columns").width(px(250.0)),
-            Column::new("unique", "Unique").width(px(80.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("columns", "Columns").width(250.0),
+            Column::new("unique", "Unique").width(80.0),
         ];
 
         let rows: Vec<Vec<String>> = indexes
@@ -1210,14 +1204,12 @@ impl DatabasePlugin for DuckDbPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let views = self.list_views(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("schema", "Schema").width(px(160.0)),
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("definition", "Definition").width(px(320.0)),
+            Column::new("schema", "Schema").width(160.0),
+            Column::new("name", "Name").width(180.0),
+            Column::new("definition", "Definition").width(320.0),
         ];
 
         let rows: Vec<Vec<String>> = views

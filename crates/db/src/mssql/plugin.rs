@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use crate::types::ObjectViewColumn as Column;
 use anyhow::Result;
-use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use regex::Regex;
 use tracing::info;
@@ -682,6 +682,11 @@ impl DatabasePlugin for MsSqlPlugin {
             supports_functions: true,
             supports_procedures: true,
             supports_triggers: true,
+            supports_users: true,
+            supports_user_create: true,
+            supports_user_edit: true,
+            supports_user_delete: true,
+            supports_user_privileges: true,
             supports_table_collation: true,
             ..DatabaseUiCapabilities::default()
         }
@@ -879,8 +884,6 @@ impl DatabasePlugin for MsSqlPlugin {
     }
 
     async fn list_databases_view(&self, connection: &dyn DbConnection) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = r#"
             SELECT
                 d.name,
@@ -925,11 +928,11 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("owner", "Owner").width(px(120.0)),
-            Column::new("created", "Created").width(px(180.0)),
-            Column::new("compat_level", "Compat Level").width(px(100.0)),
-            Column::new("collation", "Collation").width(px(200.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("owner", "Owner").width(120.0),
+            Column::new("created", "Created").width(180.0),
+            Column::new("compat_level", "Compat Level").width(100.0),
+            Column::new("collation", "Collation").width(200.0),
         ];
 
         Ok(ObjectView {
@@ -1035,8 +1038,6 @@ impl DatabasePlugin for MsSqlPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = format!(
             r#"
             SELECT
@@ -1063,9 +1064,9 @@ impl DatabasePlugin for MsSqlPlugin {
 
         if let SqlResult::Query(query_result) = result {
             let columns = vec![
-                Column::new("name", "Name").width(px(180.0)),
-                Column::new("owner", "Owner").width(px(120.0)),
-                Column::new("tables", "Tables").width(px(80.0)).text_right(),
+                Column::new("name", "Name").width(180.0),
+                Column::new("owner", "Owner").width(120.0),
+                Column::new("tables", "Tables").width(80.0).text_right(),
             ];
 
             let rows: Vec<Vec<String>> = query_result
@@ -1154,8 +1155,6 @@ impl DatabasePlugin for MsSqlPlugin {
         database: &str,
         schema: Option<String>,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let schema_filter = match &schema {
             Some(s) => format!("AND s.name = '{}'", s.replace("'", "''")),
             None => String::new(),
@@ -1209,10 +1208,10 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("schema", "Schema").width(px(100.0)),
-            Column::new("comment", "Comment").width(px(250.0)),
-            Column::new("created", "Created").width(px(150.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("schema", "Schema").width(100.0),
+            Column::new("comment", "Comment").width(250.0),
+            Column::new("created", "Created").width(150.0),
         ];
 
         Ok(ObjectView {
@@ -1312,8 +1311,6 @@ impl DatabasePlugin for MsSqlPlugin {
         schema: Option<String>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let columns_data = self
             .list_columns(connection, database, schema, table)
             .await?;
@@ -1332,11 +1329,11 @@ impl DatabasePlugin for MsSqlPlugin {
             .collect();
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("type", "Type").width(px(120.0)),
-            Column::new("nullable", "Null").width(px(60.0)),
-            Column::new("default", "Default").width(px(120.0)),
-            Column::new("comment", "Comment").width(px(250.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("type", "Type").width(120.0),
+            Column::new("nullable", "Null").width(60.0),
+            Column::new("default", "Default").width(120.0),
+            Column::new("comment", "Comment").width(250.0),
         ];
 
         Ok(ObjectView {
@@ -1419,8 +1416,6 @@ impl DatabasePlugin for MsSqlPlugin {
         schema: Option<&str>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let indexes = self
             .list_indexes(connection, database, schema.map(|s| s.to_string()), table)
             .await?;
@@ -1438,10 +1433,10 @@ impl DatabasePlugin for MsSqlPlugin {
             .collect();
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("columns", "Columns").width(px(250.0)),
-            Column::new("type", "Type").width(px(150.0)),
-            Column::new("unique", "Unique").width(px(80.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("columns", "Columns").width(250.0),
+            Column::new("type", "Type").width(150.0),
+            Column::new("unique", "Unique").width(80.0),
         ];
 
         Ok(ObjectView {
@@ -1507,8 +1502,6 @@ impl DatabasePlugin for MsSqlPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = format!(
             r#"
             SELECT
@@ -1556,10 +1549,10 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("schema", "Schema").width(px(100.0)),
-            Column::new("comment", "Comment").width(px(250.0)),
-            Column::new("created", "Created").width(px(150.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("schema", "Schema").width(100.0),
+            Column::new("comment", "Comment").width(250.0),
+            Column::new("created", "Created").width(150.0),
         ];
 
         Ok(ObjectView {
@@ -1628,8 +1621,6 @@ impl DatabasePlugin for MsSqlPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = format!(
             r#"
             SELECT
@@ -1681,10 +1672,10 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("schema", "Schema").width(px(100.0)),
-            Column::new("type", "Type").width(px(120.0)),
-            Column::new("created", "Created").width(px(150.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("schema", "Schema").width(100.0),
+            Column::new("type", "Type").width(120.0),
+            Column::new("created", "Created").width(150.0),
         ];
 
         Ok(ObjectView {
@@ -1746,8 +1737,6 @@ impl DatabasePlugin for MsSqlPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = format!(
             r#"
             SELECT
@@ -1791,10 +1780,10 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("schema", "Schema").width(px(100.0)),
-            Column::new("created", "Created").width(px(150.0)),
-            Column::new("modified", "Modified").width(px(150.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("schema", "Schema").width(100.0),
+            Column::new("created", "Created").width(150.0),
+            Column::new("modified", "Modified").width(150.0),
         ];
 
         Ok(ObjectView {
@@ -1850,8 +1839,6 @@ impl DatabasePlugin for MsSqlPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = format!(
             r#"
             SELECT
@@ -1892,9 +1879,9 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(250.0)),
-            Column::new("table", "Table").width(px(200.0)),
-            Column::new("status", "Status").width(px(100.0)),
+            Column::new("name", "Name").width(250.0),
+            Column::new("table", "Table").width(200.0),
+            Column::new("status", "Status").width(100.0),
         ];
 
         Ok(ObjectView {
@@ -1958,8 +1945,6 @@ impl DatabasePlugin for MsSqlPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let sql = format!(
             r#"
             SELECT
@@ -2006,11 +1991,11 @@ impl DatabasePlugin for MsSqlPlugin {
         };
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("type", "Type").width(px(100.0)),
-            Column::new("start", "Start").width(px(100.0)),
-            Column::new("increment", "Increment").width(px(100.0)),
-            Column::new("current", "Current").width(px(100.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("type", "Type").width(100.0),
+            Column::new("start", "Start").width(100.0),
+            Column::new("increment", "Increment").width(100.0),
+            Column::new("current", "Current").width(100.0),
         ];
 
         Ok(ObjectView {
@@ -2272,6 +2257,22 @@ WHERE type IN ('S', 'U', 'G', 'R')
 ORDER BY name;"#
                 .to_string(),
         )
+    }
+
+    fn user_list_columns(&self) -> Vec<Column> {
+        vec![
+            Column::localized("name", "DatabaseUser.columns.name").width(180.0),
+            Column::localized("type_desc", "DatabaseUser.columns.principal_type").width(180.0),
+            Column::localized(
+                "authentication_type_desc",
+                "DatabaseUser.columns.authentication_type",
+            )
+            .width(200.0),
+            Column::localized("default_schema_name", "DatabaseUser.columns.default_schema")
+                .width(160.0),
+            Column::localized("create_date", "DatabaseUser.columns.created_at").width(180.0),
+            Column::localized("modify_date", "DatabaseUser.columns.updated_at").width(180.0),
+        ]
     }
 
     fn build_create_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
@@ -2753,6 +2754,17 @@ mod tests {
     fn test_capabilities_support_sequences() {
         let plugin = create_plugin();
         assert!(plugin.capabilities().supports_sequences);
+    }
+
+    #[test]
+    fn test_capabilities_support_users() {
+        let capabilities = create_plugin().capabilities();
+
+        assert!(capabilities.supports_users);
+        assert!(capabilities.supports_user_create);
+        assert!(capabilities.supports_user_edit);
+        assert!(capabilities.supports_user_delete);
+        assert!(capabilities.supports_user_privileges);
     }
 
     #[test]

@@ -5,6 +5,7 @@ pub mod compare;
 pub mod connection_form_window;
 pub mod database_objects_tab;
 pub mod database_tab;
+mod database_table_columns;
 mod database_toolbar;
 mod database_users_list;
 mod database_users_tab;

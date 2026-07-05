@@ -335,7 +335,15 @@ impl ManifestDatabaseViewPlugin {
                     cx,
                 )
             });
-            UserEditorView::new(form, database_type, operation, window, cx)
+            let initial_request = form.read(cx).current_request(cx);
+            UserEditorView::new(
+                form,
+                database_type,
+                operation,
+                Some(initial_request),
+                window,
+                cx,
+            )
         }))
     }
 

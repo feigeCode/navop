@@ -114,7 +114,7 @@ impl GenericUserForm {
             .get_plugin(&self.database_type)
             .unwrap();
         let options = resolve_field_options(plugin.as_ref(), &field, &self.current_values(cx));
-        let items = to_select_items(options);
+        let items = to_select_items(options, self.text_resolver.as_ref());
         let selected = selected_index(&items, value);
         let select = cx.new(|cx| SelectState::new(items, selected, window, cx));
         let field_id = field.id.clone();
@@ -177,6 +177,10 @@ impl GenericUserForm {
             database: non_empty_value(&values, "database"),
             field_values: values,
         }
+    }
+
+    pub fn current_request(&self, cx: &App) -> DatabaseUserOperationRequest {
+        self.build_request(cx)
     }
 
     fn emit_form_changed(&mut self, cx: &mut Context<Self>) {

@@ -84,7 +84,7 @@ impl GenericDatabaseForm {
 
             if matches!(field.field_type, DatabaseFormFieldType::Select) {
                 let options = resolve_field_options(plugin.as_ref(), field, &initial_values);
-                let items = to_select_items(options.clone());
+                let items = to_select_items(options.clone(), text_resolver.as_ref());
                 let selected_index = items
                     .iter()
                     .position(|item| item.value == current_value)
@@ -182,7 +182,7 @@ impl GenericDatabaseForm {
 
             let options = resolve_field_options(plugin.as_ref(), &field, &state);
             let next_value = default_select_value(&field, &options);
-            let items = to_select_items(options);
+            let items = to_select_items(options, self.text_resolver.as_ref());
             let selected_index = items
                 .iter()
                 .position(|item| item.value == next_value)

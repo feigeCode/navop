@@ -591,6 +591,53 @@ pub trait DatabasePlugin: Send + Sync {
         None
     }
 
+    /// Columns used by the database users view. The order must match `build_list_users_sql`.
+    fn user_list_columns(&self) -> Vec<ObjectViewColumn> {
+        Vec::new()
+    }
+
+    /// List database users as a view model with localized column labels.
+    async fn list_users_view(
+        &self,
+        connection: &dyn DbConnection,
+        database: Option<&str>,
+    ) -> Result<ObjectView> {
+        let sql = self
+            .build_list_users_sql(database)
+            .ok_or_else(|| anyhow!("database users are not supported"))?;
+        let query = match connection.query(&sql).await? {
+            SqlResult::Query(query) => query,
+            SqlResult::Error(error) => return Err(anyhow!(error.message)),
+            SqlResult::Exec(_) => bail!("user listing did not return a result set"),
+        };
+        let columns = self.user_list_columns();
+        let columns = if columns.is_empty() {
+            query
+                .columns
+                .iter()
+                .map(|name| ObjectViewColumn::new(name.clone(), name.clone()))
+                .map(|column| column.width(180.0))
+                .collect()
+        } else {
+            columns
+        };
+        let rows = query
+            .rows
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|value| value.unwrap_or_default())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        Ok(ObjectView {
+            db_node_type: DbNodeType::Connection,
+            title: format!("{} user(s)", rows.len()),
+            columns,
+            rows,
+        })
+    }
+
     /// Build SQL for creating a database user.
     fn build_create_user_sql(&self, _request: &DatabaseUserOperationRequest) -> Option<String> {
         None

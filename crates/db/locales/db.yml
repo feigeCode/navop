@@ -86,6 +86,167 @@ DatabaseUser:
     en: Role
     zh-CN: 角色
     zh-HK: 角色
+  columns:
+    user:
+      en: User
+      zh-CN: 用户
+      zh-HK: 使用者
+    host:
+      en: Host
+      zh-CN: 主机
+      zh-HK: 主機
+    name:
+      en: Name
+      zh-CN: 名称
+      zh-HK: 名稱
+    username:
+      en: Username
+      zh-CN: 用户名
+      zh-HK: 使用者名稱
+    user_id:
+      en: User ID
+      zh-CN: 用户 ID
+      zh-HK: 使用者 ID
+    authentication_plugin:
+      en: Authentication Plugin
+      zh-CN: 认证插件
+      zh-HK: 認證外掛
+    account_locked:
+      en: Account Locked
+      zh-CN: 账号锁定
+      zh-HK: 帳號鎖定
+    password_expired:
+      en: Password Expired
+      zh-CN: 密码过期
+      zh-HK: 密碼過期
+    password_last_changed:
+      en: Password Last Changed
+      zh-CN: 密码最后修改
+      zh-HK: 密碼最後修改
+    password_lifetime:
+      en: Password Expiration Policy
+      zh-CN: 密码过期策略
+      zh-HK: 密碼過期策略
+    max_questions:
+      en: Max Queries
+      zh-CN: 最大查询
+      zh-HK: 最大查詢
+    max_updates:
+      en: Max Updates
+      zh-CN: 最大更新
+      zh-HK: 最大更新
+    max_connections:
+      en: Max Connections
+      zh-CN: 最大连接数
+      zh-HK: 最大連線數
+    max_user_connections:
+      en: Max User Connections
+      zh-CN: 最大用户连接数
+      zh-HK: 最大使用者連線數
+    ssl_type:
+      en: SSL Type
+      zh-CN: SSL 类型
+      zh-HK: SSL 類型
+    ssl_cipher:
+      en: SSL Cipher
+      zh-CN: SSL 密码套件
+      zh-HK: SSL 密碼套件
+    x509_issuer:
+      en: X509 Issuer
+      zh-CN: 发行者
+      zh-HK: 發行者
+    x509_subject:
+      en: X509 Subject
+      zh-CN: 主题
+      zh-HK: 主體
+    select_priv:
+      en: SELECT Privilege
+      zh-CN: SELECT 权限
+      zh-HK: SELECT 權限
+    insert_priv:
+      en: INSERT Privilege
+      zh-CN: INSERT 权限
+      zh-HK: INSERT 權限
+    update_priv:
+      en: UPDATE Privilege
+      zh-CN: UPDATE 权限
+      zh-HK: UPDATE 權限
+    delete_priv:
+      en: DELETE Privilege
+      zh-CN: DELETE 权限
+      zh-HK: DELETE 權限
+    create_priv:
+      en: CREATE Privilege
+      zh-CN: CREATE 权限
+      zh-HK: CREATE 權限
+    drop_priv:
+      en: DROP Privilege
+      zh-CN: DROP 权限
+      zh-HK: DROP 權限
+    grant_priv:
+      en: GRANT Privilege
+      zh-CN: GRANT 权限
+      zh-HK: GRANT 權限
+    role_name:
+      en: Role Name
+      zh-CN: 角色名
+      zh-HK: 角色名
+    can_login:
+      en: Can Login
+      zh-CN: 可登录
+      zh-HK: 可登入
+    superuser:
+      en: Superuser
+      zh-CN: 超级用户
+      zh-HK: 超級使用者
+    create_database:
+      en: Create Database
+      zh-CN: 创建数据库
+      zh-HK: 建立資料庫
+    create_role:
+      en: Create Role
+      zh-CN: 创建角色
+      zh-HK: 建立角色
+    replication:
+      en: Replication
+      zh-CN: 复制
+      zh-HK: 複寫
+    bypass_rls:
+      en: Bypass RLS
+      zh-CN: 绕过行级安全
+      zh-HK: 略過列級安全
+    valid_until:
+      en: Valid Until
+      zh-CN: 有效期至
+      zh-HK: 有效期至
+    principal_type:
+      en: Principal Type
+      zh-CN: 主体类型
+      zh-HK: 主體類型
+    authentication_type:
+      en: Authentication Type
+      zh-CN: 认证类型
+      zh-HK: 認證類型
+    default_schema:
+      en: Default Schema
+      zh-CN: 默认 Schema
+      zh-HK: 預設 Schema
+    created_at:
+      en: Created At
+      zh-CN: 创建时间
+      zh-HK: 建立時間
+    updated_at:
+      en: Updated At
+      zh-CN: 更新时间
+      zh-HK: 更新時間
+    storage:
+      en: Storage
+      zh-CN: 存储
+      zh-HK: 儲存
+    auth_type:
+      en: Auth Type
+      zh-CN: 认证类型
+      zh-HK: 認證類型
   privilege_select:
     en: SELECT
     zh-CN: SELECT

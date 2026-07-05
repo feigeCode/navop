@@ -1,6 +1,6 @@
+use crate::types::ObjectViewColumn as Column;
 use anyhow::Result;
 use async_trait::async_trait;
-use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -704,9 +704,7 @@ impl DatabasePlugin for SqlitePlugin {
     }
 
     async fn list_databases_view(&self, _connection: &dyn DbConnection) -> Result<ObjectView> {
-        use gpui::px;
-
-        let columns = vec![Column::new("name", "Name").width(px(180.0))];
+        let columns = vec![Column::new("name", "Name").width(180.0)];
 
         let rows = vec![vec!["main".to_string()]];
 
@@ -783,11 +781,9 @@ impl DatabasePlugin for SqlitePlugin {
         database: &str,
         _schema: Option<String>,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let tables = self.list_tables(connection, database, None).await?;
 
-        let columns = vec![Column::new("name", "Name").width(px(200.0))];
+        let columns = vec![Column::new("name", "Name").width(200.0)];
 
         let rows: Vec<Vec<String>> = tables
             .iter()
@@ -861,18 +857,16 @@ impl DatabasePlugin for SqlitePlugin {
         schema: Option<String>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let columns_data = self
             .list_columns(connection, database, schema, table)
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("type", "Type").width(px(150.0)),
-            Column::new("nullable", "Nullable").width(px(80.0)),
-            Column::new("key", "Key").width(px(80.0)),
-            Column::new("default", "Default").width(px(120.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("type", "Type").width(150.0),
+            Column::new("nullable", "Nullable").width(80.0),
+            Column::new("key", "Key").width(80.0),
+            Column::new("default", "Default").width(120.0),
         ];
 
         let rows: Vec<Vec<String>> = columns_data
@@ -961,16 +955,14 @@ impl DatabasePlugin for SqlitePlugin {
         schema: Option<&str>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let indexes = self
             .list_indexes(connection, database, schema.map(|s| s.to_string()), table)
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("columns", "Columns").width(px(250.0)),
-            Column::new("unique", "Unique").width(px(80.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("columns", "Columns").width(250.0),
+            Column::new("unique", "Unique").width(80.0),
         ];
 
         let rows: Vec<Vec<String>> = indexes
@@ -1026,13 +1018,11 @@ impl DatabasePlugin for SqlitePlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let views = self.list_views(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("definition", "Definition").width(px(400.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("definition", "Definition").width(400.0),
         ];
 
         let rows: Vec<Vec<String>> = views
@@ -1066,9 +1056,7 @@ impl DatabasePlugin for SqlitePlugin {
         _connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
-        let columns = vec![Column::new("name", "Name").width(px(200.0))];
+        let columns = vec![Column::new("name", "Name").width(200.0)];
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Function,
@@ -1091,9 +1079,7 @@ impl DatabasePlugin for SqlitePlugin {
         _connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
-        let columns = vec![Column::new("name", "Name").width(px(200.0))];
+        let columns = vec![Column::new("name", "Name").width(200.0)];
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Procedure,
@@ -1138,13 +1124,11 @@ impl DatabasePlugin for SqlitePlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let triggers = self.list_triggers(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("table", "Table").width(px(150.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("table", "Table").width(150.0),
         ];
 
         let rows: Vec<Vec<String>> = triggers
@@ -1174,9 +1158,7 @@ impl DatabasePlugin for SqlitePlugin {
         _connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
-        let columns = vec![Column::new("name", "Name").width(px(200.0))];
+        let columns = vec![Column::new("name", "Name").width(200.0)];
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Sequence,

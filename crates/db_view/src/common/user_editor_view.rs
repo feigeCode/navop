@@ -38,6 +38,7 @@ impl UserEditorView {
         form: Entity<F>,
         database_type: DatabaseType,
         operation: DatabaseFormKind,
+        initial_request: Option<DatabaseUserOperationRequest>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self
@@ -60,7 +61,7 @@ impl UserEditorView {
             },
         );
 
-        Self {
+        let mut this = Self {
             focus_handle: cx.focus_handle(),
             form: form.into(),
             sql_preview,
@@ -69,7 +70,11 @@ impl UserEditorView {
             database_type,
             error_message: cx.new(|_| None),
             _subscriptions: vec![form_subscription],
+        };
+        if let Some(request) = initial_request {
+            this.update_sql_preview(&request, window, cx);
         }
+        this
     }
 
     fn update_sql_preview(
@@ -80,7 +85,7 @@ impl UserEditorView {
     ) {
         let sql = self
             .build_sql(request, cx)
-            .unwrap_or_else(|| "-- 当前数据库类型暂不支持该用户操作。".to_string());
+            .unwrap_or_else(|| t!("DatabaseUsers.unsupported_sql_preview").to_string());
         self.sql_preview.update(cx, |state, cx| {
             state.set_value(sql, window, cx);
         });

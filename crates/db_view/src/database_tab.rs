@@ -468,6 +468,11 @@ impl DatabaseTabView {
     }
 
     fn render_workspace_toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let items = database_toolbar_items()
+            .into_iter()
+            .filter(|item| self.should_render_toolbar_item(item, cx))
+            .collect::<Vec<_>>();
+
         h_flex()
             .h(WORKSPACE_TOOLBAR_HEIGHT)
             .w_full()
@@ -481,11 +486,18 @@ impl DatabaseTabView {
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
             .children(
-                database_toolbar_items()
+                items
                     .into_iter()
                     .map(|item| self.render_toolbar_item(item, cx)),
             )
             .into_any_element()
+    }
+
+    fn should_render_toolbar_item(&self, item: &DatabaseToolbarItem, cx: &App) -> bool {
+        match item.action {
+            DatabaseToolbarAction::Users => self.toolbar_connection_supports_users(cx),
+            _ => true,
+        }
     }
 
     fn render_toolbar_item(&self, item: DatabaseToolbarItem, cx: &mut Context<Self>) -> AnyElement {
@@ -514,7 +526,7 @@ impl DatabaseTabView {
                 this.handle_toolbar_action(action, window, cx);
             }))
             .child(toolbar_item_icon(item.icon, color))
-            .child(toolbar_item_label(item.label, cx))
+            .child(toolbar_item_label(t!(item.label_i18n_key).to_string(), cx))
             .into_any_element()
     }
 
@@ -565,9 +577,22 @@ impl DatabaseTabView {
 
     fn open_users_tab(&self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(config) = self.toolbar_connection_config(cx) else {
-            self.notify_info("没有可用的数据库连接，无法查看用户。", window, cx);
+            self.notify_info(
+                &t!("DatabaseUsers.no_available_connection").to_string(),
+                window,
+                cx,
+            );
             return;
         };
+
+        if !self.connection_supports_users(&config, cx) {
+            self.notify_info(
+                &t!("DatabaseUsers.unsupported_database").to_string(),
+                window,
+                cx,
+            );
+            return;
+        }
 
         let tab_id = format!("db-users-{}", config.id);
         let tab_id_clone = tab_id.clone();
@@ -584,6 +609,19 @@ impl DatabaseTabView {
                 cx,
             );
         });
+    }
+
+    fn toolbar_connection_supports_users(&self, cx: &App) -> bool {
+        self.toolbar_connection_config(cx)
+            .as_ref()
+            .is_some_and(|config| self.connection_supports_users(config, cx))
+    }
+
+    fn connection_supports_users(&self, config: &DbConnectionConfig, cx: &App) -> bool {
+        cx.global::<GlobalDbState>()
+            .get_plugin(&config.database_type)
+            .map(|plugin| plugin.ui_manifest().capabilities.supports_users)
+            .unwrap_or(false)
     }
 
     fn toolbar_connection_config(&self, cx: &App) -> Option<DbConnectionConfig> {

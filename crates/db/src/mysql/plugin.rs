@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use crate::types::ObjectViewColumn as Column;
 use anyhow::Result;
-use gpui_component::table::Column;
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 
 use crate::connection::{DbConnection, DbError};
@@ -1185,17 +1185,15 @@ impl DatabasePlugin for MySqlPlugin {
     }
 
     async fn list_databases_view(&self, connection: &dyn DbConnection) -> Result<ObjectView> {
-        use gpui::px;
-
         let databases = self.list_databases_detailed(connection).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("charset", "Charset").width(px(120.0)),
-            Column::new("collation", "Collation").width(px(180.0)),
-            Column::new("size", "Size").width(px(100.0)).text_right(),
-            Column::new("tables", "Tables").width(px(80.0)).text_right(),
-            Column::new("comment", "Comment").width(px(250.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("charset", "Charset").width(120.0),
+            Column::new("collation", "Collation").width(180.0),
+            Column::new("size", "Size").width(100.0).text_right(),
+            Column::new("tables", "Tables").width(80.0).text_right(),
+            Column::new("comment", "Comment").width(250.0),
         ];
 
         let rows: Vec<Vec<String>> = databases
@@ -1345,16 +1343,14 @@ impl DatabasePlugin for MySqlPlugin {
         database: &str,
         _schema: Option<String>,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let tables = self.list_tables(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("engine", "Engine").width(px(150.0)),
-            Column::new("rows", "Rows").width(px(100.0)).text_right(),
-            Column::new("created", "Created").width(px(180.0)),
-            Column::new("comment", "Comment").width(px(300.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("engine", "Engine").width(150.0),
+            Column::new("rows", "Rows").width(100.0).text_right(),
+            Column::new("created", "Created").width(180.0),
+            Column::new("comment", "Comment").width(300.0),
         ];
 
         let rows: Vec<Vec<String>> = tables
@@ -1439,19 +1435,17 @@ impl DatabasePlugin for MySqlPlugin {
         schema: Option<String>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let columns_data = self
             .list_columns(connection, database, schema, table)
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("type", "Type").width(px(150.0)),
-            Column::new("nullable", "Nullable").width(px(80.0)),
-            Column::new("key", "Key").width(px(80.0)),
-            Column::new("default", "Default").width(px(120.0)),
-            Column::new("comment", "Comment").width(px(250.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("type", "Type").width(150.0),
+            Column::new("nullable", "Nullable").width(80.0),
+            Column::new("key", "Key").width(80.0),
+            Column::new("default", "Default").width(120.0),
+            Column::new("comment", "Comment").width(250.0),
         ];
 
         let rows: Vec<Vec<String>> = columns_data
@@ -1535,17 +1529,15 @@ impl DatabasePlugin for MySqlPlugin {
         schema: Option<&str>,
         table: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let indexes = self
             .list_indexes(connection, database, schema.map(|s| s.to_string()), table)
             .await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("columns", "Columns").width(px(250.0)),
-            Column::new("unique", "Unique").width(px(80.0)),
-            Column::new("type", "Type").width(px(120.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("columns", "Columns").width(250.0),
+            Column::new("unique", "Unique").width(80.0),
+            Column::new("type", "Type").width(120.0),
         ];
 
         let rows: Vec<Vec<String>> = indexes
@@ -1689,13 +1681,11 @@ impl DatabasePlugin for MySqlPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let views = self.list_views(connection, database, None).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("definition", "Definition").width(px(400.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("definition", "Definition").width(400.0),
         ];
 
         let rows: Vec<Vec<String>> = views
@@ -1758,13 +1748,11 @@ impl DatabasePlugin for MySqlPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let functions = self.list_functions(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(200.0)),
-            Column::new("return_type", "Return Type").width(px(150.0)),
+            Column::new("name", "Name").width(200.0),
+            Column::new("return_type", "Return Type").width(150.0),
         ];
 
         let rows: Vec<Vec<String>> = functions
@@ -1792,6 +1780,11 @@ impl DatabasePlugin for MySqlPlugin {
             supports_functions: true,
             supports_procedures: true,
             supports_triggers: true,
+            supports_users: true,
+            supports_user_create: true,
+            supports_user_edit: true,
+            supports_user_delete: true,
+            supports_user_privileges: true,
             supports_table_engine: true,
             supports_table_charset: true,
             supports_table_collation: true,
@@ -1894,11 +1887,9 @@ impl DatabasePlugin for MySqlPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let procedures = self.list_procedures(connection, database).await?;
 
-        let columns = vec![Column::new("name", "Name").width(px(200.0))];
+        let columns = vec![Column::new("name", "Name").width(200.0)];
 
         let rows: Vec<Vec<String>> = procedures
             .iter()
@@ -1957,15 +1948,13 @@ impl DatabasePlugin for MySqlPlugin {
         connection: &dyn DbConnection,
         database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
         let triggers = self.list_triggers(connection, database).await?;
 
         let columns = vec![
-            Column::new("name", "Name").width(px(180.0)),
-            Column::new("table", "Table").width(px(150.0)),
-            Column::new("event", "Event").width(px(100.0)),
-            Column::new("timing", "Timing").width(px(100.0)),
+            Column::new("name", "Name").width(180.0),
+            Column::new("table", "Table").width(150.0),
+            Column::new("event", "Event").width(100.0),
+            Column::new("timing", "Timing").width(100.0),
         ];
 
         let rows: Vec<Vec<String>> = triggers
@@ -2002,9 +1991,7 @@ impl DatabasePlugin for MySqlPlugin {
         _connection: &dyn DbConnection,
         _database: &str,
     ) -> Result<ObjectView> {
-        use gpui::px;
-
-        let columns = vec![Column::new("name", "Name").width(px(200.0))];
+        let columns = vec![Column::new("name", "Name").width(200.0)];
 
         Ok(ObjectView {
             db_node_type: DbNodeType::Sequence,
@@ -2049,13 +2036,81 @@ impl DatabasePlugin for MySqlPlugin {
             r#"SELECT
   User,
   Host,
-  account_locked AS account_locked,
-  password_expired AS password_expired,
-  plugin AS authentication_plugin
+  plugin AS authentication_plugin,
+  account_locked,
+  password_expired,
+  password_last_changed,
+  password_lifetime,
+  max_questions,
+  max_updates,
+  max_connections,
+  max_user_connections,
+  ssl_type,
+  ssl_cipher,
+  x509_issuer,
+  x509_subject,
+  Select_priv,
+  Insert_priv,
+  Update_priv,
+  Delete_priv,
+  Create_priv,
+  Drop_priv,
+  Grant_priv
 FROM mysql.user
 ORDER BY User, Host;"#
                 .to_string(),
         )
+    }
+
+    fn user_list_columns(&self) -> Vec<Column> {
+        vec![
+            Column::localized("user", "DatabaseUser.columns.user").width(180.0),
+            Column::localized("host", "DatabaseUser.columns.host").width(160.0),
+            Column::localized(
+                "authentication_plugin",
+                "DatabaseUser.columns.authentication_plugin",
+            )
+            .width(220.0),
+            Column::localized("account_locked", "DatabaseUser.columns.account_locked").width(120.0),
+            Column::localized("password_expired", "DatabaseUser.columns.password_expired")
+                .width(130.0),
+            Column::localized(
+                "password_last_changed",
+                "DatabaseUser.columns.password_last_changed",
+            )
+            .width(180.0),
+            Column::localized(
+                "password_lifetime",
+                "DatabaseUser.columns.password_lifetime",
+            )
+            .width(150.0),
+            Column::localized("max_questions", "DatabaseUser.columns.max_questions")
+                .width(120.0)
+                .text_right(),
+            Column::localized("max_updates", "DatabaseUser.columns.max_updates")
+                .width(120.0)
+                .text_right(),
+            Column::localized("max_connections", "DatabaseUser.columns.max_connections")
+                .width(140.0)
+                .text_right(),
+            Column::localized(
+                "max_user_connections",
+                "DatabaseUser.columns.max_user_connections",
+            )
+            .width(160.0)
+            .text_right(),
+            Column::localized("ssl_type", "DatabaseUser.columns.ssl_type").width(120.0),
+            Column::localized("ssl_cipher", "DatabaseUser.columns.ssl_cipher").width(160.0),
+            Column::localized("x509_issuer", "DatabaseUser.columns.x509_issuer").width(240.0),
+            Column::localized("x509_subject", "DatabaseUser.columns.x509_subject").width(240.0),
+            Column::localized("select_priv", "DatabaseUser.columns.select_priv").width(110.0),
+            Column::localized("insert_priv", "DatabaseUser.columns.insert_priv").width(110.0),
+            Column::localized("update_priv", "DatabaseUser.columns.update_priv").width(110.0),
+            Column::localized("delete_priv", "DatabaseUser.columns.delete_priv").width(110.0),
+            Column::localized("create_priv", "DatabaseUser.columns.create_priv").width(110.0),
+            Column::localized("drop_priv", "DatabaseUser.columns.drop_priv").width(110.0),
+            Column::localized("grant_priv", "DatabaseUser.columns.grant_priv").width(110.0),
+        ]
     }
 
     fn build_create_user_sql(&self, request: &DatabaseUserOperationRequest) -> Option<String> {
@@ -3147,6 +3202,17 @@ mod tests {
         assert_eq!(plugin.quote_identifier("table_name"), "`table_name`");
         assert_eq!(plugin.quote_identifier("column"), "`column`");
         assert_eq!(plugin.quote_identifier("col`umn"), "`col``umn`");
+    }
+
+    #[test]
+    fn test_capabilities_support_users() {
+        let capabilities = create_plugin().capabilities();
+
+        assert!(capabilities.supports_users);
+        assert!(capabilities.supports_user_create);
+        assert!(capabilities.supports_user_edit);
+        assert!(capabilities.supports_user_delete);
+        assert!(capabilities.supports_user_privileges);
     }
 
     #[test]

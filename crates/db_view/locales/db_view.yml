@@ -2508,6 +2508,144 @@ EditorView:
     en: SQL Preview
     zh-CN: SQL 预览
     zh-HK: SQL 預覽
+DatabaseToolbar:
+  show_objects:
+    en: Show
+    zh-CN: 显示
+    zh-HK: 顯示
+  create_query:
+    en: New Query
+    zh-CN: 新建查询
+    zh-HK: 新建查詢
+  users:
+    en: Users
+    zh-CN: 用户
+    zh-HK: 使用者
+  compare_schema:
+    en: Compare Schema
+    zh-CN: 比较结构
+    zh-HK: 比較結構
+  compare_data:
+    en: Compare Data
+    zh-CN: 比较数据
+    zh-HK: 比較資料
+  data_generator:
+    en: Data Generator
+    zh-CN: 数据生成
+    zh-HK: 資料生成
+  backup:
+    en: Backup
+    zh-CN: 备份
+    zh-HK: 備份
+  automation:
+    en: Automation
+    zh-CN: 自动运行
+    zh-HK: 自動執行
+  model:
+    en: Model
+    zh-CN: 模型
+    zh-HK: 模型
+  bi:
+    en: BI
+    zh-CN: BI
+    zh-HK: BI
+DatabaseUsers:
+  title:
+    en: Users
+    zh-CN: 用户
+    zh-HK: 使用者
+  toolbar_add:
+    en: Add
+    zh-CN: 新增
+    zh-HK: 新增
+  toolbar_edit:
+    en: Edit
+    zh-CN: 编辑
+    zh-HK: 編輯
+  toolbar_delete:
+    en: Delete
+    zh-CN: 删除
+    zh-HK: 刪除
+  toolbar_privileges:
+    en: Privileges
+    zh-CN: 权限
+    zh-HK: 權限
+  toolbar_refresh:
+    en: Refresh
+    zh-CN: 刷新
+    zh-HK: 重新整理
+  select_edit_user:
+    en: Select a user before editing.
+    zh-CN: 请先选择要编辑的用户。
+    zh-HK: 請先選擇要編輯的使用者。
+  select_delete_user:
+    en: Select a user before deleting.
+    zh-CN: 请先选择要删除的用户。
+    zh-HK: 請先選擇要刪除的使用者。
+  select_privilege_user:
+    en: Select a user before changing privileges.
+    zh-CN: 请先选择要授权的用户。
+    zh-HK: 請先選擇要授權的使用者。
+  unsupported_operation:
+    en: This database type does not support this user operation.
+    zh-CN: 当前数据库类型暂不支持该用户操作。
+    zh-HK: 目前資料庫類型暫不支援此使用者操作。
+  unsupported_database:
+    en: This database type does not support user management.
+    zh-CN: 当前数据库类型暂不支持用户管理。
+    zh-HK: 目前資料庫類型暫不支援使用者管理。
+  no_available_connection:
+    en: No available database connection to view users.
+    zh-CN: 没有可用的数据库连接，无法查看用户。
+    zh-HK: 沒有可用的資料庫連線，無法檢視使用者。
+  execute:
+    en: Execute
+    zh-CN: 执行
+    zh-HK: 執行
+  empty_operation_sql:
+    en: No executable user operation SQL.
+    zh-CN: 没有可执行的用户操作 SQL。
+    zh-HK: 沒有可執行的使用者操作 SQL。
+  create_title:
+    en: Add User
+    zh-CN: 新增用户
+    zh-HK: 新增使用者
+  edit_title:
+    en: Edit User
+    zh-CN: 编辑用户
+    zh-HK: 編輯使用者
+  delete_title:
+    en: Delete User
+    zh-CN: 删除用户
+    zh-HK: 刪除使用者
+  privileges_title:
+    en: User Privileges
+    zh-CN: 用户权限
+    zh-HK: 使用者權限
+  operation_title:
+    en: User Operation
+    zh-CN: 用户操作
+    zh-HK: 使用者操作
+  operation_success:
+    en: User operation executed.
+    zh-CN: 用户操作已执行。
+    zh-HK: 使用者操作已執行。
+  operation_failed:
+    en: "User operation failed: %{error}"
+    zh-CN: "用户操作失败:%{error}"
+    zh-HK: "使用者操作失敗:%{error}"
+  loading:
+    en: Loading users...
+    zh-CN: 正在加载用户...
+    zh-HK: 正在載入使用者...
+  empty:
+    en: No users
+    zh-CN: 暂无用户
+    zh-HK: 暫無使用者
+  unsupported_sql_preview:
+    en: -- This database type does not support this user operation.
+    zh-CN: -- 当前数据库类型暂不支持该用户操作。
+    zh-HK: -- 目前資料庫類型暫不支援此使用者操作。
 DatabaseObjects:
   title:
     en: Objects

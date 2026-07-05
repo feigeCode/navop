@@ -1987,6 +1987,26 @@ impl GlobalDbState {
         })
     }
 
+    pub async fn list_users_view(
+        &self,
+        cx: &mut AsyncApp,
+        connection_id: String,
+        database: Option<String>,
+    ) -> anyhow::Result<crate::types::ObjectView> {
+        if let Some(database) = database {
+            return with_plugin_session_db!(
+                self,
+                cx,
+                connection_id,
+                database.clone(),
+                |plugin, conn| { plugin.list_users_view(&*conn, Some(&database)).await }
+            );
+        }
+        with_plugin_session!(self, cx, connection_id, |plugin, conn| {
+            plugin.list_users_view(&*conn, None).await
+        })
+    }
+
     pub fn capabilities(&self, database_type: &DatabaseType) -> DatabaseCapabilities {
         self.db_manager
             .get_plugin(database_type)

@@ -2062,7 +2062,7 @@ fn object_view(
         title: title.into(),
         columns: columns
             .into_iter()
-            .map(|name| gpui_component::table::Column::new(name, name))
+            .map(|name| ObjectViewColumn::new(name, name))
             .collect(),
         rows,
     }
@@ -2102,8 +2102,8 @@ fn object_view_from_wire(
     })
 }
 
-fn column_from_wire(column: wire_schema::ObjectViewColumn) -> gpui_component::table::Column {
-    let mut result = gpui_component::table::Column::new(column.key, column.name);
+fn column_from_wire(column: wire_schema::ObjectViewColumn) -> ObjectViewColumn {
+    let mut result = ObjectViewColumn::new(column.key, column.name);
     if let Some(width) = column
         .width_px
         .filter(|width| width.is_finite() && *width >= MIN_CUSTOM_COLUMN_WIDTH_PX)
@@ -2843,10 +2843,10 @@ mod tests {
         assert_eq!(DbNodeType::Column, view.db_node_type);
         assert_eq!("Driver Columns", view.title);
         assert_eq!(2, view.columns.len());
-        assert_eq!("Field", view.columns[0].name.as_ref());
-        assert_eq!(gpui::px(220.0), view.columns[0].width);
-        assert_eq!("Null?", view.columns[1].name.as_ref());
-        assert_eq!(gpui::TextAlign::Right, view.columns[1].align);
+        assert_eq!("Field", view.columns[0].label);
+        assert_eq!(220.0, view.columns[0].width_px);
+        assert_eq!("Null?", view.columns[1].label);
+        assert_eq!(ObjectViewColumnAlign::Right, view.columns[1].align);
         assert_eq!(
             vec![
                 vec!["id".to_string(), "false".to_string()],
@@ -2866,7 +2866,7 @@ mod tests {
         assert_eq!(DbNodeType::Database, view.db_node_type);
         assert_eq!("Databases", view.title);
         assert_eq!(2, view.columns.len());
-        assert_eq!("Name", view.columns[0].name.as_ref());
+        assert_eq!("Name", view.columns[0].label);
         assert_eq!(vec![vec!["mockdb".to_string(), String::new()]], view.rows);
     }
 
