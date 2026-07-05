@@ -1227,6 +1227,9 @@ fn table_schema_to_design(database: &str, table: &TableSchema) -> TableDesign {
         })
         .collect();
     design.options.comment = table.comment.clone().unwrap_or_default();
+    design.options.engine = table.engine.clone();
+    design.options.charset = table.charset.clone();
+    design.options.collation = table.collation.clone();
     design
 }
 
@@ -1234,13 +1237,63 @@ fn column_schema_to_definition(column: &ColumnSchema) -> ColumnDefinition {
     let mut definition = ColumnDefinition::new(column.name.clone())
         .data_type(column.data_type.clone())
         .nullable(column.nullable);
-    if let Some(default_value) = &column.default_value {
+    if let Some(default_value) = executable_column_default(column) {
         definition = definition.default_value(default_value.clone());
     }
     if let Some(comment) = &column.comment {
         definition = definition.comment(comment.clone());
     }
+    definition.charset = column.charset.clone();
+    definition.collation = column.collation.clone();
     definition
+}
+
+fn executable_column_default(column: &ColumnSchema) -> Option<String> {
+    let default = column.default_value.as_deref()?.trim();
+    if default.is_empty() {
+        return Some(String::new());
+    }
+    if is_raw_sql_default(default) {
+        return Some(default.to_string());
+    }
+    Some(format!("'{}'", default.replace('\'', "''")))
+}
+
+fn is_raw_sql_default(default: &str) -> bool {
+    let upper = default.to_ascii_uppercase();
+    is_quoted_literal(default)
+        || is_numeric_literal(default)
+        || is_known_default_keyword(&upper)
+        || default.starts_with('(')
+        || default.contains("::")
+        || default.contains('(')
+}
+
+fn is_quoted_literal(default: &str) -> bool {
+    (default.starts_with('\'') && default.ends_with('\''))
+        || (default.starts_with('"') && default.ends_with('"'))
+        || default.starts_with("b'")
+        || default.starts_with("B'")
+        || default.starts_with("x'")
+        || default.starts_with("X'")
+}
+
+fn is_numeric_literal(default: &str) -> bool {
+    default.parse::<i64>().is_ok() || default.parse::<f64>().is_ok()
+}
+
+fn is_known_default_keyword(upper: &str) -> bool {
+    matches!(
+        upper,
+        "NULL"
+            | "TRUE"
+            | "FALSE"
+            | "CURRENT_TIMESTAMP"
+            | "CURRENT_DATE"
+            | "CURRENT_TIME"
+            | "LOCALTIMESTAMP"
+            | "LOCALTIME"
+    )
 }
 
 #[cfg(test)]
@@ -1372,10 +1425,12 @@ mod tests {
                 nullable: false,
                 default_value: None,
                 comment: None,
+                ..Default::default()
             }],
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
 
         let result = SchemaCompareResult {
@@ -1395,6 +1450,7 @@ mod tests {
                                 nullable: true,
                                 default_value: None,
                                 comment: None,
+                                ..Default::default()
                             }),
                             target: None,
                         },
@@ -1408,6 +1464,7 @@ mod tests {
                                 nullable: true,
                                 default_value: None,
                                 comment: None,
+                                ..Default::default()
                             }),
                         },
                     ],
@@ -1425,6 +1482,7 @@ mod tests {
                         indexes: vec![],
                         foreign_keys: vec![],
                         comment: None,
+                        ..Default::default()
                     }),
                     column_diffs: vec![],
                     index_diffs: vec![],
@@ -1482,6 +1540,7 @@ mod tests {
                     nullable: false,
                     default_value: None,
                     comment: None,
+                    ..Default::default()
                 },
                 ColumnSchema {
                     name: "name".to_string(),
@@ -1489,11 +1548,13 @@ mod tests {
                     nullable: true,
                     default_value: Some("'anonymous'".to_string()),
                     comment: None,
+                    ..Default::default()
                 },
             ],
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {
@@ -1586,6 +1647,7 @@ mod tests {
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {
@@ -1632,6 +1694,7 @@ mod tests {
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {
@@ -1679,6 +1742,7 @@ mod tests {
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {
@@ -1743,6 +1807,7 @@ mod tests {
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {
@@ -1809,10 +1874,12 @@ mod tests {
                 nullable: false,
                 default_value: None,
                 comment: None,
+                ..Default::default()
             }],
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let source = TableSchema {
             name: "users".to_string(),
@@ -1823,6 +1890,7 @@ mod tests {
                     nullable: false,
                     default_value: None,
                     comment: None,
+                    ..Default::default()
                 },
                 ColumnSchema {
                     name: "email".to_string(),
@@ -1830,11 +1898,13 @@ mod tests {
                     nullable: true,
                     default_value: None,
                     comment: None,
+                    ..Default::default()
                 },
             ],
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {
@@ -1851,6 +1921,7 @@ mod tests {
                         nullable: true,
                         default_value: None,
                         comment: None,
+                        ..Default::default()
                     }),
                     target: None,
                 }],
@@ -1875,6 +1946,73 @@ mod tests {
     }
 
     #[test]
+    fn test_mysql_schema_sync_plan_quotes_string_metadata_defaults() {
+        use super::super::{ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema};
+
+        let target = TableSchema {
+            name: "users".to_string(),
+            columns: vec![ColumnSchema {
+                name: "id".to_string(),
+                data_type: "int".to_string(),
+                nullable: false,
+                default_value: None,
+                comment: None,
+                ..Default::default()
+            }],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+            ..Default::default()
+        };
+        let source = TableSchema {
+            name: "users".to_string(),
+            columns: vec![
+                ColumnSchema {
+                    name: "id".to_string(),
+                    data_type: "int".to_string(),
+                    nullable: false,
+                    default_value: None,
+                    comment: None,
+                    ..Default::default()
+                },
+                ColumnSchema {
+                    name: "status".to_string(),
+                    data_type: "varchar(20)".to_string(),
+                    nullable: false,
+                    default_value: Some("active".to_string()),
+                    comment: None,
+                    ..Default::default()
+                },
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+            ..Default::default()
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(source),
+                target: Some(target),
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin(&result, "app", None, &plugin);
+
+        assert!(plan.sql_text.contains("DEFAULT 'active'"));
+        assert!(!plan.sql_text.contains("DEFAULT active"));
+    }
+
+    #[test]
     fn test_sqlite_schema_sync_plan_reuses_table_designer_recreate_sql() {
         use super::super::{
             ColumnDiff, ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema,
@@ -1888,10 +2026,12 @@ mod tests {
                 nullable: false,
                 default_value: None,
                 comment: None,
+                ..Default::default()
             }],
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let target = TableSchema {
             name: "users".to_string(),
@@ -1902,6 +2042,7 @@ mod tests {
                     nullable: false,
                     default_value: None,
                     comment: None,
+                    ..Default::default()
                 },
                 ColumnSchema {
                     name: "legacy".to_string(),
@@ -1909,11 +2050,13 @@ mod tests {
                     nullable: true,
                     default_value: None,
                     comment: None,
+                    ..Default::default()
                 },
             ],
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {
@@ -1931,6 +2074,7 @@ mod tests {
                         nullable: true,
                         default_value: None,
                         comment: None,
+                        ..Default::default()
                     }),
                 }],
                 index_diffs: vec![],
@@ -1973,10 +2117,12 @@ mod tests {
                 nullable: false,
                 default_value: None,
                 comment: None,
+                ..Default::default()
             }],
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let source = TableSchema {
             name: "users".to_string(),
@@ -1987,6 +2133,7 @@ mod tests {
                     nullable: false,
                     default_value: None,
                     comment: None,
+                    ..Default::default()
                 },
                 ColumnSchema {
                     name: "email".to_string(),
@@ -1994,11 +2141,13 @@ mod tests {
                     nullable: true,
                     default_value: None,
                     comment: None,
+                    ..Default::default()
                 },
             ],
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {
@@ -2015,6 +2164,7 @@ mod tests {
                         nullable: true,
                         default_value: None,
                         comment: None,
+                        ..Default::default()
                     }),
                     target: None,
                 }],
@@ -2060,6 +2210,7 @@ mod tests {
                 on_update: None,
             }],
             comment: None,
+            ..Default::default()
         };
         let target_table = TableSchema {
             name: "order_items".to_string(),
@@ -2074,6 +2225,7 @@ mod tests {
                 on_update: None,
             }],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {
@@ -2147,6 +2299,7 @@ mod tests {
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let order_items = TableSchema {
             name: "order_items".to_string(),
@@ -2154,6 +2307,7 @@ mod tests {
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![
@@ -2228,6 +2382,7 @@ mod tests {
                     nullable: false,
                     default_value: None,
                     comment: None,
+                    ..Default::default()
                 },
                 ColumnSchema {
                     name: "order_id".to_string(),
@@ -2235,6 +2390,7 @@ mod tests {
                     nullable: false,
                     default_value: None,
                     comment: None,
+                    ..Default::default()
                 },
             ],
             indexes: vec![IndexSchema {
@@ -2251,6 +2407,7 @@ mod tests {
                 on_update: Some("RESTRICT".to_string()),
             }],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {
@@ -2301,6 +2458,7 @@ mod tests {
                     nullable: false,
                     default_value: None,
                     comment: None,
+                    ..Default::default()
                 },
                 ColumnSchema {
                     name: "order_id".to_string(),
@@ -2308,6 +2466,7 @@ mod tests {
                     nullable: false,
                     default_value: None,
                     comment: None,
+                    ..Default::default()
                 },
             ],
             indexes: vec![],
@@ -2320,6 +2479,7 @@ mod tests {
                 on_update: None,
             }],
             comment: None,
+            ..Default::default()
         };
         let result = SchemaCompareResult {
             table_diffs: vec![TableDiff {

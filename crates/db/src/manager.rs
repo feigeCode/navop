@@ -1539,9 +1539,22 @@ impl GlobalDbState {
 
         let clone_self = self.clone();
         Tokio::spawn(cx, async move {
+            let total_size = source.file_size().unwrap_or(0);
             let plugin = match clone_self.get_plugin(&config.database_type) {
                 Ok(c) => c,
-                Err(_) => return,
+                Err(e) => {
+                    let progress = StreamingProgress::with_file_progress(
+                        0,
+                        SqlResult::Error(SqlErrorInfo {
+                            sql: String::new(),
+                            message: format!("Failed to get database plugin: {}", e),
+                        }),
+                        0,
+                        total_size,
+                    );
+                    let _ = tx.send(progress).await;
+                    return;
+                }
             };
 
             let session_result = clone_self
@@ -1552,7 +1565,6 @@ impl GlobalDbState {
             let session_id = match session_result {
                 Ok(id) => id,
                 Err(e) => {
-                    let total_size = source.file_size().unwrap_or(0);
                     let progress = StreamingProgress::with_file_progress(
                         0,
                         SqlResult::Error(SqlErrorInfo {
@@ -1567,6 +1579,7 @@ impl GlobalDbState {
                 }
             };
 
+            let error_tx = tx.clone();
             let exec_result = async {
                 let mut guard = clone_self
                     .connection_manager
@@ -1596,6 +1609,16 @@ impl GlobalDbState {
 
             if let Err(e) = exec_result {
                 error!("Streaming execution error: {}", e);
+                let progress = StreamingProgress::with_file_progress(
+                    0,
+                    SqlResult::Error(SqlErrorInfo {
+                        sql: String::new(),
+                        message: e.to_string(),
+                    }),
+                    0,
+                    total_size,
+                );
+                let _ = error_tx.send(progress).await;
             }
         })
         .detach();

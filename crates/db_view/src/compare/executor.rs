@@ -68,6 +68,12 @@ pub struct SchemaCompareParams {
     pub target_database: String,
     pub target_schema: Option<String>,
     pub case_sensitive_identifiers: bool,
+    pub compare_indexes: bool,
+    pub compare_foreign_keys: bool,
+    pub ignore_comments: bool,
+    pub ignore_auto_increment: bool,
+    pub ignore_charset_collation: bool,
+    pub ignore_table_options: bool,
 }
 
 /// 执行数据比较任务（简化版本）
@@ -332,6 +338,12 @@ pub async fn execute_schema_compare(
 ) -> anyhow::Result<SchemaCompareResult> {
     let options = SchemaCompareOptions {
         case_sensitive_identifiers: params.case_sensitive_identifiers,
+        compare_indexes: params.compare_indexes,
+        compare_foreign_keys: params.compare_foreign_keys,
+        ignore_comments: params.ignore_comments,
+        ignore_auto_increment: params.ignore_auto_increment,
+        ignore_charset_collation: params.ignore_charset_collation,
+        ignore_table_options: params.ignore_table_options,
         ..SchemaCompareOptions::default()
     };
     let source_label = t!("Compare.source").to_string();
@@ -628,6 +640,8 @@ fn table_schema_from_metadata(
                 nullable: column.is_nullable,
                 default_value: column.default_value,
                 comment: column.comment,
+                charset: column.charset,
+                collation: column.collation,
             })
             .collect(),
         indexes,
@@ -643,6 +657,9 @@ fn table_schema_from_metadata(
             })
             .collect(),
         comment: table.comment,
+        engine: table.engine,
+        charset: table.charset,
+        collation: table.collation,
     }
 }
 
@@ -1060,10 +1077,16 @@ fn parse_json_cell(value: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compare::{CompareSyncExecutionOptions, CompareTargetScope, execute_sync_sql};
+    use db::compare::{DiffStatus, SyncStatementKind};
     use db::{
-        ColumnInfo, ForeignKeyDefinition, IndexInfo, QueryColumnMeta, QueryResult, TableInfo,
+        ColumnInfo, ExecOptions, ForeignKeyDefinition, IndexInfo, QueryColumnMeta, QueryResult,
+        SqlResult, TableInfo,
     };
+    use gpui::TestAppContext;
+    use one_core::storage::{DatabaseType, DbConnectionConfig};
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn table_schema_from_metadata_preserves_columns_indexes_and_foreign_keys() {
@@ -1437,6 +1460,31 @@ mod tests {
         assert!(plan.sql_text.contains("INSERT INTO orders"));
     }
 
+    #[gpui::test]
+    #[ignore = "requires ONETCLI_TEST_MYSQL_PASSWORD and a local MySQL server"]
+    fn mysql_compare_and_sync_uses_real_connection(cx: &mut TestAppContext) {
+        let Some(config) = mysql_test_config_from_env() else {
+            eprintln!("ONETCLI_TEST_MYSQL_PASSWORD not set; skipping");
+            return;
+        };
+        let mut state = GlobalDbState::new();
+        let connection_id = config.id.clone();
+        state.register_connection(config);
+        let db_state = Arc::new(state);
+        cx.update(one_core::gpui_tokio::init);
+        cx.executor().allow_parking();
+
+        let executor = cx.foreground_executor().clone();
+        let mut async_cx = cx.to_async();
+        executor
+            .block_on(run_mysql_compare_fixture(
+                db_state,
+                connection_id,
+                &mut async_cx,
+            ))
+            .unwrap();
+    }
+
     fn column_info(name: &str, primary_key: bool) -> ColumnInfo {
         ColumnInfo {
             name: name.to_string(),
@@ -1476,4 +1524,480 @@ mod tests {
             .map(|(key, value)| (key.to_string(), value))
             .collect()
     }
+
+    fn mysql_test_config_from_env() -> Option<DbConnectionConfig> {
+        let password = std::env::var("ONETCLI_TEST_MYSQL_PASSWORD").ok()?;
+        Some(DbConnectionConfig {
+            id: "onetcli-compare-real-mysql".to_string(),
+            database_type: DatabaseType::MySQL,
+            name: "onetcli compare real mysql".to_string(),
+            host: std::env::var("ONETCLI_TEST_MYSQL_HOST")
+                .unwrap_or_else(|_| "127.0.0.1".to_string()),
+            port: std::env::var("ONETCLI_TEST_MYSQL_PORT")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(3306),
+            username: std::env::var("ONETCLI_TEST_MYSQL_USER")
+                .unwrap_or_else(|_| "root".to_string()),
+            password,
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params: HashMap::new(),
+        })
+    }
+
+    async fn setup_mysql_fixture(
+        db_state: &GlobalDbState,
+        connection_id: &str,
+        cx: &mut gpui::AsyncApp,
+    ) -> anyhow::Result<()> {
+        exec_mysql_script(db_state, connection_id, None, MYSQL_COMPARE_FIXTURE_SQL, cx)
+            .await
+            .map(|_| ())
+    }
+
+    async fn cleanup_mysql_fixture(
+        db_state: &GlobalDbState,
+        connection_id: &str,
+        cx: &mut gpui::AsyncApp,
+    ) {
+        let _ =
+            exec_mysql_script(db_state, connection_id, None, MYSQL_COMPARE_CLEANUP_SQL, cx).await;
+    }
+
+    async fn execute_real_schema_compare(
+        db_state: &Arc<GlobalDbState>,
+        connection_id: &str,
+        cx: &mut gpui::AsyncApp,
+    ) -> anyhow::Result<SchemaCompareResult> {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        execute_schema_compare(
+            SchemaCompareParams {
+                source_connection_id: connection_id.to_string(),
+                source_database: "onetcli_compare_src".to_string(),
+                source_schema: None,
+                target_connection_id: connection_id.to_string(),
+                target_database: "onetcli_compare_dst".to_string(),
+                target_schema: None,
+                case_sensitive_identifiers: false,
+                compare_indexes: true,
+                compare_foreign_keys: true,
+                ignore_comments: false,
+                ignore_auto_increment: false,
+                ignore_charset_collation: false,
+                ignore_table_options: false,
+            },
+            db_state.clone(),
+            tx,
+            cx,
+        )
+        .await
+    }
+
+    async fn run_mysql_compare_fixture(
+        db_state: Arc<GlobalDbState>,
+        connection_id: String,
+        cx: &mut gpui::AsyncApp,
+    ) -> anyhow::Result<()> {
+        cleanup_mysql_fixture(&db_state, &connection_id, cx).await;
+        setup_mysql_fixture(&db_state, &connection_id, cx).await?;
+        run_mysql_schema_sync_assertions(&db_state, &connection_id, cx).await?;
+        run_mysql_data_sync_assertions(&db_state, &connection_id, cx).await?;
+        assert_streaming_error_modes(&db_state, &connection_id, cx).await?;
+        cleanup_mysql_fixture(&db_state, &connection_id, cx).await;
+        Ok(())
+    }
+
+    async fn run_mysql_schema_sync_assertions(
+        db_state: &Arc<GlobalDbState>,
+        connection_id: &str,
+        cx: &mut gpui::AsyncApp,
+    ) -> anyhow::Result<()> {
+        let schema = execute_real_schema_compare(db_state, connection_id, cx).await?;
+        assert_schema_fixture_diff(&schema);
+        let plan = generate_schema_sync_plan_for_target(
+            &schema,
+            db_state,
+            connection_id,
+            "onetcli_compare_dst",
+            None,
+        )?;
+        assert_no_display_charset_labels(&plan.sql_text);
+        let schema_results = run_sync_sql_and_collect(
+            db_state,
+            connection_id,
+            "onetcli_compare_dst",
+            selected_default_sql(&plan),
+            CompareSyncExecutionOptions::default(),
+            cx,
+        )
+        .await?;
+        assert_no_streaming_errors(&schema_results);
+        Ok(())
+    }
+
+    async fn run_mysql_data_sync_assertions(
+        db_state: &Arc<GlobalDbState>,
+        connection_id: &str,
+        cx: &mut gpui::AsyncApp,
+    ) -> anyhow::Result<()> {
+        let data = execute_real_data_compare(db_state, connection_id, cx).await?;
+        assert_data_fixture_diff(&data);
+        let plan = generate_data_sync_plan_for_target(
+            &data,
+            db_state,
+            connection_id,
+            "onetcli_compare_dst",
+            None,
+        )?;
+        assert_data_delete_is_destructive_and_not_selected(&plan);
+        assert_no_display_charset_labels(&plan.sql_text);
+        let data_results = run_sync_sql_and_collect(
+            db_state,
+            connection_id,
+            "onetcli_compare_dst",
+            plan.sql_text.clone(),
+            CompareSyncExecutionOptions::default(),
+            cx,
+        )
+        .await?;
+        assert_no_streaming_errors(&data_results);
+        assert_target_users_match_source(db_state, connection_id, cx).await
+    }
+
+    async fn execute_real_data_compare(
+        db_state: &Arc<GlobalDbState>,
+        connection_id: &str,
+        cx: &mut gpui::AsyncApp,
+    ) -> anyhow::Result<DataCompareBatchResult> {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        execute_data_compare(
+            DataCompareParams {
+                source_connection_id: connection_id.to_string(),
+                source_database: "onetcli_compare_src".to_string(),
+                source_schema: None,
+                target_connection_id: connection_id.to_string(),
+                target_database: "onetcli_compare_dst".to_string(),
+                target_schema: None,
+                table_pairs: vec![DataCompareTablePair {
+                    source_table: "users".to_string(),
+                    target_table: "users".to_string(),
+                }],
+                key_columns: vec!["id".to_string()],
+                case_sensitive_identifiers: false,
+            },
+            db_state.clone(),
+            tx,
+            cx,
+        )
+        .await
+    }
+
+    async fn exec_mysql_script(
+        db_state: &GlobalDbState,
+        connection_id: &str,
+        database: Option<&str>,
+        sql: &str,
+        cx: &mut gpui::AsyncApp,
+    ) -> anyhow::Result<Vec<SqlResult>> {
+        db_state
+            .execute_script(
+                cx,
+                connection_id.to_string(),
+                sql.to_string(),
+                database.map(ToString::to_string),
+                None,
+                Some(ExecOptions {
+                    stop_on_error: true,
+                    transactional: false,
+                    max_rows: None,
+                    streaming: false,
+                }),
+            )
+            .await
+    }
+
+    async fn run_sync_sql_and_collect(
+        db_state: &Arc<GlobalDbState>,
+        connection_id: &str,
+        database: &str,
+        sql: String,
+        options: CompareSyncExecutionOptions,
+        cx: &mut gpui::AsyncApp,
+    ) -> anyhow::Result<Vec<SqlResult>> {
+        let target = CompareTargetScope {
+            connection_id: connection_id.to_string(),
+            database: database.to_string(),
+            schema: None,
+        };
+        let mut rx = execute_sync_sql(target, sql, db_state.clone(), options, cx)?;
+        let mut results = Vec::new();
+        while let Some(progress) = rx.recv().await {
+            results.push(progress.result);
+        }
+        Ok(results)
+    }
+
+    fn selected_default_sql(plan: &SyncPlan) -> String {
+        plan.statements
+            .iter()
+            .filter(|statement| statement.selected_by_default)
+            .map(|statement| statement.sql.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn assert_schema_fixture_diff(result: &SchemaCompareResult) {
+        let users = result
+            .table_diffs
+            .iter()
+            .find(|diff| diff.name == "users")
+            .expect("users table diff should exist");
+        assert_eq!(DiffStatus::Modified, users.status);
+        assert!(users.column_diffs.iter().any(|diff| diff.name == "email"));
+        assert!(
+            users
+                .index_diffs
+                .iter()
+                .any(|diff| diff.name == "idx_users_email")
+        );
+        assert!(
+            users
+                .foreign_key_diffs
+                .iter()
+                .any(|diff| diff.name == "fk_users_department")
+        );
+    }
+
+    fn assert_data_fixture_diff(result: &DataCompareBatchResult) {
+        let users = result.table_results.first().expect("users data diff");
+        assert_eq!(1, users.added.len());
+        assert_eq!(1, users.removed.len());
+        assert!(
+            users.modified.iter().any(|row| {
+                row.changes.contains_key("email") && row.changes.contains_key("name")
+            })
+        );
+    }
+
+    fn assert_data_delete_is_destructive_and_not_selected(plan: &SyncPlan) {
+        assert!(plan.statements.iter().any(|statement| {
+            matches!(statement.kind, SyncStatementKind::Delete)
+                && statement.destructive
+                && !statement.selected_by_default
+        }));
+    }
+
+    fn assert_no_display_charset_labels(sql: &str) {
+        assert!(!sql.contains("Default UTF-8"));
+        assert!(!sql.contains("UTF-8 Unicode"));
+        assert!(!sql.contains("Default InnoDB"));
+    }
+
+    fn assert_no_streaming_errors(results: &[SqlResult]) {
+        let errors = results
+            .iter()
+            .filter_map(|result| match result {
+                SqlResult::Error(error) => Some(error.message.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "streaming SQL errors: {errors:?}");
+    }
+
+    async fn assert_target_users_match_source(
+        db_state: &GlobalDbState,
+        connection_id: &str,
+        cx: &mut gpui::AsyncApp,
+    ) -> anyhow::Result<()> {
+        let results = exec_mysql_script(
+            db_state,
+            connection_id,
+            Some("onetcli_compare_dst"),
+            TARGET_MATCH_QUERY,
+            cx,
+        )
+        .await?;
+        assert_eq!("0", first_query_value(&results));
+        Ok(())
+    }
+
+    async fn assert_streaming_error_modes(
+        db_state: &Arc<GlobalDbState>,
+        connection_id: &str,
+        cx: &mut gpui::AsyncApp,
+    ) -> anyhow::Result<()> {
+        exec_mysql_script(
+            db_state,
+            connection_id,
+            Some("onetcli_compare_dst"),
+            ERROR_PROBE_DDL,
+            cx,
+        )
+        .await?;
+        let continued = run_sync_sql_and_collect(
+            db_state,
+            connection_id,
+            "onetcli_compare_dst",
+            ERROR_PROBE_INSERTS.to_string(),
+            CompareSyncExecutionOptions {
+                use_transaction: true,
+                continue_on_error: true,
+            },
+            cx,
+        )
+        .await?;
+        assert_eq!(
+            2,
+            continued.iter().filter(|result| !result.is_error()).count()
+        );
+        assert_eq!(
+            1,
+            continued.iter().filter(|result| result.is_error()).count()
+        );
+        assert_eq!("2", probe_row_count(db_state, connection_id, cx).await?);
+
+        exec_mysql_script(
+            db_state,
+            connection_id,
+            Some("onetcli_compare_dst"),
+            ERROR_PROBE_DDL,
+            cx,
+        )
+        .await?;
+        let stopped = run_sync_sql_and_collect(
+            db_state,
+            connection_id,
+            "onetcli_compare_dst",
+            ERROR_PROBE_INSERTS.to_string(),
+            CompareSyncExecutionOptions {
+                use_transaction: false,
+                continue_on_error: false,
+            },
+            cx,
+        )
+        .await?;
+        assert_eq!(
+            1,
+            stopped.iter().filter(|result| !result.is_error()).count()
+        );
+        assert_eq!(1, stopped.iter().filter(|result| result.is_error()).count());
+        assert_eq!("1", probe_row_count(db_state, connection_id, cx).await?);
+        Ok(())
+    }
+
+    async fn probe_row_count(
+        db_state: &GlobalDbState,
+        connection_id: &str,
+        cx: &mut gpui::AsyncApp,
+    ) -> anyhow::Result<String> {
+        let results = exec_mysql_script(
+            db_state,
+            connection_id,
+            Some("onetcli_compare_dst"),
+            "SELECT COUNT(*) FROM error_probe;",
+            cx,
+        )
+        .await?;
+        Ok(first_query_value(&results))
+    }
+
+    fn first_query_value(results: &[SqlResult]) -> String {
+        let Some(SqlResult::Query(query)) = results.first() else {
+            panic!("expected a query result");
+        };
+        query.rows[0][0]
+            .clone()
+            .expect("query value should not be null")
+    }
+
+    const MYSQL_COMPARE_CLEANUP_SQL: &str = r#"
+DROP DATABASE IF EXISTS onetcli_compare_src;
+DROP DATABASE IF EXISTS onetcli_compare_dst;
+"#;
+
+    const MYSQL_COMPARE_FIXTURE_SQL: &str = r#"
+DROP DATABASE IF EXISTS onetcli_compare_src;
+DROP DATABASE IF EXISTS onetcli_compare_dst;
+CREATE DATABASE onetcli_compare_src CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE onetcli_compare_dst CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE TABLE onetcli_compare_src.departments (
+  id INT PRIMARY KEY,
+  name VARCHAR(80) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE onetcli_compare_dst.departments (
+  id INT PRIMARY KEY,
+  name VARCHAR(80) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE onetcli_compare_src.users (
+  id INT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  email VARCHAR(160) NULL,
+  department_id INT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_users_email (email),
+  CONSTRAINT fk_users_department FOREIGN KEY (department_id) REFERENCES departments(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE onetcli_compare_dst.users (
+  id INT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  department_id INT NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+INSERT INTO onetcli_compare_src.departments VALUES (1, 'Engineering'), (2, 'Sales');
+INSERT INTO onetcli_compare_dst.departments VALUES (1, 'Engineering'), (2, 'Sales');
+INSERT INTO onetcli_compare_src.users
+  (id, name, email, department_id, status)
+VALUES
+  (1, 'Ada Lovelace', 'ada@example.com', 1, 'active'),
+  (2, 'Grace Hopper', 'grace@example.com', 1, 'active'),
+  (3, 'Katherine Johnson', 'katherine@example.com', 2, 'inactive');
+INSERT INTO onetcli_compare_dst.users (id, name, department_id)
+VALUES
+  (1, 'Ada', 1),
+  (2, 'Grace Hopper', 1),
+  (4, 'Legacy User', 2);
+"#;
+
+    const TARGET_MATCH_QUERY: &str = r#"
+SELECT (
+  SELECT COUNT(*)
+  FROM onetcli_compare_src.users s
+  LEFT JOIN onetcli_compare_dst.users d
+    ON s.id = d.id
+   AND s.name <=> d.name
+   AND s.email <=> d.email
+   AND s.department_id <=> d.department_id
+   AND s.status <=> d.status
+  WHERE d.id IS NULL
+) + (
+  SELECT COUNT(*)
+  FROM onetcli_compare_dst.users d
+  LEFT JOIN onetcli_compare_src.users s
+    ON s.id = d.id
+   AND s.name <=> d.name
+   AND s.email <=> d.email
+   AND s.department_id <=> d.department_id
+   AND s.status <=> d.status
+  WHERE s.id IS NULL
+) AS mismatch_count;
+"#;
+
+    const ERROR_PROBE_DDL: &str = r#"
+DROP TABLE IF EXISTS error_probe;
+CREATE TABLE error_probe (id INT PRIMARY KEY);
+"#;
+
+    const ERROR_PROBE_INSERTS: &str = r#"
+INSERT INTO error_probe VALUES (1);
+INSERT INTO error_probe VALUES (1);
+INSERT INTO error_probe VALUES (2);
+"#;
 }

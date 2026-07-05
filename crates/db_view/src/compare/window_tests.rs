@@ -7,8 +7,8 @@ use rust_i18n::t;
 
 use crate::compare::sync_statement_picker::selected_sync_sql_text_for_ids;
 use crate::compare::window_params::{
-    DataCompareSelection, SchemaCompareSelection, data_compare_params, schema_compare_params,
-    split_columns,
+    DataCompareSelection, SchemaCompareSelection, SchemaCompareSettings, data_compare_params,
+    schema_compare_params, split_columns,
 };
 use crate::compare::window_ui::{
     CompareStep, sync_sql_execution_error_log_entry, sync_sql_execution_start_log_entries,
@@ -98,7 +98,7 @@ fn schema_compare_params_use_editable_source_selection() {
             database: "target_db".to_string(),
             schema: "target_schema".to_string(),
         },
-        false,
+        SchemaCompareSettings::default(),
     )
     .unwrap();
 
@@ -121,11 +121,47 @@ fn schema_compare_params_can_enable_case_sensitive_identifiers() {
             database: "target_db".to_string(),
             schema: String::new(),
         },
-        true,
+        SchemaCompareSettings {
+            case_sensitive_identifiers: true,
+            ..SchemaCompareSettings::default()
+        },
     )
     .unwrap();
 
     assert!(params.case_sensitive_identifiers);
+}
+
+#[test]
+fn schema_compare_params_include_object_and_rule_settings() {
+    let params = schema_compare_params(
+        SchemaCompareSelection {
+            connection_id: "source-1".to_string(),
+            database: "source_db".to_string(),
+            schema: String::new(),
+        },
+        SchemaCompareSelection {
+            connection_id: "target-1".to_string(),
+            database: "target_db".to_string(),
+            schema: String::new(),
+        },
+        SchemaCompareSettings {
+            compare_indexes: false,
+            compare_foreign_keys: false,
+            ignore_comments: true,
+            ignore_auto_increment: true,
+            ignore_charset_collation: true,
+            ignore_table_options: true,
+            ..SchemaCompareSettings::default()
+        },
+    )
+    .unwrap();
+
+    assert!(!params.compare_indexes);
+    assert!(!params.compare_foreign_keys);
+    assert!(params.ignore_comments);
+    assert!(params.ignore_auto_increment);
+    assert!(params.ignore_charset_collation);
+    assert!(params.ignore_table_options);
 }
 
 #[test]

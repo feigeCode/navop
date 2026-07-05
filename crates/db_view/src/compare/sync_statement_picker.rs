@@ -49,6 +49,16 @@ pub(super) fn refresh_sync_statement_list<T: 'static>(
     });
 }
 
+pub(super) fn clear_sync_statement_list<T: 'static>(
+    list_state: &SyncStatementListState,
+    cx: &mut Context<T>,
+) {
+    list_state.update(cx, |list, cx| {
+        list.delegate_mut().set_statements(Vec::new());
+        cx.notify();
+    });
+}
+
 pub(super) fn selected_sync_sql_text_for_ids(
     plan: &SyncPlan,
     selected_ids: &HashSet<String>,

@@ -101,20 +101,38 @@ fn compare_table(
     options: &SchemaCompareOptions,
 ) -> Option<TableDiff> {
     let column_diffs = compare_columns_with_options(&source.columns, &target.columns, options);
-    let index_diffs = compare_indexes_with_options(&source.indexes, &target.indexes, options);
-    let foreign_key_diffs =
-        compare_foreign_keys_with_options(&source.foreign_keys, &target.foreign_keys, options);
+    let index_diffs = if options.compare_indexes {
+        compare_indexes_with_options(&source.indexes, &target.indexes, options)
+    } else {
+        Vec::new()
+    };
+    let foreign_key_diffs = if options.compare_foreign_keys {
+        compare_foreign_keys_with_options(&source.foreign_keys, &target.foreign_keys, options)
+    } else {
+        Vec::new()
+    };
 
     let comment_changed = if options.ignore_comments {
         false
     } else {
         source.comment != target.comment
     };
+    let table_options_changed = if options.ignore_table_options {
+        false
+    } else {
+        normalized_metadata(source.engine.as_deref())
+            != normalized_metadata(target.engine.as_deref())
+            || normalized_metadata(source.charset.as_deref())
+                != normalized_metadata(target.charset.as_deref())
+            || normalized_metadata(source.collation.as_deref())
+                != normalized_metadata(target.collation.as_deref())
+    };
 
     let has_changes = !column_diffs.is_empty()
         || !index_diffs.is_empty()
         || !foreign_key_diffs.is_empty()
-        || comment_changed;
+        || comment_changed
+        || table_options_changed;
 
     if has_changes {
         Some(TableDiff {
@@ -184,10 +202,7 @@ fn compare_columns_with_options(
         let src = source_map[name];
         let tgt = target_map[name];
 
-        if !data_type_eq(&src.data_type, &tgt.data_type)
-            || src.nullable != tgt.nullable
-            || src.default_value != tgt.default_value
-        {
+        if !column_eq(src, tgt, options) {
             diffs.push(ColumnDiff {
                 name: src.name.clone(),
                 status: DiffStatus::Modified,
@@ -333,8 +348,42 @@ fn identifier_key(value: &str, options: &SchemaCompareOptions) -> String {
     }
 }
 
-fn data_type_eq(left: &str, right: &str) -> bool {
-    left.trim().eq_ignore_ascii_case(right.trim())
+fn column_eq(left: &ColumnSchema, right: &ColumnSchema, options: &SchemaCompareOptions) -> bool {
+    data_type_eq(&left.data_type, &right.data_type, options)
+        && left.nullable == right.nullable
+        && left.default_value == right.default_value
+        && (options.ignore_comments || left.comment == right.comment)
+        && (options.ignore_charset_collation
+            || (normalized_metadata(left.charset.as_deref())
+                == normalized_metadata(right.charset.as_deref())
+                && normalized_metadata(left.collation.as_deref())
+                    == normalized_metadata(right.collation.as_deref())))
+}
+
+fn data_type_eq(left: &str, right: &str, options: &SchemaCompareOptions) -> bool {
+    normalized_data_type(left, options).eq_ignore_ascii_case(&normalized_data_type(right, options))
+}
+
+fn normalized_data_type(value: &str, options: &SchemaCompareOptions) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if options.ignore_auto_increment {
+        normalized
+            .split_whitespace()
+            .filter(|part| !part.eq_ignore_ascii_case("AUTO_INCREMENT"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        normalized
+    }
+}
+
+fn normalized_metadata(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_ascii_lowercase())
+    }
 }
 
 fn index_eq(left: &IndexSchema, right: &IndexSchema, options: &SchemaCompareOptions) -> bool {
@@ -442,6 +491,7 @@ mod tests {
             nullable,
             default_value: None,
             comment: None,
+            ..Default::default()
         }
     }
 
@@ -452,6 +502,7 @@ mod tests {
             indexes: vec![],
             foreign_keys: vec![],
             comment: None,
+            ..Default::default()
         }
     }
 
@@ -467,6 +518,7 @@ mod tests {
                 indexes: vec![],
                 foreign_keys: vec![],
                 comment: None,
+                ..Default::default()
             },
             TableSchema {
                 name: "orders".to_string(),
@@ -474,6 +526,7 @@ mod tests {
                 indexes: vec![],
                 foreign_keys: vec![],
                 comment: None,
+                ..Default::default()
             },
         ];
 
@@ -487,6 +540,7 @@ mod tests {
                 indexes: vec![],
                 foreign_keys: vec![],
                 comment: None,
+                ..Default::default()
             },
             TableSchema {
                 name: "audit".to_string(),
@@ -494,6 +548,7 @@ mod tests {
                 indexes: vec![],
                 foreign_keys: vec![],
                 comment: None,
+                ..Default::default()
             },
         ];
 
@@ -555,6 +610,94 @@ mod tests {
         let result = compare_schemas(source, target, SchemaCompareOptions::default());
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn compare_schemas_can_ignore_table_option_noise() {
+        let mut source = table("users", vec![column("id", "int", false)]);
+        source.engine = Some("InnoDB".to_string());
+        source.charset = Some("utf8mb4".to_string());
+        source.collation = Some("utf8mb4_0900_ai_ci".to_string());
+        source.comment = Some("source comment".to_string());
+
+        let mut target = table("users", vec![column("id", "int", false)]);
+        target.engine = Some("MyISAM".to_string());
+        target.charset = Some("utf8".to_string());
+        target.collation = Some("utf8_general_ci".to_string());
+        target.comment = Some("target comment".to_string());
+
+        let result = compare_schemas(
+            vec![source],
+            vec![target],
+            SchemaCompareOptions {
+                ignore_comments: true,
+                ignore_table_options: true,
+                ..SchemaCompareOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(result.table_diffs.is_empty());
+    }
+
+    #[test]
+    fn compare_schemas_can_ignore_column_metadata_noise() {
+        let mut source_column = column("id", "int auto_increment", false);
+        source_column.charset = Some("utf8mb4".to_string());
+        source_column.collation = Some("utf8mb4_0900_ai_ci".to_string());
+        source_column.comment = Some("source id".to_string());
+
+        let mut target_column = column("id", "int", false);
+        target_column.charset = Some("utf8".to_string());
+        target_column.collation = Some("utf8_general_ci".to_string());
+        target_column.comment = Some("target id".to_string());
+
+        let result = compare_schemas(
+            vec![table("users", vec![source_column])],
+            vec![table("users", vec![target_column])],
+            SchemaCompareOptions {
+                ignore_comments: true,
+                ignore_auto_increment: true,
+                ignore_charset_collation: true,
+                ..SchemaCompareOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(result.table_diffs.is_empty());
+    }
+
+    #[test]
+    fn compare_schemas_can_ignore_index_and_foreign_key_objects() {
+        let mut source = table("orders", vec![column("id", "int", false)]);
+        source.indexes = vec![IndexSchema {
+            name: "idx_orders_user".to_string(),
+            columns: vec!["user_id".to_string()],
+            unique: false,
+        }];
+        source.foreign_keys = vec![ForeignKeySchema {
+            name: "fk_orders_user".to_string(),
+            columns: vec!["user_id".to_string()],
+            ref_table: "users".to_string(),
+            ref_columns: vec!["id".to_string()],
+            on_delete: None,
+            on_update: None,
+        }];
+
+        let target = table("orders", vec![column("id", "int", false)]);
+
+        let result = compare_schemas(
+            vec![source],
+            vec![target],
+            SchemaCompareOptions {
+                compare_indexes: false,
+                compare_foreign_keys: false,
+                ..SchemaCompareOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert!(result.table_diffs.is_empty());
     }
 
     #[test]

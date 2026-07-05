@@ -17,6 +17,31 @@ pub(super) struct SchemaCompareSelection {
     pub schema: String,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct SchemaCompareSettings {
+    pub case_sensitive_identifiers: bool,
+    pub compare_indexes: bool,
+    pub compare_foreign_keys: bool,
+    pub ignore_comments: bool,
+    pub ignore_auto_increment: bool,
+    pub ignore_charset_collation: bool,
+    pub ignore_table_options: bool,
+}
+
+impl Default for SchemaCompareSettings {
+    fn default() -> Self {
+        Self {
+            case_sensitive_identifiers: false,
+            compare_indexes: true,
+            compare_foreign_keys: true,
+            ignore_comments: false,
+            ignore_auto_increment: false,
+            ignore_charset_collation: false,
+            ignore_table_options: false,
+        }
+    }
+}
+
 pub(super) fn data_compare_params(
     source: DataCompareSelection,
     target: DataCompareSelection,
@@ -122,7 +147,7 @@ fn table_map_by_identifier_key(
 pub(super) fn schema_compare_params(
     source: SchemaCompareSelection,
     target: SchemaCompareSelection,
-    case_sensitive_identifiers: bool,
+    settings: SchemaCompareSettings,
 ) -> Result<SchemaCompareParams, &'static str> {
     if source.connection_id.trim().is_empty() || source.database.trim().is_empty() {
         return Err("Source connection and database are required");
@@ -138,7 +163,13 @@ pub(super) fn schema_compare_params(
         target_connection_id: target.connection_id,
         target_database: target.database,
         target_schema: empty_to_none(target.schema),
-        case_sensitive_identifiers,
+        case_sensitive_identifiers: settings.case_sensitive_identifiers,
+        compare_indexes: settings.compare_indexes,
+        compare_foreign_keys: settings.compare_foreign_keys,
+        ignore_comments: settings.ignore_comments,
+        ignore_auto_increment: settings.ignore_auto_increment,
+        ignore_charset_collation: settings.ignore_charset_collation,
+        ignore_table_options: settings.ignore_table_options,
     })
 }
 

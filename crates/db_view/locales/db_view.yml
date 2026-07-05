@@ -2935,6 +2935,54 @@ Compare:
     en: Ignore identifier case
     zh-CN: 忽略标识符大小写
     zh-HK: 忽略識別符大小寫
+  object_types:
+    en: Object types
+    zh-CN: 对象类型
+    zh-HK: 物件類型
+  object_tables:
+    en: Tables
+    zh-CN: 表
+    zh-HK: 表
+  object_indexes:
+    en: Indexes
+    zh-CN: 索引
+    zh-HK: 索引
+  object_foreign_keys:
+    en: Foreign keys
+    zh-CN: 外键
+    zh-HK: 外鍵
+  object_views:
+    en: Views
+    zh-CN: 视图
+    zh-HK: 檢視
+  object_routines:
+    en: Routines
+    zh-CN: 函数/过程
+    zh-HK: 函數/程序
+  object_triggers:
+    en: Triggers
+    zh-CN: 触发器
+    zh-HK: 觸發器
+  compare_rules:
+    en: Compare rules
+    zh-CN: 比较规则
+    zh-HK: 比較規則
+  ignore_auto_increment:
+    en: Ignore auto increment
+    zh-CN: 忽略 AUTO_INCREMENT
+    zh-HK: 忽略 AUTO_INCREMENT
+  ignore_charset_collation:
+    en: Ignore charset/collation
+    zh-CN: 忽略字符集/排序规则
+    zh-HK: 忽略字元集/排序規則
+  ignore_table_options:
+    en: Ignore table options
+    zh-CN: 忽略表选项
+    zh-HK: 忽略表選項
+  ignore_comments:
+    en: Ignore comments
+    zh-CN: 忽略注释
+    zh-HK: 忽略註解
   swap_source_target:
     en: Swap source and target
     zh-CN: 交换源和目标
@@ -3127,6 +3175,14 @@ Compare:
     en: SQL Execution Log
     zh-CN: SQL 执行日志
     zh-HK: SQL 執行日誌
+  use_transaction:
+    en: Use transaction
+    zh-CN: 使用事务
+    zh-HK: 使用事務
+  continue_on_error:
+    en: Continue on error
+    zh-CN: 遇到错误继续
+    zh-HK: 遇到錯誤繼續
   sync_sql_execution_ready:
     en: "Ready to execute %{count} SQL statement(s)"
     zh-CN: "准备执行 %{count} 条 SQL 语句"
@@ -3151,6 +3207,22 @@ Compare:
     en: "Sync SQL executed: %{count} result(s)"
     zh-CN: "同步 SQL 执行完成:%{count} 条结果"
     zh-HK: "同步 SQL 執行完成:%{count} 條結果"
+  sync_sql_finished_with_errors:
+    en: "Sync SQL finished with errors: %{success} succeeded, %{error} failed"
+    zh-CN: "同步 SQL 执行完成：%{success} 条成功，%{error} 条失败"
+    zh-HK: "同步 SQL 執行完成：%{success} 條成功，%{error} 條失敗"
+  sync_sql_stopped_on_error:
+    en: "Sync SQL stopped after error: %{success} succeeded, %{error} failed"
+    zh-CN: "同步 SQL 遇错停止：%{success} 条成功，%{error} 条失败"
+    zh-HK: "同步 SQL 遇錯停止：%{success} 條成功，%{error} 條失敗"
+  sync_sql_statement_progress:
+    en: "Executed statement %{statement} (%{progress}%)"
+    zh-CN: "已执行第 %{statement} 条语句 (%{progress}%)"
+    zh-HK: "已執行第 %{statement} 條語句 (%{progress}%)"
+  sync_sql_statement_failed:
+    en: "Statement %{statement} failed: %{error}"
+    zh-CN: "第 %{statement} 条语句执行失败:%{error}"
+    zh-HK: "第 %{statement} 條語句執行失敗:%{error}"
   execution_failed:
     en: "Execution failed: %{error}"
     zh-CN: "执行失败:%{error}"
