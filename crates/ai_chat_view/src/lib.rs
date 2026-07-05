@@ -38,6 +38,7 @@ mod connection_selector;
 mod default_panel;
 #[cfg(test)]
 mod default_panel_tests;
+mod html_code_block;
 mod input;
 mod message;
 mod message_code_actions;

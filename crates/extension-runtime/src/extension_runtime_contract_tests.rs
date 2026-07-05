@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 
+use html_preview::resolve_extension_asset_url;
+
 use crate::{
     ExtensionRuntimeCatalog,
     extension::manifest::{
-        ApiVersions, CommandContrib, CommandHandlerContrib, ContributesManifest, Engines, Manifest,
-        MenuCommandRef, MenuContrib, RuntimeSection, WasmRuntime, WasmRuntimeKind,
+        ApiVersions, CommandContrib, CommandHandlerContrib, ContributesManifest, Engines,
+        HtmlPreviewTransformContrib, Manifest, MenuCommandRef, MenuContrib, RuntimeSection,
+        WasmRuntime, WasmRuntimeKind,
     },
 };
 
@@ -72,6 +75,39 @@ fn runtime_catalog_exposes_component_permissions_for_command() {
         .unwrap();
 
     assert_eq!(vec!["db:schema:*", "ui:dialog"], permissions);
+}
+
+#[test]
+fn runtime_catalog_registers_wasm_html_preview_transform_with_assets() {
+    let mut manifest = base_manifest();
+    manifest.runtime.wasm.push(wasm_runtime("main"));
+    manifest
+        .contributes
+        .html_preview_transforms
+        .push(HtmlPreviewTransformContrib {
+            id: "example.decorate_html".to_string(),
+            runtime_id: "main".to_string(),
+            function: "transform-html".to_string(),
+            languages: vec!["html".to_string(), "htm".to_string()],
+            assets: "assets".to_string(),
+        });
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let transforms = catalog.html_preview_transforms_for_language("HTML");
+
+    assert_eq!(1, transforms.len());
+    assert_eq!("com.example.tools", transforms[0].extension_id);
+    assert_eq!("example.decorate_html", transforms[0].id);
+    assert_eq!("com.example.tools::main", transforms[0].runtime_id);
+    assert_eq!("transform-html", transforms[0].function);
+    assert_eq!(
+        PathBuf::from("/tmp/com.example.tools/assets"),
+        transforms[0].assets_root
+    );
+    assert_eq!(
+        PathBuf::from("/tmp/com.example.tools/assets/app.css"),
+        resolve_extension_asset_url("onet-extension://com.example.tools/app.css").unwrap()
+    );
 }
 
 #[test]

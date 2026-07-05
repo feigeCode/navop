@@ -12,6 +12,9 @@ gpui.workspace = true
 gpui-component.workspace = true
 one-core.workspace = true
 agent_runtime = { path = "../agent_runtime" }
+html-preview.workspace = true
+gpui-wry = { path = "../webview" }
+wry = { version = "0.53.3", package = "lb-wry" }
 agent-client-protocol.workspace = true
 llm-connector = { workspace = true, features = ["streaming"] }
 async-trait.workspace = true

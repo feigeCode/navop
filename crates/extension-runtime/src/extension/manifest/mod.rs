@@ -8,7 +8,7 @@ pub mod versioning;
 
 pub use contributes::CommandContrib;
 #[cfg(test)]
-pub use contributes::{CommandHandlerContrib, ContributesManifest};
+pub use contributes::{CommandHandlerContrib, ContributesManifest, HtmlPreviewTransformContrib};
 #[cfg(test)]
 pub use menus::{MenuCommandRef, MenuContrib};
 pub use parser::{ManifestError, load_and_check, load_from_dir};

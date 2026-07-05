@@ -1,16 +1,20 @@
 use crate::card::{CardMessage, ChatCard};
 use crate::cards::ChartJsonCard;
 use crate::code_block::CodeBlockActionRegistry;
+use crate::html_code_block::HtmlCodeBlockView;
 use crate::parse_chart_json_block;
 use crate::theme::{AgentChatTheme, active_agent_chat_theme, with_agent_chat_theme};
-use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window};
+use gpui::{AnyElement, App, AppContext, IntoElement, ParentElement, SharedString, Styled, Window};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{
-    Sizable,
+    IconName, Sizable,
     clipboard::Clipboard,
     h_flex,
     text::{CodeBlock, TextView},
 };
+#[cfg(test)]
+use html_preview::HtmlPreviewAction;
+use html_preview::HtmlPreviewDocument;
 
 const COPY_CODE_ACTION_ID: &str = "copy-code";
 
@@ -30,7 +34,10 @@ pub(crate) fn apply_code_block_features(
             render_code_block_toolbar(block, toolbar_registry.as_ref(), &theme, cx)
         })
         .code_block_renderer(move |block, _options, default, window, cx| {
-            if is_renderable_chart_code_block(block.code().as_ref(), block.lang().as_deref()) {
+            if is_renderable_html_code_block(block.code().as_ref(), block.lang().as_deref()) {
+                render_html_code_block(block, default, window, cx)
+            } else if is_renderable_chart_code_block(block.code().as_ref(), block.lang().as_deref())
+            {
                 let theme = renderer_theme
                     .clone()
                     .unwrap_or_else(|| active_agent_chat_theme(cx));
@@ -49,6 +56,10 @@ fn render_code_block_toolbar(
 ) -> AnyElement {
     let code = block.code();
     let lang = block.lang();
+    if is_html_code_block(lang.as_deref()) {
+        return render_html_code_block_toolbar(code, theme);
+    }
+
     let copy_id = SharedString::from(format!(
         "{COPY_CODE_ACTION_ID}-{}-{}",
         lang.as_deref().unwrap_or("text"),
@@ -85,11 +96,46 @@ fn render_code_block_toolbar(
     row.into_any_element()
 }
 
+fn render_html_code_block_toolbar(code: SharedString, theme: &AgentChatTheme) -> AnyElement {
+    h_flex()
+        .gap_1()
+        .text_color(theme.code_foreground)
+        .child(
+            Button::new("html-preview")
+                .icon(IconName::Eye)
+                .ghost()
+                .xsmall()
+                .tooltip("预览"),
+        )
+        .child(
+            Button::new("html-source")
+                .icon(IconName::SquareTerminal)
+                .ghost()
+                .xsmall()
+                .tooltip("源码"),
+        )
+        .child(Clipboard::new("html-copy").value(code).tooltip("复制 HTML"))
+        .child(
+            Button::new("html-open-window")
+                .icon(IconName::ExternalLink)
+                .ghost()
+                .xsmall()
+                .tooltip("打开新窗口"),
+        )
+        .into_any_element()
+}
+
 #[cfg(test)]
 fn code_block_toolbar_action_ids(
     lang: Option<&str>,
     registry: Option<&CodeBlockActionRegistry>,
 ) -> Vec<String> {
+    if is_html_code_block(lang) {
+        return HtmlPreviewAction::toolbar_ids()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+    }
     std::iter::once(COPY_CODE_ACTION_ID.to_string())
         .chain(
             registry
@@ -100,8 +146,36 @@ fn code_block_toolbar_action_ids(
         .collect()
 }
 
+fn is_html_code_block(lang: Option<&str>) -> bool {
+    lang.is_some_and(|lang| matches!(lang.to_ascii_lowercase().as_str(), "html" | "htm"))
+}
+
+fn is_renderable_html_code_block(code: &str, lang: Option<&str>) -> bool {
+    is_html_code_block(lang) && !code.trim().is_empty()
+}
+
+fn html_preview_document_for_block(code: &str, lang: Option<&str>) -> Option<HtmlPreviewDocument> {
+    is_renderable_html_code_block(code, lang)
+        .then(|| HtmlPreviewDocument::new(lang.unwrap_or("html"), code))
+}
+
 fn is_renderable_chart_code_block(code: &str, lang: Option<&str>) -> bool {
     parse_chart_json_block(code, lang).is_some()
+}
+
+fn render_html_code_block(
+    block: &CodeBlock,
+    default: AnyElement,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let Some(document) =
+        html_preview_document_for_block(block.code().as_ref(), block.lang().as_deref())
+    else {
+        return default;
+    };
+    cx.new(|cx| HtmlCodeBlockView::new(document, window, cx))
+        .into_any_element()
 }
 
 fn render_chart_code_block(block: &CodeBlock, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -137,6 +211,53 @@ mod tests {
         assert_eq!(
             vec!["copy-code"],
             code_block_toolbar_action_ids(Some("rust"), Some(&registry))
+        );
+    }
+
+    #[test]
+    fn html_code_block_toolbar_uses_preview_source_copy_open_actions() {
+        assert_eq!(
+            vec![
+                "html-preview",
+                "html-source",
+                "html-copy",
+                "html-open-window"
+            ],
+            code_block_toolbar_action_ids(Some("html"), None)
+        );
+        assert_eq!(
+            vec![
+                "html-preview",
+                "html-source",
+                "html-copy",
+                "html-open-window"
+            ],
+            code_block_toolbar_action_ids(Some("HTML"), None)
+        );
+    }
+
+    #[test]
+    fn html_code_block_detection_requires_html_language() {
+        assert!(is_renderable_html_code_block(
+            "<h1>Hello</h1>",
+            Some("html")
+        ));
+        assert!(is_renderable_html_code_block("<h1>Hello</h1>", Some("htm")));
+        assert!(!is_renderable_html_code_block(
+            "<h1>Hello</h1>",
+            Some("rust")
+        ));
+        assert!(!is_renderable_html_code_block("", Some("html")));
+    }
+
+    #[test]
+    fn html_code_block_document_normalizes_partial_markup() {
+        let document = html_preview_document_for_block("<main>Partial", Some("html")).unwrap();
+
+        assert!(
+            document
+                .render_html()
+                .contains("<body><main>Partial</main></body>")
         );
     }
 

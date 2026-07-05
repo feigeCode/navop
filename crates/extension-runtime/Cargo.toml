@@ -17,6 +17,7 @@ flate2 = "1"
 futures = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
+html-preview.workspace = true
 one-core = { workspace = true }
 remote_desktop = { workspace = true }
 semver = { workspace = true }

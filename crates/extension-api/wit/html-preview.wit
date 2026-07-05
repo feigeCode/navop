@@ -1,0 +1,24 @@
+package onet:extension;
+
+interface html-preview {
+    record html-transform-input {
+        language: string,
+        html: string,
+    }
+
+    record html-asset {
+        path: string,
+        url: string,
+    }
+
+    record html-transform-output {
+        html: string,
+        assets: list<html-asset>,
+    }
+}
+
+world html-preview-transform {
+    use html-preview.{html-transform-input, html-transform-output};
+
+    export transform-html: func(input: html-transform-input) -> result<html-transform-output, string>;
+}
