@@ -694,7 +694,8 @@ impl TerminalView {
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(t!("Common.close").to_string())
-                        .cancel_text(t!("Common.cancel").to_string()),
+                        .cancel_text(t!("Common.cancel").to_string())
+                        .show_cancel(true),
                 )
                 .on_ok(move |_, _, _| {
                     TerminalView::send_close_confirmation(&tx_ok, true);
