@@ -4,51 +4,51 @@ use std::sync::Arc;
 use db::{DbNode, DbNodeType, GlobalDbState};
 use extension_component::DbSelectorKind;
 use gpui::{
-    div, prelude::FluentBuilder, App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, ScrollHandle, Styled, Subscription, Task, Window,
+    App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
+    Render, ScrollHandle, Styled, Subscription, Task, Window, div, prelude::FluentBuilder,
 };
 use gpui_component::{
-    button::{Button, ButtonVariants as _}, checkbox::Checkbox, h_flex, input::InputState,
+    ActiveTheme, Disableable, IconName, Sizable,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    h_flex,
+    input::InputState,
     select::{SearchableVec, SelectEvent, SelectState},
     switch::Switch,
     v_flex,
-    ActiveTheme,
-    Disableable,
-    IconName,
-    Sizable,
 };
 use rust_i18n::t;
 use tokio::sync::mpsc;
 
 use crate::compare::sync_statement_picker::{
-    clear_sync_statement_list, default_selected_statement_ids, refresh_sync_statement_list,
-    selected_sync_sql_text_for_ids, sync_statement_list_state, SyncStatementListState,
+    SyncStatementListState, clear_sync_statement_list, default_selected_statement_ids,
+    refresh_sync_statement_list, selected_sync_sql_text_for_ids, sync_statement_list_state,
 };
 use crate::compare::table_picker::{
-    replace_table_selection_list, table_selection_list_state, table_selection_list_tables,
-    table_selection_panel, TableSelectionListState,
+    TableSelectionListState, replace_table_selection_list, table_selection_list_state,
+    table_selection_list_tables, table_selection_panel,
 };
 use crate::compare::target_picker::{
-    selected_string, set_connection_select, set_string_select, string_select_state, StringSelect,
+    StringSelect, selected_string, set_connection_select, set_string_select, string_select_state,
 };
 use crate::compare::window_params::{
-    schema_compare_params, SchemaCompareSelection, SchemaCompareSettings,
+    SchemaCompareSelection, SchemaCompareSettings, schema_compare_params,
 };
 use crate::compare::window_ui::{
-    clear_sync_sql_execution_log, close_button, connection_select_state, ignore_identifier_case_option,
+    CompareStep, ConnectionSelectItem, SyncSqlExecutionLogEntry, clear_sync_sql_execution_log,
+    close_button, connection_select_state, ignore_identifier_case_option,
     register_connection_for_compare, reset_sync_sql_execution_log, section_title,
-    selected_connection_id, sql_editor_panel, start_sync_sql_execution,
-    sync_sql_editor_state, sync_sql_execution_continue_on_error_row, sync_sql_execution_log_panel, sync_sql_execution_start_log_entries,
-    CompareStep, ConnectionSelectItem,
-    SyncSqlExecutionLogEntry,
+    selected_connection_id, sql_editor_panel, start_sync_sql_execution, sync_sql_editor_state,
+    sync_sql_execution_continue_on_error_row, sync_sql_execution_log_panel,
+    sync_sql_execution_start_log_entries,
 };
 use crate::compare::{
-    execute_schema_compare, generate_schema_sync_plan_for_target, CompareProgress, CompareSyncExecutionOptions,
-    CompareTargetScope, SchemaCompareParams,
+    CompareProgress, CompareSyncExecutionOptions, CompareTargetScope, SchemaCompareParams,
+    execute_schema_compare, generate_schema_sync_plan_for_target,
 };
 use crate::db_object_selector::{
-    db_object_selector_panel, effective_database_schema, policy_for_connection,
-    DbObjectSelectorPolicy,
+    DbObjectSelectorPolicy, db_object_selector_panel, effective_database_schema,
+    policy_for_connection,
 };
 use db::compare::{SchemaCompareResult, SyncPlan};
 
