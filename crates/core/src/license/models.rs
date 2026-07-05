@@ -55,6 +55,8 @@ impl PlanTier {
 pub enum Feature {
     /// 云端数据同步
     CloudSync,
+    /// 团队管理入口
+    TeamManagement,
     // 预留扩展：
     // /// AI 聊天功能
     // AiChat,
@@ -69,6 +71,7 @@ impl Feature {
     pub fn as_str(&self) -> &'static str {
         match self {
             Feature::CloudSync => "cloud_sync",
+            Feature::TeamManagement => "team_management",
         }
     }
 }
@@ -268,15 +271,18 @@ mod tests {
     fn test_plan_tier_features() {
         assert!(PlanTier::Free.features().is_empty());
         assert!(PlanTier::Pro.features().contains(&Feature::CloudSync));
+        assert!(!PlanTier::Pro.features().contains(&Feature::TeamManagement));
     }
 
     #[test]
     fn test_license_info_has_feature() {
         let license = LicenseInfo::new("user1".to_string(), PlanTier::Pro, None);
         assert!(license.has_feature(Feature::CloudSync));
+        assert!(!license.has_feature(Feature::TeamManagement));
 
         let free_license = LicenseInfo::new("user2".to_string(), PlanTier::Free, None);
         assert!(!free_license.has_feature(Feature::CloudSync));
+        assert!(!free_license.has_feature(Feature::TeamManagement));
     }
 
     #[test]

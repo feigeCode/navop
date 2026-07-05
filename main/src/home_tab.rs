@@ -175,6 +175,10 @@ fn should_show_team_key_button(route: HomeSyncRoute, cached_team_count: usize) -
     route == HomeSyncRoute::OnetCloud && cached_team_count > 0
 }
 
+fn should_show_team_management_entry(team_management_enabled: bool) -> bool {
+    team_management_enabled
+}
+
 // HomePage Entity - 管理 home 页面的所有状态
 
 /// 连接列表布局模式
@@ -535,6 +539,12 @@ mod external_driver_form_tests {
         assert!(should_show_team_key_button(HomeSyncRoute::OnetCloud, 3));
         assert!(!should_show_team_key_button(HomeSyncRoute::OnetCloud, 0));
         assert!(!should_show_team_key_button(HomeSyncRoute::Personal, 1));
+    }
+
+    #[test]
+    fn team_management_entry_follows_feature_gate() {
+        assert!(should_show_team_management_entry(true));
+        assert!(!should_show_team_management_entry(false));
     }
 
     #[test]
@@ -2979,6 +2989,8 @@ impl HomePage {
 
         let filter_types = ConnectionType::all();
         let collapsed = self.sidebar_collapsed;
+        let show_team_management_entry =
+            should_show_team_management_entry(is_feature_enabled(Feature::TeamManagement, cx));
         let sidebar_width = if collapsed {
             HOME_SIDEBAR_COLLAPSED_WIDTH
         } else {
@@ -3053,21 +3065,23 @@ impl HomePage {
                     .gap_3()
                     .border_t_1()
                     .border_color(cx.theme().border)
-                    .child(
-                        Button::new("open_team_management")
-                            .icon(IconName::TeamColor.color())
-                            .tooltip(t!("TeamManagement.title").to_string())
-                            .when(collapsed, |button| button.ghost().small())
-                            .when(!collapsed, |button| {
-                                button
-                                    .label(t!("TeamManagement.title").to_string())
-                                    .w_full()
-                                    .justify_start()
-                            })
-                            .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
-                                this.open_team_management(window, cx);
-                            })),
-                    )
+                    .when(show_team_management_entry, |this| {
+                        this.child(
+                            Button::new("open_team_management")
+                                .icon(IconName::TeamColor.color())
+                                .tooltip(t!("TeamManagement.title").to_string())
+                                .when(collapsed, |button| button.ghost().small())
+                                .when(!collapsed, |button| {
+                                    button
+                                        .label(t!("TeamManagement.title").to_string())
+                                        .w_full()
+                                        .justify_start()
+                                })
+                                .on_click(cx.listener(|this: &mut HomePage, _, window, cx| {
+                                    this.open_team_management(window, cx);
+                                })),
+                        )
+                    })
                     .child(
                         Button::new("open_extensions")
                             .icon(IconName::ExtensionsColor.color())
