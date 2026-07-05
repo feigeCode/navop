@@ -1252,15 +1252,17 @@ impl DatabasePlugin for PostgresPlugin {
         let schema_val = schema.unwrap_or_else(|| "public".to_string());
         let sql = format!(
             "SELECT
-                t.tablename,
-                t.schemaname,
-                t.tableowner,
-                obj_description((quote_ident(t.schemaname) || '.' || quote_ident(t.tablename))::regclass) AS table_comment,
-                (SELECT reltuples::bigint FROM pg_class c JOIN pg_namespace n ON c.relnamespace = n.oid WHERE c.relname = t.tablename AND n.nspname = t.schemaname) AS row_count,
-                pg_size_pretty(pg_total_relation_size((quote_ident(t.schemaname) || '.' || quote_ident(t.tablename))::regclass)) AS total_size
-             FROM pg_tables t
-             WHERE t.schemaname = '{}'
-             ORDER BY t.tablename",
+                c.relname AS tablename,
+                n.nspname AS schemaname,
+                pg_catalog.pg_get_userbyid(c.relowner) AS tableowner,
+                obj_description(c.oid, 'pg_class') AS table_comment,
+                c.reltuples::bigint AS row_count,
+                pg_size_pretty(pg_total_relation_size(c.oid)) AS total_size
+             FROM pg_class c
+             JOIN pg_namespace n ON c.relnamespace = n.oid
+             WHERE n.nspname = '{}'
+               AND c.relkind IN ('r', 'p')
+             ORDER BY c.relname",
             schema_val.replace("'", "''")
         );
 
@@ -1359,7 +1361,8 @@ impl DatabasePlugin for PostgresPlugin {
                     WHERE c.conrelid = a.attrelid \
                     AND a.attnum = ANY(c.conkey) \
                     AND c.contype = 'p' \
-                ) AS is_primary \
+                ) AS is_primary, \
+                col_description(a.attrelid, a.attnum) AS column_comment \
             FROM pg_attribute a \
             LEFT JOIN pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum \
             JOIN pg_class t ON a.attrelid = t.oid \
@@ -1398,7 +1401,7 @@ impl DatabasePlugin for PostgresPlugin {
                             .map(|v| v == "t" || v == "true" || v == "1")
                             .unwrap_or(false),
                         default_value: row.get(3).and_then(|v| v.clone()),
-                        comment: None,
+                        comment: row.get(5).and_then(|v| v.clone()),
                         charset: None,
                         collation: None,
                     }
@@ -1426,6 +1429,7 @@ impl DatabasePlugin for PostgresPlugin {
             Column::new("nullable", "Nullable").width(80.0),
             Column::new("key", "Key").width(80.0),
             Column::new("default", "Default").width(200.0),
+            Column::new("comment", "Comment").width(250.0),
         ];
 
         let rows: Vec<Vec<String>> = columns_data
@@ -1437,6 +1441,7 @@ impl DatabasePlugin for PostgresPlugin {
                     if col.is_nullable { "YES" } else { "NO" }.to_string(),
                     if col.is_primary_key { "PRI" } else { "" }.to_string(),
                     col.default_value.as_deref().unwrap_or("").to_string(),
+                    col.comment.as_deref().unwrap_or("").to_string(),
                 ]
             })
             .collect();
@@ -2443,6 +2448,9 @@ impl Default for PostgresPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::QueryResult;
+    use crate::connection::StreamingProgress;
+    use crate::executor::{ExecOptions, SqlSource};
     use crate::plugin::DatabasePlugin;
     use crate::plugin_manifest::{DatabaseActionId, DatabaseFormKind};
     use crate::types::{
@@ -2450,6 +2458,8 @@ mod tests {
         TableOptions, TableRowChange, TableSaveRequest,
     };
     use std::collections::HashMap;
+    use std::sync::Mutex;
+    use tokio::sync::mpsc;
 
     fn create_plugin() -> PostgresPlugin {
         PostgresPlugin::new()
@@ -2479,6 +2489,122 @@ mod tests {
             "conn-1".to_string(),
             DatabaseType::PostgreSQL,
         )
+    }
+
+    struct CommentMetadataConnection {
+        config: DbConnectionConfig,
+        queries: Mutex<Vec<String>>,
+    }
+
+    impl CommentMetadataConnection {
+        fn new() -> Self {
+            Self {
+                config: DbConnectionConfig {
+                    id: "comment-metadata".to_string(),
+                    name: "Comment metadata".to_string(),
+                    database_type: DatabaseType::PostgreSQL,
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    username: "postgres".to_string(),
+                    password: String::new(),
+                    database: Some("app".to_string()),
+                    service_name: None,
+                    sid: None,
+                    workspace_id: None,
+                    extra_params: Default::default(),
+                },
+                queries: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn queries(&self) -> Vec<String> {
+            self.queries.lock().expect("queries mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl DbConnection for CommentMetadataConnection {
+        fn config(&self) -> &DbConnectionConfig {
+            &self.config
+        }
+
+        fn set_config_database(&mut self, database: Option<String>) {
+            self.config.database = database;
+        }
+
+        async fn connect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn disconnect(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _script: &str,
+            _options: ExecOptions,
+        ) -> Result<Vec<SqlResult>, DbError> {
+            Err(DbError::query(
+                "execute should not be used by metadata tests",
+            ))
+        }
+
+        async fn query(&self, query: &str) -> Result<SqlResult, DbError> {
+            self.queries
+                .lock()
+                .expect("queries mutex poisoned")
+                .push(query.to_string());
+
+            let rows = if query.contains("table_comment") {
+                vec![vec![
+                    Some("users".to_string()),
+                    Some("public".to_string()),
+                    Some("postgres".to_string()),
+                    Some("Application users".to_string()),
+                    Some("42".to_string()),
+                    Some("16 kB".to_string()),
+                ]]
+            } else if query.contains("column_name") {
+                vec![vec![
+                    Some("id".to_string()),
+                    Some("integer".to_string()),
+                    Some("NO".to_string()),
+                    Some("nextval('users_id_seq'::regclass)".to_string()),
+                    Some("t".to_string()),
+                    Some("User identifier".to_string()),
+                ]]
+            } else {
+                vec![]
+            };
+
+            Ok(SqlResult::Query(QueryResult {
+                sql: query.to_string(),
+                columns: vec![],
+                column_meta: vec![],
+                rows,
+                elapsed_ms: 0,
+            }))
+        }
+
+        async fn current_database(&self) -> Result<Option<String>, DbError> {
+            Ok(self.config.database.clone())
+        }
+
+        async fn switch_database(&self, _database: &str) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        async fn execute_streaming(
+            &self,
+            _plugin: &dyn DatabasePlugin,
+            _source: SqlSource,
+            _options: ExecOptions,
+            _sender: mpsc::Sender<StreamingProgress>,
+        ) -> Result<(), DbError> {
+            Ok(())
+        }
     }
 
     // ==================== Basic Plugin Info Tests ====================
@@ -2516,6 +2642,54 @@ mod tests {
     fn test_capabilities_support_sequences() {
         let plugin = create_plugin();
         assert!(plugin.capabilities().supports_sequences);
+    }
+
+    #[tokio::test]
+    async fn test_postgres_table_metadata_reads_comments_from_pg_class() {
+        let plugin = create_plugin();
+        let connection = CommentMetadataConnection::new();
+
+        let tables = plugin
+            .list_tables(&connection, "app", Some("public".to_string()))
+            .await
+            .expect("list tables");
+
+        assert_eq!(Some("Application users"), tables[0].comment.as_deref());
+        let queries = connection.queries();
+        let table_query = queries
+            .iter()
+            .find(|query| query.contains("table_comment"))
+            .expect("table metadata query");
+        assert!(table_query.contains("obj_description(c.oid, 'pg_class')"));
+    }
+
+    #[tokio::test]
+    async fn test_postgres_column_metadata_and_view_include_comments() {
+        let plugin = create_plugin();
+        let connection = CommentMetadataConnection::new();
+
+        let columns = plugin
+            .list_columns(&connection, "app", Some("public".to_string()), "users")
+            .await
+            .expect("list columns");
+
+        assert_eq!(Some("User identifier"), columns[0].comment.as_deref());
+        let view = plugin
+            .list_columns_view(&connection, "app", Some("public".to_string()), "users")
+            .await
+            .expect("list columns view");
+        assert_eq!(
+            Some("comment"),
+            view.columns.last().map(|column| column.key.as_str())
+        );
+        assert_eq!("User identifier", view.rows[0][5]);
+
+        let queries = connection.queries();
+        assert!(
+            queries
+                .iter()
+                .any(|query| query.contains("col_description(a.attrelid, a.attnum)"))
+        );
     }
 
     #[test]
