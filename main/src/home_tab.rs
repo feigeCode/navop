@@ -171,6 +171,10 @@ fn should_auto_onet_cloud_sync(cx: &App, current_user_present: bool) -> bool {
     sync_route(cx) == HomeSyncRoute::OnetCloud && current_user_present && crypto::has_master_key()
 }
 
+fn should_show_team_key_button(route: HomeSyncRoute, cached_team_count: usize) -> bool {
+    route == HomeSyncRoute::OnetCloud && cached_team_count > 0
+}
+
 // HomePage Entity - 管理 home 页面的所有状态
 
 /// 连接列表布局模式
@@ -523,6 +527,14 @@ mod external_driver_form_tests {
             HomeSyncRoute::Personal,
             sync_route_for_provider(SyncProvider::Personal)
         );
+    }
+
+    #[test]
+    fn team_key_button_is_visible_only_for_onetcloud_with_cached_teams() {
+        assert!(should_show_team_key_button(HomeSyncRoute::OnetCloud, 1));
+        assert!(should_show_team_key_button(HomeSyncRoute::OnetCloud, 3));
+        assert!(!should_show_team_key_button(HomeSyncRoute::OnetCloud, 0));
+        assert!(!should_show_team_key_button(HomeSyncRoute::Personal, 1));
     }
 
     #[test]
@@ -2560,6 +2572,8 @@ impl HomePage {
             HomeSyncRoute::Personal => !personal_sync_ready || personal_syncing,
         };
         let has_master_key = crypto::has_master_key();
+        let show_team_key_button =
+            should_show_team_key_button(route, get_cached_team_options(cx).len());
         let personal_conflict_count = if route == HomeSyncRoute::Personal {
             crate::personal_sync_conflicts::current_personal_conflict_count(cx)
         } else {
@@ -2710,16 +2724,18 @@ impl HomePage {
                                 this.show_encryption_key_dialog(window, cx);
                             })),
                     )
-                    .child(
-                        Button::new("team-key-button")
-                            .icon(IconName::Key)
-                            .label(t!("TeamSync.manage_keys").to_string())
-                            .ghost()
-                            .tooltip(t!("TeamSync.key_help").to_string())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.add_team_key_settings_tab(window, cx);
-                            })),
-                    ),
+                    .when(show_team_key_button, |this| {
+                        this.child(
+                            Button::new("team-key-button")
+                                .icon(IconName::Key)
+                                .label(t!("TeamSync.manage_keys").to_string())
+                                .ghost()
+                                .tooltip(t!("TeamSync.key_help").to_string())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.add_team_key_settings_tab(window, cx);
+                                })),
+                        )
+                    }),
             )
             // ===== 右侧操作区 =====
             .child(
