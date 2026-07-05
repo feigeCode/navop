@@ -28,20 +28,6 @@ fn shell_single_quote(input: &str) -> String {
     format!("'{}'", input.replace('\'', "'\"'\"'"))
 }
 
-fn shell_double_quote(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn remote_session_key(connection_id: Option<i64>) -> String {
-    connection_id
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| "adhoc".to_string())
-}
-
-fn shell_basename(shell: &str) -> &str {
-    shell.rsplit('/').next().unwrap_or(shell)
-}
-
 fn is_channel_open_failure(err: &anyhow::Error) -> bool {
     let msg = format!("{err:#}").to_ascii_lowercase();
     msg.contains("channel open") || msg.contains("maxsessions")
@@ -77,7 +63,6 @@ fn extract_marker_value(output: &str, marker: &str) -> Option<String> {
 
 fn build_shell_integration_setup_script(
     script: &str,
-    session_key: &str,
     success_marker: &str,
     home_marker: &str,
     session_marker: &str,
@@ -85,83 +70,128 @@ fn build_shell_integration_setup_script(
 ) -> String {
     let script = normalized_shell_integration_script(script);
     let script = shell_single_quote(&script);
-    let integration_source =
-        format!("$HOME/.config/onetcli/sessions/{session_key}/shell_integration.sh");
-    let session_key = shell_double_quote(session_key);
+    let managed_block = shell_single_quote(&managed_shell_integration_block());
     let success_marker = shell_single_quote(success_marker);
     let home_marker = shell_single_quote(home_marker);
     let session_marker = shell_single_quote(session_marker);
     let shell_marker = shell_single_quote(shell_marker);
 
-    // zsh wrapper 设计:让 ZDOTDIR 始终保持 session_dir/zsh,在该目录下放完整的 4 个 wrapper
-    // 文件,每个 fan-out 到 $ONETCLI_ORIG_ZDOTDIR 下的同名文件,保留完整 login shell 行为;
-    // 仅在 .zshrc 末尾追加 integration source,然后还原 ZDOTDIR 给后续 sub-shell。
-    let zshenv = shell_single_quote(
-        "[[ -n \"${ONETCLI_ORIG_ZDOTDIR:-}\" ]] && [ -f \"$ONETCLI_ORIG_ZDOTDIR/.zshenv\" ] \
-         && . \"$ONETCLI_ORIG_ZDOTDIR/.zshenv\"\n",
-    );
-    let zprofile = shell_single_quote(
-        "[[ -n \"${ONETCLI_ORIG_ZDOTDIR:-}\" ]] && [ -f \"$ONETCLI_ORIG_ZDOTDIR/.zprofile\" ] \
-         && . \"$ONETCLI_ORIG_ZDOTDIR/.zprofile\"\n",
-    );
-    let zshrc = shell_single_quote(&format!(
-        "[[ -n \"${{ONETCLI_ORIG_ZDOTDIR:-}}\" ]] && [ -f \"$ONETCLI_ORIG_ZDOTDIR/.zshrc\" ] \
-         && . \"$ONETCLI_ORIG_ZDOTDIR/.zshrc\"\n\
-         . \"{integration_source}\"\n\
-         ZDOTDIR=\"${{ONETCLI_ORIG_ZDOTDIR:-$HOME}}\"\n"
-    ));
-    let zlogin = shell_single_quote(
-        "[[ -n \"${ONETCLI_ORIG_ZDOTDIR:-}\" ]] && [ -f \"$ONETCLI_ORIG_ZDOTDIR/.zlogin\" ] \
-         && . \"$ONETCLI_ORIG_ZDOTDIR/.zlogin\"\n",
-    );
-    // bash wrapper:`exec bash --rcfile X -i` 是 interactive non-login,跳过 /etc/profile 与
-    // ~/.bash_profile 等。这里手动模拟 login chain,然后再显式 source ~/.bashrc + integration。
-    // ONETCLI_LOGIN_SIMULATED guard 防止 .bash_profile 内 `exec bash -l` 等场景二次进入时重复
-    // 加载 profile 链。
-    let bashrc = shell_single_quote(&format!(
-        "if [ -z \"${{ONETCLI_LOGIN_SIMULATED:-}}\" ]; then\n\
-         \x20\x20\x20\x20export ONETCLI_LOGIN_SIMULATED=1\n\
-         \x20\x20\x20\x20[ -r /etc/profile ] && . /etc/profile\n\
-         \x20\x20\x20\x20for __onetcli_profile in \"$HOME/.bash_profile\" \"$HOME/.bash_login\" \"$HOME/.profile\"; do\n\
-         \x20\x20\x20\x20\x20\x20\x20\x20if [ -r \"$__onetcli_profile\" ]; then . \"$__onetcli_profile\"; break; fi\n\
-         \x20\x20\x20\x20done\n\
-         \x20\x20\x20\x20unset __onetcli_profile\n\
-         fi\n\
-         [ -r \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"\n\
-         . \"{integration_source}\"\n"
-    ));
-
     format!(
         concat!(
             "set -e\n",
-            "session_dir=\"$HOME/.config/onetcli/sessions/{session_key}\"\n",
-            "integration_path=\"$session_dir/shell_integration.sh\"\n",
-            "zsh_dir=\"$session_dir/zsh\"\n",
-            "bash_dir=\"$session_dir/bash\"\n",
-            "mkdir -p \"$zsh_dir\" \"$bash_dir\"\n",
+            "config_dir=\"$HOME/.config/onetcli\"\n",
+            "integration_path=\"$config_dir/shell_integration.sh\"\n",
+            "managed_block={managed_block}\n",
+            "mkdir -p \"$config_dir\"\n",
             "printf %s {script} > \"$integration_path\"\n",
-            "printf %s {zshenv} > \"$zsh_dir/.zshenv\"\n",
-            "printf %s {zprofile} > \"$zsh_dir/.zprofile\"\n",
-            "printf %s {zshrc} > \"$zsh_dir/.zshrc\"\n",
-            "printf %s {zlogin} > \"$zsh_dir/.zlogin\"\n",
-            "printf %s {bashrc} > \"$bash_dir/.bashrc\"\n",
+            "install_onetcli_block() {{\n",
+            "    rc_file=\"$1\"\n",
+            "    [ -n \"$rc_file\" ] || return 0\n",
+            "    tmp_file=\"$rc_file.onetcli.$$\"\n",
+            "    if [ -f \"$rc_file\" ]; then\n",
+            "        awk '\n",
+            "            $0 == \"# BEGIN ONETCLI SHELL INTEGRATION\" {{ skip = 1; next }}\n",
+            "            $0 == \"# END ONETCLI SHELL INTEGRATION\" {{ skip = 0; next }}\n",
+            "            skip != 1 {{ print }}\n",
+            "        ' \"$rc_file\" > \"$tmp_file\"\n",
+            "    else\n",
+            "        : > \"$tmp_file\"\n",
+            "    fi\n",
+            "    printf '%s\\n' \"$managed_block\" >> \"$tmp_file\"\n",
+            "    cat \"$tmp_file\" > \"$rc_file\"\n",
+            "    rm -f \"$tmp_file\"\n",
+            "}}\n",
+            "install_bash_login_block() {{\n",
+            "    for rc_file in \"$HOME/.bash_profile\" \"$HOME/.bash_login\" \"$HOME/.profile\"; do\n",
+            "        if [ -f \"$rc_file\" ]; then\n",
+            "            install_onetcli_block \"$rc_file\"\n",
+            "            return 0\n",
+            "        fi\n",
+            "    done\n",
+            "    install_onetcli_block \"$HOME/.bash_profile\"\n",
+            "}}\n",
+            "login_shell=\"${{SHELL:-}}\"\n",
+            "shell_name=\"${{login_shell##*/}}\"\n",
+            "case \"$shell_name\" in\n",
+            "    bash)\n",
+            "        install_onetcli_block \"$HOME/.bashrc\"\n",
+            "        install_bash_login_block\n",
+            "        ;;\n",
+            "    zsh)\n",
+            "        install_onetcli_block \"$HOME/.zshrc\"\n",
+            "        ;;\n",
+            "    *)\n",
+            "        install_onetcli_block \"$HOME/.bashrc\"\n",
+            "        install_bash_login_block\n",
+            "        install_onetcli_block \"$HOME/.zshrc\"\n",
+            "        ;;\n",
+            "esac\n",
             "printf '%s%s\\n' {home_marker} \"$HOME\"\n",
-            "printf '%s%s\\n' {session_marker} \"$session_dir\"\n",
-            "printf '%s%s\\n' {shell_marker} \"${{SHELL:-}}\"\n",
+            "printf '%s%s\\n' {session_marker} \"$config_dir\"\n",
+            "printf '%s%s\\n' {shell_marker} \"$login_shell\"\n",
             "printf '%s\\n' {success_marker}\n"
         ),
-        session_key = session_key,
         script = script,
-        zshenv = zshenv,
-        zprofile = zprofile,
-        zshrc = zshrc,
-        zlogin = zlogin,
-        bashrc = bashrc,
+        managed_block = managed_block,
         success_marker = success_marker,
         home_marker = home_marker,
         session_marker = session_marker,
         shell_marker = shell_marker,
     )
+}
+
+fn build_shell_integration_uninstall_script(success_marker: &str, home_marker: &str) -> String {
+    let success_marker = shell_single_quote(success_marker);
+    let home_marker = shell_single_quote(home_marker);
+
+    format!(
+        concat!(
+            "set -e\n",
+            "config_dir=\"$HOME/.config/onetcli\"\n",
+            "remove_onetcli_block() {{\n",
+            "    rc_file=\"$1\"\n",
+            "    [ -f \"$rc_file\" ] || return 0\n",
+            "    tmp_file=\"$rc_file.onetcli.$$\"\n",
+            "    awk '\n",
+            "        $0 == \"# BEGIN ONETCLI SHELL INTEGRATION\" {{ skip = 1; next }}\n",
+            "        $0 == \"# END ONETCLI SHELL INTEGRATION\" {{ skip = 0; next }}\n",
+            "        skip != 1 {{ print }}\n",
+            "    ' \"$rc_file\" > \"$tmp_file\"\n",
+            "    cat \"$tmp_file\" > \"$rc_file\"\n",
+            "    rm -f \"$tmp_file\"\n",
+            "}}\n",
+            "remove_onetcli_block \"$HOME/.bashrc\"\n",
+            "remove_onetcli_block \"$HOME/.bash_profile\"\n",
+            "remove_onetcli_block \"$HOME/.bash_login\"\n",
+            "remove_onetcli_block \"$HOME/.profile\"\n",
+            "remove_onetcli_block \"$HOME/.zshrc\"\n",
+            "rm -f \"$config_dir/shell_integration.sh\"\n",
+            "rm -rf \"$config_dir/sessions\"\n",
+            "rmdir \"$config_dir\" 2>/dev/null || true\n",
+            "printf '%s%s\\n' {home_marker} \"$HOME\"\n",
+            "printf '%s\\n' {success_marker}\n"
+        ),
+        success_marker = success_marker,
+        home_marker = home_marker,
+    )
+}
+
+fn managed_shell_integration_block() -> String {
+    concat!(
+        "# BEGIN ONETCLI SHELL INTEGRATION\n",
+        "case \"$-\" in\n",
+        "    *i*) __onetcli_interactive=1 ;;\n",
+        "    *) __onetcli_interactive= ;;\n",
+        "esac\n",
+        "if [ -n \"$__onetcli_interactive\" ] && { [ -n \"${BASH_VERSION:-}\" ] || [ -n \"${ZSH_VERSION:-}\" ]; }; then\n",
+        "    __onetcli_si=\"$HOME/.config/onetcli/shell_integration.sh\"\n",
+        "    [ -r \"$__onetcli_si\" ] && . \"$__onetcli_si\"\n",
+        "    unset __onetcli_si\n",
+        "fi\n",
+        "unset __onetcli_interactive\n",
+        "# END ONETCLI SHELL INTEGRATION\n",
+    )
+    .to_string()
 }
 
 fn format_numbered_script(script: &str) -> String {
@@ -196,6 +226,23 @@ pub struct SshBackend {
 }
 
 impl SshBackend {
+    pub async fn uninstall_shell_integration(
+        session_manager: Arc<SshSessionManager>,
+    ) -> anyhow::Result<()> {
+        let client = session_manager
+            .client()
+            .await
+            .map_err(add_connect_error_context)?;
+        let result = {
+            let mut guard = client.lock().await;
+            Self::uninstall_shell_integration_for_client(&mut *guard).await
+        };
+        if result.is_ok() {
+            session_manager.invalidate().await;
+        }
+        result.map_err(add_connect_error_context)
+    }
+
     pub async fn connect(
         session_manager: Arc<SshSessionManager>,
         pty_config: PtyConfig,
@@ -410,8 +457,9 @@ impl SshBackend {
         disable_shell_integration: bool,
     ) -> anyhow::Result<(C::Channel, Option<ShellIntegrationSetup>)> {
         let (setup, new_setup) = if disable_shell_integration {
-            // 用户在连接配置里显式关闭了 shell integration:跳过安装,走裸 request_shell 路径,
-            // 不向 manager 写入任何缓存,确保下次连接如果用户改回开启时还能正常走 setup。
+            // 用户在连接配置里显式关闭了 shell integration:先 best-effort 卸载远端
+            // managed block,再走裸 request_shell 路径。
+            Self::try_uninstall_shell_integration(client).await;
             (None, None)
         } else if let Some(cached) = cached {
             (Some(cached), None)
@@ -489,6 +537,72 @@ impl SshBackend {
         }
     }
 
+    async fn try_uninstall_shell_integration<C: SshClient>(client: &mut C) {
+        if let Err(err) = Self::uninstall_shell_integration_for_client(client).await {
+            tracing::warn!(
+                target: "terminal.ssh.setup",
+                error = %err,
+                "卸载 shell integration 失败，继续使用裸 shell"
+            );
+        }
+    }
+
+    async fn uninstall_shell_integration_for_client<C: SshClient>(
+        client: &mut C,
+    ) -> anyhow::Result<()> {
+        let mut channel = client.open_channel().await?;
+        let result = tokio::time::timeout(
+            SHELL_INTEGRATION_SETUP_TIMEOUT,
+            Self::run_shell_integration_uninstall(&mut channel),
+        )
+        .await;
+        let _ = channel.close().await;
+
+        match result {
+            Ok(result) => result,
+            Err(_) => anyhow::bail!(
+                "shell integration uninstall timed out after {}s",
+                SHELL_INTEGRATION_SETUP_TIMEOUT.as_secs()
+            ),
+        }
+    }
+
+    async fn run_shell_integration_uninstall(channel: &mut dyn SshChannel) -> anyhow::Result<()> {
+        const SUCCESS_MARKER: &str = "__ONETCLI_UNINSTALL_OK__";
+        const HOME_MARKER: &str = "__ONETCLI_UNINSTALL_HOME__=";
+        let uninstall_script =
+            build_shell_integration_uninstall_script(SUCCESS_MARKER, HOME_MARKER);
+        let cmd = format!("sh -c {}", shell_single_quote(&uninstall_script));
+
+        channel.exec(&cmd).await?;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        loop {
+            match channel.recv().await {
+                Some(ChannelEvent::Data(data)) => stdout.extend(data),
+                Some(ChannelEvent::ExtendedData { data, .. }) => stderr.extend(data),
+                Some(ChannelEvent::ExitStatus(code)) => {
+                    let context = format_setup_failure_context(&uninstall_script, &stdout, &stderr);
+                    anyhow::ensure!(
+                        code == 0,
+                        "shell integration uninstall failed with exit code {code}: {context}",
+                    );
+                }
+                Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
+                    let output = String::from_utf8_lossy(&stdout);
+                    let context = format_setup_failure_context(&uninstall_script, &stdout, &stderr);
+                    anyhow::ensure!(
+                        output.contains(SUCCESS_MARKER),
+                        "shell integration uninstall ended before confirming completion: {context}",
+                    );
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// 在 PTY 之前写入 integration 脚本。
     async fn run_shell_integration_setup(
         channel: &mut dyn SshChannel,
@@ -501,7 +615,6 @@ impl SshBackend {
         let script = embedded_shell_integration_script();
         let setup_script = build_shell_integration_setup_script(
             &script,
-            &remote_session_key(connection_id),
             SUCCESS_MARKER,
             HOME_MARKER,
             SESSION_MARKER,
@@ -571,45 +684,10 @@ impl SshBackend {
     async fn start_interactive_shell(
         channel: &mut dyn SshChannel,
         pty_config: &PtyConfig,
-        setup: Option<&ShellIntegrationSetup>,
+        _setup: Option<&ShellIntegrationSetup>,
     ) -> anyhow::Result<()> {
-        let Some(setup) = setup else {
-            // 降级路径：远端没有安装 integration，只请求基本 pty + shell。
-            channel.request_pty(pty_config).await?;
-            channel.request_shell().await?;
-            return Ok(());
-        };
-
-        channel.set_env("ONETCLI_SHELL_INTEGRATION", "1").await?;
-        channel
-            .set_env("ONETCLI_ORIG_ZDOTDIR", &setup.home_dir)
-            .await?;
-
-        match setup.login_shell.as_deref().map(shell_basename) {
-            Some("zsh") => {
-                channel
-                    .set_env("ZDOTDIR", &format!("{}/zsh", setup.session_dir))
-                    .await?;
-                channel.request_pty(pty_config).await?;
-                channel.request_shell().await?;
-            }
-            Some("bash") => {
-                channel.request_pty(pty_config).await?;
-                let shell_path = setup.login_shell.as_deref().unwrap_or("bash");
-                let bash_rc = format!("{}/bash/.bashrc", setup.session_dir);
-                let command = format!(
-                    "exec {} --rcfile {} -i",
-                    shell_single_quote(shell_path),
-                    shell_single_quote(&bash_rc)
-                );
-                channel.exec(&command).await?;
-            }
-            _ => {
-                channel.request_pty(pty_config).await?;
-                channel.request_shell().await?;
-            }
-        }
-
+        channel.request_pty(pty_config).await?;
+        channel.request_shell().await?;
         Ok(())
     }
 }
@@ -799,11 +877,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_ssh_channel_uses_dedicated_setup_channel_for_zsh() {
+    async fn prepare_ssh_channel_uses_plain_request_shell_for_zsh_after_setup() {
         let (setup_channel, setup_state) = MockChannel::new(
             [
                 ChannelEvent::Data(
-                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli/sessions/42\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
+                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
                         .to_vec(),
                 ),
                 ChannelEvent::ExitStatus(0),
@@ -834,25 +912,16 @@ mod tests {
         );
         assert_eq!(
             recorded_ops(&interactive_state),
-            vec![
-                ChannelOp::SetEnv("ONETCLI_SHELL_INTEGRATION".into(), "1".into()),
-                ChannelOp::SetEnv("ONETCLI_ORIG_ZDOTDIR".into(), "/tmp/home".into()),
-                ChannelOp::SetEnv(
-                    "ZDOTDIR".into(),
-                    "/tmp/home/.config/onetcli/sessions/42/zsh".into(),
-                ),
-                ChannelOp::RequestPty,
-                ChannelOp::RequestShell,
-            ]
+            vec![ChannelOp::RequestPty, ChannelOp::RequestShell]
         );
     }
 
     #[tokio::test]
-    async fn prepare_ssh_channel_execs_bash_wrapper_after_pty() {
+    async fn prepare_ssh_channel_uses_plain_request_shell_for_bash_after_setup() {
         let (setup_channel, setup_state) = MockChannel::new(
             [
                 ChannelEvent::Data(
-                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli/sessions/42\n__ONETCLI_LOGIN_SHELL__=/bin/bash\n__ONETCLI_SETUP_OK__\n"
+                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli\n__ONETCLI_LOGIN_SHELL__=/bin/bash\n__ONETCLI_SETUP_OK__\n"
                         .to_vec(),
                 ),
                 ChannelEvent::ExitStatus(0),
@@ -877,19 +946,10 @@ mod tests {
             recorded_ops(&setup_state),
             vec![ChannelOp::Exec, ChannelOp::Close]
         );
-        let interactive_ops = recorded_ops(&interactive_state);
         assert_eq!(
-            interactive_ops[0..3],
-            [
-                ChannelOp::SetEnv("ONETCLI_SHELL_INTEGRATION".into(), "1".into()),
-                ChannelOp::SetEnv("ONETCLI_ORIG_ZDOTDIR".into(), "/tmp/home".into()),
-                ChannelOp::RequestPty,
-            ]
+            recorded_ops(&interactive_state),
+            vec![ChannelOp::RequestPty, ChannelOp::RequestShell]
         );
-        match interactive_ops.get(3) {
-            Some(ChannelOp::Exec) => {}
-            other => panic!("expected bash interactive channel to exec wrapper, got {other:?}"),
-        }
     }
 
     #[tokio::test]
@@ -909,7 +969,7 @@ mod tests {
         let (mut channel, _) = MockChannel::new(
             [
                 ChannelEvent::Data(
-                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli/sessions/42\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
+                    b"__ONETCLI_HOME__=/tmp/home\n__ONETCLI_SESSION_DIR__=/tmp/home/.config/onetcli\n__ONETCLI_LOGIN_SHELL__=/bin/zsh\n__ONETCLI_SETUP_OK__\n"
                         .to_vec(),
                 ),
                 ChannelEvent::Close,
@@ -1006,7 +1066,7 @@ mod tests {
 
         let cached = ShellIntegrationSetup {
             home_dir: "/tmp/home".into(),
-            session_dir: "/tmp/home/.config/onetcli/sessions/42".into(),
+            session_dir: "/tmp/home/.config/onetcli".into(),
             login_shell: Some("/bin/zsh".into()),
         };
 
@@ -1026,25 +1086,25 @@ mod tests {
         );
         assert_eq!(
             recorded_ops(&interactive_state),
-            vec![
-                ChannelOp::SetEnv("ONETCLI_SHELL_INTEGRATION".into(), "1".into()),
-                ChannelOp::SetEnv("ONETCLI_ORIG_ZDOTDIR".into(), "/tmp/home".into()),
-                ChannelOp::SetEnv(
-                    "ZDOTDIR".into(),
-                    "/tmp/home/.config/onetcli/sessions/42/zsh".into(),
-                ),
-                ChannelOp::RequestPty,
-                ChannelOp::RequestShell,
-            ]
+            vec![ChannelOp::RequestPty, ChannelOp::RequestShell]
         );
     }
 
     #[tokio::test]
     async fn prepare_ssh_channel_skips_setup_when_disabled() {
-        // 用户在连接配置里显式关闭 shell integration:不开 setup channel,只开 1 个 interactive
-        // channel 走裸 PTY + shell;且不向 manager 写入任何缓存。
+        // 用户在连接配置里显式关闭 shell integration:先卸载远端 managed block,再开
+        // interactive channel 走裸 PTY + shell;且不向 manager 写入任何缓存。
+        let (uninstall_channel, uninstall_state) = MockChannel::new(
+            [
+                ChannelEvent::Data(
+                    b"__ONETCLI_UNINSTALL_HOME__=/tmp/home\n__ONETCLI_UNINSTALL_OK__\n".to_vec(),
+                ),
+                ChannelEvent::Close,
+            ],
+            false,
+        );
         let (interactive_channel, interactive_state) = MockChannel::new([], false);
-        let mut client = MockClient::new([interactive_channel]);
+        let mut client = MockClient::new([uninstall_channel, interactive_channel]);
 
         let (_ch, new_setup) = SshBackend::prepare_ssh_channel(
             &mut client,
@@ -1059,6 +1119,11 @@ mod tests {
         assert!(
             new_setup.is_none(),
             "禁用路径不应向 manager 写入任何 integration 缓存"
+        );
+        assert_eq!(
+            recorded_ops(&uninstall_state),
+            vec![ChannelOp::Exec, ChannelOp::Close],
+            "禁用路径应先 best-effort 卸载远端 integration"
         );
         assert_eq!(
             recorded_ops(&interactive_state),
@@ -1109,7 +1174,7 @@ mod tests {
     }
 
     #[test]
-    fn build_shell_integration_setup_command_writes_session_files_without_touching_user_rc() {
+    fn build_shell_integration_setup_command_writes_bash_managed_blocks_idempotently() {
         let temp_dir = std::env::temp_dir().join(format!(
             "onetcli-shell-setup-{}-{}",
             std::process::id(),
@@ -1123,99 +1188,88 @@ mod tests {
         let home_dir = temp_dir.join("home");
         fs::create_dir_all(&home_dir).expect("应创建 home 目录");
         let bashrc_path = home_dir.join(".bashrc");
-        let zshrc_path = home_dir.join(".zshrc");
-        fs::write(&bashrc_path, "# user bashrc\n").expect("应写入用户 bashrc");
-        fs::write(&zshrc_path, "# user zshrc\n").expect("应写入用户 zshrc");
+        let bash_profile_path = home_dir.join(".bash_profile");
+        fs::write(
+            &bashrc_path,
+            "# user bashrc\n# BEGIN ONETCLI SHELL INTEGRATION\nold\n# END ONETCLI SHELL INTEGRATION\n",
+        )
+        .expect("应写入用户 bashrc");
+        fs::write(&bash_profile_path, "# user bash_profile\n").expect("应写入用户 bash_profile");
         let script = "echo 'quoted'\nPS1='prompt'\n";
         let command = build_shell_integration_setup_script(
             script,
-            "42",
             "__TEST_OK__",
             "__HOME__=",
             "__SESSION__=",
             "__SHELL__=",
         );
 
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .env("HOME", &home_dir)
-            .env("SHELL", "/bin/zsh")
-            .output()
-            .expect("应能执行本地 shell setup 命令");
+        for _ in 0..2 {
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .env("HOME", &home_dir)
+                .env("SHELL", "/bin/bash")
+                .output()
+                .expect("应能执行本地 shell setup 命令");
 
-        assert!(
-            output.status.success(),
-            "shell setup 命令应成功执行: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let session_dir = home_dir.join(".config/onetcli/sessions/42");
-        let integration_path = session_dir.join("shell_integration.sh");
+            assert!(
+                output.status.success(),
+                "shell setup 命令应成功执行: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                format!(
+                    "__HOME__={}\n__SESSION__={}\n__SHELL__=/bin/bash\n__TEST_OK__",
+                    home_dir.display(),
+                    home_dir.join(".config/onetcli").display()
+                )
+            );
+        }
+
+        let integration_path = home_dir.join(".config/onetcli/shell_integration.sh");
         assert_eq!(
             fs::read_to_string(&integration_path).expect("应写入 integration 文件"),
             script
         );
+
+        let bashrc = fs::read_to_string(&bashrc_path).expect("应读取用户 bashrc");
         assert!(
-            session_dir.join("zsh/.zshenv").is_file(),
-            "应写入 zsh session wrapper (.zshenv)"
+            bashrc.starts_with("# user bashrc\n"),
+            "应保留用户 bashrc 原内容，实际: {bashrc}"
         );
         assert!(
-            session_dir.join("zsh/.zprofile").is_file(),
-            "应写入 zsh session wrapper (.zprofile)"
+            !bashrc.contains("\nold\n"),
+            "再次安装应替换旧 managed block，实际: {bashrc}"
+        );
+        assert_eq!(
+            bashrc.matches("# BEGIN ONETCLI SHELL INTEGRATION").count(),
+            1,
+            "重复安装不应追加多个 begin marker: {bashrc}"
+        );
+        assert_eq!(
+            bashrc.matches("# END ONETCLI SHELL INTEGRATION").count(),
+            1,
+            "重复安装不应追加多个 end marker: {bashrc}"
         );
         assert!(
-            session_dir.join("zsh/.zshrc").is_file(),
-            "应写入 zshrc session wrapper"
+            bashrc.contains("case \"$-\" in"),
+            "managed block 应先判断是否交互 shell，避免 rsync/scp 等非交互通道被 OSC 污染: {bashrc}"
         );
         assert!(
-            session_dir.join("zsh/.zlogin").is_file(),
-            "应写入 zsh session wrapper (.zlogin)"
-        );
-        assert!(
-            session_dir.join("bash/.bashrc").is_file(),
-            "应写入 bash session wrapper"
+            bashrc.contains("shell_integration.sh"),
+            "managed block 应 source 持久 integration 脚本: {bashrc}"
         );
 
-        let zshrc_wrapper =
-            fs::read_to_string(session_dir.join("zsh/.zshrc")).expect("应读取 zshrc wrapper");
+        let bash_profile = fs::read_to_string(&bash_profile_path).expect("应读取用户 bash_profile");
         assert!(
-            zshrc_wrapper.contains("shell_integration.sh"),
-            ".zshrc wrapper 应在末尾 source integration: {zshrc_wrapper}"
-        );
-        assert!(
-            zshrc_wrapper.contains("ZDOTDIR=\"${ONETCLI_ORIG_ZDOTDIR:-$HOME}\""),
-            ".zshrc wrapper 应在末尾还原 ZDOTDIR: {zshrc_wrapper}"
-        );
-
-        let bashrc_wrapper =
-            fs::read_to_string(session_dir.join("bash/.bashrc")).expect("应读取 bashrc wrapper");
-        assert!(
-            bashrc_wrapper.contains("ONETCLI_LOGIN_SIMULATED"),
-            ".bashrc wrapper 应包含 ONETCLI_LOGIN_SIMULATED guard 模拟 login chain: {bashrc_wrapper}"
+            bash_profile.starts_with("# user bash_profile\n"),
+            "应保留用户 bash_profile 原内容，实际: {bash_profile}"
         );
         assert!(
-            bashrc_wrapper.contains("/etc/profile"),
-            ".bashrc wrapper 应模拟 login shell 加载 /etc/profile: {bashrc_wrapper}"
-        );
-        assert!(
-            bashrc_wrapper.contains(".bash_profile"),
-            ".bashrc wrapper 应模拟 login shell 尝试 ~/.bash_profile: {bashrc_wrapper}"
-        );
-        assert_eq!(
-            fs::read_to_string(&bashrc_path).expect("应保留用户 bashrc"),
-            "# user bashrc\n"
-        );
-        assert_eq!(
-            fs::read_to_string(&zshrc_path).expect("应保留用户 zshrc"),
-            "# user zshrc\n"
-        );
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            format!(
-                "__HOME__={}\n__SESSION__={}\n__SHELL__=/bin/zsh\n__TEST_OK__",
-                home_dir.display(),
-                session_dir.display()
-            )
+            bash_profile.contains("# BEGIN ONETCLI SHELL INTEGRATION"),
+            "bash login shell 启动文件也应写入 managed block: {bash_profile}"
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
@@ -1238,7 +1292,6 @@ mod tests {
 
         let command = build_shell_integration_setup_script(
             "echo one\r\necho two\r\n",
-            "42",
             "__TEST_OK__",
             "__HOME__=",
             "__SESSION__=",
@@ -1258,7 +1311,7 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        let integration_path = home_dir.join(".config/onetcli/sessions/42/shell_integration.sh");
+        let integration_path = home_dir.join(".config/onetcli/shell_integration.sh");
         assert_eq!(
             fs::read_to_string(&integration_path).expect("应写入 integration 文件"),
             "echo one\necho two\n",
@@ -1268,15 +1321,112 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 
+    #[test]
+    fn build_shell_integration_uninstall_command_removes_managed_blocks_and_scripts() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "onetcli-shell-uninstall-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos()
+        ));
+        let home_dir = temp_dir.join("home");
+        let config_dir = home_dir.join(".config/onetcli");
+        fs::create_dir_all(config_dir.join("sessions/42")).expect("应创建 legacy sessions");
+        fs::write(
+            config_dir.join("shell_integration.sh"),
+            "echo integration\n",
+        )
+        .expect("应写入 integration 脚本");
+        fs::write(
+            config_dir.join("sessions/42/shell_integration.sh"),
+            "legacy\n",
+        )
+        .expect("应写入 legacy session 脚本");
+
+        let managed = managed_shell_integration_block();
+        fs::write(
+            home_dir.join(".bashrc"),
+            format!("before bash\n{managed}after bash\n"),
+        )
+        .expect("应写入 bashrc");
+        fs::write(
+            home_dir.join(".bash_profile"),
+            format!("before profile\n{managed}after profile\n"),
+        )
+        .expect("应写入 bash_profile");
+        fs::write(
+            home_dir.join(".zshrc"),
+            format!("before zsh\n{managed}after zsh\n"),
+        )
+        .expect("应写入 zshrc");
+
+        let command =
+            build_shell_integration_uninstall_script("__TEST_UNINSTALL_OK__", "__HOME__=");
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .env("HOME", &home_dir)
+            .output()
+            .expect("应能执行本地 uninstall 命令");
+
+        assert!(
+            output.status.success(),
+            "uninstall 命令应成功执行: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            format!("__HOME__={}\n__TEST_UNINSTALL_OK__", home_dir.display())
+        );
+        assert_eq!(
+            fs::read_to_string(home_dir.join(".bashrc")).expect("应读取 bashrc"),
+            "before bash\nafter bash\n"
+        );
+        assert_eq!(
+            fs::read_to_string(home_dir.join(".bash_profile")).expect("应读取 bash_profile"),
+            "before profile\nafter profile\n"
+        );
+        assert_eq!(
+            fs::read_to_string(home_dir.join(".zshrc")).expect("应读取 zshrc"),
+            "before zsh\nafter zsh\n"
+        );
+        assert!(!config_dir.join("shell_integration.sh").exists());
+        assert!(!config_dir.join("sessions").exists());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn run_shell_integration_uninstall_accepts_success_marker_before_close() {
+        let (mut channel, _) = MockChannel::new(
+            [
+                ChannelEvent::Data(
+                    b"__ONETCLI_UNINSTALL_HOME__=/tmp/home\n__ONETCLI_UNINSTALL_OK__\n".to_vec(),
+                ),
+                ChannelEvent::Close,
+            ],
+            false,
+        );
+
+        let result = SshBackend::run_shell_integration_uninstall(&mut channel).await;
+
+        assert!(
+            result.is_ok(),
+            "收到卸载成功标记后应接受无 ExitStatus 的 Close"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
-    fn bash_wrapper_runs_bash_profile_chain_and_integration() {
+    fn bash_managed_block_sources_integration_only_for_onetcli_interactive_shells() {
         if Command::new("bash").arg("--version").output().is_err() {
-            eprintln!("跳过 bash wrapper 测试：当前环境未安装 bash");
+            eprintln!("跳过 bash managed block 测试：当前环境未安装 bash");
             return;
         }
         let temp_dir = std::env::temp_dir().join(format!(
-            "onetcli-bash-wrapper-{}-{}",
+            "onetcli-bash-managed-block-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1287,21 +1437,10 @@ mod tests {
 
         let home_dir = temp_dir.join("home");
         fs::create_dir_all(&home_dir).expect("应创建 home 目录");
-        fs::write(
-            home_dir.join(".bash_profile"),
-            "export __ONETCLI_BASH_PROFILE_LOADED=1\n",
-        )
-        .expect("应写入用户 .bash_profile");
-        fs::write(
-            home_dir.join(".bashrc"),
-            "[[ $- != *i* ]] && return\nexport __ONETCLI_USER_BASHRC=1\n",
-        )
-        .expect("应写入用户 .bashrc");
 
         let script = "export __ONETCLI_INTEGRATION_LOADED=1\n";
         let command = build_shell_integration_setup_script(
             script,
-            "42",
             "__TEST_OK__",
             "__HOME__=",
             "__SESSION__=",
@@ -1311,6 +1450,7 @@ mod tests {
             .arg("-c")
             .arg(&command)
             .env("HOME", &home_dir)
+            .env("SHELL", "/bin/bash")
             .output()
             .expect("应执行 setup 脚本");
         assert!(
@@ -1319,45 +1459,40 @@ mod tests {
             String::from_utf8_lossy(&setup.stderr)
         );
 
-        let wrapper = home_dir.join(".config/onetcli/sessions/42/bash/.bashrc");
-        let output = Command::new("bash")
-            .arg("--rcfile")
-            .arg(&wrapper)
+        let non_interactive = Command::new("bash")
+            .arg("-c")
+            .arg(". \"$HOME/.bashrc\"; echo loaded=${__ONETCLI_INTEGRATION_LOADED:-0}")
+            .env("HOME", &home_dir)
+            .output()
+            .expect("应执行非交互 bash");
+        assert!(
+            non_interactive.status.success(),
+            "非交互 bash 应成功: {}",
+            String::from_utf8_lossy(&non_interactive.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&non_interactive.stdout).trim(),
+            "loaded=0",
+            "非交互 shell 不应 source integration"
+        );
+
+        let interactive = Command::new("bash")
             .arg("-i")
             .arg("-c")
-            .arg(
-                "echo profile=$__ONETCLI_BASH_PROFILE_LOADED \
-                 rc=$__ONETCLI_USER_BASHRC \
-                 integration=$__ONETCLI_INTEGRATION_LOADED \
-                 login=$ONETCLI_LOGIN_SIMULATED",
-            )
+            .arg("echo loaded=${__ONETCLI_INTEGRATION_LOADED:-0}")
             .env("HOME", &home_dir)
-            .env("PS1", "$ ")
             .output()
-            .expect("应执行 bash wrapper");
+            .expect("应执行交互 bash");
 
         assert!(
-            output.status.success(),
-            "bash wrapper 应成功执行: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("profile=1"),
-            "bash wrapper 应模拟 login shell 加载 .bash_profile，实际: {stdout}"
+            interactive.status.success(),
+            "交互 bash 应成功执行: {}",
+            String::from_utf8_lossy(&interactive.stderr)
         );
         assert!(
-            stdout.contains("rc=1"),
-            "bash wrapper 应显式 source 用户 .bashrc，实际: {stdout}"
-        );
-        assert!(
-            stdout.contains("integration=1"),
-            "bash wrapper 应在末尾 source shell integration，实际: {stdout}"
-        );
-        assert!(
-            stdout.contains("login=1"),
-            "bash wrapper 应设置 ONETCLI_LOGIN_SIMULATED guard，实际: {stdout}"
+            String::from_utf8_lossy(&interactive.stdout).contains("loaded=1"),
+            "OnetCli 交互 bash 应 source integration，实际 stdout: {}",
+            String::from_utf8_lossy(&interactive.stdout)
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
@@ -1365,13 +1500,13 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn zsh_wrapper_loads_user_files_integration_and_restores_zdotdir() {
+    fn zsh_setup_writes_zshrc_managed_block() {
         if Command::new("zsh").arg("--version").output().is_err() {
-            eprintln!("跳过 zsh wrapper 测试：当前环境未安装 zsh");
+            eprintln!("跳过 zsh managed block 测试：当前环境未安装 zsh");
             return;
         }
         let temp_dir = std::env::temp_dir().join(format!(
-            "onetcli-zsh-wrapper-{}-{}",
+            "onetcli-zsh-managed-block-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1382,15 +1517,11 @@ mod tests {
 
         let home_dir = temp_dir.join("home");
         fs::create_dir_all(&home_dir).expect("应创建 home 目录");
-        fs::write(home_dir.join(".zshenv"), "export __ONETCLI_USER_ZSHENV=1\n")
-            .expect("应写入用户 .zshenv");
-        fs::write(home_dir.join(".zshrc"), "export __ONETCLI_USER_ZSHRC=1\n")
-            .expect("应写入用户 .zshrc");
+        fs::write(home_dir.join(".zshrc"), "# user zshrc\n").expect("应写入用户 .zshrc");
 
         let script = "export __ONETCLI_INTEGRATION_LOADED=1\n";
         let command = build_shell_integration_setup_script(
             script,
-            "42",
             "__TEST_OK__",
             "__HOME__=",
             "__SESSION__=",
@@ -1408,44 +1539,22 @@ mod tests {
             String::from_utf8_lossy(&setup.stderr)
         );
 
-        let zsh_dir = home_dir.join(".config/onetcli/sessions/42/zsh");
-        let output = Command::new("zsh")
-            .arg("-i")
-            .arg("-c")
-            .arg(
-                "echo zshenv=$__ONETCLI_USER_ZSHENV \
-                 zshrc=$__ONETCLI_USER_ZSHRC \
-                 integration=$__ONETCLI_INTEGRATION_LOADED \
-                 zdotdir=$ZDOTDIR",
-            )
-            .env("HOME", &home_dir)
-            .env("ZDOTDIR", &zsh_dir)
-            .env("ONETCLI_ORIG_ZDOTDIR", &home_dir)
-            .output()
-            .expect("应执行 zsh wrapper");
-
+        let zshrc = fs::read_to_string(home_dir.join(".zshrc")).expect("应读取 zshrc");
         assert!(
-            output.status.success(),
-            "zsh wrapper 应成功执行: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("zshenv=1"),
-            "zsh wrapper 应通过 fan-out 加载用户 .zshenv，实际: {stdout}"
+            zshrc.starts_with("# user zshrc\n"),
+            "应保留用户 zshrc 原内容，实际: {zshrc}"
         );
         assert!(
-            stdout.contains("zshrc=1"),
-            "zsh wrapper 应通过 fan-out 加载用户 .zshrc，实际: {stdout}"
+            zshrc.contains("# BEGIN ONETCLI SHELL INTEGRATION"),
+            "zshrc 应包含 managed block: {zshrc}"
         );
         assert!(
-            stdout.contains("integration=1"),
-            "zsh wrapper 应在 .zshrc 末尾 source shell integration，实际: {stdout}"
+            zshrc.contains("case \"$-\" in"),
+            "zshrc managed block 应保护非交互 shell: {zshrc}"
         );
         assert!(
-            stdout.contains(&format!("zdotdir={}", home_dir.display())),
-            "zsh wrapper 应在 .zshrc 末尾把 ZDOTDIR 还原为 $HOME，实际: {stdout}"
+            !home_dir.join(".zprofile").exists(),
+            "zsh 不需要通过 ZDOTDIR/session wrapper 改写 .zprofile"
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
