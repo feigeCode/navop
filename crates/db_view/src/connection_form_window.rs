@@ -457,7 +457,7 @@ mod tests {
             .expect("form factory block has an end marker");
 
         assert!(source.contains("external_driver_registry: db::ipc::IpcDriverRegistry"));
-        assert!(constructor.contains("&config.external_driver_registry"));
+        assert!(form_factory.contains("&config.external_driver_registry"));
         assert!(form_factory.contains("create_external_connection_form_for_with_registry"));
         assert!(form_factory.contains("create_connection_form_for_with_registry"));
         assert!(!constructor.contains("IpcDriverRegistry::load_default()"));

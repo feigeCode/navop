@@ -1122,27 +1122,21 @@ mod tests {
     }
 
     #[test]
-    fn app_settings_default_opens_ai_workbench_on_startup() {
+    fn app_settings_default_opens_home_on_startup() {
         let settings = AppSettings::default();
 
-        assert_eq!(
-            StartupDefaultPage::AiWorkbench,
-            settings.startup_default_page
-        );
+        assert_eq!(StartupDefaultPage::Home, settings.startup_default_page);
     }
 
     #[test]
-    fn app_settings_deserializes_startup_default_page_from_legacy_json() {
+    fn app_settings_deserializes_home_startup_default_page_from_legacy_json() {
         let settings: AppSettings = serde_json::from_value(serde_json::json!({
             "locale": "en",
             "theme_mode": "dark"
         }))
         .expect("旧版 settings.json 应能读取");
 
-        assert_eq!(
-            StartupDefaultPage::AiWorkbench,
-            settings.startup_default_page
-        );
+        assert_eq!(StartupDefaultPage::Home, settings.startup_default_page);
     }
 
     #[test]

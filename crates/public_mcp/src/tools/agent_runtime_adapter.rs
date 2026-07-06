@@ -163,7 +163,8 @@ mod tests {
     use crate::permissions::PermissionMode;
     use crate::tools::{PublicMcpToolContext, PublicMcpToolFuture, PublicMcpToolProvider};
     use agent_runtime::{
-        ResourceContext, SessionId, ToolName, TurnId, ids::ToolCallId, tools::ToolInvocation,
+        ResourceContext, SessionId, SkillContext, ToolName, TurnId, ids::ToolCallId,
+        tools::ToolInvocation,
     };
     use rmcp::model::{CallToolResult, Content, JsonObject, Tool};
     use serde_json::json;
@@ -267,6 +268,7 @@ mod tests {
             arguments,
             resource_id: None,
             resources: ResourceContext::new(),
+            skills: SkillContext::new(),
             cancellation: CancellationToken::new(),
         }
     }
