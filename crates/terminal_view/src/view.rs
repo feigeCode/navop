@@ -25,6 +25,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub(crate) mod block_selection;
 mod broadcast;
 mod history_prompt_rules;
 mod mouse_input;
@@ -52,6 +53,9 @@ use crate::terminal_element::{RenderCache, TerminalElement};
 use crate::theme::{
     DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, default_font_fallbacks,
     default_monospace_font, normalize_terminal_primary_font, terminal_cell_width_from_advances,
+};
+use crate::view::block_selection::{
+    BlockSelection, block_selection_text_from_rows, should_start_block_selection,
 };
 use broadcast::{BroadcastInputRegistry, init_broadcast_input_registry};
 #[cfg(test)]
@@ -469,6 +473,10 @@ fn terminal_paste_defaults() -> Vec<&'static str> {
     }
 }
 
+fn should_direct_paste_on_right_click(enabled: bool, button: MouseButton) -> bool {
+    enabled && button == MouseButton::Right
+}
+
 fn remote_clipboard_image_path(format: ImageFormat, timestamp_millis: u128) -> String {
     format!(
         "{REMOTE_CLIPBOARD_IMAGE_DIR}/{REMOTE_CLIPBOARD_IMAGE_PREFIX}-{timestamp_millis}.{}",
@@ -509,19 +517,11 @@ fn clipboard_image_from_item(item: &ClipboardItem) -> Option<Image> {
 }
 
 fn should_upload_clipboard_image_to_remote_cli(
+    paste_image_upload_enabled: bool,
     connection_kind: TerminalConnectionKind,
-    mode: TermMode,
+    _mode: TermMode,
 ) -> bool {
-    if connection_kind != TerminalConnectionKind::Ssh {
-        return false;
-    }
-
-    let application_modes = TermMode::ALT_SCREEN
-        | TermMode::MOUSE_MODE
-        | TermMode::DISAMBIGUATE_ESC_CODES
-        | TermMode::FOCUS_IN_OUT
-        | TermMode::VI;
-    !mode.intersects(application_modes)
+    paste_image_upload_enabled && connection_kind == TerminalConnectionKind::Ssh
 }
 
 fn terminal_increase_font_defaults() -> Vec<&'static str> {
@@ -603,6 +603,7 @@ pub struct TerminalView {
     scroll_lines_accumulated: f32,
 
     mouse_state: MouseState,
+    block_selection: Option<BlockSelection>,
     addon_manager: AddonManager,
 
     _subscriptions: Vec<Subscription>,
@@ -648,6 +649,10 @@ pub struct TerminalView {
     autocomplete_enabled: bool,
     /// 中键粘贴
     middle_click_paste: bool,
+    /// 右键快速粘贴
+    right_click_paste: bool,
+    /// SSH 粘贴图片上传
+    paste_image_upload: bool,
     /// 在 vim/less/man 等 alt-screen TUI 中,把鼠标滚轮转为方向键发送到 PTY
     vim_scroll_to_arrow_keys: bool,
     /// SSH 多窗口同步输入开关，按同一连接 ID 分组。
@@ -671,6 +676,7 @@ pub struct TerminalView {
 #[derive(Default)]
 struct MouseState {
     selecting: bool,
+    block_selecting: bool,
     pending_sgr_left_press: Option<PendingSgrMousePress>,
     last_click_point: Option<AlacPoint>,
     click_count: u32,
@@ -1095,6 +1101,7 @@ impl TerminalView {
             last_alt_screen: false,
             scroll_lines_accumulated: 0.0,
             mouse_state: MouseState::default(),
+            block_selection: None,
             addon_manager: Self::create_addon_manager(),
             _subscriptions: subscriptions,
             mouse_position: None,
@@ -1119,6 +1126,8 @@ impl TerminalView {
             auto_copy_on_select: true,
             autocomplete_enabled: true,
             middle_click_paste: true,
+            right_click_paste: false,
+            paste_image_upload: true,
             vim_scroll_to_arrow_keys: true,
             broadcast_input_enabled: false,
             broadcast_client_id: None,
@@ -1328,6 +1337,12 @@ impl TerminalView {
             }
             TerminalSidebarEvent::MiddleClickPasteChanged(enabled) => {
                 self.set_middle_click_paste(*enabled, cx);
+            }
+            TerminalSidebarEvent::RightClickPasteChanged(enabled) => {
+                self.set_right_click_paste(*enabled, cx);
+            }
+            TerminalSidebarEvent::PasteImageUploadChanged(enabled) => {
+                self.set_paste_image_upload(*enabled, cx);
             }
             TerminalSidebarEvent::VimScrollToArrowKeysChanged(enabled) => {
                 self.set_vim_scroll_to_arrow_keys(*enabled, cx);
@@ -2167,6 +2182,8 @@ impl TerminalView {
         auto_copy: bool,
         autocomplete_enabled: bool,
         middle_click_paste: bool,
+        right_click_paste: bool,
+        paste_image_upload: bool,
         sync_path: bool,
         vim_scroll_to_arrow_keys: bool,
         window: &mut Window,
@@ -2196,6 +2213,8 @@ impl TerminalView {
             self.dismiss_history_prompt_matches();
         }
         self.middle_click_paste = middle_click_paste;
+        self.right_click_paste = right_click_paste;
+        self.paste_image_upload = paste_image_upload;
         self.vim_scroll_to_arrow_keys = vim_scroll_to_arrow_keys;
 
         self.terminal.update(cx, |terminal, _cx| {
@@ -2209,6 +2228,8 @@ impl TerminalView {
             sidebar.set_font_family(font_family, window, cx);
             sidebar.set_auto_copy(auto_copy, cx);
             sidebar.set_middle_click_paste(middle_click_paste, cx);
+            sidebar.set_right_click_paste(right_click_paste, cx);
+            sidebar.set_paste_image_upload(paste_image_upload, cx);
             sidebar.set_vim_scroll_to_arrow_keys(vim_scroll_to_arrow_keys, cx);
             sidebar.set_sync_path_enabled(sync_path, cx);
         });
@@ -2228,6 +2249,8 @@ impl TerminalView {
             settings.auto_copy,
             settings.enable_autocomplete,
             settings.middle_click_paste,
+            settings.right_click_paste,
+            settings.paste_image_upload,
             settings.sync_path_with_terminal,
             settings.vim_scroll_to_arrow_keys,
             window,
@@ -2361,6 +2384,24 @@ impl TerminalView {
         }
         let _ = update_settings(cx, move |settings| {
             settings.middle_click_paste = enabled;
+        });
+    }
+
+    pub fn set_right_click_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.right_click_paste == enabled {
+            return;
+        }
+        let _ = update_settings(cx, move |settings| {
+            settings.right_click_paste = enabled;
+        });
+    }
+
+    pub fn set_paste_image_upload(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.paste_image_upload == enabled {
+            return;
+        }
+        let _ = update_settings(cx, move |settings| {
+            settings.paste_image_upload = enabled;
         });
     }
 
@@ -2796,10 +2837,44 @@ impl TerminalView {
     }
 
     fn copy(&mut self, _: &Copy, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = self.terminal.read(cx).selection_text() {
+        if let Some(text) = self.block_selection_text(cx) {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        } else if let Some(text) = self.terminal.read(cx).selection_text() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
         self.focus_terminal(window, cx);
+    }
+
+    fn block_selection_text(&self, cx: &App) -> Option<String> {
+        let selection = self.block_selection?;
+        if selection.is_empty() {
+            return None;
+        }
+
+        let terminal = self.terminal.read(cx);
+        let term = terminal.term().lock();
+        let columns = term.columns();
+        let screen_lines = term.screen_lines();
+        let content = term.renderable_content();
+        let display_offset = content.display_offset;
+        let mut rows = vec![vec![' '; columns]; screen_lines];
+
+        for cell in content.display_iter {
+            let screen_line = cell.point.line.0 + display_offset as i32;
+            let Ok(row) = usize::try_from(screen_line) else {
+                continue;
+            };
+            if row >= rows.len() || cell.point.column.0 >= columns {
+                continue;
+            }
+            rows[row][cell.point.column.0] = cell.c;
+        }
+
+        let rows = rows
+            .into_iter()
+            .map(|chars| chars.into_iter().collect::<String>())
+            .collect::<Vec<_>>();
+        block_selection_text_from_rows(&rows, selection.anchor, selection.active)
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
@@ -2808,8 +2883,11 @@ impl TerminalView {
                 let terminal = self.terminal.read(cx);
                 (terminal.connection_kind(), terminal.mode())
             };
-            let should_upload_image =
-                should_upload_clipboard_image_to_remote_cli(connection_kind, mode);
+            let should_upload_image = should_upload_clipboard_image_to_remote_cli(
+                self.paste_image_upload,
+                connection_kind,
+                mode,
+            );
 
             if should_upload_image {
                 if let Some(image) = clipboard_image_from_item(&clipboard) {
@@ -3154,6 +3232,8 @@ impl TerminalView {
     }
 
     fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
+        self.block_selection = None;
+        self.mouse_state.block_selecting = false;
         self.terminal.update(cx, |terminal, _| {
             terminal.select_all();
         });
@@ -3196,6 +3276,9 @@ impl TerminalView {
             return;
         }
 
+        let had_block_selection = self.block_selection.take().is_some();
+        self.mouse_state.block_selecting = false;
+
         let term = self.terminal.read(cx).term().clone();
         let mut term_lock = term.lock();
         let in_vi_mode = term_lock.mode().contains(TermMode::VI);
@@ -3209,8 +3292,10 @@ impl TerminalView {
             }
             drop(term_lock);
             cx.notify();
-        } else if has_selection {
-            term_lock.selection = None;
+        } else if has_selection || had_block_selection {
+            if has_selection {
+                term_lock.selection = None;
+            }
             drop(term_lock);
             cx.notify();
         } else {
@@ -3441,8 +3526,14 @@ impl TerminalView {
             let term = self.terminal.read(cx).term().clone();
             let mut term = term.lock();
 
-            self.render_cache
-                .update(&mut term, &self.addon_manager, &self.current_theme);
+            self.render_cache.update(
+                &mut term,
+                &self.addon_manager,
+                &self.current_theme,
+                self.block_selection
+                    .filter(|selection| !selection.is_empty())
+                    .map(|selection| selection.bounds()),
+            );
         }
 
         // 获取光标可见性
@@ -3899,6 +3990,19 @@ impl TerminalView {
         if self.terminal.read(cx).ssh_mfa_request().is_none() {
             window.focus(&self.focus_handle, cx);
         }
+        if should_start_block_selection(event.button, event.modifiers) {
+            let point = self.pixel_to_point(event.position, self.terminal_bounds, cx);
+            self.block_selection = Some(BlockSelection::new(point));
+            self.mouse_state.block_selecting = true;
+            self.mouse_state.pending_sgr_left_press = None;
+            self.mouse_state.selecting = false;
+            self.terminal.update(cx, |terminal, _| {
+                terminal.clear_selection();
+            });
+            self.dismiss_history_prompt();
+            cx.notify();
+            return;
+        }
         let mode = self.terminal.read(cx).mode();
         if should_defer_sgr_left_press(event.button, event.modifiers, mode) {
             self.mouse_state.pending_sgr_left_press = Some(PendingSgrMousePress {
@@ -3931,6 +4035,8 @@ impl TerminalView {
         }
 
         let bounds = self.terminal_bounds;
+        let cleared_block_selection = self.block_selection.take().is_some();
+        self.mouse_state.block_selecting = false;
 
         let point = self.pixel_to_point(event.position, bounds, cx);
         let has_selection = self.terminal.read(cx).term().lock().selection.is_some();
@@ -3964,6 +4070,9 @@ impl TerminalView {
         };
 
         if consumed {
+            if cleared_block_selection {
+                cx.notify();
+            }
             return;
         }
 
@@ -4027,6 +4136,23 @@ impl TerminalView {
         }
     }
 
+    fn handle_right_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !should_direct_paste_on_right_click(self.right_click_paste, event.button) {
+            return;
+        }
+        cx.stop_propagation();
+        if self.terminal.read(cx).ssh_mfa_request().is_none() {
+            window.focus(&self.focus_handle, cx);
+        }
+        self.dismiss_history_prompt();
+        self.paste(&Paste, window, cx);
+    }
+
     fn handle_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
@@ -4038,6 +4164,16 @@ impl TerminalView {
         let point = self.pixel_to_point(event.position, bounds, cx);
         let screen_line = point.line.0 as usize;
         let column = point.column.0;
+
+        if self.mouse_state.block_selecting {
+            if event.dragging() {
+                if let Some(selection) = &mut self.block_selection {
+                    selection.update(point);
+                    cx.notify();
+                }
+            }
+            return;
+        }
 
         if !event.dragging() {
             self.mouse_state.pending_sgr_left_press = None;
@@ -4140,6 +4276,14 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.mouse_state.block_selecting && event.button == MouseButton::Left {
+            let point = self.pixel_to_point(event.position, self.terminal_bounds, cx);
+            if let Some(selection) = &mut self.block_selection {
+                selection.update(point);
+            }
+            self.finish_block_selection(cx);
+            return;
+        }
         if let Some(pending) = self.mouse_state.pending_sgr_left_press.take() {
             self.terminal.update(cx, |terminal, _| {
                 terminal.clear_selection();
@@ -4208,6 +4352,11 @@ impl TerminalView {
             return;
         }
 
+        if self.mouse_state.block_selecting {
+            self.finish_block_selection(cx);
+            return;
+        }
+
         if self.mouse_state.pending_sgr_left_press.is_some() {
             if !self.terminal_bounds.contains(&event.position) {
                 self.handle_mouse_up(event, window, cx);
@@ -4216,6 +4365,29 @@ impl TerminalView {
         }
 
         self.finish_mouse_selection(cx);
+    }
+
+    fn finish_block_selection(&mut self, cx: &mut Context<Self>) {
+        if !self.mouse_state.block_selecting {
+            return;
+        }
+
+        self.mouse_state.block_selecting = false;
+        if self
+            .block_selection
+            .map(|selection| selection.is_empty())
+            .unwrap_or(false)
+        {
+            self.block_selection = None;
+            cx.notify();
+            return;
+        }
+        if self.auto_copy_on_select {
+            if let Some(text) = self.block_selection_text(cx) {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+        }
+        cx.notify();
     }
 
     fn finish_mouse_selection(&mut self, cx: &mut Context<Self>) {
@@ -4515,8 +4687,12 @@ impl Render for TerminalView {
         let connection_state = self.terminal.read(cx).connection_state().clone();
         let can_reconnect = self.terminal.read(cx).can_reconnect();
         let bg_color = self.current_theme.background;
-        let has_selection = self.terminal.read(cx).term().lock().selection.is_some();
-        let selection_text = self.terminal.read(cx).selection_text();
+        let block_selection_text = self.block_selection_text(cx);
+        let terminal_has_selection = self.terminal.read(cx).term().lock().selection.is_some();
+        let has_selection = terminal_has_selection || block_selection_text.is_some();
+        let selection_text =
+            block_selection_text.or_else(|| self.terminal.read(cx).selection_text());
+        let right_click_paste = self.right_click_paste;
         let render_embedded_sidebar =
             self.sidebar_render_mode == TerminalSidebarRenderMode::Embedded;
         let sidebar_visible = render_embedded_sidebar && self.sidebar.read(cx).is_visible();
@@ -4624,7 +4800,7 @@ impl Render for TerminalView {
                     .child({
                         let view = cx.entity().clone();
                         let sidebar = self.sidebar.clone();
-                        div()
+                        let terminal_surface = div()
                             .absolute()
                             .left(px(12.))
                             .right(px(12.))
@@ -4635,18 +4811,29 @@ impl Render for TerminalView {
                             .child(self.render_terminal(effective_font_family.clone(), cx))
                             .when_some(self.render_history_prompt_overlay(cx), |this, overlay| {
                                 this.child(overlay)
-                            })
-                            .context_menu(move |menu, window, cx| {
-                                Self::build_context_menu(
-                                    menu,
-                                    has_selection,
-                                    selection_text.clone(),
-                                    &view,
-                                    &sidebar,
-                                    window,
-                                    cx,
+                            });
+                        if right_click_paste {
+                            terminal_surface
+                                .on_mouse_down(
+                                    MouseButton::Right,
+                                    cx.listener(Self::handle_right_mouse_down),
                                 )
-                            })
+                                .into_any_element()
+                        } else {
+                            terminal_surface
+                                .context_menu(move |menu, window, cx| {
+                                    Self::build_context_menu(
+                                        menu,
+                                        has_selection,
+                                        selection_text.clone(),
+                                        &view,
+                                        &sidebar,
+                                        window,
+                                        cx,
+                                    )
+                                })
+                                .into_any_element()
+                        }
                     })
                     .when_some(tooltip.zip(mouse_pos), |this, (tooltip, pos)| {
                         let relative_x = pos.x - terminal_bounds.origin.x;
@@ -4929,19 +5116,20 @@ impl Element for ResizeEventHandler {
 mod tests {
     use super::{
         TerminalDuplicateSource, UnbracketedPasteHazard, WrappedLineSegment,
-        clipboard_image_from_item, detect_unbracketed_paste_hazard, encode_mouse_modifiers,
-        has_trailing_line_continuation, has_unterminated_shell_quote, history_prompt_available,
-        history_prompt_dropdown_origin, history_prompt_overlay_bounds, mouse_button_code,
-        multiline_non_empty_line_count, remote_clipboard_image_path, sgr_mouse_button_report,
-        sgr_mouse_mode_enabled, sgr_mouse_wheel_report, should_confirm_local_terminal_close,
+        block_selection_text_from_rows, clipboard_image_from_item, detect_unbracketed_paste_hazard,
+        encode_mouse_modifiers, has_trailing_line_continuation, has_unterminated_shell_quote,
+        history_prompt_available, history_prompt_dropdown_origin, history_prompt_overlay_bounds,
+        mouse_button_code, multiline_non_empty_line_count, remote_clipboard_image_path,
+        sgr_mouse_button_report, sgr_mouse_mode_enabled, sgr_mouse_wheel_report,
+        should_confirm_local_terminal_close,
         should_defer_inline_history_prompt_input_to_text_system, should_defer_sgr_left_press,
-        should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
-        should_dismiss_history_prompt_for_scroll, should_extend_selection_on_shift_click,
-        should_refresh_history_commands_for_terminal_event,
+        should_direct_paste_on_right_click, should_dismiss_history_prompt_for_keystroke,
+        should_dismiss_history_prompt_for_mouse, should_dismiss_history_prompt_for_scroll,
+        should_extend_selection_on_shift_click, should_refresh_history_commands_for_terminal_event,
         should_reset_history_prompt_for_terminal_event, should_scroll_to_bottom_on_user_input,
-        should_start_selection_from_pending_sgr_press, should_upload_clipboard_image_to_remote_cli,
-        take_whole_scroll_lines, terminal_history_scope, terminal_tab_duplicate_supported,
-        wrapped_addon_line_text,
+        should_start_block_selection, should_start_selection_from_pending_sgr_press,
+        should_upload_clipboard_image_to_remote_cli, take_whole_scroll_lines,
+        terminal_history_scope, terminal_tab_duplicate_supported, wrapped_addon_line_text,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
@@ -5099,26 +5287,35 @@ mod tests {
     #[test]
     fn clipboard_image_upload_is_only_for_ssh_shell_paste() {
         assert!(should_upload_clipboard_image_to_remote_cli(
+            true,
             TerminalConnectionKind::Ssh,
             TermMode::empty()
         ));
         assert!(should_upload_clipboard_image_to_remote_cli(
+            true,
             TerminalConnectionKind::Ssh,
             TermMode::BRACKETED_PASTE
         ));
 
         assert!(!should_upload_clipboard_image_to_remote_cli(
+            true,
             TerminalConnectionKind::Local,
             TermMode::empty()
         ));
         assert!(!should_upload_clipboard_image_to_remote_cli(
+            true,
             TerminalConnectionKind::Serial,
+            TermMode::empty()
+        ));
+        assert!(!should_upload_clipboard_image_to_remote_cli(
+            false,
+            TerminalConnectionKind::Ssh,
             TermMode::empty()
         ));
     }
 
     #[test]
-    fn clipboard_image_upload_does_not_intercept_tui_modes() {
+    fn clipboard_image_upload_intercepts_ssh_tui_modes() {
         for mode in [
             TermMode::ALT_SCREEN,
             TermMode::MOUSE_MODE,
@@ -5126,7 +5323,13 @@ mod tests {
             TermMode::FOCUS_IN_OUT,
             TermMode::VI,
         ] {
+            assert!(should_upload_clipboard_image_to_remote_cli(
+                true,
+                TerminalConnectionKind::Ssh,
+                mode
+            ));
             assert!(!should_upload_clipboard_image_to_remote_cli(
+                false,
                 TerminalConnectionKind::Ssh,
                 mode
             ));
@@ -5374,6 +5577,32 @@ mod tests {
             none,
             TermMode::default()
         ));
+    }
+
+    #[test]
+    fn alt_left_mouse_starts_block_selection() {
+        let alt = Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        };
+
+        assert!(should_start_block_selection(MouseButton::Left, alt));
+        assert!(!should_start_block_selection(MouseButton::Right, alt));
+        assert!(!should_start_block_selection(
+            MouseButton::Left,
+            Modifiers::default()
+        ));
+    }
+
+    #[test]
+    fn block_selection_text_extracts_same_columns_from_each_line() {
+        let rows = vec!["alpha beta".to_string(), "bravo charlie".to_string()];
+        let start = AlacPoint::new(Line(0), Column(2));
+        let end = AlacPoint::new(Line(1), Column(6));
+
+        let text = block_selection_text_from_rows(&rows, start, end);
+
+        assert_eq!(Some("pha b\navo c".to_string()), text);
     }
 
     #[test]
@@ -5704,6 +5933,20 @@ mod tests {
         assert!(should_dismiss_history_prompt_for_mouse(MouseButton::Left));
         assert!(should_dismiss_history_prompt_for_mouse(MouseButton::Middle));
         assert!(should_dismiss_history_prompt_for_mouse(MouseButton::Right));
+    }
+
+    #[test]
+    fn right_click_uses_context_menu_when_quick_paste_is_disabled() {
+        assert!(!should_direct_paste_on_right_click(
+            false,
+            MouseButton::Right
+        ));
+    }
+
+    #[test]
+    fn right_click_directly_pastes_when_quick_paste_is_enabled() {
+        assert!(should_direct_paste_on_right_click(true, MouseButton::Right));
+        assert!(!should_direct_paste_on_right_click(true, MouseButton::Left));
     }
 
     #[test]

@@ -457,6 +457,14 @@ Settings:
     en: Middle click paste
     zh-CN: 中键粘贴
     zh-HK: 中鍵貼上
+  right_click_paste:
+    en: Right click paste
+    zh-CN: 右键快速粘贴
+    zh-HK: 右鍵快速貼上
+  paste_image_upload:
+    en: Upload pasted images to SSH
+    zh-CN: 粘贴图片上传到 SSH
+    zh-HK: 貼上圖片上傳到 SSH
   vim_scroll_to_arrow_keys:
     en: Mouse wheel as arrow keys in vim/TUI
     zh-CN: vim/TUI 中鼠标滚轮映射为方向键

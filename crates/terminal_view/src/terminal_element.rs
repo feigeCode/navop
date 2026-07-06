@@ -8,6 +8,7 @@
 
 use crate::TerminalTheme;
 use crate::addon::{AddonManager, CellDecoration, DecorationSpan};
+use crate::view::block_selection::BlockSelectionBounds;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::Flags;
@@ -409,6 +410,8 @@ pub struct RenderCache {
 
     /// 上一帧的选择范围，用于增量更新
     last_selection: Option<SelectionRange>,
+    /// 上一帧的块选择范围，用于增量更新
+    last_block_selection: Option<BlockSelectionBounds>,
 
     /// 左边缘列指纹（用于检测脏区漏报导致的首列残字）
     left_edge_fingerprint: Vec<u64>,
@@ -461,16 +464,18 @@ impl RenderCache {
             custom_background: rgb(0x1E1E1E).into(),
             custom_cursor: rgb(0xFFFFFF).into(),
             last_selection: None,
+            last_block_selection: None,
             left_edge_fingerprint: vec![0; num_lines],
         }
     }
 
     /// Update cache based on terminal damage, with incremental selection support
-    pub fn update(
+    pub(crate) fn update(
         &mut self,
         term: &mut Term<GpuiEventProxy>,
         addon_manager: &AddonManager,
         theme: &TerminalTheme,
+        block_selection: Option<BlockSelectionBounds>,
     ) {
         let num_cols = term.columns();
         let num_lines = term.screen_lines();
@@ -530,7 +535,7 @@ impl RenderCache {
                 num_lines,
                 "rebuild_all (forced by theme/decoration)"
             );
-            self.rebuild_all_and_update_state(term);
+            self.rebuild_all_and_update_state(term, block_selection);
             return;
         }
 
@@ -542,7 +547,7 @@ impl RenderCache {
                     num_lines,
                     "rebuild_all (TermDamage::Full)"
                 );
-                self.rebuild_all_and_update_state(term);
+                self.rebuild_all_and_update_state(term, block_selection);
                 return;
             }
             DamageSnapshot::Partial(lines) => {
@@ -581,6 +586,15 @@ impl RenderCache {
             }
         }
 
+        if self.last_block_selection != block_selection {
+            let block_selection_lines = self
+                .compute_block_selection_changed_lines(self.last_block_selection, block_selection);
+            for line in block_selection_lines {
+                dirty_lines.insert(line);
+            }
+            self.last_block_selection = block_selection;
+        }
+
         // 首列兜底：检测左边缘变化但未被 damage 标记的行。
         let edge_changed_lines = self.detect_left_edge_changed_lines(term, 4);
         for line in &edge_changed_lines {
@@ -592,7 +606,7 @@ impl RenderCache {
             self.update_cursor(term);
         } else {
             let lines: Vec<usize> = dirty_lines.into_iter().collect();
-            self.rebuild_lines(term, &lines);
+            self.rebuild_lines(term, &lines, block_selection);
         }
     }
 
@@ -611,13 +625,22 @@ impl RenderCache {
         self.left_edge_fingerprint.resize(num_lines, 0);
     }
 
-    fn rebuild_all_and_update_state(&mut self, term: &Term<GpuiEventProxy>) {
-        self.rebuild_all(term);
+    fn rebuild_all_and_update_state(
+        &mut self,
+        term: &Term<GpuiEventProxy>,
+        block_selection: Option<BlockSelectionBounds>,
+    ) {
+        self.rebuild_all(term, block_selection);
         self.update_last_selection(term);
+        self.last_block_selection = block_selection;
         self.sync_left_edge_fingerprint(term, 4);
     }
 
-    fn rebuild_all(&mut self, term: &Term<GpuiEventProxy>) {
+    fn rebuild_all(
+        &mut self,
+        term: &Term<GpuiEventProxy>,
+        block_selection: Option<BlockSelectionBounds>,
+    ) {
         let content = term.renderable_content();
         let display_offset = content.display_offset;
         let selection = &content.selection;
@@ -639,10 +662,15 @@ impl RenderCache {
                 continue;
             }
 
-            let is_selected = selection
-                .as_ref()
-                .map(|s: &SelectionRange| s.contains(cell.point))
-                .unwrap_or(false);
+            let is_selected = block_selection
+                .map(|bounds| {
+                    bounds.contains_screen_cell(screen_line as usize, cell.point.column.0)
+                })
+                .unwrap_or(false)
+                || selection
+                    .as_ref()
+                    .map(|s: &SelectionRange| s.contains(cell.point))
+                    .unwrap_or(false);
 
             line_cells[screen_line as usize].push(CellData {
                 column: cell.point.column.0,
@@ -693,7 +721,12 @@ impl RenderCache {
     }
 
     /// Rebuild specified lines
-    fn rebuild_lines(&mut self, term: &Term<GpuiEventProxy>, lines: &[usize]) {
+    fn rebuild_lines(
+        &mut self,
+        term: &Term<GpuiEventProxy>,
+        lines: &[usize],
+        block_selection: Option<BlockSelectionBounds>,
+    ) {
         let content = term.renderable_content();
         let display_offset = content.display_offset;
         let selection = &content.selection;
@@ -714,10 +747,13 @@ impl RenderCache {
                 continue;
             }
 
-            let is_selected = selection
-                .as_ref()
-                .map(|s: &SelectionRange| s.contains(cell.point))
-                .unwrap_or(false);
+            let is_selected = block_selection
+                .map(|bounds| bounds.contains_screen_cell(line_idx, cell.point.column.0))
+                .unwrap_or(false)
+                || selection
+                    .as_ref()
+                    .map(|s: &SelectionRange| s.contains(cell.point))
+                    .unwrap_or(false);
 
             line_cells[line_idx].push(CellData {
                 column: cell.point.column.0,
@@ -776,6 +812,34 @@ impl RenderCache {
         }
 
         changed_lines
+    }
+
+    fn compute_block_selection_changed_lines(
+        &self,
+        old_selection: Option<BlockSelectionBounds>,
+        new_selection: Option<BlockSelectionBounds>,
+    ) -> Vec<usize> {
+        let mut changed_lines = Vec::new();
+        self.push_block_selection_lines(old_selection, &mut changed_lines);
+        self.push_block_selection_lines(new_selection, &mut changed_lines);
+        changed_lines
+    }
+
+    fn push_block_selection_lines(
+        &self,
+        selection: Option<BlockSelectionBounds>,
+        changed_lines: &mut Vec<usize>,
+    ) {
+        let Some(selection) = selection else {
+            return;
+        };
+        let start_line = selection.start_line.max(0) as usize;
+        let end_line = selection.end_line.max(0) as usize;
+        for line in start_line..=end_line.min(self.num_lines.saturating_sub(1)) {
+            if !changed_lines.contains(&line) {
+                changed_lines.push(line);
+            }
+        }
     }
 
     /// Update the last_selection tracking field

@@ -429,6 +429,10 @@ pub enum TerminalSidebarEvent {
     AutocompleteChanged(bool),
     /// 中键粘贴开关
     MiddleClickPasteChanged(bool),
+    /// 右键快速粘贴开关
+    RightClickPasteChanged(bool),
+    /// SSH 粘贴图片上传开关
+    PasteImageUploadChanged(bool),
     /// vim/TUI 滚轮转方向键开关
     VimScrollToArrowKeysChanged(bool),
     /// SSH 多窗口同步输入开关
@@ -501,6 +505,8 @@ impl TerminalSidebar {
                 has_file_manager,
                 true,
                 true,
+                true,
+                false,
                 true,
                 sync_path_enabled,
                 true,
@@ -621,6 +627,12 @@ impl TerminalSidebar {
                 }
                 settings_panel::SettingsPanelEvent::MiddleClickPasteChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::MiddleClickPasteChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::RightClickPasteChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::RightClickPasteChanged(*enabled));
+                }
+                settings_panel::SettingsPanelEvent::PasteImageUploadChanged(enabled) => {
+                    cx.emit(TerminalSidebarEvent::PasteImageUploadChanged(*enabled));
                 }
                 settings_panel::SettingsPanelEvent::VimScrollToArrowKeysChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::VimScrollToArrowKeysChanged(*enabled));
@@ -950,6 +962,18 @@ impl TerminalSidebar {
     pub fn set_middle_click_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_middle_click_paste(enabled, cx);
+        });
+    }
+
+    pub fn set_right_click_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_right_click_paste(enabled, cx);
+        });
+    }
+
+    pub fn set_paste_image_upload(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_paste_image_upload(enabled, cx);
         });
     }
 

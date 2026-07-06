@@ -542,6 +542,10 @@ pub struct AppSettings {
     pub terminal_enable_autocomplete: bool,
     #[serde(default = "default_true")]
     pub terminal_middle_click_paste: bool,
+    #[serde(default)]
+    pub terminal_right_click_paste: bool,
+    #[serde(default = "default_true")]
+    pub terminal_paste_image_upload: bool,
     #[serde(default = "default_true")]
     pub terminal_sync_path_with_terminal: bool,
     #[serde(default = "default_terminal_theme")]
@@ -836,6 +840,8 @@ impl Default for AppSettings {
             terminal_auto_copy: default_true(),
             terminal_enable_autocomplete: default_true(),
             terminal_middle_click_paste: default_true(),
+            terminal_right_click_paste: false,
+            terminal_paste_image_upload: default_true(),
             terminal_sync_path_with_terminal: true,
             terminal_theme: default_terminal_theme(),
             terminal_cursor_blink: false,
@@ -1099,6 +1105,20 @@ mod tests {
         .expect("旧版 settings.json 应能读取");
 
         assert!(settings.terminal_sync_path_with_terminal);
+    }
+
+    #[test]
+    fn app_settings_disables_terminal_right_click_paste_by_default() {
+        let settings = AppSettings::default();
+
+        assert!(!settings.terminal_right_click_paste);
+    }
+
+    #[test]
+    fn app_settings_enables_terminal_paste_image_upload_by_default() {
+        let settings = AppSettings::default();
+
+        assert!(settings.terminal_paste_image_upload);
     }
 
     #[test]

@@ -46,6 +46,22 @@ impl NumberField {
     }
 }
 
+fn update_number_from_step(
+    value: &str,
+    action: StepAction,
+    options: &NumberFieldOptions,
+    mut set_value: impl FnMut(f64),
+) -> Option<f64> {
+    let value = value.parse::<f64>().ok()?;
+    let new_value = match action {
+        StepAction::Increment => value + options.step,
+        StepAction::Decrement => value - options.step,
+    }
+    .clamp(options.min, options.max);
+    set_value(new_value);
+    Some(new_value)
+}
+
 struct State {
     input: Entity<InputState>,
     initial_value: f64,
@@ -75,24 +91,32 @@ impl SettingFieldRender for NumberField {
                 |window, cx| {
                     let input =
                         cx.new(|cx| InputState::new(window, cx).default_value(value.to_string()));
+                    let step_options = num_options.clone();
+                    let change_options = num_options.clone();
                     let _subscriptions = vec![
                         cx.subscribe_in(&input, window, {
-                            move |_, input, event: &NumberInputEvent, window, cx| match event {
-                                NumberInputEvent::Step(action) => input.update(cx, |input, cx| {
-                                    let value = input.value();
-                                    if let Ok(value) = value.parse::<f64>() {
-                                        let new_value = if *action == StepAction::Increment {
-                                            value + num_options.step
-                                        } else {
-                                            value - num_options.step
-                                        };
-                                        input.set_value(
-                                            SharedString::from(new_value.to_string()),
-                                            window,
-                                            cx,
-                                        );
+                            let set_value = set_value.clone();
+                            move |state: &mut State, input, event: &NumberInputEvent, window, cx| {
+                                match event {
+                                    NumberInputEvent::Step(action) => {
+                                        input.update(cx, |input, cx| {
+                                            let value = input.value();
+                                            if let Some(new_value) = update_number_from_step(
+                                                &value,
+                                                *action,
+                                                &step_options,
+                                                |value| set_value(value, cx),
+                                            ) {
+                                                state.initial_value = new_value;
+                                                input.set_value(
+                                                    SharedString::from(new_value.to_string()),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        })
                                     }
-                                }),
+                                }
                             }
                         }),
                         cx.subscribe_in(&input, window, {
@@ -106,8 +130,8 @@ impl SettingFieldRender for NumberField {
                                             }
 
                                             if let Ok(value) = value.parse::<f64>() {
-                                                let clamp_value =
-                                                    value.clamp(num_options.min, num_options.max);
+                                                let clamp_value = value
+                                                    .clamp(change_options.min, change_options.max);
 
                                                 set_value(clamp_value, cx);
                                                 state.initial_value = clamp_value;
@@ -147,5 +171,45 @@ impl SettingFieldRender for NumberField {
             })
             .refine_style(style)
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NumberFieldOptions, update_number_from_step};
+    use crate::input::StepAction;
+
+    #[test]
+    fn number_step_updates_persisted_value() {
+        let options = NumberFieldOptions {
+            min: 8.0,
+            max: 72.0,
+            step: 1.0,
+        };
+        let mut persisted = None;
+
+        let next = update_number_from_step("14", StepAction::Increment, &options, |value| {
+            persisted = Some(value);
+        });
+
+        assert_eq!(Some(15.0), next);
+        assert_eq!(Some(15.0), persisted);
+    }
+
+    #[test]
+    fn number_step_clamps_before_persisting() {
+        let options = NumberFieldOptions {
+            min: 8.0,
+            max: 72.0,
+            step: 1.0,
+        };
+        let mut persisted = None;
+
+        let next = update_number_from_step("72", StepAction::Increment, &options, |value| {
+            persisted = Some(value);
+        });
+
+        assert_eq!(Some(72.0), next);
+        assert_eq!(Some(72.0), persisted);
     }
 }

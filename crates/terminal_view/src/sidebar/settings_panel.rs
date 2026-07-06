@@ -129,6 +129,10 @@ pub enum SettingsPanelEvent {
     AutocompleteChanged(bool),
     /// 中键粘贴开关
     MiddleClickPasteChanged(bool),
+    /// 右键快速粘贴开关
+    RightClickPasteChanged(bool),
+    /// SSH 粘贴图片上传开关
+    PasteImageUploadChanged(bool),
     /// vim/TUI 滚轮转方向键开关
     VimScrollToArrowKeysChanged(bool),
     /// SSH 多窗口同步输入开关
@@ -167,6 +171,10 @@ pub struct SettingsPanel {
     autocomplete_enabled: bool,
     /// 中键粘贴
     middle_click_paste: bool,
+    /// 右键快速粘贴
+    right_click_paste: bool,
+    /// SSH 粘贴图片上传
+    paste_image_upload: bool,
     /// vim/TUI 滚轮转方向键
     vim_scroll_to_arrow_keys: bool,
     /// SSH 多窗口同步输入
@@ -192,6 +200,8 @@ impl SettingsPanel {
         auto_copy: bool,
         autocomplete_enabled: bool,
         middle_click_paste: bool,
+        right_click_paste: bool,
+        paste_image_upload: bool,
         sync_path: bool,
         vim_scroll_to_arrow_keys: bool,
         broadcast_input: bool,
@@ -318,6 +328,8 @@ impl SettingsPanel {
             auto_copy,
             autocomplete_enabled,
             middle_click_paste,
+            right_click_paste,
+            paste_image_upload,
             broadcast_input,
             sync_path,
             vim_scroll_to_arrow_keys,
@@ -380,6 +392,16 @@ impl SettingsPanel {
 
     pub fn set_middle_click_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.middle_click_paste = enabled;
+        cx.notify();
+    }
+
+    pub fn set_right_click_paste(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.right_click_paste = enabled;
+        cx.notify();
+    }
+
+    pub fn set_paste_image_upload(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.paste_image_upload = enabled;
         cx.notify();
     }
 
@@ -937,6 +959,8 @@ impl SettingsPanel {
         let auto_copy = self.auto_copy;
         let autocomplete_enabled = self.autocomplete_enabled;
         let middle_click_paste = self.middle_click_paste;
+        let right_click_paste = self.right_click_paste;
+        let paste_image_upload = self.paste_image_upload;
         let vim_scroll_to_arrow_keys = self.vim_scroll_to_arrow_keys;
 
         v_flex()
@@ -970,6 +994,40 @@ impl SettingsPanel {
                                     .on_click(cx.listener(|this, checked: &bool, _window, cx| {
                                         this.confirm_multiline_paste = *checked;
                                         cx.emit(SettingsPanelEvent::ConfirmMultilinePasteChanged(
+                                            *checked,
+                                        ));
+                                    })),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().text_sm().child(t!("Settings.right_click_paste")))
+                            .child(
+                                Switch::new("right-click-paste-switch")
+                                    .checked(right_click_paste)
+                                    .small()
+                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                                        this.right_click_paste = *checked;
+                                        cx.emit(SettingsPanelEvent::RightClickPasteChanged(
+                                            *checked,
+                                        ));
+                                    })),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(div().text_sm().child(t!("Settings.paste_image_upload")))
+                            .child(
+                                Switch::new("paste-image-upload-switch")
+                                    .checked(paste_image_upload)
+                                    .small()
+                                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                                        this.paste_image_upload = *checked;
+                                        cx.emit(SettingsPanelEvent::PasteImageUploadChanged(
                                             *checked,
                                         ));
                                     })),

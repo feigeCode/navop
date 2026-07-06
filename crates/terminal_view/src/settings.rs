@@ -40,6 +40,8 @@ pub struct TerminalSettings {
     pub auto_copy: bool,
     pub enable_autocomplete: bool,
     pub middle_click_paste: bool,
+    pub right_click_paste: bool,
+    pub paste_image_upload: bool,
     pub sync_path_with_terminal: bool,
     pub theme: String,
     pub cursor_blink: bool,
@@ -77,6 +79,8 @@ impl TerminalSettings {
             auto_copy: app_settings.terminal_auto_copy,
             enable_autocomplete: app_settings.terminal_enable_autocomplete,
             middle_click_paste: app_settings.terminal_middle_click_paste,
+            right_click_paste: app_settings.terminal_right_click_paste,
+            paste_image_upload: app_settings.terminal_paste_image_upload,
             sync_path_with_terminal: app_settings.terminal_sync_path_with_terminal,
             theme: app_settings.terminal_theme.clone(),
             cursor_blink: app_settings.terminal_cursor_blink,
@@ -278,6 +282,8 @@ fn update_app_settings<T>(
         settings.terminal_auto_copy = next.auto_copy;
         settings.terminal_enable_autocomplete = next.enable_autocomplete;
         settings.terminal_middle_click_paste = next.middle_click_paste;
+        settings.terminal_right_click_paste = next.right_click_paste;
+        settings.terminal_paste_image_upload = next.paste_image_upload;
         settings.terminal_sync_path_with_terminal = next.sync_path_with_terminal;
         settings.terminal_theme = next.theme.clone();
         settings.terminal_cursor_blink = next.cursor_blink;
@@ -292,6 +298,8 @@ fn terminal_app_fields_equal(left: &TerminalSettings, right: &TerminalSettings) 
         && left.auto_copy == right.auto_copy
         && left.enable_autocomplete == right.enable_autocomplete
         && left.middle_click_paste == right.middle_click_paste
+        && left.right_click_paste == right.right_click_paste
+        && left.paste_image_upload == right.paste_image_upload
         && left.sync_path_with_terminal == right.sync_path_with_terminal
         && left.theme == right.theme
         && left.cursor_blink == right.cursor_blink
@@ -389,6 +397,32 @@ mod tests {
             TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
 
         assert_eq!("JetBrains Mono", settings.font_family);
+    }
+
+    #[test]
+    fn terminal_settings_reads_right_click_paste_from_app_settings() {
+        let app_settings = AppSettings {
+            terminal_right_click_paste: true,
+            ..AppSettings::default()
+        };
+
+        let settings =
+            TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
+
+        assert!(settings.right_click_paste);
+    }
+
+    #[test]
+    fn terminal_settings_reads_paste_image_upload_from_app_settings() {
+        let app_settings = AppSettings {
+            terminal_paste_image_upload: false,
+            ..AppSettings::default()
+        };
+
+        let settings =
+            TerminalSettings::from_parts(&app_settings, &TerminalLocalSettings::default());
+
+        assert!(!settings.paste_image_upload);
     }
 
     #[test]
