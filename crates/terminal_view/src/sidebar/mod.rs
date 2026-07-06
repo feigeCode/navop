@@ -190,12 +190,12 @@ impl SidebarPanel {
     pub fn icon_name(&self) -> IconName {
         match self {
             SidebarPanel::Settings => IconName::Settings,
-            SidebarPanel::QuickCommand => IconName::SquareTerminal,
-            SidebarPanel::HistoryCommand => IconName::TerminalColor,
+            SidebarPanel::QuickCommand => IconName::TerminalQuickCommandColor,
+            SidebarPanel::HistoryCommand => IconName::TerminalHistoryColor,
             SidebarPanel::RichInput => IconName::Edit,
             SidebarPanel::AiChat => IconName::AI,
-            SidebarPanel::FileManager => IconName::FolderOpen,
-            SidebarPanel::ServerMonitor => IconName::Monitor,
+            SidebarPanel::FileManager => IconName::TerminalFileManagerColor,
+            SidebarPanel::ServerMonitor => IconName::TerminalServerMonitorColor,
         }
     }
 
@@ -203,12 +203,12 @@ impl SidebarPanel {
     pub fn icon(&self) -> Icon {
         match self {
             SidebarPanel::Settings => IconName::SettingColor.color(),
-            SidebarPanel::QuickCommand => IconName::SquareTerminalColor.color(),
-            SidebarPanel::HistoryCommand => IconName::TerminalColor.color(),
+            SidebarPanel::QuickCommand => IconName::TerminalQuickCommandColor.color(),
+            SidebarPanel::HistoryCommand => IconName::TerminalHistoryColor.color(),
             SidebarPanel::RichInput => IconName::RichInputColor.color(),
             SidebarPanel::AiChat => IconName::AI.color(),
-            SidebarPanel::FileManager => IconName::FolderOpenColor.color(),
-            SidebarPanel::ServerMonitor => IconName::Monitor.color(),
+            SidebarPanel::FileManager => IconName::TerminalFileManagerColor.color(),
+            SidebarPanel::ServerMonitor => IconName::TerminalServerMonitorColor.color(),
         }
     }
 
@@ -1127,7 +1127,7 @@ impl TerminalSidebar {
             }))
             .child(
                 Icon::new(panel.icon())
-                    .with_size(Size::Medium)
+                    .with_size(Size::Large)
                     .text_color(if is_active { accent_fg } else { muted_fg }),
             )
     }
@@ -1292,7 +1292,7 @@ impl TerminalSidebarToolbar {
             })
             .child(
                 Icon::new(panel.icon())
-                    .with_size(Size::Medium)
+                    .with_size(Size::Large)
                     .text_color(if button.open { accent_fg } else { muted_fg }),
             )
     }
