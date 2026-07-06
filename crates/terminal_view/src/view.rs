@@ -508,6 +508,22 @@ fn clipboard_image_from_item(item: &ClipboardItem) -> Option<Image> {
     })
 }
 
+fn should_upload_clipboard_image_to_remote_cli(
+    connection_kind: TerminalConnectionKind,
+    mode: TermMode,
+) -> bool {
+    if connection_kind != TerminalConnectionKind::Ssh {
+        return false;
+    }
+
+    let application_modes = TermMode::ALT_SCREEN
+        | TermMode::MOUSE_MODE
+        | TermMode::DISAMBIGUATE_ESC_CODES
+        | TermMode::FOCUS_IN_OUT
+        | TermMode::VI;
+    !mode.intersects(application_modes)
+}
+
 fn terminal_increase_font_defaults() -> Vec<&'static str> {
     if cfg!(target_os = "macos") {
         vec!["cmd-+", "cmd-="]
@@ -2788,9 +2804,18 @@ impl TerminalView {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(clipboard) = cx.read_from_clipboard() {
-            if let Some(image) = clipboard_image_from_item(&clipboard) {
-                self.paste_clipboard_image_to_remote_cli(image, window, cx);
-                return;
+            let (connection_kind, mode) = {
+                let terminal = self.terminal.read(cx);
+                (terminal.connection_kind(), terminal.mode())
+            };
+            let should_upload_image =
+                should_upload_clipboard_image_to_remote_cli(connection_kind, mode);
+
+            if should_upload_image {
+                if let Some(image) = clipboard_image_from_item(&clipboard) {
+                    self.paste_clipboard_image_to_remote_cli(image, window, cx);
+                    return;
+                }
             }
             if let Some(text) = clipboard.text() {
                 self.paste_text(&text, window, cx);
@@ -4914,8 +4939,9 @@ mod tests {
         should_dismiss_history_prompt_for_scroll, should_extend_selection_on_shift_click,
         should_refresh_history_commands_for_terminal_event,
         should_reset_history_prompt_for_terminal_event, should_scroll_to_bottom_on_user_input,
-        should_start_selection_from_pending_sgr_press, take_whole_scroll_lines,
-        terminal_history_scope, terminal_tab_duplicate_supported, wrapped_addon_line_text,
+        should_start_selection_from_pending_sgr_press, should_upload_clipboard_image_to_remote_cli,
+        take_whole_scroll_lines, terminal_history_scope, terminal_tab_duplicate_supported,
+        wrapped_addon_line_text,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
@@ -5068,6 +5094,43 @@ mod tests {
         let item = ClipboardItem::new_string("/tmp/image.png".to_string());
 
         assert!(clipboard_image_from_item(&item).is_none());
+    }
+
+    #[test]
+    fn clipboard_image_upload_is_only_for_ssh_shell_paste() {
+        assert!(should_upload_clipboard_image_to_remote_cli(
+            TerminalConnectionKind::Ssh,
+            TermMode::empty()
+        ));
+        assert!(should_upload_clipboard_image_to_remote_cli(
+            TerminalConnectionKind::Ssh,
+            TermMode::BRACKETED_PASTE
+        ));
+
+        assert!(!should_upload_clipboard_image_to_remote_cli(
+            TerminalConnectionKind::Local,
+            TermMode::empty()
+        ));
+        assert!(!should_upload_clipboard_image_to_remote_cli(
+            TerminalConnectionKind::Serial,
+            TermMode::empty()
+        ));
+    }
+
+    #[test]
+    fn clipboard_image_upload_does_not_intercept_tui_modes() {
+        for mode in [
+            TermMode::ALT_SCREEN,
+            TermMode::MOUSE_MODE,
+            TermMode::DISAMBIGUATE_ESC_CODES,
+            TermMode::FOCUS_IN_OUT,
+            TermMode::VI,
+        ] {
+            assert!(!should_upload_clipboard_image_to_remote_cli(
+                TerminalConnectionKind::Ssh,
+                mode
+            ));
+        }
     }
 
     #[test]
