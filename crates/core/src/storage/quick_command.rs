@@ -19,6 +19,12 @@ pub struct QuickCommand {
     /// 命令名称（用于显示）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// 分组名称
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_name: Option<String>,
+    /// 分组颜色
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_color: Option<String>,
     /// 命令内容
     pub command: String,
     /// 命令描述
@@ -60,6 +66,8 @@ impl QuickCommand {
         Self {
             id: None,
             name: None,
+            group_name: None,
+            group_color: None,
             command,
             description: None,
             pinned: false,
@@ -94,6 +102,8 @@ impl QuickCommand {
 struct QuickCommandRow {
     id: i64,
     name: Option<String>,
+    group_name: Option<String>,
+    group_color: Option<String>,
     command: String,
     description: Option<String>,
     pinned: i32,
@@ -108,6 +118,8 @@ impl FromSqliteRow for QuickCommandRow {
         Ok(QuickCommandRow {
             id: row.get("id")?,
             name: row.get("name")?,
+            group_name: row.get("group_name").unwrap_or(None),
+            group_color: row.get("group_color").unwrap_or(None),
             command: row.get("command")?,
             description: row.get("description")?,
             pinned: row.get("pinned")?,
@@ -124,6 +136,8 @@ impl From<QuickCommandRow> for QuickCommand {
         QuickCommand {
             id: Some(row.id),
             name: row.name,
+            group_name: row.group_name,
+            group_color: row.group_color,
             command: row.command,
             description: row.description,
             pinned: row.pinned != 0,
@@ -146,6 +160,62 @@ impl QuickCommandRepository {
         Self { conn }
     }
 
+    /// 重命名分组；目标名称为空时移出分组
+    pub fn rename_group(&self, from: &str, to: Option<&str>) -> Result<()> {
+        let from = from.trim();
+        if from.is_empty() {
+            return Ok(());
+        }
+        let to = to.map(str::trim).filter(|value| !value.is_empty());
+        let ts = now();
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE quick_commands
+                 SET group_name = ?1, updated_at = ?2
+                 WHERE TRIM(COALESCE(group_name, '')) = ?3",
+                params![to, ts, from],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn recolor_group(&self, group_name: &str, color: Option<&str>) -> Result<()> {
+        let group_name = group_name.trim();
+        if group_name.is_empty() {
+            return Ok(());
+        }
+        let color = color.map(str::trim).filter(|value| !value.is_empty());
+        let ts = now();
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE quick_commands
+                 SET group_color = ?1, updated_at = ?2
+                 WHERE TRIM(COALESCE(group_name, '')) = ?3",
+                params![color, ts, group_name],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn clear_group(&self, group_name: &str) -> Result<()> {
+        let group_name = group_name.trim();
+        if group_name.is_empty() {
+            return Ok(());
+        }
+        let ts = now();
+        self.conn.with_connection(|conn| {
+            conn.execute(
+                "UPDATE quick_commands
+                 SET group_name = NULL,
+                     group_color = NULL,
+                     updated_at = ?1
+                 WHERE TRIM(COALESCE(group_name, '')) = ?2",
+                params![ts, group_name],
+            )?;
+            Ok(())
+        })
+    }
+
     /// 按连接 ID 获取快捷命令（置顶优先，然后按排序顺序）
     pub fn list_by_connection(&self, connection_id: Option<i64>) -> Result<Vec<QuickCommand>> {
         self.conn.with_connection(|conn| {
@@ -153,7 +223,7 @@ impl QuickCommandRepository {
 
             if let Some(cid) = connection_id {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, command, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at
                      FROM quick_commands
                      WHERE connection_id = ?1 OR connection_id IS NULL
                      ORDER BY pinned DESC, sort_order ASC, created_at DESC"
@@ -164,7 +234,7 @@ impl QuickCommandRepository {
                 }
             } else {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, command, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at
                      FROM quick_commands
                      WHERE connection_id IS NULL
                      ORDER BY pinned DESC, sort_order ASC, created_at DESC"
@@ -187,7 +257,7 @@ impl QuickCommandRepository {
 
             if let Some(cid) = connection_id {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, command, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at
                      FROM quick_commands
                      WHERE (command LIKE ?1 OR name LIKE ?1 OR description LIKE ?1)
                        AND (connection_id = ?2 OR connection_id IS NULL)
@@ -199,7 +269,7 @@ impl QuickCommandRepository {
                 }
             } else {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, command, description, pinned, sort_order, connection_id, created_at, updated_at
+                    "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at
                      FROM quick_commands
                      WHERE (command LIKE ?1 OR name LIKE ?1 OR description LIKE ?1)
                        AND connection_id IS NULL
@@ -279,10 +349,12 @@ impl Repository for QuickCommandRepository {
 
         let id = self.conn.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO quick_commands (name, command, description, pinned, sort_order, connection_id, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO quick_commands (name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     item.name,
+                    item.group_name,
+                    item.group_color,
                     item.command,
                     item.description,
                     pinned,
@@ -311,9 +383,21 @@ impl Repository for QuickCommandRepository {
 
         self.conn.with_connection(|conn| {
             conn.execute(
-                "UPDATE quick_commands SET name = ?1, command = ?2, description = ?3, pinned = ?4, sort_order = ?5, connection_id = ?6, updated_at = ?7 WHERE id = ?8",
+                "UPDATE quick_commands
+                 SET name = ?1,
+                     group_name = ?2,
+                     group_color = ?3,
+                     command = ?4,
+                     description = ?5,
+                     pinned = ?6,
+                     sort_order = ?7,
+                     connection_id = ?8,
+                     updated_at = ?9
+                 WHERE id = ?10",
                 params![
                     item.name,
+                    item.group_name,
+                    item.group_color,
                     item.command,
                     item.description,
                     pinned,
@@ -337,7 +421,7 @@ impl Repository for QuickCommandRepository {
     fn get(&self, id: i64) -> Result<Option<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, command, description, pinned, sort_order, connection_id, created_at, updated_at FROM quick_commands WHERE id = ?1",
+                "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at FROM quick_commands WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
             if let Some(row) = rows.next()? {
@@ -351,7 +435,7 @@ impl Repository for QuickCommandRepository {
     fn list(&self) -> Result<Vec<Self::Entity>> {
         self.conn.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, command, description, pinned, sort_order, connection_id, created_at, updated_at FROM quick_commands ORDER BY pinned DESC, sort_order ASC, created_at DESC",
+                "SELECT id, name, group_name, group_color, command, description, pinned, sort_order, connection_id, created_at, updated_at FROM quick_commands ORDER BY pinned DESC, sort_order ASC, created_at DESC",
             )?;
             let rows = stmt.query_map([], |row| QuickCommandRow::from_row(row))?;
             let mut results = Vec::new();

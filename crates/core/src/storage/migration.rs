@@ -51,6 +51,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../../migrations/20260705000001_terminal_command_history.sql"),
     ),
     (
+        "20260707000001",
+        include_str!("../../migrations/20260707000001_quick_command_grouping.sql"),
+    ),
+    (
         "20260711000001",
         include_str!("../../migrations/20260711000001_scoped_team_key_cache.sql"),
     ),
