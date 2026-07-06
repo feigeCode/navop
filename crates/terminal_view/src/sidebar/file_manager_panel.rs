@@ -35,6 +35,7 @@ use one_core::storage::{
     sftp_favorite_connection_key,
 };
 use remote_file_editor::open_remote_file_editor;
+use remote_image_preview::{image_format_for_path, open_remote_image_preview};
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
 use ssh::{ChannelEvent, SshChannel, SshSessionManager};
@@ -3054,6 +3055,21 @@ impl FileManagerPanel {
         .detach();
     }
 
+    fn open_remote_file(&self, full_path: String, window: &mut Window, cx: &mut Context<Self>) {
+        if image_format_for_path(&full_path).is_some() {
+            let Some(client) = self.sftp_client.clone() else {
+                window.push_notification(
+                    Notification::error("SFTP client is not connected".to_string()),
+                    cx,
+                );
+                return;
+            };
+            open_remote_image_preview(full_path, client, window, cx);
+        } else {
+            self.open_remote_editor(full_path, window, cx);
+        }
+    }
+
     fn open_remote_editor(&self, full_path: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(client) = self.sftp_client.clone() else {
             window.push_notification(
@@ -3853,7 +3869,7 @@ impl FileManagerPanel {
                 PopupMenuItem::new(t!("Common.edit"))
                     .icon(IconName::Edit)
                     .on_click(window.listener_for(&view_edit, move |this, _, window, cx| {
-                        this.open_remote_editor(path_for_edit.clone(), window, cx);
+                        this.open_remote_file(path_for_edit.clone(), window, cx);
                     })),
             );
 
@@ -4423,7 +4439,7 @@ impl FileManagerPanel {
                                                                     cx,
                                                                 );
                                                             } else {
-                                                                this.open_remote_editor(
+                                                                this.open_remote_file(
                                                                     fp.clone(),
                                                                     window,
                                                                     cx,

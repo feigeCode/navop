@@ -9,10 +9,9 @@ pub use file_list_panel::{
 };
 
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AsyncApp, Context, Entity, EventEmitter, ExternalPaths,
-    FocusHandle, Focusable, FontWeight, Hsla, Image, ImageFormat, IntoElement, MouseButton,
-    ObjectFit, ParentElement, Render, SharedString, Styled, WeakEntity, Window, actions, div, img,
-    prelude::*, px,
+    AnyElement, App, AsyncApp, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
+    Focusable, FontWeight, Hsla, IntoElement, MouseButton, ParentElement, Render, SharedString,
+    Styled, WeakEntity, Window, actions, div, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, Sizable, Size, WindowExt,
@@ -30,7 +29,6 @@ use gpui_component::{
     v_flex,
 };
 use one_core::gpui_tokio::Tokio;
-use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::models::{
     ActiveConnections, ProxyType as StorageProxyType, SshAuthMethod, StoredConnection,
 };
@@ -40,6 +38,7 @@ use one_core::storage::{
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_file_editor::open_remote_file_editor;
+use remote_image_preview::{image_format_for_path, open_remote_image_preview};
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
 use ssh::{
@@ -100,63 +99,6 @@ struct FavoritePathEdit {
 const MAX_CONCURRENT_TRANSFERS: usize = 2;
 const BREADCRUMB_ITEM_MAX_WIDTH: f32 = 180.0;
 const LOCAL_FAVORITE_CONNECTION_KEY: &str = "local-file-list:global";
-const MAX_REMOTE_IMAGE_PREVIEW_BYTES: usize = 25 * 1024 * 1024;
-
-struct RemoteImagePreview {
-    remote_path: String,
-    image: Arc<Image>,
-    byte_len: usize,
-}
-
-impl RemoteImagePreview {
-    fn new(remote_path: String, image: Image) -> Self {
-        let byte_len = image.bytes.len();
-        Self {
-            remote_path,
-            image: Arc::new(image),
-            byte_len,
-        }
-    }
-}
-
-impl Render for RemoteImagePreview {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        v_flex()
-            .size_full()
-            .bg(theme.background)
-            .child(
-                v_flex()
-                    .gap_1()
-                    .px_4()
-                    .py_3()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.foreground)
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(self.remote_path.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format_image_preview_size(self.byte_len)),
-                    ),
-            )
-            .child(
-                div().flex_1().p_4().bg(theme.muted.opacity(0.35)).child(
-                    img(self.image.clone())
-                        .size_full()
-                        .object_fit(ObjectFit::Contain),
-                ),
-            )
-    }
-}
 
 struct TransferClientPool {
     config: SshConnectConfig,
@@ -392,16 +334,6 @@ fn format_speed(bytes_per_sec: f64) -> String {
     }
 }
 
-fn format_image_preview_size(bytes: usize) -> String {
-    if bytes >= 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else if bytes >= 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
 fn join_remote_path(base: &str, name: &str) -> String {
     if base == "." || base.is_empty() {
         name.to_string()
@@ -410,59 +342,6 @@ fn join_remote_path(base: &str, name: &str) -> String {
     } else {
         format!("{}/{}", base, name)
     }
-}
-
-fn remote_image_format_for_path(path: &str) -> Option<ImageFormat> {
-    let ext = path.rsplit_once('.')?.1.to_ascii_lowercase();
-    match ext.as_str() {
-        "png" => Some(ImageFormat::Png),
-        "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
-        "webp" => Some(ImageFormat::Webp),
-        "gif" => Some(ImageFormat::Gif),
-        "bmp" => Some(ImageFormat::Bmp),
-        "tif" | "tiff" => Some(ImageFormat::Tiff),
-        "ico" => Some(ImageFormat::Ico),
-        "svg" => Some(ImageFormat::Svg),
-        "pnm" => Some(ImageFormat::Pnm),
-        _ => None,
-    }
-}
-
-fn open_remote_image_preview_window(
-    remote_path: String,
-    format: ImageFormat,
-    bytes: Vec<u8>,
-    cx: &mut App,
-) {
-    let title = remote_path
-        .rsplit('/')
-        .next()
-        .filter(|name| !name.is_empty())
-        .unwrap_or("Remote Image")
-        .to_string();
-    let image = Image::from_bytes(format, bytes);
-
-    open_popup_window(
-        PopupWindowOptions::new(title)
-            .size(960.0, 720.0)
-            .min_width(480.0)
-            .min_height(360.0),
-        move |_window, cx| cx.new(|_| RemoteImagePreview::new(remote_path, image)),
-        cx,
-    );
-}
-
-fn notify_remote_image_preview_error(
-    window_handle: AnyWindowHandle,
-    message: String,
-    cx: &mut AsyncApp,
-) {
-    let _ = cx.update_window(window_handle, |_, window, cx| {
-        window.push_notification(
-            Notification::error(format!("远程图片预览失败：{message}")).autohide(true),
-            cx,
-        );
-    });
 }
 
 fn remote_path_parent(path: &str) -> String {
@@ -1329,8 +1208,15 @@ impl SftpView {
     }
 
     fn open_remote_file(&self, full_path: String, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(format) = remote_image_format_for_path(&full_path) {
-            self.open_remote_image_preview(full_path, format, window, cx);
+        if image_format_for_path(&full_path).is_some() {
+            let Some(client) = self.sftp_client.clone() else {
+                window.push_notification(
+                    Notification::error("SFTP client is not connected".to_string()),
+                    cx,
+                );
+                return;
+            };
+            open_remote_image_preview(full_path, client, window, cx);
         } else {
             self.open_remote_editor(full_path, window, cx);
         }
@@ -1346,53 +1232,6 @@ impl SftpView {
         };
 
         open_remote_file_editor(full_path, client, cx);
-    }
-
-    fn open_remote_image_preview(
-        &self,
-        full_path: String,
-        format: ImageFormat,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(client) = self.sftp_client.clone() else {
-            window.push_notification(
-                Notification::error("SFTP client is not connected".to_string()),
-                cx,
-            );
-            return;
-        };
-
-        let window_handle = window.window_handle();
-        let task_path = full_path.clone();
-        let read_task = Tokio::spawn(cx, async move {
-            let bytes = client
-                .lock()
-                .await
-                .read_file(&task_path, MAX_REMOTE_IMAGE_PREVIEW_BYTES)
-                .await?;
-            Ok::<_, anyhow::Error>((task_path, bytes))
-        });
-
-        window.push_notification(
-            Notification::info("正在读取远程图片...".to_string()).autohide(true),
-            cx,
-        );
-
-        cx.spawn(async move |_this, cx| match read_task.await {
-            Ok(Ok((path, bytes))) => {
-                cx.update(|cx| {
-                    open_remote_image_preview_window(path, format, bytes, cx);
-                });
-            }
-            Ok(Err(error)) => {
-                notify_remote_image_preview_error(window_handle, error.to_string(), cx);
-            }
-            Err(error) => {
-                notify_remote_image_preview_error(window_handle, error.to_string(), cx);
-            }
-        })
-        .detach();
     }
 
     fn navigate_local_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -5192,7 +5031,6 @@ impl Render for SftpView {
 #[cfg(test)]
 mod tests {
     use super::{should_apply_local_listing, should_apply_remote_listing};
-    use gpui::ImageFormat;
     use std::path::Path;
 
     #[test]
@@ -5228,35 +5066,6 @@ mod tests {
             super::archive_kind_for_name("release.tgz")
         );
         assert_eq!(None, super::archive_kind_for_name("notes.txt"));
-    }
-
-    #[test]
-    fn remote_image_format_detects_supported_image_extensions() {
-        assert_eq!(
-            Some(ImageFormat::Png),
-            super::remote_image_format_for_path("/srv/screenshot.PNG")
-        );
-        assert_eq!(
-            Some(ImageFormat::Jpeg),
-            super::remote_image_format_for_path("/srv/photo.jpeg")
-        );
-        assert_eq!(
-            Some(ImageFormat::Webp),
-            super::remote_image_format_for_path("/srv/thumb.webp")
-        );
-    }
-
-    #[test]
-    fn remote_image_format_rejects_non_images() {
-        assert_eq!(None, super::remote_image_format_for_path("/srv/readme.md"));
-        assert_eq!(
-            None,
-            super::remote_image_format_for_path("/srv/archive.tar.gz")
-        );
-        assert_eq!(
-            None,
-            super::remote_image_format_for_path("/srv/no-extension")
-        );
     }
 
     #[test]

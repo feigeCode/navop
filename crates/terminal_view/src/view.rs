@@ -85,6 +85,7 @@ use paste_safety::{
 };
 #[cfg(test)]
 use paste_safety::{has_trailing_line_continuation, has_unterminated_shell_quote};
+use remote_image_preview::image_from_local_path;
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient};
 use std::ops::Deref;
@@ -497,7 +498,11 @@ fn image_format_extension(format: ImageFormat) -> &'static str {
 fn clipboard_image_from_item(item: &ClipboardItem) -> Option<Image> {
     item.entries().iter().find_map(|entry| match entry {
         ClipboardEntry::Image(image) => Some(image.clone()),
-        ClipboardEntry::String(_) | ClipboardEntry::ExternalPaths(_) => None,
+        ClipboardEntry::ExternalPaths(paths) => paths
+            .paths()
+            .iter()
+            .find_map(|path| image_from_local_path(path)),
+        ClipboardEntry::String(_) => None,
     })
 }
 

@@ -10,6 +10,7 @@ public_mcp = { workspace = true }
 ssh = { workspace = true }
 sftp = { workspace = true }
 remote_file_editor = { workspace = true }
+remote_image_preview = { workspace = true }
 
 # GPUI
 gpui = { workspace = true }

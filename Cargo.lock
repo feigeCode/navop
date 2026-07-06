@@ -9749,6 +9749,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "remote_image_preview"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "one-core",
+ "sftp",
+ "tokio",
+]
+
+[[package]]
 name = "rend"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10985,6 +10997,7 @@ dependencies = [
  "gpui-component",
  "one-core",
  "remote_file_editor",
+ "remote_image_preview",
  "rust-i18n",
  "sftp",
  "ssh",
@@ -11983,6 +11996,7 @@ dependencies = [
  "public_mcp",
  "regex",
  "remote_file_editor",
+ "remote_image_preview",
  "rust-i18n",
  "serde",
  "serde_json",
