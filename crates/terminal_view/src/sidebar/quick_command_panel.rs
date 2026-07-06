@@ -1,6 +1,6 @@
 //! 快捷命令面板
 //!
-//! 支持命令的新增、置顶、删除功能
+//! 支持命令的新增、编辑、分组、置顶和删除功能。
 
 use gpui::prelude::*;
 use gpui::{
@@ -33,17 +33,40 @@ pub enum QuickCommandPanelEvent {
     Close,
     /// 粘贴命令到终端输入区（不自动回车）
     ExecuteCommand(String),
+    /// 快捷命令数据发生变化
+    CommandsChanged(Vec<QuickCommand>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum QuickCommandGroupFilter {
+    All,
+    Ungrouped,
+    Group(String),
+}
+
+fn command_matches_group_filter(command: &QuickCommand, filter: &QuickCommandGroupFilter) -> bool {
+    match filter {
+        QuickCommandGroupFilter::All => true,
+        QuickCommandGroupFilter::Ungrouped => command
+            .group_name
+            .as_ref()
+            .map(|group| group.trim().is_empty())
+            .unwrap_or(true),
+        QuickCommandGroupFilter::Group(group) => command
+            .group_name
+            .as_deref()
+            .map(|name| name == group)
+            .unwrap_or(false),
+    }
 }
 
 /// 快捷命令面板组件
 pub struct QuickCommandPanel {
     /// 搜索输入框状态
     search_input_state: Entity<InputState>,
-    /// 新增命令输入框状态
-    add_input_state: Entity<InputState>,
     /// 快捷命令列表
     commands: Vec<QuickCommand>,
-    /// 过滤后的命令列表
+    /// 过滤后的非置顶命令列表
     filtered_commands: Vec<QuickCommand>,
     /// 连接 ID
     connection_id: Option<i64>,
@@ -55,8 +78,8 @@ pub struct QuickCommandPanel {
     is_loading: bool,
     /// 搜索关键词
     search_query: String,
-    /// 是否显示新增输入框
-    show_add_input: bool,
+    /// 当前分组筛选
+    group_filter: QuickCommandGroupFilter,
     /// 列表滚动句柄
     scroll_handle: UniformListScrollHandle,
     /// 终端主题配色
@@ -71,30 +94,21 @@ impl QuickCommandPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let search_input_state = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
-
-        let add_input_state =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Enter command..."));
-
-        let mut subscriptions = Vec::new();
-
-        // 订阅搜索输入事件
         let input_entity = search_input_state.clone();
-        subscriptions.push(cx.subscribe_in(
+        let subscriptions = vec![cx.subscribe_in(
             &search_input_state,
             window,
             move |this, _state, event, _window, cx| {
                 if let InputEvent::Change = event {
-                    let value = input_entity.read(cx).value().to_string();
-                    this.search_query = value;
+                    this.search_query = input_entity.read(cx).value().to_string();
                     this.filter_commands();
                     cx.notify();
                 }
             },
-        ));
+        )];
 
         let mut panel = Self {
             search_input_state,
-            add_input_state,
             commands: Vec::new(),
             filtered_commands: Vec::new(),
             connection_id,
@@ -102,14 +116,11 @@ impl QuickCommandPanel {
             _subscriptions: subscriptions,
             is_loading: false,
             search_query: String::new(),
-            show_add_input: false,
+            group_filter: QuickCommandGroupFilter::All,
             scroll_handle: UniformListScrollHandle::new(),
             colors,
         };
-
-        // 初始加载
         panel.load_commands(cx);
-
         panel
     }
 
@@ -118,171 +129,425 @@ impl QuickCommandPanel {
         cx.notify();
     }
 
+    pub fn current_commands(&self) -> Vec<QuickCommand> {
+        self.commands.clone()
+    }
+
+    pub fn set_group_filter(
+        &mut self,
+        group_filter: QuickCommandGroupFilter,
+        cx: &mut Context<Self>,
+    ) {
+        if self.group_filter == group_filter {
+            return;
+        }
+        self.group_filter = group_filter;
+        self.filter_commands();
+        cx.notify();
+    }
+
+    fn emit_commands_changed(&self, cx: &mut Context<Self>) {
+        cx.emit(QuickCommandPanelEvent::CommandsChanged(
+            self.commands.clone(),
+        ));
+    }
+
+    fn sort_commands(&mut self) {
+        self.commands.sort_by(|a, b| {
+            b.pinned
+                .cmp(&a.pinned)
+                .then_with(|| a.sort_order.cmp(&b.sort_order))
+                .then_with(|| b.created_at.cmp(&a.created_at))
+        });
+    }
+
+    fn pinned_commands(&self) -> Vec<QuickCommand> {
+        self.commands
+            .iter()
+            .filter(|command| command.pinned)
+            .cloned()
+            .collect()
+    }
+
     /// 加载快捷命令
     pub fn load_commands(&mut self, cx: &mut Context<Self>) {
         self.is_loading = true;
-
         let storage = cx.global::<GlobalStorageState>().storage.clone();
-        let connection_id = self.connection_id;
-
-        let repo = match storage.get::<QuickCommandRepository>() {
-            Some(repo) => repo,
-            None => {
-                tracing::error!("QuickCommandRepository not found");
-                self.is_loading = false;
-                cx.notify();
-                return;
-            }
+        let Some(repo) = storage.get::<QuickCommandRepository>() else {
+            tracing::error!("QuickCommandRepository not found");
+            self.is_loading = false;
+            cx.notify();
+            return;
         };
 
-        match repo.list_by_connection(connection_id) {
+        match repo.list_by_connection(self.connection_id) {
             Ok(commands) => {
                 self.commands = commands;
+                self.sort_commands();
                 self.filter_commands();
+                self.emit_commands_changed(cx);
             }
-            Err(e) => {
-                tracing::error!("Failed to load commands: {}", e);
-            }
+            Err(error) => tracing::error!(%error, "Failed to load commands"),
         }
 
         self.is_loading = false;
         cx.notify();
     }
 
-    /// 添加快捷命令
-    fn add_command(&mut self, command: String, cx: &mut Context<Self>) {
-        if command.trim().is_empty() {
-            return;
-        }
-
-        let connection_id = self.connection_id;
-        let storage = cx.global::<GlobalStorageState>().storage.clone();
-
-        // 创建新命令
-        let mut new_command = QuickCommand::new(command.clone());
-        new_command.connection_id = connection_id;
-
-        // 持久化
-        let repo = match storage.get::<QuickCommandRepository>() {
-            Some(repo) => repo,
-            None => {
-                tracing::error!("QuickCommandRepository not found");
-                return;
-            }
+    fn group_for_new_command(&self) -> (Option<String>, Option<String>) {
+        let QuickCommandGroupFilter::Group(group_name) = &self.group_filter else {
+            return (None, None);
         };
-
-        let next_order = repo.next_sort_order(connection_id).unwrap_or(0);
-        new_command.sort_order = next_order;
-
-        match repo.insert(&mut new_command) {
-            Ok(_) => {
-                // 添加到列表前面
-                self.commands.insert(0, new_command);
-                self.filter_commands();
-                self.show_add_input = false;
-                cx.notify();
-            }
-            Err(e) => {
-                tracing::error!("Failed to add command: {}", e);
-            }
-        }
+        let color = self
+            .commands
+            .iter()
+            .find(|command| command.group_name.as_deref() == Some(group_name.as_str()))
+            .and_then(|command| command.group_color.clone());
+        (Some(group_name.clone()), color)
     }
 
     /// 从外部添加快捷命令（例如右键菜单）
     pub fn add_command_external(&mut self, command: String, cx: &mut Context<Self>) {
-        self.add_command(command, cx);
+        if command.trim().is_empty() {
+            return;
+        }
+        let (group_name, group_color) = self.group_for_new_command();
+        let mut new_command = QuickCommand::new(command);
+        new_command.connection_id = self.connection_id;
+        new_command.group_name = group_name;
+        new_command.group_color = group_color;
+        if let Err(error) = self.save_new_command(new_command, cx) {
+            tracing::error!(%error, "Failed to add command");
+        }
+    }
+
+    fn save_new_command(
+        &mut self,
+        mut command: QuickCommand,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let repo = storage
+            .get::<QuickCommandRepository>()
+            .ok_or_else(|| anyhow::anyhow!("QuickCommandRepository not found"))?;
+        command.connection_id = self.connection_id;
+        command.sort_order = repo.next_sort_order(self.connection_id).unwrap_or(0);
+        repo.insert(&mut command)?;
+        self.commands.push(command);
+        self.sort_commands();
+        self.filter_commands();
+        self.emit_commands_changed(cx);
+        cx.notify();
+        Ok(())
+    }
+
+    fn save_existing_command(
+        &mut self,
+        command: QuickCommand,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let repo = storage
+            .get::<QuickCommandRepository>()
+            .ok_or_else(|| anyhow::anyhow!("QuickCommandRepository not found"))?;
+        repo.update(&command)?;
+        if let Some(existing) = self
+            .commands
+            .iter_mut()
+            .find(|existing| existing.id == command.id)
+        {
+            *existing = command;
+        }
+        self.sort_commands();
+        self.filter_commands();
+        self.emit_commands_changed(cx);
+        cx.notify();
+        Ok(())
+    }
+
+    fn open_command_editor(
+        &mut self,
+        existing: Option<QuickCommand>,
+        initial_command: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let initial_name = existing
+            .as_ref()
+            .and_then(|command| command.name.clone())
+            .unwrap_or_default();
+        let initial_description = existing
+            .as_ref()
+            .and_then(|command| command.description.clone())
+            .unwrap_or_default();
+        let initial_group_name = existing
+            .as_ref()
+            .and_then(|command| command.group_name.clone())
+            .or_else(|| match &self.group_filter {
+                QuickCommandGroupFilter::Group(group) => Some(group.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let initial_group_color = existing
+            .as_ref()
+            .and_then(|command| command.group_color.clone())
+            .or_else(|| {
+                self.commands
+                    .iter()
+                    .find(|command| {
+                        command.group_name.as_deref() == Some(initial_group_name.as_str())
+                    })
+                    .and_then(|command| command.group_color.clone())
+            })
+            .unwrap_or_default();
+        let initial_command = existing
+            .as_ref()
+            .map(|command| command.command.clone())
+            .or(initial_command)
+            .unwrap_or_default();
+
+        let name_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("输入简短名称（可选）")
+                .default_value(&initial_name)
+        });
+        let description_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("输入备注或使用说明（可选）")
+                .default_value(&initial_description)
+        });
+        let group_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("输入分组名称（可选）")
+                .default_value(&initial_group_name)
+        });
+        let color_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("颜色：blue / green / red / purple …")
+                .default_value(&initial_group_color)
+        });
+        let command_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("输入命令")
+                .multi_line(true)
+                .rows(4)
+                .default_value(&initial_command)
+        });
+
+        let title = if existing.is_some() {
+            "编辑快捷命令"
+        } else {
+            "新增快捷命令"
+        };
+        let ok_text = if existing.is_some() {
+            "保存"
+        } else {
+            "新增"
+        };
+        let view = cx.entity().clone();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let view_ok = view.clone();
+            let existing_ok = existing.clone();
+            let name_ok = name_state.clone();
+            let description_ok = description_state.clone();
+            let group_ok = group_state.clone();
+            let color_ok = color_state.clone();
+            let command_ok = command_state.clone();
+            dialog
+                .title(title)
+                .confirm()
+                .child(
+                    v_flex()
+                        .gap_3()
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .child(div().text_xs().child("名称"))
+                                .child(Input::new(&name_state).small().w_full()),
+                        )
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .child(div().text_xs().child("说明"))
+                                .child(Input::new(&description_state).small().w_full()),
+                        )
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .child(div().text_xs().child("分组"))
+                                .child(Input::new(&group_state).small().w_full()),
+                        )
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .child(div().text_xs().child("分组颜色"))
+                                .child(Input::new(&color_state).small().w_full()),
+                        )
+                        .child(
+                            v_flex().gap_1().child(div().text_xs().child("命令")).child(
+                                div()
+                                    .w_full()
+                                    .h(gpui::px(132.0))
+                                    .child(Input::new(&command_state).small().w_full().h_full()),
+                            ),
+                        )
+                        .into_any_element(),
+                )
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(ok_text)
+                        .cancel_text("取消"),
+                )
+                .on_ok(move |_, window, cx| {
+                    let command = command_ok.read(cx).value().trim().to_string();
+                    if command.is_empty() {
+                        window.push_notification(
+                            Notification::error("命令不能为空").autohide(true),
+                            cx,
+                        );
+                        return false;
+                    }
+                    let name = name_ok.read(cx).value().trim().to_string();
+                    let description = description_ok.read(cx).value().trim().to_string();
+                    let group_name = group_ok.read(cx).value().trim().to_string();
+                    let group_color = color_ok.read(cx).value().trim().to_string();
+                    view_ok.update(cx, |this, cx| {
+                        let result = if let Some(mut existing) = existing_ok.clone() {
+                            existing.name = (!name.is_empty()).then_some(name.clone());
+                            existing.description =
+                                (!description.is_empty()).then_some(description.clone());
+                            existing.group_name =
+                                (!group_name.is_empty()).then_some(group_name.clone());
+                            existing.group_color = (!group_name.is_empty()
+                                && !group_color.is_empty())
+                            .then_some(group_color.clone());
+                            existing.command = command.clone();
+                            this.save_existing_command(existing, cx)
+                        } else {
+                            let mut new_command = QuickCommand::new(command.clone());
+                            new_command.name = (!name.is_empty()).then_some(name.clone());
+                            new_command.description =
+                                (!description.is_empty()).then_some(description.clone());
+                            new_command.group_name =
+                                (!group_name.is_empty()).then_some(group_name.clone());
+                            new_command.group_color = (!group_name.is_empty()
+                                && !group_color.is_empty())
+                            .then_some(group_color.clone());
+                            this.save_new_command(new_command, cx)
+                        };
+                        if let Err(error) = result {
+                            tracing::error!(%error, "Failed to save quick command");
+                        }
+                    });
+                    true
+                })
+        });
     }
 
     /// 删除快捷命令
     fn delete_command(&mut self, id: i64, cx: &mut Context<Self>) {
         let storage = cx.global::<GlobalStorageState>().storage.clone();
-
-        let repo = match storage.get::<QuickCommandRepository>() {
-            Some(repo) => repo,
-            None => {
-                tracing::error!("QuickCommandRepository not found");
-                return;
-            }
+        let Some(repo) = storage.get::<QuickCommandRepository>() else {
+            tracing::error!("QuickCommandRepository not found");
+            return;
         };
-
         match repo.delete(id) {
-            Ok(_) => {
-                self.commands.retain(|cmd| cmd.id != Some(id));
+            Ok(()) => {
+                self.commands.retain(|command| command.id != Some(id));
                 self.filter_commands();
+                self.emit_commands_changed(cx);
                 cx.notify();
             }
-            Err(e) => {
-                tracing::error!("Failed to delete command: {}", e);
-            }
+            Err(error) => tracing::error!(%error, "Failed to delete command"),
         }
     }
 
     /// 切换置顶状态
     fn toggle_pin(&mut self, id: i64, cx: &mut Context<Self>) {
         let storage = cx.global::<GlobalStorageState>().storage.clone();
-
-        let repo = match storage.get::<QuickCommandRepository>() {
-            Some(repo) => repo,
-            None => {
-                tracing::error!("QuickCommandRepository not found");
-                return;
-            }
+        let Some(repo) = storage.get::<QuickCommandRepository>() else {
+            tracing::error!("QuickCommandRepository not found");
+            return;
         };
-
         match repo.toggle_pin(id) {
-            Ok(_) => {
-                if let Some(cmd) = self.commands.iter_mut().find(|c| c.id == Some(id)) {
-                    cmd.pinned = !cmd.pinned;
+            Ok(pinned) => {
+                if let Some(command) = self
+                    .commands
+                    .iter_mut()
+                    .find(|command| command.id == Some(id))
+                {
+                    command.pinned = pinned;
                 }
-
-                self.commands.sort_by(|a, b| match (a.pinned, b.pinned) {
-                    (true, false) => std::cmp::Ordering::Less,
-                    (false, true) => std::cmp::Ordering::Greater,
-                    _ => a.sort_order.cmp(&b.sort_order),
-                });
-
+                self.sort_commands();
                 self.filter_commands();
+                self.emit_commands_changed(cx);
                 cx.notify();
             }
-            Err(e) => {
-                tracing::error!("Failed to toggle pin: {}", e);
-            }
+            Err(error) => tracing::error!(%error, "Failed to toggle pin"),
         }
     }
 
-    /// 过滤命令列表
+    /// 过滤非置顶命令；置顶命令始终在固定区域显示。
     fn filter_commands(&mut self) {
-        if self.search_query.is_empty() {
-            self.filtered_commands = self.commands.clone();
-        } else {
-            let query = self.search_query.to_lowercase();
-            self.filtered_commands = self
-                .commands
-                .iter()
-                .filter(|cmd| {
-                    cmd.command.to_lowercase().contains(&query)
-                        || cmd
-                            .name
-                            .as_ref()
-                            .map(|n| n.to_lowercase().contains(&query))
-                            .unwrap_or(false)
-                        || cmd
-                            .description
-                            .as_ref()
-                            .map(|d| d.to_lowercase().contains(&query))
-                            .unwrap_or(false)
-                })
-                .cloned()
-                .collect();
-        }
+        let query = self.search_query.to_lowercase();
+        self.filtered_commands = self
+            .commands
+            .iter()
+            .filter(|command| !command.pinned)
+            .filter(|command| command_matches_group_filter(command, &self.group_filter))
+            .filter(|command| {
+                query.is_empty()
+                    || command.command.to_lowercase().contains(&query)
+                    || command
+                        .name
+                        .as_ref()
+                        .map(|name| name.to_lowercase().contains(&query))
+                        .unwrap_or(false)
+                    || command
+                        .group_name
+                        .as_ref()
+                        .map(|group| group.to_lowercase().contains(&query))
+                        .unwrap_or(false)
+                    || command
+                        .description
+                        .as_ref()
+                        .map(|description| description.to_lowercase().contains(&query))
+                        .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
     }
 
-    /// 粘贴命令到终端输入区（不自动回车）
     fn paste_command(&self, command: String, cx: &mut Context<Self>) {
         cx.emit(QuickCommandPanelEvent::ExecuteCommand(command));
     }
 
-    /// 复制命令到系统剪贴板
+    fn command_tooltip(command: &QuickCommand) -> String {
+        let mut lines = Vec::new();
+        if let Some(name) = command.name.as_ref().filter(|name| !name.trim().is_empty()) {
+            lines.push(name.clone());
+        }
+        if let Some(group) = command
+            .group_name
+            .as_ref()
+            .filter(|group| !group.trim().is_empty())
+        {
+            lines.push(format!("分组：{group}"));
+        }
+        if let Some(description) = command
+            .description
+            .as_ref()
+            .filter(|description| !description.trim().is_empty())
+        {
+            lines.push(description.clone());
+        }
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push(command.command.clone());
+        lines.join("\n")
+    }
+
     fn copy_command(&self, command: &str, window: &mut Window, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(command.to_string()));
         window.push_notification(
@@ -291,7 +556,6 @@ impl QuickCommandPanel {
         );
     }
 
-    /// 二次确认后删除命令
     fn confirm_delete_command(
         &mut self,
         id: i64,
@@ -300,7 +564,6 @@ impl QuickCommandPanel {
         cx: &mut Context<Self>,
     ) {
         let view = cx.entity().clone();
-
         window.open_dialog(cx, move |dialog, _window, _cx| {
             let view_ok = view.clone();
             let preview = if command.chars().count() > 120 {
@@ -308,19 +571,12 @@ impl QuickCommandPanel {
             } else {
                 command.clone()
             };
-
             dialog
                 .title(t!("QuickCommand.delete_confirm_title").to_string())
                 .child(
-                    div()
-                        .flex()
-                        .flex_col()
+                    v_flex()
                         .gap_2()
-                        .child(
-                            div()
-                                .text_sm()
-                                .child(t!("QuickCommand.delete_confirm_message")),
-                        )
+                        .child(t!("QuickCommand.delete_confirm_message").to_string())
                         .child(
                             div()
                                 .text_xs()
@@ -334,21 +590,17 @@ impl QuickCommandPanel {
                         .ok_text(t!("QuickCommand.delete_action").to_string())
                         .cancel_text(t!("Common.cancel").to_string()),
                 )
-                .on_ok(move |_event, _window, cx| {
-                    view_ok.update(cx, |this, cx| {
-                        this.delete_command(id, cx);
-                    });
+                .on_ok(move |_, _, cx| {
+                    view_ok.update(cx, |this, cx| this.delete_command(id, cx));
                     true
                 })
         });
     }
 
-    /// 渲染搜索栏
     fn render_search_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let has_query = !self.search_query.is_empty();
         let border = self.colors.border;
         let muted_fg = self.colors.muted_foreground;
-
         h_flex()
             .flex_shrink_0()
             .h_8()
@@ -372,100 +624,49 @@ impl QuickCommandPanel {
                     .ghost()
                     .xsmall()
                     .tooltip(t!("QuickCommand.add_tooltip").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.show_add_input = true;
-                        cx.notify();
-                    })),
-            )
-    }
-
-    /// 渲染新增命令输入框
-    fn render_add_input(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let add_input = self.add_input_state.clone();
-        let border = self.colors.border;
-        let muted_bg = self.colors.muted;
-
-        h_flex()
-            .flex_shrink_0()
-            .h_8()
-            .px_2()
-            .gap_1()
-            .items_center()
-            .border_b_1()
-            .border_color(border)
-            .bg(muted_bg)
-            .child(
-                div()
-                    .flex_1()
-                    .child(Input::new(&self.add_input_state).appearance(false).xsmall()),
-            )
-            .child(
-                Button::new("cancel-add")
-                    .label("Cancel")
-                    .ghost()
-                    .xsmall()
-                    .tooltip(t!("QuickCommand.cancel_tooltip").to_string())
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.add_input_state.update(cx, |state, cx| {
-                            state.set_value("", window, cx);
-                        });
-                        this.show_add_input = false;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("confirm-add")
-                    .label("Add")
-                    .primary()
-                    .xsmall()
-                    .tooltip(t!("QuickCommand.confirm_add_tooltip").to_string())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        let value = add_input.read(cx).value().to_string();
-                        if !value.trim().is_empty() {
-                            this.add_command(value, cx);
-                            add_input.update(cx, |state, cx| {
-                                state.set_value("", window, cx);
-                            });
-                        }
+                        this.open_command_editor(None, None, window, cx);
                     })),
             )
     }
 
-    /// 渲染单个命令项（供 uniform_list 使用）
     fn render_command_item(
         &self,
         index: usize,
-        cmd: &QuickCommand,
+        command: &QuickCommand,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let command = cmd.command.clone();
-        let command_for_paste = command.clone();
-        let command_for_paste2 = command.clone();
-        let command_for_copy = command.clone();
-        let command_for_delete = command.clone();
-        let command_for_tooltip = command.clone();
-        let id = cmd.id.unwrap_or(0);
-        let is_pinned = cmd.pinned;
-        let item_id = SharedString::from(format!("quick-cmd-item-{}", index));
-        let group_name = SharedString::from(format!("quick-cmd-group-{}", index));
-
+        let value = command.command.clone();
+        let value_for_row = value.clone();
+        let value_for_paste = value.clone();
+        let value_for_copy = value.clone();
+        let value_for_delete = value.clone();
+        let existing_for_edit = command.clone();
+        let tooltip = Self::command_tooltip(command);
+        let id = command.id.unwrap_or(0);
+        let is_pinned = command.pinned;
+        let item_group = SharedString::from(format!("quick-cmd-group-{index}"));
+        let display = command
+            .name
+            .as_ref()
+            .filter(|name| !name.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| value.clone());
         let pin_color = cx.theme().warning;
         let muted_bg = self.colors.muted;
 
         div()
-            .id(item_id)
-            .group(group_name.clone())
+            .id(SharedString::from(format!("quick-cmd-item-{index}")))
+            .group(item_group.clone())
             .w_full()
             .px_3()
             .py_2()
             .rounded_md()
             .cursor_pointer()
-            .hover(|s| s.bg(muted_bg))
+            .hover(|style| style.bg(muted_bg))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    this.paste_command(command_for_paste.clone(), cx);
-                }),
+                cx.listener(move |this, _, _, cx| this.paste_command(value_for_row.clone(), cx)),
             )
             .child(
                 h_flex()
@@ -487,16 +688,16 @@ impl QuickCommandPanel {
                             })
                             .child(
                                 div()
-                                    .id(SharedString::from(format!("quick-cmd-text-{}", index)))
+                                    .id(SharedString::from(format!("quick-cmd-text-{index}")))
                                     .flex_1()
                                     .min_w_0()
                                     .text_sm()
                                     .overflow_hidden()
                                     .text_ellipsis()
                                     .tooltip(move |window, cx| {
-                                        Tooltip::new(command_for_tooltip.clone()).build(window, cx)
+                                        Tooltip::new(tooltip.clone()).build(window, cx)
                                     })
-                                    .child(command),
+                                    .child(display),
                             ),
                     )
                     .child(
@@ -505,12 +706,10 @@ impl QuickCommandPanel {
                             .gap_1()
                             .ml_2()
                             .invisible()
-                            .group_hover(group_name, |s| s.visible())
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                cx.stop_propagation();
-                            })
+                            .group_hover(item_group, |style| style.visible())
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .child(
-                                Button::new(SharedString::from(format!("pin-{}", index)))
+                                Button::new(SharedString::from(format!("pin-{index}")))
                                     .icon(if is_pinned {
                                         IconName::StarOff
                                     } else {
@@ -518,64 +717,66 @@ impl QuickCommandPanel {
                                     })
                                     .ghost()
                                     .xsmall()
-                                    .tooltip(if is_pinned {
-                                        t!("QuickCommand.unpin_tooltip").to_string()
-                                    } else {
-                                        t!("QuickCommand.pin_tooltip").to_string()
-                                    })
                                     .when(is_pinned, |this| this.text_color(pin_color))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.toggle_pin(id, cx);
                                     })),
                             )
                             .child(
-                                Button::new(SharedString::from(format!("copy-{}", index)))
-                                    .icon(IconName::Copy)
+                                Button::new(SharedString::from(format!("edit-{index}")))
+                                    .icon(IconName::Edit)
                                     .ghost()
                                     .xsmall()
-                                    .tooltip(t!("QuickCommand.copy_tooltip").to_string())
                                     .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.copy_command(&command_for_copy, window, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new(SharedString::from(format!("delete-{}", index)))
-                                    .icon(IconName::Remove)
-                                    .danger()
-                                    .xsmall()
-                                    .tooltip(t!("QuickCommand.delete_tooltip").to_string())
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.confirm_delete_command(
-                                            id,
-                                            command_for_delete.clone(),
+                                        this.open_command_editor(
+                                            Some(existing_for_edit.clone()),
+                                            None,
                                             window,
                                             cx,
                                         );
                                     })),
                             )
                             .child(
-                                Button::new(SharedString::from(format!("paste-{}", index)))
+                                Button::new(SharedString::from(format!("copy-{index}")))
+                                    .icon(IconName::Copy)
+                                    .ghost()
+                                    .xsmall()
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.copy_command(&value_for_copy, window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("delete-{index}")))
+                                    .icon(IconName::Remove)
+                                    .danger()
+                                    .xsmall()
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.confirm_delete_command(
+                                            id,
+                                            value_for_delete.clone(),
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("paste-{index}")))
                                     .icon(IconName::Paste)
                                     .ghost()
                                     .xsmall()
-                                    .tooltip(t!("QuickCommand.paste_tooltip").to_string())
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.paste_command(command_for_paste2.clone(), cx);
+                                        this.paste_command(value_for_paste.clone(), cx);
                                     })),
                             ),
                     ),
             )
     }
 
-    /// 渲染空状态
     fn render_empty_state(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let muted_fg = self.colors.muted_foreground;
         let search_empty = self.search_query.is_empty();
-
-        div()
+        v_flex()
             .size_full()
-            .flex()
-            .flex_col()
             .items_center()
             .justify_center()
             .gap_2()
@@ -585,31 +786,26 @@ impl QuickCommandPanel {
                     .text_color(muted_fg),
             )
             .child(div().text_sm().text_color(muted_fg).child(if search_empty {
-                "No commands yet. Click + to add one."
+                "当前分组暂无命令"
             } else {
-                "No matching commands"
+                "没有匹配的命令"
             }))
             .when(search_empty, |this| {
                 this.child(
                     Button::new("add-first-command")
-                        .label("Add command")
+                        .label("新增命令")
                         .small()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.show_add_input = true;
-                            cx.notify();
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_command_editor(None, None, window, cx);
                         })),
                 )
             })
     }
 
-    /// 渲染加载状态
-    fn render_loading_state(&self, _cx: &App) -> impl IntoElement {
+    fn render_loading_state(&self) -> impl IntoElement {
         let muted_fg = self.colors.muted_foreground;
-
-        div()
+        v_flex()
             .size_full()
-            .flex()
-            .flex_col()
             .items_center()
             .justify_center()
             .gap_2()
@@ -632,9 +828,9 @@ impl Focusable for QuickCommandPanel {
 
 impl Render for QuickCommandPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let show_add = self.show_add_input;
-        let is_loading = self.is_loading;
-        let commands_empty = self.filtered_commands.is_empty();
+        let pinned_commands = self.pinned_commands();
+        let pinned_empty = pinned_commands.is_empty();
+        let commands_empty = self.filtered_commands.is_empty() && pinned_empty;
         let item_count = self.filtered_commands.len();
 
         v_flex()
@@ -642,30 +838,95 @@ impl Render for QuickCommandPanel {
             .bg(self.colors.background)
             .text_color(self.colors.foreground)
             .child(self.render_search_bar(cx))
-            .when(show_add, |this| this.child(self.render_add_input(cx)))
-            .when(is_loading, |this| this.child(self.render_loading_state(cx)))
-            .when(!is_loading && commands_empty, |this| {
-                this.child(self.render_empty_state(cx))
+            .when(self.is_loading, |this| {
+                this.child(self.render_loading_state())
             })
-            .when(!is_loading && !commands_empty, |this| {
+            .when(!self.is_loading && !pinned_empty, |this| {
                 this.child(
-                    uniform_list("quick-command-list", item_count, {
-                        cx.processor(move |state: &mut Self, range: Range<usize>, _window, _cx| {
-                            range
-                                .map(|ix| {
-                                    let cmd = state.filtered_commands[ix].clone();
-                                    state.render_command_item(ix, &cmd, _cx)
-                                })
-                                .collect()
-                        })
-                    })
-                    .flex_1()
-                    .size_full()
-                    .px_2()
-                    .py_1()
-                    .track_scroll(&self.scroll_handle)
-                    .with_sizing_behavior(ListSizingBehavior::Auto),
+                    v_flex()
+                        .flex_shrink_0()
+                        .gap_1()
+                        .px_2()
+                        .pt_1()
+                        .pb_1()
+                        .children(pinned_commands.iter().enumerate().map(|(index, command)| {
+                            self.render_command_item(index + 10_000, command, cx)
+                        })),
                 )
             })
+            .when(!self.is_loading && commands_empty, |this| {
+                this.child(self.render_empty_state(cx))
+            })
+            .when(
+                !self.is_loading && !self.filtered_commands.is_empty(),
+                |this| {
+                    this.child(
+                        uniform_list("quick-command-list", item_count, {
+                            cx.processor(move |state: &mut Self, range: Range<usize>, _, cx| {
+                                range
+                                    .map(|index| {
+                                        let command = state.filtered_commands[index].clone();
+                                        state.render_command_item(index, &command, cx)
+                                    })
+                                    .collect()
+                            })
+                        })
+                        .flex_1()
+                        .size_full()
+                        .px_2()
+                        .py_1()
+                        .track_scroll(&self.scroll_handle)
+                        .with_sizing_behavior(ListSizingBehavior::Auto),
+                    )
+                },
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{QuickCommandGroupFilter, command_matches_group_filter};
+    use one_core::storage::QuickCommand;
+
+    fn command_in_group(group_name: Option<&str>) -> QuickCommand {
+        let mut command = QuickCommand::new("echo test".to_string());
+        command.group_name = group_name.map(str::to_string);
+        command
+    }
+
+    #[test]
+    fn ungrouped_filter_accepts_missing_or_blank_group_names() {
+        let filter = QuickCommandGroupFilter::Ungrouped;
+
+        assert!(command_matches_group_filter(
+            &command_in_group(None),
+            &filter
+        ));
+        assert!(command_matches_group_filter(
+            &command_in_group(Some("  ")),
+            &filter
+        ));
+        assert!(!command_matches_group_filter(
+            &command_in_group(Some("deploy")),
+            &filter
+        ));
+    }
+
+    #[test]
+    fn named_group_filter_requires_an_exact_group_name() {
+        let filter = QuickCommandGroupFilter::Group("deploy".to_string());
+
+        assert!(command_matches_group_filter(
+            &command_in_group(Some("deploy")),
+            &filter
+        ));
+        assert!(!command_matches_group_filter(
+            &command_in_group(Some("Deploy")),
+            &filter
+        ));
+        assert!(!command_matches_group_filter(
+            &command_in_group(None),
+            &filter
+        ));
     }
 }
