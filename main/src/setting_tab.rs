@@ -2639,6 +2639,13 @@ const TAB_SHORTCUTS: &[ShortcutEntry] = &[
         action_id: Some(action_id::HOME_NEW_CONNECTION),
         system_hotkey: false,
     },
+    ShortcutEntry {
+        keys_macos: &["cmd-alt-t"],
+        keys_other: &["alt-t"],
+        label_key: "Settings.Shortcuts.open_local_terminal",
+        action_id: Some(action_id::HOME_OPEN_LOCAL_TERMINAL),
+        system_hotkey: false,
+    },
 ];
 
 const CONNECTION_SHORTCUTS: &[ShortcutEntry] = &[
@@ -3358,6 +3365,18 @@ mod tests {
         let settings: AppSettings = serde_json::from_str("{}").unwrap();
 
         assert!(settings.custom_keybindings.is_empty());
+    }
+
+    #[test]
+    fn shortcut_settings_include_open_local_terminal() {
+        let entry = super::TAB_SHORTCUTS
+            .iter()
+            .find(|entry| entry.action_id == Some("home.open_local_terminal"))
+            .expect("open local terminal shortcut should be configurable");
+
+        assert_eq!(&["cmd-alt-t"], entry.keys_macos);
+        assert_eq!(&["alt-t"], entry.keys_other);
+        assert_eq!("Settings.Shortcuts.open_local_terminal", entry.label_key);
     }
 
     #[test]

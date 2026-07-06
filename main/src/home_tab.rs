@@ -68,11 +68,20 @@ use remote_desktop_view::remote_desktop_form::{
     RemoteDesktopFormWindow, RemoteDesktopFormWindowConfig,
 };
 
-actions!(home_tab, [OpenConnectionQuickOpen, NewConnectionShortcut]);
+actions!(
+    home_tab,
+    [
+        OpenConnectionQuickOpen,
+        NewConnectionShortcut,
+        OpenLocalTerminalShortcut
+    ]
+);
 
 const HOME_SIDEBAR_EXPANDED_WIDTH: gpui::Pixels = px(220.0);
 const HOME_SIDEBAR_COLLAPSED_WIDTH: gpui::Pixels = px(68.0);
 const HOME_CONNECTION_LIST_ACTIONS_WIDTH: gpui::Pixels = px(136.0);
+const OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS: &str = "cmd-alt-t";
+const OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER: &str = "alt-t";
 
 pub fn init(cx: &mut App) {
     cx.bind_keys(init_keybindings(cx));
@@ -108,6 +117,15 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .into_iter()
         .map(|key| KeyBinding::new(&key, NewConnectionShortcut, None)),
     );
+    keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::HOME_OPEN_LOCAL_TERMINAL,
+            &[open_local_terminal_default_shortcut()],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, OpenLocalTerminalShortcut, None)),
+    );
     keybindings
 }
 
@@ -127,6 +145,13 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         None,
         NewConnectionShortcut,
     ));
+    keybindings.extend(rebind_keybindings(
+        cx,
+        action_id::HOME_OPEN_LOCAL_TERMINAL,
+        &[open_local_terminal_default_shortcut()],
+        None,
+        OpenLocalTerminalShortcut,
+    ));
     keybindings
 }
 
@@ -136,6 +161,13 @@ fn home_default_shortcut(macos: &'static str, other: &'static str) -> &'static s
     } else {
         other
     }
+}
+
+fn open_local_terminal_default_shortcut() -> &'static str {
+    home_default_shortcut(
+        OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS,
+        OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER,
+    )
 }
 
 fn refreshed_pending_conflicts(
@@ -348,6 +380,13 @@ mod external_driver_form_tests {
     use super::*;
     use one_core::cloud_sync::{CloudSyncData, ConflictType};
     use one_core::storage::DbConnectionConfig;
+
+    #[test]
+    fn open_local_terminal_shortcut_defaults_are_conflict_free() {
+        assert_eq!("cmd-alt-t", OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS);
+        assert_eq!("alt-t", OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER);
+        assert_ne!("ctrl-alt-t", OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER);
+    }
 
     fn stored_external_connection(driver_id: &str) -> StoredConnection {
         StoredConnection::new_database(

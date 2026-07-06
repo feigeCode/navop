@@ -1804,6 +1804,10 @@ Settings:
       en: New Connection
       zh-CN: 新建连接
       zh-HK: 新建連線
+    open_local_terminal:
+      en: Open Local Terminal
+      zh-CN: 打开本地终端
+      zh-HK: 打開本機終端
     connection_previous_type:
       en: Previous Connection Type
       zh-CN: 上一个连接类型

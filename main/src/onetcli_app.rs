@@ -1,4 +1,6 @@
-use crate::home_tab::{HomePage, NewConnectionShortcut, OpenConnectionQuickOpen};
+use crate::home_tab::{
+    HomePage, NewConnectionShortcut, OpenConnectionQuickOpen, OpenLocalTerminalShortcut,
+};
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, KeyBinding, ParentElement, Render, Styled,
     Window, actions, div,
@@ -597,6 +599,25 @@ fn init_action_handlers(cx: &mut App) {
                 }
                 home_page.update(cx, |hp, cx| {
                     hp.show_new_connection_dialog(window, cx);
+                });
+            });
+        });
+    });
+    cx.on_action(|_: &OpenLocalTerminalShortcut, cx| {
+        let Some(active_window) = cx.active_window() else {
+            return;
+        };
+        let Some(home) = cx.try_global::<GlobalHomePage>() else {
+            return;
+        };
+        let home_page = home.home_page.clone();
+        cx.defer(move |cx| {
+            _ = active_window.update(cx, |_, window, cx| {
+                if window.has_active_dialog(cx) {
+                    window.close_all_dialogs(cx);
+                }
+                home_page.update(cx, |hp, cx| {
+                    hp.add_terminal_tab(window, cx);
                 });
             });
         });
