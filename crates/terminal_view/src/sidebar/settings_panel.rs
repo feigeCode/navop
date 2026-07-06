@@ -862,7 +862,10 @@ impl SettingsPanel {
         let colors = self.colors();
         let border = colors.border;
         let fg = colors.foreground;
+        let muted = colors.muted;
         let muted_fg = colors.muted_foreground;
+        let accent = colors.accent;
+        let accent_fg = colors.accent_foreground;
         let input_style = self.local_input_style();
 
         v_flex()
@@ -903,6 +906,7 @@ impl SettingsPanel {
                         Select::new(&self.font_select_state)
                             .small()
                             .local_style(input_style)
+                            .local_menu_item_style(fg, muted, accent, accent_fg)
                             .text_color(fg)
                             .placeholder(t!("Settings.font_family_placeholder")),
                     ),
