@@ -112,7 +112,7 @@ impl ConnectionImportWindow {
             ssh_connections,
         };
         open_popup_window(
-            PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 520.0),
+            PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 650.0),
             move |window, cx| cx.new(|cx| MongoFormWindow::new(form_config, window, cx)),
             cx,
         );
