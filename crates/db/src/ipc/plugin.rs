@@ -86,6 +86,15 @@ impl ExternalDatabasePlugin {
         }
     }
 
+    fn driver_table_data_method(&self) -> Option<String> {
+        self.driver
+            .query
+            .table_data_method
+            .as_deref()
+            .filter(|method| !method.trim().is_empty())
+            .map(str::to_string)
+    }
+
     fn is_oracle_compatible(&self) -> bool {
         matches!(
             self.driver.dialect.compatible_database_type,
@@ -426,6 +435,7 @@ fn placeholder_driver_manifest(driver_id: &str) -> IpcDriverManifest {
         dialect: Default::default(),
         capabilities: None,
         connection: Default::default(),
+        query: Default::default(),
         methods: Vec::new(),
         ui: Default::default(),
         manifest_dir: Default::default(),
@@ -576,6 +586,27 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         connection: &dyn DbConnection,
         request: TableDataRequest,
     ) -> Result<TableDataResponse> {
+        if let Some(method) = self.driver_table_data_method() {
+            let value = connection
+                .driver_request_value(
+                    &method,
+                    serde_json::json!({
+                        "database": request.database,
+                        "schema": request.schema,
+                        "table": request.table,
+                        "page": request.page,
+                        "page_size": request.page_size,
+                        "filters": request.filters,
+                        "sorts": request.sorts,
+                        "where_clause": request.where_clause,
+                        "order_by_clause": request.order_by_clause
+                    }),
+                )
+                .await?;
+            return serde_json::from_value(value)
+                .map_err(|err| anyhow::anyhow!("invalid `{method}` response: {err}"));
+        }
+
         let start_time = std::time::Instant::now();
 
         let where_clause = match request.where_clause {
@@ -2632,6 +2663,28 @@ mod tests {
             "SELECT ROWID AS \"__rowid__\", t.* FROM \"APP\".\"EVENTS\" t ORDER BY ROWID OFFSET 0 ROWS FETCH NEXT 25 ROWS ONLY",
             queries[1]
         );
+    }
+
+    #[test]
+    fn external_table_data_uses_driver_method_when_manifest_declares_it() {
+        let mut driver = driver_manifest("elasticsearch", false, "elasticsearch.connection");
+        driver.query.table_data_method = Some("x/es/table_data".to_string());
+        driver.methods.push("x/es/table_data".to_string());
+
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        assert_eq!(
+            plugin.driver_table_data_method().as_deref(),
+            Some("x/es/table_data")
+        );
+    }
+
+    #[test]
+    fn external_sql_driver_has_no_driver_owned_table_data_method() {
+        let driver = driver_manifest("postgres-compatible", true, "postgres.connection");
+        let plugin = ExternalDatabasePlugin::for_driver(driver);
+
+        assert!(plugin.driver_table_data_method().is_none());
     }
 
     #[test]
