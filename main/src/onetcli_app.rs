@@ -653,7 +653,8 @@ impl OnetCliApp {
                 )
                 .with_inactive_tab_bg_color(Some(gpui::rgb(0x3a3a3a).into()))
                 .with_tab_content_colors(Some(gpui::white()), Some(gpui::rgb(0xaaaaaa).into()))
-                .with_split_enabled(true);
+                .with_split_enabled(true)
+                .with_primary_pane(primary);
 
             #[cfg(target_os = "macos")]
             {

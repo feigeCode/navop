@@ -31,6 +31,10 @@ TabContextMenu:
     en: "Split Down"
     zh-CN: "向下分屏"
     zh-HK: "向下分屏"
+  move_to_primary:
+    en: "Move to Main Split"
+    zh-CN: "回到主分屏"
+    zh-HK: "回到主分屏"
   close_tab:
     en: "Close Tab"
     zh-CN: "关闭标签页"

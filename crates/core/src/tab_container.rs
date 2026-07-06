@@ -50,6 +50,13 @@ pub(crate) fn split_command_enabled(
     container_split_enabled && tab_can_split && source_tab_count > 1
 }
 
+pub(crate) fn move_to_primary_command_visible(
+    container_split_enabled: bool,
+    is_primary_pane: bool,
+) -> bool {
+    container_split_enabled && !is_primary_pane
+}
+
 pub(crate) fn active_content_can_split_for_layout(
     pinned_tab_active: bool,
     pinned_tab_can_split: Option<bool>,
@@ -135,6 +142,10 @@ pub enum TabContainerEvent {
     /// 移动到当前 pane 的 `placement` 方向新建的 pane 中（由上层 SplitTabContainer 处理）
     SplitRequested {
         placement: Placement,
+        source: Entity<TabContainer>,
+        tab_index: usize,
+    },
+    MoveToPrimaryRequested {
         source: Entity<TabContainer>,
         tab_index: usize,
     },
@@ -964,6 +975,7 @@ pub struct TabContainer {
     /// Active pinned tab index. When `None`, a regular tab is active.
     active_pinned_index: Option<usize>,
     split_enabled: bool,
+    is_primary_pane: bool,
     will_split_placement: Option<Placement>,
     sidebar_overrides: HashMap<SidebarPanelId, SidebarPanelOverride>,
     sidebar_size_overrides: HashMap<SidebarPanelId, SidebarPanelSizeOverride>,
@@ -1006,6 +1018,7 @@ impl TabContainer {
             pinned_tabs: Vec::new(),
             active_pinned_index: None,
             split_enabled: false,
+            is_primary_pane: true,
             will_split_placement: None,
             sidebar_overrides: HashMap::new(),
             sidebar_size_overrides: HashMap::new(),
@@ -1066,6 +1079,11 @@ impl TabContainer {
 
     pub fn with_split_enabled(mut self, enabled: bool) -> Self {
         self.split_enabled = enabled;
+        self
+    }
+
+    pub fn with_primary_pane(mut self, primary: bool) -> Self {
+        self.is_primary_pane = primary;
         self
     }
 
@@ -3453,6 +3471,13 @@ impl TabContainer {
                                     can_split,
                                     tab_count,
                                 );
+                                let move_to_primary_visible = {
+                                    let container = view_for_menu.read(cx);
+                                    move_to_primary_command_visible(
+                                        container.split_enabled,
+                                        container.is_primary_pane,
+                                    )
+                                };
                                 let closeable = view_for_menu
                                     .read(cx)
                                     .tabs
@@ -3516,6 +3541,26 @@ impl TabContainer {
                                             },
                                         )),
                                 )
+                                .when(move_to_primary_visible, |menu| {
+                                    menu.item(
+                                        PopupMenuItem::new(
+                                            t!("TabContextMenu.move_to_primary").to_string(),
+                                        )
+                                        .on_click(
+                                            window.listener_for(
+                                                &view_for_menu,
+                                                move |_this, _, _window, cx| {
+                                                    cx.emit(
+                                                        TabContainerEvent::MoveToPrimaryRequested {
+                                                            source: cx.entity(),
+                                                            tab_index: idx,
+                                                        },
+                                                    );
+                                                },
+                                            ),
+                                        ),
+                                    )
+                                })
                                 .item(
                                     PopupMenuItem::new(t!("TabContextMenu.close_tab").to_string())
                                         .disabled(!closeable)

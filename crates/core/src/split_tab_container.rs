@@ -185,6 +185,9 @@ impl SplitTabContainer {
             } => {
                 self.split_tab(source.clone(), *tab_index, *placement, window, cx);
             }
+            TabContainerEvent::MoveToPrimaryRequested { source, tab_index } => {
+                self.move_tab_to_primary(source.clone(), *tab_index, window, cx);
+            }
         }
     }
 
@@ -219,6 +222,34 @@ impl SplitTabContainer {
                 pane.insert_tab_at_end_and_activate(tab, window, cx);
             });
         }
+        self.cleanup_empty_panes(cx);
+        cx.emit(SplitTabContainerEvent::LayoutChanged);
+        cx.emit(SplitTabContainerEvent::ActivePaneChanged);
+        cx.notify();
+    }
+
+    fn move_tab_to_primary(
+        &mut self,
+        source: Entity<TabContainer>,
+        tab_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if source == self.primary_pane {
+            return;
+        }
+
+        self.suppress_cleanup = true;
+        let moved_tab = source.update(cx, |source, cx| source.take_tab(tab_index, window, cx));
+        self.suppress_cleanup = false;
+        let Some(tab) = moved_tab else {
+            return;
+        };
+
+        self.primary_pane.update(cx, |pane, cx| {
+            pane.insert_tab_at_end_and_activate(tab, window, cx);
+        });
+        self.active_pane = self.primary_pane.clone();
         self.cleanup_empty_panes(cx);
         cx.emit(SplitTabContainerEvent::LayoutChanged);
         cx.emit(SplitTabContainerEvent::ActivePaneChanged);

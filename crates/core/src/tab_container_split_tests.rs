@@ -1,5 +1,6 @@
 use crate::{
-    split_tab_container::split_tree_visible_for_layout, tab_container::split_command_enabled,
+    split_tab_container::split_tree_visible_for_layout,
+    tab_container::{move_to_primary_command_visible, split_command_enabled},
 };
 
 #[test]
@@ -12,6 +13,13 @@ fn split_command_requires_container_and_tab_capability() {
 #[test]
 fn split_command_rejects_single_tab_source_pane() {
     assert!(!split_command_enabled(true, true, 1));
+}
+
+#[test]
+fn move_to_primary_command_only_shows_for_secondary_split_panes() {
+    assert!(!move_to_primary_command_visible(false, false));
+    assert!(!move_to_primary_command_visible(true, true));
+    assert!(move_to_primary_command_visible(true, false));
 }
 
 #[test]
