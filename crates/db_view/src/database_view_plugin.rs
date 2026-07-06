@@ -1383,6 +1383,7 @@ mod tests {
             dialect: Default::default(),
             capabilities: None,
             connection: Default::default(),
+            query: Default::default(),
             methods: Vec::new(),
             ui: Default::default(),
             manifest_dir: PathBuf::from("."),

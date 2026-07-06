@@ -940,6 +940,10 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         schema: Option<String>,
         table: &str,
     ) -> Result<Vec<IndexInfo>> {
+        if !self.capabilities().supports_indexes {
+            return Ok(Vec::new());
+        }
+
         self.metadata(
             connection,
             wire_method::SCHEMA_INDEXES,

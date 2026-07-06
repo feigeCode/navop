@@ -623,12 +623,9 @@ impl DataGrid {
             let result = global_state
                 .query_table_data(cx, connection_id.clone(), request)
                 .await;
-            let columns_info = global_state
-                .list_columns(cx, connection_id, database_name, schema_name, table_name)
-                .await;
 
-            match (result, columns_info) {
-                (Err(err), _) => {
+            match result {
+                Err(err) => {
                     error!("load_data_with_clauses failed: {}", err);
                     cx.update(|cx| {
                         table_data_info.update(cx, |info, cx| {
@@ -643,7 +640,7 @@ impl DataGrid {
                         });
                     })
                 }
-                (Ok(response), columns_info_result) => {
+                Ok(response) => {
                     let query_result = response.query_result;
 
                     let (columns, rows, rowids) =
@@ -680,24 +677,21 @@ impl DataGrid {
                             (columns, rows, Vec::new())
                         };
 
-                    let column_meta = match columns_info_result {
-                        Ok(cols) => cols,
-                        Err(_) => query_result
-                            .column_meta
-                            .iter()
-                            .filter(|meta| meta.name != "__rowid__")
-                            .map(|meta| ColumnInfo {
-                                name: meta.name.clone(),
-                                data_type: meta.db_type.clone(),
-                                is_nullable: meta.nullable,
-                                is_primary_key: false,
-                                default_value: None,
-                                comment: None,
-                                charset: None,
-                                collation: None,
-                            })
-                            .collect(),
-                    };
+                    let column_meta: Vec<ColumnInfo> = query_result
+                        .column_meta
+                        .iter()
+                        .filter(|meta| meta.name != "__rowid__")
+                        .map(|meta| ColumnInfo {
+                            name: meta.name.clone(),
+                            data_type: meta.db_type.clone(),
+                            is_nullable: meta.nullable,
+                            is_primary_key: false,
+                            default_value: None,
+                            comment: None,
+                            charset: None,
+                            collation: None,
+                        })
+                        .collect();
 
                     cx.update(|cx| {
                         table_data_info.update(cx, |info, cx| {
@@ -730,6 +724,37 @@ impl DataGrid {
                             state.refresh(cx);
                         });
                     });
+
+                    match global_state
+                        .list_columns(cx, connection_id, database_name, schema_name, table_name)
+                        .await
+                    {
+                        Ok(column_meta) => {
+                            cx.update(|cx| {
+                                table_data_info.update(cx, |info, cx| {
+                                    info.columns = column_meta.clone();
+                                    cx.notify();
+                                });
+
+                                filter_editor.update(cx, |editor, cx| {
+                                    editor.set_schema(
+                                        TableSchema {
+                                            columns: column_meta.clone(),
+                                        },
+                                        cx,
+                                    );
+                                });
+
+                                table.update(cx, |state, cx| {
+                                    state.delegate_mut().set_column_meta(column_meta);
+                                    state.refresh(cx);
+                                });
+                            });
+                        }
+                        Err(err) => {
+                            trace!("load_data_with_clauses list_columns failed: {}", err);
+                        }
+                    }
                 }
             }
         })

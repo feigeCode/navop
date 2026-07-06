@@ -170,6 +170,7 @@ fn build_mysql_ui_manifest() -> DatabaseUiManifest {
             supports_schema: false,
             uses_schema_as_database: false,
             supports_views: true,
+            supports_indexes: true,
             supports_users: true,
             supports_user_create: true,
             supports_user_edit: true,

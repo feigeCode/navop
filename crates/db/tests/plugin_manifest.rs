@@ -16,6 +16,7 @@ fn default_capabilities_keep_views_enabled_for_legacy_drivers() {
     assert!(!capabilities.supports_schema);
     assert!(!capabilities.uses_schema_as_database);
     assert!(capabilities.supports_views);
+    assert!(capabilities.supports_indexes);
     assert!(!capabilities.supports_sequences);
     assert!(!capabilities.supports_functions);
     assert!(!capabilities.supports_procedures);

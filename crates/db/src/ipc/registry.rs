@@ -248,6 +248,14 @@ impl IpcDriverManifest {
         {
             capabilities.supports_views = false;
         }
+        if !self.methods.is_empty()
+            && !self
+                .methods
+                .iter()
+                .any(|driver_method| driver_method == method::SCHEMA_INDEXES)
+        {
+            capabilities.supports_indexes = false;
+        }
         capabilities
     }
 

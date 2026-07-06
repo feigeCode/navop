@@ -337,6 +337,7 @@ fn falls_back_to_legacy_dialect_capabilities() {
     assert!(capabilities.supports_schema);
     assert!(capabilities.supports_sequences);
     assert!(capabilities.supports_views);
+    assert!(capabilities.supports_indexes);
     assert!(capabilities.supports_functions);
     assert!(capabilities.supports_procedures);
 }
@@ -352,6 +353,16 @@ fn declared_methods_disable_views_when_schema_views_is_absent() {
 }
 
 #[test]
+fn declared_methods_disable_indexes_when_schema_indexes_is_absent() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"methods":["schema/databases","schema/objects"]}"#,
+    )
+    .unwrap();
+
+    assert!(!manifest.effective_capabilities().supports_indexes);
+}
+
+#[test]
 fn declared_schema_views_method_enables_views() {
     let manifest: IpcDriverManifest = serde_json::from_str(
         r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"methods":["schema/databases","schema/views"]}"#,
@@ -362,6 +373,16 @@ fn declared_schema_views_method_enables_views() {
 }
 
 #[test]
+fn declared_schema_indexes_method_enables_indexes() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"methods":["schema/databases","schema/indexes"]}"#,
+    )
+    .unwrap();
+
+    assert!(manifest.effective_capabilities().supports_indexes);
+}
+
+#[test]
 fn explicit_capability_can_disable_views_even_when_method_is_declared() {
     let manifest: IpcDriverManifest = serde_json::from_str(
         r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"methods":["schema/databases","schema/views"],"capabilities":{"supports_views":false}}"#,
@@ -369,6 +390,16 @@ fn explicit_capability_can_disable_views_even_when_method_is_declared() {
     .unwrap();
 
     assert!(!manifest.effective_capabilities().supports_views);
+}
+
+#[test]
+fn explicit_capability_can_disable_indexes_even_when_method_is_declared() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"methods":["schema/databases","schema/indexes"],"capabilities":{"supports_indexes":false}}"#,
+    )
+    .unwrap();
+
+    assert!(!manifest.effective_capabilities().supports_indexes);
 }
 
 #[test]
