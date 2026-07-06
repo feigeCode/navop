@@ -2,6 +2,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point as AlacPoint, Side};
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
+use alacritty_terminal::term::cell::Flags;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
@@ -146,6 +147,28 @@ const TERMINAL_SEARCH_FORWARD_SHORTCUT: &str = "ctrl-shift-f";
 const TERMINAL_SEARCH_BACKWARD_SHORTCUT: &str = "cmd-g";
 #[cfg(not(target_os = "macos"))]
 const TERMINAL_SEARCH_BACKWARD_SHORTCUT: &str = "ctrl-shift-g";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WrappedLineSegment {
+    text: String,
+    wraps_to_next: bool,
+}
+
+impl WrappedLineSegment {
+    fn new(text: impl Into<String>, wraps_to_next: bool) -> Self {
+        Self {
+            text: text.into(),
+            wraps_to_next,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AddonLineText {
+    text: String,
+    column: usize,
+    screen_line: usize,
+}
 const TERMINAL_TOGGLE_VI_MODE_SHORTCUT: &str = "f7";
 
 const DEFAULT_CELL_WIDTH: Pixels = px(8.0);
@@ -286,6 +309,55 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .map(|key| KeyBinding::new(&key, ResetFont, Some(TERMINAL_CONTEXT))),
     );
     keybindings
+}
+
+fn first_wrapped_grid_line(
+    current: i32,
+    min_line: i32,
+    wraps_to_next: impl Fn(i32) -> bool,
+) -> i32 {
+    let mut line = current;
+    while line > min_line && wraps_to_next(line - 1) {
+        line -= 1;
+    }
+    line
+}
+
+fn last_wrapped_grid_line(current: i32, max_line: i32, wraps_to_next: impl Fn(i32) -> bool) -> i32 {
+    let mut line = current;
+    while line < max_line && wraps_to_next(line) {
+        line += 1;
+    }
+    line
+}
+
+fn wrapped_addon_line_text(
+    lines: &[WrappedLineSegment],
+    current_line: usize,
+    column: usize,
+    first_screen_line: usize,
+) -> AddonLineText {
+    debug_assert!(
+        lines
+            .iter()
+            .take(lines.len().saturating_sub(1))
+            .all(|line| line.wraps_to_next)
+    );
+    let prefix_width = lines
+        .iter()
+        .take(current_line)
+        .map(|line| line.text.chars().count())
+        .sum::<usize>();
+    let text = lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<String>();
+
+    AddonLineText {
+        text,
+        column: prefix_width + column,
+        screen_line: first_screen_line,
+    }
 }
 
 fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
@@ -3036,20 +3108,60 @@ impl TerminalView {
         }
     }
 
-    fn get_line_text(&self, screen_line: usize, cx: &Context<Self>) -> String {
+    fn get_addon_line_text(
+        &self,
+        screen_line: usize,
+        column: usize,
+        cx: &Context<Self>,
+    ) -> AddonLineText {
         let term = self.terminal.read(cx).term().lock();
         let grid = term.grid();
         let display_offset = grid.display_offset();
         let grid_line = screen_line as i32 - display_offset as i32;
+        let min_line = -(term.history_size() as i32);
+        let max_line = term.screen_lines() as i32 - 1;
 
-        if grid_line < -(term.history_size() as i32) || grid_line >= term.screen_lines() as i32 {
-            return String::new();
+        if grid_line < min_line || grid_line > max_line {
+            return AddonLineText {
+                text: String::new(),
+                column,
+                screen_line,
+            };
         }
 
-        let line = &grid[Line(grid_line)];
-        let text: String = line[..].iter().map(|cell| cell.c).collect();
-        text.trim_end_matches(|c: char| c == ' ' || c == '\0')
-            .to_string()
+        let first_line = first_wrapped_grid_line(grid_line, min_line, |line| {
+            grid[Line(line)][Column(term.columns() - 1)]
+                .flags
+                .contains(Flags::WRAPLINE)
+        });
+        let last_line = last_wrapped_grid_line(grid_line, max_line, |line| {
+            grid[Line(line)][Column(term.columns() - 1)]
+                .flags
+                .contains(Flags::WRAPLINE)
+        });
+        let line_text = |line| {
+            let text: String = grid[Line(line)][..].iter().map(|cell| cell.c).collect();
+            text.trim_end_matches(|c: char| c == ' ' || c == '\0')
+                .to_string()
+        };
+        let segments = (first_line..=last_line)
+            .map(|line| {
+                WrappedLineSegment::new(
+                    line_text(line),
+                    line < last_line
+                        && grid[Line(line)][Column(term.columns() - 1)]
+                            .flags
+                            .contains(Flags::WRAPLINE),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        wrapped_addon_line_text(
+            &segments,
+            (grid_line - first_line) as usize,
+            column,
+            (first_line + display_offset as i32).max(0) as usize,
+        )
     }
 
     fn terminal_font_metrics(
@@ -3652,14 +3764,14 @@ impl TerminalView {
 
         let screen_line = point.line.0 as usize;
         let column = point.column.0;
-        let line_text = self.get_line_text(screen_line, cx);
+        let line_text = self.get_addon_line_text(screen_line, column, cx);
         let is_local = self.terminal.read(cx).connection_kind() == TerminalConnectionKind::Local;
         let consumed = {
             let mut open_url = |url: &str| cx.open_url(url);
             let mut context = TerminalAddonMouseContext::new(
-                screen_line,
-                column,
-                &line_text,
+                line_text.screen_line,
+                line_text.column,
+                &line_text.text,
                 event.modifiers,
                 event.position,
                 is_local,
@@ -3754,14 +3866,14 @@ impl TerminalView {
             self.start_selection_from_pending_sgr_press(point, bounds, cx);
         }
 
-        let line_text = self.get_line_text(screen_line, cx);
+        let line_text = self.get_addon_line_text(screen_line, column, cx);
         let is_local = self.terminal.read(cx).connection_kind() == TerminalConnectionKind::Local;
         let hover_changed = {
             let mut open_url = |url: &str| cx.open_url(url);
             let mut context = TerminalAddonMouseContext::new(
-                screen_line,
-                column,
-                &line_text,
+                line_text.screen_line,
+                line_text.column,
+                &line_text.text,
                 event.modifiers,
                 event.position,
                 is_local,
@@ -3885,14 +3997,14 @@ impl TerminalView {
         let point = self.pixel_to_point(event.position, bounds, cx);
         let screen_line = point.line.0 as usize;
         let column = point.column.0;
-        let line_text = self.get_line_text(screen_line, cx);
+        let line_text = self.get_addon_line_text(screen_line, column, cx);
         let is_local = self.terminal.read(cx).connection_kind() == TerminalConnectionKind::Local;
         {
             let mut open_url = |url: &str| cx.open_url(url);
             let mut context = TerminalAddonMouseContext::new(
-                screen_line,
-                column,
-                &line_text,
+                line_text.screen_line,
+                line_text.column,
+                &line_text.text,
                 event.modifiers,
                 event.position,
                 is_local,
@@ -4634,10 +4746,11 @@ impl Element for ResizeEventHandler {
 #[cfg(test)]
 mod tests {
     use super::{
-        TerminalDuplicateSource, UnbracketedPasteHazard, detect_unbracketed_paste_hazard,
-        encode_mouse_modifiers, has_trailing_line_continuation, has_unterminated_shell_quote,
-        history_prompt_available, history_prompt_dropdown_origin, history_prompt_overlay_bounds,
-        mouse_button_code, multiline_non_empty_line_count, sgr_mouse_button_report,
+        TerminalDuplicateSource, UnbracketedPasteHazard, WrappedLineSegment,
+        detect_unbracketed_paste_hazard, encode_mouse_modifiers, has_trailing_line_continuation,
+        has_unterminated_shell_quote, history_prompt_available, history_prompt_dropdown_origin,
+        history_prompt_overlay_bounds, mouse_button_code, multiline_non_empty_line_count,
+        sgr_mouse_button_report,
         sgr_mouse_mode_enabled, sgr_mouse_wheel_report, should_confirm_local_terminal_close,
         should_defer_inline_history_prompt_input_to_text_system, should_defer_sgr_left_press,
         should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
@@ -4645,7 +4758,7 @@ mod tests {
         should_refresh_history_commands_for_terminal_event,
         should_reset_history_prompt_for_terminal_event, should_scroll_to_bottom_on_user_input,
         should_start_selection_from_pending_sgr_press, take_whole_scroll_lines,
-        terminal_history_scope, terminal_tab_duplicate_supported,
+        terminal_history_scope, terminal_tab_duplicate_supported, wrapped_addon_line_text,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
@@ -4655,6 +4768,29 @@ mod tests {
     use std::cell::Cell as StdCell;
     use terminal::LocalConfig;
     use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
+
+    #[test]
+    fn wrapped_addon_line_text_joins_visual_continuation_lines() {
+        let lines = vec![
+            WrappedLineSegment::new("见 /Users/demo/project/crates/extension-protoco", true),
+            WrappedLineSegment::new("l/src/row.rs:22 和其他文本", false),
+        ];
+
+        let joined = wrapped_addon_line_text(&lines, 1, 4, 0);
+
+        assert_eq!(
+            "见 /Users/demo/project/crates/extension-protocol/src/row.rs:22 和其他文本",
+            joined.text
+        );
+        assert_eq!(0, joined.screen_line);
+        assert_eq!(
+            "见 /Users/demo/project/crates/extension-protoco"
+                .chars()
+                .count()
+                + 4,
+            joined.column
+        );
+    }
 
     #[test]
     fn local_terminal_close_confirms_while_command_is_running() {

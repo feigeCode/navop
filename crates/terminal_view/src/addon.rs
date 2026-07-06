@@ -939,10 +939,11 @@ impl FilePathAddon {
         let path_regex = regex::Regex::new(
             r#"(?x)
             (?P<path>
-                (?:~|\.{1,2})/[^\s:<>"'|]+|
-                /[^\s:<>"'|]+|
+                (?:~|\.{1,2})/[^\s:<>"'|，。；、]+|
+                /[^\s:<>"'|，。；、]+|
                 [A-Za-z]:\\[^\s:<>"'|]+|
-                \\\\[^\s:<>"'|]+
+                \\\\[^\s:<>"'|]+|
+                (?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-][^\s:<>"'|，。；、]*
             )
             (?::\d+)?(?::\d+)?
             "#,
@@ -1000,14 +1001,18 @@ impl FilePathAddon {
 
             let (path_part, _line_number, _column_number) = split_path_line_column(candidate);
             let cleaned_path = trim_trailing_punctuation(&path_part);
+            let path_end_col = start_col + cleaned_path.chars().count();
+            if column >= path_end_col {
+                continue;
+            }
 
             if let Some(resolved_path) = resolve_path(&cleaned_path, base_dir) {
                 if resolved_path.exists() {
                     self.hovered_path = Some(HoveredPath {
-                        display: candidate.to_string(),
+                        display: cleaned_path,
                         path: resolved_path,
                         line: screen_line,
-                        col_range: start_col..end_col,
+                        col_range: start_col..path_end_col,
                     });
                     return true;
                 }
@@ -1222,8 +1227,21 @@ fn file_path_to_url(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AddonManager, compile_custom_highlight_rules, register_default_addons};
+    use super::{
+        AddonManager, FilePathAddon, compile_custom_highlight_rules, register_default_addons,
+    };
     use crate::settings::TerminalHighlightRule;
+    use std::fs;
+    use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("onetcli-{name}-{timestamp}"))
+    }
 
     #[test]
     fn custom_highlight_rule_requires_pattern_and_color() {
@@ -1265,5 +1283,45 @@ mod tests {
 
         assert!(manager.is_loaded("custom_highlights"));
         assert!(!manager.is_loaded("ip_highlight"));
+    }
+
+    #[test]
+    fn file_path_hover_does_not_extend_into_line_number_suffix() {
+        let dir = unique_temp_dir("path-line-suffix");
+        fs::create_dir_all(&dir).expect("temp dir should be created");
+        let file = dir.join("row.rs");
+        fs::write(&file, "").expect("temp file should be created");
+        let line = format!("见 {}:22 后续", file.display());
+        let path_column = char_column(&line, line.find("row.rs").expect("path should be present"));
+        let line_number_column =
+            char_column(&line, line.find(":22").expect("line should be present")) + 1;
+        let mut addon = FilePathAddon::new();
+
+        assert!(addon.detect_path_at(&line, path_column, 0, None));
+        assert_eq!(file, addon.hovered_path().expect("path should hover").path);
+        assert!(!addon.detect_path_at(&line, line_number_column, 0, None));
+
+        _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn file_path_hover_resolves_bare_relative_paths_from_base_dir() {
+        let dir = unique_temp_dir("relative-path");
+        let file = dir.join("crates/extension-protocol/src/row.rs");
+        fs::create_dir_all(file.parent().expect("file should have parent"))
+            .expect("parent dir should be created");
+        fs::write(&file, "").expect("temp file should be created");
+        let line = "见 crates/extension-protocol/src/row.rs:22";
+        let column = char_column(line, line.find("row.rs").expect("path should be present"));
+        let mut addon = FilePathAddon::new();
+
+        assert!(addon.detect_path_at(line, column, 0, Some(Path::new(&dir))));
+        assert_eq!(file, addon.hovered_path().expect("path should hover").path);
+
+        _ = fs::remove_dir_all(dir);
+    }
+
+    fn char_column(text: &str, byte_index: usize) -> usize {
+        text[..byte_index].chars().count()
     }
 }
