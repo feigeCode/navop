@@ -704,6 +704,8 @@ impl SettingsPanel {
                                         AppSettings::update_and_save(cx, |settings| {
                                             settings.font_size = val;
                                         });
+                                        AppSettings::current(cx).apply_font_size(cx);
+                                        cx.refresh_windows();
                                     },
                                 )
                                 .default_value(default_settings.font_size),
@@ -925,13 +927,26 @@ impl SettingsPanel {
                             ),
                             SettingItem::render(move |_options, _window, cx| {
                                 render_manual_update_check_item(cx)
-                            }),
+                            })
+                            .search_texts([
+                                t!("Settings.General.Update.group_title").to_string(),
+                                t!("Settings.General.Update.check_now").to_string(),
+                                t!("Settings.General.Update.check_now_desc").to_string(),
+                            ]),
                         ]),
                     SettingGroup::new()
                         .title(t!("Settings.General.Proxy.group_title"))
-                        .item(SettingItem::render(move |_options, _window, cx| {
-                            render_global_proxy_settings_item(cx)
-                        })),
+                        .item(
+                            SettingItem::render(move |_options, _window, cx| {
+                                render_global_proxy_settings_item(cx)
+                            })
+                            .search_texts([
+                                t!("Settings.General.Proxy.group_title").to_string(),
+                                t!("Settings.General.Proxy.title").to_string(),
+                                t!("Settings.General.Proxy.description").to_string(),
+                                t!("Settings.General.Proxy.open").to_string(),
+                            ]),
+                        ),
                 ]),
             SettingPage::new(t!("Settings.Sync.title"))
                 .resettable(true)
@@ -944,22 +959,41 @@ impl SettingsPanel {
                 .group(team_key_setting_group()),
             // 快捷键页面
             SettingPage::new(t!("Settings.Shortcuts.title")).group(
-                SettingGroup::new().item(SettingItem::render(move |_options, window, cx| {
-                    render_shortcuts_section(default_system_hotkey.clone(), window, cx)
-                })),
+                SettingGroup::new().item(
+                    SettingItem::render(move |_options, window, cx| {
+                        render_shortcuts_section(default_system_hotkey.clone(), window, cx)
+                    })
+                    .search_texts(shortcut_search_texts()),
+                ),
             ),
             SettingPage::new(t!("LlmProviders.title")).group(SettingGroup::new().item(
                 SettingItem::render(move |_options, _window, _cx| {
                     llm_view.clone().into_any_element()
-                }),
+                })
+                .search_text(t!("LlmProviders.title").to_string()),
             )),
             // 账户设置页
             SettingPage::new(t!("Settings.Account.title")).group(SettingGroup::new().item(
-                SettingItem::render(move |_options, window, cx| render_account_section(window, cx)),
+                SettingItem::render(move |_options, window, cx| render_account_section(window, cx))
+                    .search_texts([
+                        t!("Settings.Account.title").to_string(),
+                        t!("Settings.Account.username").to_string(),
+                        t!("Settings.Account.email").to_string(),
+                        t!("Settings.Account.not_logged_in").to_string(),
+                        t!("Auth.logout").to_string(),
+                        t!("License.import_offline").to_string(),
+                    ]),
             )),
             // 关于页面
             SettingPage::new(t!("Settings.About.title")).group(SettingGroup::new().item(
-                SettingItem::render(move |_options, _window, cx| render_about_section(cx)),
+                SettingItem::render(move |_options, _window, cx| render_about_section(cx))
+                    .search_texts([
+                        t!("Settings.About.title").to_string(),
+                        t!("Settings.About.version").to_string(),
+                        t!("Settings.About.opensource_label").to_string(),
+                        t!("Settings.About.disclaimer_title").to_string(),
+                        t!("Settings.About.data_safety_title").to_string(),
+                    ]),
             )),
         ]
     }
@@ -979,7 +1013,12 @@ fn sync_setting_group(
             personal_sync_git_auto_push_item(defaults.git.auto_push),
             SettingItem::render(move |_options, window, cx| {
                 render_personal_sync_actions(window, cx)
-            }),
+            })
+            .search_texts([
+                t!("Settings.Sync.status").to_string(),
+                t!("Settings.Sync.test_connection").to_string(),
+                t!("Settings.Sync.sync_now").to_string(),
+            ]),
         ])
 }
 
@@ -1322,11 +1361,12 @@ fn render_personal_sync_actions(_window: &mut Window, cx: &mut App) -> gpui::Any
 }
 
 fn team_key_setting_group() -> SettingGroup {
-    SettingGroup::new()
-        .title(t!("TeamSync.manage_keys"))
-        .item(SettingItem::render(move |_options, window, cx| {
+    SettingGroup::new().title(t!("TeamSync.manage_keys")).item(
+        SettingItem::render(move |_options, window, cx| {
             render_team_key_management_section(window, cx)
-        }))
+        })
+        .search_text(t!("TeamSync.manage_keys").to_string()),
+    )
 }
 
 fn render_team_key_management_section(_window: &mut Window, cx: &mut App) -> gpui::AnyElement {
@@ -2530,6 +2570,24 @@ fn render_account_section(_window: &mut Window, cx: &App) -> gpui::AnyElement {
 // ============================================================================
 // 快捷键设置页
 // ============================================================================
+
+fn shortcut_search_texts() -> Vec<String> {
+    let mut texts = vec![
+        t!("Settings.Shortcuts.title").to_string(),
+        t!("Settings.Shortcuts.system_hotkey_desc").to_string(),
+    ];
+
+    for group in SHORTCUT_GROUPS {
+        texts.push(t!(group.title_key).to_string());
+        for entry in group.entries {
+            texts.push(t!(entry.label_key).to_string());
+            texts.extend(entry.keys_macos.iter().map(|spec| spec.to_string()));
+            texts.extend(entry.keys_other.iter().map(|spec| spec.to_string()));
+        }
+    }
+
+    texts
+}
 
 /// 快捷键条目
 struct ShortcutEntry {

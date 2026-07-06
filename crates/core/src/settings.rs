@@ -2,7 +2,7 @@ use crate::cloud_sync::{GlobalCloudUser, UserInfo};
 use crate::storage::get_config_dir;
 use crate::utils::auto_save_config::AutoSaveConfig;
 use gpui::http_client::Url;
-use gpui::{App, Font, FontFallbacks, Global, font};
+use gpui::{App, Font, FontFallbacks, Global, font, px};
 use gpui_component::{Theme, ThemeMode};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
@@ -993,9 +993,14 @@ impl AppSettings {
         };
         Theme::global_mut(cx).mode = mode;
         Theme::change(mode, None, cx);
+        self.apply_font_size(cx);
 
         // 同步自动保存配置
         self.sync_auto_save_config(cx);
+    }
+
+    pub fn apply_font_size(&self, cx: &mut App) {
+        Theme::global_mut(cx).font_size = px(self.font_size as f32);
     }
 
     /// 同步自动保存配置到全局状态
@@ -1014,6 +1019,9 @@ impl AppSettings {
 
 #[cfg(test)]
 mod tests {
+    use gpui::px;
+    use gpui_component::Theme;
+
     use super::{
         AppSettings, CustomFont, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, McpPermissionMode,
         McpServerMode, PersonalSyncBackendKind, StartupDefaultPage, SyncProvider,
@@ -1276,6 +1284,20 @@ mod tests {
             settings.terminal_font_family
         );
         assert!(settings.custom_fonts.is_empty());
+    }
+
+    #[gpui::test]
+    fn app_settings_apply_updates_theme_font_size(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+
+            let mut settings = AppSettings::default();
+            settings.font_size = 18.0;
+
+            settings.apply(cx);
+
+            assert_eq!(px(18.0), Theme::global(cx).font_size);
+        });
     }
 
     #[test]

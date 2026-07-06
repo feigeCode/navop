@@ -28,6 +28,7 @@ pub enum SettingItem {
     /// A full custom element to render.
     Element {
         render: Rc<dyn Fn(&RenderOptions, &mut Window, &mut App) -> AnyElement + 'static>,
+        search_texts: Vec<SharedString>,
     },
 }
 
@@ -55,6 +56,7 @@ impl SettingItem {
             render: Rc::new(move |options, window, cx| {
                 render(options, window, cx).into_any_element()
             }),
+            search_texts: Vec::new(),
         }
     }
 
@@ -84,20 +86,54 @@ impl SettingItem {
         self
     }
 
+    /// Add searchable text for a custom element setting item.
+    ///
+    /// Only applies to [`SettingItem::Element`].
+    pub fn search_text(mut self, text: impl Into<SharedString>) -> Self {
+        match &mut self {
+            SettingItem::Element { search_texts, .. } => {
+                search_texts.push(text.into());
+            }
+            SettingItem::Item { .. } => {}
+        }
+        self
+    }
+
+    /// Add multiple searchable texts for a custom element setting item.
+    ///
+    /// Only applies to [`SettingItem::Element`].
+    pub fn search_texts<I, S>(mut self, texts: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<SharedString>,
+    {
+        match &mut self {
+            SettingItem::Element { search_texts, .. } => {
+                search_texts.extend(texts.into_iter().map(Into::into));
+            }
+            SettingItem::Item { .. } => {}
+        }
+        self
+    }
+
     pub(crate) fn is_match(&self, query: &str, cx: &App) -> bool {
+        let query = query.to_lowercase();
         match self {
             SettingItem::Item {
                 title, description, ..
             } => {
-                title.to_lowercase().contains(&query.to_lowercase())
-                    || description.as_ref().map_or(false, |d| {
-                        d.get_text(cx)
-                            .to_lowercase()
-                            .contains(&query.to_lowercase())
-                    })
+                title.to_lowercase().contains(&query)
+                    || description
+                        .as_ref()
+                        .map_or(false, |d| d.get_text(cx).to_lowercase().contains(&query))
             }
             // We need to show all custom elements when not searching.
-            SettingItem::Element { .. } => query.is_empty(),
+            SettingItem::Element { search_texts, .. } => {
+                query.is_empty()
+                    || search_texts
+                        .iter()
+                        .any(|text| text.to_lowercase().contains(&query))
+            }
         }
     }
 
@@ -210,9 +246,37 @@ impl SettingItem {
                         cx,
                     )))
                     .into_any_element(),
-                SettingItem::Element { render } => {
+                SettingItem::Element { render, .. } => {
                     (render)(&options, window, cx).into_any_element()
                 }
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::div;
+
+    use super::SettingItem;
+
+    #[gpui::test]
+    fn custom_element_without_search_text_only_matches_empty_query(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let item = SettingItem::render(|_, _, _| div());
+
+            assert!(item.is_match("", cx));
+            assert!(!item.is_match("proxy", cx));
+        });
+    }
+
+    #[gpui::test]
+    fn custom_element_matches_explicit_search_text(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let item = SettingItem::render(|_, _, _| div()).search_text("Global proxy settings");
+
+            assert!(item.is_match("proxy", cx));
+            assert!(item.is_match("GLOBAL", cx));
+            assert!(!item.is_match("shortcut", cx));
+        });
     }
 }
