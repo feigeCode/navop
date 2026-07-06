@@ -250,6 +250,9 @@ impl MongoManager {
             id: "test".to_string(),
             name,
             connection_string,
+            direct_host: params.host.clone(),
+            direct_port: params.port.unwrap_or(27017),
+            ssh_tunnel: params.ssh_tunnel.clone(),
         };
         Self::test_connection(&config).await
     }
@@ -266,6 +269,9 @@ impl MongoManager {
             id: stored.id.map(|id| id.to_string()).unwrap_or_default(),
             name: stored.name.clone(),
             connection_string,
+            direct_host: parameters.host.clone(),
+            direct_port: parameters.port.unwrap_or(27017),
+            ssh_tunnel: parameters.ssh_tunnel,
         })
     }
 }
@@ -273,7 +279,8 @@ impl MongoManager {
 #[cfg(test)]
 mod tests {
     use super::MongoManager;
-    use one_core::storage::MongoDBParams;
+    use connection_tunnel::SshTunnelConfig;
+    use one_core::storage::{MongoDBParams, StoredConnection};
 
     #[test]
     fn build_connection_string_encodes_userinfo_and_query_values() {
@@ -292,6 +299,7 @@ mod tests {
             use_tls: true,
             connect_timeout_seconds: Some(3),
             application_name: Some("onet cli".to_string()),
+            ssh_tunnel: None,
         };
 
         let uri = MongoManager::build_connection_string(&params).expect("构造连接串失败");
@@ -318,11 +326,55 @@ mod tests {
             use_tls: false,
             connect_timeout_seconds: None,
             application_name: None,
+            ssh_tunnel: None,
         };
         let uri = MongoManager::build_connection_string(&params).expect("应按字段拼接连接串");
         assert_eq!(
             uri,
             "mongodb://user:pass@localhost:27017/app?authSource=admin"
+        );
+    }
+
+    #[test]
+    fn config_from_stored_carries_ssh_tunnel_settings() {
+        let stored = StoredConnection::new_mongodb(
+            "prod mongo".to_string(),
+            MongoDBParams {
+                connection_string: String::new(),
+                host: "mongo.internal".to_string(),
+                port: Some(27018),
+                database: Some("app".to_string()),
+                username: None,
+                password: None,
+                auth_source: None,
+                replica_set: None,
+                read_preference: None,
+                use_srv_record: false,
+                direct_connection: false,
+                use_tls: false,
+                connect_timeout_seconds: None,
+                application_name: None,
+                ssh_tunnel: Some(SshTunnelConfig {
+                    enabled: true,
+                    connection_id: Some(42),
+                    target_host: Some("mongo.internal".to_string()),
+                    target_port: Some(27018),
+                    ..Default::default()
+                }),
+            },
+            Some(7),
+        );
+
+        let config = MongoManager::config_from_stored(&stored).expect("stored mongo should parse");
+
+        assert_eq!("mongo.internal", config.direct_host);
+        assert_eq!(27018, config.direct_port);
+        assert_eq!(
+            Some(42),
+            config
+                .ssh_tunnel
+                .as_ref()
+                .and_then(|tunnel| tunnel.connection_id)
         );
     }
 }

@@ -496,10 +496,18 @@ MongoForm:
     en: "Advanced"
     zh-CN: "高级"
     zh-HK: "進階"
+  tab_ssh:
+    en: "SSH"
+    zh-CN: "SSH"
+    zh-HK: "SSH"
   tab_remark:
     en: "Remark"
     zh-CN: "备注"
     zh-HK: "備註"
+  ssh_timeout_label:
+    en: "SSH timeout (seconds)"
+    zh-CN: "SSH 超时（秒）"
+    zh-HK: "SSH 逾時（秒）"
   testing:
     en: "Testing..."
     zh-CN: "测试中"

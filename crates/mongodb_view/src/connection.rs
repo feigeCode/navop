@@ -3,12 +3,66 @@
 use crate::document_table_delegate::build_set_update_document_from_fields;
 use crate::types::{MongoConnectionConfig, MongoError};
 use async_trait::async_trait;
+use connection_tunnel::{TunnelGuard, resolve_connection_target};
 use futures_util::stream::TryStreamExt;
 use mongodb::Client;
 use mongodb::bson::{Bson, Document, doc};
 use mongodb::options::FindOptions;
 use rust_i18n::t;
 use tracing::{error, info, warn};
+
+fn replace_mongodb_uri_authority(connection_string: &str, host: &str, port: u16) -> String {
+    let Some((scheme, rest)) = connection_string.split_once("://") else {
+        return connection_string.to_string();
+    };
+    let scheme = if scheme.eq_ignore_ascii_case("mongodb+srv") {
+        "mongodb"
+    } else {
+        scheme
+    };
+    let split_at = rest
+        .char_indices()
+        .find(|(_, char)| matches!(char, '/' | '?'))
+        .map(|(idx, _)| idx)
+        .unwrap_or(rest.len());
+    let (authority, suffix) = rest.split_at(split_at);
+    let userinfo = authority
+        .rfind('@')
+        .map(|idx| &authority[..=idx])
+        .unwrap_or("");
+
+    format!("{scheme}://{userinfo}{host}:{port}{suffix}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replace_mongodb_uri_authority;
+
+    #[test]
+    fn replace_mongodb_uri_authority_preserves_userinfo_path_and_query() {
+        let uri = replace_mongodb_uri_authority(
+            "mongodb://user:p%40ss@mongo.internal:27017/app?authSource=admin",
+            "127.0.0.1",
+            49152,
+        );
+
+        assert_eq!(
+            "mongodb://user:p%40ss@127.0.0.1:49152/app?authSource=admin",
+            uri
+        );
+    }
+
+    #[test]
+    fn replace_mongodb_uri_authority_converts_srv_scheme_for_tunnel() {
+        let uri = replace_mongodb_uri_authority(
+            "mongodb+srv://mongo.example.com/app?retryWrites=true",
+            "127.0.0.1",
+            49152,
+        );
+
+        assert_eq!("mongodb://127.0.0.1:49152/app?retryWrites=true", uri);
+    }
+}
 
 /// MongoDB 连接 trait
 #[async_trait]
@@ -134,6 +188,7 @@ pub trait MongoConnection: Send + Sync {
 pub struct MongoConnectionImpl {
     config: MongoConnectionConfig,
     client: Option<Client>,
+    tunnel: Option<TunnelGuard>,
 }
 
 impl MongoConnectionImpl {
@@ -141,6 +196,7 @@ impl MongoConnectionImpl {
         Self {
             config,
             client: None,
+            tunnel: None,
         }
     }
 
@@ -191,6 +247,30 @@ impl MongoConnectionImpl {
         !Self::has_auth_source(connection_string)
             && Self::has_credentials(connection_string)
             && Self::is_authentication_failed(error)
+    }
+
+    async fn effective_connection_string(&mut self) -> Result<String, MongoError> {
+        let Some(tunnel_config) = self.config.ssh_tunnel.as_ref() else {
+            return Ok(self.config.connection_string.clone());
+        };
+        if !tunnel_config.enabled {
+            return Ok(self.config.connection_string.clone());
+        }
+
+        let target = resolve_connection_target(
+            &self.config.direct_host,
+            self.config.direct_port,
+            Some(tunnel_config),
+        )
+        .await
+        .map_err(|error| MongoError::connection(error.to_string()))?;
+        self.tunnel = target.tunnel;
+
+        Ok(replace_mongodb_uri_authority(
+            &self.config.connection_string,
+            &target.host,
+            target.port,
+        ))
     }
 
     /// 通过 $listSessions 聚合管道查询 system.sessions 集合
@@ -301,7 +381,7 @@ impl MongoConnection for MongoConnectionImpl {
             return Ok(());
         }
 
-        let connection_string = self.config.connection_string.clone();
+        let connection_string = self.effective_connection_string().await?;
         let client = Client::with_uri_str(&connection_string)
             .await
             .map_err(|e| {
@@ -355,6 +435,7 @@ impl MongoConnection for MongoConnectionImpl {
 
     async fn disconnect(&mut self) -> Result<(), MongoError> {
         self.client = None;
+        self.tunnel = None;
         Ok(())
     }
 

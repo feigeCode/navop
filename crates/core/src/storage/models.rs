@@ -1,6 +1,7 @@
 use crate::cloud_sync::sync_type::SyncableItem;
 use crate::crypto;
 use crate::storage::traits::Entity;
+use connection_tunnel::SshTunnelConfig;
 use gpui::Global;
 use gpui_component::Size::Large;
 use gpui_component::{Icon, IconName, Sizable};
@@ -393,61 +394,8 @@ pub struct RedisClusterConfig {
     pub nodes: Vec<String>,
 }
 
-fn default_redis_ssh_port() -> u16 {
-    22
-}
-
-fn default_redis_ssh_auth_type() -> String {
-    "password".to_string()
-}
-
-/// Redis SSH tunnel configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RedisSshTunnelConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub connection_id: Option<i64>,
-    #[serde(default)]
-    pub host: String,
-    #[serde(default = "default_redis_ssh_port")]
-    pub port: u16,
-    #[serde(default)]
-    pub username: String,
-    #[serde(default = "default_redis_ssh_auth_type")]
-    pub auth_type: String,
-    #[serde(default)]
-    pub password: Option<String>,
-    #[serde(default)]
-    pub private_key_path: Option<String>,
-    #[serde(default)]
-    pub private_key_passphrase: Option<String>,
-    #[serde(default)]
-    pub target_host: Option<String>,
-    #[serde(default)]
-    pub target_port: Option<u16>,
-    #[serde(default)]
-    pub timeout: Option<u64>,
-}
-
-impl Default for RedisSshTunnelConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            connection_id: None,
-            host: String::new(),
-            port: default_redis_ssh_port(),
-            username: String::new(),
-            auth_type: default_redis_ssh_auth_type(),
-            password: None,
-            private_key_path: None,
-            private_key_passphrase: None,
-            target_host: None,
-            target_port: None,
-            timeout: None,
-        }
-    }
-}
+pub type RedisSshTunnelConfig = SshTunnelConfig;
+pub type MongoSshTunnelConfig = SshTunnelConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RedisParams {
@@ -566,6 +514,68 @@ pub struct MongoDBParams {
     pub connect_timeout_seconds: Option<u64>,
     #[serde(default)]
     pub application_name: Option<String>,
+    #[serde(default)]
+    pub ssh_tunnel: Option<MongoSshTunnelConfig>,
+}
+
+impl MongoDBParams {
+    pub fn apply_referenced_ssh_tunnel(
+        &mut self,
+        ssh_connection: &StoredConnection,
+    ) -> Result<(), serde_json::Error> {
+        let Some(tunnel) = self.ssh_tunnel.as_mut() else {
+            return Ok(());
+        };
+        let Some(ssh_connection_id) = tunnel.connection_id else {
+            return Ok(());
+        };
+        if ssh_connection.id != Some(ssh_connection_id) {
+            return Ok(());
+        }
+        if ssh_connection.connection_type != ConnectionType::SshSftp {
+            return Ok(());
+        }
+
+        let ssh_params = ssh_connection.to_ssh_params()?;
+        tunnel.host = ssh_params.host;
+        tunnel.port = ssh_params.port;
+        tunnel.username = ssh_params.username;
+        tunnel.timeout = ssh_params.connect_timeout;
+        tunnel.target_host.get_or_insert_with(|| self.host.clone());
+        tunnel.target_port.get_or_insert(self.port.unwrap_or(27017));
+
+        match ssh_params.auth_method {
+            SshAuthMethod::Password { password } => {
+                tunnel.auth_type = "password".to_string();
+                tunnel.password = Some(password);
+                tunnel.private_key_path = None;
+                tunnel.private_key_passphrase = None;
+            }
+            SshAuthMethod::PrivateKey {
+                key_path,
+                passphrase,
+            } => {
+                tunnel.auth_type = "private_key".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = Some(key_path);
+                tunnel.private_key_passphrase = passphrase;
+            }
+            SshAuthMethod::Agent => {
+                tunnel.auth_type = "agent".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = None;
+                tunnel.private_key_passphrase = None;
+            }
+            SshAuthMethod::AutoPublicKey => {
+                tunnel.auth_type = "auto_publickey".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = None;
+                tunnel.private_key_passphrase = None;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// 串口校验位
@@ -1396,6 +1406,68 @@ mod tests {
         assert_eq!(Some(15), tunnel.timeout);
         assert_eq!(Some("redis.internal".to_string()), tunnel.target_host);
         assert_eq!(Some(6379), tunnel.target_port);
+    }
+
+    #[test]
+    fn mongodb_params_deserializes_legacy_json_without_ssh_tunnel() {
+        let params: MongoDBParams = serde_json::from_value(serde_json::json!({
+            "host": "mongo.internal",
+            "port": 27017,
+            "database": "app"
+        }))
+        .expect("legacy mongodb params should parse without ssh_tunnel");
+
+        assert_eq!("mongo.internal", params.host);
+        assert_eq!(Some(27017), params.port);
+        assert_eq!(None, params.ssh_tunnel);
+    }
+
+    #[test]
+    fn mongodb_params_can_apply_referenced_password_ssh_connection() {
+        let ssh = ssh_connection_with_id(
+            42,
+            SshAuthMethod::Password {
+                password: "ssh-secret".to_string(),
+            },
+        );
+        let mut mongo = MongoDBParams {
+            connection_string: String::new(),
+            host: "mongo.internal".to_string(),
+            port: Some(27018),
+            database: Some("app".to_string()),
+            username: None,
+            password: None,
+            auth_source: None,
+            replica_set: None,
+            read_preference: None,
+            use_srv_record: false,
+            direct_connection: false,
+            use_tls: false,
+            connect_timeout_seconds: Some(10),
+            application_name: None,
+            ssh_tunnel: Some(MongoSshTunnelConfig {
+                enabled: true,
+                connection_id: Some(42),
+                ..Default::default()
+            }),
+        };
+
+        mongo
+            .apply_referenced_ssh_tunnel(&ssh)
+            .expect("referenced ssh connection should be applied");
+
+        let tunnel = mongo
+            .ssh_tunnel
+            .as_ref()
+            .expect("ssh tunnel config should remain present");
+        assert_eq!("bastion.example.com", tunnel.host);
+        assert_eq!(2222, tunnel.port);
+        assert_eq!("deploy", tunnel.username);
+        assert_eq!("password", tunnel.auth_type);
+        assert_eq!(Some("ssh-secret".to_string()), tunnel.password);
+        assert_eq!(Some(15), tunnel.timeout);
+        assert_eq!(Some("mongo.internal".to_string()), tunnel.target_host);
+        assert_eq!(Some(27018), tunnel.target_port);
     }
 
     #[test]

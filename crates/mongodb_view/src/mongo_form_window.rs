@@ -11,6 +11,7 @@ use gpui_component::{
     checkbox::Checkbox,
     h_flex,
     input::{Input, InputState},
+    radio::Radio,
     scroll::ScrollableElement,
     select::{Select, SelectItem, SelectState},
     tab::{Tab, TabBar},
@@ -23,7 +24,9 @@ use one_core::cloud_sync::{
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
-use one_core::storage::{MongoDBParams, StoredConnection, Workspace};
+use one_core::storage::{
+    ConnectionType, MongoDBParams, MongoSshTunnelConfig, StoredConnection, Workspace,
+};
 use rust_i18n::t;
 use tracing::error;
 
@@ -36,6 +39,7 @@ pub struct MongoFormWindowConfig {
     pub on_saved: Option<MongoFormSavedCallback>,
     pub workspaces: Vec<Workspace>,
     pub teams: Vec<TeamOption>,
+    pub ssh_connections: Vec<StoredConnection>,
 }
 
 pub type MongoFormSavedCallback =
@@ -132,6 +136,46 @@ impl SelectItem for TeamSelectItem {
     }
 }
 
+#[derive(Clone, Default, PartialEq)]
+struct SshConnectionSelectItem {
+    id: Option<i64>,
+    name: String,
+}
+
+impl SshConnectionSelectItem {
+    fn none() -> Self {
+        Self {
+            id: None,
+            name: t!("ConnectionForm.ssh_connection_manual").to_string(),
+        }
+    }
+
+    fn from_connection(connection: &StoredConnection) -> Self {
+        let host = connection.to_ssh_params().ok().map(|params| params.host);
+        let name = match host.as_deref().filter(|host| !host.trim().is_empty()) {
+            Some(host) => format!("{} ({})", connection.name, host),
+            None => connection.name.clone(),
+        };
+
+        Self {
+            id: connection.id,
+            name,
+        }
+    }
+}
+
+impl SelectItem for SshConnectionSelectItem {
+    type Value = Option<i64>;
+
+    fn title(&self) -> SharedString {
+        self.name.clone().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+}
+
 /// MongoDB 连接表单窗口
 pub struct MongoFormWindow {
     focus_handle: FocusHandle,
@@ -158,6 +202,19 @@ pub struct MongoFormWindow {
     use_srv_record: bool,
     direct_connection: bool,
     use_tls: bool,
+    ssh_connections: Vec<StoredConnection>,
+    ssh_connection_select: Entity<SelectState<Vec<SshConnectionSelectItem>>>,
+    ssh_tunnel_enabled: bool,
+    ssh_host_input: Entity<InputState>,
+    ssh_port_input: Entity<InputState>,
+    ssh_username_input: Entity<InputState>,
+    ssh_auth_type: String,
+    ssh_password_input: Entity<InputState>,
+    ssh_private_key_path_input: Entity<InputState>,
+    ssh_private_key_passphrase_input: Entity<InputState>,
+    ssh_target_host_input: Entity<InputState>,
+    ssh_target_port_input: Entity<InputState>,
+    ssh_timeout_input: Entity<InputState>,
 
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
@@ -393,6 +450,108 @@ impl MongoFormWindow {
             .as_ref()
             .map(|parameters| parameters.use_tls)
             .unwrap_or(false);
+        let existing_ssh = existing_parameters
+            .as_ref()
+            .and_then(|p| p.ssh_tunnel.as_ref());
+        let mut ssh_items = vec![SshConnectionSelectItem::none()];
+        let ssh_connections: Vec<StoredConnection> = config
+            .ssh_connections
+            .into_iter()
+            .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
+            .collect();
+        ssh_items.extend(
+            ssh_connections
+                .iter()
+                .map(SshConnectionSelectItem::from_connection),
+        );
+        let selected_ssh_connection_id = existing_ssh.and_then(|ssh| ssh.connection_id);
+        let ssh_connection_select = cx.new(|cx| {
+            let mut state = SelectState::new(ssh_items, Some(Default::default()), window, cx);
+            if let Some(id) = selected_ssh_connection_id {
+                state.set_selected_value(&Some(id), window, cx);
+            }
+            state
+        });
+
+        let ssh_host_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("jump.example.com");
+            if let Some(ssh) = existing_ssh {
+                state.set_value(ssh.host.clone(), window, cx);
+            }
+            state
+        });
+
+        let ssh_port_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("22");
+            state.set_value(
+                existing_ssh.map(|ssh| ssh.port).unwrap_or(22).to_string(),
+                window,
+                cx,
+            );
+            state
+        });
+
+        let ssh_username_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("root");
+            if let Some(ssh) = existing_ssh {
+                state.set_value(ssh.username.clone(), window, cx);
+            }
+            state
+        });
+
+        let ssh_password_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .placeholder("Password")
+                .masked(true);
+            if let Some(ssh) = existing_ssh.and_then(|ssh| ssh.password.as_ref()) {
+                state.set_value(ssh.clone(), window, cx);
+            }
+            state
+        });
+
+        let ssh_private_key_path_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("~/.ssh/id_rsa");
+            if let Some(path) = existing_ssh.and_then(|ssh| ssh.private_key_path.as_ref()) {
+                state.set_value(path.clone(), window, cx);
+            }
+            state
+        });
+
+        let ssh_private_key_passphrase_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .placeholder("Passphrase")
+                .masked(true);
+            if let Some(passphrase) =
+                existing_ssh.and_then(|ssh| ssh.private_key_passphrase.as_ref())
+            {
+                state.set_value(passphrase.clone(), window, cx);
+            }
+            state
+        });
+
+        let ssh_target_host_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("MongoDB target host");
+            if let Some(host) = existing_ssh.and_then(|ssh| ssh.target_host.as_ref()) {
+                state.set_value(host.clone(), window, cx);
+            }
+            state
+        });
+
+        let ssh_target_port_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("27017");
+            if let Some(port) = existing_ssh.and_then(|ssh| ssh.target_port) {
+                state.set_value(port.to_string(), window, cx);
+            }
+            state
+        });
+
+        let ssh_timeout_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("30");
+            if let Some(timeout) = existing_ssh.and_then(|ssh| ssh.timeout) {
+                state.set_value(timeout.to_string(), window, cx);
+            }
+            state
+        });
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -416,6 +575,21 @@ impl MongoFormWindow {
             use_srv_record,
             direct_connection,
             use_tls,
+            ssh_connections,
+            ssh_connection_select,
+            ssh_tunnel_enabled: existing_ssh.is_some_and(|ssh| ssh.enabled),
+            ssh_host_input,
+            ssh_port_input,
+            ssh_username_input,
+            ssh_auth_type: existing_ssh
+                .map(|ssh| ssh.auth_type.clone())
+                .unwrap_or_else(|| "password".to_string()),
+            ssh_password_input,
+            ssh_private_key_path_input,
+            ssh_private_key_passphrase_input,
+            ssh_target_host_input,
+            ssh_target_port_input,
+            ssh_timeout_input,
             workspace_select,
             team_select,
             remark_input,
@@ -459,6 +633,72 @@ impl MongoFormWindow {
     fn request_team_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         emit_connection_event(ConnectionDataEvent::CloudSyncRequested, cx);
         self.reload_team_options(window, cx);
+    }
+
+    fn selected_ssh_connection(&self, cx: &App) -> Option<&StoredConnection> {
+        let selected_id = self
+            .ssh_connection_select
+            .read(cx)
+            .selected_value()
+            .cloned()
+            .flatten()?;
+        self.ssh_connections
+            .iter()
+            .find(|connection| connection.id == Some(selected_id))
+    }
+
+    fn optional_input_value(input: &Entity<InputState>, cx: &App) -> Option<String> {
+        let value = input.read(cx).text().to_string().trim().to_string();
+        if value.is_empty() { None } else { Some(value) }
+    }
+
+    fn optional_input_u16(input: &Entity<InputState>, cx: &App) -> Option<u16> {
+        input.read(cx).text().to_string().trim().parse::<u16>().ok()
+    }
+
+    fn optional_input_u64(input: &Entity<InputState>, cx: &App) -> Option<u64> {
+        input.read(cx).text().to_string().trim().parse::<u64>().ok()
+    }
+
+    fn build_ssh_tunnel_config(&self, cx: &App) -> Option<MongoSshTunnelConfig> {
+        if !self.ssh_tunnel_enabled {
+            return None;
+        }
+
+        Some(MongoSshTunnelConfig {
+            enabled: true,
+            connection_id: self
+                .ssh_connection_select
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .flatten(),
+            host: self
+                .ssh_host_input
+                .read(cx)
+                .text()
+                .to_string()
+                .trim()
+                .to_string(),
+            port: Self::optional_input_u16(&self.ssh_port_input, cx).unwrap_or(22),
+            username: self
+                .ssh_username_input
+                .read(cx)
+                .text()
+                .to_string()
+                .trim()
+                .to_string(),
+            auth_type: self.ssh_auth_type.clone(),
+            password: Self::optional_input_value(&self.ssh_password_input, cx),
+            private_key_path: Self::optional_input_value(&self.ssh_private_key_path_input, cx),
+            private_key_passphrase: Self::optional_input_value(
+                &self.ssh_private_key_passphrase_input,
+                cx,
+            ),
+            target_host: Self::optional_input_value(&self.ssh_target_host_input, cx),
+            target_port: Self::optional_input_u16(&self.ssh_target_port_input, cx),
+            timeout: Self::optional_input_u64(&self.ssh_timeout_input, cx),
+        })
     }
 
     fn build_parameters(&self, cx: &App) -> Result<MongoDBParams, String> {
@@ -552,7 +792,7 @@ impl MongoFormWindow {
             Some(application_name_value)
         };
 
-        Ok(MongoDBParams {
+        let mut params = MongoDBParams {
             connection_string: String::new(),
             host: host_value,
             port: port_value,
@@ -567,7 +807,16 @@ impl MongoFormWindow {
             use_tls: self.use_tls,
             connect_timeout_seconds,
             application_name,
-        })
+            ssh_tunnel: None,
+        };
+        params.ssh_tunnel = self.build_ssh_tunnel_config(cx);
+        if let Some(ssh_connection) = self.selected_ssh_connection(cx) {
+            params
+                .apply_referenced_ssh_tunnel(ssh_connection)
+                .map_err(|error| error.to_string())?;
+        }
+
+        Ok(params)
     }
 
     fn on_test(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -865,6 +1114,113 @@ impl MongoFormWindow {
             ))
     }
 
+    fn render_ssh_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let using_ssh_reference = self
+            .ssh_connection_select
+            .read(cx)
+            .selected_value()
+            .is_some_and(|value| value.is_some());
+        let auth_type = self.ssh_auth_type.as_str();
+
+        v_flex()
+            .gap_2()
+            .child(
+                self.render_form_row(
+                    &t!("ConnectionForm.ssh_tunnel_enabled"),
+                    Checkbox::new("mongo-ssh-tunnel-enabled")
+                        .checked(self.ssh_tunnel_enabled)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.ssh_tunnel_enabled = !this.ssh_tunnel_enabled;
+                            cx.notify();
+                        })),
+                ),
+            )
+            .when(self.ssh_tunnel_enabled, |this| {
+                this.child(self.render_form_row(
+                    &t!("ConnectionForm.ssh_connection_id"),
+                    Select::new(&self.ssh_connection_select).w_full(),
+                ))
+                .when(!using_ssh_reference, |this| {
+                    this.child(self.render_form_row(
+                        &t!("ConnectionForm.ssh_host"),
+                        Input::new(&self.ssh_host_input),
+                    ))
+                    .child(self.render_form_row(
+                        &t!("ConnectionForm.ssh_port"),
+                        Input::new(&self.ssh_port_input),
+                    ))
+                    .child(self.render_form_row(
+                        &t!("ConnectionForm.ssh_username"),
+                        Input::new(&self.ssh_username_input),
+                    ))
+                    .child(
+                        self.render_form_row(
+                            &t!("ConnectionForm.ssh_auth_type"),
+                            h_flex()
+                                .gap_4()
+                                .child(
+                                    Radio::new("mongo-ssh-auth-password")
+                                        .label(t!("ConnectionForm.ssh_auth_password").to_string())
+                                        .checked(auth_type == "password")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.ssh_auth_type = "password".to_string();
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Radio::new("mongo-ssh-auth-private-key")
+                                        .label(
+                                            t!("ConnectionForm.ssh_auth_private_key").to_string(),
+                                        )
+                                        .checked(auth_type == "private_key")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.ssh_auth_type = "private_key".to_string();
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Radio::new("mongo-ssh-auth-agent")
+                                        .label(t!("ConnectionForm.ssh_auth_agent").to_string())
+                                        .checked(auth_type == "agent")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.ssh_auth_type = "agent".to_string();
+                                            cx.notify();
+                                        })),
+                                ),
+                        ),
+                    )
+                    .when(auth_type == "password", |this| {
+                        this.child(self.render_form_row(
+                            &t!("ConnectionForm.ssh_password"),
+                            Input::new(&self.ssh_password_input).mask_toggle(),
+                        ))
+                    })
+                    .when(auth_type == "private_key", |this| {
+                        this.child(self.render_form_row(
+                            &t!("ConnectionForm.ssh_private_key_path"),
+                            Input::new(&self.ssh_private_key_path_input),
+                        ))
+                        .child(self.render_form_row(
+                            &t!("ConnectionForm.ssh_private_key_passphrase"),
+                            Input::new(&self.ssh_private_key_passphrase_input).mask_toggle(),
+                        ))
+                    })
+                })
+                .child(self.render_form_row(
+                    &t!("ConnectionForm.ssh_target_host"),
+                    Input::new(&self.ssh_target_host_input),
+                ))
+                .child(self.render_form_row(
+                    &t!("ConnectionForm.ssh_target_port"),
+                    Input::new(&self.ssh_target_port_input),
+                ))
+                .child(self.render_form_row(
+                    &t!("MongoForm.ssh_timeout_label"),
+                    Input::new(&self.ssh_timeout_input),
+                ))
+            })
+    }
+
     fn render_remark_tab(&self) -> impl IntoElement {
         v_flex().gap_2().child(self.render_form_row(
             t!("MongoForm.remark_label").as_ref(),
@@ -901,6 +1257,7 @@ mod tests {
                 use_tls: false,
                 connect_timeout_seconds: None,
                 application_name: None,
+                ssh_tunnel: None,
             },
             None,
         )
@@ -914,6 +1271,7 @@ mod tests {
             on_saved: None,
             workspaces: Vec::new(),
             teams: Vec::new(),
+            ssh_connections: Vec::new(),
         };
 
         assert!(!config.is_editing());
@@ -933,6 +1291,7 @@ mod tests {
             on_saved: None,
             workspaces: Vec::new(),
             teams: Vec::new(),
+            ssh_connections: Vec::new(),
         };
 
         assert!(config.is_editing());
@@ -991,6 +1350,7 @@ impl Render for MongoFormWindow {
                         .child(Tab::new().label(t!("MongoForm.tab_basic").to_string()))
                         .child(Tab::new().label(t!("MongoForm.tab_cluster").to_string()))
                         .child(Tab::new().label(t!("MongoForm.tab_advanced").to_string()))
+                        .child(Tab::new().label(t!("MongoForm.tab_ssh").to_string()))
                         .child(Tab::new().label(t!("MongoForm.tab_remark").to_string())),
                 ),
             )
@@ -1004,7 +1364,8 @@ impl Render for MongoFormWindow {
                         0 => self.render_basic_tab(cx).into_any_element(),
                         1 => self.render_cluster_tab(cx).into_any_element(),
                         2 => self.render_advanced_tab(cx).into_any_element(),
-                        3 => self.render_remark_tab().into_any_element(),
+                        3 => self.render_ssh_tab(cx).into_any_element(),
+                        4 => self.render_remark_tab().into_any_element(),
                         _ => div().into_any_element(),
                     }),
             )

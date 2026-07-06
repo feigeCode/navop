@@ -102,13 +102,14 @@ impl ConnectionImportWindow {
         connection: StoredConnection,
         cx: &mut Context<Self>,
     ) {
-        let (workspaces, _, _) = self.parent.read(cx).import_editor_context();
+        let (workspaces, ssh_connections, _) = self.parent.read(cx).import_editor_context();
         let form_config = MongoFormWindowConfig {
             editing_connection: None,
             initial_connection: Some(connection),
             on_saved: Some(self.mongodb_editor_saved_callback(record_id, cx)),
             workspaces,
             teams: get_cached_team_options(cx),
+            ssh_connections,
         };
         open_popup_window(
             PopupWindowOptions::new(t!("Home.import").to_string()).size(700.0, 520.0),

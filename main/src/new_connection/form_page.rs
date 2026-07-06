@@ -310,12 +310,14 @@ fn build_mongo_form(
                 .cloned()
         });
         home.editing_connection_id = None;
+        let ssh_connections = home.connections.clone();
         Some(MongoFormWindowConfig {
             editing_connection,
             initial_connection: None,
             on_saved: None,
             workspaces: home.workspaces.clone(),
             teams: get_cached_team_options(cx),
+            ssh_connections,
         })
     }) else {
         return NewConnectionFormResult::Blocked;

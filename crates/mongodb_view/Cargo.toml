@@ -7,6 +7,7 @@ edition.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+connection_tunnel.workspace = true
 dashmap.workspace = true
 futures-util.workspace = true
 gpui.workspace = true

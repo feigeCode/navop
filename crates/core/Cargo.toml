@@ -8,6 +8,7 @@ anyhow.workspace = true
 agent-client-protocol.workspace = true
 agent_runtime.workspace = true
 async-trait.workspace = true
+connection_tunnel.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true

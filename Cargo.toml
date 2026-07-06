@@ -28,6 +28,7 @@ members = [
     "crates/terminal",
     "crates/terminal_view",
     "crates/port_forwarding",
+    "crates/connection_tunnel",
     "crates/port_forwarding_view",
     "crates/process-util",
     "crates/remote_desktop",
@@ -103,6 +104,7 @@ sftp = { path = "crates/sftp" }
 terminal = { path = "crates/terminal" }
 terminal_view = { path = "crates/terminal_view" }
 port_forwarding = { path = "crates/port_forwarding" }
+connection_tunnel = { path = "crates/connection_tunnel" }
 port_forwarding_view = { path = "crates/port_forwarding_view" }
 process-util = { path = "crates/process-util" }
 remote_desktop = { path = "crates/remote_desktop" }

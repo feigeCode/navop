@@ -131,6 +131,7 @@ fn build_mongodb(input: &Value) -> Result<StoredConnection, ToolError> {
         use_tls: optional_bool(values, "use_tls").unwrap_or(false),
         connect_timeout_seconds: optional_u64(values, "connect_timeout_seconds"),
         application_name: optional_value_str(values, "application_name").map(str::to_string),
+        ssh_tunnel: None,
     };
     Ok(with_common_fields(
         StoredConnection::new_mongodb(

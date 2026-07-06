@@ -2110,6 +2110,7 @@ impl HomePage {
             on_saved: None,
             workspaces: self.workspaces.clone(),
             teams: get_cached_team_options(cx),
+            ssh_connections: self.connections.clone(),
         };
 
         self.editing_connection_id = None;

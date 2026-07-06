@@ -1,5 +1,6 @@
 //! MongoDB 核心类型定义
 
+use connection_tunnel::SshTunnelConfig;
 use mongodb::bson::{Bson, Document};
 use thiserror::Error;
 
@@ -75,6 +76,9 @@ pub struct MongoConnectionConfig {
     pub id: String,
     pub name: String,
     pub connection_string: String,
+    pub direct_host: String,
+    pub direct_port: u16,
+    pub ssh_tunnel: Option<SshTunnelConfig>,
 }
 
 /// MongoDB 树形节点类型

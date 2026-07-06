@@ -1976,6 +1976,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "510ca239cf13b7f8d16a2b48f263de7b4f8c566f0af58d901031473c76afb1e3"
 
 [[package]]
+name = "connection_tunnel"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "ssh",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "console_error_panic_hook"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2781,6 +2791,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clickhouse",
+ "connection_tunnel",
  "dashmap 5.5.3",
  "duckdb",
  "extension-host",
@@ -7217,6 +7228,7 @@ dependencies = [
  "ai_chat_view",
  "anyhow",
  "async-trait",
+ "connection_tunnel",
  "dashmap 5.5.3",
  "futures-util",
  "gpui",
@@ -7913,6 +7925,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "connection_tunnel",
  "dashmap 5.5.3",
  "dirs 6.0.0",
  "ed25519-dalek 2.2.0",

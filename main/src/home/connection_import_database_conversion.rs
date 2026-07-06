@@ -107,6 +107,7 @@ fn mongodb_params(
         use_tls: false,
         connect_timeout_seconds: None,
         application_name: None,
+        ssh_tunnel: None,
     })
 }
 

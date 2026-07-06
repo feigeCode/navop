@@ -1,0 +1,14 @@
+[package]
+name = "connection_tunnel"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+ssh.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
