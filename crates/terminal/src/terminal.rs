@@ -667,6 +667,8 @@ fn load_local_history(preferred_shell: Option<&str>) -> Vec<String> {
 #[cfg(target_os = "macos")]
 fn with_local_terminal_default_env(mut env: Vec<(String, String)>) -> Vec<(String, String)> {
     const GUI_FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+    const DEFAULT_LANG: &str = "en_US.UTF-8";
+    const DEFAULT_LC_CTYPE: &str = "UTF-8";
     const MACOS_CLI_PATHS: &[&str] = &[
         "/opt/homebrew/bin",
         "/opt/homebrew/sbin",
@@ -697,7 +699,16 @@ fn with_local_terminal_default_env(mut env: Vec<(String, String)>) -> Vec<(Strin
     } else {
         env.push(("PATH".to_string(), merged_path));
     }
+    push_env_if_missing(&mut env, "LANG", DEFAULT_LANG);
+    push_env_if_missing(&mut env, "LC_CTYPE", DEFAULT_LC_CTYPE);
     env
+}
+
+#[cfg(target_os = "macos")]
+fn push_env_if_missing(env: &mut Vec<(String, String)>, key: &str, value: &str) {
+    if !env.iter().any(|(name, _)| name == key) {
+        env.push((key.to_string(), value.to_string()));
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -2376,6 +2387,33 @@ mod tests {
         assert!(path.contains("/opt/homebrew/sbin"));
         assert!(path.contains("/usr/local/bin"));
         assert!(path.ends_with("/usr/bin:/bin"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn with_local_terminal_default_env_adds_utf8_locale_when_missing() {
+        let env = with_local_terminal_default_env(vec![]);
+
+        assert_eq!(Some("en_US.UTF-8"), env_value(&env, "LANG"));
+        assert_eq!(Some("UTF-8"), env_value(&env, "LC_CTYPE"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn with_local_terminal_default_env_keeps_explicit_locale() {
+        let env = with_local_terminal_default_env(vec![
+            ("LANG".to_string(), "zh_CN.UTF-8".to_string()),
+            ("LC_CTYPE".to_string(), "zh_CN.UTF-8".to_string()),
+        ]);
+
+        assert_eq!(Some("zh_CN.UTF-8"), env_value(&env, "LANG"));
+        assert_eq!(Some("zh_CN.UTF-8"), env_value(&env, "LC_CTYPE"));
+    }
+
+    #[cfg(target_os = "macos")]
+    fn env_value<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        env.iter()
+            .find_map(|(name, value)| (name == key).then_some(value.as_str()))
     }
 
     #[test]
