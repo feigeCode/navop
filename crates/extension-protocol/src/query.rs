@@ -24,6 +24,9 @@ use crate::row::{CellValue, ColumnSpec, ParamValue, Row};
 pub struct QueryStartParams {
     pub conn_id: ConnId,
     pub sql: String,
+    /// Query language hint. Defaults to SQL when absent for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     /// 参数列表。位置参数 `?` / `$N` / `:name` 由驱动方言决定。
     #[serde(default)]
     pub params: Vec<ParamValue>,
@@ -46,6 +49,7 @@ impl QueryStartParams {
         Self {
             conn_id,
             sql: sql.into(),
+            language: None,
             params: Vec::new(),
             fetch_size: None,
             timeout_ms: None,
@@ -286,6 +290,18 @@ mod tests {
         assert_eq!(p.fetch_size, Some(500));
         assert_eq!(p.timeout_ms, Some(10_000));
         assert_eq!(p.tx_id.as_deref(), Some("t-1"));
+    }
+
+    #[test]
+    fn query_start_params_serializes_optional_language() {
+        let mut params = QueryStartParams::new(7, r#"{"query":{"match_all":{}}}"#);
+        params.language = Some("elasticsearch_dsl".to_string());
+
+        let value = serde_json::to_value(&params).expect("query params serialize");
+
+        assert_eq!(value["conn_id"], 7);
+        assert_eq!(value["language"], "elasticsearch_dsl");
+        assert_eq!(value["sql"], r#"{"query":{"match_all":{}}}"#);
     }
 
     #[test]

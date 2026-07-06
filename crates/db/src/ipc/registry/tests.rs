@@ -55,6 +55,54 @@ fn parses_connection_lifecycle_policy() {
 }
 
 #[test]
+fn manifest_parses_non_sql_query_contract() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{
+          "id":"elasticsearch",
+          "name":"Elasticsearch",
+          "entry":{"command":"./elasticsearch_driver"},
+          "transport":{"name":"elasticsearch-driver.sock"},
+          "query":{
+            "default_language":"elasticsearch_dsl",
+            "languages":["elasticsearch_dsl","elasticsearch_sql"],
+            "table_data_method":"x/es/table_data"
+          }
+        }"#,
+    )
+    .expect("manifest parses");
+
+    assert_eq!(
+        manifest.query.default_language.as_deref(),
+        Some("elasticsearch_dsl")
+    );
+    assert_eq!(
+        manifest.query.languages,
+        vec!["elasticsearch_dsl", "elasticsearch_sql"]
+    );
+    assert_eq!(
+        manifest.query.table_data_method.as_deref(),
+        Some("x/es/table_data")
+    );
+}
+
+#[test]
+fn manifest_defaults_to_sql_table_data() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{
+          "id":"demo",
+          "name":"Demo",
+          "entry":{"command":"./demo"},
+          "transport":{"name":"demo.sock"}
+        }"#,
+    )
+    .expect("manifest parses");
+
+    assert!(manifest.query.default_language.is_none());
+    assert!(manifest.query.languages.is_empty());
+    assert!(manifest.query.table_data_method.is_none());
+}
+
+#[test]
 fn rejects_missing_transport() {
     let result = serde_json::from_str::<IpcDriverManifest>(
         r#"{"id":"demo","name":"Demo","entry":{"command":"python3"}}"#,
@@ -583,6 +631,7 @@ fn manifest(id: &str, name: &str) -> IpcDriverManifest {
         dialect: Default::default(),
         capabilities: None,
         connection: Default::default(),
+        query: Default::default(),
         methods: Vec::new(),
         ui: Default::default(),
         manifest_dir: PathBuf::from("."),

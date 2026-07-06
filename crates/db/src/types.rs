@@ -612,7 +612,7 @@ pub struct TableColumnMeta {
 }
 
 /// Filter condition for querying table data
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FilterCondition {
     /// Column name
     pub column: String,
@@ -623,7 +623,7 @@ pub struct FilterCondition {
 }
 
 /// Filter operator
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum FilterOperator {
     #[default]
     Equal,
@@ -660,14 +660,14 @@ impl FilterOperator {
 }
 
 /// Sort direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SortDirection {
     Asc,
     Desc,
 }
 
 /// Sort condition
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SortCondition {
     pub column: String,
     pub direction: SortDirection,
@@ -854,7 +854,7 @@ impl TableDataRequest {
 }
 
 /// Response for table data query
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TableDataResponse {
     /// Row data (each cell is Option<String>, None means NULL)
     pub query_result: QueryResult,
@@ -1117,5 +1117,50 @@ mod tests {
             vec![vec!["users".to_string(), "12".to_string()]],
             restored.rows
         );
+    }
+
+    #[test]
+    fn table_data_request_parts_serialize_for_external_drivers() {
+        let filter = FilterCondition {
+            column: "status".to_string(),
+            operator: FilterOperator::Equal,
+            value: "200".to_string(),
+        };
+        let sort = SortCondition {
+            column: "@timestamp".to_string(),
+            direction: SortDirection::Desc,
+        };
+
+        let value = serde_json::json!({
+            "filters": [filter],
+            "sorts": [sort]
+        });
+
+        assert_eq!(value["filters"][0]["column"], "status");
+        assert_eq!(value["filters"][0]["operator"], "Equal");
+        assert_eq!(value["sorts"][0]["direction"], "Desc");
+    }
+
+    #[test]
+    fn table_data_response_deserializes_from_external_driver_value() {
+        let value = serde_json::json!({
+            "query_result": {
+                "sql": "elasticsearch_dsl://logs-*",
+                "columns": ["_id"],
+                "column_meta": [],
+                "rows": [["abc"]],
+                "elapsed_ms": 3
+            },
+            "total_count": 1,
+            "page": 1,
+            "page_size": 100,
+            "duration": 3
+        });
+
+        let response: TableDataResponse =
+            serde_json::from_value(value).expect("table data response decodes");
+
+        assert_eq!(response.total_count, 1);
+        assert_eq!(response.query_result.columns, vec!["_id"]);
     }
 }
