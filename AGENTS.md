@@ -338,6 +338,13 @@
 - **验证方式**：运行对应状态 contract 测试、fake HTTP 网络测试、真实 GPUI view 测试，以及相关 crate 的 `cargo check` / `cargo clippy -D warnings` / `cargo test`。
 - **适用范围**：`main/src/settings/*`、扩展市场加载、更新检查、数据库驱动安装等 GPUI UI 层异步加载路径。
 
+- **标题**：GPUI `overflow_y_scrollbar()` 不要直接承担父级 flex 裁剪职责
+- **触发信号**：窗口或面板里已经调用 `.overflow_y_scrollbar()`，但列表/卡片区域仍无法上下滚动，尤其是该区域同时需要 `.flex_1()`、`.min_h_0()` 或 `.min_w_0()` 参与父级布局。
+- **根因 / 约束**：`gpui_component::scroll::ScrollableElement::overflow_y_scrollbar()` 会生成额外的 `Scrollable` 外层 wrapper；该 wrapper 渲染时主要继承原元素的 `size`，不能假设原元素上的 flex/min 尺寸约束会作为父级布局约束稳定作用到外层滚动盒。
+- **正确做法**：用普通外层容器承担父级布局与裁剪，例如 `.flex_1().h_full().min_h_0().min_w_0().overflow_hidden()`；把真正可滚动内容放到内层 `.size_full().overflow_y_scrollbar()` 中。若父级使用 `h_flex()`，注意它默认 `items_center()`，外层滚动边界通常必须显式 `.h_full()` 或其他明确高度，否则内层 `size_full()` 可能塌陷成白屏。参考 `main/src/new_connection/connection_window.rs::render_card_area`。
+- **验证方式**：补结构性回归测试，断言外层有 flex/h_full/min/overflow_hidden 边界、内层有 size_full/overflow_y_scrollbar；运行相关 UI 模块的定向 `cargo test`，必要时手工打开窗口验证滚轮。
+- **适用范围**：GPUI popup、dialog、tab 面板中需要滚动的列表、卡片网格、表单内容区域。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

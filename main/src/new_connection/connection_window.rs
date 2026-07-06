@@ -239,33 +239,38 @@ impl NewConnectionWindow {
             );
         }
 
-        v_flex()
+        div()
             .flex_1()
             .h_full()
             .min_h_0()
             .min_w_0()
-            .overflow_y_scrollbar()
-            .bg(cx.theme().muted)
-            .p_6()
-            .gap_4()
+            .overflow_hidden()
             .child(
                 v_flex()
-                    .gap_1()
+                    .size_full()
+                    .overflow_y_scrollbar()
+                    .bg(cx.theme().muted)
+                    .p_6()
+                    .gap_4()
                     .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().foreground)
-                            .child(t!("NewConnection.select_type_title").to_string()),
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(cx.theme().foreground)
+                                    .child(t!("NewConnection.select_type_title").to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("NewConnection.select_type_hint").to_string()),
+                            ),
                     )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(t!("NewConnection.select_type_hint").to_string()),
-                    ),
+                    .child(grid),
             )
-            .child(grid)
     }
 
     fn render_connection_type_card(
@@ -424,9 +429,8 @@ impl Render for NewConnectionWindow {
 
         v_flex()
             .key_context(KEY_CONTEXT)
-            .flex_1()
+            .size_full()
             .min_h_0()
-            .w_full()
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_action_select_previous))
             .on_action(cx.listener(Self::on_action_select_next))
@@ -481,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn new_connection_render_fits_with_popup_title_bar() {
+    fn new_connection_render_fills_popup_content_area() {
         let source = include_str!("connection_window.rs");
         let render = source
             .split("impl Render for NewConnectionWindow")
@@ -492,9 +496,28 @@ mod tests {
             .expect("render impl has an end marker");
 
         assert!(!source.contains(concat!("Title", "Bar")));
-        assert!(render.contains(".flex_1()"));
+        assert!(render.contains(".size_full()"));
         assert!(render.contains(".min_h_0()"));
         assert!(render.contains(".child(self.render_selection_footer(cx))"));
-        assert!(!render.contains(".size_full()"));
+    }
+
+    #[test]
+    fn new_connection_card_area_uses_bounded_scroll_container() {
+        let source = include_str!("connection_window.rs");
+        let card_area = source
+            .split("fn render_card_area(")
+            .nth(1)
+            .expect("card area render exists")
+            .split("fn render_connection_type_card(")
+            .next()
+            .expect("card area has an end marker");
+
+        assert!(card_area.contains(".flex_1()"));
+        assert!(card_area.contains(".h_full()"));
+        assert!(card_area.contains(".min_h_0()"));
+        assert!(card_area.contains(".min_w_0()"));
+        assert!(card_area.contains(".overflow_hidden()"));
+        assert!(card_area.contains(".size_full()"));
+        assert!(card_area.contains(".overflow_y_scrollbar()"));
     }
 }
