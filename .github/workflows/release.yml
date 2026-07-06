@@ -152,10 +152,6 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           ONETCLI_PUBLIC_BASE_URL: ${{ vars.ONETCLI_PUBLIC_BASE_URL }}
           ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
-          ONETCLI_EXTENSION_GITHUB_MANIFEST_URL: ${{ vars.ONETCLI_EXTENSION_GITHUB_MANIFEST_URL }}
-          ONETCLI_WECHAT_QR_URL: ${{ secrets.ONETCLI_WECHAT_QR_URL }}
-          ONETCLI_ALIPAY_QR_URL: ${{ secrets.ONETCLI_ALIPAY_QR_URL }}
-          ONETCLI_PAYPAL_QR_URL: ${{ secrets.ONETCLI_PAYPAL_QR_URL }}
         run: |
           cargo --version
           rustc --version
