@@ -92,6 +92,7 @@ use one_core::tab_container::{TabContainer, TabContentRegistry, TabItem};
 use one_core::tab_navigation::{
     ActiveTabSlot, TabCycleDirection, tab_number_target, tab_slot_after_cycle,
 };
+use sftp_view::{PasteUpload as SftpPasteUpload, SFTP_VIEW_CONTEXT};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -484,6 +485,11 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .into_iter()
         .map(|key| KeyBinding::new(&key, QuitApp, None)),
     );
+    keybindings.push(KeyBinding::new(
+        default_shortcut("cmd-v", "ctrl-v"),
+        SftpPasteUpload,
+        Some(SFTP_VIEW_CONTEXT),
+    ));
 
     keybindings
 }
@@ -503,6 +509,11 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
         &["ctrl-w"],
         None,
         ClosePanel,
+    ));
+    keybindings.push(KeyBinding::new(
+        default_shortcut("cmd-v", "ctrl-v"),
+        SftpPasteUpload,
+        Some(SFTP_VIEW_CONTEXT),
     ));
     keybindings.extend(rebind_keybindings(
         cx,

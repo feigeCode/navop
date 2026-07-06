@@ -214,6 +214,7 @@ pub fn refresh_keybindings(cx: &mut App) {
 
 fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
     let mut keybindings = Vec::new();
+    keybindings.extend(crate::sidebar::file_manager_panel::init_keybindings());
     keybindings.extend(
         shortcuts_for(cx, action_id::TERMINAL_SEND_TAB, &["tab"])
             .into_iter()
@@ -365,6 +366,7 @@ fn wrapped_addon_line_text(
 
 fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
     let mut keybindings = Vec::new();
+    keybindings.extend(crate::sidebar::file_manager_panel::init_keybindings());
     keybindings.extend(rebind_keybindings(
         cx,
         action_id::TERMINAL_SEND_TAB,

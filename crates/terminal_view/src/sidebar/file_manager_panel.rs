@@ -8,9 +8,9 @@ use crate::theme::TerminalColors;
 use chrono::{DateTime, Local};
 use gpui::{
     App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable,
-    IntoElement, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, PathPromptOptions,
-    Render, SharedString, Styled, UniformListScrollHandle, Window, div, prelude::*, px,
-    uniform_list,
+    IntoElement, KeyBinding, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement,
+    PathPromptOptions, Render, SharedString, Styled, UniformListScrollHandle, Window, actions, div,
+    prelude::*, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
@@ -35,7 +35,9 @@ use one_core::storage::{
     sftp_favorite_connection_key,
 };
 use remote_file_editor::open_remote_file_editor;
-use remote_image_preview::{image_format_for_path, open_remote_image_preview};
+use remote_image_preview::{
+    clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
+};
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
 use ssh::{ChannelEvent, SshChannel, SshSessionManager};
@@ -46,6 +48,26 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex;
+
+actions!(terminal_file_manager, [PasteUpload]);
+
+pub const FILE_MANAGER_CONTEXT: &str = "TerminalFileManager";
+
+pub fn init_keybindings() -> Vec<KeyBinding> {
+    vec![KeyBinding::new(
+        file_manager_paste_shortcut(),
+        PasteUpload,
+        Some(FILE_MANAGER_CONTEXT),
+    )]
+}
+
+fn file_manager_paste_shortcut() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd-v"
+    } else {
+        "ctrl-v"
+    }
+}
 
 // ── 传输相关类型 ──────────────────────────────────────────────
 
@@ -2483,6 +2505,43 @@ impl FileManagerPanel {
             .detach();
     }
 
+    fn paste_upload_from_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.connection_state != ConnectionState::Connected {
+            window.push_notification(
+                Notification::warning("文件管理器未连接，无法上传剪贴板内容".to_string())
+                    .autohide(true),
+                cx,
+            );
+            return;
+        }
+
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+
+        let upload_paths = match clipboard_upload_paths(&item) {
+            Ok(upload_paths) => upload_paths.paths,
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(format!("读取剪贴板失败：{error}")).autohide(true),
+                    cx,
+                );
+                return;
+            }
+        };
+
+        if upload_paths.is_empty() {
+            window.push_notification(
+                Notification::info("剪贴板没有可上传的文件或图片".to_string()).autohide(true),
+                cx,
+            );
+            return;
+        }
+
+        let remote_dir = self.current_path.clone();
+        self.prepare_uploads(upload_paths, &remote_dir, window, cx);
+    }
+
     fn show_new_folder_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t!("FileManager.new_folder_placeholder"))
@@ -4520,6 +4579,11 @@ impl Render for FileManagerPanel {
 
         v_flex()
             .size_full()
+            .track_focus(&self.focus_handle)
+            .key_context(FILE_MANAGER_CONTEXT)
+            .on_action(cx.listener(|this, _: &PasteUpload, window, cx| {
+                this.paste_upload_from_clipboard(window, cx);
+            }))
             .bg(background)
             .text_color(foreground)
             .child(match state {

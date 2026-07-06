@@ -38,7 +38,9 @@ use one_core::storage::{
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_file_editor::open_remote_file_editor;
-use remote_image_preview::{image_format_for_path, open_remote_image_preview};
+use remote_image_preview::{
+    clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
+};
 use rust_i18n::t;
 use sftp::{RusshSftpClient, SftpClient, TransferCancelled, TransferProgress};
 use ssh::{
@@ -61,9 +63,12 @@ actions!(
         Download,
         Delete,
         NewFolder,
-        Rename
+        Rename,
+        PasteUpload
     ]
 );
+
+pub const SFTP_VIEW_CONTEXT: &str = "SftpView";
 
 /// SftpView 发出的事件
 #[derive(Clone, Debug)]
@@ -2190,6 +2195,47 @@ impl SftpView {
                 });
             })
             .detach();
+    }
+
+    fn paste_upload_from_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(client) = self.sftp_client.clone() else {
+            window.push_notification(
+                Notification::warning("SFTP 未连接，无法上传剪贴板内容".to_string()).autohide(true),
+                cx,
+            );
+            return;
+        };
+
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+
+        let upload_paths = match clipboard_upload_paths(&item) {
+            Ok(upload_paths) => upload_paths.paths,
+            Err(error) => {
+                window.push_notification(
+                    Notification::error(format!("读取剪贴板失败：{error}")).autohide(true),
+                    cx,
+                );
+                return;
+            }
+        };
+
+        if upload_paths.is_empty() {
+            window.push_notification(
+                Notification::info("剪贴板没有可上传的文件或图片".to_string()).autohide(true),
+                cx,
+            );
+            return;
+        }
+
+        self.upload_paths_to_remote(
+            upload_paths,
+            self.remote_current_path.clone(),
+            client,
+            window,
+            cx,
+        );
     }
 
     fn show_conflict_dialog(
@@ -5014,6 +5060,11 @@ impl Render for SftpView {
         v_flex()
             .size_full()
             .relative()
+            .track_focus(&self.focus_handle)
+            .key_context(SFTP_VIEW_CONTEXT)
+            .on_action(cx.listener(|this, _: &PasteUpload, window, cx| {
+                this.paste_upload_from_clipboard(window, cx);
+            }))
             .bg(cx.theme().background)
             .child(
                 h_flex()
