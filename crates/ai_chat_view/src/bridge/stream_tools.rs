@@ -27,6 +27,9 @@ pub(super) fn merge_stream_tool_calls(acc: &mut Vec<ToolCall>, chunk: &Streaming
 
 fn merge_existing_tool_call(existing: &mut ToolCall, call: &ToolCall) {
     if is_argument_delta(call) {
+        if existing.function.arguments == "{}" {
+            existing.function.arguments.clear();
+        }
         existing.merge_delta(call);
     } else {
         *existing = call.clone();

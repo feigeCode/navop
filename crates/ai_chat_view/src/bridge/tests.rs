@@ -377,6 +377,33 @@ fn partial_argument_deltas_preserve_initial_tool_identity() {
 }
 
 #[test]
+fn anthropic_tool_use_placeholder_is_replaced_by_json_deltas() {
+    let mut acc = Vec::new();
+    merge_stream_tool_calls(
+        &mut acc,
+        &chunk(vec![tool_call(0, "toolu_1", "update_plan", "{}")]),
+    );
+    merge_stream_tool_calls(&mut acc, &chunk(vec![tool_call_delta(0, "{\"plan\":")]));
+    merge_stream_tool_calls(
+        &mut acc,
+        &chunk(vec![tool_call_delta(
+            0,
+            "[{\"step\":\"排查\",\"status\":\"in_progress\"}]}",
+        )]),
+    );
+
+    assert_eq!(acc.len(), 1);
+    assert_eq!(acc[0].id, "toolu_1");
+    assert_eq!(acc[0].function.name, "update_plan");
+    assert_eq!(
+        acc[0].function.arguments,
+        "{\"plan\":[{\"step\":\"排查\",\"status\":\"in_progress\"}]}"
+    );
+    serde_json::from_str::<serde_json::Value>(&acc[0].function.arguments)
+        .expect("Anthropic input_json_delta must produce one JSON object");
+}
+
+#[test]
 fn keeps_distinct_tool_calls_by_index() {
     let mut acc = Vec::new();
     merge_stream_tool_calls(
