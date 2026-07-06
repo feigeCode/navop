@@ -1,10 +1,8 @@
 use gpui::{
     AnyWindowHandle, App, AsyncApp, Context, Image, ImageFormat, IntoElement, ObjectFit,
-    ParentElement, Render, Styled, Window, div, img, prelude::*, px, relative,
+    ParentElement, Render, Styled, Window, div, img, prelude::*,
 };
-use gpui_component::{
-    ActiveTheme, WindowExt, notification::Notification, scroll::ScrollableElement,
-};
+use gpui_component::{ActiveTheme, WindowExt, notification::Notification};
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use sftp::{RusshSftpClient, SftpClient};
@@ -30,23 +28,17 @@ impl Render for RemoteImagePreview {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         div()
-            .size_full()
-            .min_h(px(0.0))
+            .flex_1()
+            .w_full()
+            .min_h_0()
+            .flex()
+            .items_center()
+            .justify_center()
             .bg(theme.muted.opacity(0.20))
-            .overflow_scrollbar()
             .child(
-                div()
-                    .min_w(relative(1.0))
-                    .min_h(relative(1.0))
-                    .p_4()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        img(self.image.clone())
-                            .max_w(relative(1.0))
-                            .object_fit(ObjectFit::Contain),
-                    ),
+                img(self.image.clone())
+                    .size_full()
+                    .object_fit(ObjectFit::Contain),
             )
     }
 }
