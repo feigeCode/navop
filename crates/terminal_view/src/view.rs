@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod broadcast;
 mod history_prompt_rules;
@@ -147,6 +147,9 @@ const TERMINAL_SEARCH_FORWARD_SHORTCUT: &str = "ctrl-shift-f";
 const TERMINAL_SEARCH_BACKWARD_SHORTCUT: &str = "cmd-g";
 #[cfg(not(target_os = "macos"))]
 const TERMINAL_SEARCH_BACKWARD_SHORTCUT: &str = "ctrl-shift-g";
+const TERMINAL_TOGGLE_VI_MODE_SHORTCUT: &str = "f7";
+const REMOTE_CLIPBOARD_IMAGE_DIR: &str = "/tmp";
+const REMOTE_CLIPBOARD_IMAGE_PREFIX: &str = "onetcli-paste";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WrappedLineSegment {
@@ -169,7 +172,6 @@ struct AddonLineText {
     column: usize,
     screen_line: usize,
 }
-const TERMINAL_TOGGLE_VI_MODE_SHORTCUT: &str = "f7";
 
 const DEFAULT_CELL_WIDTH: Pixels = px(8.0);
 const DEFAULT_COLS: usize = 80;
@@ -462,6 +464,41 @@ fn terminal_paste_defaults() -> Vec<&'static str> {
     } else {
         vec![TERMINAL_PASTE_SHORTCUT, "shift-insert"]
     }
+}
+
+fn remote_clipboard_image_path(format: ImageFormat, timestamp_millis: u128) -> String {
+    format!(
+        "{REMOTE_CLIPBOARD_IMAGE_DIR}/{REMOTE_CLIPBOARD_IMAGE_PREFIX}-{timestamp_millis}.{}",
+        image_format_extension(format)
+    )
+}
+
+fn current_timestamp_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn image_format_extension(format: ImageFormat) -> &'static str {
+    match format {
+        ImageFormat::Png => "png",
+        ImageFormat::Jpeg => "jpg",
+        ImageFormat::Webp => "webp",
+        ImageFormat::Gif => "gif",
+        ImageFormat::Bmp => "bmp",
+        ImageFormat::Tiff => "tiff",
+        ImageFormat::Ico => "ico",
+        ImageFormat::Svg => "svg",
+        ImageFormat::Pnm => "pnm",
+    }
+}
+
+fn clipboard_image_from_item(item: &ClipboardItem) -> Option<Image> {
+    item.entries().iter().find_map(|entry| match entry {
+        ClipboardEntry::Image(image) => Some(image.clone()),
+        ClipboardEntry::String(_) | ClipboardEntry::ExternalPaths(_) => None,
+    })
 }
 
 fn terminal_increase_font_defaults() -> Vec<&'static str> {
@@ -2744,6 +2781,10 @@ impl TerminalView {
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(clipboard) = cx.read_from_clipboard() {
+            if let Some(image) = clipboard_image_from_item(&clipboard) {
+                self.paste_clipboard_image_to_remote_cli(image, window, cx);
+                return;
+            }
             if let Some(text) = clipboard.text() {
                 self.paste_text(&text, window, cx);
             }
@@ -2832,6 +2873,115 @@ impl TerminalView {
             self.write_to_pty(text.as_bytes().to_vec(), cx);
         }
         self.focus_terminal(window, cx);
+    }
+
+    fn paste_clipboard_image_to_remote_cli(
+        &mut self,
+        image: Image,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ssh_config) = self
+            .terminal
+            .read(cx)
+            .ssh_config()
+            .map(|config| config.ssh_config.clone())
+        else {
+            window.push_notification(
+                Notification::error("当前终端不是 SSH 终端，无法上传剪贴板图片".to_string())
+                    .autohide(true),
+                cx,
+            );
+            return;
+        };
+
+        if image.bytes.is_empty() {
+            window.push_notification(
+                Notification::error("剪贴板图片为空，无法上传".to_string()).autohide(true),
+                cx,
+            );
+            return;
+        }
+
+        self.spawn_clipboard_image_upload(ssh_config, image, window, cx);
+        window.push_notification(
+            Notification::info("正在上传剪贴板图片到远程服务器...".to_string()).autohide(true),
+            cx,
+        );
+    }
+
+    fn spawn_clipboard_image_upload(
+        &mut self,
+        ssh_config: ssh::SshConnectConfig,
+        image: Image,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let remote_path = remote_clipboard_image_path(image.format, current_timestamp_millis());
+        let bytes = image.bytes;
+        let window_handle = window.window_handle();
+        let task = Tokio::spawn(cx, async move {
+            let mut client = RusshSftpClient::connect(ssh_config).await?;
+            client.write_file(&remote_path, &bytes).await?;
+            Ok::<_, anyhow::Error>(remote_path)
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.handle_clipboard_image_upload_result(result, window_handle, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn handle_clipboard_image_upload_result(
+        &mut self,
+        result: Result<Result<String, anyhow::Error>, tokio::task::JoinError>,
+        window_handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(Ok(path)) => {
+                self.paste_remote_image_path(&path, cx);
+                self.notify_clipboard_image_upload(
+                    window_handle,
+                    Notification::success(format!("已上传剪贴板图片并粘贴路径：{path}")),
+                    cx,
+                );
+            }
+            Ok(Err(error)) => self.notify_clipboard_image_upload(
+                window_handle,
+                Notification::error(format!("上传剪贴板图片失败：{error}")),
+                cx,
+            ),
+            Err(error) => self.notify_clipboard_image_upload(
+                window_handle,
+                Notification::error(format!("上传剪贴板图片任务失败：{error}")),
+                cx,
+            ),
+        }
+    }
+
+    fn notify_clipboard_image_upload(
+        &self,
+        window_handle: AnyWindowHandle,
+        notification: Notification,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = cx.update_window(window_handle, |_, window, cx| {
+            window.push_notification(notification.autohide(true), cx);
+        });
+    }
+
+    fn paste_remote_image_path(&mut self, path: &str, cx: &mut Context<Self>) {
+        let mode = self.terminal.read(cx).mode();
+        self.apply_paste_to_history_prompt(path, cx);
+        if mode.contains(TermMode::BRACKETED_PASTE) {
+            self.write_to_pty(format!("\x1b[200~{path}\x1b[201~").into_bytes(), cx);
+        } else {
+            self.write_to_pty(path.as_bytes().to_vec(), cx);
+        }
     }
 
     /// 粘贴代码块到终端（用于AI生成的代码）
@@ -4747,10 +4897,10 @@ impl Element for ResizeEventHandler {
 mod tests {
     use super::{
         TerminalDuplicateSource, UnbracketedPasteHazard, WrappedLineSegment,
-        detect_unbracketed_paste_hazard, encode_mouse_modifiers, has_trailing_line_continuation,
-        has_unterminated_shell_quote, history_prompt_available, history_prompt_dropdown_origin,
-        history_prompt_overlay_bounds, mouse_button_code, multiline_non_empty_line_count,
-        sgr_mouse_button_report,
+        clipboard_image_from_item, detect_unbracketed_paste_hazard, encode_mouse_modifiers,
+        has_trailing_line_continuation, has_unterminated_shell_quote, history_prompt_available,
+        history_prompt_dropdown_origin, history_prompt_overlay_bounds, mouse_button_code,
+        multiline_non_empty_line_count, remote_clipboard_image_path, sgr_mouse_button_report,
         sgr_mouse_mode_enabled, sgr_mouse_wheel_report, should_confirm_local_terminal_close,
         should_defer_inline_history_prompt_input_to_text_system, should_defer_sgr_left_press,
         should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
@@ -4763,7 +4913,10 @@ mod tests {
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
     use alacritty_terminal::term::TermMode;
-    use gpui::{Bounds, Keystroke, Modifiers, MouseButton, Point, px, size};
+    use gpui::{
+        Bounds, ClipboardItem, Image, ImageFormat, Keystroke, Modifiers, MouseButton, Point, px,
+        size,
+    };
     use one_core::storage::models::{SerialParams, SshAuthMethod, SshParams, StoredConnection};
     use std::cell::Cell as StdCell;
     use terminal::LocalConfig;
@@ -4877,6 +5030,37 @@ mod tests {
         assert_eq!("ssh:42", ssh.scope_key);
         assert!(terminal_history_scope(TerminalConnectionKind::Ssh, None).is_none());
         assert!(terminal_history_scope(TerminalConnectionKind::Serial, Some(7)).is_none());
+    }
+
+    #[test]
+    fn remote_clipboard_image_path_uses_tmp_prefix_and_format_extension() {
+        let path = remote_clipboard_image_path(ImageFormat::Png, 1_720_000_000_123);
+
+        assert_eq!("/tmp/onetcli-paste-1720000000123.png", path);
+    }
+
+    #[test]
+    fn remote_clipboard_image_path_uses_jpg_for_jpeg_images() {
+        let path = remote_clipboard_image_path(ImageFormat::Jpeg, 42);
+
+        assert_eq!("/tmp/onetcli-paste-42.jpg", path);
+    }
+
+    #[test]
+    fn clipboard_image_from_item_extracts_image_entry() {
+        let image = Image::from_bytes(ImageFormat::Png, vec![1, 2, 3]);
+        let item = ClipboardItem::new_image(&image);
+        let extracted = clipboard_image_from_item(&item).expect("image should be extracted");
+
+        assert_eq!(ImageFormat::Png, extracted.format);
+        assert_eq!(vec![1, 2, 3], extracted.bytes);
+    }
+
+    #[test]
+    fn clipboard_image_from_item_ignores_text_clipboard() {
+        let item = ClipboardItem::new_string("/tmp/image.png".to_string());
+
+        assert!(clipboard_image_from_item(&item).is_none());
     }
 
     #[test]
