@@ -34,8 +34,6 @@ pub struct IpcDriverManifest {
     #[serde(default)]
     pub connection: IpcDriverConnection,
     #[serde(default)]
-    pub query: IpcDriverQuery,
-    #[serde(default)]
     pub methods: Vec<String>,
     #[serde(default)]
     pub ui: IpcDriverUi,
@@ -50,14 +48,6 @@ pub struct IpcDriverConnection {
     pub single_connection: bool,
     pub close_on_release: bool,
     pub path_fields: Vec<String>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct IpcDriverQuery {
-    pub default_language: Option<String>,
-    pub languages: Vec<String>,
-    pub table_data_method: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

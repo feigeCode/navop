@@ -585,12 +585,20 @@ impl DatabaseObjects {
                 } else {
                     database.clone()
                 };
+                let schema = current_node.get_schema_name();
                 metadata.insert("database".to_string(), db.clone());
+                if let Some(schema) = schema.as_ref().filter(|schema| !schema.trim().is_empty()) {
+                    metadata.insert("schema".to_string(), schema.clone());
+                }
                 metadata.insert("table".to_string(), name.clone());
-                (
-                    format!("{}:{}:table_folder:{}", connection_id, db, name),
-                    DbNodeType::Table,
-                )
+                let node_id = if let Some(schema) =
+                    schema.as_ref().filter(|schema| !schema.trim().is_empty())
+                {
+                    format!("{}:{}:{}:table_folder:{}", connection_id, db, schema, name)
+                } else {
+                    format!("{}:{}:table_folder:{}", connection_id, db, name)
+                };
+                (node_id, DbNodeType::Table)
             }
             DbNodeType::Schema => {
                 if current_node.node_type == DbNodeType::Connection {
@@ -629,12 +637,20 @@ impl DatabaseObjects {
                 } else {
                     database.clone()
                 };
+                let schema = current_node.get_schema_name();
                 metadata.insert("database".to_string(), db.clone());
+                if let Some(schema) = schema.as_ref().filter(|schema| !schema.trim().is_empty()) {
+                    metadata.insert("schema".to_string(), schema.clone());
+                }
                 metadata.insert("view".to_string(), name.clone());
-                (
-                    format!("{}:{}:views_folder:{}", connection_id, db, name),
-                    DbNodeType::View,
-                )
+                let node_id = if let Some(schema) =
+                    schema.as_ref().filter(|schema| !schema.trim().is_empty())
+                {
+                    format!("{}:{}:{}:views_folder:{}", connection_id, db, schema, name)
+                } else {
+                    format!("{}:{}:views_folder:{}", connection_id, db, name)
+                };
+                (node_id, DbNodeType::View)
             }
             DbNodeType::QueriesFolder | DbNodeType::NamedQuery => {
                 let query_id = row_data.get(1).cloned().unwrap_or_default();
@@ -1234,7 +1250,7 @@ mod tests {
         let row = vec!["users".to_string()];
 
         let node = DatabaseObjects::build_node_from_object_row(
-            DbNodeType::Schema,
+            DbNodeType::Table,
             Some(&schema_node()),
             &row,
         )
@@ -1254,6 +1270,35 @@ mod tests {
             Some("users"),
             node.metadata.get("table").map(String::as_str)
         );
+        assert_eq!("conn1:app_db:public:table_folder:users", node.id);
+    }
+
+    #[test]
+    fn schema_object_view_row_builds_view_node() {
+        let row = vec!["active_users".to_string()];
+
+        let node = DatabaseObjects::build_node_from_object_row(
+            DbNodeType::View,
+            Some(&schema_node()),
+            &row,
+        )
+        .expect("view row under schema should produce a node");
+
+        assert_eq!(DbNodeType::View, node.node_type);
+        assert_eq!("active_users", node.name);
+        assert_eq!(
+            Some("app_db"),
+            node.metadata.get("database").map(String::as_str)
+        );
+        assert_eq!(
+            Some("public"),
+            node.metadata.get("schema").map(String::as_str)
+        );
+        assert_eq!(
+            Some("active_users"),
+            node.metadata.get("view").map(String::as_str)
+        );
+        assert_eq!("conn1:app_db:public:views_folder:active_users", node.id);
     }
 
     #[test]

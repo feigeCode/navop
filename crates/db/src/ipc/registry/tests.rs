@@ -55,38 +55,28 @@ fn parses_connection_lifecycle_policy() {
 }
 
 #[test]
-fn manifest_parses_non_sql_query_contract() {
+fn manifest_ignores_legacy_query_extension_contract() {
     let manifest: IpcDriverManifest = serde_json::from_str(
         r#"{
-          "id":"elasticsearch",
-          "name":"Elasticsearch",
-          "entry":{"command":"./elasticsearch_driver"},
-          "transport":{"name":"elasticsearch-driver.sock"},
+          "id":"legacy-query-driver",
+          "name":"Legacy Query Driver",
+          "entry":{"command":"./legacy_query_driver"},
+          "transport":{"name":"legacy-query-driver.sock"},
           "query":{
-            "default_language":"elasticsearch_dsl",
-            "languages":["elasticsearch_dsl","elasticsearch_sql"],
-            "table_data_method":"x/es/table_data"
+            "default_language":"legacy_dsl",
+            "languages":["legacy_dsl","sql"],
+            "table_data_method":"x/legacy/table_data"
           }
         }"#,
     )
     .expect("manifest parses");
 
-    assert_eq!(
-        manifest.query.default_language.as_deref(),
-        Some("elasticsearch_dsl")
-    );
-    assert_eq!(
-        manifest.query.languages,
-        vec!["elasticsearch_dsl", "elasticsearch_sql"]
-    );
-    assert_eq!(
-        manifest.query.table_data_method.as_deref(),
-        Some("x/es/table_data")
-    );
+    assert_eq!(manifest.id, "legacy-query-driver");
+    assert_eq!(manifest.methods, Vec::<String>::new());
 }
 
 #[test]
-fn manifest_defaults_to_sql_table_data() {
+fn manifest_without_query_extension_parses() {
     let manifest: IpcDriverManifest = serde_json::from_str(
         r#"{
           "id":"demo",
@@ -97,9 +87,7 @@ fn manifest_defaults_to_sql_table_data() {
     )
     .expect("manifest parses");
 
-    assert!(manifest.query.default_language.is_none());
-    assert!(manifest.query.languages.is_empty());
-    assert!(manifest.query.table_data_method.is_none());
+    assert_eq!(manifest.id, "demo");
 }
 
 #[test]
@@ -694,7 +682,6 @@ fn manifest(id: &str, name: &str) -> IpcDriverManifest {
         dialect: Default::default(),
         capabilities: None,
         connection: Default::default(),
-        query: Default::default(),
         methods: Vec::new(),
         ui: Default::default(),
         manifest_dir: PathBuf::from("."),

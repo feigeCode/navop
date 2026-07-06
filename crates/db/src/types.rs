@@ -611,68 +611,6 @@ pub struct TableColumnMeta {
     pub index: usize,
 }
 
-/// Filter condition for querying table data
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FilterCondition {
-    /// Column name
-    pub column: String,
-    /// Operator (=, !=, >, <, >=, <=, LIKE, IN, IS NULL, IS NOT NULL)
-    pub operator: FilterOperator,
-    /// Value (ignored for IS NULL / IS NOT NULL)
-    pub value: String,
-}
-
-/// Filter operator
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-pub enum FilterOperator {
-    #[default]
-    Equal,
-    NotEqual,
-    GreaterThan,
-    LessThan,
-    GreaterOrEqual,
-    LessOrEqual,
-    Like,
-    NotLike,
-    In,
-    NotIn,
-    IsNull,
-    IsNotNull,
-}
-
-impl FilterOperator {
-    pub fn to_sql(&self) -> &'static str {
-        match self {
-            Self::Equal => "=",
-            Self::NotEqual => "!=",
-            Self::GreaterThan => ">",
-            Self::LessThan => "<",
-            Self::GreaterOrEqual => ">=",
-            Self::LessOrEqual => "<=",
-            Self::Like => "LIKE",
-            Self::NotLike => "NOT LIKE",
-            Self::In => "IN",
-            Self::NotIn => "NOT IN",
-            Self::IsNull => "IS NULL",
-            Self::IsNotNull => "IS NOT NULL",
-        }
-    }
-}
-
-/// Sort direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum SortDirection {
-    Asc,
-    Desc,
-}
-
-/// Sort condition
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SortCondition {
-    pub column: String,
-    pub direction: SortDirection,
-}
-
 /// Represents a single cell change when persisting table edits
 #[derive(Debug, Clone)]
 pub struct TableCellChange {
@@ -781,7 +719,7 @@ pub struct TableSaveResponse {
     pub errors: Vec<String>,
 }
 
-/// Request for querying table data with pagination and filtering
+/// Request for querying table data with pagination and optional SQL clauses
 #[derive(Debug, Clone, Default)]
 pub struct TableDataRequest {
     /// Database name
@@ -794,10 +732,6 @@ pub struct TableDataRequest {
     pub page: usize,
     /// Page size
     pub page_size: usize,
-    /// Filter conditions (structured)
-    pub filters: Vec<FilterCondition>,
-    /// Sort conditions (structured)
-    pub sorts: Vec<SortCondition>,
     /// Raw WHERE clause (e.g., "id > 10 AND name LIKE '%test%'")
     pub where_clause: Option<String>,
     /// Raw ORDER BY clause (e.g., "id DESC, name ASC")
@@ -812,8 +746,6 @@ impl TableDataRequest {
             table: table.into(),
             page: 1,
             page_size: 100,
-            filters: Vec::new(),
-            sorts: Vec::new(),
             where_clause: None,
             order_by_clause: None,
         }
@@ -827,16 +759,6 @@ impl TableDataRequest {
     pub fn with_page(mut self, page: usize, page_size: usize) -> Self {
         self.page = page;
         self.page_size = page_size;
-        self
-    }
-
-    pub fn with_filter(mut self, filter: FilterCondition) -> Self {
-        self.filters.push(filter);
-        self
-    }
-
-    pub fn with_sort(mut self, sort: SortCondition) -> Self {
-        self.sorts.push(sort);
         self
     }
 
@@ -1120,32 +1042,10 @@ mod tests {
     }
 
     #[test]
-    fn table_data_request_parts_serialize_for_external_drivers() {
-        let filter = FilterCondition {
-            column: "status".to_string(),
-            operator: FilterOperator::Equal,
-            value: "200".to_string(),
-        };
-        let sort = SortCondition {
-            column: "@timestamp".to_string(),
-            direction: SortDirection::Desc,
-        };
-
-        let value = serde_json::json!({
-            "filters": [filter],
-            "sorts": [sort]
-        });
-
-        assert_eq!(value["filters"][0]["column"], "status");
-        assert_eq!(value["filters"][0]["operator"], "Equal");
-        assert_eq!(value["sorts"][0]["direction"], "Desc");
-    }
-
-    #[test]
     fn table_data_response_deserializes_from_external_driver_value() {
         let value = serde_json::json!({
             "query_result": {
-                "sql": "elasticsearch_dsl://logs-*",
+                "sql": "SELECT _id FROM logs",
                 "columns": ["_id"],
                 "column_meta": [],
                 "rows": [["abc"]],
