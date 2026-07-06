@@ -14,10 +14,21 @@ OnetCli 当前下载入口统一托管在 GitHub Releases。推荐先下载桌�
 | 平台 | 架构 | 渲染 |
 | --- | --- | --- |
 | macOS | Apple Silicon、Intel | Metal |
-| Linux | x86_64 | Vulkan |
+| Linux | x86_64、ARM64 | Vulkan |
 | Windows | x86_64 | 原生桌面窗口 |
 
 > 实际可下载包以 GitHub Releases 中当前发布的文件为准。
+
+## Linux 包格式
+
+Linux x86_64 发布包包含通用归档和发行版安装包：
+
+- `onetcli-x86_64-unknown-linux-gnu.tar.gz`：应用内自动更新和通用手动安装使用。
+- `onetcli_<version>_amd64.deb`：Ubuntu、Debian、Linux Mint 等 Debian 系发行版使用。
+- `onetcli-<version>-1.x86_64.rpm`：Fedora、RHEL、CentOS、openSUSE 等 RPM 系发行版使用。
+- `onetcli_<version>_amd64.AppImage`：不确定发行版或偏好便携运行时使用。
+
+Linux ARM64 当前提供 `onetcli-aarch64-unknown-linux-gnu.tar.gz`。
 
 ## 下载后可以先体验什么
 

@@ -193,6 +193,92 @@ jobs:
           cp resources/linux/onetcli-512.png package/usr/share/icons/hicolor/512x515/apps/onetcli.png
           tar czf ${{ matrix.archive }} -C package .
 
+      - name: Install Linux packaging dependencies
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Package Linux installers (x86_64)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PACKAGE_VERSION="${ONETCLI_VERSION//-/.}"
+          DEB_NAME="onetcli_${PACKAGE_VERSION}_amd64.deb"
+          RPM_NAME="onetcli-${PACKAGE_VERSION}-1.x86_64.rpm"
+          APPIMAGE_NAME="onetcli_${PACKAGE_VERSION}_amd64.AppImage"
+
+          rm -rf package-deb rpmbuild OnetCli.AppDir linuxdeploy-x86_64.AppImage
+
+          mkdir -p package-deb/DEBIAN
+          cp -a package/. package-deb/
+          cat > package-deb/DEBIAN/control <<EOF
+          Package: onetcli
+          Version: ${PACKAGE_VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: feigeCode <noreply@github.com>
+          Homepage: https://github.com/feigeCode/onetcli
+          Description: One Net Client - Database, SSH, Terminal, AI Tools
+          EOF
+          dpkg-deb --root-owner-group --build package-deb "${DEB_NAME}"
+
+          RPM_ROOT="${PWD}/rpmbuild"
+          mkdir -p "${RPM_ROOT}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          tar czf "${RPM_ROOT}/SOURCES/onetcli-${PACKAGE_VERSION}.tar.gz" -C package .
+          cat > "${RPM_ROOT}/SPECS/onetcli.spec" <<EOF
+          Name: onetcli
+          Version: ${PACKAGE_VERSION}
+          Release: 1%{?dist}
+          Summary: One Net Client - Database, SSH, Terminal, AI Tools
+          License: Apache-2.0
+          URL: https://github.com/feigeCode/onetcli
+          BuildArch: x86_64
+          Source0: %{name}-%{version}.tar.gz
+
+          %description
+          One Net Client - Database, SSH, Terminal, AI Tools.
+
+          %prep
+          mkdir -p %{_builddir}/%{name}-%{version}
+          tar -xzf %{SOURCE0} -C %{_builddir}/%{name}-%{version}
+
+          %build
+
+          %install
+          mkdir -p %{buildroot}
+          cp -a %{_builddir}/%{name}-%{version}/* %{buildroot}/
+
+          %files
+          /usr/bin/onetcli
+          /usr/share/applications/onetcli.desktop
+          /usr/share/icons/hicolor/128x128/apps/onetcli.png
+          /usr/share/icons/hicolor/256x256/apps/onetcli.png
+          /usr/share/icons/hicolor/512x515/apps/onetcli.png
+          EOF
+          rpmbuild --define "_topdir ${RPM_ROOT}" -bb "${RPM_ROOT}/SPECS/onetcli.spec"
+          generated_rpm="$(find "${RPM_ROOT}/RPMS" -name "onetcli-${PACKAGE_VERSION}-1*.x86_64.rpm" -print -quit)"
+          test -n "${generated_rpm}"
+          cp "${generated_rpm}" "${RPM_NAME}"
+
+          mkdir -p OnetCli.AppDir
+          cp -a package/. OnetCli.AppDir/
+          curl -L -o linuxdeploy-x86_64.AppImage \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          VERSION="${PACKAGE_VERSION}" APPIMAGE_EXTRACT_AND_RUN=1 ./linuxdeploy-x86_64.AppImage \
+            --appdir OnetCli.AppDir \
+            --executable OnetCli.AppDir/usr/bin/onetcli \
+            --desktop-file resources/linux/onetcli.desktop \
+            --icon-file package/usr/share/icons/hicolor/512x515/apps/onetcli.png \
+            --output appimage
+          generated_appimage="$(find . -maxdepth 1 -name '*.AppImage' ! -name 'linuxdeploy-x86_64.AppImage' -print -quit)"
+          test -n "${generated_appimage}"
+          mv "${generated_appimage}" "${APPIMAGE_NAME}"
+
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -213,6 +299,16 @@ jobs:
         with:
           name: onetcli-${{ matrix.target }}.dmg
           path: "*.dmg"
+
+      - name: Upload Linux installer artifacts
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@v4
+        with:
+          name: onetcli-linux-x86_64-installers
+          path: |
+            onetcli_*.deb
+            onetcli-*.rpm
+            onetcli_*.AppImage
 
   release:
     name: Create Release
@@ -235,7 +331,13 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum onetcli-* > sha256sums.txt
+          shopt -s nullglob
+          release_files=(onetcli-* onetcli_*)
+          if [ "${#release_files[@]}" -eq 0 ]; then
+            echo "::error::No release artifacts found for checksum generation"
+            exit 1
+          fi
+          sha256sum "${release_files[@]}" > sha256sums.txt
           cat sha256sums.txt
 
       - name: Write release metadata
@@ -265,4 +367,7 @@ jobs:
             artifacts/onetcli-*.tar.gz
             artifacts/onetcli-*.zip
             artifacts/onetcli-*.dmg
+            artifacts/onetcli_*.deb
+            artifacts/onetcli-*.rpm
+            artifacts/onetcli_*.AppImage
             artifacts/sha256sums.txt
