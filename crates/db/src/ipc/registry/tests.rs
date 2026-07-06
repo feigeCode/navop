@@ -316,12 +316,13 @@ fn relative_entry_command_falls_back_to_exe_sibling() {
 #[test]
 fn parses_top_level_capabilities() {
     let manifest: IpcDriverManifest = serde_json::from_str(
-        r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"dialect":{"supports_schema":false},"capabilities":{"supports_schema":true,"supports_functions":true}}"#,
+        r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"dialect":{"supports_schema":false},"capabilities":{"supports_schema":true,"supports_views":false,"supports_functions":true}}"#,
     )
     .unwrap();
 
     let capabilities = manifest.effective_capabilities();
     assert!(capabilities.supports_schema);
+    assert!(!capabilities.supports_views);
     assert!(capabilities.supports_functions);
 }
 
@@ -335,8 +336,39 @@ fn falls_back_to_legacy_dialect_capabilities() {
     let capabilities = manifest.effective_capabilities();
     assert!(capabilities.supports_schema);
     assert!(capabilities.supports_sequences);
+    assert!(capabilities.supports_views);
     assert!(capabilities.supports_functions);
     assert!(capabilities.supports_procedures);
+}
+
+#[test]
+fn declared_methods_disable_views_when_schema_views_is_absent() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"methods":["schema/databases","schema/objects"]}"#,
+    )
+    .unwrap();
+
+    assert!(!manifest.effective_capabilities().supports_views);
+}
+
+#[test]
+fn declared_schema_views_method_enables_views() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"methods":["schema/databases","schema/views"]}"#,
+    )
+    .unwrap();
+
+    assert!(manifest.effective_capabilities().supports_views);
+}
+
+#[test]
+fn explicit_capability_can_disable_views_even_when_method_is_declared() {
+    let manifest: IpcDriverManifest = serde_json::from_str(
+        r#"{"id":"demo","name":"Demo","entry":{"command":"python3"},"transport":{"name":"demo.sock"},"methods":["schema/databases","schema/views"],"capabilities":{"supports_views":false}}"#,
+    )
+    .unwrap();
+
+    assert!(!manifest.effective_capabilities().supports_views);
 }
 
 #[test]

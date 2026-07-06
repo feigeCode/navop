@@ -999,18 +999,18 @@ impl DatabasePlugin for ExternalDatabasePlugin {
         database: &str,
         schema: Option<String>,
     ) -> Result<Vec<ViewInfo>> {
-        self.metadata(
-            connection,
-            wire_method::SCHEMA_VIEWS,
-            serde_json::json!({
-                "database": database,
-                "schema": schema,
-            }),
-        )
-        .await
-        .map(|views: Vec<wire_schema::ViewInfo>| {
-            views.into_iter().map(view_info_from_wire).collect()
-        })
+        let views: Vec<wire_schema::ViewInfo> = self
+            .optional_metadata(
+                connection,
+                wire_method::SCHEMA_VIEWS,
+                serde_json::json!({
+                    "database": database,
+                    "schema": schema,
+                }),
+            )
+            .await?
+            .unwrap_or_default();
+        Ok(views.into_iter().map(view_info_from_wire).collect())
     }
 
     async fn list_views_view(
@@ -2934,6 +2934,16 @@ mod tests {
         assert_eq!("lower", functions[0].name);
         assert_eq!(Some("VARCHAR".to_string()), functions[0].return_type);
         assert_eq!(vec!["value VARCHAR"], functions[0].parameters);
+    }
+
+    #[tokio::test]
+    async fn list_views_returns_empty_when_driver_does_not_support_method() {
+        let plugin = ExternalDatabasePlugin::new();
+        let connection = DriverRequestOnlyConnection::new();
+
+        let views = plugin.list_views(&connection, "main", None).await.unwrap();
+
+        assert!(views.is_empty());
     }
 
     #[tokio::test]

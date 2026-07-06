@@ -788,48 +788,49 @@ pub trait DatabasePlugin: Send + Sync {
         }
         nodes.push(table_folder);
 
-        let views = self
-            .list_views(connection, database, schema.clone())
-            .await?;
-        let view_count = views.len();
-        let mut views_folder = DbNode::new(
-            format!("{}:views_folder", id),
-            "DbTree.Views".to_string(),
-            DbNodeType::ViewsFolder,
-            node.connection_id.clone(),
-            node.database_type.clone(),
-        )
-        .with_parent_context(id)
-        .with_metadata(metadata.clone());
-        if view_count > 0 {
-            let children: Vec<DbNode> = views
-                .into_iter()
-                .map(|view| {
-                    let mut meta: HashMap<String, String> = metadata.clone();
-                    if let Some(comment) = view.comment {
-                        meta.insert("comment".to_string(), comment);
-                    }
-
-                    let mut vnode = DbNode::new(
-                        format!("{}:views_folder:{}", id, view.name),
-                        view.name.clone(),
-                        DbNodeType::View,
-                        node.connection_id.clone(),
-                        node.database_type.clone(),
-                    )
-                    .with_parent_context(format!("{}:views_folder", id));
-
-                    if !meta.is_empty() {
-                        vnode = vnode.with_metadata(meta);
-                    }
-                    vnode
-                })
-                .collect();
-            views_folder.set_children(children);
-        }
-        nodes.push(views_folder);
-
         let capabilities = self.capabilities();
+        if capabilities.supports_views {
+            let views = self
+                .list_views(connection, database, schema.clone())
+                .await?;
+            let view_count = views.len();
+            let mut views_folder = DbNode::new(
+                format!("{}:views_folder", id),
+                "DbTree.Views".to_string(),
+                DbNodeType::ViewsFolder,
+                node.connection_id.clone(),
+                node.database_type.clone(),
+            )
+            .with_parent_context(id)
+            .with_metadata(metadata.clone());
+            if view_count > 0 {
+                let children: Vec<DbNode> = views
+                    .into_iter()
+                    .map(|view| {
+                        let mut meta: HashMap<String, String> = metadata.clone();
+                        if let Some(comment) = view.comment {
+                            meta.insert("comment".to_string(), comment);
+                        }
+
+                        let mut vnode = DbNode::new(
+                            format!("{}:views_folder:{}", id, view.name),
+                            view.name.clone(),
+                            DbNodeType::View,
+                            node.connection_id.clone(),
+                            node.database_type.clone(),
+                        )
+                        .with_parent_context(format!("{}:views_folder", id));
+
+                        if !meta.is_empty() {
+                            vnode = vnode.with_metadata(meta);
+                        }
+                        vnode
+                    })
+                    .collect();
+                views_folder.set_children(children);
+            }
+            nodes.push(views_folder);
+        }
 
         // Functions folder
         if capabilities.supports_functions {
@@ -1069,6 +1070,9 @@ pub trait DatabasePlugin: Send + Sync {
                     .collect())
             }
             DbNodeType::ViewsFolder => {
+                if !self.capabilities().supports_views {
+                    return Ok(Vec::new());
+                }
                 let views = self.list_views(connection, database, schema).await?;
                 Ok(views
                     .into_iter()

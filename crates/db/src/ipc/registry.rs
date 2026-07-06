@@ -239,7 +239,16 @@ impl IpcDriverManifest {
         capabilities.supports_schema |= self.dialect.supports_schema;
         capabilities.supports_sequences |= self.dialect.supports_sequences;
         capabilities.uses_schema_as_database |= self.dialect.uses_schema_as_database;
-        self.capabilities.clone().unwrap_or(capabilities)
+        let mut capabilities = self.capabilities.clone().unwrap_or(capabilities);
+        if !self.methods.is_empty()
+            && !self
+                .methods
+                .iter()
+                .any(|driver_method| driver_method == method::SCHEMA_VIEWS)
+        {
+            capabilities.supports_views = false;
+        }
+        capabilities
     }
 
     pub fn icon_path(&self) -> Option<PathBuf> {

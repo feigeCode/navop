@@ -25,11 +25,12 @@ impl Default for DatabaseUiManifest {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DatabaseUiCapabilities {
     pub supports_schema: bool,
     pub uses_schema_as_database: bool,
+    pub supports_views: bool,
     pub supports_users: bool,
     pub supports_user_create: bool,
     pub supports_user_edit: bool,
@@ -49,6 +50,35 @@ pub struct DatabaseUiCapabilities {
     pub show_charset_in_column_detail: bool,
     pub show_collation_in_column_detail: bool,
     pub table_engines: Vec<String>,
+}
+
+impl Default for DatabaseUiCapabilities {
+    fn default() -> Self {
+        Self {
+            supports_schema: false,
+            uses_schema_as_database: false,
+            supports_views: true,
+            supports_users: false,
+            supports_user_create: false,
+            supports_user_edit: false,
+            supports_user_delete: false,
+            supports_user_privileges: false,
+            supports_sequences: false,
+            supports_functions: false,
+            supports_procedures: false,
+            supports_triggers: false,
+            supports_table_engine: false,
+            supports_table_charset: false,
+            supports_table_collation: false,
+            supports_auto_increment: false,
+            supports_tablespace: false,
+            supports_unsigned: false,
+            supports_enum_values: false,
+            show_charset_in_column_detail: false,
+            show_collation_in_column_detail: false,
+            table_engines: Vec::new(),
+        }
+    }
 }
 
 pub type DatabaseCapabilities = DatabaseUiCapabilities;
