@@ -6,7 +6,7 @@ use gpui_component::{
     ActiveTheme, Icon, IndexPath, Sizable, Size, WindowExt, h_flex,
     list::{ListDelegate, ListItem, ListState},
 };
-use one_core::storage::StoredConnection;
+use one_core::storage::{ConnectionType, StoredConnection};
 
 pub(crate) struct ConnectionQuickOpenDelegate {
     parent: Entity<HomePage>,
@@ -50,6 +50,19 @@ impl ConnectionQuickOpenDelegate {
     }
 }
 
+fn connection_icon(connection: &StoredConnection) -> Icon {
+    match connection.connection_type {
+        ConnectionType::Database => connection
+            .to_db_connection()
+            .map(|config| config.database_type.as_icon())
+            .unwrap_or_else(|_| Icon::new(ConnectionType::Database.icon()).color())
+            .with_size(Size::Small),
+        _ => Icon::new(connection.connection_type.icon())
+            .color()
+            .with_size(Size::Small),
+    }
+}
+
 impl ListDelegate for ConnectionQuickOpenDelegate {
     type Item = ListItem;
 
@@ -79,6 +92,7 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
         let parent = self.parent.clone();
         let name = connection.name.clone();
         let connection_type = connection.connection_type;
+        let icon = connection_icon(&connection);
         let connection_for_open = connection.clone();
 
         Some(
@@ -98,13 +112,7 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
                         .w_full()
                         .items_center()
                         .gap_3()
-                        .child(
-                            div().flex_shrink_0().flex().items_center().child(
-                                Icon::new(connection_type.icon())
-                                    .color()
-                                    .with_size(Size::Small),
-                            ),
-                        )
+                        .child(div().flex_shrink_0().flex().items_center().child(icon))
                         .child(
                             div()
                                 .flex_1()
