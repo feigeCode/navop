@@ -1445,7 +1445,6 @@ impl DataGrid {
 
             if request.editable {
                 d = d
-                    .footer(|ok, cancel, window, cx| vec![ok(window, cx), cancel(window, cx)])
                     .on_ok(move |_, window, cx| {
                         if !editor.read(cx).has_pending_writeback() {
                             return true;
@@ -1490,7 +1489,8 @@ impl DataGrid {
                                 false
                             }
                         };
-                    });
+                    })
+                    .footer(|ok, cancel, window, cx| vec![ok(window, cx), cancel(window, cx)]);
             } else {
                 d = d.footer(|_ok, cancel, window, cx| vec![cancel(window, cx)]);
             }
@@ -2200,7 +2200,6 @@ impl DataGrid {
                     DialogButtonProps::default()
                         .ok_text(t!("TableDataGrid.execute_sql").to_string()),
                 )
-                .footer(|ok, cancel, window, cx| vec![ok(window, cx), cancel(window, cx)])
                 .on_ok(move |_, window, cx| {
                     let sql_text = editor.read(cx).get_text(cx);
                     if sql_text.trim().is_empty() {
@@ -2217,6 +2216,7 @@ impl DataGrid {
                     );
                     false
                 })
+                .footer(|ok, cancel, window, cx| vec![ok(window, cx), cancel(window, cx)])
         });
     }
 
@@ -2925,6 +2925,27 @@ mod tests {
         let route = resolve_large_text_editor_route(LargeTextCellEditorOpenMode::Dialog);
 
         assert_eq!(route, LargeTextEditorRoute::Dialog);
+    }
+
+    #[test]
+    fn dialog_custom_footers_capture_latest_callbacks() {
+        let source = include_str!("data_grid.rs");
+        assert_dialog_footer_after_callback(source, "fn show_text_editor_dialog(");
+        assert_dialog_footer_after_callback(source, "fn show_sql_editor_dialog(");
+    }
+
+    fn assert_dialog_footer_after_callback(source: &str, marker: &str) {
+        let start = source.find(marker).expect("function exists");
+        let rest = &source[start..];
+        let end = rest.find("\n    fn ").unwrap_or(rest.len());
+        let body = &rest[..end];
+        let on_ok = body.find(".on_ok(").expect("function binds ok callback");
+        let footer = body.find(".footer(").expect("function uses custom footer");
+
+        assert!(
+            on_ok < footer,
+            "{marker} must bind dialog callbacks before building custom footer buttons"
+        );
     }
 
     #[test]

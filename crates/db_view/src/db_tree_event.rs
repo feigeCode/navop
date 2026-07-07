@@ -1368,7 +1368,6 @@ impl DatabaseEventHandler {
                 .child(editor_view.clone())
                 .width(px(700.0))
                 .button_props(DialogButtonProps::default().ok_text(t!("Common.create").to_string()))
-                .footer(|ok, cancel, window, cx| vec![cancel(window, cx), ok(window, cx)])
                 .on_ok(move |_, _window, cx| {
                     let sql = editor_view_ok.read(cx).get_sql(cx);
                     let database_name = editor_view_ok.read(cx).get_database_name(cx);
@@ -1455,6 +1454,7 @@ impl DatabaseEventHandler {
                     false
                 })
                 .on_cancel(|_, _window, _cx| true)
+                .footer(|ok, cancel, window, cx| vec![cancel(window, cx), ok(window, cx)])
         });
     }
 
@@ -1499,7 +1499,6 @@ impl DatabaseEventHandler {
                 .overlay(false)
                 .width(px(700.0))
                 .button_props(DialogButtonProps::default().ok_text(t!("Common.save").to_string()))
-                .footer(|ok, cancel, window, cx| vec![cancel(window, cx), ok(window, cx)])
                 .on_ok(move |_, _window, cx| {
                     let sql = editor_view_ok.read(cx).get_sql(cx);
                     if sql.trim().is_empty() {
@@ -1575,6 +1574,7 @@ impl DatabaseEventHandler {
                     false
                 })
                 .on_cancel(|_, _window, _cx| true)
+                .footer(|ok, cancel, window, cx| vec![cancel(window, cx), ok(window, cx)])
         });
     }
 
@@ -1778,7 +1778,6 @@ impl DatabaseEventHandler {
                 .child(editor_view.clone())
                 .width(px(600.0))
                 .button_props(DialogButtonProps::default().ok_text(t!("Common.create").to_string()))
-                .footer(|ok, cancel, window, cx| vec![cancel(window, cx), ok(window, cx)])
                 .on_ok(move |_, _window, cx| {
                     let sql = editor_view_ok.read(cx).get_sql(cx);
                     if sql.trim().is_empty() {
@@ -1862,6 +1861,7 @@ impl DatabaseEventHandler {
                     false
                 })
                 .on_cancel(|_, _window, _cx| true)
+                .footer(|ok, cancel, window, cx| vec![cancel(window, cx), ok(window, cx)])
         });
     }
 
@@ -3874,6 +3874,34 @@ mod tests {
         assert_eq!(
             "app - Query",
             DatabaseEventHandler::query_title_for_node(&node, Some("app"))
+        );
+    }
+
+    #[test]
+    fn database_dialog_custom_footers_capture_latest_callbacks() {
+        let source = include_str!("db_tree_event.rs");
+        assert_dialog_footer_after_callbacks(source, "fn handle_create_database(");
+        assert_dialog_footer_after_callbacks(source, "fn handle_edit_database(");
+        assert_dialog_footer_after_callbacks(source, "fn handle_create_schema(");
+    }
+
+    fn assert_dialog_footer_after_callbacks(source: &str, marker: &str) {
+        let start = source.find(marker).expect("handler exists");
+        let rest = &source[start..];
+        let end = rest
+            .find("\n    /// 处理")
+            .or_else(|| rest.find("\n    fn handle_"))
+            .unwrap_or(rest.len());
+        let body = &rest[..end];
+        let on_ok = body.find(".on_ok(").expect("handler binds ok callback");
+        let on_cancel = body
+            .find(".on_cancel(")
+            .expect("handler binds cancel callback");
+        let footer = body.find(".footer(").expect("handler uses custom footer");
+
+        assert!(
+            on_ok < footer && on_cancel < footer,
+            "{marker} must bind dialog callbacks before building custom footer buttons"
         );
     }
 }
