@@ -147,6 +147,10 @@ fn current_sql_statement(
 ) -> Option<String> {
     let cursor_offset = clamp_to_char_boundary(editor_text, cursor_offset);
     let (prefix, suffix) = editor_text.split_at(cursor_offset);
+    let statements = parse_sql_statements(editor_text, database_type.clone());
+    if statements.is_empty() {
+        return None;
+    }
     if cursor_starts_next_statement(prefix, suffix) {
         if let Some(statement) = parse_sql_statements(suffix, database_type.clone())
             .into_iter()
@@ -155,14 +159,12 @@ fn current_sql_statement(
             return Some(statement);
         }
     }
-    parse_sql_statements(prefix, database_type.clone())
-        .into_iter()
-        .last()
-        .or_else(|| {
-            parse_sql_statements(editor_text, database_type)
-                .into_iter()
-                .next()
-        })
+    let prefix_statement_count = parse_sql_statements(prefix, database_type).len();
+    let statement_index = prefix_statement_count.saturating_sub(1);
+
+    statements
+        .get(statement_index.min(statements.len() - 1))
+        .cloned()
 }
 
 fn parse_sql_statements(sql: &str, database_type: DatabaseType) -> Vec<String> {
@@ -1960,6 +1962,18 @@ mod tests {
         let actual = sql_text_for_run_current(sql, "   ", cursor_offset, DatabaseType::MySQL);
 
         assert_eq!("select * from orders", actual);
+    }
+
+    #[test]
+    fn run_query_text_uses_full_multiline_statement_when_cursor_is_inside() {
+        let sql = "select * from users;\nselect id,\n       name\nfrom orders\nwhere active = 1;\nselect * from products;";
+        let cursor_offset = sql.find("name").expect("statement exists") + "na".len();
+        let actual = sql_text_for_run_current(sql, "", cursor_offset, DatabaseType::MySQL);
+
+        assert_eq!(
+            "select id,\n       name\nfrom orders\nwhere active = 1",
+            actual
+        );
     }
 
     #[test]
