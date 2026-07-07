@@ -1600,26 +1600,25 @@ impl HomePage {
         });
 
         let list_for_focus = list.clone();
-        window.open_dialog(cx, move |dialog, _window, cx| {
+        window.open_dialog(cx, move |dialog, _window, _cx| {
             dialog
                 .title(t!("Home.open_connection").to_string())
-                .w(px(520.0))
-                .child(
-                    v_flex().gap_2().child(
-                        List::new(&list)
-                            .w_full()
-                            .max_h(px(360.0))
-                            .p(px(8.0))
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .rounded(cx.theme().radius),
-                    ),
-                )
-                .alert()
-                .button_props(
-                    gpui_component::dialog::DialogButtonProps::default()
-                        .ok_text(t!("Common.close")),
-                )
+                .w(px(640.0))
+                .margin_top(px(72.0))
+                .close_button(false)
+                .content({
+                    let list = list.clone();
+                    move |content, _window, _cx| {
+                        content.p_0().child(
+                            div().id("connection-quick-open-dialog").child(
+                                List::new(&list)
+                                    .search_placeholder(t!("Home.open_connection").to_string())
+                                    .with_size(Size::Large)
+                                    .max_h(px(420.0)),
+                            ),
+                        )
+                    }
+                })
         });
         // 将焦点设置到 List 搜索框，使上下键和 Enter 键可用
         list_for_focus.update(cx, |state, cx| {

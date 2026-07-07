@@ -1,7 +1,9 @@
 use crate::home_tab::HomePage;
-use gpui::{App, Context, Entity, ParentElement, SharedString, Styled, Task, Window, div, px};
+use gpui::{
+    App, Context, Entity, FontWeight, ParentElement, SharedString, Styled, Task, Window, div, px,
+};
 use gpui_component::{
-    ActiveTheme, IndexPath, WindowExt, h_flex,
+    ActiveTheme, Icon, IndexPath, Sizable, Size, WindowExt, h_flex,
     list::{ListDelegate, ListItem, ListState},
 };
 use one_core::storage::StoredConnection;
@@ -81,8 +83,9 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
 
         Some(
             ListItem::new(ix)
+                .mx_2()
+                .h(px(44.0))
                 .px_3()
-                .py_2()
                 .rounded(px(6.0))
                 .on_click(move |_, window, cx| {
                     parent.update(cx, |this, cx| {
@@ -94,12 +97,20 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
                     h_flex()
                         .w_full()
                         .items_center()
-                        .gap_2()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .child(Icon::new(connection_type.icon()).with_size(Size::Small)),
+                        )
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_ellipsis()
                                 .whitespace_nowrap()
                                 .child(SharedString::from(name)),
