@@ -725,6 +725,8 @@ pub struct TabContainer {
     on_toggle_always_on_top: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
     /// 当前窗口置顶状态读取器，由上层注入
     is_always_on_top: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    /// 窗口关闭回调，由上层注入；为 None 时使用默认关闭窗口行为
+    on_close_window: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
     /// Pinned tabs that stay fixed before the scrollable tab list.
     pinned_tabs: Vec<TabItem>,
     /// Active pinned tab index. When `None`, a regular tab is active.
@@ -768,6 +770,7 @@ impl TabContainer {
             show_window_controls: false,
             on_toggle_always_on_top: None,
             is_always_on_top: None,
+            on_close_window: None,
             pinned_tabs: Vec::new(),
             active_pinned_index: None,
             split_enabled: false,
@@ -827,6 +830,14 @@ impl TabContainer {
 
     pub fn with_window_controls(mut self, show: bool) -> Self {
         self.show_window_controls = show;
+        self
+    }
+
+    pub fn with_window_close_action(
+        mut self,
+        on_close_window: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>,
+    ) -> Self {
+        self.on_close_window = Some(on_close_window);
         self
     }
 
@@ -3463,6 +3474,7 @@ impl TabContainer {
                 is_linux,
                 is_windows,
                 false,
+                None,
             ))
             .child(self.render_control_button(
                 if is_maximized { "restore" } else { "maximize" },
@@ -3475,6 +3487,7 @@ impl TabContainer {
                 is_linux,
                 is_windows,
                 false,
+                None,
             ))
             .child(self.render_control_button(
                 "close",
@@ -3483,6 +3496,7 @@ impl TabContainer {
                 is_linux,
                 is_windows,
                 true,
+                self.on_close_window.clone(),
             ))
     }
 
@@ -3494,6 +3508,7 @@ impl TabContainer {
         is_linux: bool,
         is_windows: bool,
         is_close: bool,
+        on_close_window: Option<Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>>,
     ) -> impl IntoElement {
         div()
             .id(id)
@@ -3534,7 +3549,13 @@ impl TabContainer {
                     match control_area {
                         WindowControlArea::Min => window.minimize_window(),
                         WindowControlArea::Max => window.zoom_window(),
-                        WindowControlArea::Close => window.remove_window(),
+                        WindowControlArea::Close => {
+                            if let Some(on_close_window) = on_close_window.clone() {
+                                on_close_window(window, cx);
+                            } else {
+                                window.remove_window();
+                            }
+                        }
                         _ => {}
                     }
                 })
