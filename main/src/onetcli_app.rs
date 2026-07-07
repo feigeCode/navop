@@ -2,10 +2,10 @@ use crate::home_tab::{
     HomePage, NewConnectionShortcut, OpenConnectionQuickOpen, OpenLocalTerminalShortcut,
 };
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, KeyBinding, ParentElement, Render, Styled,
-    Window, actions, div,
+    App, AppContext, Context, Entity, IntoElement, KeyBinding, Keystroke, ParentElement, Render,
+    Styled, Window, actions, div,
 };
-use gpui_component::WindowExt;
+use gpui_component::{WindowExt, kbd::Kbd, notification::Notification};
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use raw_window_handle::HasWindowHandle;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -14,6 +14,8 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
+
+struct AlwaysOnTopNotification;
 
 actions!(
     onetcli_app,
@@ -195,17 +197,102 @@ fn toggle_always_on_top(cx: &mut App) {
         return;
     };
     cx.defer(move |cx| {
-        _ = active_window.update(cx, |_, window, _| {
-            let next = !ALWAYS_ON_TOP.load(Ordering::Relaxed);
-            if set_window_always_on_top(window, next).is_ok() {
-                ALWAYS_ON_TOP.store(next, Ordering::Relaxed);
-                #[cfg(target_os = "macos")]
-                if should_activate_after_always_on_top_change(next) {
-                    window.activate_window();
+        _ = active_window.update(cx, |_, window, cx| {
+            let next = next_always_on_top_state(window);
+            let shortcut = always_on_top_shortcut_label(cx);
+            match set_window_always_on_top(window, next) {
+                Ok(()) => {
+                    ALWAYS_ON_TOP.store(next, Ordering::Relaxed);
+                    #[cfg(target_os = "macos")]
+                    if should_activate_after_always_on_top_change(next) {
+                        window.activate_window();
+                    }
+                    show_always_on_top_notification(window, cx, next, &shortcut);
+                }
+                Err(err) => {
+                    tracing::warn!("窗口置顶切换失败: {err:?}");
+                    show_always_on_top_error_notification(window, cx, &shortcut, &err);
                 }
             }
         });
     });
+}
+
+fn always_on_top_shortcut_label(cx: &App) -> String {
+    let shortcut = shortcuts_for(
+        cx,
+        action_id::WINDOW_TOGGLE_ALWAYS_ON_TOP,
+        &[default_shortcut("ctrl-cmd-t", "ctrl-alt-t")],
+    )
+    .into_iter()
+    .next()
+    .unwrap_or_else(|| default_shortcut("ctrl-cmd-t", "ctrl-alt-t").to_string());
+    shortcut_label(&shortcut)
+}
+
+fn shortcut_label(shortcut: &str) -> String {
+    Keystroke::parse(shortcut)
+        .map(|keystroke| Kbd::format(&keystroke).to_string())
+        .unwrap_or_else(|_| shortcut.to_string())
+}
+
+fn always_on_top_notification_message(enabled: bool, shortcut: &str) -> String {
+    if enabled {
+        format!("窗口已置顶。再次按 {shortcut} 可取消置顶。")
+    } else {
+        format!("窗口已取消置顶。按 {shortcut} 可重新置顶。")
+    }
+}
+
+fn always_on_top_error_notification_message(shortcut: &str, error: &anyhow::Error) -> String {
+    format!("窗口置顶切换失败：{error:#}。可再次按 {shortcut} 重试。")
+}
+
+fn show_always_on_top_notification(
+    window: &mut Window,
+    cx: &mut App,
+    enabled: bool,
+    shortcut: &str,
+) {
+    let message = always_on_top_notification_message(enabled, shortcut);
+    let notification = if enabled {
+        Notification::success(message)
+    } else {
+        Notification::info(message)
+    };
+    window.push_notification(
+        notification.id::<AlwaysOnTopNotification>().autohide(true),
+        cx,
+    );
+}
+
+fn show_always_on_top_error_notification(
+    window: &mut Window,
+    cx: &mut App,
+    shortcut: &str,
+    error: &anyhow::Error,
+) {
+    window.push_notification(
+        Notification::error(always_on_top_error_notification_message(shortcut, error))
+            .id::<AlwaysOnTopNotification>()
+            .autohide(true),
+        cx,
+    );
+}
+
+fn next_always_on_top_state(_window: &Window) -> bool {
+    let cached = ALWAYS_ON_TOP.load(Ordering::Relaxed);
+
+    #[cfg(target_os = "macos")]
+    let observed = window_always_on_top(_window).ok();
+    #[cfg(not(target_os = "macos"))]
+    let observed = None;
+
+    next_always_on_top_from_state(cached, observed)
+}
+
+fn next_always_on_top_from_state(cached: bool, observed: Option<bool>) -> bool {
+    !observed.unwrap_or(cached)
 }
 
 #[cfg(target_os = "macos")]
@@ -231,14 +318,12 @@ fn set_window_always_on_top(window: &Window, _always_on_top: bool) -> anyhow::Re
 }
 
 #[cfg(target_os = "macos")]
-fn set_macos_always_on_top(
-    ns_view: *mut std::ffi::c_void,
-    always_on_top: bool,
-) -> anyhow::Result<()> {
-    if ns_view.is_null() {
-        return Err(anyhow::anyhow!("获取 NSView 失败"));
-    }
+const NS_NORMAL_WINDOW_LEVEL: isize = 0;
+#[cfg(target_os = "macos")]
+const NS_FLOATING_WINDOW_LEVEL: isize = 3;
 
+#[cfg(target_os = "macos")]
+fn with_macos_objc<R>(f: impl FnOnce(MacosObjcFns) -> R) -> R {
     type Id = *mut std::ffi::c_void;
     type Sel = *mut std::ffi::c_void;
 
@@ -247,28 +332,126 @@ fn set_macos_always_on_top(
         #[link_name = "sel_registerName"]
         fn sel_register_name(name: *const std::ffi::c_char) -> Sel;
         #[link_name = "objc_msgSend"]
-        fn objc_msg_send(receiver: Id, selector: Sel, ...) -> Id;
+        fn objc_msg_send();
     }
 
-    const NS_NORMAL_WINDOW_LEVEL: isize = 0;
-    const NS_FLOATING_WINDOW_LEVEL: isize = 3;
-    let level = if always_on_top {
+    unsafe {
+        let objc_msg_send = objc_msg_send as *const ();
+        // objc_msgSend must be called with the exact Objective-C method ABI.
+        f(MacosObjcFns {
+            sel_register_name,
+            objc_msg_send_id: std::mem::transmute::<*const (), unsafe extern "C" fn(Id, Sel) -> Id>(
+                objc_msg_send,
+            ),
+            objc_msg_send_isize: std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(Id, Sel) -> isize,
+            >(objc_msg_send),
+            objc_msg_send_void_isize: std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(Id, Sel, isize),
+            >(objc_msg_send),
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct MacosObjcFns {
+    sel_register_name: unsafe extern "C" fn(*const std::ffi::c_char) -> *mut std::ffi::c_void,
+    objc_msg_send_id:
+        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> *mut std::ffi::c_void,
+    objc_msg_send_isize:
+        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> isize,
+    objc_msg_send_void_isize:
+        unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, isize),
+}
+
+#[cfg(target_os = "macos")]
+fn macos_window_level(always_on_top: bool) -> isize {
+    if always_on_top {
         NS_FLOATING_WINDOW_LEVEL
     } else {
         NS_NORMAL_WINDOW_LEVEL
-    };
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_macos_always_on_top_level(level: isize) -> bool {
+    level != NS_NORMAL_WINDOW_LEVEL
+}
+
+#[cfg(target_os = "macos")]
+fn macos_ns_window_from_view(
+    ns_view: *mut std::ffi::c_void,
+) -> anyhow::Result<*mut std::ffi::c_void> {
+    if ns_view.is_null() {
+        return Err(anyhow::anyhow!("获取 NSView 失败"));
+    }
+
     let window_selector = std::ffi::CString::new("window")?;
-    let set_level_selector = std::ffi::CString::new("setLevel:")?;
-    unsafe {
-        let ns_window = objc_msg_send(ns_view.cast(), sel_register_name(window_selector.as_ptr()));
+    with_macos_objc(|objc| unsafe {
+        let ns_window = (objc.objc_msg_send_id)(
+            ns_view.cast(),
+            (objc.sel_register_name)(window_selector.as_ptr()),
+        );
         if ns_window.is_null() {
-            return Err(anyhow::anyhow!("获取 NSWindow 失败"));
+            Err(anyhow::anyhow!("获取 NSWindow 失败"))
+        } else {
+            Ok(ns_window)
         }
-        objc_msg_send(
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_ns_window_level(ns_window: *mut std::ffi::c_void) -> anyhow::Result<isize> {
+    let level_selector = std::ffi::CString::new("level")?;
+    Ok(with_macos_objc(|objc| unsafe {
+        (objc.objc_msg_send_isize)(ns_window, (objc.sel_register_name)(level_selector.as_ptr()))
+    }))
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_ns_window_level(ns_window: *mut std::ffi::c_void, level: isize) -> anyhow::Result<()> {
+    let set_level_selector = std::ffi::CString::new("setLevel:")?;
+    with_macos_objc(|objc| unsafe {
+        (objc.objc_msg_send_void_isize)(
             ns_window,
-            sel_register_name(set_level_selector.as_ptr()),
+            (objc.sel_register_name)(set_level_selector.as_ptr()),
             level,
         );
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn window_always_on_top(window: &Window) -> anyhow::Result<bool> {
+    let handle = HasWindowHandle::window_handle(window)
+        .map_err(|err| anyhow::anyhow!("获取窗口句柄失败: {err:?}"))?
+        .as_raw();
+    match handle {
+        RawWindowHandle::AppKit(handle) => {
+            let ns_window = macos_ns_window_from_view(handle.ns_view.as_ptr())?;
+            Ok(is_macos_always_on_top_level(macos_ns_window_level(
+                ns_window,
+            )?))
+        }
+        _ => Err(anyhow::anyhow!("当前平台暂不支持读取窗口置顶状态")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn set_macos_always_on_top(
+    ns_view: *mut std::ffi::c_void,
+    always_on_top: bool,
+) -> anyhow::Result<()> {
+    let ns_window = macos_ns_window_from_view(ns_view)?;
+    let level = macos_window_level(always_on_top);
+    set_macos_ns_window_level(ns_window, level)?;
+    let actual = macos_ns_window_level(ns_window)?;
+    if actual != level {
+        return Err(anyhow::anyhow!(
+            "设置 NSWindow level 失败: expected {level}, actual {actual}"
+        ));
     }
     Ok(())
 }
@@ -799,6 +982,51 @@ mod tests {
 
         assert_eq!(0, home_layout.active_pinned_index);
         assert_eq!(1, ai_layout.active_pinned_index);
+    }
+
+    #[test]
+    fn next_always_on_top_state_prefers_observed_window_state() {
+        assert!(super::next_always_on_top_from_state(false, None));
+        assert!(!super::next_always_on_top_from_state(true, None));
+        assert!(super::next_always_on_top_from_state(true, Some(false)));
+        assert!(!super::next_always_on_top_from_state(false, Some(true)));
+    }
+
+    #[test]
+    fn always_on_top_notification_message_includes_shortcut() {
+        assert_eq!(
+            "窗口已置顶。再次按 ⌃⌘T 可取消置顶。",
+            super::always_on_top_notification_message(true, "⌃⌘T")
+        );
+        assert_eq!(
+            "窗口已取消置顶。按 ⌃⌘T 可重新置顶。",
+            super::always_on_top_notification_message(false, "⌃⌘T")
+        );
+    }
+
+    #[test]
+    fn always_on_top_error_notification_message_includes_shortcut() {
+        let error = anyhow::anyhow!("NSWindow level 写入失败");
+
+        assert_eq!(
+            "窗口置顶切换失败：NSWindow level 写入失败。可再次按 ⌃⌘T 重试。",
+            super::always_on_top_error_notification_message("⌃⌘T", &error)
+        );
+    }
+
+    #[test]
+    fn shortcut_label_formats_configured_shortcut() {
+        assert_eq!("⌃⌘T", super::shortcut_label("ctrl-cmd-t"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_window_level_maps_toggle_state() {
+        assert_eq!(0, super::macos_window_level(false));
+        assert_eq!(3, super::macos_window_level(true));
+        assert!(!super::is_macos_always_on_top_level(0));
+        assert!(super::is_macos_always_on_top_level(3));
+        assert!(super::is_macos_always_on_top_level(-1));
     }
 
     #[cfg(target_os = "macos")]
