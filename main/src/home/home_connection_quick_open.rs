@@ -99,11 +99,11 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
                         .items_center()
                         .gap_3()
                         .child(
-                            div()
-                                .flex_shrink_0()
-                                .flex()
-                                .items_center()
-                                .child(Icon::new(connection_type.icon()).with_size(Size::Small)),
+                            div().flex_shrink_0().flex().items_center().child(
+                                Icon::new(connection_type.icon())
+                                    .color()
+                                    .with_size(Size::Small),
+                            ),
                         )
                         .child(
                             div()
