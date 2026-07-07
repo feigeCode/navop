@@ -12,6 +12,7 @@ mod quick_command_panel;
 mod rich_input_panel;
 mod server_monitor_panel;
 mod settings_panel;
+pub(crate) mod tool_dock;
 
 pub use file_manager_panel::{FileManagerPanel, FileManagerPanelEvent};
 pub use history_command_panel::{HistoryCommandPanel, HistoryCommandPanelEvent};
@@ -796,6 +797,10 @@ impl TerminalSidebar {
         self.tool_dock.panel_placement(panel)
     }
 
+    pub(crate) fn colors(&self) -> TerminalColors {
+        self.colors.clone()
+    }
+
     pub fn panel_view(&self, panel: SidebarPanel) -> Option<AnyView> {
         match panel {
             SidebarPanel::Settings => Some(self.settings_panel.clone().into()),
@@ -1546,6 +1551,20 @@ mod tests {
         assert_eq!(
             dock.open_panels(),
             vec![(SidebarPanel::Settings, SidebarPlacement::Right)],
+        );
+        assert!(dock.toolbar_visible());
+    }
+
+    #[test]
+    fn tool_dock_moving_open_panel_keeps_it_open() {
+        let mut dock = TerminalToolDockState::new([SidebarPanel::Settings, SidebarPanel::AiChat]);
+
+        dock.open_tool(SidebarPanel::AiChat);
+        assert!(dock.move_tool(SidebarPanel::AiChat, SidebarPlacement::Bottom));
+
+        assert_eq!(
+            dock.open_panels(),
+            vec![(SidebarPanel::AiChat, SidebarPlacement::Bottom)],
         );
         assert!(dock.toolbar_visible());
     }

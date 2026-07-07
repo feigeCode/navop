@@ -993,6 +993,7 @@ impl AgentInput {
 
         h_flex()
             .w_full()
+            .min_w_0()
             .items_center()
             .text_color(theme.foreground)
             .gap_2()
@@ -2311,6 +2312,7 @@ impl Render for AgentInput {
             .debug_selector(|| "agent-input-root".to_string())
             .track_focus(&self.focus_handle)
             .w_full()
+            .min_w_0()
             .flex_shrink_0()
             .bg(theme.background)
             .text_color(theme.foreground)
@@ -2333,25 +2335,32 @@ impl Render for AgentInput {
             .child(editor_top_bar)
             // 中部：多行输入框
             .child(
-                div().w_full().px_3().pt_1().max_h(px(220.0)).child(
-                    div()
-                        .w_full()
-                        .border_1()
-                        .rounded(cx.theme().radius)
-                        .border_color(if input_focused {
-                            theme.accent
-                        } else {
-                            theme.border
-                        })
-                        .bg(theme.background)
-                        .child(
-                            Input::new(&self.input_state)
-                                .size_full()
-                                .appearance(false)
-                                .text_color(theme.foreground)
-                                .caret_color(theme.foreground),
-                        ),
-                ),
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .px_3()
+                    .pt_1()
+                    .max_h(px(220.0))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .border_1()
+                            .rounded(cx.theme().radius)
+                            .border_color(if input_focused {
+                                theme.accent
+                            } else {
+                                theme.border
+                            })
+                            .bg(theme.background)
+                            .child(
+                                Input::new(&self.input_state)
+                                    .size_full()
+                                    .appearance(false)
+                                    .text_color(theme.foreground)
+                                    .caret_color(theme.foreground),
+                            ),
+                    ),
             )
             // 底部：执行参数、模型和发送按钮
             .child(toolbar)

@@ -263,6 +263,7 @@ impl ChatCard for ToolCard {
         let hover_bg = theme.panel_hover;
 
         let mut card = v_flex()
+            .debug_selector(|| "agent-tool-card".to_string())
             .w_full()
             .min_w_0()
             .gap_2()

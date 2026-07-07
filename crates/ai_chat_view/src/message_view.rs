@@ -13,8 +13,8 @@ use crate::{
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px,
+    AnyElement, App, Div, InteractiveElement, IntoElement, ParentElement, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, h_flex, scroll::Scrollbar, v_flex,
@@ -37,6 +37,51 @@ pub fn render_messages_with_code_actions(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    render_messages_with_layout(
+        messages,
+        scroll_handle,
+        code_actions,
+        theme,
+        MessageListLayout::Centered,
+        window,
+        cx,
+    )
+}
+
+pub fn render_sidebar_messages_with_code_actions(
+    messages: &[ChatMessageUI],
+    scroll_handle: &ScrollHandle,
+    code_actions: Option<&CodeBlockActionRegistry>,
+    theme: Option<&AgentChatTheme>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    render_messages_with_layout(
+        messages,
+        scroll_handle,
+        code_actions,
+        theme,
+        MessageListLayout::EdgeToEdge,
+        window,
+        cx,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum MessageListLayout {
+    Centered,
+    EdgeToEdge,
+}
+
+fn render_messages_with_layout(
+    messages: &[ChatMessageUI],
+    scroll_handle: &ScrollHandle,
+    code_actions: Option<&CodeBlockActionRegistry>,
+    theme: Option<&AgentChatTheme>,
+    layout: MessageListLayout,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     let theme = resolve_agent_chat_theme(theme, cx);
     let items: Vec<AnyElement> = message_render_items(messages)
         .into_iter()
@@ -45,25 +90,23 @@ pub fn render_messages_with_code_actions(
 
     div()
         .id("ai-chat-messages")
+        .debug_selector(|| "ai-chat-messages".to_string())
         .flex_1()
         .min_h_0()
+        .min_w_0()
         .w_full()
         .relative()
+        .overflow_hidden()
         .child(
             div()
                 .id("ai-chat-messages-scroll")
+                .debug_selector(|| "ai-chat-messages-scroll".to_string())
                 .size_full()
+                .min_w_0()
                 .overflow_y_scroll()
                 .track_scroll(scroll_handle)
                 .p_4()
-                .child(
-                    v_flex()
-                        .w_full()
-                        .max_w(px(920.0))
-                        .mx_auto()
-                        .gap_3()
-                        .children(items),
-                ),
+                .child(message_column(layout).gap_3().children(items)),
         )
         .child(
             div()
@@ -75,6 +118,17 @@ pub fn render_messages_with_code_actions(
                 .child(Scrollbar::vertical(scroll_handle)),
         )
         .into_any_element()
+}
+
+fn message_column(layout: MessageListLayout) -> Div {
+    let column = v_flex()
+        .debug_selector(|| "ai-chat-message-column".to_string())
+        .w_full()
+        .min_w_0();
+    match layout {
+        MessageListLayout::Centered => column.max_w(px(920.0)).mx_auto(),
+        MessageListLayout::EdgeToEdge => column,
+    }
 }
 
 fn render_item(
@@ -133,7 +187,9 @@ fn render_user_message_themed<E: MessageExtension>(
     theme: &AgentChatTheme,
 ) -> AnyElement {
     h_flex()
+        .debug_selector(|| "ai-chat-user-row".to_string())
         .w_full()
+        .min_w_0()
         .justify_end()
         .child(
             div()
