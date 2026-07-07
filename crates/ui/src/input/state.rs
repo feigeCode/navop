@@ -1996,6 +1996,7 @@ impl InputState {
     pub(crate) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.clear_inline_completion(cx);
 
+        let previous_cursor = self.cursor();
         let offset = offset.clamp(0, self.text.len());
         if self.selection_reversed {
             self.selected_range.start = offset
@@ -2020,6 +2021,15 @@ impl InputState {
         if self.selected_range.is_empty() {
             self.update_preferred_column();
         }
+        let cursor = self.cursor();
+        let direction = if cursor < previous_cursor {
+            Some(MoveDirection::Up)
+        } else if cursor > previous_cursor {
+            Some(MoveDirection::Down)
+        } else {
+            None
+        };
+        self.scroll_to(cursor, direction, cx);
         cx.notify()
     }
 
@@ -2816,35 +2826,23 @@ mod tests {
     use crate::theme::Theme;
     use gpui::{TestAppContext, VisualTestContext};
 
-    struct InputView {
-        input: Entity<InputState>,
-        window_handle: gpui::WindowHandle<Root>,
+    /// Helper to create an InputState in a window for testing
+    fn new_code_editor(cx: &mut TestAppContext) -> (Entity<InputState>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            // Set up the theme first
+            cx.set_global(Theme::default());
+            // Initialize input keybindings
+            super::super::init(cx);
+        });
+        cx.add_window_view(|window, cx| InputState::new(window, cx).code_editor("sql"))
     }
 
-    /// Helper to create an InputState in a window for testing
-    impl InputView {
-        pub fn new(cx: &mut TestAppContext) -> Self {
-            let mut input: Option<Entity<InputState>> = None;
-
-            let window = cx.update(|cx| {
-                cx.open_window(Default::default(), |window, cx| {
-                    // Set up the theme first
-                    cx.set_global(Theme::default());
-                    // Initialize input keybindings
-                    super::super::init(cx);
-
-                    input = Some(cx.new(|cx| InputState::new(window, cx).code_editor("sql")));
-
-                    cx.new(|cx| crate::Root::new(input.clone().unwrap(), window, cx))
-                })
-                .unwrap()
-            });
-
-            Self {
-                input: input.clone().unwrap(),
-                window_handle: window,
-            }
-        }
+    fn draw_input(cx: &mut VisualTestContext, input: &Entity<InputState>) {
+        cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(800.), px(240.)),
+            |_, _| input.clone().into_any_element(),
+        );
     }
 
     #[gpui::test]
@@ -2852,9 +2850,8 @@ mod tests {
         use crate::highlighter::HighlightTheme;
         use crate::input::display_map::FoldRange;
 
-        let input_view = InputView::new(cx);
-        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
-        let input = input_view.input;
+        let (input, cx) = new_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
 
         // SQL text: fold the SELECT..WHERE block, verify comments keep highlighting.
         // Lines 0-9: SELECT block (fold range 0..9 hides lines 1-8)
@@ -2880,7 +2877,7 @@ ORDER BY id
                 state.set_value(text, window, cx);
             });
         });
-        cx.run_until_parked();
+        draw_input(cx, &input);
 
         // Grab styles for "-- Comment 1" (line 11) before folding
         let theme = HighlightTheme::default_dark();
@@ -2911,7 +2908,7 @@ ORDER BY id
                 state.display_map.set_folded(0, true);
             });
         });
-        cx.run_until_parked();
+        draw_input(cx, &input);
 
         // Verify fold is active and lines 1-8 are hidden
         cx.update(|_, cx| {
@@ -2962,6 +2959,56 @@ ORDER BY id
             "Comment highlighting must be identical before and after folding.\n\
              Before: {:?}\nAfter: {:?}",
             colored_before, colored_after
+        );
+    }
+
+    #[gpui::test]
+    fn select_to_scrolls_reversed_selection_anchor_into_view(cx: &mut TestAppContext) {
+        let (input, cx) = new_code_editor(cx);
+        let cx: &mut VisualTestContext = cx;
+        let text = (0..120)
+            .map(|line| format!("select {line};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.set_value(text, window, cx));
+        });
+        draw_input(cx, &input);
+
+        let bottom_offset =
+            cx.update(|_, cx| input.read_with(cx, |state, _| state.text.line_start_offset(100)));
+        cx.update(|_, cx| {
+            input.update(cx, |state, cx| {
+                state.move_to(bottom_offset, Some(MoveDirection::Down), cx);
+            });
+        });
+        draw_input(cx, &input);
+
+        let before_scroll =
+            cx.update(|_, cx| input.read_with(cx, |state, _| state.scroll_offset()));
+        let target_offset =
+            cx.update(|_, cx| input.read_with(cx, |state, _| state.text.line_start_offset(40)));
+        cx.update(|_, cx| {
+            input.update(cx, |state, cx| {
+                state.select_to(target_offset, cx);
+            });
+        });
+        draw_input(cx, &input);
+
+        let after_select = cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                (
+                    state.cursor(),
+                    state.selection_reversed,
+                    state.selected_range,
+                    state.scroll_offset(),
+                )
+            })
+        });
+        assert!(
+            after_select.3.y > before_scroll.y,
+            "expected upward selection to move viewport up, bottom={bottom_offset}, target={target_offset}, before={before_scroll:?}, state={after_select:?}"
         );
     }
 }
