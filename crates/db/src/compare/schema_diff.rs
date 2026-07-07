@@ -215,12 +215,6 @@ fn compare_columns_with_options(
     diffs
 }
 
-/// 比较索引
-#[cfg(test)]
-fn compare_indexes(source: &[IndexSchema], target: &[IndexSchema]) -> Vec<IndexDiff> {
-    compare_indexes_with_options(source, target, &SchemaCompareOptions::default())
-}
-
 fn compare_indexes_with_options(
     source: &[IndexSchema],
     target: &[IndexSchema],
@@ -274,15 +268,6 @@ fn compare_indexes_with_options(
     }
 
     diffs
-}
-
-/// 比较外键
-#[cfg(test)]
-fn compare_foreign_keys(
-    source: &[ForeignKeySchema],
-    target: &[ForeignKeySchema],
-) -> Vec<ForeignKeyDiff> {
-    compare_foreign_keys_with_options(source, target, &SchemaCompareOptions::default())
 }
 
 fn compare_foreign_keys_with_options(
