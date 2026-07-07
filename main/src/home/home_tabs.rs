@@ -114,6 +114,25 @@ mod tests {
         );
         assert_eq!("backend", workspace_for_tab.unwrap().name);
     }
+
+    #[test]
+    fn terminal_tabs_do_not_request_external_sidebar_mode() {
+        let source = include_str!("home_tabs.rs");
+        let external_sidebar_call = concat!(".with_", "external_sidebar");
+        let lines = source.lines().collect::<Vec<_>>();
+
+        for (index, line) in lines.iter().enumerate() {
+            if !line.contains("TerminalView::new") {
+                continue;
+            }
+            let end = (index + 8).min(lines.len());
+            let nearby_source = lines[index..end].join("\n");
+            assert!(
+                !nearby_source.contains(external_sidebar_call),
+                "terminal tab construction should not opt into TabContainer sidebar mode:\n{nearby_source}"
+            );
+        }
+    }
 }
 
 impl HomePage {
@@ -159,7 +178,6 @@ impl HomePage {
 
         let terminal_view = cx.new(|cx| {
             TerminalView::new_ssh_with_index(conn, tab_index, window, cx, None, sync_path)
-                .with_external_sidebar()
         });
         tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, "ssh", terminal_view);
@@ -194,9 +212,8 @@ impl HomePage {
             None
         };
 
-        let terminal_view = cx.new(|cx| {
-            TerminalView::new_serial_with_index(conn, tab_index, window, cx).with_external_sidebar()
-        });
+        let terminal_view =
+            cx.new(|cx| TerminalView::new_serial_with_index(conn, tab_index, window, cx));
         tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, "serial", terminal_view);
             tc.add_and_activate_tab_with_focus(tab, window, cx);
@@ -267,10 +284,8 @@ impl HomePage {
                         } else {
                             None
                         };
-                        let terminal_view = cx.new(|cx| {
-                            TerminalView::new_with_index(config, idx, window, cx)
-                                .with_external_sidebar()
-                        });
+                        let terminal_view =
+                            cx.new(|cx| TerminalView::new_with_index(config, idx, window, cx));
                         event_tab_container.update(cx, |tc, cx| {
                             let tab = TabItem::new(tab_id, "terminal", terminal_view);
                             tc.add_and_activate_tab_with_focus(tab, window, cx);
@@ -311,7 +326,6 @@ impl HomePage {
                                 Some(working_dir),
                                 sync_path,
                             )
-                            .with_external_sidebar()
                         });
                         event_tab_container.update(cx, |tc, cx| {
                             let tab = TabItem::new(tab_id, "ssh", terminal_view);
@@ -570,7 +584,6 @@ impl HomePage {
             home.update(cx, |_this, cx| {
                 let terminal_view = cx.new(|cx| {
                     TerminalView::new_with_index(LocalConfig::default(), tab_index, window, cx)
-                        .with_external_sidebar()
                 });
                 tab_container.update(cx, |tc, cx| {
                     let tab = TabItem::new(tab_id, "home", terminal_view);

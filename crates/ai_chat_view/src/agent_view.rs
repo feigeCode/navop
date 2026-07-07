@@ -49,7 +49,9 @@ use crate::input::{
     ComposerResourceSourceOption, ComposerResourceTypeFilter, ComposerScope, ComposerSkillItem,
     ComposerSkillSummary, ComposerSubAgentItem, ComposerTarget, MentionItem,
 };
-use crate::message_view::render_messages_with_code_actions;
+use crate::message_view::{
+    render_messages_with_code_actions, render_sidebar_messages_with_code_actions,
+};
 use crate::persistence;
 use crate::resource_display::first_visible_alias;
 use crate::session_sidebar::{self, SessionRowStyle, SessionSummary};
@@ -1967,24 +1969,38 @@ impl Render for AgentChatView {
             self.scroll_handle.scroll_to_bottom();
         }
         let chat_theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
-        let messages = render_messages_with_code_actions(
-            &self.transcript.messages,
-            &self.scroll_handle,
-            Some(&self.code_block_actions),
-            Some(&chat_theme),
-            window,
-            cx,
-        );
+        let messages = if self.sidebar_mode {
+            render_sidebar_messages_with_code_actions(
+                &self.transcript.messages,
+                &self.scroll_handle,
+                Some(&self.code_block_actions),
+                Some(&chat_theme),
+                window,
+                cx,
+            )
+        } else {
+            render_messages_with_code_actions(
+                &self.transcript.messages,
+                &self.scroll_handle,
+                Some(&self.code_block_actions),
+                Some(&chat_theme),
+                window,
+                cx,
+            )
+        };
         let input_area = div()
             .debug_selector(|| "agent-input-area".to_string())
             .w_full()
+            .min_w_0()
             .flex_shrink_0()
+            .overflow_hidden()
             .border_t_1()
             .border_color(chat_theme.border)
             .bg(chat_theme.background)
             .child(
                 v_flex()
                     .w_full()
+                    .min_w_0()
                     .when(!self.sidebar_mode, |this| this.p_3())
                     .child(self.input.clone()),
             );
@@ -1993,14 +2009,21 @@ impl Render for AgentChatView {
             // 侧边栏视图:紧凑头部(新建对话 / 历史记录) + 消息 + 输入。
             let header = self.render_sidebar_mode_header(cx);
             div()
+                .debug_selector(|| "agent-sidebar-root".to_string())
                 .size_full()
+                .min_w_0()
+                .overflow_hidden()
                 .text_color(chat_theme.foreground)
                 .bg(chat_theme.background)
                 .on_action(cx.listener(Self::approve_tool_call))
                 .on_action(cx.listener(Self::reject_tool_call))
                 .child(
                     v_flex()
+                        .debug_selector(|| "agent-sidebar-stack".to_string())
                         .size_full()
+                        .min_w_0()
+                        .min_h_0()
+                        .overflow_hidden()
                         .child(header)
                         .child(messages)
                         .child(input_area),
@@ -2897,6 +2920,7 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_cards::{TOOL_CARD, ToolCardData};
     use agent_runtime::RuntimeServices;
     use agent_runtime::model::MockModelClient;
     use agent_runtime::model::function_tool_call;
@@ -2909,14 +2933,54 @@ mod tests {
     };
     use async_trait::async_trait;
     use gpui::{
-        Modifiers, ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext,
-        point,
+        Entity, IntoElement, Modifiers, ParentElement, Render, ScrollDelta, ScrollWheelEvent,
+        Styled, TestAppContext, TouchPhase, VisualTestContext, Window, div, point, px,
     };
     use one_core::llm::{ProviderConfig, ProviderType};
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct WriteTool;
+
+    struct FixedSidebarHost {
+        view: Entity<AgentChatView>,
+    }
+
+    impl FixedSidebarHost {
+        fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            let config =
+                AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+                    .sidebar_mode(true);
+            let view = cx.new(|cx| AgentChatView::new(config, window, cx));
+            Self { view }
+        }
+    }
+
+    impl Render for FixedSidebarHost {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            v_flex()
+                .debug_selector(|| "fixed-sidebar-host".to_string())
+                .w(px(420.0))
+                .h(px(640.0))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .debug_selector(|| "fixed-sidebar-header".to_string())
+                        .h(px(34.0))
+                        .w_full()
+                        .flex_shrink_0(),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "fixed-sidebar-content-slot".to_string())
+                        .flex_1()
+                        .min_h_0()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .child(self.view.clone()),
+                )
+        }
+    }
 
     #[async_trait]
     impl Tool for WriteTool {
@@ -4115,6 +4179,130 @@ mod tests {
         assert_eq!(
             area.origin.x, input.origin.x,
             "sidebar input should not be inset: area={area:?}, input={input:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn sidebar_mode_user_message_row_fills_message_column(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .sidebar_mode(true);
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            view.transcript
+                .messages
+                .push(crate::ChatMessageUI::user("帮我看看内存占用"));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let column = cx
+            .debug_bounds("ai-chat-message-column")
+            .expect("message column should render");
+        let scroll = cx
+            .debug_bounds("ai-chat-messages-scroll")
+            .expect("message scroll area should render");
+        let user_row = cx
+            .debug_bounds("ai-chat-user-row")
+            .expect("user row should render");
+
+        let expected_column_width = scroll.size.width - px(32.0);
+        assert_eq!(
+            expected_column_width, column.size.width,
+            "sidebar message column should fill the padded scroll area: scroll={scroll:?}, column={column:?}"
+        );
+        assert_eq!(
+            column.size.width, user_row.size.width,
+            "user message row should fill the message column: column={column:?}, row={user_row:?}"
+        );
+        assert_eq!(
+            column.origin.x, user_row.origin.x,
+            "user message row should not drift horizontally: column={column:?}, row={user_row:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn sidebar_mode_fills_fixed_host_frame(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let (host, cx) = cx.add_window_view(FixedSidebarHost::new);
+        let chat = host.read_with(cx, |host, _| host.view.clone());
+        chat.update(cx, |view, cx| {
+            view.transcript
+                .messages
+                .push(crate::ChatMessageUI::user("帮我检查终端侧边栏布局"));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let slot = cx
+            .debug_bounds("fixed-sidebar-content-slot")
+            .expect("fixed sidebar content slot should render");
+        let root = cx
+            .debug_bounds("agent-sidebar-root")
+            .expect("sidebar root should render");
+        let stack = cx
+            .debug_bounds("agent-sidebar-stack")
+            .expect("sidebar stack should render");
+        let messages = cx
+            .debug_bounds("ai-chat-messages")
+            .expect("messages area should render");
+        let input_area = cx
+            .debug_bounds("agent-input-area")
+            .expect("input area should render");
+        let input = cx
+            .debug_bounds("agent-input-root")
+            .expect("input root should render");
+
+        assert_eq!(slot.origin.x, root.origin.x);
+        assert_eq!(slot.size.width, root.size.width);
+        assert_eq!(root.origin.x, stack.origin.x);
+        assert_eq!(root.size.width, stack.size.width);
+        assert_eq!(root.origin.x, messages.origin.x);
+        assert_eq!(root.size.width, messages.size.width);
+        assert_eq!(root.origin.x, input_area.origin.x);
+        assert_eq!(root.size.width, input_area.size.width);
+        assert_eq!(input_area.origin.x, input.origin.x);
+        assert_eq!(input_area.size.width, input.size.width);
+    }
+
+    #[gpui::test]
+    fn sidebar_mode_tool_card_fills_message_column(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let (host, cx) = cx.add_window_view(FixedSidebarHost::new);
+        let chat = host.read_with(cx, |host, _| host.view.clone());
+        chat.update(cx, |view, cx| {
+            view.transcript.messages.push(crate::ChatMessageUI::card(
+                TOOL_CARD,
+                ToolCardData {
+                    call_id: "call-layout".to_string(),
+                    tool_name: "terminal.exec".to_string(),
+                    target_id: Some("ssh-prod-with-a-very-long-target-id".to_string()),
+                    target_label: Some("生产终端节点-很长的展示名称".to_string()),
+                    input_summary: "ps aux | sort -nrk 3,3 | head -20".to_string(),
+                    input_json: r#"{"command":"ps aux | sort -nrk 3,3 | head -20"}"#.to_string(),
+                    running: true,
+                    success: None,
+                    summary: String::new(),
+                    data_text: String::new(),
+                }
+                .to_json(),
+            ));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let column = cx
+            .debug_bounds("ai-chat-message-column")
+            .expect("message column should render");
+        let card = cx
+            .debug_bounds("agent-tool-card")
+            .expect("tool card should render");
+
+        assert_eq!(column.origin.x, card.origin.x);
+        assert_eq!(
+            column.size.width, card.size.width,
+            "tool card should fill sidebar message column: column={column:?}, card={card:?}"
         );
     }
 

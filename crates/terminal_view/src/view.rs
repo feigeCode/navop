@@ -45,6 +45,9 @@ use crate::settings::{
     GlobalTerminalLocalSettings, TerminalHighlightRule, TerminalSettings, TerminalSettingsEvent,
     current_settings, update_settings,
 };
+use crate::sidebar::tool_dock::{
+    TerminalToolDockLayout, render_internal_tool_panel_frame, right_tool_region_width,
+};
 use crate::sidebar::{
     SidebarPanel, TerminalSidebar, TerminalSidebarEvent, TerminalSidebarToolPanel,
     TerminalSidebarToolbar,
@@ -77,10 +80,7 @@ use mouse_input::{
 use one_core::layout::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
 };
-use one_core::sidebar_contribution::{
-    SidebarContribution, SidebarContributionActions, SidebarPanelChrome, SidebarPanelId,
-    SidebarPanelPolicy, SidebarPanelSize, SidebarPanelStyle, SidebarPlacement, SidebarPlacementSet,
-};
+use one_core::sidebar_contribution::SidebarContribution;
 use one_core::storage::models::{ActiveConnections, StoredConnection};
 use one_core::tab_container::{TabContent, TabContentEvent, TabContentView};
 use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
@@ -121,12 +121,6 @@ actions!(
 );
 
 const TERMINAL_CONTEXT: &str = "TerminalView";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerminalSidebarRenderMode {
-    Embedded,
-    External,
-}
 
 #[cfg(target_os = "macos")]
 const TERMINAL_COPY_SHORTCUT: &str = "cmd-c";
@@ -202,7 +196,9 @@ fn shell_escape(s: &str) -> String {
 /// 正在调整大小的面板
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResizingPanel {
-    Sidebar,
+    LeftSidebar,
+    RightSidebar,
+    BottomSidebar,
 }
 
 pub fn init(cx: &mut App) {
@@ -661,7 +657,6 @@ pub struct TerminalView {
 
     /// 侧边栏面板大小
     sidebar_panel_size: Pixels,
-    sidebar_render_mode: TerminalSidebarRenderMode,
     /// 正在调整大小的面板
     resizing: Option<ResizingPanel>,
     /// 视图边界
@@ -1132,7 +1127,6 @@ impl TerminalView {
             broadcast_input_enabled: false,
             broadcast_client_id: None,
             sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
-            sidebar_render_mode: TerminalSidebarRenderMode::Embedded,
             resizing: None,
             view_bounds: Bounds::default(),
             scrollbar_metrics,
@@ -1144,11 +1138,6 @@ impl TerminalView {
         this.register_broadcast_input(cx);
         this.register_public_mcp_session(cx);
         this
-    }
-
-    pub fn with_external_sidebar(mut self) -> Self {
-        self.sidebar_render_mode = TerminalSidebarRenderMode::External;
-        self
     }
 
     fn register_public_mcp_session(&mut self, cx: &mut Context<Self>) {
@@ -4422,24 +4411,57 @@ impl TerminalView {
 
     fn render_sidebar_resize_handle(
         &mut self,
-        _window: &mut Window,
+        target: ResizingPanel,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let view = cx.entity().clone();
+        let (id, axis, placement) = match target {
+            ResizingPanel::LeftSidebar => (
+                "terminal-left-sidebar-resize-handle",
+                Axis::Horizontal,
+                Some(HandlePlacement::Left),
+            ),
+            ResizingPanel::RightSidebar => (
+                "terminal-right-sidebar-resize-handle",
+                Axis::Horizontal,
+                Some(HandlePlacement::Right),
+            ),
+            ResizingPanel::BottomSidebar => (
+                "terminal-bottom-sidebar-resize-handle",
+                Axis::Vertical,
+                None,
+            ),
+        };
 
-        resize_handle::<ResizePanel, ResizePanel>(
-            "terminal-sidebar-resize-handle",
-            Axis::Horizontal,
-        )
-        .placement(HandlePlacement::Right)
-        .on_drag(ResizePanel, move |info, _, _, cx| {
+        let handle = resize_handle::<ResizePanel, ResizePanel>(id, axis);
+        let handle = match placement {
+            Some(placement) => handle.placement(placement),
+            None => handle,
+        };
+        handle.on_drag(ResizePanel, move |info, _, _, cx| {
             cx.stop_propagation();
             view.update(cx, |view, cx| {
-                view.resizing = Some(ResizingPanel::Sidebar);
+                view.resizing = Some(target);
                 cx.notify();
             });
             cx.new(|_| info.deref().clone())
         })
+    }
+
+    fn terminal_tool_layout(&self, cx: &App) -> TerminalToolDockLayout {
+        TerminalToolDockLayout::from_open_panels(self.sidebar.read(cx).open_tool_panels())
+    }
+
+    fn render_internal_tool_panel(
+        &self,
+        panel: SidebarPanel,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(view) = self.sidebar_tool_panels.get(&panel).cloned() else {
+            return div().into_any_element();
+        };
+        let colors = self.sidebar.read(cx).colors();
+        render_internal_tool_panel_frame(self.sidebar.clone(), panel, view, colors)
     }
 
     fn resize_sidebar(
@@ -4453,8 +4475,16 @@ impl TerminalView {
         };
 
         match resizing {
-            ResizingPanel::Sidebar => {
+            ResizingPanel::LeftSidebar => {
+                let new_size = mouse_position.x - self.view_bounds.left();
+                self.sidebar_panel_size = new_size.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+            }
+            ResizingPanel::RightSidebar => {
                 let new_size = self.view_bounds.right() - mouse_position.x;
+                self.sidebar_panel_size = new_size.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+            }
+            ResizingPanel::BottomSidebar => {
+                let new_size = self.view_bounds.bottom() - mouse_position.y;
                 self.sidebar_panel_size = new_size.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
             }
         }
@@ -4525,119 +4555,31 @@ impl TabContent for TerminalView {
         cx: &mut Context<Self>,
     ) -> Option<Arc<dyn TabContentView>> {
         let source = self.duplicate_source.clone();
-        let sidebar_mode = self.sidebar_render_mode;
-        let duplicate = cx.new(|cx| {
-            let view = match source {
-                TerminalDuplicateSource::Local(config) => {
-                    TerminalView::new_with_index(config, None, window, cx)
-                }
-                TerminalDuplicateSource::Ssh {
-                    connection,
-                    working_dir,
-                    sync_path_with_terminal,
-                } => TerminalView::new_ssh_with_index(
-                    connection,
-                    None,
-                    window,
-                    cx,
-                    working_dir.as_deref(),
-                    sync_path_with_terminal,
-                ),
-                TerminalDuplicateSource::Serial(connection) => {
-                    TerminalView::new_serial_with_index(connection, None, window, cx)
-                }
-            };
-            if sidebar_mode == TerminalSidebarRenderMode::External {
-                view.with_external_sidebar()
-            } else {
-                view
+        let duplicate = cx.new(|cx| match source {
+            TerminalDuplicateSource::Local(config) => {
+                TerminalView::new_with_index(config, None, window, cx)
             }
+            TerminalDuplicateSource::Serial(connection) => {
+                TerminalView::new_serial_with_index(connection, None, window, cx)
+            }
+            TerminalDuplicateSource::Ssh {
+                connection,
+                working_dir,
+                sync_path_with_terminal,
+            } => TerminalView::new_ssh_with_index(
+                connection,
+                None,
+                window,
+                cx,
+                working_dir.as_deref(),
+                sync_path_with_terminal,
+            ),
         });
         Some(Arc::new(duplicate))
     }
 
-    fn sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution> {
-        if self.sidebar_render_mode != TerminalSidebarRenderMode::External {
-            return Vec::new();
-        }
-        let colors = self.current_theme.colors();
-        let style = SidebarPanelStyle {
-            background: Some(colors.background),
-            header_background: Some(colors.muted),
-            border: Some(colors.border),
-            text: Some(colors.foreground),
-        };
-        let open_panels = self.sidebar.read(cx).open_tool_panels();
-        let mut contributions = Vec::new();
-
-        for (panel, placement) in open_panels {
-            let Some(view) = self.sidebar_tool_panels.get(&panel).cloned() else {
-                continue;
-            };
-            let sidebar_for_close = self.sidebar.clone();
-            let sidebar_for_move = self.sidebar.clone();
-            contributions.push(SidebarContribution {
-                id: SidebarPanelId::new(self.sidebar.entity_id(), panel.local_id()),
-                title: SharedString::from(panel.title()),
-                icon: panel.icon_name(),
-                view: view.into(),
-                default_placement: placement,
-                policy: SidebarPanelPolicy {
-                    hideable: true,
-                    movable: true,
-                    allowed_placements: SidebarPlacementSet::all(),
-                    initially_visible: true,
-                },
-                style,
-                size: SidebarPanelSize {
-                    side_width: Some(self.sidebar_panel_size),
-                    bottom_height: Some(self.sidebar_panel_size),
-                },
-                chrome: SidebarPanelChrome::Host,
-                actions: SidebarContributionActions {
-                    close: Some(Arc::new(move |_window, cx| {
-                        sidebar_for_close.update(cx, |sidebar, cx| {
-                            sidebar.close_tool(panel, cx);
-                        });
-                    })),
-                    move_to: Some(Arc::new(move |placement, _window, cx| {
-                        sidebar_for_move.update(cx, |sidebar, cx| {
-                            sidebar.move_tool(panel, placement, cx);
-                        });
-                    })),
-                },
-            });
-        }
-
-        if self.sidebar.read(cx).toolbar_visible() {
-            contributions.push(SidebarContribution {
-                id: SidebarPanelId::new(self.sidebar.entity_id(), "terminal.toolbar"),
-                title: SharedString::from("Terminal"),
-                icon: IconName::Terminal,
-                view: self.sidebar_toolbar.clone().into(),
-                default_placement: SidebarPlacement::Right,
-                policy: SidebarPanelPolicy {
-                    hideable: false,
-                    movable: false,
-                    allowed_placements: SidebarPlacementSet::right_only(),
-                    initially_visible: true,
-                },
-                style: SidebarPanelStyle {
-                    background: Some(colors.background),
-                    header_background: Some(colors.muted),
-                    border: Some(colors.border),
-                    text: Some(colors.foreground),
-                },
-                size: SidebarPanelSize {
-                    side_width: Some(TOOLBAR_WIDTH),
-                    bottom_height: Some(TOOLBAR_WIDTH),
-                },
-                chrome: SidebarPanelChrome::None,
-                actions: SidebarContributionActions::default(),
-            });
-        }
-
-        contributions
+    fn sidebar_contributions(&self, _cx: &App) -> Vec<SidebarContribution> {
+        Vec::new()
     }
 
     fn try_close(
@@ -4697,14 +4639,22 @@ impl Render for TerminalView {
         let selection_text =
             block_selection_text.or_else(|| self.terminal.read(cx).selection_text());
         let right_click_paste = self.right_click_paste;
-        let render_embedded_sidebar =
-            self.sidebar_render_mode == TerminalSidebarRenderMode::Embedded;
-        let sidebar_visible = render_embedded_sidebar && self.sidebar.read(cx).is_visible();
         let sidebar_panel_size = self.sidebar_panel_size;
         let view = cx.entity().clone();
         let terminal_mode = self.terminal.read(cx).mode();
         let history_size = self.terminal.read(cx).term().lock().history_size();
         let show_scrollbar = !terminal_mode.contains(TermMode::ALT_SCREEN) && history_size > 0;
+        let tool_layout = self.terminal_tool_layout(cx);
+        let right_tool_width = right_tool_region_width(&tool_layout, sidebar_panel_size);
+        let left_tool_panel = tool_layout
+            .left
+            .map(|panel| self.render_internal_tool_panel(panel, cx));
+        let right_tool_panel = tool_layout
+            .right
+            .map(|panel| self.render_internal_tool_panel(panel, cx));
+        let bottom_tool_panel = tool_layout
+            .bottom
+            .map(|panel| self.render_internal_tool_panel(panel, cx));
 
         // 检测主屏 ↔ alt screen 切换。
         // 进入 alt screen 时(opencode/lazygit/vim 等 TUI 启动),主动重发当前尺寸到 PTY,
@@ -4728,202 +4678,273 @@ impl Render for TerminalView {
             }
         }
 
-        div()
+        h_flex()
+            .debug_selector(|| "terminal-tool-dock-root".to_string())
             .size_full()
-            .flex()
-            .flex_row()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
             .bg(bg_color)
-            .child({
-                let tooltip = self.addon_manager.tooltip();
-                let mouse_pos = self.mouse_position;
-                let terminal_bounds = self.terminal_bounds;
-                let entity = cx.entity().downgrade();
-                let focus_handle = self.focus_handle.clone();
-                let terminal_core = div()
-                    .track_focus(&focus_handle)
-                    .key_context(TERMINAL_CONTEXT)
-                    .on_action(cx.listener(Self::send_tab))
-                    .on_action(cx.listener(Self::send_shift_tab))
-                    .on_action(cx.listener(Self::copy))
-                    .on_action(cx.listener(Self::paste))
-                    .on_action(cx.listener(Self::select_all))
-                    .on_action(cx.listener(Self::clear_screen))
-                    .on_action(cx.listener(Self::clear_selection))
-                    .on_action(cx.listener(Self::search_forward))
-                    .on_action(cx.listener(Self::search_backward))
-                    .on_action(cx.listener(Self::toggle_vi_mode))
-                    .on_action(cx.listener(Self::increase_font))
-                    .on_action(cx.listener(Self::decrease_font))
-                    .on_action(cx.listener(Self::reset_font))
-                    .on_key_down(cx.listener(Self::handle_key_event))
-                    .flex_1()
-                    .relative()
-                    .overflow_hidden()
-                    .on_scroll_wheel(cx.listener(Self::handle_scroll))
-                    .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
-                    .on_mouse_down(
-                        MouseButton::Middle,
-                        cx.listener(Self::handle_middle_mouse_down),
-                    )
-                    .on_mouse_move(cx.listener(Self::handle_mouse_move))
-                    .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
-                    .child(
-                        canvas(
-                            move |bounds, _window, cx| {
-                                if let Some(entity) = entity.upgrade() {
-                                    entity.update(cx, |this, cx| {
-                                        this.terminal_bounds = bounds;
-                                        {
-                                            let mut metrics = this.scrollbar_metrics.borrow_mut();
-                                            metrics.viewport_size = bounds.size;
-                                            metrics.line_height = this.line_height;
-                                            metrics.cell_width = this.cell_width;
-                                        }
-                                        this.resize_if_needed(bounds, cx);
-                                    });
-                                }
-                            },
-                            {
-                                let entity = cx.entity().downgrade();
-                                let focus_handle = focus_handle.clone();
-                                move |bounds, _state, window, cx| {
-                                    if let Some(entity) = entity.upgrade() {
-                                        let input_handler =
-                                            ElementInputHandler::new(bounds, entity);
-                                        window.handle_input(&focus_handle, input_handler, cx);
-                                    }
-                                }
-                            },
-                        )
-                        .absolute()
-                        .left(px(12.))
-                        .right(px(12.))
-                        .top(px(12.))
-                        .bottom(px(12.)),
-                    )
-                    .child({
-                        let view = cx.entity().clone();
-                        let sidebar = self.sidebar.clone();
-                        let terminal_surface = div()
-                            .absolute()
-                            .left(px(12.))
-                            .right(px(12.))
-                            .top(px(12.))
-                            .bottom(px(12.))
-                            .bg(self.current_theme.background)
-                            .overflow_hidden()
-                            .child(self.render_terminal(effective_font_family.clone(), cx))
-                            .when_some(self.render_history_prompt_overlay(cx), |this, overlay| {
-                                this.child(overlay)
-                            });
-                        if right_click_paste {
-                            terminal_surface
-                                .on_mouse_down(
-                                    MouseButton::Right,
-                                    cx.listener(Self::handle_right_mouse_down),
-                                )
-                                .into_any_element()
-                        } else {
-                            terminal_surface
-                                .context_menu(move |menu, window, cx| {
-                                    Self::build_context_menu(
-                                        menu,
-                                        has_selection,
-                                        selection_text.clone(),
-                                        &view,
-                                        &sidebar,
-                                        window,
-                                        cx,
-                                    )
-                                })
-                                .into_any_element()
-                        }
-                    })
-                    .when_some(tooltip.zip(mouse_pos), |this, (tooltip, pos)| {
-                        let relative_x = pos.x - terminal_bounds.origin.x;
-                        let relative_y = pos.y - terminal_bounds.origin.y;
-                        this.child(
-                            div()
-                                .absolute()
-                                .left(relative_x + px(10.0))
-                                .top(relative_y + px(20.0))
-                                .px_2()
-                                .py_1()
-                                .bg(rgb(0x3d3d3d))
-                                .rounded_md()
-                                .shadow_md()
-                                .text_size(px(11.0))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .child(
-                                            div()
-                                                .px_1()
-                                                .bg(rgb(0x4d4d4d))
-                                                .rounded_sm()
-                                                .text_color(rgb(0xcccccc))
-                                                .child(tooltip.action_hint),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_color(rgb(0x888888))
-                                                .child(tooltip.action_text),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(tooltip.display_color)
-                                        .overflow_hidden()
-                                        .max_w(px(400.0))
-                                        .text_ellipsis()
-                                        .child(tooltip.display_text),
-                                ),
-                        )
-                    })
-                    .when(
-                        matches!(connection_state, ConnectionState::Disconnected { .. })
-                            || matches!(connection_state, ConnectionState::Connecting),
-                        |this| this.child(self.render_connection_overlay(can_reconnect, cx)),
-                    );
-
-                div()
-                    .relative()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .child(terminal_core)
-                    .when(show_scrollbar, |this| {
-                        this.child(
-                            div()
-                                .absolute()
-                                .top(px(12.0))
-                                .right(px(4.0))
-                                .bottom(px(12.0))
-                                .w(px(12.0))
-                                .child(
-                                    Scrollbar::vertical(&self.scrollbar_handle)
-                                        .scrollbar_show(ScrollbarShow::Always),
-                                ),
-                        )
-                    })
-            })
-            // 渲染侧边栏
-            .when(sidebar_visible, |this| {
+            .when_some(left_tool_panel, |this, panel| {
                 this.child(
                     div()
+                        .debug_selector(|| "terminal-tool-dock-left".to_string())
                         .relative()
                         .h_full()
                         .w(sidebar_panel_size)
                         .flex_shrink_0()
-                        .child(self.render_sidebar_resize_handle(window, cx))
-                        .child(self.sidebar.clone()),
+                        .overflow_hidden()
+                        .child(self.render_sidebar_resize_handle(ResizingPanel::LeftSidebar, cx))
+                        .child(panel),
                 )
             })
-            .when(render_embedded_sidebar && !sidebar_visible, |this| {
-                this.child(self.sidebar.clone())
-            })
+            .child(
+                v_flex()
+                    .debug_selector(|| "terminal-tool-dock-center".to_string())
+                    .flex_1()
+                    .h_full()
+                    .min_h_0()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child({
+                        let tooltip = self.addon_manager.tooltip();
+                        let mouse_pos = self.mouse_position;
+                        let terminal_bounds = self.terminal_bounds;
+                        let entity = cx.entity().downgrade();
+                        let focus_handle = self.focus_handle.clone();
+                        let terminal_core = div()
+                            .track_focus(&focus_handle)
+                            .key_context(TERMINAL_CONTEXT)
+                            .on_action(cx.listener(Self::send_tab))
+                            .on_action(cx.listener(Self::send_shift_tab))
+                            .on_action(cx.listener(Self::copy))
+                            .on_action(cx.listener(Self::paste))
+                            .on_action(cx.listener(Self::select_all))
+                            .on_action(cx.listener(Self::clear_screen))
+                            .on_action(cx.listener(Self::clear_selection))
+                            .on_action(cx.listener(Self::search_forward))
+                            .on_action(cx.listener(Self::search_backward))
+                            .on_action(cx.listener(Self::toggle_vi_mode))
+                            .on_action(cx.listener(Self::increase_font))
+                            .on_action(cx.listener(Self::decrease_font))
+                            .on_action(cx.listener(Self::reset_font))
+                            .on_key_down(cx.listener(Self::handle_key_event))
+                            .flex_1()
+                            .relative()
+                            .overflow_hidden()
+                            .on_scroll_wheel(cx.listener(Self::handle_scroll))
+                            .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
+                            .on_mouse_down(
+                                MouseButton::Middle,
+                                cx.listener(Self::handle_middle_mouse_down),
+                            )
+                            .on_mouse_move(cx.listener(Self::handle_mouse_move))
+                            .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
+                            .child(
+                                canvas(
+                                    move |bounds, _window, cx| {
+                                        if let Some(entity) = entity.upgrade() {
+                                            entity.update(cx, |this, cx| {
+                                                this.terminal_bounds = bounds;
+                                                {
+                                                    let mut metrics =
+                                                        this.scrollbar_metrics.borrow_mut();
+                                                    metrics.viewport_size = bounds.size;
+                                                    metrics.line_height = this.line_height;
+                                                    metrics.cell_width = this.cell_width;
+                                                }
+                                                this.resize_if_needed(bounds, cx);
+                                            });
+                                        }
+                                    },
+                                    {
+                                        let entity = cx.entity().downgrade();
+                                        let focus_handle = focus_handle.clone();
+                                        move |bounds, _state, window, cx| {
+                                            if let Some(entity) = entity.upgrade() {
+                                                let input_handler =
+                                                    ElementInputHandler::new(bounds, entity);
+                                                window.handle_input(
+                                                    &focus_handle,
+                                                    input_handler,
+                                                    cx,
+                                                );
+                                            }
+                                        }
+                                    },
+                                )
+                                .absolute()
+                                .left(px(12.))
+                                .right(px(12.))
+                                .top(px(12.))
+                                .bottom(px(12.)),
+                            )
+                            .child({
+                                let view = cx.entity().clone();
+                                let sidebar = self.sidebar.clone();
+                                let terminal_surface = div()
+                                    .absolute()
+                                    .left(px(12.))
+                                    .right(px(12.))
+                                    .top(px(12.))
+                                    .bottom(px(12.))
+                                    .bg(self.current_theme.background)
+                                    .overflow_hidden()
+                                    .child(self.render_terminal(effective_font_family.clone(), cx))
+                                    .when_some(
+                                        self.render_history_prompt_overlay(cx),
+                                        |this, overlay| this.child(overlay),
+                                    );
+                                if right_click_paste {
+                                    terminal_surface
+                                        .on_mouse_down(
+                                            MouseButton::Right,
+                                            cx.listener(Self::handle_right_mouse_down),
+                                        )
+                                        .into_any_element()
+                                } else {
+                                    terminal_surface
+                                        .context_menu(move |menu, window, cx| {
+                                            Self::build_context_menu(
+                                                menu,
+                                                has_selection,
+                                                selection_text.clone(),
+                                                &view,
+                                                &sidebar,
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                        .into_any_element()
+                                }
+                            })
+                            .when_some(tooltip.zip(mouse_pos), |this, (tooltip, pos)| {
+                                let relative_x = pos.x - terminal_bounds.origin.x;
+                                let relative_y = pos.y - terminal_bounds.origin.y;
+                                this.child(
+                                    div()
+                                        .absolute()
+                                        .left(relative_x + px(10.0))
+                                        .top(relative_y + px(20.0))
+                                        .px_2()
+                                        .py_1()
+                                        .bg(rgb(0x3d3d3d))
+                                        .rounded_md()
+                                        .shadow_md()
+                                        .text_size(px(11.0))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .px_1()
+                                                        .bg(rgb(0x4d4d4d))
+                                                        .rounded_sm()
+                                                        .text_color(rgb(0xcccccc))
+                                                        .child(tooltip.action_hint),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_color(rgb(0x888888))
+                                                        .child(tooltip.action_text),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_color(tooltip.display_color)
+                                                .overflow_hidden()
+                                                .max_w(px(400.0))
+                                                .text_ellipsis()
+                                                .child(tooltip.display_text),
+                                        ),
+                                )
+                            })
+                            .when(
+                                matches!(connection_state, ConnectionState::Disconnected { .. })
+                                    || matches!(connection_state, ConnectionState::Connecting),
+                                |this| {
+                                    this.child(self.render_connection_overlay(can_reconnect, cx))
+                                },
+                            );
+
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .overflow_hidden()
+                            .child(terminal_core)
+                            .when(show_scrollbar, |this| {
+                                this.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(12.0))
+                                        .right(px(4.0))
+                                        .bottom(px(12.0))
+                                        .w(px(12.0))
+                                        .child(
+                                            Scrollbar::vertical(&self.scrollbar_handle)
+                                                .scrollbar_show(ScrollbarShow::Always),
+                                        ),
+                                )
+                            })
+                    })
+                    .when_some(bottom_tool_panel, |this, panel| {
+                        this.child(
+                            div()
+                                .debug_selector(|| "terminal-tool-dock-bottom".to_string())
+                                .relative()
+                                .w_full()
+                                .h(sidebar_panel_size)
+                                .flex_shrink_0()
+                                .overflow_hidden()
+                                .child(
+                                    self.render_sidebar_resize_handle(
+                                        ResizingPanel::BottomSidebar,
+                                        cx,
+                                    ),
+                                )
+                                .child(panel),
+                        )
+                    }),
+            )
+            .child(
+                h_flex()
+                    .debug_selector(|| "terminal-tool-dock-right".to_string())
+                    .h_full()
+                    .w(right_tool_width)
+                    .flex_shrink_0()
+                    .overflow_hidden()
+                    .when_some(right_tool_panel, |this, panel| {
+                        this.child(
+                            div()
+                                .relative()
+                                .h_full()
+                                .w(sidebar_panel_size)
+                                .flex_shrink_0()
+                                .overflow_hidden()
+                                .child(
+                                    self.render_sidebar_resize_handle(
+                                        ResizingPanel::RightSidebar,
+                                        cx,
+                                    ),
+                                )
+                                .child(panel),
+                        )
+                    })
+                    .child(
+                        div()
+                            .debug_selector(|| "terminal-tool-dock-toolbar".to_string())
+                            .h_full()
+                            .w(TOOLBAR_WIDTH)
+                            .flex_shrink_0()
+                            .child(self.sidebar_toolbar.clone()),
+                    ),
+            )
             .child(ResizeEventHandler { view })
     }
 }
@@ -5406,6 +5427,75 @@ mod tests {
 
         assert!(source.contains("ContextMenu.clear_screen_with_shortcut"));
         assert!(source.contains("this.clear_screen(&ClearScreen, window, cx)"));
+    }
+
+    #[test]
+    fn terminal_tools_are_not_exposed_as_external_sidebar_contributions() {
+        let source = include_str!("view.rs");
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("source should contain production section");
+        let sidebar_contributions = source
+            .split("fn sidebar_contributions(&self, _cx: &App) -> Vec<SidebarContribution>")
+            .nth(1)
+            .expect("terminal sidebar_contributions override should exist");
+
+        assert!(sidebar_contributions.contains("Vec::new()"));
+        assert!(!production_source.contains("terminal.toolbar"));
+        assert!(!production_source.contains("terminal.ai-chat"));
+        assert!(!production_source.contains("TerminalSidebarRenderMode"));
+        assert!(!production_source.contains("sidebar_render_mode"));
+        assert!(!production_source.contains("with_external_sidebar"));
+    }
+
+    #[test]
+    fn terminal_render_owns_internal_tool_dock_regions() {
+        let source = include_str!("view.rs");
+        let render_start = source
+            .find("fn render(&mut self, window: &mut Window, cx: &mut Context<Self>)")
+            .expect("render method should exist");
+        let render_source = &source[render_start..];
+
+        assert!(render_source.contains("terminal-tool-dock-root"));
+        assert!(render_source.contains("terminal-tool-dock-left"));
+        assert!(render_source.contains("terminal-tool-dock-center"));
+        assert!(render_source.contains("terminal-tool-dock-right"));
+        assert!(render_source.contains("terminal-tool-dock-bottom"));
+        assert!(render_source.contains("terminal-tool-dock-toolbar"));
+        assert!(render_source.contains(".child(self.sidebar_toolbar.clone())"));
+        assert!(
+            render_source.contains("right_tool_region_width(&tool_layout, sidebar_panel_size)")
+        );
+    }
+
+    #[test]
+    fn terminal_internal_dock_keeps_bottom_inside_center_column() {
+        let source = include_str!("view.rs");
+        let render_start = source
+            .find("fn render(&mut self, window: &mut Window, cx: &mut Context<Self>)")
+            .expect("render method should exist");
+        let render_source = &source[render_start..];
+
+        let root = render_source
+            .find("terminal-tool-dock-root")
+            .expect("root dock marker should exist");
+        let center = render_source
+            .find("terminal-tool-dock-center")
+            .expect("center dock marker should exist");
+        let bottom = render_source
+            .find("terminal-tool-dock-bottom")
+            .expect("bottom dock marker should exist");
+        let right = render_source
+            .find("terminal-tool-dock-right")
+            .expect("right dock marker should exist");
+
+        assert!(root < center);
+        assert!(center < bottom);
+        assert!(
+            bottom < right,
+            "bottom dock should be rendered inside the center column before the right toolbar dock"
+        );
     }
 
     #[test]
