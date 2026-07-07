@@ -589,6 +589,7 @@ mod external_driver_form_tests {
     #[test]
     fn home_render_uses_cached_external_driver_registry() {
         let source = include_str!("home_tab.rs");
+        let quick_open = include_str!("home/home_connection_quick_open.rs");
         let list_item = source
             .rsplit("fn render_connection_list_item(")
             .next()
@@ -607,8 +608,11 @@ mod external_driver_form_tests {
         assert!(source.contains("external_driver_registry: IpcDriverRegistry"));
         assert!(list_item.contains("external_driver_icon_for_config_with_registry"));
         assert!(card.contains("external_driver_icon_for_config_with_registry"));
+        assert!(quick_open.contains("external_driver_icon_for_config_with_registry"));
+        assert!(quick_open.contains("external_driver_registry: IpcDriverRegistry"));
         assert!(!list_item.contains("IpcDriverRegistry::load_default()"));
         assert!(!card.contains("IpcDriverRegistry::load_default()"));
+        assert!(!quick_open.contains("IpcDriverRegistry::load_default()"));
     }
 
     fn sync_conflict(cloud_id: &str) -> SyncConflict {
@@ -1593,8 +1597,9 @@ impl HomePage {
 
         let parent = cx.entity();
         let connections = self.connections.clone();
+        let external_driver_registry = self.external_driver_registry.clone();
         let list = cx.new(|cx| {
-            let mut delegate = ConnectionQuickOpenDelegate::new(parent);
+            let mut delegate = ConnectionQuickOpenDelegate::new(parent, external_driver_registry);
             delegate.update_items(&connections);
             ListState::new(delegate, window, cx).searchable(true)
         });

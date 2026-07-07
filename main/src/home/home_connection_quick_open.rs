@@ -1,4 +1,6 @@
+use crate::external_driver_display::external_driver_icon_for_config_with_registry;
 use crate::home_tab::HomePage;
+use db::ipc::IpcDriverRegistry;
 use gpui::{
     App, Context, Entity, FontWeight, ParentElement, SharedString, Styled, Task, Window, div, px,
 };
@@ -10,6 +12,7 @@ use one_core::storage::{ConnectionType, StoredConnection};
 
 pub(crate) struct ConnectionQuickOpenDelegate {
     parent: Entity<HomePage>,
+    external_driver_registry: IpcDriverRegistry,
     items: Vec<StoredConnection>,
     filtered_items: Vec<StoredConnection>,
     selected_index: Option<IndexPath>,
@@ -17,9 +20,13 @@ pub(crate) struct ConnectionQuickOpenDelegate {
 }
 
 impl ConnectionQuickOpenDelegate {
-    pub(crate) fn new(parent: Entity<HomePage>) -> Self {
+    pub(crate) fn new(
+        parent: Entity<HomePage>,
+        external_driver_registry: IpcDriverRegistry,
+    ) -> Self {
         Self {
             parent,
+            external_driver_registry,
             items: Vec::new(),
             filtered_items: Vec::new(),
             selected_index: None,
@@ -50,11 +57,14 @@ impl ConnectionQuickOpenDelegate {
     }
 }
 
-fn connection_icon(connection: &StoredConnection) -> Icon {
+fn connection_icon(connection: &StoredConnection, registry: &IpcDriverRegistry) -> Icon {
     match connection.connection_type {
         ConnectionType::Database => connection
             .to_db_connection()
-            .map(|config| config.database_type.as_icon())
+            .map(|config| {
+                external_driver_icon_for_config_with_registry(&config, Size::Small, registry)
+                    .unwrap_or_else(|| config.database_type.as_icon())
+            })
             .unwrap_or_else(|_| Icon::new(ConnectionType::Database.icon()).color())
             .with_size(Size::Small),
         _ => Icon::new(connection.connection_type.icon())
@@ -92,7 +102,7 @@ impl ListDelegate for ConnectionQuickOpenDelegate {
         let parent = self.parent.clone();
         let name = connection.name.clone();
         let connection_type = connection.connection_type;
-        let icon = connection_icon(&connection);
+        let icon = connection_icon(&connection, &self.external_driver_registry);
         let connection_for_open = connection.clone();
 
         Some(
