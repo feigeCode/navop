@@ -31,6 +31,7 @@ actions!(
         ToggleAlwaysOnTop,
         MinimizeWindow,
         DuplicateTab,
+        OpenTabSwitcher,
         SwitchNextTab,
         SwitchPreviousTab,
         QuitApp,
@@ -160,6 +161,24 @@ fn switch_tab(direction: TabCycleDirection, cx: &mut App) {
     });
 }
 
+fn open_tab_switcher(cx: &mut App) {
+    let Some(active_window) = cx.active_window() else {
+        return;
+    };
+    let Some(container) = cx.try_global::<GlobalTabContainer>() else {
+        return;
+    };
+    let container = container.primary_pane();
+
+    cx.defer(move |cx| {
+        _ = active_window.update(cx, |_, window, cx| {
+            container.update(cx, |tc, cx| {
+                tc.open_tab_switcher(window, cx);
+            });
+        });
+    });
+}
+
 fn toggle_fullscreen(cx: &mut App) {
     let Some(active_window) = cx.active_window() else {
         return;
@@ -180,9 +199,18 @@ fn toggle_always_on_top(cx: &mut App) {
             let next = !ALWAYS_ON_TOP.load(Ordering::Relaxed);
             if set_window_always_on_top(window, next).is_ok() {
                 ALWAYS_ON_TOP.store(next, Ordering::Relaxed);
+                #[cfg(target_os = "macos")]
+                if should_activate_after_always_on_top_change(next) {
+                    window.activate_window();
+                }
             }
         });
     });
+}
+
+#[cfg(target_os = "macos")]
+fn should_activate_after_always_on_top_change(always_on_top: bool) -> bool {
+    always_on_top
 }
 
 fn set_window_always_on_top(window: &Window, _always_on_top: bool) -> anyhow::Result<()> {
@@ -467,6 +495,15 @@ fn init_keybindings(cx: &App) -> Vec<KeyBinding> {
         .map(|key| KeyBinding::new(&key, DuplicateTab, None)),
     );
     keybindings.extend(
+        shortcuts_for(
+            cx,
+            action_id::APP_OPEN_TAB_SWITCHER,
+            &[default_shortcut("cmd-j", "ctrl-j")],
+        )
+        .into_iter()
+        .map(|key| KeyBinding::new(&key, OpenTabSwitcher, None)),
+    );
+    keybindings.extend(
         shortcuts_for(cx, action_id::APP_SWITCH_NEXT_TAB, &["ctrl-tab"])
             .into_iter()
             .map(|key| KeyBinding::new(&key, SwitchNextTab, None)),
@@ -538,6 +575,13 @@ fn refreshable_keybindings(cx: &App) -> Vec<KeyBinding> {
     ));
     keybindings.extend(rebind_keybindings(
         cx,
+        action_id::APP_OPEN_TAB_SWITCHER,
+        &[default_shortcut("cmd-j", "ctrl-j")],
+        None,
+        OpenTabSwitcher,
+    ));
+    keybindings.extend(rebind_keybindings(
+        cx,
         action_id::APP_SWITCH_NEXT_TAB,
         &["ctrl-tab"],
         None,
@@ -573,6 +617,7 @@ fn init_action_handlers(cx: &mut App) {
     cx.on_action(|_: &ToggleFullscreen, cx| toggle_fullscreen(cx));
     cx.on_action(|_: &ToggleAlwaysOnTop, cx| toggle_always_on_top(cx));
     cx.on_action(|_: &DuplicateTab, cx| duplicate_tab(cx));
+    cx.on_action(|_: &OpenTabSwitcher, cx| open_tab_switcher(cx));
     cx.on_action(|_: &SwitchNextTab, cx| switch_tab(TabCycleDirection::Next, cx));
     cx.on_action(|_: &SwitchPreviousTab, cx| switch_tab(TabCycleDirection::Previous, cx));
     cx.on_action(|_: &QuitApp, cx| quit_app(cx));
@@ -754,6 +799,13 @@ mod tests {
 
         assert_eq!(0, home_layout.active_pinned_index);
         assert_eq!(1, ai_layout.active_pinned_index);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_always_on_top_activation_only_happens_when_enabled() {
+        assert!(super::should_activate_after_always_on_top_change(true));
+        assert!(!super::should_activate_after_always_on_top_change(false));
     }
 
     #[test]

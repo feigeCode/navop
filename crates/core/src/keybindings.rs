@@ -12,6 +12,7 @@ pub mod action_id {
     pub const WINDOW_TOGGLE_FULLSCREEN: &str = "window.toggle_fullscreen";
     pub const WINDOW_TOGGLE_ALWAYS_ON_TOP: &str = "window.toggle_always_on_top";
     pub const APP_DUPLICATE_TAB: &str = "app.duplicate_tab";
+    pub const APP_OPEN_TAB_SWITCHER: &str = "app.open_tab_switcher";
     pub const APP_SWITCH_NEXT_TAB: &str = "app.switch_next_tab";
     pub const APP_SWITCH_PREVIOUS_TAB: &str = "app.switch_previous_tab";
     pub const APP_QUIT: &str = "app.quit";
