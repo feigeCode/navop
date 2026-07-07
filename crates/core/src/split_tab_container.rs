@@ -3,7 +3,7 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, AppContext as _, Axis, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement, Render, SharedString, Styled,
-    Subscription, Window, div,
+    Subscription, Task, Window, div,
 };
 use gpui_component::{
     Placement,
@@ -46,6 +46,23 @@ impl SplitNode {
         match self {
             Self::Leaf(leaf) => leaf == pane,
             Self::Split { children, .. } => children.iter().any(|child| child.contains(pane)),
+        }
+    }
+
+    fn collect_close_panes(&self) -> Vec<Entity<TabContainer>> {
+        let mut panes = Vec::new();
+        self.collect_close_panes_into(&mut panes);
+        panes
+    }
+
+    fn collect_close_panes_into(&self, panes: &mut Vec<Entity<TabContainer>>) {
+        match self {
+            Self::Leaf(pane) => panes.push(pane.clone()),
+            Self::Split { children, .. } => {
+                for child in children {
+                    child.collect_close_panes_into(panes);
+                }
+            }
         }
     }
 
@@ -133,6 +150,31 @@ impl SplitTabContainer {
 
     pub fn active_pane(&self) -> Entity<TabContainer> {
         self.active_pane.clone()
+    }
+
+    pub fn close_all_tabs(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Task<bool> {
+        let panes = self.root.collect_close_panes();
+        let Some(window_id) = cx.active_window() else {
+            return Task::ready(false);
+        };
+
+        cx.spawn(async move |_handle, cx| {
+            for pane in panes {
+                let close_task = cx.update_window(window_id, |_, window, cx| {
+                    pane.update(cx, |pane, cx| pane.close_all_tabs(window, cx))
+                });
+
+                match close_task {
+                    Ok(task) => {
+                        if !task.await {
+                            return false;
+                        }
+                    }
+                    Err(_) => return false,
+                }
+            }
+            true
+        })
     }
 
     fn create_secondary_pane(
@@ -358,5 +400,54 @@ impl Render for SplitTabContainer {
             .size_full()
             .track_focus(&self.focus_handle)
             .child(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{TestAppContext, WindowOptions};
+    use gpui_component::Theme;
+
+    #[gpui::test]
+    fn split_close_collects_leaf_panes_in_tree_order(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            let window = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let primary = cx.new(|cx| TabContainer::new(window, cx));
+                    let right_top = cx.new(|cx| TabContainer::new(window, cx));
+                    let right_bottom = cx.new(|cx| TabContainer::new(window, cx));
+                    let tree = SplitNode::Split {
+                        axis: Axis::Horizontal,
+                        children: vec![
+                            SplitNode::Leaf(primary.clone()),
+                            SplitNode::Split {
+                                axis: Axis::Vertical,
+                                children: vec![
+                                    SplitNode::Leaf(right_top.clone()),
+                                    SplitNode::Leaf(right_bottom.clone()),
+                                ],
+                            },
+                        ],
+                    };
+
+                    let panes = tree.collect_close_panes();
+
+                    assert_eq!(vec![primary, right_top, right_bottom], panes);
+                    panes[0].clone()
+                })
+                .expect("window opens");
+            drop(window);
+        });
+    }
+
+    #[test]
+    fn split_container_exposes_close_all_tabs_contract() {
+        let _close_all_tabs: fn(
+            &mut SplitTabContainer,
+            &mut Window,
+            &mut Context<SplitTabContainer>,
+        ) -> gpui::Task<bool> = SplitTabContainer::close_all_tabs;
     }
 }

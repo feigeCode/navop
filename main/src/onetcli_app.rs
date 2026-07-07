@@ -5,12 +5,15 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, KeyBinding, Keystroke, ParentElement, Render,
     Styled, Window, actions, div,
 };
-use gpui_component::{WindowExt, kbd::Kbd, notification::Notification};
+use gpui_component::{WindowExt, dialog::DialogButtonProps, kbd::Kbd, notification::Notification};
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use raw_window_handle::HasWindowHandle;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use raw_window_handle::RawWindowHandle;
+use rust_i18n::t;
 use std::rc::Rc;
+#[cfg(not(target_os = "macos"))]
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static ALWAYS_ON_TOP: AtomicBool = AtomicBool::new(false);
@@ -60,11 +63,59 @@ pub struct GlobalHomePage {
 
 impl gpui::Global for GlobalHomePage {}
 
+#[derive(Clone)]
+pub struct GlobalOnetCliApp {
+    pub app: Entity<OnetCliApp>,
+}
+
+impl gpui::Global for GlobalOnetCliApp {}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InitialPinnedTabLayout {
     home_tab_id: &'static str,
     workbench_tab_id: &'static str,
     active_pinned_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QuitRequestDecision {
+    OpenPrompt,
+    Ignore,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct QuitRequestState {
+    prompt_open: bool,
+    in_progress: bool,
+}
+
+impl QuitRequestState {
+    fn request(&mut self) -> QuitRequestDecision {
+        if self.prompt_open || self.in_progress {
+            return QuitRequestDecision::Ignore;
+        }
+        self.prompt_open = true;
+        QuitRequestDecision::OpenPrompt
+    }
+
+    fn cancel_prompt(&mut self) {
+        self.prompt_open = false;
+    }
+
+    fn confirm_prompt(&mut self) -> bool {
+        if self.in_progress {
+            return false;
+        }
+        self.prompt_open = false;
+        self.in_progress = true;
+        true
+    }
+
+    fn finish_close(&mut self, closed: bool) {
+        if !closed {
+            self.in_progress = false;
+        }
+    }
 }
 
 fn initial_home_tab_layout(startup_default_page: StartupDefaultPage) -> InitialPinnedTabLayout {
@@ -501,7 +552,32 @@ fn duplicate_tab(cx: &mut App) {
 }
 
 fn quit_app(cx: &mut App) {
-    cx.quit();
+    request_active_window_quit(cx);
+}
+
+fn request_active_window_quit(cx: &mut App) {
+    let Some(active_window) = cx.active_window() else {
+        cx.quit();
+        return;
+    };
+    cx.defer(move |cx| {
+        _ = active_window.update(cx, |_, window, cx| {
+            request_window_quit(window, cx);
+        });
+    });
+}
+
+fn request_window_quit(window: &mut Window, cx: &mut App) {
+    let Some(app) = cx
+        .try_global::<GlobalOnetCliApp>()
+        .map(|global| global.app.clone())
+    else {
+        cx.quit();
+        return;
+    };
+    app.update(cx, |app, cx| {
+        app.request_quit(window, cx);
+    });
 }
 
 fn default_shortcut(macos: &'static str, other: &'static str) -> &'static str {
@@ -865,10 +941,23 @@ fn init_action_handlers(cx: &mut App) {
 
 pub struct OnetCliApp {
     split_container: Entity<SplitTabContainer>,
+    quit_state: QuitRequestState,
 }
 
 impl OnetCliApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let app_entity = cx.entity();
+        cx.set_global(GlobalOnetCliApp {
+            app: app_entity.clone(),
+        });
+        let app = app_entity.downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            let _ = app.update(cx, |app, cx| {
+                app.request_quit(window, cx);
+            });
+            false
+        });
+
         let pane_factory: TabPaneFactory = Rc::new(|window, cx, primary| {
             let mut container = TabContainer::new(window, cx)
                 .with_tab_bar_colors(
@@ -897,8 +986,8 @@ impl OnetCliApp {
             {
                 if primary {
                     // 窗口置顶按钮注入：点击时切换置顶并刷新按钮视觉状态
-                    let on_toggle: std::sync::Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> =
-                        std::sync::Arc::new(|_window: &mut Window, cx: &mut App| {
+                    let on_toggle: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> =
+                        Arc::new(|_window: &mut Window, cx: &mut App| {
                             toggle_always_on_top(cx);
                             if let Some(tab_container) = cx
                                 .try_global::<GlobalTabContainer>()
@@ -907,10 +996,13 @@ impl OnetCliApp {
                                 tab_container.update(cx, |_, cx| cx.notify());
                             }
                         });
-                    let is_active: std::sync::Arc<dyn Fn() -> bool + Send + Sync> =
-                        std::sync::Arc::new(|| ALWAYS_ON_TOP.load(Ordering::Relaxed));
+                    let is_active: Arc<dyn Fn() -> bool + Send + Sync> =
+                        Arc::new(|| ALWAYS_ON_TOP.load(Ordering::Relaxed));
+                    let on_close: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync> =
+                        Arc::new(request_window_quit);
                     container = container
                         .with_window_controls(true)
+                        .with_window_close_action(on_close)
                         .with_always_on_top_control(on_toggle, is_active);
                 }
             }
@@ -954,7 +1046,72 @@ impl OnetCliApp {
             });
         }
 
-        Self { split_container }
+        Self {
+            split_container,
+            quit_state: QuitRequestState::default(),
+        }
+    }
+
+    fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quit_state.request() == QuitRequestDecision::OpenPrompt {
+            self.show_quit_confirmation(window, cx);
+        }
+    }
+
+    fn show_quit_confirmation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let app_for_ok = cx.entity().downgrade();
+        let app_for_cancel = cx.entity().downgrade();
+        let app_for_close = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let app_for_ok = app_for_ok.clone();
+            let app_for_cancel = app_for_cancel.clone();
+            let app_for_close = app_for_close.clone();
+            dialog
+                .title(t!("Quit.confirm_title").to_string())
+                .child(t!("Quit.confirm_message").to_string())
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t!("Quit.confirm_action").to_string())
+                        .cancel_text(t!("Common.cancel").to_string()),
+                )
+                .on_ok(move |_, window, cx| {
+                    let _ = app_for_ok.update(cx, |app, cx| {
+                        app.confirm_quit(window, cx);
+                    });
+                    true
+                })
+                .on_cancel(move |_, _, cx| {
+                    let _ = app_for_cancel.update(cx, |app, _cx| {
+                        app.quit_state.cancel_prompt();
+                    });
+                    true
+                })
+                .on_close(move |_, _, cx| {
+                    let _ = app_for_close.update(cx, |app, _cx| {
+                        app.quit_state.cancel_prompt();
+                    });
+                })
+        });
+    }
+
+    fn confirm_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.quit_state.confirm_prompt() {
+            return;
+        }
+        let close_task = self
+            .split_container
+            .update(cx, |split, cx| split.close_all_tabs(window, cx));
+        cx.spawn(async move |this, cx| {
+            let can_quit = close_task.await;
+            let _ = this.update(cx, |app, cx| {
+                app.quit_state.finish_close(can_quit);
+                if can_quit {
+                    cx.quit();
+                }
+            });
+        })
+        .detach();
     }
 }
 
@@ -1017,6 +1174,81 @@ mod tests {
     #[test]
     fn shortcut_label_formats_configured_shortcut() {
         assert_eq!("⌃⌘T", super::shortcut_label("ctrl-cmd-t"));
+    }
+
+    #[test]
+    fn quit_action_routes_through_active_window_quit_request() {
+        let source = include_str!("onetcli_app.rs");
+        let start = source.find("fn quit_app").expect("quit_app function");
+        let end = source[start..]
+            .find("\n}\n\nfn request_active_window_quit")
+            .map(|offset| start + offset)
+            .expect("quit_app function end");
+        let quit_fn = &source[start..end];
+
+        assert!(!quit_fn.contains("cx.quit()"));
+        assert!(quit_fn.contains("request_active_window_quit(cx)"));
+    }
+
+    #[test]
+    fn onetcli_app_registers_window_close_guard() {
+        let source = include_str!("onetcli_app.rs");
+        let start = source.find("pub fn new").expect("OnetCliApp::new");
+        let end = source[start..]
+            .find("\n        let pane_factory")
+            .map(|offset| start + offset)
+            .expect("OnetCliApp::new setup");
+        let new_fn = &source[start..end];
+
+        assert!(new_fn.contains("on_window_should_close"));
+        assert!(new_fn.contains("request_quit(window, cx)"));
+    }
+
+    #[test]
+    fn quit_state_opens_prompt_for_first_request() {
+        let mut state = super::QuitRequestState::default();
+
+        assert_eq!(super::QuitRequestDecision::OpenPrompt, state.request());
+        assert!(state.prompt_open);
+    }
+
+    #[test]
+    fn quit_state_ignores_duplicate_prompt_and_in_progress_requests() {
+        let mut prompt_state = super::QuitRequestState {
+            prompt_open: true,
+            in_progress: false,
+        };
+        assert_eq!(super::QuitRequestDecision::Ignore, prompt_state.request());
+
+        let mut running_state = super::QuitRequestState {
+            prompt_open: false,
+            in_progress: true,
+        };
+        assert_eq!(super::QuitRequestDecision::Ignore, running_state.request());
+    }
+
+    #[test]
+    fn quit_state_resets_after_cancel_or_failed_close() {
+        let mut state = super::QuitRequestState {
+            prompt_open: true,
+            in_progress: false,
+        };
+
+        state.cancel_prompt();
+        assert_eq!(super::QuitRequestState::default(), state);
+
+        state.prompt_open = true;
+        assert!(state.confirm_prompt());
+        assert_eq!(
+            super::QuitRequestState {
+                prompt_open: false,
+                in_progress: true,
+            },
+            state
+        );
+
+        state.finish_close(false);
+        assert_eq!(super::QuitRequestState::default(), state);
     }
 
     #[cfg(target_os = "macos")]

@@ -55,6 +55,21 @@ Common:
     zh-CN: 无
     zh-HK: 無
 
+# 应用退出
+Quit:
+  confirm_title:
+    en: Quit application?
+    zh-CN: 退出应用？
+    zh-HK: 結束應用程式？
+  confirm_message:
+    en: All tabs will be closed. Some tabs may ask for additional confirmation before quitting.
+    zh-CN: 将关闭所有标签页，部分标签页可能会在退出前要求再次确认。
+    zh-HK: 將關閉所有標籤頁，部分標籤頁可能會在結束前要求再次確認。
+  confirm_action:
+    en: Quit
+    zh-CN: 退出
+    zh-HK: 結束
+
 # MCP 审批
 McpApproval:
   dialog_title:

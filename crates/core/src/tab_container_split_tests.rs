@@ -57,3 +57,11 @@ fn split_visibility_uses_pinned_tab_capability_when_pinned_is_active() {
         Some(true),
     ));
 }
+
+#[test]
+fn linux_close_control_uses_injected_window_close_callback() {
+    let source = include_str!("tab_container.rs");
+
+    assert!(source.contains("with_window_close_action"));
+    assert!(source.contains("on_close_window"));
+}
