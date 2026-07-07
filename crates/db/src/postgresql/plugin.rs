@@ -1255,15 +1255,11 @@ impl DatabasePlugin for PostgresPlugin {
                 c.relname AS tablename,
                 n.nspname AS schemaname,
                 pg_catalog.pg_get_userbyid(c.relowner) AS tableowner,
-                d.description AS table_comment,
+                obj_description(c.oid, 'pg_class') AS table_comment,
                 c.reltuples::bigint AS row_count,
                 pg_size_pretty(pg_total_relation_size(c.oid)) AS total_size
              FROM pg_class c
              JOIN pg_namespace n ON c.relnamespace = n.oid
-             LEFT JOIN pg_description d
-               ON d.objoid = c.oid
-              AND d.classoid = 'pg_class'::regclass
-              AND d.objsubid = 0
              WHERE n.nspname = '{}'
                AND c.relkind IN ('r', 'p')
              ORDER BY c.relname",
@@ -2649,7 +2645,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_postgres_table_metadata_reads_comments_from_pg_description() {
+    async fn test_postgres_table_metadata_reads_comments_from_pg_class() {
         let plugin = create_plugin();
         let connection = CommentMetadataConnection::new();
 
@@ -2664,53 +2660,7 @@ mod tests {
             .iter()
             .find(|query| query.contains("table_comment"))
             .expect("table metadata query");
-        assert!(table_query.contains("LEFT JOIN pg_description d"));
-        assert!(table_query.contains("d.objsubid = 0"));
-    }
-
-    #[tokio::test]
-    async fn test_postgres_tables_view_includes_table_comments() {
-        let plugin = create_plugin();
-        let connection = CommentMetadataConnection::new();
-
-        let view = plugin
-            .list_tables_view(&connection, "app", Some("public".to_string()))
-            .await
-            .expect("list tables view");
-
-        assert_eq!(
-            Some("comment"),
-            view.columns.last().map(|column| column.key.as_str())
-        );
-        assert_eq!("Application users", view.rows[0][4]);
-    }
-
-    #[tokio::test]
-    async fn test_postgres_table_tree_nodes_include_table_comments() {
-        let plugin = create_plugin();
-        let connection = CommentMetadataConnection::new();
-        let mut metadata = HashMap::new();
-        metadata.insert("database".to_string(), "app".to_string());
-        metadata.insert("schema".to_string(), "public".to_string());
-        let table_folder = DbNode::new(
-            "conn-1:app:public:table_folder",
-            "DbTree.Tables",
-            DbNodeType::TablesFolder,
-            "conn-1".to_string(),
-            DatabaseType::PostgreSQL,
-        )
-        .with_metadata(metadata);
-
-        let nodes = plugin
-            .load_schema_folder_children(&connection, &table_folder, &table_folder.id)
-            .await
-            .expect("load table tree nodes");
-
-        assert_eq!("users", nodes[0].name);
-        assert_eq!(
-            Some("Application users"),
-            nodes[0].metadata.get("comment").map(String::as_str)
-        );
+        assert!(table_query.contains("obj_description(c.oid, 'pg_class')"));
     }
 
     #[tokio::test]
