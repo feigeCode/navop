@@ -11,6 +11,7 @@ use gpui_component::{
     h_flex,
     input::{Input, InputState},
     radio::Radio,
+    scroll::ScrollableElement,
     select::{Select, SelectItem, SelectState},
     tab::{Tab, TabBar},
     v_flex,
@@ -256,6 +257,10 @@ pub enum AuthMethodSelection {
 
 fn build_connection_test_signature(params: &SshParams) -> String {
     format!("{:?}", params)
+}
+
+fn format_connection_error(error: &anyhow::Error) -> String {
+    format!("{error:#}")
 }
 
 fn validate_save_state(
@@ -998,7 +1003,7 @@ impl SshFormWindow {
             };
             let test_result: Result<(), String> = match spawn_result {
                 Ok(task) => Ok(task),
-                Err(e) => Err(e.to_string()),
+                Err(error) => Err(format_connection_error(&error)),
             };
 
             let _ = cx.update_window(window_handle, |_, window, cx| {
@@ -1659,13 +1664,22 @@ impl Render for SshFormWindow {
                 div()
                     .text_sm()
                     .text_color(cx.theme().success)
-                    .child(t!("SSH.test_success").to_string()),
+                    .child(t!("SSH.test_success").to_string())
+                    .into_any_element(),
             ),
             Some(Err(e)) => Some(
                 div()
+                    .mx_6()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(gpui::rgb(0xfee2e2))
                     .text_sm()
                     .text_color(cx.theme().danger)
-                    .child(e.clone()),
+                    .max_h(px(120.0))
+                    .overflow_y_scrollbar()
+                    .child(e.clone())
+                    .into_any_element(),
             ),
             None => None,
         };
@@ -1790,8 +1804,9 @@ impl Render for SshFormWindow {
 mod tests {
     use super::{
         AuthMethodSelection, build_connection_test_signature, build_jump_auth_method,
-        validate_save_state,
+        format_connection_error, validate_save_state,
     };
+    use anyhow::Context as _;
     use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
     use std::sync::Arc;
 
@@ -1856,6 +1871,20 @@ mod tests {
         let mut changed_host = sample_params();
         changed_host.host = "example.com".to_string();
         assert_ne!(original, build_connection_test_signature(&changed_host));
+    }
+
+    #[test]
+    fn connection_test_error_keeps_context_chain() {
+        let error = Err::<(), _>(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ))
+        .context("SSH connection failed")
+        .unwrap_err();
+        let message = format_connection_error(&error);
+
+        assert!(message.contains("SSH connection failed"));
+        assert!(message.contains("denied"));
     }
 
     #[test]

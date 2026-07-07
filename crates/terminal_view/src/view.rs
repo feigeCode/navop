@@ -10,7 +10,7 @@ use gpui_component::dialog::DialogButtonProps;
 use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::notification::Notification;
-use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
+use gpui_component::scroll::{ScrollableElement, Scrollbar, ScrollbarHandle, ScrollbarShow};
 use gpui_component::{BlinkCursor, Icon, IconName, Sizable, WindowExt, h_flex, kbd::Kbd, v_flex};
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::{
@@ -3754,11 +3754,15 @@ impl TerminalView {
                     .when_some(error_msg, |this, msg| {
                         this.child(
                             div()
+                                .px_3()
+                                .py_2()
+                                .rounded_md()
+                                .bg(rgb(0x1f1f1f))
                                 .text_sm()
                                 .text_color(rgb(0xef4444))
-                                .max_w(px(350.0))
-                                .overflow_hidden()
-                                .text_ellipsis()
+                                .max_w(px(480.0))
+                                .max_h(px(160.0))
+                                .overflow_y_scrollbar()
                                 .child(msg),
                         )
                     })
