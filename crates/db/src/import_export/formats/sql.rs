@@ -4,6 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use super::format_import_table_reference;
+use super::sql_export::export_table_data_in_pages;
 use crate::connection::DbConnection;
 use crate::executor::{ExecOptions, SqlResult};
 use crate::import_export::{
@@ -282,43 +283,19 @@ impl FormatHandler for SqlFormatHandler {
                     table: table.clone(),
                 });
 
-                match plugin
-                    .export_table_data_sql(
-                        connection,
-                        &config.database,
-                        config.schema.as_deref(),
-                        table,
-                        config.where_clause.as_deref(),
-                        config.limit,
-                    )
-                    .await
+                match export_table_data_in_pages(
+                    plugin,
+                    connection,
+                    config,
+                    table,
+                    is_streaming,
+                    &mut output,
+                    &send_progress,
+                )
+                .await
                 {
-                    Ok(data_sql) => {
-                        let mut data_output = String::new();
-                        let rows_count = if !data_sql.is_empty() {
-                            data_output.push_str("-- Data for table ");
-                            data_output.push_str(table);
-                            data_output.push('\n');
-                            data_output.push_str(&data_sql);
-                            data_output.push('\n');
-                            data_sql.lines().filter(|l| l.starts_with("INSERT")).count() as u64
-                        } else {
-                            0
-                        };
+                    Ok(rows_count) => {
                         total_rows += rows_count;
-                        let progress_data = if is_streaming {
-                            std::mem::take(&mut data_output)
-                        } else {
-                            data_output.clone()
-                        };
-                        send_progress(ExportProgressEvent::DataExported {
-                            table: table.clone(),
-                            rows: rows_count,
-                            data: progress_data,
-                        });
-                        if !is_streaming {
-                            output.push_str(&data_output);
-                        }
                     }
                     Err(e) => {
                         let error_output =
