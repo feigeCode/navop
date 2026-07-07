@@ -4692,6 +4692,8 @@ impl Render for TerminalView {
                         .relative()
                         .h_full()
                         .w(sidebar_panel_size)
+                        .min_w(sidebar_panel_size)
+                        .max_w(sidebar_panel_size)
                         .flex_shrink_0()
                         .overflow_hidden()
                         .child(self.render_sidebar_resize_handle(ResizingPanel::LeftSidebar, cx))
@@ -4900,6 +4902,8 @@ impl Render for TerminalView {
                                 .relative()
                                 .w_full()
                                 .h(sidebar_panel_size)
+                                .min_h(sidebar_panel_size)
+                                .max_h(sidebar_panel_size)
                                 .flex_shrink_0()
                                 .overflow_hidden()
                                 .child(
@@ -4917,6 +4921,8 @@ impl Render for TerminalView {
                     .debug_selector(|| "terminal-tool-dock-right".to_string())
                     .h_full()
                     .w(right_tool_width)
+                    .min_w(right_tool_width)
+                    .max_w(right_tool_width)
                     .flex_shrink_0()
                     .overflow_hidden()
                     .when_some(right_tool_panel, |this, panel| {
@@ -4925,6 +4931,8 @@ impl Render for TerminalView {
                                 .relative()
                                 .h_full()
                                 .w(sidebar_panel_size)
+                                .min_w(sidebar_panel_size)
+                                .max_w(sidebar_panel_size)
                                 .flex_shrink_0()
                                 .overflow_hidden()
                                 .child(
@@ -4941,6 +4949,8 @@ impl Render for TerminalView {
                             .debug_selector(|| "terminal-tool-dock-toolbar".to_string())
                             .h_full()
                             .w(TOOLBAR_WIDTH)
+                            .min_w(TOOLBAR_WIDTH)
+                            .max_w(TOOLBAR_WIDTH)
                             .flex_shrink_0()
                             .child(self.sidebar_toolbar.clone()),
                     ),
@@ -5467,6 +5477,27 @@ mod tests {
         assert!(
             render_source.contains("right_tool_region_width(&tool_layout, sidebar_panel_size)")
         );
+    }
+
+    #[test]
+    fn terminal_internal_tool_dock_uses_fixed_host_bounds() {
+        let source = include_str!("view.rs");
+        let render_start = source
+            .find("fn render(&mut self, window: &mut Window, cx: &mut Context<Self>)")
+            .expect("render method should exist");
+        let render_source = &source[render_start..];
+
+        assert!(render_source.contains(".w(right_tool_width)"));
+        assert!(render_source.contains(".min_w(right_tool_width)"));
+        assert!(render_source.contains(".max_w(right_tool_width)"));
+        assert!(render_source.matches(".w(sidebar_panel_size)").count() >= 2);
+        assert!(render_source.matches(".min_w(sidebar_panel_size)").count() >= 2);
+        assert!(render_source.matches(".max_w(sidebar_panel_size)").count() >= 2);
+        assert!(render_source.contains(".h(sidebar_panel_size)"));
+        assert!(render_source.contains(".min_h(sidebar_panel_size)"));
+        assert!(render_source.contains(".max_h(sidebar_panel_size)"));
+        assert!(render_source.contains(".min_w(TOOLBAR_WIDTH)"));
+        assert!(render_source.contains(".max_w(TOOLBAR_WIDTH)"));
     }
 
     #[test]
