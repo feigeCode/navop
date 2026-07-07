@@ -11,6 +11,7 @@ const SSH_USERNAME: &str = "ssh_username";
 const SSH_AUTH_TYPE: &str = "ssh_auth_type";
 const SSH_PASSWORD: &str = "ssh_password";
 const SSH_PRIVATE_KEY_PATH: &str = "ssh_private_key_path";
+const SSH_PRIVATE_KEY_CONTENT: &str = "ssh_private_key_content";
 const SSH_PRIVATE_KEY_PASSPHRASE: &str = "ssh_private_key_passphrase";
 const SSH_TARGET_HOST: &str = "ssh_target_host";
 const SSH_TARGET_PORT: &str = "ssh_target_port";
@@ -64,6 +65,7 @@ fn tunnel_config_from_db_config(config: &DbConnectionConfig) -> Option<SshTunnel
         auth_type: string_param(config, SSH_AUTH_TYPE),
         password: optional_string_param(config, SSH_PASSWORD),
         private_key_path: optional_string_param(config, SSH_PRIVATE_KEY_PATH),
+        private_key_content: optional_string_param(config, SSH_PRIVATE_KEY_CONTENT),
         private_key_passphrase: optional_string_param(config, SSH_PRIVATE_KEY_PASSPHRASE),
         target_host: optional_string_param(config, SSH_TARGET_HOST),
         target_port: optional_u16_param(config, SSH_TARGET_PORT),

@@ -49,6 +49,8 @@ pub struct SshTunnelConfig {
     #[serde(default)]
     pub private_key_path: Option<String>,
     #[serde(default)]
+    pub private_key_content: Option<String>,
+    #[serde(default)]
     pub private_key_passphrase: Option<String>,
     #[serde(default)]
     pub target_host: Option<String>,
@@ -69,6 +71,7 @@ impl Default for SshTunnelConfig {
             auth_type: DEFAULT_SSH_AUTH_TYPE.to_string(),
             password: None,
             private_key_path: None,
+            private_key_content: None,
             private_key_passphrase: None,
             target_host: None,
             target_port: None,
@@ -186,6 +189,14 @@ fn build_auth(config: &SshTunnelConfig) -> Result<SshAuth, TunnelError> {
             key_path: required_value(
                 "private_key_path",
                 config.private_key_path.as_deref().unwrap_or(""),
+            )?,
+            passphrase: optional_value(&config.private_key_passphrase),
+            certificate_path: None,
+        }),
+        "private_key_content" | "private_key_material" => Ok(SshAuth::PrivateKeyContent {
+            private_key: required_value(
+                "private_key_content",
+                config.private_key_content.as_deref().unwrap_or(""),
             )?,
             passphrase: optional_value(&config.private_key_passphrase),
             certificate_path: None,

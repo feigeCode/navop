@@ -471,6 +471,10 @@ ConnectionForm:
     en: Private Key
     zh-CN: 私钥
     zh-HK: 私鑰
+  ssh_auth_private_key_content:
+    en: Private Key Content
+    zh-CN: 私钥内容
+    zh-HK: 私鑰內容
   ssh_auth_agent:
     en: SSH Agent
     zh-CN: SSH Agent
@@ -479,6 +483,14 @@ ConnectionForm:
     en: Private Key Path
     zh-CN: 私钥路径
     zh-HK: 私鑰路徑
+  ssh_private_key_content:
+    en: Private Key Content
+    zh-CN: 私钥内容
+    zh-HK: 私鑰內容
+  ssh_private_key_content_placeholder:
+    en: Paste OpenSSH or PuTTY private key content
+    zh-CN: 粘贴 OpenSSH 或 PuTTY 私钥内容
+    zh-HK: 貼上 OpenSSH 或 PuTTY 私鑰內容
   ssh_private_key_passphrase:
     en: Key Passphrase
     zh-CN: 私钥口令

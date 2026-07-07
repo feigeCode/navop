@@ -178,6 +178,29 @@ fn edited_ssh_private_key_path_is_converted_to_stored_connection() {
 }
 
 #[test]
+fn imported_ssh_private_key_material_is_converted_to_stored_connection() {
+    let mut record = ssh_import("inline-key");
+    let ssh = record.ssh.as_mut().expect("ssh record should exist");
+    ssh.auth_method = SshImportAuthMethod::PrivateKeyMaterial {
+        private_key: Some("-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n".to_string()),
+        passphrase: Some("secret".to_string()),
+        file_name_hint: Some("id_ed25519".to_string()),
+    };
+    let draft = EditableImportDraft::new(record);
+
+    let stored = selected_import_drafts_to_connections(&[draft]).unwrap();
+    let params = stored[0].to_ssh_params().unwrap();
+
+    assert!(matches!(
+        params.auth_method,
+        SshAuthMethod::PrivateKeyContent {
+            ref private_key,
+            passphrase: Some(ref passphrase),
+        } if private_key.contains("OPENSSH PRIVATE KEY") && passphrase == "secret"
+    ));
+}
+
+#[test]
 fn database_duplicate_identity_uses_type_host_port_username_and_database() {
     let draft = EditableImportDraft::new(database_import("prod"));
 

@@ -410,6 +410,10 @@ impl DbFormConfig {
                     t!("ConnectionForm.ssh_auth_private_key").to_string(),
                 ),
                 (
+                    "private_key_content".to_string(),
+                    t!("ConnectionForm.ssh_auth_private_key_content").to_string(),
+                ),
+                (
                     "agent".to_string(),
                     t!("ConnectionForm.ssh_auth_agent").to_string(),
                 ),
@@ -428,6 +432,14 @@ impl DbFormConfig {
             )
             .optional()
             .placeholder("~/.ssh/id_rsa"),
+            FormField::new(
+                "ssh_private_key_content",
+                t!("ConnectionForm.ssh_private_key_content"),
+                FormFieldType::TextArea,
+            )
+            .rows(5)
+            .optional()
+            .placeholder(t!("ConnectionForm.ssh_private_key_content_placeholder")),
             FormField::new(
                 "ssh_private_key_passphrase",
                 t!("ConnectionForm.ssh_private_key_passphrase"),
@@ -1098,6 +1110,7 @@ impl DbFormConfig {
 fn normalized_ssh_auth_type(auth_type: &str) -> &str {
     match auth_type.trim().to_ascii_lowercase().as_str() {
         "private_key" => "private_key",
+        "private_key_content" | "private_key_material" => "private_key_content",
         "agent" => "agent",
         _ => "password",
     }
@@ -1111,7 +1124,11 @@ fn ssh_auth_requires_private_key(auth_type: &str) -> bool {
     normalized_ssh_auth_type(auth_type) == "private_key"
 }
 
-const HOST_SSH_FIELD_NAMES: &[&str] = &[
+fn ssh_auth_requires_private_key_content(auth_type: &str) -> bool {
+    normalized_ssh_auth_type(auth_type) == "private_key_content"
+}
+
+const REQUIRED_HOST_SSH_FIELD_NAMES: &[&str] = &[
     "ssh_tunnel_enabled",
     "ssh_connection_id",
     "ssh_host",
@@ -1143,7 +1160,7 @@ fn has_all_fields(fields: &[FormField], field_names: &[&str]) -> bool {
 }
 
 fn should_use_custom_ssh_tab(db_type: &DatabaseType, fields: &[FormField]) -> bool {
-    !db_type.is_external() || has_all_fields(fields, HOST_SSH_FIELD_NAMES)
+    !db_type.is_external() || has_all_fields(fields, REQUIRED_HOST_SSH_FIELD_NAMES)
 }
 
 fn host_ssl_tab_kind(db_type: &DatabaseType, fields: &[FormField]) -> Option<HostSslTabKind> {
@@ -1191,6 +1208,7 @@ fn missing_ssh_tunnel_required_field(
     ssh_username: &str,
     auth_type: &str,
     ssh_private_key_path: &str,
+    ssh_private_key_content: &str,
     ssh_password: &str,
 ) -> Option<&'static str> {
     if !enabled {
@@ -1207,6 +1225,11 @@ fn missing_ssh_tunnel_required_field(
 
     if ssh_auth_requires_private_key(auth_type) && ssh_private_key_path.trim().is_empty() {
         return Some("ssh_private_key_path");
+    }
+
+    if ssh_auth_requires_private_key_content(auth_type) && ssh_private_key_content.trim().is_empty()
+    {
+        return Some("ssh_private_key_content");
     }
 
     if ssh_auth_requires_password(auth_type) && ssh_password.trim().is_empty() {
@@ -1795,6 +1818,9 @@ impl DbConnectionForm {
             &self
                 .get_field_value("ssh_private_key_path", cx)
                 .unwrap_or_default(),
+            &self
+                .get_field_value("ssh_private_key_content", cx)
+                .unwrap_or_default(),
             &self.get_field_value("ssh_password", cx).unwrap_or_default(),
         );
 
@@ -2236,17 +2262,20 @@ impl DbConnectionForm {
         let is_checkbox = field_info.field_type == FormFieldType::Checkbox;
         let is_file_path = field_info.field_type == FormFieldType::FilePath;
         let is_password = field_info.field_type == FormFieldType::Password;
+        let is_textarea = field_info.field_type == FormFieldType::TextArea;
         let field_name = field_info.name.clone();
 
         field()
             .label(field_info.label.clone())
             .required(field_info.required)
-            .items_center()
+            .when(!is_textarea, |field| field.items_center())
+            .when(is_textarea, |field| field.items_start())
             .label_justify_end()
             .child(
                 h_flex()
                     .w_full()
                     .gap_2()
+                    .when(is_textarea, |el| el.items_start())
                     .when(is_select, |el| {
                         if let Some(select_state) = self.field_selects.get(&field_name) {
                             el.child(Select::new(select_state).w_full())
@@ -2702,6 +2731,7 @@ impl DbConnectionForm {
                             .child(
                                 h_flex()
                                     .w_full()
+                                    .flex_wrap()
                                     .gap_4()
                                     .child(
                                         Radio::new("db-ssh-auth-password")
@@ -2735,6 +2765,22 @@ impl DbConnectionForm {
                                             })),
                                     )
                                     .child(
+                                        Radio::new("db-ssh-auth-private-key-content")
+                                            .label(
+                                                t!("ConnectionForm.ssh_auth_private_key_content")
+                                                    .to_string(),
+                                            )
+                                            .checked(ssh_auth_type == "private_key_content")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.set_field_value(
+                                                    "ssh_auth_type",
+                                                    "private_key_content",
+                                                    window,
+                                                    cx,
+                                                );
+                                            })),
+                                    )
+                                    .child(
                                         Radio::new("db-ssh-auth-agent")
                                             .label(t!("ConnectionForm.ssh_auth_agent").to_string())
                                             .checked(ssh_auth_type == "agent")
@@ -2754,6 +2800,10 @@ impl DbConnectionForm {
                     })
                     .when(ssh_auth_type == "private_key", |form| {
                         form.child(self.render_field_by_name("ssh_private_key_path", cx))
+                            .child(self.render_field_by_name("ssh_private_key_passphrase", cx))
+                    })
+                    .when(ssh_auth_type == "private_key_content", |form| {
+                        form.child(self.render_field_by_name("ssh_private_key_content", cx))
                             .child(self.render_field_by_name("ssh_private_key_passphrase", cx))
                     })
                 })
@@ -3041,10 +3091,47 @@ mod tests {
                 "ssh_auth_type",
                 "ssh_password",
                 "ssh_private_key_path",
+                "ssh_private_key_content",
                 "ssh_private_key_passphrase",
                 "ssh_target_host",
                 "ssh_target_port"
             ]
+        );
+    }
+
+    #[test]
+    fn private_key_content_auth_requires_pasted_key_body() {
+        assert_eq!(
+            Some("ssh_private_key_content"),
+            missing_ssh_tunnel_required_field(
+                true,
+                "jump.example.com",
+                "root",
+                "private_key_content",
+                "",
+                "",
+                "",
+            )
+        );
+        assert_eq!(
+            None,
+            missing_ssh_tunnel_required_field(
+                true,
+                "jump.example.com",
+                "root",
+                "private_key_content",
+                "",
+                "-----BEGIN OPENSSH PRIVATE KEY-----",
+                "",
+            )
+        );
+    }
+
+    #[test]
+    fn private_key_material_alias_uses_private_key_content_auth() {
+        assert_eq!(
+            "private_key_content",
+            normalized_ssh_auth_type("private_key_material")
         );
     }
 
@@ -3121,7 +3208,15 @@ mod tests {
     #[test]
     fn ssh_agent_auth_does_not_require_password() {
         assert_eq!(
-            missing_ssh_tunnel_required_field(true, "jump.example.com", "root", "agent", "", "",),
+            missing_ssh_tunnel_required_field(
+                true,
+                "jump.example.com",
+                "root",
+                "agent",
+                "",
+                "",
+                ""
+            ),
             None
         );
     }
@@ -3129,7 +3224,15 @@ mod tests {
     #[test]
     fn ssh_password_auth_still_requires_password() {
         assert_eq!(
-            missing_ssh_tunnel_required_field(true, "jump.example.com", "root", "password", "", "",),
+            missing_ssh_tunnel_required_field(
+                true,
+                "jump.example.com",
+                "root",
+                "password",
+                "",
+                "",
+                "",
+            ),
             Some("ssh_password")
         );
     }

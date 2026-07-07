@@ -268,6 +268,14 @@ fn auth_from_method(auth: &SshAuthMethod) -> SshAuth {
             passphrase: passphrase.clone(),
             certificate_path: None,
         },
+        SshAuthMethod::PrivateKeyContent {
+            private_key,
+            passphrase,
+        } => SshAuth::PrivateKeyContent {
+            private_key: private_key.clone(),
+            passphrase: passphrase.clone(),
+            certificate_path: None,
+        },
         SshAuthMethod::Agent => SshAuth::Agent,
         SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
     }

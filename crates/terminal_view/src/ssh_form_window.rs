@@ -185,6 +185,7 @@ pub struct SshFormWindow {
     username_input: Entity<InputState>,
     password_input: Entity<InputState>,
     key_path_input: Entity<InputState>,
+    private_key_content_input: Entity<InputState>,
     passphrase_input: Entity<InputState>,
 
     auth_method: AuthMethodSelection,
@@ -199,6 +200,7 @@ pub struct SshFormWindow {
     jump_username_input: Entity<InputState>,
     jump_password_input: Entity<InputState>,
     jump_key_path_input: Entity<InputState>,
+    jump_private_key_content_input: Entity<InputState>,
     jump_passphrase_input: Entity<InputState>,
     jump_mfa_request: Option<FormMfaRequest>,
     jump_mfa_inputs: Vec<JumpMfaInput>,
@@ -251,12 +253,18 @@ pub enum AuthMethodSelection {
     #[default]
     Password,
     PrivateKey,
+    PrivateKeyContent,
     Agent,
     AutoPublicKey,
 }
 
 fn build_connection_test_signature(params: &SshParams) -> String {
-    format!("{:?}", params)
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash as _, Hasher as _};
+
+    let mut hasher = DefaultHasher::new();
+    format!("{:?}", params).hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 fn format_connection_error(error: &anyhow::Error) -> String {
@@ -290,12 +298,21 @@ fn build_jump_auth_method(
     auth_method: AuthMethodSelection,
     password: String,
     key_path: String,
+    private_key: String,
     passphrase: String,
 ) -> SshAuthMethod {
     match auth_method {
         AuthMethodSelection::Password => SshAuthMethod::Password { password },
         AuthMethodSelection::PrivateKey => SshAuthMethod::PrivateKey {
             key_path,
+            passphrase: if passphrase.is_empty() {
+                None
+            } else {
+                Some(passphrase)
+            },
+        },
+        AuthMethodSelection::PrivateKeyContent => SshAuthMethod::PrivateKeyContent {
+            private_key,
             passphrase: if passphrase.is_empty() {
                 None
             } else {
@@ -351,6 +368,11 @@ impl SshFormWindow {
         });
         let key_path_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.key_path_placeholder")));
+        let private_key_content_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("SSH.private_key_content_placeholder"))
+                .auto_grow(6, 12)
+        });
         let passphrase_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t!("SSH.passphrase_placeholder"))
@@ -374,6 +396,11 @@ impl SshFormWindow {
         });
         let jump_key_path_input =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("SSH.key_path_placeholder")));
+        let jump_private_key_content_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("SSH.private_key_content_placeholder"))
+                .auto_grow(6, 12)
+        });
         let jump_passphrase_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t!("SSH.passphrase_placeholder"))
@@ -481,6 +508,17 @@ impl SshFormWindow {
                             passphrase_input.update(cx, |s, cx| s.set_value(pass, window, cx));
                         }
                     }
+                    SshAuthMethod::PrivateKeyContent {
+                        ref private_key,
+                        ref passphrase,
+                    } => {
+                        auth_method = AuthMethodSelection::PrivateKeyContent;
+                        private_key_content_input
+                            .update(cx, |s, cx| s.set_value(private_key, window, cx));
+                        if let Some(ref pass) = passphrase {
+                            passphrase_input.update(cx, |s, cx| s.set_value(pass, window, cx));
+                        }
+                    }
                     SshAuthMethod::Agent => {
                         auth_method = AuthMethodSelection::Agent;
                     }
@@ -532,6 +570,18 @@ impl SshFormWindow {
                             jump_auth_method = AuthMethodSelection::PrivateKey;
                             jump_key_path_input
                                 .update(cx, |s, cx| s.set_value(key_path, window, cx));
+                            if let Some(ref pass) = passphrase {
+                                jump_passphrase_input
+                                    .update(cx, |s, cx| s.set_value(pass, window, cx));
+                            }
+                        }
+                        SshAuthMethod::PrivateKeyContent {
+                            ref private_key,
+                            ref passphrase,
+                        } => {
+                            jump_auth_method = AuthMethodSelection::PrivateKeyContent;
+                            jump_private_key_content_input
+                                .update(cx, |s, cx| s.set_value(private_key, window, cx));
                             if let Some(ref pass) = passphrase {
                                 jump_passphrase_input
                                     .update(cx, |s, cx| s.set_value(pass, window, cx));
@@ -599,6 +649,7 @@ impl SshFormWindow {
             username_input,
             password_input,
             key_path_input,
+            private_key_content_input,
             passphrase_input,
             auth_method,
             workspace_select,
@@ -610,6 +661,7 @@ impl SshFormWindow {
             jump_username_input,
             jump_password_input,
             jump_key_path_input,
+            jump_private_key_content_input,
             jump_passphrase_input,
             jump_mfa_request: None,
             jump_mfa_inputs: Vec::new(),
@@ -704,6 +756,17 @@ impl SshFormWindow {
                     passphrase,
                 }
             }
+            AuthMethodSelection::PrivateKeyContent => {
+                let private_key = self.private_key_content_input.read(cx).text().to_string();
+                let passphrase = {
+                    let p = self.passphrase_input.read(cx).text().to_string();
+                    if p.is_empty() { None } else { Some(p) }
+                };
+                SshAuthMethod::PrivateKeyContent {
+                    private_key,
+                    passphrase,
+                }
+            }
             AuthMethodSelection::Agent => SshAuthMethod::Agent,
             AuthMethodSelection::AutoPublicKey => SshAuthMethod::AutoPublicKey,
         };
@@ -755,6 +818,11 @@ impl SshFormWindow {
                     .unwrap_or(22);
                 let jump_password = self.jump_password_input.read(cx).text().to_string();
                 let jump_key_path = self.jump_key_path_input.read(cx).text().to_string();
+                let jump_private_key = self
+                    .jump_private_key_content_input
+                    .read(cx)
+                    .text()
+                    .to_string();
                 let jump_passphrase = self.jump_passphrase_input.read(cx).text().to_string();
                 Some(JumpServerConfig {
                     host: jump_host,
@@ -764,6 +832,7 @@ impl SshFormWindow {
                         self.jump_auth_method,
                         jump_password,
                         jump_key_path,
+                        jump_private_key,
                         jump_passphrase,
                     ),
                 })
@@ -842,6 +911,14 @@ impl SshFormWindow {
                 passphrase: passphrase.clone(),
                 certificate_path: None,
             },
+            SshAuthMethod::PrivateKeyContent {
+                private_key,
+                passphrase,
+            } => SshAuth::PrivateKeyContent {
+                private_key: private_key.clone(),
+                passphrase: passphrase.clone(),
+                certificate_path: None,
+            },
             SshAuthMethod::Agent => SshAuth::Agent,
             SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
         };
@@ -855,6 +932,14 @@ impl SshFormWindow {
                     passphrase,
                 } => SshAuth::PrivateKey {
                     key_path: key_path.clone(),
+                    passphrase: passphrase.clone(),
+                    certificate_path: None,
+                },
+                SshAuthMethod::PrivateKeyContent {
+                    private_key,
+                    passphrase,
+                } => SshAuth::PrivateKeyContent {
+                    private_key: private_key.clone(),
                     passphrase: passphrase.clone(),
                     certificate_path: None,
                 },
@@ -1225,6 +1310,7 @@ impl SshFormWindow {
                     &t!("SSH.auth_method"),
                     h_flex()
                         .gap_4()
+                        .flex_wrap()
                         .child(
                             Radio::new("password")
                                 .label(t!("SSH.password").to_string())
@@ -1240,6 +1326,15 @@ impl SshFormWindow {
                                 .checked(auth_method == AuthMethodSelection::PrivateKey)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.auth_method = AuthMethodSelection::PrivateKey;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Radio::new("private-key-content")
+                                .label(t!("SSH.private_key_content").to_string())
+                                .checked(auth_method == AuthMethodSelection::PrivateKeyContent)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.auth_method = AuthMethodSelection::PrivateKeyContent;
                                     cx.notify();
                                 })),
                         )
@@ -1278,6 +1373,27 @@ impl SshFormWindow {
                     Input::new(&self.passphrase_input).mask_toggle(),
                 ))
             })
+            .when(
+                auth_method == AuthMethodSelection::PrivateKeyContent,
+                |this| {
+                    this.child(self.render_form_row(
+                        &t!("SSH.private_key_content"),
+                        Input::new(&self.private_key_content_input),
+                    ))
+                    .child(self.render_form_row(
+                        &t!("SSH.passphrase"),
+                        Input::new(&self.passphrase_input).mask_toggle(),
+                    ))
+                    .child(
+                        h_flex().justify_center().child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("SSH.private_key_content_sync_hint").to_string()),
+                        ),
+                    )
+                },
+            )
             .when(auth_method == AuthMethodSelection::AutoPublicKey, |this| {
                 this.child(
                     h_flex().justify_center().child(
@@ -1436,6 +1552,7 @@ impl SshFormWindow {
                         &t!("SSH.jump_auth_method"),
                         h_flex()
                             .gap_4()
+                            .flex_wrap()
                             .child(
                                 Radio::new("jump-password")
                                     .label(t!("SSH.password").to_string())
@@ -1451,6 +1568,18 @@ impl SshFormWindow {
                                     .checked(jump_auth_method == AuthMethodSelection::PrivateKey)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.jump_auth_method = AuthMethodSelection::PrivateKey;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Radio::new("jump-private-key-content")
+                                    .label(t!("SSH.private_key_content").to_string())
+                                    .checked(
+                                        jump_auth_method == AuthMethodSelection::PrivateKeyContent,
+                                    )
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.jump_auth_method =
+                                            AuthMethodSelection::PrivateKeyContent;
                                         cx.notify();
                                     })),
                             )
@@ -1491,6 +1620,27 @@ impl SshFormWindow {
                             &t!("SSH.jump_passphrase"),
                             Input::new(&self.jump_passphrase_input).mask_toggle(),
                         ))
+                    },
+                )
+                .when(
+                    jump_auth_method == AuthMethodSelection::PrivateKeyContent,
+                    |this| {
+                        this.child(self.render_form_row(
+                            &t!("SSH.private_key_content"),
+                            Input::new(&self.jump_private_key_content_input),
+                        ))
+                        .child(self.render_form_row(
+                            &t!("SSH.jump_passphrase"),
+                            Input::new(&self.jump_passphrase_input).mask_toggle(),
+                        ))
+                        .child(
+                            h_flex().justify_center().child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("SSH.private_key_content_sync_hint").to_string()),
+                            ),
+                        )
                     },
                 )
                 .when(
@@ -1874,6 +2024,19 @@ mod tests {
     }
 
     #[test]
+    fn connection_test_signature_does_not_expose_private_key_content() {
+        let mut params = sample_params();
+        params.auth_method = SshAuthMethod::PrivateKeyContent {
+            private_key: "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n".to_string(),
+            passphrase: Some("secret-passphrase".to_string()),
+        };
+        let signature = build_connection_test_signature(&params);
+
+        assert!(!signature.contains("OPENSSH PRIVATE KEY"));
+        assert!(!signature.contains("secret-passphrase"));
+    }
+
+    #[test]
     fn connection_test_error_keeps_context_chain() {
         let error = Err::<(), _>(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
@@ -1911,6 +2074,7 @@ mod tests {
             AuthMethodSelection::PrivateKey,
             "ignored".to_string(),
             "/home/me/.ssh/bastion".to_string(),
+            "ignored-key".to_string(),
             "secret".to_string(),
         );
 
@@ -1929,6 +2093,7 @@ mod tests {
             AuthMethodSelection::PrivateKey,
             "ignored".to_string(),
             "/home/me/.ssh/bastion".to_string(),
+            "ignored-key".to_string(),
             String::new(),
         );
 
@@ -1938,6 +2103,25 @@ mod tests {
                 key_path,
                 passphrase: None,
             } if key_path == "/home/me/.ssh/bastion"
+        ));
+    }
+
+    #[test]
+    fn jump_auth_builder_supports_private_key_content() {
+        let auth = build_jump_auth_method(
+            AuthMethodSelection::PrivateKeyContent,
+            "ignored".to_string(),
+            "ignored-path".to_string(),
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n".to_string(),
+            "secret".to_string(),
+        );
+
+        assert!(matches!(
+            auth,
+            SshAuthMethod::PrivateKeyContent {
+                private_key,
+                passphrase: Some(passphrase),
+            } if private_key.contains("OPENSSH PRIVATE KEY") && passphrase == "secret"
         ));
     }
 }

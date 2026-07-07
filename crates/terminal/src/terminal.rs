@@ -1115,6 +1115,14 @@ impl Terminal {
                 passphrase,
                 certificate_path: None,
             },
+            SshAuthMethod::PrivateKeyContent {
+                private_key,
+                passphrase,
+            } => SshAuth::PrivateKeyContent {
+                private_key,
+                passphrase,
+                certificate_path: None,
+            },
             SshAuthMethod::Agent => SshAuth::Agent,
             SshAuthMethod::AutoPublicKey => SshAuth::AutoPublicKey,
         };
@@ -1143,6 +1151,14 @@ impl Terminal {
                         passphrase,
                     } => SshAuth::PrivateKey {
                         key_path,
+                        passphrase,
+                        certificate_path: None,
+                    },
+                    SshAuthMethod::PrivateKeyContent {
+                        private_key,
+                        passphrase,
+                    } => SshAuth::PrivateKeyContent {
+                        private_key,
                         passphrase,
                         certificate_path: None,
                     },

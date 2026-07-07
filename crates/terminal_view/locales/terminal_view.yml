@@ -134,9 +134,13 @@ SSH:
     zh-CN: 请输入密码
     zh-HK: 請輸入密碼
   private_key:
-    en: Private Key
-    zh-CN: 私钥
-    zh-HK: 私鑰
+    en: Private Key File
+    zh-CN: 私钥文件
+    zh-HK: 私鑰文件
+  private_key_content:
+    en: Private Key Content
+    zh-CN: 私钥内容
+    zh-HK: 私鑰內容
   agent:
     en: SSH Agent
     zh-CN: SSH Agent
@@ -153,6 +157,14 @@ SSH:
     en: Enter private key path
     zh-CN: 请输入私钥路径
     zh-HK: 請輸入私鑰路徑
+  private_key_content_placeholder:
+    en: Paste the full OpenSSH or PPK private key content
+    zh-CN: 粘贴完整的 OpenSSH 或 PPK 私钥内容
+    zh-HK: 貼上完整的 OpenSSH 或 PPK 私鑰內容
+  private_key_content_sync_hint:
+    en: The private key content is saved with this connection and can be encrypted and synced across devices.
+    zh-CN: 私钥内容会随此连接保存，可加密后跨设备同步。
+    zh-HK: 私鑰內容會隨此連線保存，可加密後跨設備同步。
   passphrase:
     en: Passphrase
     zh-CN: 密钥密码

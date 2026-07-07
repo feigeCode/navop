@@ -360,6 +360,10 @@ pub enum SshAuthMethod {
         key_path: String,
         passphrase: Option<String>,
     },
+    PrivateKeyContent {
+        private_key: String,
+        passphrase: Option<String>,
+    },
     Agent,
     AutoPublicKey,
 }
@@ -455,6 +459,7 @@ impl RedisParams {
                 tunnel.auth_type = "password".to_string();
                 tunnel.password = Some(password);
                 tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
                 tunnel.private_key_passphrase = None;
             }
             SshAuthMethod::PrivateKey {
@@ -464,18 +469,31 @@ impl RedisParams {
                 tunnel.auth_type = "private_key".to_string();
                 tunnel.password = None;
                 tunnel.private_key_path = Some(key_path);
+                tunnel.private_key_content = None;
+                tunnel.private_key_passphrase = passphrase;
+            }
+            SshAuthMethod::PrivateKeyContent {
+                private_key,
+                passphrase,
+            } => {
+                tunnel.auth_type = "private_key_content".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = None;
+                tunnel.private_key_content = Some(private_key);
                 tunnel.private_key_passphrase = passphrase;
             }
             SshAuthMethod::Agent => {
                 tunnel.auth_type = "agent".to_string();
                 tunnel.password = None;
                 tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
                 tunnel.private_key_passphrase = None;
             }
             SshAuthMethod::AutoPublicKey => {
                 tunnel.auth_type = "auto_publickey".to_string();
                 tunnel.password = None;
                 tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
                 tunnel.private_key_passphrase = None;
             }
         }
@@ -549,6 +567,7 @@ impl MongoDBParams {
                 tunnel.auth_type = "password".to_string();
                 tunnel.password = Some(password);
                 tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
                 tunnel.private_key_passphrase = None;
             }
             SshAuthMethod::PrivateKey {
@@ -558,18 +577,31 @@ impl MongoDBParams {
                 tunnel.auth_type = "private_key".to_string();
                 tunnel.password = None;
                 tunnel.private_key_path = Some(key_path);
+                tunnel.private_key_content = None;
+                tunnel.private_key_passphrase = passphrase;
+            }
+            SshAuthMethod::PrivateKeyContent {
+                private_key,
+                passphrase,
+            } => {
+                tunnel.auth_type = "private_key_content".to_string();
+                tunnel.password = None;
+                tunnel.private_key_path = None;
+                tunnel.private_key_content = Some(private_key);
                 tunnel.private_key_passphrase = passphrase;
             }
             SshAuthMethod::Agent => {
                 tunnel.auth_type = "agent".to_string();
                 tunnel.password = None;
                 tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
                 tunnel.private_key_passphrase = None;
             }
             SshAuthMethod::AutoPublicKey => {
                 tunnel.auth_type = "auto_publickey".to_string();
                 tunnel.password = None;
                 tunnel.private_key_path = None;
+                tunnel.private_key_content = None;
                 tunnel.private_key_passphrase = None;
             }
         }
@@ -806,6 +838,21 @@ impl DbConnectionConfig {
                     .insert("ssh_auth_type".to_string(), "private_key".to_string());
                 self.extra_params
                     .insert("ssh_private_key_path".to_string(), key_path);
+                if let Some(passphrase) = passphrase {
+                    self.extra_params
+                        .insert("ssh_private_key_passphrase".to_string(), passphrase);
+                }
+            }
+            SshAuthMethod::PrivateKeyContent {
+                private_key,
+                passphrase,
+            } => {
+                self.extra_params.insert(
+                    "ssh_auth_type".to_string(),
+                    "private_key_content".to_string(),
+                );
+                self.extra_params
+                    .insert("ssh_private_key_content".to_string(), private_key);
                 if let Some(passphrase) = passphrase {
                     self.extra_params
                         .insert("ssh_private_key_passphrase".to_string(), passphrase);
@@ -1228,7 +1275,7 @@ impl StoredConnection {
     }
 
     /// 对 params 中的敏感字段进行加密，返回加密后的 params 字符串。
-    /// 敏感字段包括：password、passphrase 以及嵌套结构中的同名字段。
+    /// 敏感字段包括：password、passphrase、private_key、private_key_content 以及嵌套结构中的同类字段。
     pub fn encrypt_params(&self) -> String {
         encrypt_json_passwords(&self.params)
     }
@@ -1329,6 +1376,36 @@ mod tests {
             db.extra_params.get("ssh_password")
         );
         assert_eq!(Some(&"15".to_string()), db.extra_params.get("ssh_timeout"));
+    }
+
+    #[test]
+    fn ssh_connection_round_trips_private_key_content() {
+        let connection = ssh_connection_with_id(
+            42,
+            SshAuthMethod::PrivateKeyContent {
+                private_key: "-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n".to_string(),
+                passphrase: Some("secret".to_string()),
+            },
+        );
+
+        let params = connection
+            .to_ssh_params()
+            .expect("ssh params should decode");
+
+        assert!(matches!(
+            params.auth_method,
+            SshAuthMethod::PrivateKeyContent {
+                private_key,
+                passphrase: Some(passphrase),
+            } if private_key.contains("OPENSSH PRIVATE KEY") && passphrase == "secret"
+        ));
+    }
+
+    #[test]
+    fn private_key_content_fields_are_sensitive() {
+        assert!(is_sensitive_field("private_key"));
+        assert!(is_sensitive_field("private_key_content"));
+        assert!(is_sensitive_field("ssh_private_key_content"));
     }
 
     #[test]
@@ -1513,7 +1590,7 @@ mod tests {
     }
 }
 
-/// 递归加密 JSON 中所有名为 password 或 passphrase 的字符串字段
+/// 递归加密 JSON 中所有敏感字符串字段
 fn encrypt_json_passwords(json_str: &str) -> String {
     match serde_json::from_str::<Value>(json_str) {
         Ok(mut value) => {
@@ -1524,7 +1601,7 @@ fn encrypt_json_passwords(json_str: &str) -> String {
     }
 }
 
-/// 递归解密 JSON 中所有名为 password 或 passphrase 的字符串字段
+/// 递归解密 JSON 中所有敏感字符串字段
 fn decrypt_json_passwords(json_str: &str) -> String {
     match serde_json::from_str::<Value>(json_str) {
         Ok(mut value) => {
@@ -1539,8 +1616,12 @@ fn decrypt_json_passwords(json_str: &str) -> String {
 fn is_sensitive_field(key: &str) -> bool {
     key == "password"
         || key == "passphrase"
+        || key == "private_key"
+        || key == "private_key_content"
         || key.ends_with("_password")
         || key.ends_with("_passphrase")
+        || key.ends_with("_private_key")
+        || key.ends_with("_private_key_content")
 }
 
 /// 递归遍历 JSON Value，加密敏感字段

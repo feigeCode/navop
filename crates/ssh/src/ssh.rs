@@ -86,6 +86,11 @@ pub enum SshAuth {
         passphrase: Option<String>,
         certificate_path: Option<String>,
     },
+    PrivateKeyContent {
+        private_key: String,
+        passphrase: Option<String>,
+        certificate_path: Option<String>,
+    },
     Agent,
     AutoPublicKey,
 }
@@ -314,11 +319,12 @@ where
             .await?;
         }
         SshAuth::PrivateKey {
-            key_path,
-            passphrase,
-            certificate_path,
+            certificate_path, ..
+        }
+        | SshAuth::PrivateKeyContent {
+            certificate_path, ..
         } => {
-            let key_pair = load_secret_key(key_path, passphrase.as_deref())?;
+            let key_pair = private_key_for_auth(auth)?;
 
             if let Some(cert_path) = certificate_path {
                 let cert = load_openssh_certificate(cert_path)?;
@@ -358,6 +364,22 @@ where
         SshAuth::AutoPublicKey => unreachable!("AutoPublicKey 应由高层认证编排处理"),
     }
     Ok(())
+}
+
+fn private_key_for_auth(auth: &SshAuth) -> Result<PrivateKey> {
+    match auth {
+        SshAuth::PrivateKey {
+            key_path,
+            passphrase,
+            ..
+        } => Ok(load_secret_key(key_path, passphrase.as_deref())?),
+        SshAuth::PrivateKeyContent {
+            private_key,
+            passphrase,
+            ..
+        } => Ok(decode_secret_key(private_key, passphrase.as_deref())?),
+        _ => anyhow::bail!("authentication method does not contain a private key"),
+    }
 }
 
 async fn finish_auth_result_or_keyboard_interactive<H>(
@@ -513,9 +535,12 @@ where
         anyhow::bail!(messages.no_local_identity.clone());
     }
 
-    let has_default_keys = filtered_candidates
-        .iter()
-        .any(|auth| matches!(auth, SshAuth::PrivateKey { .. }));
+    let has_default_keys = filtered_candidates.iter().any(|auth| {
+        matches!(
+            auth,
+            SshAuth::PrivateKey { .. } | SshAuth::PrivateKeyContent { .. }
+        )
+    });
     let mut errors = Vec::new();
 
     for auth in filtered_candidates {
@@ -878,6 +903,22 @@ mod tests {
             auth,
             SshAuth::PrivateKey { key_path: path, .. } if path == &key_path.to_string_lossy().to_string()
         )));
+    }
+
+    #[test]
+    fn private_key_content_auth_is_decoded_from_memory() {
+        let error = private_key_for_auth(&SshAuth::PrivateKeyContent {
+            private_key: "not a private key".to_string(),
+            passphrase: None,
+            certificate_path: None,
+        })
+        .expect_err("invalid inline private key should fail to decode");
+        let message = error.to_string();
+
+        assert!(
+            !message.contains("No such file") && !message.contains("os error 2"),
+            "inline private key content should not be treated as a file path: {message}"
+        );
     }
 
     #[test]

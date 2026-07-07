@@ -143,13 +143,18 @@ fn edited_ssh_auth_method(
             key_path: draft.private_key_path.trim().to_string(),
             passphrase: passphrase.clone(),
         }),
-        SshImportAuthMethod::PrivateKeyMaterial { passphrase, .. } => {
-            let key_path = draft.private_key_path.trim();
-            if key_path.is_empty() {
-                return Err("私钥内容导入需要先编辑为私钥路径".to_string());
-            }
-            Ok(SshAuthMethod::PrivateKey {
-                key_path: key_path.to_string(),
+        SshImportAuthMethod::PrivateKeyMaterial {
+            private_key,
+            passphrase,
+            ..
+        } => {
+            let private_key = private_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "SSH 导入记录缺少私钥内容".to_string())?;
+            Ok(SshAuthMethod::PrivateKeyContent {
+                private_key: private_key.to_string(),
                 passphrase: passphrase.clone(),
             })
         }

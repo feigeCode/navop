@@ -65,6 +65,23 @@ fn build_ssh_auth(
                 certificate_path: None,
             })
         }
+        "private_key_content" | "private_key_material" => {
+            let private_key = tunnel_config
+                .private_key_content
+                .as_deref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    RedisError::connection(
+                        "ssh tunnel enabled but `ssh_private_key_content` is missing",
+                    )
+                })?;
+            Ok(SshAuth::PrivateKeyContent {
+                private_key: private_key.to_string(),
+                passphrase: tunnel_config.private_key_passphrase.clone(),
+                certificate_path: None,
+            })
+        }
         _ => {
             let password = tunnel_config
                 .password

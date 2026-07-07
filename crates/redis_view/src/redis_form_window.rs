@@ -250,6 +250,7 @@ pub struct RedisFormWindow {
     ssh_auth_type: String,
     ssh_password_input: Entity<InputState>,
     ssh_private_key_path_input: Entity<InputState>,
+    ssh_private_key_content_input: Entity<InputState>,
     ssh_private_key_passphrase_input: Entity<InputState>,
     ssh_target_host_input: Entity<InputState>,
     ssh_target_port_input: Entity<InputState>,
@@ -484,6 +485,17 @@ impl RedisFormWindow {
             state
         });
 
+        let ssh_private_key_content_input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .placeholder(t!("ConnectionForm.ssh_private_key_content_placeholder"))
+                .auto_grow(5, 14);
+            if let Some(private_key) = existing_ssh.and_then(|ssh| ssh.private_key_content.as_ref())
+            {
+                state.set_value(private_key.clone(), window, cx);
+            }
+            state
+        });
+
         let ssh_private_key_passphrase_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
                 .placeholder(t!("ConnectionForm.ssh_private_key_passphrase"))
@@ -613,6 +625,7 @@ impl RedisFormWindow {
                 .unwrap_or_else(|| "password".to_string()),
             ssh_password_input,
             ssh_private_key_path_input,
+            ssh_private_key_content_input,
             ssh_private_key_passphrase_input,
             ssh_target_host_input,
             ssh_target_port_input,
@@ -720,6 +733,10 @@ impl RedisFormWindow {
             auth_type: self.ssh_auth_type.clone(),
             password: Self::optional_input_value(&self.ssh_password_input, cx),
             private_key_path: Self::optional_input_value(&self.ssh_private_key_path_input, cx),
+            private_key_content: Self::optional_input_value(
+                &self.ssh_private_key_content_input,
+                cx,
+            ),
             private_key_passphrase: Self::optional_input_value(
                 &self.ssh_private_key_passphrase_input,
                 cx,
@@ -1146,7 +1163,10 @@ impl RedisFormWindow {
             .read(cx)
             .selected_value()
             .is_some_and(|value| value.is_some());
-        let auth_type = self.ssh_auth_type.as_str();
+        let auth_type = match self.ssh_auth_type.as_str() {
+            "private_key_material" => "private_key_content",
+            value => value,
+        };
 
         v_flex()
             .gap_2()
@@ -1183,6 +1203,7 @@ impl RedisFormWindow {
                         self.render_form_row(
                             &t!("ConnectionForm.ssh_auth_type"),
                             h_flex()
+                                .flex_wrap()
                                 .gap_4()
                                 .child(
                                     Radio::new("redis-ssh-auth-password")
@@ -1201,6 +1222,18 @@ impl RedisFormWindow {
                                         .checked(auth_type == "private_key")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.ssh_auth_type = "private_key".to_string();
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Radio::new("redis-ssh-auth-private-key-content")
+                                        .label(
+                                            t!("ConnectionForm.ssh_auth_private_key_content")
+                                                .to_string(),
+                                        )
+                                        .checked(auth_type == "private_key_content")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.ssh_auth_type = "private_key_content".to_string();
                                             cx.notify();
                                         })),
                                 )
@@ -1225,6 +1258,16 @@ impl RedisFormWindow {
                         this.child(self.render_form_row(
                             &t!("ConnectionForm.ssh_private_key_path"),
                             Input::new(&self.ssh_private_key_path_input),
+                        ))
+                        .child(self.render_form_row(
+                            &t!("ConnectionForm.ssh_private_key_passphrase"),
+                            Input::new(&self.ssh_private_key_passphrase_input).mask_toggle(),
+                        ))
+                    })
+                    .when(auth_type == "private_key_content", |this| {
+                        this.child(self.render_form_row(
+                            &t!("ConnectionForm.ssh_private_key_content"),
+                            Input::new(&self.ssh_private_key_content_input),
                         ))
                         .child(self.render_form_row(
                             &t!("ConnectionForm.ssh_private_key_passphrase"),

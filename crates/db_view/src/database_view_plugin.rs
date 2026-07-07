@@ -1667,6 +1667,7 @@ driver:
                 "ssh_auth_type",
                 "ssh_password",
                 "ssh_private_key_path",
+                "ssh_private_key_content",
                 "ssh_private_key_passphrase",
                 "ssh_target_host",
                 "ssh_target_port"
@@ -1716,6 +1717,7 @@ driver:
                 "ssh_auth_type",
                 "ssh_password",
                 "ssh_private_key_path",
+                "ssh_private_key_content",
                 "ssh_private_key_passphrase",
                 "ssh_target_host",
                 "ssh_target_port"
