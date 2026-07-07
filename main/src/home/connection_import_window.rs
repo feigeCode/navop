@@ -1,14 +1,17 @@
+use std::path::PathBuf;
+
 use connection_import_protocol::ImporterDescriptor;
 use gpui::{
     AnyWindowHandle, App, AppContext, AsyncApp, Context, Entity, FocusHandle, Focusable,
-    WeakEntity, Window,
+    PathPromptOptions, WeakEntity, Window,
 };
 use one_core::gpui_tokio::Tokio;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use rust_i18n::t;
 
 use super::connection_import_actions::{
-    ImportSaveResult, preview_import_records, save_import_draft, scan_import_sources,
+    ImportSaveResult, preview_import_records, preview_import_records_from_files, save_import_draft,
+    scan_import_sources,
 };
 use super::connection_import_model::{ImportRowSaveStatus, previewable_source_ids_after_scan};
 use crate::home_tab::HomePage;
@@ -99,6 +102,61 @@ impl ConnectionImportWindow {
                         this.model.apply_scan_reports(reports);
                         this.model.apply_preview_records(records);
                         this.status_message = None;
+                    }
+                    Err(error) => this.status_message = Some(error),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn import_source_file(
+        &mut self,
+        importer_id: String,
+        prompt: String,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.scanning {
+            return;
+        }
+        let future = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some(prompt.into()),
+        });
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let Ok(Ok(Some(paths))) = future.await else {
+                return;
+            };
+            if paths.is_empty() {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.scanning = true;
+                this.status_message = None;
+                cx.notify();
+            });
+            let result = {
+                let id = importer_id.clone();
+                let selected_paths: Vec<PathBuf> = paths.into_iter().collect();
+                let task = Tokio::spawn(cx, async move {
+                    preview_import_records_from_files(id, selected_paths, true).await
+                });
+                match task.await {
+                    Ok(result) => result,
+                    Err(error) => Err(format!("导入文件解析任务失败: {error}")),
+                }
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.scanning = false;
+                match result {
+                    Ok(records) => {
+                        let is_empty = records.is_empty();
+                        this.model.apply_preview_records(records);
+                        this.status_message = is_empty.then(|| "未解析到可导入连接".to_string());
                     }
                     Err(error) => this.status_message = Some(error),
                 }

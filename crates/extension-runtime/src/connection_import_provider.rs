@@ -29,6 +29,21 @@ pub struct ManifestConnectionImporter {
     pub descriptor: ImporterDescriptor,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualConnectionImportFile {
+    pub importer_id: String,
+    pub path: PathBuf,
+}
+
+impl ManualConnectionImportFile {
+    pub fn new(importer_id: impl Into<String>, path: impl Into<PathBuf>) -> Self {
+        Self {
+            importer_id: importer_id.into(),
+            path: path.into(),
+        }
+    }
+}
+
 pub fn list_manifest_connection_importers(
     composite_root: &Path,
 ) -> Result<Vec<ManifestConnectionImporter>> {
@@ -156,6 +171,22 @@ pub async fn preview_manifest_connection_importers(
     importer_ids: &[String],
     include_passwords: bool,
 ) -> Result<Vec<ImportRecord>> {
+    preview_manifest_connection_importers_with_files(
+        composite_root,
+        importer_ids,
+        include_passwords,
+        &[],
+    )
+    .await
+}
+
+#[cfg(feature = "wasm-components")]
+pub async fn preview_manifest_connection_importers_with_files(
+    composite_root: &Path,
+    importer_ids: &[String],
+    include_passwords: bool,
+    manual_files: &[ManualConnectionImportFile],
+) -> Result<Vec<ImportRecord>> {
     let importers = list_manifest_connection_importers(composite_root)?;
     let mut records = Vec::new();
     for importer in importers
@@ -170,15 +201,14 @@ pub async fn preview_manifest_connection_importers(
                 &module,
             )
             .with_context(|| format!("加载连接导入 Wasm 失败: {}", module.display()))?;
-            let host = ManifestConnectionImportHost::new(
-                importer.candidates.clone(),
-                importer.permissions.clone(),
-            );
+            let (candidates, permissions) =
+                connection_import_inputs(&importer, &descriptor_id, manual_files);
+            let host = ManifestConnectionImportHost::new(candidates, permissions.clone());
             let state = ConnectionImportHostState::new(
                 importer.extension_id,
                 importer.descriptor.id,
                 host,
-                PermissionSet::new(importer.permissions),
+                PermissionSet::new(permissions),
             );
             runtime
                 .preview(state, include_passwords)
@@ -204,6 +234,42 @@ pub async fn preview_manifest_connection_importers(
     Ok(records)
 }
 
+fn connection_import_inputs(
+    importer: &ManifestConnectionImporter,
+    descriptor_id: &str,
+    manual_files: &[ManualConnectionImportFile],
+) -> (Vec<CandidateFile>, Vec<String>) {
+    let mut candidates = importer.candidates.clone();
+    let mut permissions = importer.permissions.clone();
+    let (manual_candidates, manual_permissions) =
+        manual_file_candidates(descriptor_id, manual_files);
+    candidates.extend(manual_candidates);
+    permissions.extend(manual_permissions);
+    (candidates, permissions)
+}
+
+pub(crate) fn manual_file_candidates(
+    importer_id: &str,
+    manual_files: &[ManualConnectionImportFile],
+) -> (Vec<CandidateFile>, Vec<String>) {
+    let mut candidates = Vec::new();
+    let mut permissions = Vec::new();
+    for (index, file) in manual_files
+        .iter()
+        .filter(|file| file.importer_id == importer_id)
+        .enumerate()
+    {
+        let path = file.path.to_string_lossy().to_string();
+        candidates.push(CandidateFile {
+            id: format!("manual-file-{index}"),
+            platform: None,
+            path: path.clone(),
+        });
+        permissions.push(format!("fs:read:{path}"));
+    }
+    (candidates, permissions)
+}
+
 fn scan_error_report(importer_id: String, message: String) -> ImportScanReport {
     ImportScanReport {
         importer_id,
@@ -222,6 +288,16 @@ pub async fn preview_manifest_connection_importers(
     Err(anyhow::anyhow!("wasm component runtime is disabled"))
 }
 
+#[cfg(not(feature = "wasm-components"))]
+pub async fn preview_manifest_connection_importers_with_files(
+    _composite_root: &Path,
+    _importer_ids: &[String],
+    _include_passwords: bool,
+    _manual_files: &[ManualConnectionImportFile],
+) -> Result<Vec<ImportRecord>> {
+    Err(anyhow::anyhow!("wasm component runtime is disabled"))
+}
+
 fn runtime_id(manifest: &Manifest, contrib: &ConnectionImporterContrib) -> String {
     if !contrib.runtime_id.is_empty() {
         return contrib.runtime_id.clone();
@@ -235,6 +311,7 @@ fn runtime_id(manifest: &Manifest, contrib: &ConnectionImporterContrib) -> Strin
 }
 
 fn descriptor(manifest: &Manifest, contrib: &ConnectionImporterContrib) -> ImporterDescriptor {
+    let manual_file_pick_prompt = manual_file_pick_prompt(contrib);
     ImporterDescriptor {
         id: format!("{}/{}", manifest.id, contrib.id),
         display_name: contrib.display_name.clone(),
@@ -254,10 +331,21 @@ fn descriptor(manifest: &Manifest, contrib: &ConnectionImporterContrib) -> Impor
         capabilities: ImporterCapabilities {
             supports_scan: true,
             supports_password_import: false,
-            supports_manual_file_pick: !contrib.candidate_files.is_empty(),
+            supports_manual_file_pick: manual_file_pick_prompt.is_some(),
+            manual_file_pick_prompt,
             supports_incremental_preview: false,
         },
     }
+}
+
+fn manual_file_pick_prompt(contrib: &ConnectionImporterContrib) -> Option<String> {
+    contrib
+        .manual_file_pick
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .map(str::to_string)
 }
 
 fn parse_platform(value: &str) -> Option<Platform> {

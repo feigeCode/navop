@@ -88,6 +88,9 @@ fn manifest_parses_connection_importers() {
                     "icon": "database",
                     "outputKinds": ["database"],
                     "platforms": ["macos"],
+                    "manualFilePick": {
+                        "prompt": "选择 Navicat 导出的 connection.ncx 文件"
+                    },
                     "candidateFiles": [{
                         "id": "navicat-macos-cc-conn",
                         "platform": "macos",
@@ -107,6 +110,10 @@ fn manifest_parses_connection_importers() {
     assert_eq!(Some("database"), importer.icon.as_deref());
     assert_eq!(vec!["database"], importer.output_kinds);
     assert_eq!(vec!["macos"], importer.platforms);
+    assert_eq!(
+        Some("选择 Navicat 导出的 connection.ncx 文件"),
+        importer.manual_file_pick.prompt.as_deref()
+    );
     assert_eq!(1, importer.candidate_files.len());
     assert_eq!("navicat-macos-cc-conn", importer.candidate_files[0].id);
     assert_eq!("macos", importer.candidate_files[0].platform);

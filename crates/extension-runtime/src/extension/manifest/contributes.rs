@@ -103,8 +103,16 @@ pub struct ConnectionImporterContrib {
     pub output_kinds: Vec<String>,
     #[serde(default)]
     pub platforms: Vec<String>,
+    #[serde(default, rename = "manualFilePick")]
+    pub manual_file_pick: ManualFilePickContrib,
     #[serde(default, rename = "candidateFiles")]
     pub candidate_files: Vec<CandidateFileContrib>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ManualFilePickContrib {
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

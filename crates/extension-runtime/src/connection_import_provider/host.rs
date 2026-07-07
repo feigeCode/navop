@@ -6,9 +6,12 @@ use connection_import_protocol::{
 };
 use extension_component::{CandidateFileAccess, ExtensionConnectionImportHost, PermissionSet};
 
+#[cfg(test)]
+use super::{ManualConnectionImportFile, manual_file_candidates};
+
 pub(crate) struct ManifestConnectionImportHost {
     candidates: Vec<CandidateFile>,
-    permissions: PermissionSet,
+    permissions: Vec<String>,
 }
 
 impl ManifestConnectionImportHost {
@@ -19,12 +22,31 @@ impl ManifestConnectionImportHost {
     {
         Self {
             candidates,
-            permissions: PermissionSet::new(permissions),
+            permissions: permissions
+                .into_iter()
+                .map(|permission| permission.as_ref().to_string())
+                .collect(),
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_manual_files(
+        mut self,
+        importer_id: &str,
+        manual_files: &[ManualConnectionImportFile],
+    ) -> Self {
+        let (manual_candidates, manual_permissions) =
+            manual_file_candidates(importer_id, manual_files);
+        self.candidates.extend(manual_candidates);
+        self.permissions.extend(manual_permissions);
+        self
+    }
+
     fn candidate_access(&self) -> CandidateFileAccess {
-        CandidateFileAccess::new(self.candidates.clone(), self.permissions.clone())
+        CandidateFileAccess::new(
+            self.candidates.clone(),
+            PermissionSet::new(self.permissions.iter().map(String::as_str)),
+        )
     }
 }
 
@@ -83,7 +105,9 @@ impl ExtensionConnectionImportHost for ManifestConnectionImportHost {
 
     fn read_secret(&self, query: SecretQuery) -> SecretResult {
         let (namespace, key) = secret_scope(&query);
-        if !self.permissions.allows_secret_read(&namespace, &key) {
+        if !PermissionSet::new(self.permissions.iter().map(String::as_str))
+            .allows_secret_read(&namespace, &key)
+        {
             return SecretResult::PermissionDenied;
         }
         read_platform_secret(&query)

@@ -1,10 +1,13 @@
+use std::path::PathBuf;
+
 use super::connection_import_draft::EditableImportDraft;
 use super::connection_import_draft_conversion::stored_connection_duplicate_identity;
 use crate::setting_tab::GlobalCurrentUser;
 use connection_import_protocol::{ImportRecord, ImportScanReport};
 use extension_runtime::{
     connection_import_provider::{
-        preview_manifest_connection_importers, scan_manifest_connection_importers,
+        ManualConnectionImportFile, preview_manifest_connection_importers,
+        preview_manifest_connection_importers_with_files, scan_manifest_connection_importers,
     },
     extension::{ExtensionKind, extensions_root},
 };
@@ -43,6 +46,29 @@ pub(crate) async fn preview_import_records(
     preview_manifest_connection_importers(&composite_root, &importer_ids, include_passwords)
         .await
         .map_err(|error| error.to_string())
+}
+
+pub(crate) async fn preview_import_records_from_files(
+    importer_id: String,
+    file_paths: Vec<PathBuf>,
+    include_passwords: bool,
+) -> Result<Vec<ImportRecord>, String> {
+    if file_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let composite_root = composite_extensions_root()?;
+    let manual_files = file_paths
+        .into_iter()
+        .map(|path| ManualConnectionImportFile::new(importer_id.clone(), path))
+        .collect::<Vec<_>>();
+    preview_manifest_connection_importers_with_files(
+        &composite_root,
+        std::slice::from_ref(&importer_id),
+        include_passwords,
+        &manual_files,
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 pub(crate) fn duplicate_connection_name(

@@ -1,7 +1,9 @@
 use connection_import_protocol::{ImportRecordKind, ImporterAvailability};
+use gpui::prelude::FluentBuilder;
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px};
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, checkbox::Checkbox, h_flex, v_flex,
+    ActiveTheme, Disableable, Icon, IconName, Sizable, Size, button::Button, checkbox::Checkbox,
+    h_flex, v_flex,
 };
 
 use super::super::ConnectionImportWindow;
@@ -13,6 +15,14 @@ pub(super) fn render_source_row(
     cx: &mut Context<ConnectionImportWindow>,
 ) -> AnyElement {
     let importer_id = source.descriptor.id.clone();
+    let file_importer_id = importer_id.clone();
+    let file_pick_prompt = source
+        .descriptor
+        .capabilities
+        .manual_file_pick_prompt
+        .clone()
+        .unwrap_or_else(|| "选择导入文件".to_string());
+    let file_pick_tooltip = file_pick_prompt.clone();
     h_flex()
         .items_center()
         .gap_3()
@@ -53,6 +63,26 @@ pub(super) fn render_source_row(
                         .text_color(cx.theme().muted_foreground)
                         .child(availability_text(&source.availability)),
                 ),
+        )
+        .when(
+            source.descriptor.capabilities.supports_manual_file_pick,
+            |this| {
+                this.child(
+                    Button::new(format!("import-source-file-{file_importer_id}"))
+                        .small()
+                        .icon(IconName::FolderOpen)
+                        .tooltip(file_pick_tooltip)
+                        .disabled(scanning || !source.selectable)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.import_source_file(
+                                file_importer_id.clone(),
+                                file_pick_prompt.clone(),
+                                window,
+                                cx,
+                            );
+                        })),
+                )
+            },
         )
         .into_any_element()
 }
