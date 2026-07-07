@@ -1059,12 +1059,87 @@ impl SyncableItem for StoredConnection {
     }
 }
 
+fn trimmed_or_default(name: String, default_name: String) -> String {
+    if name.trim().is_empty() {
+        default_name
+    } else {
+        name
+    }
+}
+
+fn host_port_name(host: &str, port: u16) -> String {
+    let host = host.trim();
+    if host.is_empty() {
+        port.to_string()
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
+fn optional_host_port_name(host: &str, port: Option<u16>) -> String {
+    match port {
+        Some(port) => host_port_name(host, port),
+        None => host.trim().to_string(),
+    }
+}
+
+fn default_database_name(name: String, params: &DbConnectionConfig) -> String {
+    trimmed_or_default(name, params.server_info())
+}
+
+fn default_ssh_name(name: String, params: &SshParams) -> String {
+    let username = params.username.trim();
+    let destination = host_port_name(&params.host, params.port);
+    let default_name = if username.is_empty() {
+        destination
+    } else {
+        format!("{username}@{destination}")
+    };
+    trimmed_or_default(name, default_name)
+}
+
+fn default_remote_desktop_name(name: String, params: &RemoteDesktopParams) -> String {
+    trimmed_or_default(name, host_port_name(&params.host, params.port))
+}
+
+fn default_redis_name(name: String, params: &RedisParams) -> String {
+    trimmed_or_default(name, host_port_name(&params.host, params.port))
+}
+
+fn default_mongodb_name(name: String, params: &MongoDBParams) -> String {
+    let default_name = optional_host_port_name(&params.host, params.port);
+    let default_name = if default_name.is_empty() {
+        params.connection_string.trim().to_string()
+    } else {
+        default_name
+    };
+    trimmed_or_default(name, default_name)
+}
+
+fn default_serial_name(name: String, params: &SerialParams) -> String {
+    trimmed_or_default(name, params.port_name.trim().to_string())
+}
+
+fn default_port_forwarding_name(name: String, params: &PortForwardingParams) -> String {
+    let default_name = match params.kind {
+        PortForwardingKind::Local => format!(
+            "{}:{} -> {}:{}",
+            params.bind_host, params.bind_port, params.target_host, params.target_port
+        ),
+        PortForwardingKind::Dynamic => {
+            format!("SOCKS {}:{}", params.bind_host, params.bind_port)
+        }
+    };
+    trimmed_or_default(name, default_name)
+}
+
 impl StoredConnection {
     pub fn new_database(
         name: String,
         params: DbConnectionConfig,
         workspace_id: Option<i64>,
     ) -> Self {
+        let name = default_database_name(name, &params);
         Self {
             id: None,
             name,
@@ -1090,6 +1165,7 @@ impl StoredConnection {
     }
 
     pub fn new_ssh(name: String, params: SshParams, workspace_id: Option<i64>) -> Self {
+        let name = default_ssh_name(name, &params);
         Self {
             id: None,
             name,
@@ -1115,6 +1191,7 @@ impl StoredConnection {
         params: RemoteDesktopParams,
         workspace_id: Option<i64>,
     ) -> Self {
+        let name = default_remote_desktop_name(name, &params);
         Self {
             id: None,
             name,
@@ -1136,6 +1213,7 @@ impl StoredConnection {
     }
 
     pub fn new_redis(name: String, params: RedisParams, workspace_id: Option<i64>) -> Self {
+        let name = default_redis_name(name, &params);
         Self {
             id: None,
             name,
@@ -1157,6 +1235,7 @@ impl StoredConnection {
     }
 
     pub fn new_mongodb(name: String, params: MongoDBParams, workspace_id: Option<i64>) -> Self {
+        let name = default_mongodb_name(name, &params);
         Self {
             id: None,
             name,
@@ -1194,6 +1273,7 @@ impl StoredConnection {
     }
 
     pub fn new_serial(name: String, params: SerialParams, workspace_id: Option<i64>) -> Self {
+        let name = default_serial_name(name, &params);
         Self {
             id: None,
             name,
@@ -1219,6 +1299,7 @@ impl StoredConnection {
         params: PortForwardingParams,
         workspace_id: Option<i64>,
     ) -> Self {
+        let name = default_port_forwarding_name(name, &params);
         Self {
             id: None,
             name,
@@ -1343,6 +1424,136 @@ mod tests {
             workspace_id: Some(7),
             extra_params,
         }
+    }
+
+    #[test]
+    fn empty_connection_names_default_to_target_address() {
+        let db = DbConnectionConfig {
+            id: String::new(),
+            database_type: DatabaseType::MySQL,
+            name: String::new(),
+            host: "127.0.0.1".to_string(),
+            port: 3306,
+            username: "root".to_string(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            extra_params: HashMap::new(),
+        };
+        assert_eq!(
+            "127.0.0.1:3306",
+            StoredConnection::new_database(String::new(), db, None).name
+        );
+
+        let ssh = SshParams {
+            host: "localhost".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth_method: SshAuthMethod::Agent,
+            connect_timeout: None,
+            keepalive_interval: None,
+            keepalive_max: None,
+            default_directory: None,
+            init_script: None,
+            disable_shell_integration: None,
+            jump_server: None,
+            proxy: None,
+        };
+        assert_eq!(
+            "root@localhost:22",
+            StoredConnection::new_ssh(String::new(), ssh, None).name
+        );
+
+        let redis = RedisParams {
+            host: "10.0.0.5".to_string(),
+            port: 6379,
+            password: None,
+            username: None,
+            db_index: 0,
+            mode: RedisMode::Standalone,
+            use_tls: false,
+            connect_timeout: None,
+            sentinel: None,
+            cluster: None,
+            ssh_tunnel: None,
+        };
+        assert_eq!(
+            "10.0.0.5:6379",
+            StoredConnection::new_redis(String::new(), redis, None).name
+        );
+
+        let mongo = MongoDBParams {
+            connection_string: String::new(),
+            host: "mongo.internal".to_string(),
+            port: Some(27017),
+            database: None,
+            username: None,
+            password: None,
+            auth_source: None,
+            replica_set: None,
+            read_preference: None,
+            use_srv_record: false,
+            direct_connection: false,
+            use_tls: false,
+            connect_timeout_seconds: None,
+            application_name: None,
+            ssh_tunnel: None,
+        };
+        assert_eq!(
+            "mongo.internal:27017",
+            StoredConnection::new_mongodb(String::new(), mongo, None).name
+        );
+
+        let remote = RemoteDesktopParams {
+            protocol: RemoteDesktopProtocol::Rdp,
+            host: "winhost".to_string(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            read_only: false,
+        };
+        assert_eq!(
+            "winhost:3389",
+            StoredConnection::new_remote_desktop(String::new(), remote, None).name
+        );
+
+        let serial = SerialParams {
+            port_name: "/dev/tty.usbserial".to_string(),
+            baud_rate: 115200,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: SerialParity::None,
+            flow_control: SerialFlowControl::None,
+        };
+        assert_eq!(
+            "/dev/tty.usbserial",
+            StoredConnection::new_serial(String::new(), serial, None).name
+        );
+
+        let forward = PortForwardingParams {
+            ssh_connection_id: 42,
+            kind: PortForwardingKind::Local,
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 15432,
+            target_host: "db.internal".to_string(),
+            target_port: 5432,
+        };
+        assert_eq!(
+            "127.0.0.1:15432 -> db.internal:5432",
+            StoredConnection::new_port_forwarding(String::new(), forward, None).name
+        );
+    }
+
+    #[test]
+    fn explicit_connection_names_are_preserved() {
+        let db = database_config_with_ssh_ref(42);
+        assert_eq!(
+            "  keep spaces  ",
+            StoredConnection::new_database("  keep spaces  ".to_string(), db, None).name
+        );
     }
 
     #[test]

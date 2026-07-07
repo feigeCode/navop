@@ -438,8 +438,7 @@ fn mysql_connection_form() -> DatabaseFormManifest {
                         DatabaseFormFieldType::Text,
                     )
                     .optional()
-                    .with_placeholder("database name (optional)")
-                    .with_default("ai_app"),
+                    .with_placeholder("database name (optional)"),
                 ],
             ),
             tab(
@@ -4160,6 +4159,24 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["general", "advanced", "ssl", "ssh", "notes"]
         );
+
+        let general_tab = connection_form
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "general")
+            .unwrap();
+        let name_field = general_tab
+            .fields
+            .iter()
+            .find(|field| field.id == "name")
+            .unwrap();
+        let database_field = general_tab
+            .fields
+            .iter()
+            .find(|field| field.id == "database")
+            .unwrap();
+        assert_eq!(name_field.default_value.as_deref(), Some("Local MySQL"));
+        assert_eq!(database_field.default_value, None);
 
         let ssh_host = connection_form
             .tabs

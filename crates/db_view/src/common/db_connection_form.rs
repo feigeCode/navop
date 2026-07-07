@@ -666,8 +666,7 @@ impl DbFormConfig {
                         FormFieldType::Text,
                     )
                     .optional()
-                    .placeholder("database name (optional)")
-                    .default("ai_app"),
+                    .placeholder("database name (optional)"),
                 ]),
                 TabGroup::new("advanced", t!("ConnectionForm.advanced")).fields(vec![
                     FormField::new(
@@ -1992,7 +1991,7 @@ impl DbConnectionForm {
         let mut stored = match &self.editing_connection {
             Some(conn) => {
                 let mut c = conn.clone();
-                c.name = connection.name.clone();
+                c.name = StoredConnection::from_db_connection(connection.clone()).name;
                 c.workspace_id = connection.workspace_id;
                 c.sync_enabled = sync_enabled;
                 c.team_id = team_id;
@@ -2950,6 +2949,14 @@ mod tests {
             .collect()
     }
 
+    fn field_by_name<'a>(tab_group: &'a TabGroup, field_name: &str) -> &'a FormField {
+        tab_group
+            .fields
+            .iter()
+            .find(|field| field.name == field_name)
+            .expect("field should exist")
+    }
+
     fn stored_ssh_connection(id: i64, name: &str, host: &str) -> StoredConnection {
         let mut connection = StoredConnection::new_ssh(
             name.to_string(),
@@ -3018,6 +3025,22 @@ mod tests {
             field_names(advanced_tab),
             vec!["connect_timeout", "charset", "collation", "read_timeout"]
         );
+    }
+
+    #[test]
+    fn mysql_form_keeps_connection_name_default_but_not_database_default() {
+        let config = DbFormConfig::mysql();
+        let general_tab = config
+            .tab_groups
+            .iter()
+            .find(|group| group.name == "general")
+            .expect("MySQL should include the general tab");
+
+        assert_eq!(
+            "Local MySQL",
+            field_by_name(general_tab, "name").default_value
+        );
+        assert_eq!("", field_by_name(general_tab, "database").default_value);
     }
 
     #[test]

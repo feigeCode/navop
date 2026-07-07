@@ -890,11 +890,6 @@ impl MongoFormWindow {
             }
         };
         let name = self.name_input.read(cx).text().to_string();
-        let name = if name.is_empty() {
-            t!("MongoForm.default_name").to_string()
-        } else {
-            name
-        };
 
         let workspace_id = self.get_workspace_id(cx);
         let team_id = self.get_team_id(cx);
