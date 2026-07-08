@@ -38,7 +38,7 @@ use db::ipc::ExternalDatabasePlugin;
 use db::plugin::DatabasePlugin;
 use db::types::{
     CharsetInfo, CollationInfo, ColumnDefinition, ColumnInfo, IndexDefinition, IndexInfo,
-    ParsedColumnType, TableDesign, TableOptions,
+    ParsedColumnType, TableDesign, TableInfo, TableOptions,
 };
 use gpui_component::select::SearchableVec;
 use one_core::storage::DatabaseType;
@@ -152,6 +152,7 @@ pub(crate) fn build_table_design_from_metadata(
     table_name: String,
     columns: &[ColumnInfo],
     indexes: &[IndexInfo],
+    table_info: Option<&TableInfo>,
     plugin: Option<&dyn DatabasePlugin>,
 ) -> TableDesign {
     let column_defs: Vec<ColumnDefinition> = columns
@@ -177,13 +178,18 @@ pub(crate) fn build_table_design_from_metadata(
         })
         .collect();
 
+    let mut options = TableOptions::default();
+    if let Some(table_info) = table_info {
+        options.comment = table_info.comment.clone().unwrap_or_default();
+    }
+
     TableDesign {
         database_name,
         table_name,
         columns: column_defs,
         indexes: index_defs,
         foreign_keys: vec![],
-        options: TableOptions::default(),
+        options,
     }
 }
 
@@ -259,6 +265,22 @@ fn extract_scale_from_type_str(data_type: &str) -> Option<u32> {
         }
     }
     None
+}
+
+fn find_loaded_table_info(
+    tables: Vec<TableInfo>,
+    table_name: &str,
+    schema_name: Option<&str>,
+) -> Option<TableInfo> {
+    tables.into_iter().find(|table| {
+        if table.name != table_name {
+            return false;
+        }
+        match schema_name {
+            Some(schema) => table.schema.as_deref() == Some(schema),
+            None => true,
+        }
+    })
 }
 
 fn column_order_snapshot(design: &TableDesign) -> Vec<&str> {
@@ -1051,6 +1073,7 @@ impl TableDesigner {
         let schema_name = self.config.schema_name.clone();
         let columns_editor = self.columns_editor.clone();
         let indexes_editor = self.indexes_editor.clone();
+        let table_comment_input = self.table_comment_input.clone();
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let columns_result = global_state
@@ -1073,6 +1096,15 @@ impl TableDesigner {
                 )
                 .await;
 
+            let tables_result = global_state
+                .list_tables(
+                    cx,
+                    connection_id.clone(),
+                    database_name.clone(),
+                    schema_name.clone(),
+                )
+                .await;
+
             tracing::warn!(
                 target: "table_designer_diag",
                 seq = load_seq,
@@ -1080,6 +1112,8 @@ impl TableDesigner {
                 columns_count = columns_result.as_ref().map(|cols| cols.len()).unwrap_or(0),
                 indexes_ok = indexes_result.is_ok(),
                 indexes_count = indexes_result.as_ref().map(|idxs| idxs.len()).unwrap_or(0),
+                tables_ok = tables_result.is_ok(),
+                tables_count = tables_result.as_ref().map(|tables| tables.len()).unwrap_or(0),
                 "[table_designer_diag] load_table_structure query finished"
             );
 
@@ -1088,6 +1122,9 @@ impl TableDesigner {
                     cx.update_window(window_id, |_entity, window, cx| {
                         let columns = columns_result.ok();
                         let indexes = indexes_result.ok();
+                        let table_info = tables_result.ok().and_then(|tables| {
+                            find_loaded_table_info(tables, &table_name, schema_name.as_deref())
+                        });
 
                         if let Some(ref cols) = columns {
                             columns_editor.update(cx, |editor, cx| {
@@ -1101,10 +1138,19 @@ impl TableDesigner {
                             });
                         }
 
+                        if let Some(ref info) = table_info {
+                            if let Some(comment) = &info.comment {
+                                table_comment_input.update(cx, |input, cx| {
+                                    input.set_value(comment.clone(), window, cx);
+                                });
+                            }
+                        }
+
                         let _ = this.update(cx, |designer, cx| {
                             let original_design = designer.build_original_design(
                                 columns.unwrap_or_default(),
                                 indexes.unwrap_or_default(),
+                                table_info.as_ref(),
                                 cx,
                             );
                             designer.original_design = Some(original_design);
@@ -1123,6 +1169,7 @@ impl TableDesigner {
         &self,
         columns: Vec<ColumnInfo>,
         indexes: Vec<IndexInfo>,
+        table_info: Option<&TableInfo>,
         cx: &App,
     ) -> TableDesign {
         let global_state = cx.global::<GlobalDbState>();
@@ -1136,6 +1183,7 @@ impl TableDesigner {
             self.config.table_name.clone().unwrap_or_default(),
             &columns,
             &indexes,
+            table_info,
             plugin.as_deref(),
         )
     }
@@ -3735,10 +3783,37 @@ mod tests {
                 },
             ],
             None,
+            None,
         );
 
         assert_eq!(design.indexes.len(), 1);
         assert_eq!(design.indexes[0].name, "idx_users_email");
+    }
+
+    #[test]
+    fn test_build_table_design_from_metadata_preserves_table_comment() {
+        let table_info = TableInfo {
+            name: "users".to_string(),
+            schema: Some("public".to_string()),
+            comment: Some("User table".to_string()),
+            engine: None,
+            row_count: None,
+            create_time: None,
+            charset: None,
+            collation: None,
+        };
+
+        let design = build_table_design_from_metadata(
+            DatabaseType::PostgreSQL,
+            "app".to_string(),
+            "users".to_string(),
+            &[],
+            &[],
+            Some(&table_info),
+            None,
+        );
+
+        assert_eq!("User table", design.options.comment);
     }
 
     #[test]

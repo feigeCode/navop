@@ -3069,10 +3069,7 @@ ORDER BY User, Host;"#
             }
         }
 
-        if original.options.comment != new.options.comment
-            && !original.options.comment.is_empty()
-            && !new.options.comment.is_empty()
-        {
+        if original.options.comment != new.options.comment {
             option_parts.push(format!(
                 "COMMENT='{}'",
                 new.options.comment.replace("'", "''")
@@ -3770,6 +3767,30 @@ mod tests {
         assert!(!sql.contains("UTF-8"));
         assert!(!sql.contains("DEFAULT CHARSET"));
         assert!(!sql.contains("COLLATE="));
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_adds_table_comment_from_empty() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![ColumnDefinition::new("id").data_type("INT")],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            options: TableOptions {
+                comment: "User table".to_string(),
+                ..TableOptions::default()
+            },
+            ..original.clone()
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+        assert!(sql.contains("ALTER TABLE `users` COMMENT='User table';"));
     }
 
     #[test]

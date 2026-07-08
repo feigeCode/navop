@@ -116,6 +116,59 @@ fn mssql_string_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+fn mssql_nstring_literal(value: &str) -> String {
+    format!("N'{}'", value.replace('\'', "''"))
+}
+
+fn mssql_table_comment_sql(table_name: &str, comment: &str, operation: &str) -> String {
+    format!(
+        "EXEC sp_{operation}extendedproperty @name=N'MS_Description', @value={}, @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'TABLE', @level1name={};",
+        mssql_nstring_literal(comment),
+        mssql_nstring_literal(table_name)
+    )
+}
+
+fn mssql_drop_table_comment_sql(table_name: &str) -> String {
+    format!(
+        "EXEC sp_dropextendedproperty @name=N'MS_Description', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'TABLE', @level1name={};",
+        mssql_nstring_literal(table_name)
+    )
+}
+
+fn mssql_column_comment_sql(
+    table_name: &str,
+    column_name: &str,
+    comment: &str,
+    operation: &str,
+) -> String {
+    format!(
+        "EXEC sp_{operation}extendedproperty @name=N'MS_Description', @value={}, @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'TABLE', @level1name={}, @level2type=N'COLUMN', @level2name={};",
+        mssql_nstring_literal(comment),
+        mssql_nstring_literal(table_name),
+        mssql_nstring_literal(column_name)
+    )
+}
+
+fn mssql_drop_column_comment_sql(table_name: &str, column_name: &str) -> String {
+    format!(
+        "EXEC sp_dropextendedproperty @name=N'MS_Description', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'TABLE', @level1name={}, @level2type=N'COLUMN', @level2name={};",
+        mssql_nstring_literal(table_name),
+        mssql_nstring_literal(column_name)
+    )
+}
+
+fn mssql_comment_operation(original: &str, new: &str) -> Option<&'static str> {
+    if original == new {
+        None
+    } else if new.is_empty() {
+        Some("drop")
+    } else if original.is_empty() {
+        Some("add")
+    } else {
+        Some("update")
+    }
+}
+
 fn mssql_user_password(request: &DatabaseUserOperationRequest) -> &str {
     request
         .field_values
@@ -2501,6 +2554,26 @@ ORDER BY name;"#
         sql.push_str(&definitions.join(",\n"));
         sql.push_str("\n);");
 
+        if !design.options.comment.is_empty() {
+            sql.push('\n');
+            sql.push_str(&mssql_table_comment_sql(
+                &design.table_name,
+                &design.options.comment,
+                "add",
+            ));
+        }
+        for col in &design.columns {
+            if !col.comment.is_empty() {
+                sql.push('\n');
+                sql.push_str(&mssql_column_comment_sql(
+                    &design.table_name,
+                    &col.name,
+                    &col.comment,
+                    "add",
+                ));
+            }
+        }
+
         for idx in &design.indexes {
             if idx.is_primary {
                 continue;
@@ -2592,9 +2665,29 @@ ORDER BY name;"#
                         table_name, col_name, type_str, null_str
                     ));
                 }
+                if let Some(operation) = mssql_comment_operation(&orig_col.comment, &col.comment) {
+                    if operation == "drop" {
+                        statements.push(mssql_drop_column_comment_sql(&new.table_name, &col.name));
+                    } else {
+                        statements.push(mssql_column_comment_sql(
+                            &new.table_name,
+                            &col.name,
+                            &col.comment,
+                            operation,
+                        ));
+                    }
+                }
             } else {
                 let col_def = self.build_column_def(col);
                 statements.push(format!("ALTER TABLE {} ADD {};", table_name, col_def));
+                if !col.comment.is_empty() {
+                    statements.push(mssql_column_comment_sql(
+                        &new.table_name,
+                        &col.name,
+                        &col.comment,
+                        "add",
+                    ));
+                }
             }
         }
 
@@ -2658,6 +2751,20 @@ ORDER BY name;"#
                     if !self.foreign_key_changed(original_foreign_key, new_foreign_key) => {}
                 _ => statements
                     .push(self.build_add_foreign_key_sql(&new.table_name, new_foreign_key)),
+            }
+        }
+
+        if let Some(operation) =
+            mssql_comment_operation(&original.options.comment, &new.options.comment)
+        {
+            if operation == "drop" {
+                statements.push(mssql_drop_table_comment_sql(&new.table_name));
+            } else {
+                statements.push(mssql_table_comment_sql(
+                    &new.table_name,
+                    &new.options.comment,
+                    operation,
+                ));
             }
         }
 
@@ -3064,6 +3171,34 @@ mod tests {
     }
 
     #[test]
+    fn test_build_create_table_sql_with_comments() {
+        let plugin = create_plugin();
+        let design = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("NVARCHAR")
+                    .length(100)
+                    .comment("Display name"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions {
+                comment: "User table".to_string(),
+                ..TableOptions::default()
+            },
+        };
+
+        let sql = plugin.build_create_table_sql(&design);
+        assert!(sql.contains("sp_addextendedproperty"));
+        assert!(sql.contains("@level1name=N'users'"));
+        assert!(sql.contains("@level2name=N'name'"));
+        assert!(sql.contains("@value=N'User table'"));
+        assert!(sql.contains("@value=N'Display name'"));
+    }
+
+    #[test]
     fn test_build_create_table_sql_with_indexes() {
         let plugin = create_plugin();
         let design = TableDesign {
@@ -3230,6 +3365,44 @@ mod tests {
         assert!(sql.contains("ALTER COLUMN"));
         assert!(sql.contains("[name] NVARCHAR(100)"));
         assert!(sql.contains("NOT NULL"));
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_updates_comments_only() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("NVARCHAR")
+                    .length(50),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("NVARCHAR")
+                    .length(50)
+                    .comment("Display name"),
+            ],
+            options: TableOptions {
+                comment: "User table".to_string(),
+                ..TableOptions::default()
+            },
+            ..original.clone()
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+        assert!(sql.contains("sp_addextendedproperty"));
+        assert!(sql.contains("@level1name=N'users'"));
+        assert!(sql.contains("@level2name=N'name'"));
+        assert!(sql.contains("@value=N'User table'"));
+        assert!(sql.contains("@value=N'Display name'"));
     }
 
     #[test]

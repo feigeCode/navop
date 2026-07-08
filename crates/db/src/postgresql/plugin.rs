@@ -90,6 +90,48 @@ impl PostgresPlugin {
         Self
     }
 
+    fn comment_literal(comment: &str) -> String {
+        if comment.is_empty() {
+            "NULL".to_string()
+        } else {
+            format!("'{}'", comment.replace('\'', "''"))
+        }
+    }
+
+    fn table_comment_sql(&self, table_name: &str, comment: &str) -> String {
+        format!(
+            "COMMENT ON TABLE {} IS {};",
+            self.quote_identifier(table_name),
+            Self::comment_literal(comment)
+        )
+    }
+
+    fn column_comment_sql(&self, table_name: &str, column_name: &str, comment: &str) -> String {
+        format!(
+            "COMMENT ON COLUMN {}.{} IS {};",
+            self.quote_identifier(table_name),
+            self.quote_identifier(column_name),
+            Self::comment_literal(comment)
+        )
+    }
+
+    fn design_comment_sql(&self, design: &TableDesign) -> Vec<String> {
+        let mut statements = Vec::new();
+        if !design.options.comment.is_empty() {
+            statements.push(self.table_comment_sql(&design.table_name, &design.options.comment));
+        }
+        statements.extend(
+            design
+                .columns
+                .iter()
+                .filter(|column| !column.comment.is_empty())
+                .map(|column| {
+                    self.column_comment_sql(&design.table_name, &column.name, &column.comment)
+                }),
+        );
+        statements
+    }
+
     fn database_node(node: &DbNode, database: String) -> DbNode {
         DbNode::new(
             format!("{}:{}", node.id, database),
@@ -2232,6 +2274,11 @@ ORDER BY rolname;"#
         sql.push_str(&definitions.join(",\n"));
         sql.push_str("\n);");
 
+        for comment_sql in self.design_comment_sql(design) {
+            sql.push('\n');
+            sql.push_str(&comment_sql);
+        }
+
         for idx in &design.indexes {
             if idx.is_primary {
                 continue;
@@ -2336,12 +2383,26 @@ ORDER BY rolname;"#
                         }
                     }
                 }
+                if orig_col.comment != col.comment {
+                    statements.push(self.column_comment_sql(
+                        &new.table_name,
+                        &col.name,
+                        &col.comment,
+                    ));
+                }
             } else {
                 let col_def = self.build_column_def(col);
                 statements.push(format!(
                     "ALTER TABLE {} ADD COLUMN {};",
                     table_name, col_def
                 ));
+                if !col.comment.is_empty() {
+                    statements.push(self.column_comment_sql(
+                        &new.table_name,
+                        &col.name,
+                        &col.comment,
+                    ));
+                }
             }
         }
 
@@ -2400,6 +2461,10 @@ ORDER BY rolname;"#
                 _ => statements
                     .push(self.build_add_foreign_key_sql(&new.table_name, new_foreign_key)),
             }
+        }
+
+        if original.options.comment != new.options.comment {
+            statements.push(self.table_comment_sql(&new.table_name, &new.options.comment));
         }
 
         if statements.is_empty() {
@@ -3064,6 +3129,31 @@ mod tests {
     }
 
     #[test]
+    fn test_build_create_table_sql_with_comments() {
+        let plugin = create_plugin();
+        let design = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("VARCHAR")
+                    .length(100)
+                    .comment("Display name"),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions {
+                comment: "User table".to_string(),
+                ..TableOptions::default()
+            },
+        };
+
+        let sql = plugin.build_create_table_sql(&design);
+        assert!(sql.contains("COMMENT ON TABLE \"users\" IS 'User table';"));
+        assert!(sql.contains("COMMENT ON COLUMN \"users\".\"name\" IS 'Display name';"));
+    }
+
+    #[test]
     fn test_build_create_table_sql_with_indexes() {
         let plugin = create_plugin();
         let design = TableDesign {
@@ -3231,6 +3321,41 @@ mod tests {
         assert!(sql.contains("ALTER COLUMN"));
         assert!(sql.contains("TYPE"));
         assert!(sql.contains("VARCHAR(100)"));
+    }
+
+    #[test]
+    fn test_build_alter_table_sql_updates_comments_only() {
+        let plugin = create_plugin();
+
+        let original = TableDesign {
+            database_name: "test_db".to_string(),
+            table_name: "users".to_string(),
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("VARCHAR")
+                    .length(50),
+            ],
+            indexes: vec![],
+            foreign_keys: vec![],
+            options: TableOptions::default(),
+        };
+        let new = TableDesign {
+            columns: vec![
+                ColumnDefinition::new("name")
+                    .data_type("VARCHAR")
+                    .length(50)
+                    .comment("Display name"),
+            ],
+            options: TableOptions {
+                comment: "User table".to_string(),
+                ..TableOptions::default()
+            },
+            ..original.clone()
+        };
+
+        let sql = plugin.build_alter_table_sql(&original, &new);
+        assert!(sql.contains("COMMENT ON TABLE \"users\" IS 'User table';"));
+        assert!(sql.contains("COMMENT ON COLUMN \"users\".\"name\" IS 'Display name';"));
     }
 
     #[test]

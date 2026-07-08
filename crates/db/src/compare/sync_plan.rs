@@ -85,6 +85,7 @@ trait SyncSqlDialect {
     fn build_column_def(&self, column: &ColumnDefinition) -> String;
     fn build_create_table_sql(&self, design: &TableDesign) -> String;
     fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> Option<String>;
+    fn needs_raw_comment_statements(&self) -> bool;
 }
 
 impl<T> SyncSqlDialect for T
@@ -113,6 +114,10 @@ where
 
     fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> Option<String> {
         Some(DatabasePlugin::build_alter_table_sql(self, original, new))
+    }
+
+    fn needs_raw_comment_statements(&self) -> bool {
+        false
     }
 }
 
@@ -143,6 +148,10 @@ impl SyncSqlDialect for PluginSyncSqlDialect<'_> {
 
     fn build_alter_table_sql(&self, original: &TableDesign, new: &TableDesign) -> Option<String> {
         Some(self.0.build_alter_table_sql(original, new))
+    }
+
+    fn needs_raw_comment_statements(&self) -> bool {
+        false
     }
 }
 
@@ -191,6 +200,10 @@ impl SyncSqlDialect for RawSyncSqlDialect {
 
     fn build_alter_table_sql(&self, _original: &TableDesign, _new: &TableDesign) -> Option<String> {
         None
+    }
+
+    fn needs_raw_comment_statements(&self) -> bool {
+        true
     }
 }
 
@@ -563,6 +576,131 @@ fn generate_drop_foreign_key_sql(
     }
 }
 
+fn escaped_comment(comment: &str) -> String {
+    comment.replace('\'', "''")
+}
+
+fn comment_literal(target_db_type: &str, comment: Option<&str>) -> String {
+    let comment = comment.unwrap_or_default();
+    if comment.is_empty() && target_db_type.to_lowercase().contains("postgres") {
+        "NULL".to_string()
+    } else {
+        format!("'{}'", escaped_comment(comment))
+    }
+}
+
+fn raw_table_comment_sql(
+    target_db_type: &str,
+    table_ref: &str,
+    table_name: &str,
+    original_comment: Option<&str>,
+    new_comment: Option<&str>,
+) -> Option<String> {
+    if original_comment.unwrap_or_default() == new_comment.unwrap_or_default() {
+        return None;
+    }
+    let db_type = target_db_type.to_lowercase();
+    let new_comment = new_comment.unwrap_or_default();
+    if db_type.contains("mysql") || db_type.contains("mariadb") {
+        Some(format!(
+            "ALTER TABLE {} COMMENT='{}';",
+            table_ref,
+            escaped_comment(new_comment)
+        ))
+    } else if db_type.contains("mssql") || db_type.contains("sqlserver") {
+        Some(mssql_comment_property_sql(
+            &["SCHEMA", "dbo", "TABLE", table_name],
+            original_comment,
+            new_comment,
+        ))
+    } else {
+        Some(format!(
+            "COMMENT ON TABLE {} IS {};",
+            table_ref,
+            comment_literal(target_db_type, Some(new_comment))
+        ))
+    }
+}
+
+fn raw_column_comment_sql(
+    target_db_type: &str,
+    table_ref: &str,
+    table_name: &str,
+    source: &ColumnSchema,
+    target: Option<&ColumnSchema>,
+    dialect: &dyn SyncSqlDialect,
+) -> Option<String> {
+    let original_comment = target.and_then(|column| column.comment.as_deref());
+    let new_comment = source.comment.as_deref();
+    if original_comment.unwrap_or_default() == new_comment.unwrap_or_default() {
+        return None;
+    }
+    let db_type = target_db_type.to_lowercase();
+    let new_comment = new_comment.unwrap_or_default();
+    if db_type.contains("mysql") || db_type.contains("mariadb") {
+        let mut column = column_schema_to_definition(source);
+        column.comment = new_comment.to_string();
+        let mut definition = dialect.build_column_def(&column);
+        if !new_comment.is_empty() {
+            definition.push_str(&format!(" COMMENT '{}'", escaped_comment(new_comment)));
+        }
+        Some(format!(
+            "ALTER TABLE {} MODIFY COLUMN {};",
+            table_ref, definition
+        ))
+    } else if db_type.contains("mssql") || db_type.contains("sqlserver") {
+        Some(mssql_comment_property_sql(
+            &["SCHEMA", "dbo", "TABLE", table_name, "COLUMN", &source.name],
+            original_comment,
+            new_comment,
+        ))
+    } else {
+        Some(format!(
+            "COMMENT ON COLUMN {}.{} IS {};",
+            table_ref,
+            dialect.quote_identifier(&source.name),
+            comment_literal(target_db_type, Some(new_comment))
+        ))
+    }
+}
+
+fn mssql_comment_property_sql(
+    levels: &[&str],
+    original: Option<&str>,
+    new_comment: &str,
+) -> String {
+    let operation = if new_comment.is_empty() {
+        "drop"
+    } else if original.unwrap_or_default().is_empty() {
+        "add"
+    } else {
+        "update"
+    };
+    let mut sql = format!("EXEC sp_{operation}extendedproperty @name=N'MS_Description'");
+    if !new_comment.is_empty() {
+        sql.push_str(&format!(", @value=N'{}'", escaped_comment(new_comment)));
+    }
+    for (idx, pair) in levels.chunks(2).enumerate() {
+        if let [level_type, level_name] = pair {
+            sql.push_str(&format!(
+                ", @level{idx}type=N'{}', @level{idx}name=N'{}'",
+                escaped_comment(level_type),
+                escaped_comment(level_name)
+            ));
+        }
+    }
+    sql.push(';');
+    sql
+}
+
+fn raw_column_definition_changed(source: &ColumnSchema, target: &ColumnSchema) -> bool {
+    source.data_type != target.data_type
+        || source.nullable != target.nullable
+        || source.default_value != target.default_value
+        || source.charset != target.charset
+        || source.collation != target.collation
+}
+
 fn table_designer_sync_statement(
     table_diff: &super::TableDiff,
     target_database: &str,
@@ -755,6 +893,55 @@ fn build_schema_sync_plan_with_dialect(
                         warnings: vec![],
                     });
 
+                    if dialect.needs_raw_comment_statements() {
+                        let table_ref = dialect.format_table_reference(
+                            target_database,
+                            target_schema,
+                            &source_table.name,
+                        );
+                        if let Some(sql) = raw_table_comment_sql(
+                            target_db_type,
+                            &table_ref,
+                            &source_table.name,
+                            None,
+                            source_table.comment.as_deref(),
+                        ) {
+                            statements.push(SyncStatement {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                sql,
+                                kind: SyncStatementKind::Comment,
+                                object_name: Some(table_diff.name.clone()),
+                                row_key: None,
+                                destructive: false,
+                                transactional_safe: true,
+                                selected_by_default: true,
+                                warnings: vec![],
+                            });
+                        }
+                        for column in &source_table.columns {
+                            if let Some(sql) = raw_column_comment_sql(
+                                target_db_type,
+                                &table_ref,
+                                &source_table.name,
+                                column,
+                                None,
+                                dialect,
+                            ) {
+                                statements.push(SyncStatement {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    sql,
+                                    kind: SyncStatementKind::Comment,
+                                    object_name: Some(table_diff.name.clone()),
+                                    row_key: None,
+                                    destructive: false,
+                                    transactional_safe: true,
+                                    selected_by_default: true,
+                                    warnings: vec![],
+                                });
+                            }
+                        }
+                    }
+
                     if sync_supports_foreign_keys(target_db_type) {
                         let table_ref = dialect.format_table_reference(
                             target_database,
@@ -877,6 +1064,28 @@ fn build_schema_sync_plan_with_dialect(
                                         selected_by_default: true,
                                         warnings: vec![],
                                     });
+                                    if dialect.needs_raw_comment_statements() {
+                                        if let Some(sql) = raw_column_comment_sql(
+                                            target_db_type,
+                                            &table_ref,
+                                            &table_diff.name,
+                                            src,
+                                            None,
+                                            dialect,
+                                        ) {
+                                            statements.push(SyncStatement {
+                                                id: uuid::Uuid::new_v4().to_string(),
+                                                sql,
+                                                kind: SyncStatementKind::Comment,
+                                                object_name: Some(table_diff.name.clone()),
+                                                row_key: None,
+                                                destructive: false,
+                                                transactional_safe: true,
+                                                selected_by_default: true,
+                                                warnings: vec![],
+                                            });
+                                        }
+                                    }
                                 }
                             }
                             DiffStatus::Removed => {
@@ -899,7 +1108,34 @@ fn build_schema_sync_plan_with_dialect(
                             }
                             DiffStatus::Modified => {
                                 // 修改列 - P0 安全保护：默认不选中（可能导致数据丢失）
-                                if let Some(src) = &col_diff.source {
+                                if let (Some(src), Some(target)) =
+                                    (&col_diff.source, &col_diff.target)
+                                {
+                                    if !raw_column_definition_changed(src, target) {
+                                        if dialect.needs_raw_comment_statements() {
+                                            if let Some(sql) = raw_column_comment_sql(
+                                                target_db_type,
+                                                &table_ref,
+                                                &table_diff.name,
+                                                src,
+                                                Some(target),
+                                                dialect,
+                                            ) {
+                                                statements.push(SyncStatement {
+                                                    id: stmt_id,
+                                                    sql,
+                                                    kind: SyncStatementKind::Comment,
+                                                    object_name: Some(table_diff.name.clone()),
+                                                    row_key: None,
+                                                    destructive: false,
+                                                    transactional_safe: true,
+                                                    selected_by_default: true,
+                                                    warnings: vec![],
+                                                });
+                                            }
+                                        }
+                                        continue;
+                                    }
                                     let sql = if target_db_type == "mysql"
                                         || target_db_type == "mariadb"
                                     {
@@ -931,8 +1167,60 @@ fn build_schema_sync_plan_with_dialect(
                                             "此操作可能导致数据类型转换失败或数据丢失".to_string(),
                                         ],
                                     });
+                                    if dialect.needs_raw_comment_statements() {
+                                        if let Some(sql) = raw_column_comment_sql(
+                                            target_db_type,
+                                            &table_ref,
+                                            &table_diff.name,
+                                            src,
+                                            Some(target),
+                                            dialect,
+                                        ) {
+                                            statements.push(SyncStatement {
+                                                id: uuid::Uuid::new_v4().to_string(),
+                                                sql,
+                                                kind: SyncStatementKind::Comment,
+                                                object_name: Some(table_diff.name.clone()),
+                                                row_key: None,
+                                                destructive: false,
+                                                transactional_safe: true,
+                                                selected_by_default: true,
+                                                warnings: vec![],
+                                            });
+                                        }
+                                    }
                                 }
                             }
+                        }
+                    }
+
+                    if dialect.needs_raw_comment_statements() && table_diff.comment_changed {
+                        let source_comment = table_diff
+                            .source
+                            .as_ref()
+                            .and_then(|table| table.comment.as_deref());
+                        let target_comment = table_diff
+                            .target
+                            .as_ref()
+                            .and_then(|table| table.comment.as_deref());
+                        if let Some(sql) = raw_table_comment_sql(
+                            target_db_type,
+                            &table_ref,
+                            &table_diff.name,
+                            target_comment,
+                            source_comment,
+                        ) {
+                            statements.push(SyncStatement {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                sql,
+                                kind: SyncStatementKind::Comment,
+                                object_name: Some(table_diff.name.clone()),
+                                row_key: None,
+                                destructive: false,
+                                transactional_safe: true,
+                                selected_by_default: true,
+                                warnings: vec![],
+                            });
                         }
                     }
 
@@ -1590,6 +1878,127 @@ mod tests {
         assert!(!drop_table.selected_by_default);
         assert!(drop_table.destructive);
         assert!(!drop_table.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_build_schema_sync_plan_raw_adds_comments_for_new_table() {
+        use super::super::{ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema};
+
+        let table = TableSchema {
+            name: "users".to_string(),
+            columns: vec![ColumnSchema {
+                name: "name".to_string(),
+                data_type: "text".to_string(),
+                nullable: true,
+                default_value: None,
+                comment: Some("Display name".to_string()),
+                ..Default::default()
+            }],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: Some("User table".to_string()),
+            ..Default::default()
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Added,
+                source: Some(table),
+                target: None,
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 1,
+            removed_count: 0,
+            modified_count: 0,
+        };
+
+        let plan = build_schema_sync_plan(&result, "postgresql");
+
+        assert!(plan.sql_text.contains("CREATE TABLE users"));
+        assert!(
+            plan.sql_text
+                .contains("COMMENT ON TABLE users IS 'User table';")
+        );
+        assert!(
+            plan.sql_text
+                .contains("COMMENT ON COLUMN users.name IS 'Display name';")
+        );
+        assert_eq!(3, plan.summary.ddl_count);
+    }
+
+    #[test]
+    fn test_build_schema_sync_plan_raw_comment_only_column_is_not_destructive() {
+        use super::super::{
+            ColumnDiff, ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema,
+        };
+
+        let target_column = ColumnSchema {
+            name: "name".to_string(),
+            data_type: "text".to_string(),
+            nullable: true,
+            default_value: None,
+            comment: None,
+            ..Default::default()
+        };
+        let source_column = ColumnSchema {
+            comment: Some("Display name".to_string()),
+            ..target_column.clone()
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(TableSchema {
+                    name: "users".to_string(),
+                    columns: vec![source_column.clone()],
+                    indexes: vec![],
+                    foreign_keys: vec![],
+                    comment: Some("User table".to_string()),
+                    ..Default::default()
+                }),
+                target: Some(TableSchema {
+                    name: "users".to_string(),
+                    columns: vec![target_column.clone()],
+                    indexes: vec![],
+                    foreign_keys: vec![],
+                    comment: None,
+                    ..Default::default()
+                }),
+                column_diffs: vec![ColumnDiff {
+                    name: "name".to_string(),
+                    status: DiffStatus::Modified,
+                    source: Some(source_column),
+                    target: Some(target_column),
+                }],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: true,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+
+        let plan = build_schema_sync_plan(&result, "postgresql");
+
+        assert_eq!(2, plan.statements.len());
+        assert!(plan.statements.iter().all(|statement| {
+            matches!(statement.kind, SyncStatementKind::Comment)
+                && !statement.destructive
+                && statement.selected_by_default
+        }));
+        assert!(
+            plan.sql_text
+                .contains("COMMENT ON COLUMN users.name IS 'Display name';")
+        );
+        assert!(
+            plan.sql_text
+                .contains("COMMENT ON TABLE users IS 'User table';")
+        );
+        assert!(!plan.sql_text.contains("ALTER COLUMN name TYPE"));
     }
 
     #[test]
