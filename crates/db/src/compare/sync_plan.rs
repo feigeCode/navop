@@ -78,6 +78,11 @@ pub struct SyncPlan {
     pub sql_text: String,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SchemaSyncPlanOptions {
+    pub compare_column_order: bool,
+}
+
 trait SyncSqlDialect {
     fn quote_identifier(&self, identifier: &str) -> String;
     fn format_table_reference(&self, database: &str, schema: Option<&str>, table: &str) -> String;
@@ -706,11 +711,16 @@ fn table_designer_sync_statement(
     target_database: &str,
     target_db_type: &str,
     dialect: &dyn SyncSqlDialect,
+    options: SchemaSyncPlanOptions,
 ) -> Option<SyncStatement> {
     let source = table_diff.source.as_ref()?;
     let target = table_diff.target.as_ref()?;
     let original = table_schema_to_design(target_database, target);
-    let new = table_schema_to_compare_design(target_database, source, target);
+    let new = if options.compare_column_order {
+        table_schema_to_design(target_database, source)
+    } else {
+        table_schema_to_compare_design(target_database, source, target)
+    };
     let sql = dialect.build_alter_table_sql(&original, &new)?;
     if !has_executable_sync_sql(&sql) {
         return None;
@@ -843,7 +853,22 @@ fn extract_key_values_from_row(
 /// - DROP COLUMN 默认不选中
 /// - 列类型修改默认不选中（可能导致数据丢失）
 pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str) -> SyncPlan {
-    build_schema_sync_plan_with_dialect(result, "", None, target_db_type, &RawSyncSqlDialect)
+    build_schema_sync_plan_with_options(result, target_db_type, SchemaSyncPlanOptions::default())
+}
+
+pub fn build_schema_sync_plan_with_options(
+    result: &SchemaCompareResult,
+    target_db_type: &str,
+    options: SchemaSyncPlanOptions,
+) -> SyncPlan {
+    build_schema_sync_plan_with_dialect(
+        result,
+        "",
+        None,
+        target_db_type,
+        &RawSyncSqlDialect,
+        options,
+    )
 }
 
 pub fn build_schema_sync_plan_with_plugin(
@@ -852,6 +877,22 @@ pub fn build_schema_sync_plan_with_plugin(
     target_schema: Option<&str>,
     plugin: &dyn DatabasePlugin,
 ) -> SyncPlan {
+    build_schema_sync_plan_with_plugin_options(
+        result,
+        target_database,
+        target_schema,
+        plugin,
+        SchemaSyncPlanOptions::default(),
+    )
+}
+
+pub fn build_schema_sync_plan_with_plugin_options(
+    result: &SchemaCompareResult,
+    target_database: &str,
+    target_schema: Option<&str>,
+    plugin: &dyn DatabasePlugin,
+    options: SchemaSyncPlanOptions,
+) -> SyncPlan {
     let target_db_type = format!("{:?}", plugin.name()).to_lowercase();
     build_schema_sync_plan_with_dialect(
         result,
@@ -859,6 +900,7 @@ pub fn build_schema_sync_plan_with_plugin(
         target_schema,
         &target_db_type,
         &PluginSyncSqlDialect(plugin),
+        options,
     )
 }
 
@@ -868,6 +910,7 @@ fn build_schema_sync_plan_with_dialect(
     target_schema: Option<&str>,
     target_db_type: &str,
     dialect: &dyn SyncSqlDialect,
+    options: SchemaSyncPlanOptions,
 ) -> SyncPlan {
     let mut foreign_key_drops = Vec::new();
     let mut statements = Vec::new();
@@ -1001,6 +1044,7 @@ fn build_schema_sync_plan_with_dialect(
                     target_database,
                     target_db_type,
                     dialect,
+                    options,
                 );
                 let table_designer_handles_table = table_designer_statement.is_some();
 
@@ -2477,6 +2521,69 @@ mod tests {
         assert!(!plan.sql_text.contains("MODIFY COLUMN"));
         assert!(!plan.sql_text.contains(" AFTER "));
         assert!(!plan.sql_text.contains(" FIRST"));
+    }
+
+    #[test]
+    fn test_mysql_schema_sync_plan_can_compare_existing_column_order_changes() {
+        use super::super::{ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema};
+
+        fn column(name: &str) -> ColumnSchema {
+            ColumnSchema {
+                name: name.to_string(),
+                data_type: "varchar(64)".to_string(),
+                nullable: true,
+                default_value: None,
+                comment: None,
+                ..Default::default()
+            }
+        }
+
+        let source = TableSchema {
+            name: "users".to_string(),
+            columns: vec![column("name"), column("id")],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+            ..Default::default()
+        };
+        let target = TableSchema {
+            name: "users".to_string(),
+            columns: vec![column("id"), column("name")],
+            indexes: vec![],
+            foreign_keys: vec![],
+            comment: None,
+            ..Default::default()
+        };
+        let result = SchemaCompareResult {
+            table_diffs: vec![TableDiff {
+                name: "users".to_string(),
+                status: DiffStatus::Modified,
+                source: Some(source),
+                target: Some(target),
+                column_diffs: vec![],
+                index_diffs: vec![],
+                foreign_key_diffs: vec![],
+                comment_changed: false,
+            }],
+            added_count: 0,
+            removed_count: 0,
+            modified_count: 1,
+        };
+        let plugin = crate::mysql::MySqlPlugin::new();
+
+        let plan = build_schema_sync_plan_with_plugin_options(
+            &result,
+            "app",
+            None,
+            &plugin,
+            SchemaSyncPlanOptions {
+                compare_column_order: true,
+            },
+        );
+
+        assert_eq!(1, plan.statements.len());
+        assert!(plan.sql_text.contains("MODIFY COLUMN"));
+        assert!(plan.sql_text.contains(" FIRST") || plan.sql_text.contains(" AFTER "));
     }
 
     #[test]

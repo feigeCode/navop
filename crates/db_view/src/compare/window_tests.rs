@@ -157,6 +157,7 @@ fn schema_compare_params_include_object_and_rule_settings() {
             ignore_auto_increment: true,
             ignore_charset_collation: true,
             ignore_table_options: true,
+            compare_column_order: true,
             ..SchemaCompareSettings::default()
         },
     )
@@ -168,6 +169,7 @@ fn schema_compare_params_include_object_and_rule_settings() {
     assert!(params.ignore_auto_increment);
     assert!(params.ignore_charset_collation);
     assert!(params.ignore_table_options);
+    assert!(params.compare_column_order);
 }
 
 #[test]

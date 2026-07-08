@@ -27,6 +27,7 @@ pub(super) struct SchemaCompareSettings {
     pub ignore_auto_increment: bool,
     pub ignore_charset_collation: bool,
     pub ignore_table_options: bool,
+    pub compare_column_order: bool,
 }
 
 impl Default for SchemaCompareSettings {
@@ -39,6 +40,7 @@ impl Default for SchemaCompareSettings {
             ignore_auto_increment: false,
             ignore_charset_collation: false,
             ignore_table_options: false,
+            compare_column_order: false,
         }
     }
 }
@@ -189,6 +191,7 @@ pub(super) fn schema_compare_params(
         ignore_auto_increment: settings.ignore_auto_increment,
         ignore_charset_collation: settings.ignore_charset_collation,
         ignore_table_options: settings.ignore_table_options,
+        compare_column_order: settings.compare_column_order,
     })
 }
 

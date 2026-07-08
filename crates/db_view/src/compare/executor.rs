@@ -1,7 +1,8 @@
 use db::compare::{
     ColumnSchema, DataCompareOptions, DataCompareResult, ForeignKeySchema, IndexSchema, RowData,
-    SchemaCompareOptions, SchemaCompareResult, SyncPlan, SyncPlanSummary, SyncStatement,
-    TableSchema, build_data_sync_plan, build_schema_sync_plan, compare_data_rows, compare_schemas,
+    SchemaCompareOptions, SchemaCompareResult, SchemaSyncPlanOptions, SyncPlan, SyncPlanSummary,
+    SyncStatement, TableSchema, build_data_sync_plan, build_schema_sync_plan, compare_data_rows,
+    compare_schemas,
 };
 use db::{
     ColumnInfo, FieldType, ForeignKeyDefinition, GlobalDbState, IndexInfo, QueryColumnMeta,
@@ -83,6 +84,7 @@ pub struct SchemaCompareParams {
     pub ignore_auto_increment: bool,
     pub ignore_charset_collation: bool,
     pub ignore_table_options: bool,
+    pub compare_column_order: bool,
 }
 
 /// 执行数据比较任务（简化版本）
@@ -820,16 +822,20 @@ pub fn generate_schema_sync_plan_for_target(
     target_connection_id: &str,
     target_database: &str,
     target_schema: Option<&str>,
+    compare_column_order: bool,
 ) -> anyhow::Result<SyncPlan> {
     let config = db_state
         .get_config(target_connection_id)
         .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", target_connection_id))?;
     let plugin = db_state.get_plugin(&config.database_type)?;
-    Ok(db::compare::build_schema_sync_plan_with_plugin(
+    Ok(db::compare::build_schema_sync_plan_with_plugin_options(
         result,
         target_database,
         target_schema,
         plugin.as_ref(),
+        SchemaSyncPlanOptions {
+            compare_column_order,
+        },
     ))
 }
 
@@ -2284,6 +2290,7 @@ mod tests {
                 ignore_auto_increment: false,
                 ignore_charset_collation: false,
                 ignore_table_options: false,
+                compare_column_order: false,
             },
             db_state.clone(),
             tx,
@@ -2319,6 +2326,7 @@ mod tests {
             connection_id,
             "onetcli_compare_dst",
             None,
+            false,
         )?;
         assert_no_display_charset_labels(&plan.sql_text);
         let schema_results = run_sync_sql_and_collect(

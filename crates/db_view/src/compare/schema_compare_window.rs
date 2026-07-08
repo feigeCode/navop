@@ -328,6 +328,7 @@ impl SchemaCompareWindow {
         let target_connection_id = params.target_connection_id.clone();
         let target_database = params.target_database.clone();
         let target_schema = params.target_schema.clone();
+        let compare_column_order = params.compare_column_order;
         let db_state = Arc::new(cx.global::<GlobalDbState>().clone());
         self.is_running.update(cx, |running, cx| {
             *running = true;
@@ -365,6 +366,7 @@ impl SchemaCompareWindow {
                         &target_connection_id,
                         &target_database,
                         target_schema.as_deref(),
+                        compare_column_order,
                     )
                     .map(|plan| (result, plan)),
                     Err(error) => Err(error),
@@ -536,6 +538,7 @@ impl SchemaCompareWindow {
             ignore_auto_increment: *self.ignore_auto_increment.read(cx),
             ignore_charset_collation: *self.ignore_charset_collation.read(cx),
             ignore_table_options: *self.ignore_table_options.read(cx),
+            compare_column_order: false,
         }
     }
 
