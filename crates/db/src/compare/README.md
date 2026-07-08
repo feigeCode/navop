@@ -43,8 +43,8 @@ let result = compare_schemas(
     SchemaCompareOptions::default(),
 )?;
 
-// 生成同步计划
-let plan = build_schema_sync_plan(&result, "postgresql");
+// 生成同步计划（使用目标数据库插件）
+let plan = build_schema_sync_plan_with_plugin(&result, "target_db", Some("public"), plugin);
 ```
 
 ## 模块说明

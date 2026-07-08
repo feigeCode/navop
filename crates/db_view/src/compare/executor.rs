@@ -1,8 +1,7 @@
 use db::compare::{
     ColumnSchema, DataCompareOptions, DataCompareResult, ForeignKeySchema, IndexSchema, RowData,
     SchemaCompareOptions, SchemaCompareResult, SchemaSyncPlanOptions, SyncPlan, SyncPlanSummary,
-    SyncStatement, TableSchema, build_data_sync_plan, build_schema_sync_plan, compare_data_rows,
-    compare_schemas,
+    SyncStatement, TableSchema, build_data_sync_plan, compare_data_rows, compare_schemas,
 };
 use db::{
     ColumnInfo, FieldType, ForeignKeyDefinition, GlobalDbState, IndexInfo, QueryColumnMeta,
@@ -809,11 +808,6 @@ pub async fn execute_schema_compare(
     );
     let result = compare_schemas(source_tables, target_tables, options)?;
     Ok(result)
-}
-
-/// 生成结构同步计划
-pub fn generate_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str) -> SyncPlan {
-    build_schema_sync_plan(result, target_db_type)
 }
 
 pub fn generate_schema_sync_plan_for_target(

@@ -754,10 +754,18 @@ fn table_designer_statement_safety(
     table_diff: &super::TableDiff,
     target_db_type: &str,
 ) -> SyncStatementSafety {
-    let destructive = table_diff
+    let destructive_column_diff = table_diff
         .column_diffs
         .iter()
-        .any(|diff| matches!(diff.status, DiffStatus::Removed | DiffStatus::Modified))
+        .any(|diff| match diff.status {
+            DiffStatus::Removed => true,
+            DiffStatus::Added => false,
+            DiffStatus::Modified => match (&diff.source, &diff.target) {
+                (Some(source), Some(target)) => raw_column_definition_changed(source, target),
+                _ => true,
+            },
+        });
+    let destructive = destructive_column_diff
         || table_diff.index_diffs.iter().any(|diff| {
             matches!(diff.status, DiffStatus::Removed | DiffStatus::Modified)
                 && diff
@@ -852,25 +860,6 @@ fn extract_key_values_from_row(
 /// - DROP TABLE 默认不选中
 /// - DROP COLUMN 默认不选中
 /// - 列类型修改默认不选中（可能导致数据丢失）
-pub fn build_schema_sync_plan(result: &SchemaCompareResult, target_db_type: &str) -> SyncPlan {
-    build_schema_sync_plan_with_options(result, target_db_type, SchemaSyncPlanOptions::default())
-}
-
-pub fn build_schema_sync_plan_with_options(
-    result: &SchemaCompareResult,
-    target_db_type: &str,
-    options: SchemaSyncPlanOptions,
-) -> SyncPlan {
-    build_schema_sync_plan_with_dialect(
-        result,
-        "",
-        None,
-        target_db_type,
-        &RawSyncSqlDialect,
-        options,
-    )
-}
-
 pub fn build_schema_sync_plan_with_plugin(
     result: &SchemaCompareResult,
     target_database: &str,
@@ -1705,6 +1694,11 @@ mod tests {
             .collect()
     }
 
+    fn postgres_schema_plan(result: &SchemaCompareResult) -> SyncPlan {
+        let plugin = crate::postgresql::PostgresPlugin::new();
+        build_schema_sync_plan_with_plugin(result, "", None, &plugin)
+    }
+
     #[test]
     fn test_build_data_sync_plan_with_all_types() {
         let mut changes = HashMap::new();
@@ -1892,13 +1886,13 @@ mod tests {
             modified_count: 1,
         };
 
-        let plan = build_schema_sync_plan(&result, "postgresql");
+        let plan = postgres_schema_plan(&result);
 
         // 检查新增列（应该默认选中）
         let add_col = plan
             .statements
             .iter()
-            .find(|s| s.sql.contains("ADD COLUMN email"))
+            .find(|s| s.sql.contains("ADD COLUMN \"email\""))
             .unwrap();
         assert!(add_col.selected_by_default);
         assert!(!add_col.destructive);
@@ -1907,7 +1901,7 @@ mod tests {
         let drop_col = plan
             .statements
             .iter()
-            .find(|s| s.sql.contains("DROP COLUMN legacy"))
+            .find(|s| s.sql.contains("DROP COLUMN \"legacy\""))
             .unwrap();
         assert!(!drop_col.selected_by_default);
         assert!(drop_col.destructive);
@@ -1925,7 +1919,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_schema_sync_plan_raw_adds_comments_for_new_table() {
+    fn test_build_schema_sync_plan_with_plugin_adds_comments_for_new_table() {
         use super::super::{ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema};
 
         let table = TableSchema {
@@ -1959,22 +1953,22 @@ mod tests {
             modified_count: 0,
         };
 
-        let plan = build_schema_sync_plan(&result, "postgresql");
+        let plan = postgres_schema_plan(&result);
 
-        assert!(plan.sql_text.contains("CREATE TABLE users"));
+        assert!(plan.sql_text.contains("CREATE TABLE \"users\""));
         assert!(
             plan.sql_text
-                .contains("COMMENT ON TABLE users IS 'User table';")
+                .contains("COMMENT ON TABLE \"users\" IS 'User table';")
         );
         assert!(
             plan.sql_text
-                .contains("COMMENT ON COLUMN users.name IS 'Display name';")
+                .contains("COMMENT ON COLUMN \"users\".\"name\" IS 'Display name';")
         );
-        assert_eq!(3, plan.summary.ddl_count);
+        assert_eq!(1, plan.summary.ddl_count);
     }
 
     #[test]
-    fn test_build_schema_sync_plan_raw_comment_only_column_is_not_destructive() {
+    fn test_build_schema_sync_plan_with_plugin_comment_only_column_is_not_destructive() {
         use super::super::{
             ColumnDiff, ColumnSchema, DiffStatus, SchemaCompareResult, TableDiff, TableSchema,
         };
@@ -2026,21 +2020,18 @@ mod tests {
             modified_count: 1,
         };
 
-        let plan = build_schema_sync_plan(&result, "postgresql");
+        let plan = postgres_schema_plan(&result);
 
-        assert_eq!(2, plan.statements.len());
-        assert!(plan.statements.iter().all(|statement| {
-            matches!(statement.kind, SyncStatementKind::Comment)
-                && !statement.destructive
-                && statement.selected_by_default
-        }));
+        assert_eq!(1, plan.statements.len());
+        assert!(!plan.statements[0].destructive);
+        assert!(plan.statements[0].selected_by_default);
         assert!(
             plan.sql_text
-                .contains("COMMENT ON COLUMN users.name IS 'Display name';")
+                .contains("COMMENT ON COLUMN \"users\".\"name\" IS 'Display name';")
         );
         assert!(
             plan.sql_text
-                .contains("COMMENT ON TABLE users IS 'User table';")
+                .contains("COMMENT ON TABLE \"users\" IS 'User table';")
         );
         assert!(!plan.sql_text.contains("ALTER COLUMN name TYPE"));
     }
@@ -2090,13 +2081,13 @@ mod tests {
             modified_count: 0,
         };
 
-        let plan = build_schema_sync_plan(&result, "postgresql");
+        let plan = postgres_schema_plan(&result);
 
         let statement = plan.statements.first().unwrap();
         assert!(matches!(statement.kind, SyncStatementKind::CreateTable));
         assert_eq!(
             statement.sql,
-            "CREATE TABLE users (\n  id int NOT NULL,\n  name varchar(64) NULL DEFAULT 'anonymous'\n);"
+            "CREATE TABLE \"users\" (\n  \"id\" int NOT NULL,\n  \"name\" varchar(64) DEFAULT 'anonymous'\n);"
         );
         assert!(statement.selected_by_default);
         assert!(!statement.destructive);
@@ -2192,11 +2183,14 @@ mod tests {
             modified_count: 1,
         };
 
-        let plan = build_schema_sync_plan(&result, "postgresql");
+        let plan = postgres_schema_plan(&result);
 
-        assert_eq!(
-            plan.statements.first().unwrap().sql,
-            "CREATE UNIQUE INDEX idx_users_email ON users (email);"
+        assert!(
+            plan.statements
+                .first()
+                .unwrap()
+                .sql
+                .contains("CREATE UNIQUE INDEX \"idx_users_email\"")
         );
     }
 
