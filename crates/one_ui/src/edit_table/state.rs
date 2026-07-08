@@ -1030,10 +1030,6 @@ where
         _: &mut Window,
         _: &mut Context<Self>,
     ) {
-        self.set_row_context_menu_target(row_ix);
-    }
-
-    fn set_row_context_menu_target(&mut self, row_ix: usize) {
         self.right_clicked_row = Some(row_ix);
     }
 
@@ -2824,12 +2820,6 @@ where
                     MouseButton::Right,
                     cx.listener(move |this, e, window, cx| {
                         this.on_row_right_click(e, row_ix, window, cx);
-                    }),
-                )
-                .on_mouse_up(
-                    MouseButton::Right,
-                    cx.listener(move |this, _, _, _| {
-                        this.set_row_context_menu_target(row_ix);
                     }),
                 )
         } else {

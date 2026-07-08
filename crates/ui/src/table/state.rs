@@ -607,10 +607,6 @@ where
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_row_context_menu_target(row_ix, cx);
-    }
-
-    fn set_row_context_menu_target(&mut self, row_ix: Option<usize>, cx: &mut Context<Self>) {
         self.right_clicked_row = row_ix;
         self.right_clicked_cell = None;
         cx.emit(TableEvent::RightClickedRow(row_ix));
@@ -622,15 +618,6 @@ where
         row_ix: usize,
         col_ix: usize,
         _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_cell_context_menu_target(row_ix, col_ix, cx);
-    }
-
-    fn set_cell_context_menu_target(
-        &mut self,
-        row_ix: usize,
-        col_ix: usize,
         cx: &mut Context<Self>,
     ) {
         if !self.cell_selectable {
@@ -1792,14 +1779,6 @@ where
                                                                 },
                                                             ),
                                                         )
-                                                        .on_mouse_up(
-                                                            MouseButton::Right,
-                                                            cx.listener(move |table, _, _, cx| {
-                                                                table.set_cell_context_menu_target(
-                                                                    row_ix, col_ix, cx,
-                                                                );
-                                                            }),
-                                                        )
                                                     }),
                                             ),
                                     );
@@ -1923,14 +1902,6 @@ where
                                                                     },
                                                                 ),
                                                             )
-                                                            .on_mouse_up(
-                                                                MouseButton::Right,
-                                                                cx.listener(move |table, _, _, cx| {
-                                                                    table.set_cell_context_menu_target(
-                                                                        row_ix, col_ix, cx,
-                                                                    );
-                                                                }),
-                                                            )
                                                         }),
                                                 );
 
@@ -1985,12 +1956,6 @@ where
                     MouseButton::Right,
                     cx.listener(move |this, e, window, cx| {
                         this.on_row_right_click(e, Some(row_ix), window, cx);
-                    }),
-                )
-                .on_mouse_up(
-                    MouseButton::Right,
-                    cx.listener(move |this, _, _, cx| {
-                        this.set_row_context_menu_target(Some(row_ix), cx);
                     }),
                 )
                 .on_click(cx.listener(move |this, e, window, cx| {

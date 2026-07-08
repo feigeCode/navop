@@ -1975,10 +1975,8 @@ impl RedisTreeView {
         let view = cx.entity().clone();
         let view_for_db_switch = cx.entity().clone();
         let view_for_context = cx.entity().clone();
-        let view_for_context_up = cx.entity().clone();
         let view_for_dbl = cx.entity().clone();
         let node_id_for_context = node_id.clone();
-        let node_id_for_context_up = node_id.clone();
         let node_id_for_dbl = node_id.clone();
         let connection_id_for_load_more = node_connection_id.clone();
 
@@ -2041,12 +2039,6 @@ impl RedisTreeView {
             .on_mouse_down(MouseButton::Right, move |_event, _window, cx| {
                 view_for_context.update(cx, |view, cx| {
                     view.set_context_menu_target(&node_id_for_context);
-                    cx.notify();
-                });
-            })
-            .on_mouse_up(MouseButton::Right, move |_event, _window, cx| {
-                view_for_context_up.update(cx, |view, cx| {
-                    view.set_context_menu_target(&node_id_for_context_up);
                     cx.notify();
                 });
             })
