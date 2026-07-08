@@ -1,7 +1,7 @@
 use gpui::{
-    Anchor, App, AppContext as _, Context, DismissEvent, Entity, IntoElement, MouseDownEvent,
-    ParentElement as _, Pixels, Point, Render, Styled, Subscription, Window, anchored, deferred,
-    div, prelude::FluentBuilder as _, px,
+    Anchor, App, AppContext as _, Context, DismissEvent, Entity, IntoElement, ParentElement as _,
+    Pixels, Point, Render, Styled, Subscription, Window, anchored, deferred, div,
+    prelude::FluentBuilder as _, px,
 };
 use rust_i18n::t;
 
@@ -98,7 +98,7 @@ impl InputState {
 
     pub(crate) fn handle_right_click_menu(
         &mut self,
-        event: &MouseDownEvent,
+        position: Point<Pixels>,
         offset: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -130,7 +130,7 @@ impl InputState {
 
         let action_context = self.focus_handle.clone();
         self.context_menu.update(cx, |this, cx| {
-            this.mouse_position = event.position;
+            this.mouse_position = position;
             this.menu.update(cx, |menu, cx| {
                 let new_menu = if let Some(builder) = &self.context_menu_builder {
                     builder(PopupMenu::new(cx), window, cx)

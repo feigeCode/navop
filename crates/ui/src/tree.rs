@@ -490,6 +490,13 @@ impl Render for TreeState {
                                             cx.notify();
                                         }),
                                     )
+                                    .on_mouse_up(
+                                        MouseButton::Right,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.right_clicked_ix = Some(ix);
+                                            cx.notify();
+                                        }),
+                                    )
                                 });
 
                             items.push(el)

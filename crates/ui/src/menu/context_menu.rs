@@ -3,11 +3,13 @@ use std::{cell::RefCell, rc::Rc};
 use gpui::{
     Anchor, AnyElement, App, Context, DismissEvent, Element, ElementId, Entity, Focusable,
     GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, InteractiveElement, IntoElement,
-    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, StyleRefinement, Styled,
-    Subscription, Window, anchored, deferred, div, prelude::FluentBuilder, px,
+    MouseButton, MouseDownEvent, MouseUpEvent, ParentElement, Pixels, Point, StyleRefinement,
+    Styled, Subscription, Window, anchored, deferred, div, prelude::FluentBuilder, px,
 };
 
 use crate::menu::PopupMenu;
+
+type PopupMenuBuilder = Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
 
 /// A extension trait for adding a context menu to an element.
 pub trait ContextMenuExt: InteractiveElement + ParentElement + Styled {
@@ -40,7 +42,7 @@ impl<E: InteractiveElement + ParentElement + Styled> ContextMenuExt for E {}
 pub struct ContextMenu<E: ParentElement + Styled + Sized> {
     id: ElementId,
     element: Option<E>,
-    menu: Option<Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>>,
+    menu: Option<PopupMenuBuilder>,
     // This is not in use, just for style refinement forwarding.
     _ignore_style: StyleRefinement,
     anchor: Anchor,
@@ -117,6 +119,57 @@ struct ContextMenuSharedState {
     open: bool,
     position: Point<Pixels>,
     _subscription: Option<Subscription>,
+}
+
+fn should_open_context_menu(state: &ContextMenuSharedState, position: Point<Pixels>) -> bool {
+    !state.open || state.position != position
+}
+
+fn mark_context_menu_open(state: &mut ContextMenuSharedState, position: Point<Pixels>) {
+    state.menu_view = None;
+    state._subscription = None;
+    state.position = position;
+    state.open = true;
+}
+
+fn open_context_menu_at(
+    shared_state: Rc<RefCell<ContextMenuSharedState>>,
+    builder: Option<PopupMenuBuilder>,
+    position: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    {
+        let mut state = shared_state.borrow_mut();
+        if !should_open_context_menu(&state, position) {
+            return;
+        }
+        mark_context_menu_open(&mut state, position);
+    }
+
+    window.defer(cx, move |window, cx| {
+        let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
+            let Some(build) = &builder else {
+                return menu;
+            };
+            build(menu, window, cx)
+        });
+
+        let _subscription = window.subscribe(&menu, cx, {
+            let shared_state = shared_state.clone();
+            move |_, _: &DismissEvent, window, _cx| {
+                shared_state.borrow_mut().open = false;
+                window.refresh();
+            }
+        });
+
+        {
+            let mut state = shared_state.borrow_mut();
+            state.menu_view = Some(menu.clone());
+            state._subscription = Some(_subscription);
+            window.refresh();
+        }
+    });
 }
 
 pub struct ContextMenuState {
@@ -270,56 +323,86 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
             |_view, state: &mut ContextMenuState, window, _| {
                 let shared_state = state.shared_state.clone();
 
-                let hitbox = hitbox.clone();
-                // When right mouse click, to build content menu, and show it at the mouse position.
+                let hitbox_for_down = hitbox.clone();
+                let state_for_down = shared_state.clone();
+                let builder_for_down = builder.clone();
+                // Build the context menu from mouse down on platforms that emit it.
                 window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
                     if phase.bubble()
                         && event.button == MouseButton::Right
-                        && hitbox.is_hovered(window)
+                        && hitbox_for_down.is_hovered(window)
                     {
-                        {
-                            let mut shared_state = shared_state.borrow_mut();
-                            // Clear any existing menu view to allow immediate replacement
-                            // Set the new position and open the menu
-                            shared_state.menu_view = None;
-                            shared_state._subscription = None;
-                            shared_state.position = event.position;
-                            shared_state.open = true;
-                        }
+                        open_context_menu_at(
+                            state_for_down.clone(),
+                            builder_for_down.clone(),
+                            event.position,
+                            window,
+                            cx,
+                        );
+                    }
+                });
 
-                        // Use defer to build the menu in the next frame, avoiding race conditions
-                        window.defer(cx, {
-                            let shared_state = shared_state.clone();
-                            let builder = builder.clone();
-                            move |window, cx| {
-                                let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
-                                    let Some(build) = &builder else {
-                                        return menu;
-                                    };
-                                    build(menu, window, cx)
-                                });
-
-                                // Set up the subscription for dismiss handling
-                                let _subscription = window.subscribe(&menu, cx, {
-                                    let shared_state = shared_state.clone();
-                                    move |_, _: &DismissEvent, window, _cx| {
-                                        shared_state.borrow_mut().open = false;
-                                        window.refresh();
-                                    }
-                                });
-
-                                // Update the shared state with the built menu and subscription
-                                {
-                                    let mut state = shared_state.borrow_mut();
-                                    state.menu_view = Some(menu.clone());
-                                    state._subscription = Some(_subscription);
-                                    window.refresh();
-                                }
-                            }
-                        });
+                let hitbox_for_up = hitbox.clone();
+                let state_for_up = shared_state.clone();
+                let builder_for_up = builder.clone();
+                // Some platforms, including the OHOS backend, surface context-menu
+                // clicks on button release instead of button press.
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase.bubble()
+                        && event.button == MouseButton::Right
+                        && hitbox_for_up.is_hovered(window)
+                    {
+                        open_context_menu_at(
+                            state_for_up.clone(),
+                            builder_for_up.clone(),
+                            event.position,
+                            window,
+                            cx,
+                        );
                     }
                 });
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::px;
+
+    fn test_state(position: Point<Pixels>, open: bool) -> ContextMenuSharedState {
+        ContextMenuSharedState {
+            menu_view: None,
+            open,
+            position,
+            _subscription: None,
+        }
+    }
+
+    fn point(x: f32, y: f32) -> Point<Pixels> {
+        Point { x: px(x), y: px(y) }
+    }
+
+    #[test]
+    fn context_menu_suppresses_same_click_release_after_press() {
+        let position = point(10.0, 20.0);
+        let mut state = test_state(position, false);
+
+        assert!(should_open_context_menu(&state, position));
+        mark_context_menu_open(&mut state, position);
+
+        assert!(!should_open_context_menu(&state, position));
+    }
+
+    #[test]
+    fn context_menu_allows_release_only_or_new_position() {
+        let position = point(10.0, 20.0);
+        let new_position = point(20.0, 20.0);
+        let open_state = test_state(position, true);
+        let closed_state = test_state(position, false);
+
+        assert!(should_open_context_menu(&closed_state, position));
+        assert!(should_open_context_menu(&open_state, new_position));
     }
 }

@@ -1577,7 +1577,7 @@ impl InputState {
         // Show Mouse context menu
         if event.button == MouseButton::Right {
             if self.enable_context_menu || self.context_menu_builder.is_some() {
-                self.handle_right_click_menu(event, offset, window, cx);
+                self.handle_right_click_menu(event.position, offset, window, cx);
             }
             return;
         }
@@ -1591,10 +1591,18 @@ impl InputState {
 
     pub(super) fn on_mouse_up(
         &mut self,
-        _: &MouseUpEvent,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        event: &MouseUpEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
+        if event.button == MouseButton::Right && self.context_menu_content.is_none() {
+            if self.enable_context_menu || self.context_menu_builder.is_some() {
+                let offset = self.index_for_mouse_position(event.position);
+                self.handle_right_click_menu(event.position, offset, window, cx);
+            }
+            return;
+        }
+
         if self.selected_range.is_empty() {
             self.selection_reversed = false;
         }

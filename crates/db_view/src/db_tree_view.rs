@@ -2744,9 +2744,11 @@ impl DbTreeView {
         let view_for_click = view.clone();
         let view_for_double_click = view.clone();
         let view_for_context = view.clone();
+        let view_for_context_up = view.clone();
         let node_id_for_click = node_id.clone();
         let node_id_for_double_click = node_id.clone();
         let node_id_for_context = node_id.clone();
+        let node_id_for_context_up = node_id.clone();
         let view_for_filter = view.clone();
         let node_id_for_filter = node_id.clone();
 
@@ -2797,6 +2799,12 @@ impl DbTreeView {
             .on_mouse_down(MouseButton::Right, move |_event, _window, cx| {
                 view_for_context.update(cx, |this, cx| {
                     this.set_context_menu_target(&node_id_for_context, ix);
+                    cx.notify();
+                });
+            })
+            .on_mouse_up(MouseButton::Right, move |_event, _window, cx| {
+                view_for_context_up.update(cx, |this, cx| {
+                    this.set_context_menu_target(&node_id_for_context_up, ix);
                     cx.notify();
                 });
             })
