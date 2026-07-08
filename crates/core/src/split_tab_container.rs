@@ -438,7 +438,7 @@ mod tests {
                     panes[0].clone()
                 })
                 .expect("window opens");
-            drop(window);
+            let _ = window;
         });
     }
 

@@ -567,6 +567,33 @@ fn terminal_tab_duplicate_supported(source: &TerminalDuplicateSource) -> bool {
     )
 }
 
+fn terminal_duplicate_source_with_cwd(
+    source: TerminalDuplicateSource,
+    current_working_dir: Option<&str>,
+) -> TerminalDuplicateSource {
+    let Some(cwd) = current_working_dir.filter(|cwd| !cwd.trim().is_empty()) else {
+        return source;
+    };
+    let cwd = cwd.to_string();
+
+    match source {
+        TerminalDuplicateSource::Local(mut config) => {
+            config.working_dir = Some(cwd);
+            TerminalDuplicateSource::Local(config)
+        }
+        TerminalDuplicateSource::Ssh {
+            connection,
+            sync_path_with_terminal,
+            ..
+        } => TerminalDuplicateSource::Ssh {
+            connection,
+            working_dir: Some(cwd),
+            sync_path_with_terminal,
+        },
+        TerminalDuplicateSource::Serial(connection) => TerminalDuplicateSource::Serial(connection),
+    }
+}
+
 /// Terminal view component - supports both Local and SSH backends
 pub struct TerminalView {
     /// Terminal model entity
@@ -4554,7 +4581,15 @@ impl TabContent for TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Arc<dyn TabContentView>> {
-        let source = self.duplicate_source.clone();
+        let current_working_dir = self
+            .terminal
+            .read(cx)
+            .current_working_dir()
+            .map(str::to_string);
+        let source = terminal_duplicate_source_with_cwd(
+            self.duplicate_source.clone(),
+            current_working_dir.as_deref(),
+        );
         let duplicate = cx.new(|cx| match source {
             TerminalDuplicateSource::Local(config) => {
                 TerminalView::new_with_index(config, None, window, cx)
@@ -5164,7 +5199,8 @@ mod tests {
         should_reset_history_prompt_for_terminal_event, should_scroll_to_bottom_on_user_input,
         should_start_block_selection, should_start_selection_from_pending_sgr_press,
         should_upload_clipboard_image_to_remote_cli, take_whole_scroll_lines,
-        terminal_history_scope, terminal_tab_duplicate_supported, wrapped_addon_line_text,
+        terminal_duplicate_source_with_cwd, terminal_history_scope,
+        terminal_tab_duplicate_supported, wrapped_addon_line_text,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
@@ -5273,6 +5309,78 @@ mod tests {
         assert!(terminal_tab_duplicate_supported(
             &TerminalDuplicateSource::Serial(serial)
         ));
+    }
+
+    #[test]
+    fn duplicate_source_for_local_terminal_prefers_current_working_dir() {
+        let mut config = LocalConfig::default();
+        config.working_dir = Some("/tmp/original".to_string());
+
+        let source = terminal_duplicate_source_with_cwd(
+            TerminalDuplicateSource::Local(config),
+            Some("/tmp/current"),
+        );
+
+        let TerminalDuplicateSource::Local(config) = source else {
+            panic!("expected local duplicate source");
+        };
+        assert_eq!(Some("/tmp/current"), config.working_dir.as_deref());
+    }
+
+    #[test]
+    fn duplicate_source_keeps_original_local_dir_when_current_dir_is_blank() {
+        let mut config = LocalConfig::default();
+        config.working_dir = Some("/tmp/original".to_string());
+
+        let source =
+            terminal_duplicate_source_with_cwd(TerminalDuplicateSource::Local(config), Some("  "));
+
+        let TerminalDuplicateSource::Local(config) = source else {
+            panic!("expected local duplicate source");
+        };
+        assert_eq!(Some("/tmp/original"), config.working_dir.as_deref());
+    }
+
+    #[test]
+    fn duplicate_source_for_ssh_terminal_prefers_current_working_dir() {
+        let ssh = StoredConnection::new_ssh(
+            "ssh".to_string(),
+            SshParams {
+                host: "localhost".to_string(),
+                port: 22,
+                username: "user".to_string(),
+                auth_method: SshAuthMethod::Agent,
+                connect_timeout: None,
+                keepalive_interval: None,
+                keepalive_max: None,
+                default_directory: None,
+                init_script: None,
+                disable_shell_integration: None,
+                jump_server: None,
+                proxy: None,
+            },
+            None,
+        );
+
+        let source = terminal_duplicate_source_with_cwd(
+            TerminalDuplicateSource::Ssh {
+                connection: ssh,
+                working_dir: Some("/srv/original".to_string()),
+                sync_path_with_terminal: true,
+            },
+            Some("/srv/current"),
+        );
+
+        let TerminalDuplicateSource::Ssh {
+            working_dir,
+            sync_path_with_terminal,
+            ..
+        } = source
+        else {
+            panic!("expected ssh duplicate source");
+        };
+        assert_eq!(Some("/srv/current"), working_dir.as_deref());
+        assert!(sync_path_with_terminal);
     }
 
     #[test]
