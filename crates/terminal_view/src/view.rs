@@ -665,7 +665,7 @@ pub struct TerminalView {
     /// 本地 shell 命令是否处于执行阶段，由 OSC 133;C 到下一次 prompt/input 维护。
     local_command_running: bool,
     /// InlineSuggest 防抖任务（30ms 延迟刷新建议）
-    suggestion_debounce: Option<gpui::Task<()>>,
+    suggestion_debounce: Option<Task<()>>,
     /// `cd` 目录补全的独立 SFTP 连接
     cd_completion_client: Option<Arc<Mutex<RusshSftpClient>>>,
     /// 按父目录缓存远端子目录名，减少重复 SFTP 请求
@@ -733,7 +733,7 @@ struct PendingSgrMousePress {
 
 #[derive(Debug, Clone)]
 struct TerminalScrollbarMetrics {
-    viewport_size: gpui::Size<Pixels>,
+    viewport_size: Size<Pixels>,
     line_height: Pixels,
     cell_width: Pixels,
 }
@@ -815,7 +815,7 @@ impl ScrollbarHandle for TerminalScrollbarHandle {
         self.future_display_offset.set(Some(display_offset));
     }
 
-    fn content_size(&self) -> gpui::Size<Pixels> {
+    fn content_size(&self) -> Size<Pixels> {
         let metrics = self.metrics.borrow();
         let line_height = metrics.line_height.max(px(1.0));
         let snapshot = self.proxy.snapshot();
@@ -1450,35 +1450,14 @@ impl TerminalView {
         )
     }
 
-    fn log_history_prompt_state(&self, reason: &str, detail: &str, cx: &App) {
-        let selected_match = self.history_prompt.selected_match().map(str::to_string);
-        tracing::debug!(
-            target: "terminal.history_prompt",
-            reason,
-            detail,
-            enabled = self.history_prompt_enabled(cx),
-            mode = ?self.history_prompt.mode(),
-            tracking = ?self.history_prompt.tracking_state(),
-            input = %self.history_prompt.input(),
-            query = %self.history_prompt.query_input(),
-            dropdown_visible = self.history_prompt.dropdown_visible(),
-            matches_len = self.history_prompt.matches().len(),
-            selected_index = ?self.history_prompt.selected_index(),
-            selected_match = ?selected_match,
-            "history prompt state"
-        );
-    }
-
     fn refresh_history_prompt_matches(&mut self, cx: &mut Context<Self>) {
         if !self.history_prompt_enabled(cx) {
             self.hide_history_prompt_dropdown();
-            self.log_history_prompt_state("refresh_skipped", "history prompt disabled", cx);
             return;
         }
 
         if !self.history_prompt.is_active() {
             self.history_prompt.set_matches(Vec::new());
-            self.log_history_prompt_state("refresh_skipped", "tracking inactive", cx);
             return;
         }
 
@@ -1634,13 +1613,10 @@ impl TerminalView {
     fn apply_inline_input_to_history_prompt(&mut self, text: &str, cx: &mut Context<Self>) {
         if !self.history_prompt_enabled(cx) {
             self.hide_history_prompt_dropdown();
-            self.log_history_prompt_state("inline_input_skipped", "history prompt disabled", cx);
             return;
         }
         self.history_prompt.append_text(text);
         self.history_prompt.show_dropdown();
-        let detail = format!("text={text:?}");
-        self.log_history_prompt_state("inline_input", &detail, cx);
         self.schedule_debounced_refresh(cx);
     }
 
@@ -1649,7 +1625,7 @@ impl TerminalView {
         self.suggestion_debounce.take();
         self.suggestion_debounce = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
-                .timer(std::time::Duration::from_millis(30))
+                .timer(Duration::from_millis(30))
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.refresh_history_prompt_matches(cx);
@@ -1661,16 +1637,9 @@ impl TerminalView {
     fn apply_paste_to_history_prompt(&mut self, text: &str, cx: &mut Context<Self>) {
         if !self.history_prompt_enabled(cx) {
             self.hide_history_prompt_dropdown();
-            self.log_history_prompt_state("paste_skipped", "history prompt disabled", cx);
             return;
         }
         self.history_prompt.apply_paste(text);
-        let detail = format!(
-            "len={} multiline={}",
-            text.len(),
-            text.contains('\n') || text.contains('\r')
-        );
-        self.log_history_prompt_state("paste_input", &detail, cx);
         self.refresh_history_prompt_matches(cx);
     }
 
@@ -1681,7 +1650,6 @@ impl TerminalView {
     fn start_history_search(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.history_prompt_enabled(cx) || !self.history_prompt.is_active() {
             self.hide_history_prompt_dropdown();
-            self.log_history_prompt_state("search_skipped", "history prompt unavailable", cx);
             return false;
         }
 
@@ -1690,7 +1658,6 @@ impl TerminalView {
         }
 
         self.history_prompt.enter_search();
-        self.log_history_prompt_state("search_enter", "ctrl-r", cx);
         self.refresh_history_prompt_matches(cx);
         cx.notify();
         true
@@ -1701,7 +1668,6 @@ impl TerminalView {
             return;
         }
         self.history_prompt.exit_search();
-        self.log_history_prompt_state("search_exit", "escape", cx);
         self.refresh_history_prompt_matches(cx);
         cx.notify();
     }
@@ -1754,7 +1720,6 @@ impl TerminalView {
             }
         }
         self.dismiss_history_prompt_matches();
-        self.log_history_prompt_state("accept_complete", "dismiss matches after accept", cx);
         cx.notify();
     }
 
@@ -1833,7 +1798,6 @@ impl TerminalView {
                 self.replace_history_prompt_line(&command, cx);
             }
         }
-        self.log_history_prompt_state("accept_next_word_complete", "after next-word accept", cx);
         cx.notify();
         true
     }
@@ -2064,7 +2028,6 @@ impl TerminalView {
 
         if should_reset_history_prompt_for_terminal_event(event) {
             self.dismiss_history_prompt();
-            self.log_history_prompt_state("terminal_event_reset", "prompt lifecycle event", cx);
         }
 
         match event {
@@ -3910,7 +3873,6 @@ impl TerminalView {
 
         if should_dismiss_history_prompt_for_scroll(lines) {
             self.dismiss_history_prompt();
-            self.log_history_prompt_state("scroll_dismiss", "scroll moved terminal viewport", cx);
         }
 
         if mode.contains(TermMode::ALT_SCREEN) {
@@ -4093,7 +4055,6 @@ impl TerminalView {
 
         if should_dismiss_history_prompt_for_mouse(event.button) {
             self.dismiss_history_prompt();
-            self.log_history_prompt_state("mouse_dismiss", "mouse interaction", cx);
         }
 
         if event.button != MouseButton::Left {
@@ -4618,10 +4579,6 @@ impl TabContent for TerminalView {
         true
     }
 
-    fn can_split(&self, _cx: &App) -> bool {
-        true
-    }
-
     fn can_duplicate(&self, _cx: &App) -> bool {
         terminal_tab_duplicate_supported(&self.duplicate_source)
     }
@@ -4663,10 +4620,6 @@ impl TabContent for TerminalView {
         Some(Arc::new(duplicate))
     }
 
-    fn sidebar_contributions(&self, _cx: &App) -> Vec<SidebarContribution> {
-        Vec::new()
-    }
-
     fn try_close(
         &mut self,
         _tab_id: &str,
@@ -4689,6 +4642,14 @@ impl TabContent for TerminalView {
 
         self.close_terminal_now(cx);
         Task::ready(true)
+    }
+
+    fn sidebar_contributions(&self, _cx: &App) -> Vec<SidebarContribution> {
+        Vec::new()
+    }
+
+    fn can_split(&self, _cx: &App) -> bool {
+        true
     }
 }
 
