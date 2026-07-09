@@ -37,7 +37,7 @@ use one_core::gpui_tokio::Tokio;
 use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::acp::{AcpAgentConfig, AcpConnection, AcpSessionState};
+use crate::acp::{AcpAgentConfig, AcpConnection, AcpSessionState, build_acp_agent_configs};
 use crate::agent_cards::{ApproveToolCall, PlanCardData, RejectToolCall, SubAgentCardData};
 use crate::agent_skills::AgentSkillState;
 use crate::agent_transcript::AgentTranscript;
@@ -885,6 +885,30 @@ impl AgentChatView {
             self.skills.items(),
         );
         self.input.update(cx, |inp, cx| inp.set_context(ctx, cx));
+    }
+
+    fn refresh_acp_agents(&mut self, cx: &mut Context<Self>) {
+        match build_acp_agent_configs(cx) {
+            Ok(agents) => self.refresh_acp_agents_from(agents, cx),
+            Err(error) => {
+                tracing::warn!(%error, "Failed to refresh ACP agent configs");
+            }
+        }
+    }
+
+    fn refresh_acp_agents_from(&mut self, agents: Vec<AcpAgentConfig>, cx: &mut Context<Self>) {
+        self.acp_agents = agents;
+        self.sync_composer(cx);
+        cx.notify();
+    }
+
+    fn agent_switcher_options(&self) -> Vec<ComposerAgentOption> {
+        composer_agent_options(
+            self.backend,
+            &self.acp_agents,
+            self.current_acp_id.as_ref(),
+            self.acp_connecting,
+        )
     }
 
     /// 在目标下拉中选中某个资源:设为当前目标并同步给会话与输入框。
@@ -1930,12 +1954,6 @@ impl AgentChatView {
             self.current_acp_id.as_ref(),
             self.acp_connecting,
         );
-        let options = composer_agent_options(
-            self.backend,
-            &self.acp_agents,
-            self.current_acp_id.as_ref(),
-            self.acp_connecting,
-        );
         let trigger = Button::new("agent-header-switcher-btn")
             .small()
             .icon(current_agent_icon(self.backend))
@@ -1950,10 +1968,20 @@ impl AgentChatView {
         Popover::new("agent-header-switcher")
             .anchor(Anchor::TopLeft)
             .p_0()
+            .on_open_change({
+                let view = view.clone();
+                move |open, _window, cx| {
+                    if *open {
+                        view.update(cx, |this, cx| this.refresh_acp_agents(cx));
+                    }
+                }
+            })
             .trigger(trigger)
             .content({
                 let theme = theme.clone();
+                let view_for_content = view.clone();
                 move |_state, _window, cx| {
+                    let options = view_for_content.read(cx).agent_switcher_options();
                     render_agent_switcher_content(view.clone(), options.clone(), &theme, cx)
                 }
             })
@@ -3655,6 +3683,39 @@ mod tests {
             "OpenCode",
             current_agent_label(Backend::Acp, &acp_agents, Some(&opencode_id), false).as_ref()
         );
+    }
+
+    #[gpui::test]
+    fn gpui_refresh_acp_agents_updates_header_switcher_options(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .with_acp_agents(vec![AcpAgentConfig::new("codex", "Codex", "codex")]);
+
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+        view.update(cx, |view, cx| {
+            view.refresh_acp_agents_from(
+                vec![
+                    AcpAgentConfig::new("codex", "Codex", "codex"),
+                    AcpAgentConfig::new("opencode", "OpenCode", "opencode"),
+                ],
+                cx,
+            );
+        });
+
+        let labels = view.read_with(cx, |view, _| {
+            composer_agent_options(
+                view.backend,
+                &view.acp_agents,
+                view.current_acp_id.as_ref(),
+                view.acp_connecting,
+            )
+            .iter()
+            .map(|option| option.label.as_ref().to_string())
+            .collect::<Vec<_>>()
+        });
+
+        assert_eq!(vec!["One Agent", "Codex", "OpenCode"], labels);
     }
 
     #[test]
