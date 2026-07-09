@@ -16,11 +16,14 @@ use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{RenderableContent, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use gpui::*;
-use one_core::settings::default_grid_font_fallback_families;
+use one_core::settings::{AppSettings, default_grid_font_fallback_families};
+use one_core::text_diag::{self, TextSignature};
 use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicUsize};
 use terminal::pty_backend::GpuiEventProxy;
+
+static TERMINAL_CJK_RUN_DIAG_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 
 /// 预缓存的字体变体，避免每帧重复创建 Font 对象
 #[derive(Clone)]
@@ -153,6 +156,42 @@ fn terminal_text_font_role(ch: char) -> TextRunFontRole {
     } else {
         TextRunFontRole::Primary
     }
+}
+
+fn log_terminal_cjk_run_diag(
+    line_idx: usize,
+    run: &CachedTextRun,
+    font: &Font,
+    terminal_font_family: &SharedString,
+    cx: &App,
+) {
+    if run.font_role != TextRunFontRole::CjkFallback || !text_diag::contains_non_ascii(&run.text) {
+        return;
+    }
+    let Some(sample) = text_diag::should_sample(&TERMINAL_CJK_RUN_DIAG_SAMPLES, 64) else {
+        return;
+    };
+
+    let settings = AppSettings::global(cx);
+    tracing::info!(
+        target: "text_render_diag",
+        sample,
+        line = line_idx,
+        start_col = run.start_col,
+        columns = run.column_count,
+        cell_width_cols = run.cell_width_cols,
+        bold = run.bold,
+        italic = run.italic,
+        app_font = %settings.font_family,
+        sql_editor_font = %settings.sql_editor_font_family,
+        table_preview_font = %settings.table_preview_font_family,
+        terminal_font = %settings.terminal_font_family,
+        terminal_element_font = %terminal_font_family,
+        resolved_font = %font.family,
+        fallbacks = %text_diag::font_fallbacks(font),
+        signature = %TextSignature::new(&run.text),
+        "terminal cjk run render"
+    );
 }
 
 #[inline]
@@ -1435,6 +1474,7 @@ impl Element for TerminalElementImpl {
             let line = &self.lines[line_idx];
             for run in &line.text_runs {
                 let font = fonts.get(run.font_role, run.bold, run.italic);
+                log_terminal_cjk_run_diag(line_idx, run, font, &self.font_family, cx);
 
                 let underline = if run.underline {
                     Some(UnderlineStyle {

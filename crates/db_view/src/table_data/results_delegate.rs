@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicUsize;
 
 use super::copy_format::{CopyFormat, CopyFormatter, TableMetadata};
 use super::data_grid::DataGrid;
@@ -18,12 +19,16 @@ use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme, WindowExt, h_flex};
 use one_core::settings::{AppSettings, installed_grid_monospace_font};
 use one_core::storage::DatabaseType;
+use one_core::text_diag::{self, TextSignature};
 use one_ui::edit_table::{
     CellEditor, Column, ColumnSort, EditTableDelegate, EditTableEvent, EditTableState,
     filter_panel::FilterValue,
 };
 use rust_i18n::t;
 use uuid::Uuid;
+
+static TABLE_DATA_DIAG_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+static TABLE_RENDER_DIAG_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 
 /// Represents a single cell change with old and new values
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +130,7 @@ pub struct EditorTableDelegate {
 #[derive(Clone)]
 struct PreviewFontCache {
     requested_family: String,
+    installed_font_names: Vec<String>,
     font: Font,
 }
 
@@ -257,19 +263,104 @@ impl EditorTableDelegate {
 
     fn preview_font(&mut self, cx: &mut Context<EditTableState<Self>>) -> Font {
         let font_family = AppSettings::global(cx).table_preview_font_family.clone();
+        let installed_font_names = cx.text_system().all_font_names();
         if let Some(cache) = &self.preview_font_cache
             && cache.requested_family == font_family
+            && cache.installed_font_names == installed_font_names
         {
             return cache.font.clone();
         }
 
-        let installed_font_names = cx.text_system().all_font_names();
         let font = installed_grid_monospace_font(&font_family, &installed_font_names);
         self.preview_font_cache = Some(PreviewFontCache {
             requested_family: font_family,
+            installed_font_names,
             font: font.clone(),
         });
         font
+    }
+
+    fn log_table_data_diag(&self, rows: &[Vec<Option<String>>], cx: &App) {
+        if !text_diag::enabled() {
+            return;
+        }
+
+        let settings = AppSettings::global(cx);
+        for (row_ix, row) in rows.iter().enumerate() {
+            for (col_ix, value) in row.iter().enumerate() {
+                let Some(text) = value.as_deref() else {
+                    continue;
+                };
+                if !text_diag::contains_non_ascii(text) {
+                    continue;
+                }
+                let Some(sample) = text_diag::should_sample(&TABLE_DATA_DIAG_SAMPLES, 32) else {
+                    return;
+                };
+                let column = self
+                    .columns
+                    .get(col_ix)
+                    .map(|column| column.name.as_ref())
+                    .unwrap_or("");
+                tracing::info!(
+                    target: "text_render_diag",
+                    sample,
+                    table = %self.table_name,
+                    row = row_ix,
+                    col = col_ix,
+                    column,
+                    rows = rows.len(),
+                    columns = self.columns.len(),
+                    app_font = %settings.font_family,
+                    sql_editor_font = %settings.sql_editor_font_family,
+                    table_preview_font = %settings.table_preview_font_family,
+                    terminal_font = %settings.terminal_font_family,
+                    signature = %TextSignature::new(text),
+                    "table data non-ascii input"
+                );
+            }
+        }
+    }
+
+    fn log_table_render_diag(
+        &self,
+        row: usize,
+        actual_row: usize,
+        col: usize,
+        text: &str,
+        font: &Font,
+        cx: &App,
+    ) {
+        if !text_diag::contains_non_ascii(text) {
+            return;
+        }
+        let Some(sample) = text_diag::should_sample(&TABLE_RENDER_DIAG_SAMPLES, 64) else {
+            return;
+        };
+
+        let settings = AppSettings::global(cx);
+        let column = self
+            .columns
+            .get(col)
+            .map(|column| column.name.as_ref())
+            .unwrap_or("");
+        tracing::info!(
+            target: "text_render_diag",
+            sample,
+            table = %self.table_name,
+            row,
+            actual_row,
+            col,
+            column,
+            app_font = %settings.font_family,
+            sql_editor_font = %settings.sql_editor_font_family,
+            table_preview_font = %settings.table_preview_font_family,
+            terminal_font = %settings.terminal_font_family,
+            resolved_font = %font.family,
+            fallbacks = %text_diag::font_fallbacks(font),
+            signature = %TextSignature::new(text),
+            "table cell non-ascii render"
+        );
     }
 
     pub fn set_data_grid(&mut self, data_grid: WeakEntity<DataGrid>) {
@@ -457,7 +548,7 @@ impl EditorTableDelegate {
         columns: Vec<Column>,
         rows: Vec<Vec<Option<String>>>,
         rowids: Vec<String>,
-        _cx: &mut App,
+        cx: &mut App,
     ) {
         const MIN_WIDTH: usize = 80;
         const MAX_WIDTH: usize = 400;
@@ -473,6 +564,8 @@ impl EditorTableDelegate {
                 col
             })
             .collect();
+
+        self.log_table_data_diag(&rows, cx);
 
         let row_count = rows.len();
         self.original_rows = rows.clone();
@@ -1391,13 +1484,16 @@ impl EditTableDelegate for EditorTableDelegate {
                 .text_color(cx.theme().muted_foreground.opacity(0.5))
                 .italic()
                 .child("NULL"),
-            Some(s) => div()
-                .font(font)
-                .w_full()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_ellipsis()
-                .child(s),
+            Some(s) => {
+                self.log_table_render_diag(row, actual_row, col, &s, &font, cx);
+                div()
+                    .font(font)
+                    .w_full()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(s)
+            }
         }
     }
 
@@ -2460,6 +2556,8 @@ mod tests {
             .expect("render_td has an end marker");
 
         assert!(preview_font.contains("cx.text_system().all_font_names()"));
+        assert!(preview_font.contains("cache.installed_font_names == installed_font_names"));
+        assert!(preview_font.contains("installed_font_names,"));
         assert!(!render_th.contains("cx.text_system().all_font_names()"));
         assert!(!render_td.contains("cx.text_system().all_font_names()"));
     }

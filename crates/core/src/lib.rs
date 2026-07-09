@@ -23,6 +23,7 @@ pub mod tab_actions;
 pub mod tab_container;
 pub mod tab_navigation;
 pub mod tab_switcher;
+pub mod text_diag;
 // pub mod tab_persistence;
 pub mod settings;
 pub mod themes;
