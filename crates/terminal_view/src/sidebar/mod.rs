@@ -227,7 +227,7 @@ impl SidebarPanel {
     }
 
     pub(crate) fn needs_internal_tool_frame_header(&self) -> bool {
-        !matches!(self, SidebarPanel::FileManager)
+        !matches!(self, SidebarPanel::AiChat | SidebarPanel::FileManager)
     }
 }
 
@@ -566,7 +566,8 @@ impl TerminalSidebar {
         let ai_theme = agent_theme_from_terminal_theme(initial_theme);
         ai_chat_panel.update(cx, |panel, cx| {
             panel.set_theme(Some(ai_theme), cx);
-            panel.set_sidebar_header_visible(false, cx);
+            panel.set_sidebar_header_visible(true, cx);
+            panel.set_sidebar_frame_controls(true, SidebarPlacement::Right, cx);
             panel.set_system_instruction(Some(TERMINAL_AI_SYSTEM_INSTRUCTION.to_string()), cx);
             // 注册复制操作（默认已有，这里只是确保）
             // 注册粘贴到终端操作
@@ -692,8 +693,13 @@ impl TerminalSidebar {
         // 订阅 AI 聊天面板关闭事件
         let ai_chat_sub = cx.subscribe(
             &ai_chat_panel,
-            |this, _, _event: &DefaultAgentChatPanelEvent, cx| {
-                this.close_tool(SidebarPanel::AiChat, cx);
+            |this, _, event: &DefaultAgentChatPanelEvent, cx| match event {
+                DefaultAgentChatPanelEvent::Close => {
+                    this.close_tool(SidebarPanel::AiChat, cx);
+                }
+                DefaultAgentChatPanelEvent::MoveTo(placement) => {
+                    this.move_tool(SidebarPanel::AiChat, *placement, cx);
+                }
             },
         );
 
@@ -710,6 +716,9 @@ impl TerminalSidebar {
                     |this, _, event: &FileManagerPanelEvent, cx| match event {
                         FileManagerPanelEvent::Close => {
                             this.close_tool(SidebarPanel::FileManager, cx);
+                        }
+                        FileManagerPanelEvent::MoveTo(placement) => {
+                            this.move_tool(SidebarPanel::FileManager, *placement, cx);
                         }
                         FileManagerPanelEvent::CdToTerminal(path) => {
                             cx.emit(TerminalSidebarEvent::CdToTerminal(path.clone()));
@@ -864,6 +873,7 @@ impl TerminalSidebar {
         cx: &mut Context<Self>,
     ) {
         if self.tool_dock.move_tool(panel, placement) {
+            self.update_panel_frame_placement(panel, placement, cx);
             cx.emit(TerminalSidebarEvent::PanelChanged(Some(panel)));
             cx.notify();
         }
@@ -871,7 +881,31 @@ impl TerminalSidebar {
 
     fn open_tool_internal(&mut self, panel: SidebarPanel, cx: &mut Context<Self>) -> bool {
         self.prepare_panel_open(panel, cx);
+        self.update_panel_frame_placement(panel, self.panel_placement(panel), cx);
         self.tool_dock.open_tool(panel)
+    }
+
+    fn update_panel_frame_placement(
+        &self,
+        panel: SidebarPanel,
+        placement: SidebarPlacement,
+        cx: &mut Context<Self>,
+    ) {
+        match panel {
+            SidebarPanel::AiChat => {
+                self.ai_chat_panel.update(cx, |panel, cx| {
+                    panel.set_sidebar_frame_controls(true, placement, cx);
+                });
+            }
+            SidebarPanel::FileManager => {
+                if let Some(ref fm_panel) = self.file_manager_panel {
+                    fm_panel.update(cx, |panel, cx| {
+                        panel.set_frame_placement(placement, cx);
+                    });
+                }
+            }
+            _ => {}
+        }
     }
 
     fn prepare_panel_open(&self, panel: SidebarPanel, cx: &mut Context<Self>) {
@@ -1462,7 +1496,7 @@ mod tests {
     fn file_manager_uses_its_own_header_in_internal_tool_frame() {
         assert!(!SidebarPanel::FileManager.needs_internal_tool_frame_header());
         assert!(SidebarPanel::Settings.needs_internal_tool_frame_header());
-        assert!(SidebarPanel::AiChat.needs_internal_tool_frame_header());
+        assert!(!SidebarPanel::AiChat.needs_internal_tool_frame_header());
         assert!(SidebarPanel::ServerMonitor.needs_internal_tool_frame_header());
     }
 

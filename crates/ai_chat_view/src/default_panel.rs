@@ -12,6 +12,7 @@ use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
 use one_core::{
     connection_notifier::{ConnectionDataEvent, get_notifier},
     llm::{GlobalProviderState, ProviderConfig, storage::ProviderRepository},
+    sidebar_contribution::SidebarPlacement,
     storage::{ConnectionRepository, GlobalStorageState, StoredConnection, traits::Repository},
     tab_container::{TabContent, TabContentEvent},
 };
@@ -24,6 +25,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub enum DefaultAgentChatPanelEvent {
     Close,
+    MoveTo(SidebarPlacement),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +71,8 @@ pub struct DefaultAgentChatPanel {
     connection_subscription: Option<Subscription>,
     theme: Option<AgentChatTheme>,
     show_sidebar_header: bool,
+    show_sidebar_frame_controls: bool,
+    sidebar_frame_placement: SidebarPlacement,
     error: Option<String>,
 }
 
@@ -204,6 +208,8 @@ impl DefaultAgentChatPanel {
             connection_subscription: None,
             theme: None,
             show_sidebar_header: true,
+            show_sidebar_frame_controls: false,
+            sidebar_frame_placement: SidebarPlacement::Right,
             error: None,
         };
         panel.subscribe_connection_events(cx);
@@ -325,6 +331,22 @@ impl DefaultAgentChatPanel {
         cx.notify();
     }
 
+    pub fn set_sidebar_frame_controls(
+        &mut self,
+        visible: bool,
+        placement: SidebarPlacement,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_sidebar_frame_controls = visible;
+        self.sidebar_frame_placement = placement;
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| {
+                view.set_sidebar_frame_controls(visible, placement, cx);
+            });
+        }
+        cx.notify();
+    }
+
     pub fn set_theme(&mut self, theme: Option<AgentChatTheme>, cx: &mut Context<Self>) {
         self.theme = theme.clone();
         if let Some(view) = &self.view {
@@ -381,12 +403,19 @@ impl DefaultAgentChatPanel {
                                 config = config.with_theme(theme);
                             }
                             config = config.show_sidebar_header(panel.show_sidebar_header);
+                            config = config.show_sidebar_frame_controls(
+                                panel.show_sidebar_frame_controls,
+                                panel.sidebar_frame_placement,
+                            );
                             let view = AgentChatView::view_with_config(config, window, cx);
                             let view_subscription =
                                 cx.subscribe(&view, |_, _, event: &AgentChatViewEvent, cx| {
                                     match event {
                                         AgentChatViewEvent::Close => {
                                             cx.emit(DefaultAgentChatPanelEvent::Close);
+                                        }
+                                        AgentChatViewEvent::MoveTo(placement) => {
+                                            cx.emit(DefaultAgentChatPanelEvent::MoveTo(*placement));
                                         }
                                     }
                                 });

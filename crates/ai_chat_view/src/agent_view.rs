@@ -29,12 +29,14 @@ use gpui_component::{
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputState},
+    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
     popover::Popover,
     v_flex,
 };
 #[cfg(not(test))]
 use one_core::gpui_tokio::Tokio;
 use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConfig};
+use one_core::sidebar_contribution::SidebarPlacement;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::acp::{AcpAgentConfig, AcpConnection, AcpSessionState, build_acp_agent_configs};
@@ -62,6 +64,8 @@ use crate::theme::{AgentChatTheme, resolve_agent_chat_theme};
 pub enum AgentChatViewEvent {
     /// 关闭面板。
     Close,
+    /// 请求宿主把面板移动到指定位置。
+    MoveTo(SidebarPlacement),
 }
 
 /// 根据模型选项构建对应运行时。
@@ -86,8 +90,96 @@ struct RuntimeBinding {
 }
 
 #[cfg(test)]
-fn sidebar_mode_header_action_ids() -> [&'static str; 3] {
-    ["new", "history", "close"]
+fn sidebar_mode_header_action_ids(show_frame_controls: bool) -> Vec<&'static str> {
+    let mut ids = Vec::new();
+    if show_frame_controls {
+        ids.push("frame-options");
+    }
+    ids.extend(["new", "history", "close"]);
+    ids
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SidebarFrameMoveOption {
+    placement: SidebarPlacement,
+    disabled: bool,
+}
+
+fn sidebar_frame_move_options(current: SidebarPlacement) -> Vec<SidebarFrameMoveOption> {
+    [
+        SidebarPlacement::Left,
+        SidebarPlacement::Right,
+        SidebarPlacement::Bottom,
+    ]
+    .into_iter()
+    .map(|placement| SidebarFrameMoveOption {
+        placement,
+        disabled: placement == current,
+    })
+    .collect()
+}
+
+fn sidebar_placement_label(placement: SidebarPlacement) -> &'static str {
+    match placement {
+        SidebarPlacement::Left => "Left",
+        SidebarPlacement::Right => "Right",
+        SidebarPlacement::Bottom => "Bottom",
+    }
+}
+
+fn sidebar_placement_icon(placement: SidebarPlacement) -> IconName {
+    match placement {
+        SidebarPlacement::Left => IconName::PanelLeft,
+        SidebarPlacement::Right => IconName::PanelRight,
+        SidebarPlacement::Bottom => IconName::PanelBottom,
+    }
+}
+
+fn build_sidebar_frame_options_menu(
+    menu: PopupMenu,
+    view: Entity<AgentChatView>,
+    placement: SidebarPlacement,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let move_view = view.clone();
+    let close_view = view.clone();
+    menu.min_w(px(220.0))
+        .submenu_with_icon(
+            Some(IconName::PanelRight.into()),
+            "Move to",
+            window,
+            cx,
+            move |submenu, _window, _cx| {
+                sidebar_frame_move_options(placement).into_iter().fold(
+                    submenu,
+                    |submenu, option| {
+                        let view = move_view.clone();
+                        submenu.item(
+                            PopupMenuItem::new(sidebar_placement_label(option.placement))
+                                .icon(sidebar_placement_icon(option.placement))
+                                .checked(option.disabled)
+                                .disabled(option.disabled)
+                                .on_click(move |_, _, cx| {
+                                    view.update(cx, |_this, cx| {
+                                        cx.emit(AgentChatViewEvent::MoveTo(option.placement));
+                                    });
+                                }),
+                        )
+                    },
+                )
+            },
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new("Remove from Sidebar")
+                .icon(IconName::Close)
+                .on_click(move |_, _, cx| {
+                    close_view.update(cx, |_this, cx| {
+                        cx.emit(AgentChatViewEvent::Close);
+                    });
+                }),
+        )
 }
 
 fn agent_history_title(show_archived: bool) -> &'static str {
@@ -156,6 +248,10 @@ pub struct AgentChatViewConfig {
     pub sidebar_mode: bool,
     /// 侧边栏模式是否渲染内部头部。嵌入到已有外层面板 frame 时可关闭。
     pub show_sidebar_header: bool,
+    /// 侧边栏模式是否在内部头部显示宿主 frame 控制入口。
+    pub show_sidebar_frame_controls: bool,
+    /// 宿主 frame 当前所在位置,用于禁用移动菜单里的当前位置。
+    pub sidebar_frame_placement: SidebarPlacement,
     /// 可接入的外部 ACP agent(自定义命令)。非空时头部显示后端切换控件。
     pub acp_agents: Vec<AcpAgentConfig>,
     /// 可选的局部聊天主题。用于终端侧边栏等嵌入场景,普通 Agent tab 保持应用主题。
@@ -180,6 +276,8 @@ impl AgentChatViewConfig {
             runtime_factory: None,
             sidebar_mode: false,
             show_sidebar_header: true,
+            show_sidebar_frame_controls: false,
+            sidebar_frame_placement: SidebarPlacement::Right,
             acp_agents: Vec::new(),
             theme: None,
         }
@@ -205,6 +303,16 @@ impl AgentChatViewConfig {
 
     pub fn show_sidebar_header(mut self, visible: bool) -> Self {
         self.show_sidebar_header = visible;
+        self
+    }
+
+    pub fn show_sidebar_frame_controls(
+        mut self,
+        visible: bool,
+        placement: SidebarPlacement,
+    ) -> Self {
+        self.show_sidebar_frame_controls = visible;
+        self.sidebar_frame_placement = placement;
         self
     }
 
@@ -367,6 +475,10 @@ pub struct AgentChatView {
     sidebar_mode: bool,
     /// 侧边栏视图是否显示内部头部。
     show_sidebar_header: bool,
+    /// 侧边栏视图是否显示宿主 frame 控制入口。
+    show_sidebar_frame_controls: bool,
+    /// 宿主 frame 当前所在位置。
+    sidebar_frame_placement: SidebarPlacement,
     /// 侧边栏视图下「历史记录」Popover 的开合状态。
     history_popover_open: bool,
     /// 当前驱动后端(默认 One_Agent)。
@@ -438,6 +550,8 @@ impl AgentChatView {
         let selected_model = selected_model_from_config(&config);
         let sidebar_mode = config.sidebar_mode;
         let show_sidebar_header = config.show_sidebar_header;
+        let show_sidebar_frame_controls = config.show_sidebar_frame_controls;
+        let sidebar_frame_placement = config.sidebar_frame_placement;
         let theme = config.theme;
         let acp_agents = config.acp_agents;
         let resources = config.resources;
@@ -525,6 +639,8 @@ impl AgentChatView {
             show_archived: false,
             sidebar_mode,
             show_sidebar_header,
+            show_sidebar_frame_controls,
+            sidebar_frame_placement,
             history_popover_open: false,
             backend: Backend::Local,
             acp_agents,
@@ -1806,6 +1922,9 @@ impl AgentChatView {
                 h_flex()
                     .gap_1()
                     .items_center()
+                    .when(self.show_sidebar_frame_controls, |this| {
+                        this.child(self.render_sidebar_frame_options(cx))
+                    })
                     .child(
                         Button::new("agent-sidebar-new")
                             .icon(IconName::Plus)
@@ -1854,6 +1973,21 @@ impl AgentChatView {
             return;
         }
         self.show_sidebar_header = visible;
+        cx.notify();
+    }
+
+    pub fn set_sidebar_frame_controls(
+        &mut self,
+        visible: bool,
+        placement: SidebarPlacement,
+        cx: &mut Context<Self>,
+    ) {
+        if self.show_sidebar_frame_controls == visible && self.sidebar_frame_placement == placement
+        {
+            return;
+        }
+        self.show_sidebar_frame_controls = visible;
+        self.sidebar_frame_placement = placement;
         cx.notify();
     }
 
@@ -1963,6 +2097,19 @@ impl AgentChatView {
             .border_color(cx.theme().border)
             .child(self.render_agent_switcher(cx))
             .into_any_element()
+    }
+
+    fn render_sidebar_frame_options(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        let placement = self.sidebar_frame_placement;
+        Button::new("agent-sidebar-frame-options")
+            .icon(IconName::Ellipsis)
+            .ghost()
+            .small()
+            .tooltip("面板选项")
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
+                build_sidebar_frame_options_menu(menu, view.clone(), placement, window, cx)
+            })
     }
 
     fn render_agent_switcher(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -4230,6 +4377,7 @@ mod tests {
         let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
             .sidebar_mode(true);
         assert!(config.show_sidebar_header);
+        assert!(!config.show_sidebar_frame_controls);
 
         let embedded = config.show_sidebar_header(false);
         assert!(!embedded.show_sidebar_header);
@@ -4239,7 +4387,21 @@ mod tests {
     fn sidebar_mode_header_actions_include_close() {
         assert_eq!(
             vec!["new", "history", "close"],
-            sidebar_mode_header_action_ids()
+            sidebar_mode_header_action_ids(false)
+        );
+    }
+
+    #[test]
+    fn sidebar_mode_header_actions_can_include_frame_options() {
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .sidebar_mode(true)
+            .show_sidebar_frame_controls(true, SidebarPlacement::Bottom);
+
+        assert!(config.show_sidebar_frame_controls);
+        assert_eq!(SidebarPlacement::Bottom, config.sidebar_frame_placement);
+        assert_eq!(
+            vec!["frame-options", "new", "history", "close"],
+            sidebar_mode_header_action_ids(config.show_sidebar_frame_controls)
         );
     }
 

@@ -7,10 +7,10 @@
 use crate::theme::TerminalColors;
 use chrono::{DateTime, Local};
 use gpui::{
-    App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable,
-    IntoElement, KeyBinding, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement,
-    PathPromptOptions, Render, SharedString, Styled, UniformListScrollHandle, Window, actions, div,
-    prelude::*, px, uniform_list,
+    Anchor, App, ClipboardItem, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
+    Focusable, IntoElement, KeyBinding, ListSizingBehavior, MouseButton, MouseDownEvent,
+    ParentElement, PathPromptOptions, Render, SharedString, Styled, UniformListScrollHandle,
+    Window, actions, div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Sizable, Size, WindowExt,
@@ -19,7 +19,7 @@ use gpui_component::{
     dialog::DialogButtonProps,
     h_flex,
     input::{Input, InputEvent, InputState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
     notification::Notification,
     popover::{Popover, PopoverState},
     progress::Progress,
@@ -29,6 +29,7 @@ use gpui_component::{
     v_flex,
 };
 use one_core::gpui_tokio::Tokio;
+use one_core::sidebar_contribution::SidebarPlacement;
 use one_core::storage::models::StoredConnection;
 use one_core::storage::{
     GlobalStorageState, SftpFavoritePathRepository, normalize_sftp_favorite_path,
@@ -382,10 +383,94 @@ struct RemoteFileItem {
 pub enum FileManagerPanelEvent {
     /// 关闭面板
     Close,
+    /// 请求宿主把面板移动到指定位置
+    MoveTo(SidebarPlacement),
     /// 在终端中 cd 到指定路径
     CdToTerminal(String),
     /// 请求将终端当前工作目录同步到文件管理器
     SyncWorkingDir,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FrameMoveOption {
+    placement: SidebarPlacement,
+    disabled: bool,
+}
+
+fn frame_move_options(current: SidebarPlacement) -> Vec<FrameMoveOption> {
+    [
+        SidebarPlacement::Left,
+        SidebarPlacement::Right,
+        SidebarPlacement::Bottom,
+    ]
+    .into_iter()
+    .map(|placement| FrameMoveOption {
+        placement,
+        disabled: placement == current,
+    })
+    .collect()
+}
+
+fn frame_placement_label(placement: SidebarPlacement) -> &'static str {
+    match placement {
+        SidebarPlacement::Left => "Left",
+        SidebarPlacement::Right => "Right",
+        SidebarPlacement::Bottom => "Bottom",
+    }
+}
+
+fn frame_placement_icon(placement: SidebarPlacement) -> IconName {
+    match placement {
+        SidebarPlacement::Left => IconName::PanelLeft,
+        SidebarPlacement::Right => IconName::PanelRight,
+        SidebarPlacement::Bottom => IconName::PanelBottom,
+    }
+}
+
+fn build_frame_options_menu(
+    menu: PopupMenu,
+    panel: Entity<FileManagerPanel>,
+    placement: SidebarPlacement,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let move_panel = panel.clone();
+    let close_panel = panel.clone();
+    menu.min_w(px(220.0))
+        .submenu_with_icon(
+            Some(IconName::PanelRight.into()),
+            "Move to",
+            window,
+            cx,
+            move |submenu, _window, _cx| {
+                frame_move_options(placement)
+                    .into_iter()
+                    .fold(submenu, |submenu, option| {
+                        let panel = move_panel.clone();
+                        submenu.item(
+                            PopupMenuItem::new(frame_placement_label(option.placement))
+                                .icon(frame_placement_icon(option.placement))
+                                .checked(option.disabled)
+                                .disabled(option.disabled)
+                                .on_click(move |_, _, cx| {
+                                    panel.update(cx, |_this, cx| {
+                                        cx.emit(FileManagerPanelEvent::MoveTo(option.placement));
+                                    });
+                                }),
+                        )
+                    })
+            },
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new("Remove from Sidebar")
+                .icon(IconName::Close)
+                .on_click(move |_, _, cx| {
+                    close_panel.update(cx, |_this, cx| {
+                        cx.emit(FileManagerPanelEvent::Close);
+                    });
+                }),
+        )
 }
 
 // ── 工具函数 ──────────────────────────────────────────────────
@@ -939,6 +1024,8 @@ pub struct FileManagerPanel {
     working_dir_hint: Option<String>,
     /// 终端主题配色，用于嵌入侧边栏时保持和终端一致
     colors: TerminalColors,
+    /// 宿主工具面板当前所在位置
+    frame_placement: SidebarPlacement,
 }
 
 impl FileManagerPanel {
@@ -1045,11 +1132,20 @@ impl FileManagerPanel {
             is_dragging_over: false,
             working_dir_hint: None,
             colors,
+            frame_placement: SidebarPlacement::Right,
         }
     }
 
     pub fn set_colors(&mut self, colors: TerminalColors, cx: &mut Context<Self>) {
         self.colors = colors;
+        cx.notify();
+    }
+
+    pub fn set_frame_placement(&mut self, placement: SidebarPlacement, cx: &mut Context<Self>) {
+        if self.frame_placement == placement {
+            return;
+        }
+        self.frame_placement = placement;
         cx.notify();
     }
 
@@ -3414,6 +3510,7 @@ impl FileManagerPanel {
                                     .text_color(muted_foreground),
                             ),
                     )
+                    .child(self.render_frame_options_button(cx))
                     // 关闭按钮
                     .child(
                         div()
@@ -3506,6 +3603,19 @@ impl FileManagerPanel {
                     )
                     .child(self.render_favorites_menu(favorite_paths, is_connected, cx)),
             )
+    }
+
+    fn render_frame_options_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel = cx.entity();
+        let placement = self.frame_placement;
+        Button::new("fm-frame-options")
+            .ghost()
+            .small()
+            .icon(IconName::Ellipsis)
+            .tooltip("面板选项")
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
+                build_frame_options_menu(menu, panel.clone(), placement, window, cx)
+            })
     }
 
     fn render_favorites_menu(
@@ -4656,9 +4766,10 @@ impl Render for FileManagerPanel {
 mod tests {
     use super::{
         ConnectionState, NavigationRecoveryPlan, build_navigation_recovery_plan,
-        build_retry_reset_plan, clear_remote_listing_state, should_apply_directory_result,
-        should_refresh_after_upload,
+        build_retry_reset_plan, clear_remote_listing_state, frame_move_options,
+        should_apply_directory_result, should_refresh_after_upload,
     };
+    use one_core::sidebar_contribution::SidebarPlacement;
     use std::collections::HashSet;
 
     #[test]
@@ -4715,6 +4826,23 @@ mod tests {
         assert!(items.is_empty());
         assert!(filtered_indices.is_empty());
         assert!(selected_indices.is_empty());
+    }
+
+    #[test]
+    fn frame_move_options_disable_current_placement() {
+        let options = frame_move_options(SidebarPlacement::Left);
+
+        assert_eq!(
+            vec![
+                (SidebarPlacement::Left, true),
+                (SidebarPlacement::Right, false),
+                (SidebarPlacement::Bottom, false),
+            ],
+            options
+                .iter()
+                .map(|option| (option.placement, option.disabled))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
