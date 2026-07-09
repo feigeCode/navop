@@ -1,7 +1,7 @@
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, IntoElement, ListSizingBehavior, MouseButton,
-    MouseDownEvent, ParentElement, Render, SharedString, Styled, UniformListScrollHandle, Window,
-    div, prelude::*, px, uniform_list,
+    MouseDownEvent, ParentElement, Render, Styled, UniformListScrollHandle, Window, div,
+    prelude::*, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, InteractiveElementExt, Sizable, Size, h_flex,
@@ -69,6 +69,16 @@ fn get_file_kind(name: &str) -> String {
         }
     }
     "file".to_string()
+}
+
+fn display_file_name(name: &str) -> String {
+    name.chars()
+        .map(|ch| match ch {
+            '\n' | '\r' | '\t' => ' ',
+            ch if ch.is_control() => '?',
+            ch => ch,
+        })
+        .collect()
 }
 
 pub struct FileListPanel {
@@ -476,12 +486,13 @@ impl FileListPanel {
 
     fn render_file_row(
         &self,
-        _ix: usize,
+        ix: usize,
         item: &FileItem,
         is_selected: bool,
         cx: &App,
     ) -> impl IntoElement {
         let name = item.name.clone();
+        let display_name = display_file_name(&name);
         let is_dir = item.is_dir;
         let size = item.size;
         let modified = item.modified;
@@ -494,6 +505,8 @@ impl FileListPanel {
             .child(
                 h_flex()
                     .w(px(250.))
+                    .min_w_0()
+                    .overflow_hidden()
                     .gap_2()
                     .items_center()
                     .child(
@@ -506,18 +519,19 @@ impl FileListPanel {
                         .color(),
                     )
                     .child({
-                        let tooltip_name = name.clone();
+                        let tooltip_name = display_name.clone();
                         v_flex()
                             .flex_1()
+                            .min_w_0()
                             .overflow_hidden()
                             .child(
                                 div()
-                                    .id(SharedString::from(name.clone()))
+                                    .id(("file-name", ix))
                                     .text_base()
                                     .overflow_hidden()
                                     .text_ellipsis()
                                     .whitespace_nowrap()
-                                    .child(name.clone())
+                                    .child(display_name.clone())
                                     .tooltip(move |window, cx| {
                                         Tooltip::new(tooltip_name.clone()).build(window, cx)
                                     }),
@@ -527,6 +541,9 @@ impl FileListPanel {
                                     div()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
                                         .child(item.permissions.clone()),
                                 )
                             })
@@ -535,17 +552,25 @@ impl FileListPanel {
             .child(
                 div()
                     .w(px(180.))
+                    .min_w_0()
+                    .overflow_hidden()
                     .px_2()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .child(format_modified_time(modified)),
             )
             .child(
                 div()
                     .w(px(100.))
+                    .min_w_0()
+                    .overflow_hidden()
                     .px_2()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .child(if is_dir {
                         "- -".to_string()
                     } else {
@@ -555,9 +580,13 @@ impl FileListPanel {
             .child(
                 div()
                     .w(px(80.))
+                    .min_w_0()
+                    .overflow_hidden()
                     .px_2()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .child(if is_dir {
                         "folder".to_string()
                     } else {
@@ -1067,6 +1096,73 @@ impl Render for DraggedFileItem {
                 }),
             )
             .child(div().text_sm().child(self.name.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_file_name;
+    use std::collections::HashSet;
+
+    #[test]
+    fn display_file_name_replaces_line_breaks_and_tabs() {
+        assert_eq!(
+            "syntax error near newline",
+            display_file_name("syntax error\nnear\tnewline")
+        );
+    }
+
+    #[test]
+    fn display_file_name_replaces_ansi_control_bytes() {
+        assert_eq!("?[1mroot?[0m", display_file_name("\x1b[1mroot\x1b[0m"));
+    }
+
+    #[test]
+    fn range_selection_selects_rows_between_anchor_and_clicked_row() {
+        let mut selected_indices = HashSet::from([4usize]);
+        let mut anchor_index = Some(4usize);
+
+        super::apply_selection_mode(
+            &mut selected_indices,
+            &mut anchor_index,
+            1,
+            super::SelectionMode::Range,
+        );
+
+        assert_eq!(HashSet::from([1usize, 2, 3, 4]), selected_indices);
+        assert_eq!(Some(4), anchor_index);
+    }
+
+    #[test]
+    fn range_selection_without_anchor_selects_clicked_row() {
+        let mut selected_indices = HashSet::new();
+        let mut anchor_index = None;
+
+        super::apply_selection_mode(
+            &mut selected_indices,
+            &mut anchor_index,
+            2,
+            super::SelectionMode::Range,
+        );
+
+        assert_eq!(HashSet::from([2usize]), selected_indices);
+        assert_eq!(Some(2), anchor_index);
+    }
+
+    #[test]
+    fn toggle_selection_updates_anchor_without_clearing_other_rows() {
+        let mut selected_indices = HashSet::from([0usize, 2]);
+        let mut anchor_index = Some(0usize);
+
+        super::apply_selection_mode(
+            &mut selected_indices,
+            &mut anchor_index,
+            3,
+            super::SelectionMode::Toggle,
+        );
+
+        assert_eq!(HashSet::from([0usize, 2, 3]), selected_indices);
+        assert_eq!(Some(3), anchor_index);
     }
 }
 
