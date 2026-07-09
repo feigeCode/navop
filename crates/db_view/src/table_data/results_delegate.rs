@@ -6,8 +6,8 @@ use super::data_grid::DataGrid;
 use db::{ColumnInfo, FieldType};
 use gpui::{
     App, AppContext, ClipboardItem, Context, Font, InteractiveElement, IntoElement,
-    ParentElement as _, SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
-    Window, div, prelude::FluentBuilder, px,
+    ParentElement as _, SharedString, StatefulInteractiveElement, Styled, Subscription, TextRun,
+    WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::calendar::Date;
 use gpui_component::date_picker::{DatePickerEvent, DatePickerState};
@@ -130,7 +130,6 @@ pub struct EditorTableDelegate {
 #[derive(Clone)]
 struct PreviewFontCache {
     requested_family: String,
-    installed_font_names: Vec<String>,
     font: Font,
 }
 
@@ -263,18 +262,16 @@ impl EditorTableDelegate {
 
     fn preview_font(&mut self, cx: &mut Context<EditTableState<Self>>) -> Font {
         let font_family = AppSettings::global(cx).table_preview_font_family.clone();
-        let installed_font_names = cx.text_system().all_font_names();
         if let Some(cache) = &self.preview_font_cache
             && cache.requested_family == font_family
-            && cache.installed_font_names == installed_font_names
         {
             return cache.font.clone();
         }
 
+        let installed_font_names = cx.text_system().all_font_names();
         let font = installed_grid_monospace_font(&font_family, &installed_font_names);
         self.preview_font_cache = Some(PreviewFontCache {
             requested_family: font_family,
-            installed_font_names,
             font: font.clone(),
         });
         font
@@ -329,6 +326,7 @@ impl EditorTableDelegate {
         col: usize,
         text: &str,
         font: &Font,
+        window: &mut Window,
         cx: &App,
     ) {
         if !text_diag::contains_non_ascii(text) {
@@ -358,6 +356,7 @@ impl EditorTableDelegate {
             terminal_font = %settings.terminal_font_family,
             resolved_font = %font.family,
             fallbacks = %text_diag::font_fallbacks(font),
+            shaped_font_runs = %shape_font_runs(text, font, window, cx),
             signature = %TextSignature::new(text),
             "table cell non-ascii render"
         );
@@ -1463,7 +1462,7 @@ impl EditTableDelegate for EditorTableDelegate {
         &mut self,
         row: usize,
         col: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<EditTableState<Self>>,
     ) -> impl IntoElement {
         // Map display row index to actual row index
@@ -1485,7 +1484,7 @@ impl EditTableDelegate for EditorTableDelegate {
                 .italic()
                 .child("NULL"),
             Some(s) => {
-                self.log_table_render_diag(row, actual_row, col, &s, &font, cx);
+                self.log_table_render_diag(row, actual_row, col, &s, &font, window, cx);
                 div()
                     .font(font)
                     .w_full()
@@ -2298,6 +2297,37 @@ impl EditTableDelegate for EditorTableDelegate {
     }
 }
 
+fn shape_font_runs(text: &str, font: &Font, window: &mut Window, cx: &App) -> String {
+    let font_size = window.text_style().font_size.to_pixels(window.rem_size());
+    let shaped = window.text_system().shape_line(
+        SharedString::from(text.to_string()),
+        font_size,
+        &[TextRun {
+            len: text.len(),
+            font: font.clone(),
+            color: cx.theme().foreground,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }],
+        None,
+    );
+
+    shaped
+        .runs
+        .iter()
+        .map(|run| {
+            let family = window
+                .text_system()
+                .get_font_for_id(run.font_id)
+                .map(|font| font.family.to_string())
+                .unwrap_or_else(|| format!("{:?}", run.font_id));
+            format!("{family}:{}", run.glyphs.len())
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 impl EditorTableDelegate {
     /// 获取表格元数据（用于生成 SQL 语句）
     pub fn get_table_metadata(&self) -> TableMetadata {
@@ -2555,9 +2585,10 @@ mod tests {
             .next()
             .expect("render_td has an end marker");
 
+        assert!(preview_font.contains("cache.requested_family == font_family"));
         assert!(preview_font.contains("cx.text_system().all_font_names()"));
-        assert!(preview_font.contains("cache.installed_font_names == installed_font_names"));
-        assert!(preview_font.contains("installed_font_names,"));
+        assert!(!preview_font.contains("cache.installed_font_names == installed_font_names"));
+        assert!(!preview_font.contains("installed_font_names,"));
         assert!(!render_th.contains("cx.text_system().all_font_names()"));
         assert!(!render_td.contains("cx.text_system().all_font_names()"));
     }

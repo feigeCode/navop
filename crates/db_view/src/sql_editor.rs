@@ -1371,7 +1371,6 @@ pub struct SqlEditor {
 
 struct SqlEditorFontCache {
     requested_family: String,
-    installed_font_names: Vec<String>,
     font: Font,
 }
 
@@ -1420,18 +1419,16 @@ impl SqlEditor {
 
     fn editor_font(&mut self, cx: &mut Context<Self>) -> Font {
         let font_family = AppSettings::global(cx).sql_editor_font_family.clone();
-        let installed_font_names = cx.text_system().all_font_names();
         if let Some(cache) = &self.font_cache
             && cache.requested_family == font_family
-            && cache.installed_font_names == installed_font_names
         {
             return cache.font.clone();
         }
 
+        let installed_font_names = cx.text_system().all_font_names();
         let font = installed_grid_monospace_font(&font_family, &installed_font_names);
         self.font_cache = Some(SqlEditorFontCache {
             requested_family: font_family,
-            installed_font_names,
             font: font.clone(),
         });
         font
@@ -1631,9 +1628,10 @@ mod tests {
             .next()
             .expect("SqlEditor render impl has an end marker");
 
+        assert!(editor_font.contains("cache.requested_family == font_family"));
         assert!(editor_font.contains("cx.text_system().all_font_names()"));
-        assert!(editor_font.contains("cache.installed_font_names == installed_font_names"));
-        assert!(editor_font.contains("installed_font_names,"));
+        assert!(!editor_font.contains("cache.installed_font_names == installed_font_names"));
+        assert!(!editor_font.contains("installed_font_names,"));
         assert!(!render.contains("cx.text_system().all_font_names()"));
     }
 }

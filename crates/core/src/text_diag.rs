@@ -46,11 +46,7 @@ impl fmt::Display for TextSignature {
 }
 
 pub fn enabled() -> bool {
-    *ENABLED.get_or_init(|| {
-        std::env::var(ENV_VAR)
-            .map(|value| !env_value_disabled(&value))
-            .unwrap_or(true)
-    })
+    *ENABLED.get_or_init(|| enabled_from_env(std::env::var(ENV_VAR).ok().as_deref()))
 }
 
 pub fn should_sample(counter: &AtomicUsize, limit: usize) -> Option<usize> {
@@ -78,6 +74,12 @@ fn env_value_disabled(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "0" | "false" | "no" | "off" | "disabled"
     )
+}
+
+fn enabled_from_env(value: Option<&str>) -> bool {
+    value
+        .map(|value| !env_value_disabled(value))
+        .unwrap_or(false)
 }
 
 fn short_hash(text: &str) -> String {
@@ -138,6 +140,14 @@ mod tests {
         assert!(!env_value_disabled(""));
         assert!(!env_value_disabled("1"));
         assert!(!env_value_disabled("true"));
+    }
+
+    #[test]
+    fn diag_is_opt_in() {
+        assert!(!enabled_from_env(None));
+        assert!(!enabled_from_env(Some("0")));
+        assert!(enabled_from_env(Some("1")));
+        assert!(enabled_from_env(Some("true")));
     }
 
     #[test]
