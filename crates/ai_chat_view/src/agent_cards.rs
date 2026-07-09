@@ -753,6 +753,7 @@ fn tool_card_json_block(
     let height = tool_json_height(&content);
     let input = tool_json_input(id.clone(), content, window, cx);
     v_flex()
+        .debug_selector(|| "agent-tool-json-block".to_string())
         .w_full()
         .min_w_0()
         .gap_1()

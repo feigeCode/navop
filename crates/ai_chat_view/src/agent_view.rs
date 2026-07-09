@@ -2970,7 +2970,7 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_cards::{TOOL_CARD, ToolCardData};
+    use crate::agent_cards::{TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData};
     use agent_runtime::RuntimeServices;
     use agent_runtime::model::MockModelClient;
     use agent_runtime::model::function_tool_call;
@@ -4316,6 +4316,32 @@ mod tests {
     }
 
     #[gpui::test]
+    fn sidebar_mode_long_user_message_bubble_uses_available_column(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let (host, cx) = cx.add_window_view(FixedSidebarHost::new);
+        let chat = host.read_with(cx, |host, _| host.view.clone());
+        chat.update(cx, |view, cx| {
+            view.transcript.messages.push(crate::ChatMessageUI::user(
+                "帮我看看这台服务器当前还有多少内存，并且顺便判断一下是否需要扩容或者清理缓存",
+            ));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let column = cx
+            .debug_bounds("ai-chat-message-column")
+            .expect("message column should render");
+        let bubble = cx
+            .debug_bounds("ai-chat-user-bubble")
+            .expect("user bubble should render");
+
+        assert!(
+            bubble.size.width > column.size.width * 0.7,
+            "long user bubble should use the available sidebar column width: column={column:?}, bubble={bubble:?}"
+        );
+    }
+
+    #[gpui::test]
     fn sidebar_mode_fills_fixed_host_frame(cx: &mut TestAppContext) {
         init_test_ui(cx);
         let (host, cx) = cx.add_window_view(FixedSidebarHost::new);
@@ -4396,6 +4422,83 @@ mod tests {
         assert_eq!(
             column.size.width, card.size.width,
             "tool card should fill sidebar message column: column={column:?}, card={card:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn sidebar_mode_tool_confirm_actions_align_to_message_column(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let (host, cx) = cx.add_window_view(FixedSidebarHost::new);
+        let chat = host.read_with(cx, |host, _| host.view.clone());
+        chat.update(cx, |view, cx| {
+            view.transcript.messages.push(crate::ChatMessageUI::card(
+                TOOL_CONFIRM_CARD,
+                ToolConfirmCardData {
+                    call_id: "call-confirm-layout".to_string(),
+                    tool_name: "terminal_exec".to_string(),
+                    items: Vec::new(),
+                    input_summary: "free -h".to_string(),
+                    input_json: r#"{"command":"free -h"}"#.to_string(),
+                    question: "确认执行工具 terminal_exec 吗？".to_string(),
+                    status: "pending".to_string(),
+                }
+                .to_json(),
+            ));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let column = cx
+            .debug_bounds("ai-chat-message-column")
+            .expect("message column should render");
+        let approve = cx
+            .debug_bounds("agent-tool-approve")
+            .expect("approval button should render");
+
+        assert!(
+            approve.right() > column.right() - px(96.0),
+            "approval button should align near the message column right edge: column={column:?}, approve={approve:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn sidebar_mode_tool_confirm_json_block_uses_available_column(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let (host, cx) = cx.add_window_view(FixedSidebarHost::new);
+        let chat = host.read_with(cx, |host, _| host.view.clone());
+        chat.update(cx, |view, cx| {
+            view.transcript.messages.push(crate::ChatMessageUI::card(
+                TOOL_CONFIRM_CARD,
+                ToolConfirmCardData {
+                    call_id: "call-confirm-json-layout".to_string(),
+                    tool_name: "terminal_exec".to_string(),
+                    items: Vec::new(),
+                    input_summary: "free -h".to_string(),
+                    input_json: r#"{
+  "target": "ssh-prod",
+  "command": "free -h",
+  "subprocess": true
+}"#
+                    .to_string(),
+                    question: "确认执行工具 terminal_exec 吗？".to_string(),
+                    status: "pending".to_string(),
+                }
+                .to_json(),
+            ));
+            cx.notify();
+        });
+        let cx: &mut VisualTestContext = cx;
+
+        let column = cx
+            .debug_bounds("ai-chat-message-column")
+            .expect("message column should render");
+        let json = cx
+            .debug_bounds("agent-tool-json-block")
+            .expect("tool json block should render");
+
+        assert!(
+            json.size.width > column.size.width * 0.75,
+            "tool confirm json block should use the available sidebar column width: column={column:?}, json={json:?}"
         );
     }
 

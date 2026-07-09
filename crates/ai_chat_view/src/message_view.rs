@@ -193,6 +193,8 @@ fn render_user_message_themed<E: MessageExtension>(
         .justify_end()
         .child(
             div()
+                .debug_selector(|| "ai-chat-user-bubble".to_string())
+                .w_full()
                 .max_w(px(720.0))
                 .min_w_0()
                 .px_3()
