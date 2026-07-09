@@ -154,6 +154,8 @@ pub struct AgentChatViewConfig {
     ///
     /// **重要**：侧边栏模式下 ResourceContext 固定为当前连接，不支持切换。
     pub sidebar_mode: bool,
+    /// 侧边栏模式是否渲染内部头部。嵌入到已有外层面板 frame 时可关闭。
+    pub show_sidebar_header: bool,
     /// 可接入的外部 ACP agent(自定义命令)。非空时头部显示后端切换控件。
     pub acp_agents: Vec<AcpAgentConfig>,
     /// 可选的局部聊天主题。用于终端侧边栏等嵌入场景,普通 Agent tab 保持应用主题。
@@ -177,6 +179,7 @@ impl AgentChatViewConfig {
             selected_model_id: Some(option.id),
             runtime_factory: None,
             sidebar_mode: false,
+            show_sidebar_header: true,
             acp_agents: Vec::new(),
             theme: None,
         }
@@ -197,6 +200,11 @@ impl AgentChatViewConfig {
     /// 切换为「侧边栏视图」(窄面板)模式。
     pub fn sidebar_mode(mut self, enabled: bool) -> Self {
         self.sidebar_mode = enabled;
+        self
+    }
+
+    pub fn show_sidebar_header(mut self, visible: bool) -> Self {
+        self.show_sidebar_header = visible;
         self
     }
 
@@ -357,6 +365,8 @@ pub struct AgentChatView {
     show_archived: bool,
     /// 侧边栏视图(窄面板)模式:头部走新建对话 / 历史记录紧凑布局,不常驻会话列表。
     sidebar_mode: bool,
+    /// 侧边栏视图是否显示内部头部。
+    show_sidebar_header: bool,
     /// 侧边栏视图下「历史记录」Popover 的开合状态。
     history_popover_open: bool,
     /// 当前驱动后端(默认 One_Agent)。
@@ -427,6 +437,7 @@ impl AgentChatView {
     ) -> Self {
         let selected_model = selected_model_from_config(&config);
         let sidebar_mode = config.sidebar_mode;
+        let show_sidebar_header = config.show_sidebar_header;
         let theme = config.theme;
         let acp_agents = config.acp_agents;
         let resources = config.resources;
@@ -513,6 +524,7 @@ impl AgentChatView {
             sidebar_collapsed: false,
             show_archived: false,
             sidebar_mode,
+            show_sidebar_header,
             history_popover_open: false,
             backend: Backend::Local,
             acp_agents,
@@ -1837,6 +1849,14 @@ impl AgentChatView {
             .into_any_element()
     }
 
+    pub fn set_sidebar_header_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.show_sidebar_header == visible {
+            return;
+        }
+        self.show_sidebar_header = visible;
+        cx.notify();
+    }
+
     /// 历史记录 Popover 内容:小标题 + 活跃/归档切换 + 会话行列表(复用行渲染)。
     fn render_history_list(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = resolve_agent_chat_theme(self.theme.as_ref(), cx);
@@ -2035,7 +2055,9 @@ impl Render for AgentChatView {
 
         if self.sidebar_mode {
             // 侧边栏视图:紧凑头部(新建对话 / 历史记录) + 消息 + 输入。
-            let header = self.render_sidebar_mode_header(cx);
+            let header = self
+                .show_sidebar_header
+                .then(|| self.render_sidebar_mode_header(cx));
             div()
                 .debug_selector(|| "agent-sidebar-root".to_string())
                 .size_full()
@@ -2052,7 +2074,7 @@ impl Render for AgentChatView {
                         .min_w_0()
                         .min_h_0()
                         .overflow_hidden()
-                        .child(header)
+                        .when_some(header, |this, header| this.child(header))
                         .child(messages)
                         .child(input_area),
                 )
@@ -4201,6 +4223,16 @@ mod tests {
             config.sidebar_mode(true).sidebar_mode,
             "builder 应开启侧边栏视图"
         );
+    }
+
+    #[test]
+    fn sidebar_header_visibility_can_be_disabled_for_framed_hosts() {
+        let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
+            .sidebar_mode(true);
+        assert!(config.show_sidebar_header);
+
+        let embedded = config.show_sidebar_header(false);
+        assert!(!embedded.show_sidebar_header);
     }
 
     #[test]
