@@ -245,6 +245,15 @@ impl HistoryPromptState {
 
     pub fn accept_selected_suggestion(&mut self) -> Option<HistoryPromptAccept> {
         let candidate = self.selected_match()?.to_string();
+        self.accept_candidate(candidate)
+    }
+
+    pub fn accept_explicit_selection(&mut self) -> Option<HistoryPromptAccept> {
+        let candidate = self.matches.get(self.selected?)?.to_string();
+        self.accept_candidate(candidate)
+    }
+
+    fn accept_candidate(&mut self, candidate: String) -> Option<HistoryPromptAccept> {
         match self.mode {
             HistoryPromptMode::InlineSuggest => {
                 // 尝试前缀匹配的 AppendSuffix 路径
@@ -565,6 +574,22 @@ mod tests {
 
         assert_eq!(state.navigate_previous().as_deref(), Some("git status"));
         assert_eq!(state.selected_index(), Some(0));
+    }
+
+    #[test]
+    fn explicit_selection_accept_requires_navigation() {
+        let mut state = HistoryPromptState::from_input("git");
+        state.set_matches(vec!["git status".to_string(), "git stash".to_string()]);
+
+        assert_eq!(state.accept_explicit_selection(), None);
+        assert_eq!(state.input(), "git");
+
+        assert_eq!(state.navigate_previous().as_deref(), Some("git status"));
+        assert_eq!(
+            state.accept_explicit_selection(),
+            Some(HistoryPromptAccept::AppendSuffix(" status".to_string()))
+        );
+        assert_eq!(state.input(), "git status");
     }
 
     #[test]

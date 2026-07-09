@@ -1703,19 +1703,12 @@ impl TerminalView {
         self.write_to_pty(bytes, cx);
     }
 
-    fn try_accept_history_prompt(&mut self, cx: &mut Context<Self>) -> bool {
-        let selected_match = self.history_prompt.selected_match().map(str::to_string);
-        let Some(accepted) = self.history_prompt.accept_selected_suggestion() else {
-            tracing::debug!(
-                target: "terminal.history_prompt",
-                reason = "accept_rejected",
-                mode = ?self.history_prompt.mode(),
-                query = %self.history_prompt.query_input(),
-                selected_match = ?selected_match,
-                "history prompt accept rejected"
-            );
-            return false;
-        };
+    fn apply_history_prompt_accept(
+        &mut self,
+        accepted: HistoryPromptAccept,
+        selected_match: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         match accepted {
             HistoryPromptAccept::AppendSuffix(suffix) => {
                 tracing::debug!(
@@ -1743,6 +1736,43 @@ impl TerminalView {
         self.dismiss_history_prompt_matches();
         self.log_history_prompt_state("accept_complete", "dismiss matches after accept", cx);
         cx.notify();
+    }
+
+    fn try_accept_history_prompt(&mut self, cx: &mut Context<Self>) -> bool {
+        let selected_match = self.history_prompt.selected_match().map(str::to_string);
+        let Some(accepted) = self.history_prompt.accept_selected_suggestion() else {
+            tracing::debug!(
+                target: "terminal.history_prompt",
+                reason = "accept_rejected",
+                mode = ?self.history_prompt.mode(),
+                query = %self.history_prompt.query_input(),
+                selected_match = ?selected_match,
+                "history prompt accept rejected"
+            );
+            return false;
+        };
+        self.apply_history_prompt_accept(accepted, selected_match, cx);
+        true
+    }
+
+    fn try_accept_explicit_history_prompt(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.history_prompt_enabled(cx) || !self.history_prompt.is_active() {
+            return false;
+        }
+
+        let selected_match = self.history_prompt.selected_match().map(str::to_string);
+        let Some(accepted) = self.history_prompt.accept_explicit_selection() else {
+            tracing::debug!(
+                target: "terminal.history_prompt",
+                reason = "accept_explicit_rejected",
+                mode = ?self.history_prompt.mode(),
+                query = %self.history_prompt.query_input(),
+                selected_match = ?selected_match,
+                "history prompt explicit accept rejected"
+            );
+            return false;
+        };
+        self.apply_history_prompt_accept(accepted, selected_match, cx);
         true
     }
 
@@ -2692,6 +2722,7 @@ impl TerminalView {
                     }
                 }
                 "enter" => {
+                    let _ = self.try_accept_explicit_history_prompt(cx);
                     self.clear_history_prompt();
                 }
                 "left" | "home" | "end" | "delete" => {
@@ -4427,6 +4458,9 @@ impl TerminalView {
     }
 
     fn send_tab(&mut self, _: &SendTab, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.try_accept_explicit_history_prompt(cx) {
+            return;
+        }
         self.dismiss_history_prompt();
         self.write_to_pty(b"\x09".to_vec(), cx);
     }
