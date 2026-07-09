@@ -2,7 +2,7 @@ use super::{SidebarPanel, TerminalSidebar};
 use crate::theme::TerminalColors;
 use gpui::{
     Anchor, AnyElement, Context, Entity, InteractiveElement, IntoElement, ParentElement, Pixels,
-    SharedString, Styled, Window, div, px,
+    SharedString, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
     Icon, IconName, Sizable, Size,
@@ -59,6 +59,8 @@ pub(crate) fn render_internal_tool_panel_frame(
     content: impl IntoElement,
     colors: TerminalColors,
 ) -> AnyElement {
+    let needs_header = panel.needs_internal_tool_frame_header();
+
     v_flex()
         .debug_selector(move || format!("terminal-internal-tool-panel-{}", panel.local_id()))
         .size_full()
@@ -68,9 +70,11 @@ pub(crate) fn render_internal_tool_panel_frame(
         .bg(colors.background)
         .border_1()
         .border_color(colors.border)
-        .child(render_internal_tool_panel_header(
-            sidebar, panel, placement, colors,
-        ))
+        .when(needs_header, |this| {
+            this.child(render_internal_tool_panel_header(
+                sidebar, panel, placement, colors,
+            ))
+        })
         .child(
             div()
                 .debug_selector(|| "terminal-tool-panel-content".to_string())

@@ -225,6 +225,10 @@ impl SidebarPanel {
             SidebarPanel::ServerMonitor => "Server Monitor",
         }
     }
+
+    pub(crate) fn needs_internal_tool_frame_header(&self) -> bool {
+        !matches!(self, SidebarPanel::FileManager)
+    }
 }
 
 fn terminal_sidebar_available_panels(
@@ -1452,6 +1456,14 @@ mod tests {
         assert!(!panels.contains(&SidebarPanel::HistoryCommand));
         assert!(!panels.contains(&SidebarPanel::FileManager));
         assert!(!panels.contains(&SidebarPanel::ServerMonitor));
+    }
+
+    #[test]
+    fn file_manager_uses_its_own_header_in_internal_tool_frame() {
+        assert!(!SidebarPanel::FileManager.needs_internal_tool_frame_header());
+        assert!(SidebarPanel::Settings.needs_internal_tool_frame_header());
+        assert!(SidebarPanel::AiChat.needs_internal_tool_frame_header());
+        assert!(SidebarPanel::ServerMonitor.needs_internal_tool_frame_header());
     }
 
     #[test]
