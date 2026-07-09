@@ -7,7 +7,9 @@ use crate::tab_actions::{
     TAB_TITLE_METADATA_KEY, clear_tab_activity, duplicate_tab_id, mark_tab_activity,
     normalize_title, resolve_tab_title,
 };
+use crate::tab_navigation::{ActiveTabSlot, tab_number_target};
 use crate::tab_switcher::{TabSwitcherEntry, open_tab_switcher_dialog};
+use gpui::KeyBinding;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, AnyView, App, AppContext as _, Bounds, Context, Decorations, DragMoveEvent,
@@ -36,6 +38,36 @@ const SIDEBAR_SIDE_DEFAULT_WIDTH: Pixels = px(320.0);
 const SIDEBAR_BOTTOM_DEFAULT_HEIGHT: Pixels = px(260.0);
 const SIDEBAR_HANDLE_PADDING: Pixels = px(4.0);
 const SIDEBAR_HANDLE_SIZE: Pixels = px(1.0);
+const TAB_CONTAINER_CONTEXT: &str = "TabContainer";
+
+gpui::actions!(
+    tab_container,
+    [
+        SwitchToTab1,
+        SwitchToTab2,
+        SwitchToTab3,
+        SwitchToTab4,
+        SwitchToTab5,
+        SwitchToTab6,
+        SwitchToTab7,
+        SwitchToTab8,
+        SwitchToTab9
+    ]
+);
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("alt-1", SwitchToTab1, Some(TAB_CONTAINER_CONTEXT)),
+        KeyBinding::new("alt-2", SwitchToTab2, Some(TAB_CONTAINER_CONTEXT)),
+        KeyBinding::new("alt-3", SwitchToTab3, Some(TAB_CONTAINER_CONTEXT)),
+        KeyBinding::new("alt-4", SwitchToTab4, Some(TAB_CONTAINER_CONTEXT)),
+        KeyBinding::new("alt-5", SwitchToTab5, Some(TAB_CONTAINER_CONTEXT)),
+        KeyBinding::new("alt-6", SwitchToTab6, Some(TAB_CONTAINER_CONTEXT)),
+        KeyBinding::new("alt-7", SwitchToTab7, Some(TAB_CONTAINER_CONTEXT)),
+        KeyBinding::new("alt-8", SwitchToTab8, Some(TAB_CONTAINER_CONTEXT)),
+        KeyBinding::new("alt-9", SwitchToTab9, Some(TAB_CONTAINER_CONTEXT)),
+    ]);
+}
 
 // ============================================================================
 // TabContainer Events
@@ -66,6 +98,23 @@ pub(crate) fn active_content_can_split_for_layout(
     } else {
         active_tab_can_split.unwrap_or(false)
     }
+}
+
+fn tab_display_number(slot: ActiveTabSlot, pinned_tab_count: usize) -> usize {
+    match slot {
+        ActiveTabSlot::Pinned(index) => index + 1,
+        ActiveTabSlot::Regular(index) => pinned_tab_count + index + 1,
+    }
+}
+
+fn render_tab_display_number(number: usize, text_color: gpui::Hsla) -> AnyElement {
+    div()
+        .flex_shrink_0()
+        .min_w(px(12.0))
+        .text_xs()
+        .text_color(text_color)
+        .child(number.to_string())
+        .into_any_element()
 }
 
 pub(crate) fn sidebar_panel_initial_visibility(policy: SidebarPanelPolicy) -> bool {
@@ -1491,6 +1540,14 @@ impl TabContainer {
     pub fn set_active_by_id(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(index) = self.tabs.iter().position(|t| t.id() == id) {
             self.set_active_index(index, window, cx);
+        }
+    }
+
+    fn activate_tab_number(&mut self, number: usize, window: &mut Window, cx: &mut Context<Self>) {
+        match tab_number_target(number, self.pinned_tabs.len(), self.tabs.len()) {
+            Some(ActiveTabSlot::Pinned(index)) => self.activate_pinned_tab_at(index, window, cx),
+            Some(ActiveTabSlot::Regular(index)) => self.set_active_index(index, window, cx),
+            None => {}
         }
     }
 
@@ -2979,6 +3036,8 @@ impl TabContainer {
                         let is_pinned_active = self.active_pinned_index == Some(pinned_index);
                         let view_for_pinned = view.clone();
                         let top_padding = self.top_padding;
+                        let display_number =
+                            tab_display_number(ActiveTabSlot::Pinned(pinned_index), 0);
 
                         div()
                             .id(SharedString::from(format!("pinned-tab-{pinned_index}")))
@@ -3004,6 +3063,7 @@ impl TabContainer {
                                     this.activate_pinned_tab_at(pinned_index, window, cx);
                                 });
                             })
+                            .child(render_tab_display_number(display_number, text_color))
                             .when_some(pinned_icon, |el, icon| {
                                 el.child(div().flex_shrink_0().flex().items_center().child(icon))
                             })
@@ -3102,6 +3162,8 @@ impl TabContainer {
                         let tab_id = tab.id();
                         let has_activity =
                             !is_active && self.activity_tabs.contains(tab_id.as_ref());
+                        let display_number =
+                            tab_display_number(ActiveTabSlot::Regular(idx), pinned_tab_count);
                         let rename_input_for_tab = self
                             .renaming_tab_id
                             .as_ref()
@@ -3195,6 +3257,7 @@ impl TabContainer {
                                 window.prevent_default();
                                 this.set_active_index(idx, window, cx);
                             }))
+                            .child(render_tab_display_number(display_number, text_color))
                             .when_some(icon, |el, icon| {
                                 el.child(div().flex_shrink_0().flex().items_center().child(icon))
                             })
@@ -3718,6 +3781,34 @@ impl Render for TabContainer {
         div()
             .id("tab-container")
             .track_focus(&focus_handle)
+            .key_context(TAB_CONTAINER_CONTEXT)
+            .on_action(cx.listener(|this, _: &SwitchToTab1, window, cx| {
+                this.activate_tab_number(1, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab2, window, cx| {
+                this.activate_tab_number(2, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab3, window, cx| {
+                this.activate_tab_number(3, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab4, window, cx| {
+                this.activate_tab_number(4, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab5, window, cx| {
+                this.activate_tab_number(5, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab6, window, cx| {
+                this.activate_tab_number(6, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab7, window, cx| {
+                this.activate_tab_number(7, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab8, window, cx| {
+                this.activate_tab_number(8, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SwitchToTab9, window, cx| {
+                this.activate_tab_number(9, window, cx);
+            }))
             .relative()
             .size_full()
             .child(
@@ -3726,5 +3817,19 @@ impl Render for TabContainer {
                     .child(self.render_tab_bar(window, cx))
                     .child(self.render_tab_content(window, cx)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tab_display_number;
+    use crate::tab_navigation::ActiveTabSlot;
+
+    #[test]
+    fn tab_display_number_matches_flat_alt_number_order() {
+        assert_eq!(1, tab_display_number(ActiveTabSlot::Pinned(0), 2));
+        assert_eq!(2, tab_display_number(ActiveTabSlot::Pinned(1), 2));
+        assert_eq!(3, tab_display_number(ActiveTabSlot::Regular(0), 2));
+        assert_eq!(5, tab_display_number(ActiveTabSlot::Regular(2), 2));
     }
 }

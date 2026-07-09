@@ -469,6 +469,26 @@ fn terminal_paste_defaults() -> Vec<&'static str> {
     }
 }
 
+fn normalize_paste_line_endings(text: &str) -> Cow<'_, str> {
+    if text.contains('\r') {
+        Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+fn terminal_paste_bytes(text: &str, mode: TermMode) -> Vec<u8> {
+    let text = normalize_paste_line_endings(text);
+    if mode.contains(TermMode::BRACKETED_PASTE) {
+        format!("\x1b[200~{}\x1b[201~", text.replace('\x1b', "")).into_bytes()
+    } else {
+        match text {
+            Cow::Borrowed(text) => text.as_bytes().to_vec(),
+            Cow::Owned(text) => text.into_bytes(),
+        }
+    }
+}
+
 fn should_direct_paste_on_right_click(enabled: bool, button: MouseButton) -> bool {
     enabled && button == MouseButton::Right
 }
@@ -2974,6 +2994,8 @@ impl TerminalView {
     /// 2. 保持文本的完整性，让用户可以检查后再执行
     /// 3. 避免意外执行危险命令
     fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let text = normalize_paste_line_endings(text);
+        let text = text.as_ref();
         let mode = self.terminal.read(cx).mode();
 
         // ALT_SCREEN（如 Vim、less）属于全屏交互程序，粘贴内容不会像 shell 那样直接执行。
@@ -3019,16 +3041,13 @@ impl TerminalView {
     }
 
     fn paste_text_unchecked(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let text = normalize_paste_line_endings(text);
+        let text = text.as_ref();
         // 仅在应用请求 bracketed paste 模式时才包装，避免把控制序列
         // 原样送进不支持的程序（例如 Vim 未开启时可能导致光标/位置异常）。
         let mode = self.terminal.read(cx).mode();
         self.apply_paste_to_history_prompt(text, cx);
-        if mode.contains(TermMode::BRACKETED_PASTE) {
-            let paste_text = format!("\x1b[200~{}\x1b[201~", text.replace('\x1b', ""));
-            self.write_to_pty(paste_text.into_bytes(), cx);
-        } else {
-            self.write_to_pty(text.as_bytes().to_vec(), cx);
-        }
+        self.write_to_pty(terminal_paste_bytes(text, mode), cx);
         self.focus_terminal(window, cx);
     }
 
@@ -3134,11 +3153,7 @@ impl TerminalView {
     fn paste_remote_image_path(&mut self, path: &str, cx: &mut Context<Self>) {
         let mode = self.terminal.read(cx).mode();
         self.apply_paste_to_history_prompt(path, cx);
-        if mode.contains(TermMode::BRACKETED_PASTE) {
-            self.write_to_pty(format!("\x1b[200~{path}\x1b[201~").into_bytes(), cx);
-        } else {
-            self.write_to_pty(path.as_bytes().to_vec(), cx);
-        }
+        self.write_to_pty(terminal_paste_bytes(path, mode), cx);
     }
 
     /// 粘贴代码块到终端（用于AI生成的代码）
@@ -5234,7 +5249,7 @@ mod tests {
         should_reset_history_prompt_for_terminal_event, should_scroll_to_bottom_on_user_input,
         should_start_block_selection, should_start_selection_from_pending_sgr_press,
         should_upload_clipboard_image_to_remote_cli, take_whole_scroll_lines,
-        terminal_duplicate_source_with_cwd, terminal_history_scope,
+        terminal_duplicate_source_with_cwd, terminal_history_scope, terminal_paste_bytes,
         terminal_tab_duplicate_supported, wrapped_addon_line_text,
     };
     use crate::history_prompt::{HistoryPromptAccept, HistoryPromptState};
@@ -5921,6 +5936,13 @@ mod tests {
     fn multiline_non_empty_line_count_ignores_blank_lines() {
         assert_eq!(multiline_non_empty_line_count("echo 1\n\n echo 2\n"), 2);
         assert_eq!(multiline_non_empty_line_count("echo 1"), 1);
+    }
+
+    #[test]
+    fn bracketed_paste_bytes_normalize_crlf_to_single_newlines() {
+        let bytes = terminal_paste_bytes("alpha\r\nbeta\r\n", TermMode::BRACKETED_PASTE);
+
+        assert_eq!(b"\x1b[200~alpha\nbeta\n\x1b[201~".to_vec(), bytes);
     }
 
     #[test]
