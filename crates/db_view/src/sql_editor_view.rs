@@ -135,17 +135,12 @@ fn sql_text_for_run_all(editor_text: &str, _selected_text: &str) -> String {
     editor_text.to_string()
 }
 
-fn sql_text_for_run_current_line(editor_text: &str, cursor_offset: usize) -> String {
-    let cursor_offset = clamp_to_char_boundary(editor_text, cursor_offset);
-    let line_start = editor_text[..cursor_offset]
-        .rfind('\n')
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    let line_end = editor_text[cursor_offset..]
-        .find('\n')
-        .map(|index| cursor_offset + index)
-        .unwrap_or(editor_text.len());
-    editor_text[line_start..line_end].trim().to_string()
+fn sql_text_for_run_cursor_statement(
+    editor_text: &str,
+    cursor_offset: usize,
+    database_type: DatabaseType,
+) -> String {
+    current_sql_statement(editor_text, cursor_offset, database_type).unwrap_or_default()
 }
 
 fn current_sql_statement(
@@ -530,11 +525,11 @@ impl SqlEditorTab {
                         }
                     })
                     .icon(IconName::ArrowRight),
-                    InputContextMenuItem::on_click(t!("Query.run_current_line").to_string(), {
+                    InputContextMenuItem::on_click(t!("Query.run_cursor_statement").to_string(), {
                         let view = view.clone();
                         move |_, window, cx| {
                             let _ = view.update(cx, |this, cx| {
-                                this.handle_run_current_line_query(window, cx);
+                                this.handle_run_cursor_statement_query(window, cx);
                             });
                         }
                     })
@@ -1347,9 +1342,13 @@ impl SqlEditorTab {
         self.execute_sql_text(selected_text, window, cx);
     }
 
-    fn handle_run_current_line_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_run_cursor_statement_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let cursor_offset = self.editor.read(cx).cursor_offset(cx);
-        let sql = sql_text_for_run_current_line(&self.get_sql_text(cx), cursor_offset);
+        let sql = sql_text_for_run_cursor_statement(
+            &self.get_sql_text(cx),
+            cursor_offset,
+            self.database_type.clone(),
+        );
         if sql.trim().is_empty() {
             window.push_notification(t!("Query.query_content_empty").to_string(), cx);
             return;
@@ -1911,7 +1910,7 @@ mod tests {
         ManualTransactionAction, ManualTransactionSession, RUN_ALL_QUERY_KEY_BINDINGS,
         RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery, SQL_EDITOR_CONTEXT,
         initial_database_select_value, manual_transaction_control_sql, should_render_schema_select,
-        sql_text_for_run_all, sql_text_for_run_current, sql_text_for_run_current_line,
+        sql_text_for_run_all, sql_text_for_run_current, sql_text_for_run_cursor_statement,
         sql_text_for_toolbar_run, supports_manual_transactions,
     };
     use db::DbManager;
@@ -2014,18 +2013,30 @@ mod tests {
     }
 
     #[test]
-    fn run_current_line_text_uses_cursor_line() {
+    fn run_cursor_statement_text_uses_cursor_statement() {
         let sql = "select 1;\n  select * from 用户表;  \nselect 3;";
         let cursor_offset = sql.find("用户表").expect("line exists") + "用户".len();
-        let actual = sql_text_for_run_current_line(sql, cursor_offset);
+        let actual = sql_text_for_run_cursor_statement(sql, cursor_offset, DatabaseType::MySQL);
 
-        assert_eq!("select * from 用户表;", actual);
+        assert_eq!("select * from 用户表", actual);
     }
 
     #[test]
-    fn run_current_line_text_handles_last_line() {
+    fn run_cursor_statement_text_uses_full_multiline_statement() {
+        let sql = "select * from users;\nselect id,\n       name\nfrom orders\nwhere active = 1;\nselect * from products;";
+        let cursor_offset = sql.find("name").expect("statement exists") + "na".len();
+        let actual = sql_text_for_run_cursor_statement(sql, cursor_offset, DatabaseType::MySQL);
+
+        assert_eq!(
+            "select id,\n       name\nfrom orders\nwhere active = 1",
+            actual
+        );
+    }
+
+    #[test]
+    fn run_cursor_statement_text_handles_last_statement() {
         let sql = "select 1;\nselect 2";
-        let actual = sql_text_for_run_current_line(sql, sql.len());
+        let actual = sql_text_for_run_cursor_statement(sql, sql.len(), DatabaseType::MySQL);
 
         assert_eq!("select 2", actual);
     }
