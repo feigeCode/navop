@@ -1531,6 +1531,7 @@ mod tests {
             .arg("-c")
             .arg(&command)
             .env("HOME", &home_dir)
+            .env("SHELL", "zsh")
             .output()
             .expect("应执行 setup 脚本");
         assert!(
