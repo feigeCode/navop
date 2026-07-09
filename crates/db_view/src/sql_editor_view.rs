@@ -123,6 +123,14 @@ fn sql_text_for_run_current(
     }
 }
 
+fn sql_text_for_toolbar_run(editor_text: &str, selected_text: &str) -> String {
+    if selected_text.trim().is_empty() {
+        editor_text.to_string()
+    } else {
+        selected_text.to_string()
+    }
+}
+
 fn sql_text_for_run_all(editor_text: &str, _selected_text: &str) -> String {
     editor_text.to_string()
 }
@@ -1298,13 +1306,7 @@ impl SqlEditorTab {
 
     fn handle_run_query(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         let selected_text = self.editor.read(cx).get_selected_text(cx);
-        let cursor_offset = self.editor.read(cx).cursor_offset(cx);
-        let sql = sql_text_for_run_current(
-            &self.get_sql_text(cx),
-            &selected_text,
-            cursor_offset,
-            self.database_type.clone(),
-        );
+        let sql = sql_text_for_toolbar_run(&self.get_sql_text(cx), &selected_text);
         self.execute_sql_text(sql, window, cx);
     }
 
@@ -1910,7 +1912,7 @@ mod tests {
         RUN_CURRENT_QUERY_KEY_BINDINGS, RunCurrentQuery, SQL_EDITOR_CONTEXT,
         initial_database_select_value, manual_transaction_control_sql, should_render_schema_select,
         sql_text_for_run_all, sql_text_for_run_current, sql_text_for_run_current_line,
-        supports_manual_transactions,
+        sql_text_for_toolbar_run, supports_manual_transactions,
     };
     use db::DbManager;
     use gpui::{KeyBinding, KeyContext, Keymap, Keystroke};
@@ -1953,6 +1955,24 @@ mod tests {
         );
 
         assert_eq!("select id from users;", actual);
+    }
+
+    #[test]
+    fn toolbar_run_text_prefers_selection_when_present() {
+        let actual = sql_text_for_toolbar_run(
+            "select * from users;\nselect * from orders;",
+            "select * from users;",
+        );
+
+        assert_eq!("select * from users;", actual);
+    }
+
+    #[test]
+    fn toolbar_run_text_uses_full_editor_sql_without_selection() {
+        let sql = "select * from users;\nselect * from orders;";
+        let actual = sql_text_for_toolbar_run(sql, "   ");
+
+        assert_eq!(sql, actual);
     }
 
     #[test]
