@@ -1,13 +1,15 @@
 use super::{SidebarPanel, TerminalSidebar};
 use crate::theme::TerminalColors;
 use gpui::{
-    AnyElement, Entity, InteractiveElement, IntoElement, ParentElement, Pixels, SharedString,
-    Styled, div, px,
+    Anchor, AnyElement, Context, Entity, InteractiveElement, IntoElement, ParentElement, Pixels,
+    SharedString, Styled, Window, div, px,
 };
 use gpui_component::{
     Icon, IconName, Sizable, Size,
     button::{Button, ButtonVariants},
-    h_flex, v_flex,
+    h_flex,
+    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
+    v_flex,
 };
 use one_core::layout::TOOLBAR_WIDTH;
 use one_core::sidebar_contribution::SidebarPlacement;
@@ -53,6 +55,7 @@ pub(crate) fn right_tool_region_width(
 pub(crate) fn render_internal_tool_panel_frame(
     sidebar: Entity<TerminalSidebar>,
     panel: SidebarPanel,
+    placement: SidebarPlacement,
     content: impl IntoElement,
     colors: TerminalColors,
 ) -> AnyElement {
@@ -65,7 +68,9 @@ pub(crate) fn render_internal_tool_panel_frame(
         .bg(colors.background)
         .border_1()
         .border_color(colors.border)
-        .child(render_internal_tool_panel_header(sidebar, panel, colors))
+        .child(render_internal_tool_panel_header(
+            sidebar, panel, placement, colors,
+        ))
         .child(
             div()
                 .debug_selector(|| "terminal-tool-panel-content".to_string())
@@ -81,6 +86,7 @@ pub(crate) fn render_internal_tool_panel_frame(
 fn render_internal_tool_panel_header(
     sidebar: Entity<TerminalSidebar>,
     panel: SidebarPanel,
+    placement: SidebarPlacement,
     colors: TerminalColors,
 ) -> AnyElement {
     let title: SharedString = panel.title().into();
@@ -107,43 +113,61 @@ fn render_internal_tool_panel_header(
                 .text_color(colors.foreground)
                 .child(title),
         )
-        .child(move_button(
-            sidebar.clone(),
-            panel,
-            SidebarPlacement::Left,
-            IconName::PanelLeft,
-        ))
-        .child(move_button(
-            sidebar.clone(),
-            panel,
-            SidebarPlacement::Right,
-            IconName::PanelRight,
-        ))
-        .child(move_button(
-            sidebar.clone(),
-            panel,
-            SidebarPlacement::Bottom,
-            IconName::PanelBottom,
-        ))
+        .child(options_button(sidebar.clone(), panel, placement))
         .child(close_button(sidebar, panel))
         .into_any_element()
 }
 
-fn move_button(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ToolPanelMoveMenuOption {
+    placement: SidebarPlacement,
+    disabled: bool,
+}
+
+fn tool_panel_move_menu_options(current: SidebarPlacement) -> Vec<ToolPanelMoveMenuOption> {
+    [
+        SidebarPlacement::Left,
+        SidebarPlacement::Right,
+        SidebarPlacement::Bottom,
+    ]
+    .into_iter()
+    .map(|placement| ToolPanelMoveMenuOption {
+        placement,
+        disabled: placement == current,
+    })
+    .collect()
+}
+
+fn placement_label(placement: SidebarPlacement) -> &'static str {
+    match placement {
+        SidebarPlacement::Left => "Left",
+        SidebarPlacement::Right => "Right",
+        SidebarPlacement::Bottom => "Bottom",
+    }
+}
+
+fn placement_icon(placement: SidebarPlacement) -> IconName {
+    match placement {
+        SidebarPlacement::Left => IconName::PanelLeft,
+        SidebarPlacement::Right => IconName::PanelRight,
+        SidebarPlacement::Bottom => IconName::PanelBottom,
+    }
+}
+
+fn options_button(
     sidebar: Entity<TerminalSidebar>,
     panel: SidebarPanel,
     placement: SidebarPlacement,
-    icon: IconName,
-) -> Button {
+) -> impl IntoElement {
     Button::new(SharedString::from(format!(
-        "terminal-tool-move-{placement:?}-{}",
+        "terminal-tool-options-{}",
         panel.local_id()
     )))
-    .icon(icon)
+    .icon(IconName::Ellipsis)
     .ghost()
     .compact()
-    .on_click(move |_, _window, cx| {
-        sidebar.update(cx, |sidebar, cx| sidebar.move_tool(panel, placement, cx));
+    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
+        build_options_menu(menu, sidebar.clone(), panel, placement, window, cx)
     })
 }
 
@@ -158,6 +182,55 @@ fn close_button(sidebar: Entity<TerminalSidebar>, panel: SidebarPanel) -> Button
     .on_click(move |_, _window, cx| {
         sidebar.update(cx, |sidebar, cx| sidebar.close_tool(panel, cx));
     })
+}
+
+fn build_options_menu(
+    menu: PopupMenu,
+    sidebar: Entity<TerminalSidebar>,
+    panel: SidebarPanel,
+    placement: SidebarPlacement,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+) -> PopupMenu {
+    let move_sidebar = sidebar.clone();
+    let remove_sidebar = sidebar.clone();
+
+    menu.min_w(px(220.0))
+        .submenu_with_icon(
+            Some(IconName::PanelRight.into()),
+            "Move to",
+            window,
+            cx,
+            move |submenu, _window, _cx| {
+                tool_panel_move_menu_options(placement).into_iter().fold(
+                    submenu,
+                    |submenu, option| {
+                        let sidebar = move_sidebar.clone();
+                        submenu.item(
+                            PopupMenuItem::new(placement_label(option.placement))
+                                .icon(placement_icon(option.placement))
+                                .checked(option.disabled)
+                                .disabled(option.disabled)
+                                .on_click(move |_, _, cx| {
+                                    sidebar.update(cx, |sidebar, cx| {
+                                        sidebar.move_tool(panel, option.placement, cx);
+                                    });
+                                }),
+                        )
+                    },
+                )
+            },
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new("Remove from Sidebar")
+                .icon(IconName::Close)
+                .on_click(move |_, _, cx| {
+                    remove_sidebar.update(cx, |sidebar, cx| {
+                        sidebar.close_tool(panel, cx);
+                    });
+                }),
+        )
 }
 
 #[cfg(test)]
@@ -212,5 +285,22 @@ mod tests {
         assert_eq!(Some(SidebarPanel::Settings), layout.left);
         assert_eq!(Some(SidebarPanel::AiChat), layout.right);
         assert_eq!(Some(SidebarPanel::HistoryCommand), layout.bottom);
+    }
+
+    #[test]
+    fn move_menu_options_disable_current_placement() {
+        let options = tool_panel_move_menu_options(SidebarPlacement::Right);
+
+        assert_eq!(
+            vec![
+                (SidebarPlacement::Left, false),
+                (SidebarPlacement::Right, true),
+                (SidebarPlacement::Bottom, false),
+            ],
+            options
+                .iter()
+                .map(|option| (option.placement, option.disabled))
+                .collect::<Vec<_>>()
+        );
     }
 }

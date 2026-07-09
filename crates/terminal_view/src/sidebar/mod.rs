@@ -562,6 +562,7 @@ impl TerminalSidebar {
         let ai_theme = agent_theme_from_terminal_theme(initial_theme);
         ai_chat_panel.update(cx, |panel, cx| {
             panel.set_theme(Some(ai_theme), cx);
+            panel.set_sidebar_header_visible(false, cx);
             panel.set_system_instruction(Some(TERMINAL_AI_SYSTEM_INSTRUCTION.to_string()), cx);
             // 注册复制操作（默认已有，这里只是确保）
             // 注册粘贴到终端操作

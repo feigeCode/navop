@@ -68,6 +68,7 @@ pub struct DefaultAgentChatPanel {
     pending_code_block_actions: Vec<CodeBlockAction>,
     connection_subscription: Option<Subscription>,
     theme: Option<AgentChatTheme>,
+    show_sidebar_header: bool,
     error: Option<String>,
 }
 
@@ -202,6 +203,7 @@ impl DefaultAgentChatPanel {
             pending_code_block_actions: Vec::new(),
             connection_subscription: None,
             theme: None,
+            show_sidebar_header: true,
             error: None,
         };
         panel.subscribe_connection_events(cx);
@@ -313,6 +315,16 @@ impl DefaultAgentChatPanel {
         }
     }
 
+    pub fn set_sidebar_header_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        self.show_sidebar_header = visible;
+        if let Some(view) = &self.view {
+            view.update(cx, |view, cx| {
+                view.set_sidebar_header_visible(visible, cx);
+            });
+        }
+        cx.notify();
+    }
+
     pub fn set_theme(&mut self, theme: Option<AgentChatTheme>, cx: &mut Context<Self>) {
         self.theme = theme.clone();
         if let Some(view) = &self.view {
@@ -368,6 +380,7 @@ impl DefaultAgentChatPanel {
                             if let Some(theme) = panel.theme.clone() {
                                 config = config.with_theme(theme);
                             }
+                            config = config.show_sidebar_header(panel.show_sidebar_header);
                             let view = AgentChatView::view_with_config(config, window, cx);
                             let view_subscription =
                                 cx.subscribe(&view, |_, _, event: &AgentChatViewEvent, cx| {

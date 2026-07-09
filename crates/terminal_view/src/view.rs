@@ -80,7 +80,7 @@ use mouse_input::{
 use one_core::layout::{
     SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, TOOLBAR_WIDTH,
 };
-use one_core::sidebar_contribution::SidebarContribution;
+use one_core::sidebar_contribution::{SidebarContribution, SidebarPlacement};
 use one_core::storage::models::{ActiveConnections, StoredConnection};
 use one_core::tab_container::{TabContent, TabContentEvent, TabContentView};
 use one_ui::resize_handle::{HandlePlacement, ResizePanel, resize_handle};
@@ -4516,13 +4516,14 @@ impl TerminalView {
     fn render_internal_tool_panel(
         &self,
         panel: SidebarPanel,
+        placement: SidebarPlacement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(view) = self.sidebar_tool_panels.get(&panel).cloned() else {
             return div().into_any_element();
         };
         let colors = self.sidebar.read(cx).colors();
-        render_internal_tool_panel_frame(self.sidebar.clone(), panel, view, colors)
+        render_internal_tool_panel_frame(self.sidebar.clone(), panel, placement, view, colors)
     }
 
     fn resize_sidebar(
@@ -4717,13 +4718,13 @@ impl Render for TerminalView {
         let right_tool_width = right_tool_region_width(&tool_layout, sidebar_panel_size);
         let left_tool_panel = tool_layout
             .left
-            .map(|panel| self.render_internal_tool_panel(panel, cx));
+            .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Left, cx));
         let right_tool_panel = tool_layout
             .right
-            .map(|panel| self.render_internal_tool_panel(panel, cx));
+            .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Right, cx));
         let bottom_tool_panel = tool_layout
             .bottom
-            .map(|panel| self.render_internal_tool_panel(panel, cx));
+            .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Bottom, cx));
 
         // 检测主屏 ↔ alt screen 切换。
         // 进入 alt screen 时(opencode/lazygit/vim 等 TUI 启动),主动重发当前尺寸到 PTY,
