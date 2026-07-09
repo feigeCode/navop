@@ -307,6 +307,52 @@ fn clear_remote_listing_state<T>(
     selected_indices.clear();
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionMode {
+    Replace,
+    Toggle,
+    Range,
+}
+
+fn selection_mode(shift_pressed: bool, multi_select: bool) -> SelectionMode {
+    if shift_pressed {
+        SelectionMode::Range
+    } else if multi_select {
+        SelectionMode::Toggle
+    } else {
+        SelectionMode::Replace
+    }
+}
+
+fn apply_selection_mode(
+    selected_indices: &mut HashSet<usize>,
+    anchor_index: &mut Option<usize>,
+    row_ix: usize,
+    mode: SelectionMode,
+) {
+    match mode {
+        SelectionMode::Replace => {
+            selected_indices.clear();
+            selected_indices.insert(row_ix);
+            *anchor_index = Some(row_ix);
+        }
+        SelectionMode::Toggle => {
+            if !selected_indices.remove(&row_ix) {
+                selected_indices.insert(row_ix);
+            }
+            *anchor_index = Some(row_ix);
+        }
+        SelectionMode::Range => {
+            let anchor = anchor_index.unwrap_or(row_ix);
+            let start = anchor.min(row_ix);
+            let end = anchor.max(row_ix);
+            selected_indices.clear();
+            selected_indices.extend(start..=end);
+            anchor_index.get_or_insert(row_ix);
+        }
+    }
+}
+
 /// 排序列
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SortColumn {
@@ -841,6 +887,8 @@ pub struct FileManagerPanel {
     filtered_indices: Vec<usize>,
     /// 选中项索引（基于 filtered_indices 的下标）
     selected_indices: HashSet<usize>,
+    /// Shift 范围选择的锚点（基于 filtered_indices 的下标）
+    selection_anchor_index: Option<usize>,
     /// 排序列
     sort_column: SortColumn,
     /// 排序方向
@@ -924,7 +972,7 @@ impl FileManagerPanel {
                     let text = input.read(cx).text().to_string();
                     this.search_query = text;
                     this.apply_filter();
-                    this.selected_indices.clear();
+                    this.clear_selection();
                     cx.notify();
                 }
             }),
@@ -968,6 +1016,7 @@ impl FileManagerPanel {
             items: Vec::new(),
             filtered_indices: Vec::new(),
             selected_indices: HashSet::new(),
+            selection_anchor_index: None,
             sort_column: SortColumn::Name,
             sort_order: SortOrder::Ascending,
             show_hidden: false,
@@ -1088,6 +1137,7 @@ impl FileManagerPanel {
                 &mut self.filtered_indices,
                 &mut self.selected_indices,
             );
+            self.selection_anchor_index = None;
         }
     }
 
@@ -1553,7 +1603,7 @@ impl FileManagerPanel {
                             .collect();
                         this.sort_items();
                         this.apply_filter();
-                        this.selected_indices.clear();
+                        this.clear_selection();
                     }
                     Ok(Err(e)) => {
                         tracing::error!("列出目录失败: {}", e);
@@ -1669,7 +1719,7 @@ impl FileManagerPanel {
         }
         self.sort_items();
         self.apply_filter();
-        self.selected_indices.clear();
+        self.clear_selection();
         cx.notify();
     }
 
@@ -1696,18 +1746,19 @@ impl FileManagerPanel {
             .collect();
     }
 
-    /// 切换选中状态
-    fn toggle_selection(&mut self, row_ix: usize, multi_select: bool) {
-        if multi_select {
-            if self.selected_indices.contains(&row_ix) {
-                self.selected_indices.remove(&row_ix);
-            } else {
-                self.selected_indices.insert(row_ix);
-            }
-        } else if !self.selected_indices.contains(&row_ix) {
-            self.selected_indices.clear();
-            self.selected_indices.insert(row_ix);
-        }
+    fn clear_selection(&mut self) {
+        self.selected_indices.clear();
+        self.selection_anchor_index = None;
+    }
+
+    /// 更新选中状态
+    fn select_row(&mut self, row_ix: usize, mode: SelectionMode) {
+        apply_selection_mode(
+            &mut self.selected_indices,
+            &mut self.selection_anchor_index,
+            row_ix,
+            mode,
+        );
     }
 
     // ── 传输调度 ──────────────────────────────────────────────
@@ -2017,7 +2068,7 @@ impl FileManagerPanel {
                 this.update_task_state(task_id, result);
                 this.schedule_transfers(cx);
                 if should_refresh && should_refresh_after_delete(&this.current_path, &remote_dir) {
-                    this.selected_indices.clear();
+                    this.clear_selection();
                     this.refresh_dir(cx);
                 }
                 cx.notify();
@@ -3349,7 +3400,7 @@ impl FileManagerPanel {
                                 cx.listener(move |this, _, _window, cx| {
                                     this.show_hidden = !this.show_hidden;
                                     this.apply_filter();
-                                    this.selected_indices.clear();
+                                    this.clear_selection();
                                     cx.notify();
                                 }),
                             )
@@ -4411,7 +4462,10 @@ impl FileManagerPanel {
                     div()
                         .id("fm-file-list-drop-zone")
                         .flex_1()
+                        .min_h_0()
+                        .min_w_0()
                         .relative()
+                        .overflow_hidden()
                         .bg(background)
                         // 拖拽上传支持
                         .drag_over::<ExternalPaths>(|el, _, _, _cx| el.bg(gpui::rgba(0x3b82f620)))
@@ -4479,11 +4533,13 @@ impl FileManagerPanel {
                                                                   event: &MouseDownEvent,
                                                                   _window,
                                                                   cx| {
-                                                                let multi_select =
-                                                                    event.modifiers.secondary();
-                                                                this.toggle_selection(
+                                                                let mode = selection_mode(
+                                                                    event.modifiers.shift,
+                                                                    event.modifiers.secondary(),
+                                                                );
+                                                                this.select_row(
                                                                     filtered_ix,
-                                                                    multi_select,
+                                                                    mode,
                                                                 );
                                                                 cx.notify();
                                                             },
@@ -4536,6 +4592,7 @@ impl FileManagerPanel {
                             .track_scroll(&scroll_handle)
                             .with_sizing_behavior(ListSizingBehavior::Auto),
                         )
+                        .vertical_scrollbar(&scroll_handle)
                         .when(is_dragging, |el| el.child(self.render_drop_overlay(cx))),
                 )
             })
@@ -4775,6 +4832,54 @@ mod tests {
 
         let single_selection = HashSet::from([0usize]);
         assert!(!super::should_use_context_selection(&single_selection, 0));
+    }
+
+    #[test]
+    fn range_selection_selects_rows_between_anchor_and_clicked_row() {
+        let mut selected_indices = HashSet::from([1usize]);
+        let mut anchor_index = Some(1usize);
+
+        super::apply_selection_mode(
+            &mut selected_indices,
+            &mut anchor_index,
+            4,
+            super::SelectionMode::Range,
+        );
+
+        assert_eq!(HashSet::from([1usize, 2, 3, 4]), selected_indices);
+        assert_eq!(Some(1), anchor_index);
+    }
+
+    #[test]
+    fn range_selection_without_anchor_selects_clicked_row() {
+        let mut selected_indices = HashSet::new();
+        let mut anchor_index = None;
+
+        super::apply_selection_mode(
+            &mut selected_indices,
+            &mut anchor_index,
+            3,
+            super::SelectionMode::Range,
+        );
+
+        assert_eq!(HashSet::from([3usize]), selected_indices);
+        assert_eq!(Some(3), anchor_index);
+    }
+
+    #[test]
+    fn replace_selection_clears_previous_rows_and_updates_anchor() {
+        let mut selected_indices = HashSet::from([0usize, 2]);
+        let mut anchor_index = Some(0usize);
+
+        super::apply_selection_mode(
+            &mut selected_indices,
+            &mut anchor_index,
+            5,
+            super::SelectionMode::Replace,
+        );
+
+        assert_eq!(HashSet::from([5usize]), selected_indices);
+        assert_eq!(Some(5), anchor_index);
     }
 
     #[test]
