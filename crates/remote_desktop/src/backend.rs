@@ -5,7 +5,7 @@ use crate::{
 };
 use connection_tunnel::{TunnelGuard, start_proxy_tunnel};
 
-const MIN_RDP_PROVIDER_VERSION: &str = "0.1.3";
+const MIN_RDP_PROVIDER_VERSION: &str = "0.1.4";
 const MIN_VNC_PROVIDER_VERSION: &str = "0.1.1";
 
 pub trait RemoteDesktopBackend: Send + 'static {
@@ -212,7 +212,7 @@ mod tests {
             "rdp",
             "RDP",
             "rdp",
-            "0.1.2",
+            "0.1.3",
             "./onetcli-rdp-helper",
         );
         let registry = RemoteDesktopProviderRegistry::load_from_dir(temp.path()).unwrap();
@@ -229,8 +229,8 @@ mod tests {
             .downcast_ref::<RemoteDesktopProviderVersionError>()
             .expect("version error");
         assert_eq!(RemoteDesktopProtocol::Rdp, version_error.protocol);
-        assert_eq!("0.1.2", version_error.installed);
-        assert_eq!("0.1.3", version_error.required);
+        assert_eq!("0.1.3", version_error.installed);
+        assert_eq!("0.1.4", version_error.required);
         assert!(!version_error.invalid);
     }
 
