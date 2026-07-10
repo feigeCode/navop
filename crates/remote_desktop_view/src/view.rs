@@ -102,9 +102,7 @@ impl RemoteDesktopView {
         });
 
         cx.on_release(move |this, cx| {
-            if let Some(input_tx) = this.input_tx.take() {
-                let _ = input_tx.send(RemoteDesktopInput::Close);
-            }
+            close_runtime_once(&mut this.input_tx);
             let frames = this
                 .rendered_frames
                 .take_all_distinct(this.latest_frame.take());
@@ -139,6 +137,14 @@ impl RemoteDesktopView {
             tab_index: config.tab_index,
             _output_poll_task: output_poll_task,
         }
+    }
+}
+
+fn close_runtime_once(
+    input_tx: &mut Option<tokio::sync::mpsc::UnboundedSender<RemoteDesktopInput>>,
+) {
+    if let Some(input_tx) = input_tx.take() {
+        let _ = input_tx.send(RemoteDesktopInput::Close);
     }
 }
 
@@ -194,6 +200,23 @@ pub fn refresh_keybindings(_cx: &mut App) {}
 #[cfg(test)]
 mod tests {
     use remote_desktop::{RemoteDesktopProtocol, RemoteDesktopProviderVersionError};
+
+    use super::close_runtime_once;
+
+    #[test]
+    fn closes_runtime_only_once() {
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut input_tx = Some(input_tx);
+
+        close_runtime_once(&mut input_tx);
+        close_runtime_once(&mut input_tx);
+
+        assert_eq!(
+            Some(remote_desktop::RemoteDesktopInput::Close),
+            input_rx.blocking_recv()
+        );
+        assert!(input_rx.try_recv().is_err());
+    }
 
     #[test]
     fn tab_title_uses_connection_name_and_duplicate_index() {

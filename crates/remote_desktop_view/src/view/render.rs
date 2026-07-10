@@ -40,9 +40,7 @@ impl TabContent for RemoteDesktopView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Task<bool> {
-        if let Some(input_tx) = &self.input_tx {
-            let _ = input_tx.send(RemoteDesktopInput::Close);
-        }
+        close_runtime_once(&mut self.input_tx);
         Task::ready(true)
     }
 }
