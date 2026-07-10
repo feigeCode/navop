@@ -1,9 +1,9 @@
 <div align="center">
   <p>
-    <img src="logo.svg" alt="OnetCli" width="120" />
+    <img src="resources/navop-icon.png" alt="Navop" width="120" />
   </p>
 
-  <h1>OnetCli</h1>
+  <h1>Navop</h1>
 
   <p><strong>Native all-in-one workspace for databases, SSH, SFTP, port forwarding, terminals, remote desktop, monitoring, and AI.</strong></p>
 
@@ -12,8 +12,8 @@
   </p>
 
   <p>
-    <a href="https://github.com/feigeCode/onetcli/releases"><img src="https://img.shields.io/github/downloads/feigeCode/onetcli/total?style=for-the-badge&color=blue" alt="Downloads" /></a>
-    <a href="https://github.com/feigeCode/onetcli/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/feigeCode/onetcli/ci.yml?branch=main&style=for-the-badge" alt="CI" /></a>
+    <a href="https://github.com/feigeCode/navop/releases"><img src="https://img.shields.io/github/downloads/feigeCode/navop/total?style=for-the-badge&color=blue" alt="Downloads" /></a>
+    <a href="https://github.com/feigeCode/navop/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/feigeCode/navop/ci.yml?branch=main&style=for-the-badge" alt="CI" /></a>
     <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20Supplementary-blue?style=for-the-badge" alt="License" /></a>
     <a href="https://qm.qq.com/cgi-bin/qm/qr?k=&group_code=860670605"><img src="https://img.shields.io/badge/QQ%20Group-860670605-EB1923?style=for-the-badge&logo=tencentqq&logoColor=white" alt="QQ Group 860670605" /></a>
     <a href="https://docs.qq.com/doc/DVEFFd2RnSnJLcFBD"><img src="https://img.shields.io/badge/WeChat%20Group-Join-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="Join WeChat Group" /></a>
@@ -45,14 +45,14 @@
   <p>
     <a href="README_CN.md">中文</a> ·
     <a href="#install">Install</a> ·
-    <a href="https://github.com/feigeCode/onetcli/releases/latest">Latest Release</a> ·
+    <a href="https://github.com/feigeCode/navop/releases/latest">Latest Release</a> ·
     <a href="#features">Features</a> ·
     <a href="#screenshots">Screenshots</a> ·
     <a href="CONTRIBUTING.md">Contributing</a>
   </p>
 
   <p>
-    <img src="app.png" alt="OnetCli overview" width="820" />
+    <img src="app.png" alt="Navop overview" width="820" />
   </p>
 </div>
 
@@ -69,13 +69,13 @@
 - **Settings and UI polish** — API key fields now support reveal/hide toggling, input components support local theme styling, and window/selector layouts have been refined.
 
 
-## Why OnetCli?
+## Why Navop?
 
 <table>
   <tr>
     <td width="50%">
       <h3>Native desktop, not a browser shell</h3>
-      <p>OnetCli is built with Rust and GPUI for a native desktop experience with GPU-accelerated rendering.</p>
+      <p>Navop is built with Rust and GPUI for a native desktop experience with GPU-accelerated rendering.</p>
     </td>
     <td width="50%">
       <h3>One workspace for daily ops</h3>
@@ -100,7 +100,7 @@
 
 Connect to MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse from a single interface. Browse schemas, tables, columns, indexes, foreign keys, procedures, functions, triggers, and sequences where supported.
 
-Beyond the built-in drivers, OnetCli ships an extension marketplace that adds database drivers for Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and a pure-Go Oracle driver that runs without Oracle Instant Client. Install the ones you need and they appear alongside the built-in connections.
+Beyond the built-in drivers, Navop ships an extension marketplace that adds database drivers for Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and a pure-Go Oracle driver that runs without Oracle Instant Client. Install the ones you need and they appear alongside the built-in connections.
 
 ### SQL Editor & Schema Tools
 
@@ -116,11 +116,11 @@ Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, 
 
 ### Port Forwarding
 
-Create reusable SSH port forwarding connections from existing SSH/SFTP servers. OnetCli supports local forwarding for services such as databases or internal HTTP endpoints, plus dynamic SOCKS tunnels for routing tools through a remote host.
+Create reusable SSH port forwarding connections from existing SSH/SFTP servers. Navop supports local forwarding for services such as databases or internal HTTP endpoints, plus dynamic SOCKS tunnels for routing tools through a remote host.
 
 ### Remote File Editing
 
-Edit remote files directly inside OnetCli with syntax highlighting and autocomplete. No need to open another editor or switch back and forth between terminal and file tools.
+Edit remote files directly inside Navop with syntax highlighting and autocomplete. No need to open another editor or switch back and forth between terminal and file tools.
 
 ### Remote Desktop (RDP & VNC)
 
@@ -132,15 +132,15 @@ Use built-in server monitoring and native rendered charts to inspect remote mach
 
 ### AI Assistant
 
-Chat with AI inside the app. OnetCli supports natural language to SQL, query explanation, BI-style data analysis, chart generation, streaming LLM responses, AI Agent workflows, and Function Calling for tool-based task execution. HTML code blocks can be opened in the browser or previewed in an in-app dialog, and generated terminal commands can be quickly pasted into a terminal session and run.
+Chat with AI inside the app. Navop supports natural language to SQL, query explanation, BI-style data analysis, chart generation, streaming LLM responses, AI Agent workflows, and Function Calling for tool-based task execution. HTML code blocks can be opened in the browser or previewed in an in-app dialog, and generated terminal commands can be quickly pasted into a terminal session and run.
 
 ### Performance & Rendering
 
-OnetCli uses native GPUI rendering and continues to tune heavy UI paths. Recent releases fixed font fallback/rendering issues that could cause garbled text, and reduced render-process blocking that could make connection lists and data lists stutter while scrolling.
+Navop uses native GPUI rendering and continues to tune heavy UI paths. Recent releases fixed font fallback/rendering issues that could cause garbled text, and reduced render-process blocking that could make connection lists and data lists stutter while scrolling.
 
 ### Sync, Security & i18n
 
-Sync connections and settings across devices with encrypted key storage based on AES-GCM and Ed25519. OnetCli supports light and dark themes, English, Simplified Chinese, and Traditional Chinese.
+Sync connections and settings across devices with encrypted key storage based on AES-GCM and Ed25519. Navop supports light and dark themes, English, Simplified Chinese, and Traditional Chinese.
 
 ## Screenshots
 
@@ -170,7 +170,7 @@ Sync connections and settings across devices with encrypted key storage based on
 
 ## Install
 
-Download the latest build from the [Releases](https://github.com/feigeCode/onetcli/releases/latest) page.
+Download the latest build from the [Releases](https://github.com/feigeCode/navop/releases/latest) page.
 
 Release artifacts are currently published by platform:
 
@@ -187,7 +187,7 @@ Checksums are published as `sha256sums.txt` in each release.
 If macOS blocks the app after installing the DMG with "Apple cannot check it for malicious software", run:
 
 ```bash
-sudo xattr -rd com.apple.quarantine /Applications/OnetCli.app
+sudo xattr -rd com.apple.quarantine /Applications/Navop.app
 ```
 
 ### Oracle Support
@@ -196,7 +196,7 @@ The built-in Oracle driver requires [Oracle Instant Client](https://www.oracle.c
 
 ## Getting Started
 
-1. Open OnetCli and create your first database connection.
+1. Open Navop and create your first database connection.
 2. Add an SSH host and open a remote terminal.
 3. Create a port forwarding connection from that SSH host when you need a local tunnel or SOCKS proxy.
 4. Open SFTP file management to browse remote directories or transfer files.
@@ -270,7 +270,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 <details>
 <summary><strong>Which databases are supported?</strong></summary>
 
-OnetCli has built-in database support for MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse, plus dedicated Redis and MongoDB views. The extension marketplace adds Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and a pure-Go Oracle driver, so domestic and specialty databases are covered alongside the mainstream ones.
+Navop has built-in database support for MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse, plus dedicated Redis and MongoDB views. The extension marketplace adds Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and a pure-Go Oracle driver, so domestic and specialty databases are covered alongside the mainstream ones.
 </details>
 
 <details>
@@ -280,26 +280,26 @@ Yes. The built-in Oracle driver requires Oracle Instant Client to be installed a
 </details>
 
 <details>
-<summary><strong>Where can I download OnetCli?</strong></summary>
+<summary><strong>Where can I download Navop?</strong></summary>
 
-Use the GitHub [Releases](https://github.com/feigeCode/onetcli/releases/latest) page. The current release workflow publishes macOS, Linux, and Windows artifacts with checksums.
+Use the GitHub [Releases](https://github.com/feigeCode/navop/releases/latest) page. The current release workflow publishes macOS, Linux, and Windows artifacts with checksums.
 </details>
 
 <details>
-<summary><strong>Is OnetCli free?</strong></summary>
+<summary><strong>Is Navop free?</strong></summary>
 
-All features are available without sponsorship. The source is licensed under Apache License 2.0, and distribution or product use is also subject to the OnetCli Supplementary License.
+All features are available without sponsorship. The source is licensed under Apache License 2.0, and distribution or product use is also subject to the Navop Supplementary License.
 </details>
 
 <details>
 <summary><strong>How do I report bugs or request features?</strong></summary>
 
-Open an issue on [GitHub Issues](https://github.com/feigeCode/onetcli/issues). For code changes, please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+Open an issue on [GitHub Issues](https://github.com/feigeCode/navop/issues). For code changes, please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 </details>
 
 ## Support
 
-OnetCli is maintained by one person over the long term. If it saves you time, you can support the project through donations, stars, bug reports, or focused pull requests.
+Navop is maintained by one person over the long term. If it saves you time, you can support the project through donations, stars, bug reports, or focused pull requests.
 
 ### Donation
 
@@ -320,7 +320,7 @@ ER diagram rendering is based on [ferrum-flow](https://github.com/tu6ge/ferrum-f
 
 Licensed under [Apache License 2.0](LICENSE-APACHE).
 
-The distribution and use of the OnetCli application are additionally subject to the [OnetCli Supplementary License](ONETCLI_LICENSE), which adds the following restrictions on top of Apache 2.0:
+The distribution and use of the Navop application are additionally subject to the [Navop Supplementary License](NAVOP_LICENSE), which adds the following restrictions on top of Apache 2.0:
 
 - No redistribution, resale, or repackaging as a standalone product
 - No creating competing products or services based on this software
@@ -330,10 +330,10 @@ For licensing inquiries, contact xiaofei.hf@gmail.com.
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=feigeCode%2Fonetcli&type=date&logscale=&legend=top-left">
+<a href="https://www.star-history.com/?repos=feigeCode%2Fnavop&type=date&logscale=&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=feigeCode/onetcli&type=date&theme=dark&logscale&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=feigeCode/onetcli&type=date&logscale&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=feigeCode/onetcli&type=date&logscale&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=feigeCode/navop&type=date&theme=dark&logscale&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=feigeCode/navop&type=date&logscale&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=feigeCode/navop&type=date&logscale&legend=top-left" />
  </picture>
 </a>

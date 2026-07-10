@@ -1,8 +1,8 @@
 # Donate
 
-If OnetCli helps your daily database or remote operations work, you can support the project with a small donation. Donations help cover maintenance time, cloud services, infrastructure, and continued feature work.
+If Navop helps your daily database or remote operations work, you can support the project with a small donation. Donations help cover maintenance time, cloud services, infrastructure, and continued feature work.
 
-Donation is optional. All OnetCli features remain available whether you donate or not.
+Donation is optional. All Navop features remain available whether you donate or not.
 
 ## Donation Methods
 
@@ -28,7 +28,7 @@ Donation is optional. All OnetCli features remain available whether you donate o
 
 - Star the repository
 - Report bugs or request features
-- Share OnetCli with people who may need it
+- Share Navop with people who may need it
 - Submit focused pull requests
 
-Project URL: <https://github.com/feigeCode/onetcli>
+Project URL: <https://github.com/feigeCode/navop>
