@@ -1998,13 +1998,6 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        tracing::debug!(
-            target: "terminal.history_prompt",
-            reason = "terminal_event",
-            event = ?event,
-            reset = should_reset_history_prompt_for_terminal_event(event),
-            "terminal model event observed"
-        );
         match event {
             TerminalModelEvent::InputStart => {
                 self.shell_prompt_input_active = true;

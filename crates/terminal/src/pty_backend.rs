@@ -73,11 +73,6 @@ fn terminal_events_from_osc_chunk(data: &[u8]) -> Vec<TerminalEvent> {
 
 fn forward_osc_events(data: &[u8], event_tx: &UnboundedSender<TerminalEvent>) {
     for event in terminal_events_from_osc_chunk(data) {
-        tracing::debug!(
-            target: "terminal.history_prompt.osc",
-            event = ?event,
-            "local pty observed osc event"
-        );
         let _ = event_tx.send(event);
     }
 }

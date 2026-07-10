@@ -1,5 +1,4 @@
 use std::rc::Rc;
-use std::sync::atomic::AtomicUsize;
 
 use anyhow::Result;
 use db::plugin::SqlCompletionInfo;
@@ -7,8 +6,8 @@ use db::sql_editor::sql_context_inferrer::{ContextInferrer, SqlContext as Inferr
 use db::sql_editor::sql_symbol_table::SymbolTable;
 use db::sql_editor::sql_tokenizer::SqlTokenizer;
 use gpui::{
-    App, AppContext, Context, Entity, Font, IntoElement, Render, Styled as _, Subscription, Task,
-    Window,
+    App, AppContext, Context, Entity, Font, IntoElement, Render, Styled as _,
+    Subscription, Task, Window,
 };
 use gpui_component::input::{
     CodeActionProvider, CompletionProvider, HoverProvider, Input, InputContextMenuItem, InputEvent,
@@ -20,13 +19,9 @@ use lsp_types::{
     InlineCompletionContext, InlineCompletionItem, InlineCompletionResponse, InsertReplaceEdit,
     InsertTextFormat, Range as LspRange,
 };
-use one_core::settings::{AppSettings, installed_grid_monospace_font};
-use one_core::text_diag::{self, TextSignature};
+use one_core::settings::{installed_grid_monospace_font, AppSettings};
 use rust_i18n::t;
 use sum_tree::Bias;
-
-static SQL_EDITOR_INPUT_DIAG_SAMPLES: AtomicUsize = AtomicUsize::new(0);
-static SQL_EDITOR_RENDER_DIAG_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 
 /// Simple schema hints to improve autocomplete suggestions.
 #[derive(Clone, Default)]
@@ -1397,18 +1392,12 @@ impl SqlEditor {
             editor
         });
 
-        let editor_for_diag = editor.clone();
-        let _subscriptions = vec![cx.subscribe_in(
-            &editor,
-            window,
-            move |_, _, evt: &InputEvent, _window, cx| {
-                if matches!(evt, InputEvent::Change) && text_diag::enabled() {
-                    let text = editor_for_diag.read(cx).text().to_string();
-                    SqlEditor::log_sql_input_diag(&text, cx);
-                }
-                cx.notify()
-            },
-        )];
+        let _subscriptions =
+            vec![
+                cx.subscribe_in(&editor, window, move |_, _, _: &InputEvent, _window, cx| {
+                    cx.notify()
+                }),
+            ];
 
         Self {
             editor,
@@ -1432,50 +1421,6 @@ impl SqlEditor {
             font: font.clone(),
         });
         font
-    }
-
-    fn log_sql_input_diag(text: &str, cx: &App) {
-        if !text_diag::contains_non_ascii(text) {
-            return;
-        }
-        let Some(sample) = text_diag::should_sample(&SQL_EDITOR_INPUT_DIAG_SAMPLES, 32) else {
-            return;
-        };
-
-        let settings = AppSettings::global(cx);
-        tracing::info!(
-            target: "text_render_diag",
-            sample,
-            app_font = %settings.font_family,
-            sql_editor_font = %settings.sql_editor_font_family,
-            table_preview_font = %settings.table_preview_font_family,
-            terminal_font = %settings.terminal_font_family,
-            signature = %TextSignature::new(text),
-            "sql editor non-ascii input"
-        );
-    }
-
-    fn log_sql_render_diag(&self, text: &str, font: &Font, cx: &App) {
-        if !text_diag::contains_non_ascii(text) {
-            return;
-        }
-        let Some(sample) = text_diag::should_sample(&SQL_EDITOR_RENDER_DIAG_SAMPLES, 32) else {
-            return;
-        };
-
-        let settings = AppSettings::global(cx);
-        tracing::info!(
-            target: "text_render_diag",
-            sample,
-            app_font = %settings.font_family,
-            sql_editor_font = %settings.sql_editor_font_family,
-            table_preview_font = %settings.table_preview_font_family,
-            terminal_font = %settings.terminal_font_family,
-            resolved_font = %font.family,
-            fallbacks = %text_diag::font_fallbacks(font),
-            signature = %TextSignature::new(text),
-            "sql editor non-ascii render"
-        );
     }
 
     /// Set database-specific completion information from plugin
@@ -1600,10 +1545,6 @@ impl SqlEditor {
 impl Render for SqlEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let font = self.editor_font(cx);
-        if text_diag::enabled() {
-            let text = self.editor.read(cx).text().to_string();
-            self.log_sql_render_diag(&text, &font, cx);
-        }
         Input::new(&self.editor).font(font).size_full()
     }
 }
@@ -1630,6 +1571,8 @@ mod tests {
 
         assert!(editor_font.contains("cache.requested_family == font_family"));
         assert!(editor_font.contains("cx.text_system().all_font_names()"));
+        assert!(editor_font.contains("installed_grid_monospace_font("));
+        assert!(!editor_font.contains("installed_business_grid_monospace_font("));
         assert!(!editor_font.contains("cache.installed_font_names == installed_font_names"));
         assert!(!editor_font.contains("installed_font_names,"));
         assert!(!render.contains("cx.text_system().all_font_names()"));

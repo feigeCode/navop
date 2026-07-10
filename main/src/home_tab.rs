@@ -4357,7 +4357,7 @@ impl HomePage {
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .whitespace_nowrap()
-                                            .flex_shrink()
+                                            .flex_shrink(1.0)
                                             .min_w_0()
                                             .tooltip(move |window, cx| {
                                                 Tooltip::new(name_tooltip.clone()).build(window, cx)

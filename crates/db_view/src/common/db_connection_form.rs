@@ -2512,7 +2512,7 @@ impl DbConnectionForm {
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .whitespace_nowrap()
-                                            .flex_shrink()
+                                            .flex_shrink(1.0)
                                             .min_w_0()
                                             .when(is_checking, |div| {
                                                 div.text_color(cx.theme().muted_foreground).child(

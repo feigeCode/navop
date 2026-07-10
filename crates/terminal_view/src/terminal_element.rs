@@ -6,24 +6,22 @@
 //! - Selection and search highlighting
 //! - Theme colors support
 
-use crate::TerminalTheme;
 use crate::addon::{AddonManager, CellDecoration, DecorationSpan};
 use crate::view::block_selection::BlockSelectionBounds;
+use crate::TerminalTheme;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Colors;
-use alacritty_terminal::term::{RenderableContent, Term, TermDamage, TermMode};
+use alacritty_terminal::term::{RenderableContent, Term, TermDamage};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
 use gpui::*;
-use one_core::settings::{AppSettings, default_grid_font_fallback_families};
-use one_core::text_diag::{self, TextSignature};
+use one_core::settings::default_grid_font_fallback_families;
 use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::{Arc, atomic::AtomicUsize};
+use std::sync::Arc;
 use terminal::pty_backend::GpuiEventProxy;
 
-static TERMINAL_CJK_RUN_DIAG_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 
 /// 预缓存的字体变体，避免每帧重复创建 Font 对象
 #[derive(Clone)]
@@ -156,42 +154,6 @@ fn terminal_text_font_role(ch: char) -> TextRunFontRole {
     } else {
         TextRunFontRole::Primary
     }
-}
-
-fn log_terminal_cjk_run_diag(
-    line_idx: usize,
-    run: &CachedTextRun,
-    font: &Font,
-    terminal_font_family: &SharedString,
-    cx: &App,
-) {
-    if run.font_role != TextRunFontRole::CjkFallback || !text_diag::contains_non_ascii(&run.text) {
-        return;
-    }
-    let Some(sample) = text_diag::should_sample(&TERMINAL_CJK_RUN_DIAG_SAMPLES, 64) else {
-        return;
-    };
-
-    let settings = AppSettings::global(cx);
-    tracing::info!(
-        target: "text_render_diag",
-        sample,
-        line = line_idx,
-        start_col = run.start_col,
-        columns = run.column_count,
-        cell_width_cols = run.cell_width_cols,
-        bold = run.bold,
-        italic = run.italic,
-        app_font = %settings.font_family,
-        sql_editor_font = %settings.sql_editor_font_family,
-        table_preview_font = %settings.table_preview_font_family,
-        terminal_font = %settings.terminal_font_family,
-        terminal_element_font = %terminal_font_family,
-        resolved_font = %font.family,
-        fallbacks = %text_diag::font_fallbacks(font),
-        signature = %TextSignature::new(&run.text),
-        "terminal cjk run render"
-    );
 }
 
 #[inline]
@@ -521,14 +483,6 @@ impl RenderCache {
 
         // Handle resize
         if num_lines != self.num_lines || num_cols != self.num_cols {
-            tracing::info!(
-                target: "terminal_residue",
-                old_lines = self.num_lines,
-                old_cols = self.num_cols,
-                new_lines = num_lines,
-                new_cols = num_cols,
-                "RenderCache::resize"
-            );
             self.resize(num_lines, num_cols);
         }
 
@@ -565,15 +519,6 @@ impl RenderCache {
         // 主题颜色变化或存在装饰时保守全量重建。
         let has_decorations = !self.decoration_manager.decorations_by_line.is_empty();
         if fg_changed || bg_changed || colors_changed || has_decorations {
-            tracing::debug!(
-                target: "terminal_residue",
-                fg_changed,
-                bg_changed,
-                colors_changed,
-                has_decorations,
-                num_lines,
-                "rebuild_all (forced by theme/decoration)"
-            );
             self.rebuild_all_and_update_state(term, block_selection);
             return;
         }
@@ -581,23 +526,10 @@ impl RenderCache {
         let mut dirty_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
         match damage {
             DamageSnapshot::Full => {
-                tracing::debug!(
-                    target: "terminal_residue",
-                    num_lines,
-                    "rebuild_all (TermDamage::Full)"
-                );
                 self.rebuild_all_and_update_state(term, block_selection);
                 return;
             }
             DamageSnapshot::Partial(lines) => {
-                if !lines.is_empty() {
-                    tracing::debug!(
-                        target: "terminal_residue",
-                        damaged = ?lines,
-                        num_lines,
-                        "Partial damage"
-                    );
-                }
                 dirty_lines.extend(lines);
             }
         }
@@ -729,34 +661,6 @@ impl RenderCache {
         // Update cursor from a fresh content
         let content = term.renderable_content();
         self.update_cursor_from_content(&content);
-
-        // 调试日志:统计 cache 重建后各行的内容分布。
-        // 关注底部最后 8 行,若 TUI 仅画了上半部,底部 8 行的 text/bg 应该为空。
-        let total = self.lines.len();
-        let non_empty_lines = self
-            .lines
-            .iter()
-            .filter(|l| !l.text_runs.is_empty() || !l.background_rects.is_empty())
-            .count();
-        let mut tail_summary = Vec::new();
-        let tail_start = total.saturating_sub(8);
-        for idx in tail_start..total {
-            let l = &self.lines[idx];
-            tail_summary.push(format!(
-                "[{idx}] bg={} text={} chars={}",
-                l.background_rects.len(),
-                l.text_runs.len(),
-                l.text_runs.iter().map(|r| r.column_count).sum::<usize>(),
-            ));
-        }
-        tracing::debug!(
-            target: "terminal_residue",
-            total_lines = total,
-            non_empty_lines,
-            in_alt_screen = content.mode.contains(TermMode::ALT_SCREEN),
-            tail = tail_summary.join(" | "),
-            "rebuild_all done"
-        );
     }
 
     /// Rebuild specified lines
@@ -1391,16 +1295,6 @@ impl Element for TerminalElementImpl {
 
         let intersection = content_mask.intersect(&terminal_bounds);
         if intersection.size.height <= px(0.) || intersection.size.width <= px(0.) {
-            tracing::debug!(
-                target: "terminal_residue",
-                lines = self.lines.len(),
-                num_cols = self.num_cols,
-                cell_w = ?tb.cell_width,
-                cell_h = ?tb.cell_height,
-                origin = ?tb.origin,
-                content_mask = ?content_mask,
-                "paint skipped (no intersection)"
-            );
             return; // 完全不可见，跳过渲染
         }
 
@@ -1417,26 +1311,6 @@ impl Element for TerminalElementImpl {
             / tb.cell_height)
             .ceil() as usize;
         let visible_end = last_visible.min(self.lines.len());
-
-        // 仅在统计行数 / 像素差异时记录一次,避免每帧爆量
-        let cm_h: f32 = content_mask.size.height.into();
-        let tb_h: f32 = terminal_height.into();
-        if (cm_h - tb_h).abs() > 0.5 || self.lines.len() < visible_end {
-            tracing::debug!(
-                target: "terminal_residue",
-                lines = self.lines.len(),
-                num_cols = self.num_cols,
-                cell_w = ?tb.cell_width,
-                cell_h = ?tb.cell_height,
-                origin = ?tb.origin,
-                terminal_bounds_h = ?terminal_height,
-                content_mask = ?content_mask,
-                first_visible,
-                visible_end,
-                bg_alpha = self.custom_background.a,
-                "paint metrics"
-            );
-        }
 
         // Paint backgrounds (only visible lines)
         for line_idx in first_visible..visible_end {
@@ -1474,7 +1348,6 @@ impl Element for TerminalElementImpl {
             let line = &self.lines[line_idx];
             for run in &line.text_runs {
                 let font = fonts.get(run.font_role, run.bold, run.italic);
-                log_terminal_cjk_run_diag(line_idx, run, font, &self.font_family, cx);
 
                 let underline = if run.underline {
                     Some(UnderlineStyle {
@@ -1787,8 +1660,8 @@ fn indexed_color_to_hsla(idx: u8) -> Hsla {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlockRect, CellData, RenderCache, TextRunFontRole, block_element_geometry,
-        terminal_text_font_role,
+        block_element_geometry, terminal_text_font_role, BlockRect, CellData, RenderCache,
+        TextRunFontRole,
     };
     use alacritty_terminal::term::cell::Flags;
     use alacritty_terminal::term::color::Colors;
@@ -1875,6 +1748,23 @@ mod tests {
         assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('协'));
         assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('，'));
         assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('あ'));
+    }
+
+    #[test]
+    fn terminal_line_cache_preserves_unicode_format_characters() {
+        let mut cache = RenderCache::new(1, 8, Colors::default());
+        cache.build_line_cache(
+            0,
+            vec![
+                plain_cell(0, 'A', Flags::empty()),
+                plain_cell(1, '\u{200d}', Flags::empty()),
+                plain_cell(2, 'B', Flags::empty()),
+            ],
+        );
+
+        let runs = &cache.lines[0].text_runs;
+        assert_eq!(1, runs.len());
+        assert_eq!("A\u{200d}B", runs[0].text);
     }
 
     #[test]

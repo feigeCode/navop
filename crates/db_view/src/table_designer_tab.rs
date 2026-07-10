@@ -2892,7 +2892,7 @@ impl Render for ColumnsEditor {
                                     .collect::<Vec<_>>()
                             })
                         })
-                        .flex_grow()
+                        .flex_grow(1.0)
                         .size_full()
                         .track_scroll(&scroll_handle)
                         .with_sizing_behavior(ListSizingBehavior::Auto)

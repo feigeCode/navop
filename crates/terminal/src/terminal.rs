@@ -1715,11 +1715,6 @@ impl Terminal {
     }
 
     fn handle_terminal_event(&mut self, event: TerminalEvent, cx: &mut Context<Self>) {
-        tracing::debug!(
-            target: "terminal.history_prompt.osc",
-            event = ?event,
-            "terminal model handling terminal event"
-        );
         match event {
             TerminalEvent::Wakeup => {
                 cx.emit(TerminalModelEvent::Wakeup);

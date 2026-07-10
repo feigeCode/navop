@@ -324,11 +324,6 @@ impl SshBackend {
                                 let osc_events = extract_osc_events(&data);
                                 task_exec_capture.record_chunk(&data, &osc_events);
                                 for osc_event in &osc_events {
-                                    tracing::debug!(
-                                        target: "terminal.history_prompt.osc",
-                                        event = ?osc_event,
-                                        "ssh backend observed osc event"
-                                    );
                                     match osc_event {
                                         OscEvent::WorkingDirChanged(path) => {
                                             let _ = event_tx.send(TerminalEvent::WorkingDirChanged(path.clone()));
