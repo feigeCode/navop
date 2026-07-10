@@ -11,9 +11,13 @@ use std::sync::{Arc, RwLock};
 use tracing::{error, info};
 
 mod locale;
+mod remote_file_editor;
 
 pub use locale::{
     LOCALE_EN, LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, effective_locale_for_setting,
+};
+pub use remote_file_editor::{
+    RemoteFileEditorOverride, RemoteFileEditorUserSettings, RemoteFileOpenMode,
 };
 
 // ============================================================================
@@ -573,6 +577,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub personal_sync: PersonalSyncSettings,
     #[serde(default)]
+    pub remote_file_editor: RemoteFileEditorUserSettings,
+    #[serde(default)]
     pub database_open_mode: DatabaseOpenMode,
     #[serde(default)]
     pub large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode,
@@ -855,6 +861,7 @@ impl Default for AppSettings {
             tool_exposure: ToolExposureSettings::default(),
             ai_chat: AiChatSettings::default(),
             personal_sync: PersonalSyncSettings::default(),
+            remote_file_editor: RemoteFileEditorUserSettings::default(),
             database_open_mode: DatabaseOpenMode::default(),
             large_text_cell_editor_open_mode: LargeTextCellEditorOpenMode::default(),
             startup_default_page: StartupDefaultPage::default(),
@@ -1030,11 +1037,52 @@ mod tests {
 
     use super::{
         AppSettings, CustomFont, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, McpPermissionMode,
-        McpServerMode, PersonalSyncBackendKind, StartupDefaultPage, SyncProvider,
-        default_grid_font_fallback_families, default_grid_monospace_font_family,
+        McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage,
+        SyncProvider, default_grid_font_fallback_families, default_grid_monospace_font_family,
         grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
         resolve_installed_grid_monospace_font_family,
     };
+
+    #[test]
+    fn remote_file_editor_settings_default_to_builtin_with_conflict_check() {
+        let settings = AppSettings::default();
+
+        assert_eq!(
+            RemoteFileOpenMode::BuiltIn,
+            settings.remote_file_editor.open_mode
+        );
+        assert!(
+            settings
+                .remote_file_editor
+                .check_remote_modified_before_upload
+        );
+        assert!(
+            settings
+                .remote_file_editor
+                .default_external_editor
+                .is_none()
+        );
+        assert!(settings.remote_file_editor.overrides.is_empty());
+    }
+
+    #[test]
+    fn app_settings_deserializes_remote_file_editor_defaults() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark"
+        }))
+        .expect("legacy settings should deserialize");
+
+        assert_eq!(
+            RemoteFileOpenMode::BuiltIn,
+            settings.remote_file_editor.open_mode
+        );
+        assert!(
+            settings
+                .remote_file_editor
+                .check_remote_modified_before_upload
+        );
+    }
 
     #[test]
     fn large_text_editor_open_mode_defaults_to_sidebar_preview() {

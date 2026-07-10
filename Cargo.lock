@@ -9855,11 +9855,16 @@ name = "remote_file_editor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "extension-runtime",
+ "futures",
  "gpui",
  "gpui-component",
+ "notify",
  "one-core",
+ "process-util",
  "rust-i18n",
  "sftp",
+ "smol",
  "tokio",
  "tracing",
 ]

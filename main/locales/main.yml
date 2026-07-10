@@ -1105,6 +1105,44 @@ Settings:
         zh-CN: 使用鼠标中键粘贴剪贴板内容
         zh-HK: 使用滑鼠中鍵貼上剪貼簿內容
 
+    RemoteFileEditor:
+      group_title:
+        en: Remote File Editor
+        zh-CN: 远程文件编辑器
+        zh-HK: 遠端檔案編輯器
+      default_editor:
+        en: Default External Editor
+        zh-CN: 默认外部编辑器
+        zh-HK: 預設外部編輯器
+      default_editor_desc:
+        en: Put this installed editor first in matching Edit With menus
+        zh-CN: 在匹配的“使用外部编辑器编辑”菜单中优先显示此编辑器
+        zh-HK: 在匹配的「使用外部編輯器編輯」選單中優先顯示此編輯器
+      none:
+        en: No preference
+        zh-CN: 无偏好
+        zh-HK: 無偏好
+      conflict_check:
+        en: Check Remote Changes Before Upload
+        zh-CN: 上传前检查远程文件变更
+        zh-HK: 上傳前檢查遠端檔案變更
+      conflict_check_desc:
+        en: Prompt before overwriting when the remote file changed after it was opened
+        zh-CN: 当远程文件在打开后发生变化时，覆盖前进行提示
+        zh-HK: 當遠端檔案在打開後發生變化時，覆蓋前進行提示
+      choose_program:
+        en: Choose Executable
+        zh-CN: 选择可执行文件
+        zh-HK: 選擇可執行檔
+      select_program:
+        en: Select the external editor executable
+        zh-CN: 选择外部编辑器可执行文件
+        zh-HK: 選擇外部編輯器可執行檔
+      program_override_desc:
+        en: Override the executable path contributed by this extension on this machine
+        zh-CN: 覆盖此扩展在当前设备上提供的可执行文件路径
+        zh-HK: 覆蓋此擴充套件在目前裝置上提供的可執行檔路徑
+
     # 数据库设置
     Database:
       group_title:

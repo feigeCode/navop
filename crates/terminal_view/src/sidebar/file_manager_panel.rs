@@ -35,7 +35,10 @@ use one_core::storage::{
     GlobalStorageState, SftpFavoritePathRepository, normalize_sftp_favorite_path,
     sftp_favorite_connection_key,
 };
-use remote_file_editor::open_remote_file_editor;
+use remote_file_editor::{
+    ExternalEditorOpenRequest, external_editor_menu_label, external_editors_for_file,
+    open_remote_file_editor, open_remote_file_external_editor,
+};
 use remote_image_preview::{
     clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
 };
@@ -3288,6 +3291,31 @@ impl FileManagerPanel {
         open_remote_file_editor(full_path, client, cx);
     }
 
+    fn open_remote_external_editor(
+        &self,
+        selection: (String, String),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (full_path, editor_key) = selection;
+        let Some(client) = self.sftp_client.clone() else {
+            window.push_notification(
+                Notification::error("SFTP client is not connected".to_string()),
+                cx,
+            );
+            return;
+        };
+        open_remote_file_external_editor(
+            ExternalEditorOpenRequest {
+                remote_path: full_path,
+                editor_key,
+                client,
+            },
+            window,
+            cx,
+        );
+    }
+
     // ── 渲染方法 ──────────────────────────────────────────────
 
     /// 渲染工具栏
@@ -4030,7 +4058,7 @@ impl FileManagerPanel {
         is_dir: bool,
         view: &Entity<Self>,
         window: &mut Window,
-        _cx: &mut Context<PopupMenu>,
+        cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
         let path_for_cd = full_path.to_string();
         let path_for_copy = full_path.to_string();
@@ -4092,6 +4120,26 @@ impl FileManagerPanel {
                         this.open_remote_file(path_for_edit.clone(), window, cx);
                     })),
             );
+
+            for editor in external_editors_for_file(name, cx) {
+                let view_external = view.clone();
+                let path_for_external = full_path.to_string();
+                let editor_key = editor.editor_key;
+                menu = menu.item(
+                    PopupMenuItem::new(external_editor_menu_label(&editor.display_name))
+                        .icon(IconName::Edit)
+                        .on_click(window.listener_for(
+                            &view_external,
+                            move |this, _, window, cx| {
+                                this.open_remote_external_editor(
+                                    (path_for_external.clone(), editor_key.clone()),
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )),
+                );
+            }
 
             if archive_kind_for_name(name).is_some() {
                 let view_extract = view.clone();

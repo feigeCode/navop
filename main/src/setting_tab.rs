@@ -7,6 +7,7 @@ use crate::auth::get_auth_service;
 use crate::license::{get_license_service, offline_license_public_key};
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::mcp_settings::mcp_setting_group;
+use crate::settings::remote_file_editor_settings::remote_file_editor_setting_group;
 use crate::settings::tool_exposure_settings::{
     agent_tool_exposure_setting_group, mcp_tool_exposure_setting_group,
 };
@@ -907,6 +908,7 @@ impl SettingsPanel {
                             )
                             .description(t!("Settings.General.Log.file_path_desc").to_string()),
                         ),
+                    remote_file_editor_setting_group(&default_settings.remote_file_editor, cx),
                     SettingGroup::new()
                         .title(t!("Settings.General.Update.group_title"))
                         .items(vec![

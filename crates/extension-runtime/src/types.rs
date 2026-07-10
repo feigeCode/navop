@@ -13,6 +13,24 @@ use serde_json::Value;
 use crate::extension::manifest::{CommandContrib, WasmRuntimeKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredRemoteFileEditorContribution {
+    pub extension_id: String,
+    pub id: String,
+    pub editor_key: String,
+    pub display_name: String,
+    pub platforms: Vec<String>,
+    pub file_masks: Vec<String>,
+    pub priority: i32,
+    pub command: RegisteredRemoteFileEditorCommand,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredRemoteFileEditorCommand {
+    pub program_candidates: Vec<String>,
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredKeybindingContribution {
     pub extension_id: String,
     pub command: String,
@@ -75,6 +93,8 @@ pub enum ExtensionRuntimeError {
     },
     #[error("command `{command_id}` is not a component wasm command")]
     UnsupportedCommand { command_id: String },
+    #[error("invalid remote file editor `{editor_id}`: {reason}")]
+    InvalidRemoteFileEditor { editor_id: String, reason: String },
 }
 
 pub(super) fn runtime_key(extension_id: &str, runtime_id: &str) -> String {

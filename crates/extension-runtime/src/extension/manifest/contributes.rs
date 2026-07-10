@@ -25,6 +25,8 @@ pub struct ContributesManifest {
     pub keybindings: Vec<KeybindingContrib>,
     #[serde(default, rename = "htmlPreviewTransforms")]
     pub html_preview_transforms: Vec<HtmlPreviewTransformContrib>,
+    #[serde(default, rename = "remoteFileEditors")]
+    pub remote_file_editors: Vec<RemoteFileEditorContrib>,
     #[serde(default)]
     pub views: Vec<Value>,
     #[serde(default)]
@@ -58,6 +60,7 @@ impl ContributesManifest {
             + self.toolbars.len()
             + self.keybindings.len()
             + self.html_preview_transforms.len()
+            + self.remote_file_editors.len()
             + self.views.len()
             + self.tasks.len()
             + self.data_types.len()
@@ -69,6 +72,28 @@ impl ContributesManifest {
             + self.themes.len()
             + self.icons.len()
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RemoteFileEditorContrib {
+    pub id: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    #[serde(default)]
+    pub platforms: Vec<String>,
+    #[serde(default, rename = "fileMasks")]
+    pub file_masks: Vec<String>,
+    #[serde(default)]
+    pub priority: i32,
+    pub command: RemoteFileEditorCommandContrib,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RemoteFileEditorCommandContrib {
+    #[serde(default, rename = "programCandidates")]
+    pub program_candidates: Vec<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
