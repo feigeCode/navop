@@ -3,13 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-SOURCE_SVG="${1:-${PROJECT_DIR}/logo.svg}"
-OUTPUT_ICNS="${2:-${PROJECT_DIR}/resources/macos/OnetCli.icns}"
+SOURCE_PNG="${1:-${PROJECT_DIR}/resources/navop-icon.png}"
+OUTPUT_ICNS="${2:-${PROJECT_DIR}/resources/macos/Navop.icns}"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/onetcli-icon.XXXXXX")"
-ICONSET_DIR="${WORK_DIR}/OnetCli.iconset"
-MASTER_PNG="${WORK_DIR}/OnetCli-master.png"
-SOURCE_ICONSET_DIR="${WORK_DIR}/Source.iconset"
-FALLBACK_ICNS="${PROJECT_DIR}/resources/macos/OnetCli.icns"
+ICONSET_DIR="${WORK_DIR}/Navop.iconset"
 SWIFT_SCRIPT="${WORK_DIR}/generate-iconset.swift"
 TARGET_MASTER_SIZE=1024
 TARGET_PADDING=16
@@ -19,30 +16,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ ! -f "$SOURCE_SVG" ]; then
-    echo "Error: SVG source not found at ${SOURCE_SVG}"
+if [ ! -f "$SOURCE_PNG" ]; then
+    echo "Error: PNG source not found at ${SOURCE_PNG}"
     exit 1
 fi
 
 mkdir -p "$ICONSET_DIR"
 mkdir -p "$(dirname "$OUTPUT_ICNS")"
 
-echo "Rendering macOS icon from ${SOURCE_SVG}..."
-if ! sips -s format png "$SOURCE_SVG" --out "$MASTER_PNG" >/dev/null 2>&1; then
-    FALLBACK_SOURCE="$OUTPUT_ICNS"
-    if [ ! -f "$FALLBACK_SOURCE" ] && [ -f "$FALLBACK_ICNS" ]; then
-        FALLBACK_SOURCE="$FALLBACK_ICNS"
-    fi
-
-    if [ ! -f "$FALLBACK_SOURCE" ]; then
-        echo "Error: failed to render ${SOURCE_SVG}, and no fallback .icns found"
-        exit 1
-    fi
-
-    echo "Warning: sips could not render SVG, falling back to ${FALLBACK_SOURCE}"
-    iconutil -c iconset "$FALLBACK_SOURCE" -o "$SOURCE_ICONSET_DIR"
-    cp "${SOURCE_ICONSET_DIR}/icon_512x512@2x.png" "$MASTER_PNG"
-fi
+echo "Generating macOS icon from ${SOURCE_PNG}..."
 
 cat > "$SWIFT_SCRIPT" <<'SWIFT'
 import CoreGraphics
@@ -217,7 +199,7 @@ for (size, name) in iconOutputs {
 SWIFT
 
 CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-${TMPDIR:-/tmp}/clang-cache}" \
-    swift "$SWIFT_SCRIPT" "$MASTER_PNG" "$ICONSET_DIR" "$TARGET_MASTER_SIZE" "$TARGET_PADDING"
+    swift "$SWIFT_SCRIPT" "$SOURCE_PNG" "$ICONSET_DIR" "$TARGET_MASTER_SIZE" "$TARGET_PADDING"
 
 iconutil -c icns "$ICONSET_DIR" -o "$OUTPUT_ICNS"
 

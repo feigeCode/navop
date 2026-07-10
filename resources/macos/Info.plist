@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>OnetCli</string>
+    <string>Navop</string>
     <key>CFBundleDisplayName</key>
-    <string>OnetCli</string>
+    <string>Navop</string>
     <key>CFBundleIdentifier</key>
     <string>com.onetcli.app</string>
     <key>CFBundleVersion</key>
@@ -15,7 +15,7 @@
     <key>CFBundleExecutable</key>
     <string>onetcli</string>
     <key>CFBundleIconFile</key>
-    <string>OnetCli</string>
+    <string>Navop</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleSignature</key>

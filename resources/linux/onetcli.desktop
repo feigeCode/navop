@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=OnetCli
-Comment=One Net Client - Database, SSH, Terminal, AI Tools
+Name=Navop
+Comment=Navop - Database, SSH, Terminal, AI Tools
 Exec=onetcli
 Icon=onetcli
 Type=Application

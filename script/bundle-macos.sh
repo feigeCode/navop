@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_NAME="OnetCli"
+APP_NAME="Navop"
 BINARY_NAME="onetcli"
 TARGET="${1:-aarch64-apple-darwin}"
 VERSION="${ONETCLI_VERSION:-0.1.0}"
@@ -32,13 +32,13 @@ sed "s/\${ONETCLI_VERSION}/${VERSION}/g" \
     "${PROJECT_DIR}/resources/macos/Info.plist" \
     > "$APP_DIR/Contents/Info.plist"
 
-# Regenerate macOS icon from logo.svg before bundling to avoid stale .icns assets.
+# Regenerate the macOS icon from the transparent PNG master before bundling.
 bash "${PROJECT_DIR}/script/generate-macos-icon.sh"
 
 # Copy icon
-ICNS_PATH="${PROJECT_DIR}/resources/macos/OnetCli.icns"
+ICNS_PATH="${PROJECT_DIR}/resources/macos/Navop.icns"
 if [ -f "$ICNS_PATH" ]; then
-    cp "$ICNS_PATH" "$APP_DIR/Contents/Resources/OnetCli.icns"
+    cp "$ICNS_PATH" "$APP_DIR/Contents/Resources/Navop.icns"
 else
     echo "Warning: Icon file not found at ${ICNS_PATH}"
 fi

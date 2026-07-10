@@ -6,8 +6,8 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET="retry-test-target"
 FAKE_BIN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/onetcli-dmg-test.XXXXXX")"
 TEST_PROJECT_DIR="${FAKE_BIN_DIR}/project"
-APP_DIR="${TEST_PROJECT_DIR}/target/OnetCli.app"
-DMG_PATH="${TEST_PROJECT_DIR}/onetcli-${TARGET}.dmg"
+APP_DIR="${TEST_PROJECT_DIR}/target/Navop.app"
+DMG_PATH="${TEST_PROJECT_DIR}/navop-${TARGET}.dmg"
 ATTEMPTS_FILE="${FAKE_BIN_DIR}/attempts"
 
 cleanup() {
