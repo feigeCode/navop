@@ -667,20 +667,23 @@ mod tests {
         fn exec_in_terminal(
             &self,
             request: TerminalExecRequest,
-        ) -> anyhow::Result<TerminalExecResult> {
+            _cancellation: public_mcp::registry::TerminalExecCancellation,
+        ) -> public_mcp::registry::TerminalExecFuture {
             let suffix = if request.submit { "\n" } else { "" };
             self.inserted
                 .lock()
                 .expect("inserted lock")
                 .push(format!("{}{suffix}", request.command));
-            Ok(TerminalExecResult {
-                target: request.target,
-                command: request.command,
-                submitted: request.submit,
-                completion: TerminalExecCompletion::SubmittedOnly,
-                exit_code: None,
-                output: String::new(),
-                duration_ms: 0,
+            Box::pin(async move {
+                Ok(TerminalExecResult {
+                    target: request.target,
+                    command: request.command,
+                    submitted: request.submit,
+                    completion: TerminalExecCompletion::SubmittedOnly,
+                    exit_code: None,
+                    output: String::new(),
+                    duration_ms: 0,
+                })
             })
         }
     }

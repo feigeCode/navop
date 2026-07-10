@@ -9,6 +9,7 @@ pub mod ssh_backend;
 pub mod terminal;
 pub mod types;
 
+pub use exec_supervisor::TerminalExecError;
 pub use pty_backend::{GpuiEventProxy, TerminalEvent};
 pub use serial_backend::SerialBackend;
 pub use ssh_backend::SshBackend;

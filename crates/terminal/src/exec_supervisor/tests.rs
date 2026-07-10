@@ -6,11 +6,14 @@ use crate::osc::OscEvent;
 use crate::{TerminalExecCompletion, TerminalExecRequest};
 use std::time::Duration;
 
+mod ready_wait;
+
 fn request(command: &str) -> TerminalExecRequest {
     TerminalExecRequest {
         command: command.to_string(),
         submit: true,
         wait_for_output: true,
+        ready_timeout: Duration::ZERO,
         timeout: Duration::from_secs(30),
     }
 }
@@ -71,6 +74,24 @@ fn running_terminal_rejects_without_writing() {
             error: TerminalExecError::Busy,
         }],
         supervisor.start(12, request("pwd"))
+    );
+}
+
+#[test]
+fn init_command_submission_makes_terminal_busy() {
+    let mut supervisor = ready_supervisor();
+    assert!(
+        supervisor
+            .on_input(TerminalInputSource::InitCommand, b"cd /workspace\n")
+            .is_empty()
+    );
+
+    assert_eq!(
+        vec![ExecEffect::Fail {
+            id: 30,
+            error: TerminalExecError::Busy,
+        }],
+        supervisor.start(30, request("pwd"))
     );
 }
 
@@ -157,4 +178,88 @@ fn command_finished_before_command_start_does_not_complete_new_operation() {
             ..
         })
     ));
+}
+
+#[test]
+fn captured_output_finishes_at_command_boundary() {
+    let mut supervisor = ready_supervisor();
+    submit(&mut supervisor, 24, "printf hello");
+    assert!(
+        supervisor
+            .on_terminal_chunk(b"printf hello\r\nhello\r\n", &[OscEvent::CommandStart])
+            .is_empty()
+    );
+
+    let effects = supervisor.on_terminal_chunk(
+        b"\x1b]133;D;0\x07late-background-output\r\n",
+        &[OscEvent::CommandFinished { exit_code: 0 }],
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [ExecEffect::Complete { output, .. }] if output.output == "hello"
+    ));
+}
+
+#[test]
+fn fresh_input_start_completes_when_finish_marker_is_missing() {
+    let mut supervisor = ready_supervisor();
+    submit(&mut supervisor, 25, "echo hello");
+    supervisor.on_terminal_chunk(b"echo hello\r\nhello\r\n", &[OscEvent::CommandStart]);
+
+    let effects = supervisor.on_osc(&OscEvent::InputStart);
+    assert!(matches!(
+        effects.as_slice(),
+        [ExecEffect::Complete { output, .. }]
+            if output.completion == TerminalExecCompletion::ObservedOutput
+                && output.output == "hello"
+    ));
+}
+
+#[test]
+fn observing_timeout_returns_bounded_partial_output() {
+    let mut supervisor = ready_supervisor();
+    submit(&mut supervisor, 26, "long-command");
+    supervisor.on_terminal_chunk(b"long-command\r\npartial\r\n", &[OscEvent::CommandStart]);
+
+    let effects = supervisor.timeout(26, ExecPhase::Observing);
+    assert!(matches!(
+        effects.as_slice(),
+        [ExecEffect::Complete { output, .. }]
+            if output.completion == TerminalExecCompletion::TimedOut
+                && output.output == "partial"
+    ));
+}
+
+#[test]
+fn disconnect_fails_pre_submit_and_finishes_detached_observer() {
+    let mut clearing = ready_supervisor();
+    clearing.start(27, request("pwd"));
+    assert_eq!(
+        vec![ExecEffect::Fail {
+            id: 27,
+            error: TerminalExecError::Disconnected,
+        }],
+        clearing.disconnect()
+    );
+
+    let mut detached = ready_supervisor();
+    submit(&mut detached, 28, "sleep 300");
+    detached.cancel(28);
+    assert!(detached.disconnect().is_empty());
+    assert_eq!(ShellCommandReadiness::Disconnected, detached.readiness());
+}
+
+#[test]
+fn cancel_before_submit_never_writes_agent_command() {
+    let mut supervisor = ready_supervisor();
+    supervisor.start(29, request("pwd"));
+
+    assert_eq!(
+        vec![ExecEffect::Fail {
+            id: 29,
+            error: TerminalExecError::CancelledBeforeSubmit,
+        }],
+        supervisor.cancel(29)
+    );
+    assert!(supervisor.on_osc(&OscEvent::InputStart).is_empty());
 }

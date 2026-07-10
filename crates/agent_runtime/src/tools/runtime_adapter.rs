@@ -99,13 +99,11 @@ impl Tool for ToolRuntimeAgentTool {
             invocation.resource_id.clone(),
         )?;
         invocation.resource_id = invocation.resource_id.or(resource_id);
+        let context = tool_runtime::ToolContext::for_adapter(self.adapter)
+            .with_cancellation(invocation.cancellation.clone());
         let result = self
             .registry
-            .call(
-                &self.runtime_id,
-                arguments,
-                tool_runtime::ToolContext::for_adapter(self.adapter),
-            )
+            .call(&self.runtime_id, arguments, context)
             .await
             .map_err(runtime_tool_error)?;
         Ok(runtime_result_to_observation(invocation, result))

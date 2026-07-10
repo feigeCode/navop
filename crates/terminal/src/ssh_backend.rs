@@ -1,6 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::oneshot;
 
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
@@ -10,14 +13,14 @@ use ssh::{
     ChannelEvent, PtyConfig, ShellIntegrationSetup, SshChannel, SshClient, SshSessionManager,
 };
 
-use crate::exec_capture::SshTerminalExecCapture;
+use crate::exec_supervisor::{ExecEffect, ExecPhase, ExecSupervisor, TerminalInputSource};
 use crate::osc::{OscEvent, extract_osc_events};
 use crate::pty_backend::{GpuiEventProxy, TerminalEvent};
 use crate::shell_integration::{
     embedded_shell_integration_script, normalized_shell_integration_script,
 };
 use crate::{
-    TerminalBackend, TerminalExecCompletion, TerminalExecHandle, TerminalExecOutput,
+    TerminalBackend, TerminalExecError, TerminalExecHandle, TerminalExecOutput,
     TerminalExecRequest, TerminalInputHandle, TerminalSize,
 };
 
@@ -216,13 +219,100 @@ fn format_setup_failure_context(script: &str, stdout: &[u8], stderr: &[u8]) -> S
 
 enum SshCommand {
     Write(Vec<u8>),
+    StartExec {
+        id: u64,
+        request: TerminalExecRequest,
+        result: oneshot::Sender<Result<TerminalExecOutput, TerminalExecError>>,
+    },
+    CancelExec {
+        id: u64,
+    },
+    ExecTimeout {
+        id: u64,
+        phase: ExecPhase,
+    },
     Resize(TerminalSize),
     Shutdown,
 }
 
 pub struct SshBackend {
     command_tx: UnboundedSender<SshCommand>,
-    exec_capture: SshTerminalExecCapture,
+    exec_ids: Arc<AtomicU64>,
+}
+
+type ExecResultSender = oneshot::Sender<Result<TerminalExecOutput, TerminalExecError>>;
+
+fn build_terminal_exec_handle(
+    command_tx: UnboundedSender<SshCommand>,
+    exec_ids: Arc<AtomicU64>,
+) -> TerminalExecHandle {
+    TerminalExecHandle::new(move |request, cancellation| {
+        let command_tx = command_tx.clone();
+        let id = exec_ids.fetch_add(1, Ordering::Relaxed);
+        Box::pin(async move {
+            let (result_tx, result_rx) = oneshot::channel();
+            command_tx
+                .send(SshCommand::StartExec {
+                    id,
+                    request,
+                    result: result_tx,
+                })
+                .map_err(|_| TerminalExecError::Disconnected)?;
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => {
+                    let _ = command_tx.send(SshCommand::CancelExec { id });
+                    Err(TerminalExecError::Cancelled)
+                }
+                result = result_rx => result.unwrap_or(Err(TerminalExecError::Disconnected)),
+            }
+        })
+    })
+}
+
+async fn send_terminal_data(channel: &mut ssh::RusshChannel, data: &[u8]) -> bool {
+    tokio::time::timeout(Duration::from_secs(30), channel.send_data(data))
+        .await
+        .is_ok_and(|result| result.is_ok())
+}
+
+async fn apply_exec_effects(
+    effects: Vec<ExecEffect>,
+    channel: &mut ssh::RusshChannel,
+    command_tx: &UnboundedSender<SshCommand>,
+    results: &mut HashMap<u64, ExecResultSender>,
+) -> bool {
+    for effect in effects {
+        match effect {
+            ExecEffect::Write { data, .. } => {
+                if !send_terminal_data(channel, &data).await {
+                    return false;
+                }
+            }
+            ExecEffect::Complete { id, output } => {
+                if let Some(sender) = results.remove(&id) {
+                    let _ = sender.send(Ok(output));
+                }
+            }
+            ExecEffect::Fail { id, error } => {
+                if let Some(sender) = results.remove(&id) {
+                    let _ = sender.send(Err(error));
+                }
+            }
+            ExecEffect::ArmTimeout {
+                id,
+                phase,
+                duration,
+            } => {
+                let tx = command_tx.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(duration).await;
+                    let _ = tx.send(SshCommand::ExecTimeout { id, phase });
+                });
+            }
+        }
+    }
+    true
 }
 
 impl SshBackend {
@@ -270,8 +360,8 @@ impl SshBackend {
         let pending_init = init_commands;
 
         let (command_tx, mut command_rx) = unbounded_channel::<SshCommand>();
-        let exec_capture = SshTerminalExecCapture::new();
-        let task_exec_capture = exec_capture.clone();
+        let exec_ids = Arc::new(AtomicU64::new(1));
+        let task_command_tx = command_tx.clone();
 
         // 创建 PtyWrite 回写通道
         let (pty_write_tx, mut pty_write_rx) = unbounded_channel::<Vec<u8>>();
@@ -280,6 +370,8 @@ impl SshBackend {
         tokio::spawn(async move {
             let mut shutdown = false;
             let mut processor: Processor<StdSyncHandler> = Processor::new();
+            let mut exec_supervisor = ExecSupervisor::new();
+            let mut exec_results = HashMap::new();
             // 用来判断 shell 是否已经 ready（收到第一个 133;B 后才发 init_commands）
             let mut shell_ready = false;
             let mut init_sent = false;
@@ -290,11 +382,48 @@ impl SshBackend {
                     Some(cmd) = command_rx.recv() => {
                         match cmd {
                             SshCommand::Write(data) => {
-                                let send_result = tokio::time::timeout(
-                                    Duration::from_secs(30),
-                                    channel.send_data(&data)
-                                ).await;
-                                if send_result.is_err() || send_result.is_ok_and(|r| r.is_err()) {
+                                let effects = exec_supervisor.on_input(TerminalInputSource::User, &data);
+                                if !apply_exec_effects(
+                                    effects,
+                                    &mut channel,
+                                    &task_command_tx,
+                                    &mut exec_results,
+                                ).await || !send_terminal_data(&mut channel, &data).await {
+                                    break;
+                                }
+                            }
+                            SshCommand::StartExec { id, request, result } => {
+                                exec_results.insert(id, result);
+                                let effects = exec_supervisor.start(id, request);
+                                if !apply_exec_effects(
+                                    effects,
+                                    &mut channel,
+                                    &task_command_tx,
+                                    &mut exec_results,
+                                ).await {
+                                    break;
+                                }
+                            }
+                            SshCommand::CancelExec { id } => {
+                                exec_results.remove(&id);
+                                let effects = exec_supervisor.cancel(id);
+                                if !apply_exec_effects(
+                                    effects,
+                                    &mut channel,
+                                    &task_command_tx,
+                                    &mut exec_results,
+                                ).await {
+                                    break;
+                                }
+                            }
+                            SshCommand::ExecTimeout { id, phase } => {
+                                let effects = exec_supervisor.timeout(id, phase);
+                                if !apply_exec_effects(
+                                    effects,
+                                    &mut channel,
+                                    &task_command_tx,
+                                    &mut exec_results,
+                                ).await {
                                     break;
                                 }
                             }
@@ -309,6 +438,10 @@ impl SshBackend {
                         }
                     }
                     Some(data) = pty_write_rx.recv() => {
+                        let _ = exec_supervisor.on_input(
+                            TerminalInputSource::TerminalResponse,
+                            &data,
+                        );
                         let send_result = tokio::time::timeout(
                             Duration::from_secs(30),
                             channel.send_data(&data)
@@ -322,7 +455,19 @@ impl SshBackend {
                             Some(ChannelEvent::Data(data)) | Some(ChannelEvent::ExtendedData { data, .. }) => {
                                 // 解析所有 OSC 事件
                                 let osc_events = extract_osc_events(&data);
-                                task_exec_capture.record_chunk(&data, &osc_events);
+                                let effects = exec_supervisor.on_terminal_chunk(&data, &osc_events);
+                                tracing::trace!(
+                                    readiness = ?exec_supervisor.readiness(),
+                                    "SSH terminal exec readiness updated"
+                                );
+                                if !apply_exec_effects(
+                                    effects,
+                                    &mut channel,
+                                    &task_command_tx,
+                                    &mut exec_results,
+                                ).await {
+                                    break;
+                                }
                                 for osc_event in &osc_events {
                                     match osc_event {
                                         OscEvent::WorkingDirChanged(path) => {
@@ -364,7 +509,18 @@ impl SshBackend {
                                             if !line.trim().is_empty() {
                                                 let mut cmd_data = line.as_bytes().to_vec();
                                                 cmd_data.push(b'\n');
-                                                let _ = channel.send_data(&cmd_data).await;
+                                                let effects = exec_supervisor.on_input(
+                                                    TerminalInputSource::InitCommand,
+                                                    &cmd_data,
+                                                );
+                                                if !apply_exec_effects(
+                                                    effects,
+                                                    &mut channel,
+                                                    &task_command_tx,
+                                                    &mut exec_results,
+                                                ).await || !send_terminal_data(&mut channel, &cmd_data).await {
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
@@ -374,7 +530,13 @@ impl SshBackend {
                                 let _ = notify_tx.send(());
                             }
                             Some(ChannelEvent::Eof) | Some(ChannelEvent::Close) | None => {
-                                task_exec_capture.finish_active_on_disconnect();
+                                let effects = exec_supervisor.disconnect();
+                                let _ = apply_exec_effects(
+                                    effects,
+                                    &mut channel,
+                                    &task_command_tx,
+                                    &mut exec_results,
+                                ).await;
                                 break;
                             }
                             _ => {}
@@ -382,6 +544,10 @@ impl SshBackend {
                     }
                 }
             }
+
+            let effects = exec_supervisor.disconnect();
+            let _ = apply_exec_effects(effects, &mut channel, &task_command_tx, &mut exec_results)
+                .await;
 
             if !shutdown {
                 let _ = session_manager.invalidate().await;
@@ -393,7 +559,7 @@ impl SshBackend {
 
         Ok(Self {
             command_tx,
-            exec_capture,
+            exec_ids,
         })
     }
 
@@ -690,6 +856,7 @@ impl SshBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TerminalExecCompletion;
     use crate::osc::parse_osc_payload;
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
@@ -697,8 +864,10 @@ mod tests {
     use std::collections::VecDeque;
     use std::fs;
     use std::process::Command;
+    use std::sync::atomic::AtomicU64;
     use std::sync::{Arc, Mutex};
     use tokio::time::sleep;
+    use tokio_util::sync::CancellationToken;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum ChannelOp {
@@ -1585,6 +1754,66 @@ mod tests {
             Some(OscEvent::CommandFinished { exit_code: 0 })
         ));
     }
+
+    #[tokio::test]
+    async fn terminal_exec_handle_cancels_waiter_without_shutdown() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let handle = build_terminal_exec_handle(command_tx, Arc::new(AtomicU64::new(1)));
+        let cancellation = CancellationToken::new();
+        let task = tokio::spawn({
+            let cancellation = cancellation.clone();
+            async move { handle.exec(request("sleep 300"), cancellation).await }
+        });
+
+        let id = match command_rx.recv().await {
+            Some(SshCommand::StartExec { id, .. }) => id,
+            _ => panic!("expected terminal exec start command"),
+        };
+        cancellation.cancel();
+        assert!(matches!(
+            command_rx.recv().await,
+            Some(SshCommand::CancelExec { id: cancelled }) if cancelled == id
+        ));
+        assert_eq!(
+            TerminalExecError::Cancelled,
+            task.await.unwrap().unwrap_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_exec_handle_returns_supervisor_result() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let handle = build_terminal_exec_handle(command_tx, Arc::new(AtomicU64::new(1)));
+        let task =
+            tokio::spawn(
+                async move { handle.exec(request("pwd"), CancellationToken::new()).await },
+            );
+
+        let result = TerminalExecOutput {
+            completion: TerminalExecCompletion::ShellIntegrationExit,
+            exit_code: Some(0),
+            output: "/tmp".to_string(),
+            duration_ms: 4,
+        };
+        match command_rx.recv().await {
+            Some(SshCommand::StartExec { result: sender, .. }) => {
+                sender.send(Ok(result.clone())).unwrap();
+            }
+            _ => panic!("expected terminal exec start command"),
+        }
+
+        assert_eq!(result, task.await.unwrap().unwrap());
+    }
+
+    fn request(command: &str) -> TerminalExecRequest {
+        TerminalExecRequest {
+            command: command.to_string(),
+            submit: true,
+            wait_for_output: true,
+            ready_timeout: Duration::ZERO,
+            timeout: Duration::from_secs(30),
+        }
+    }
 }
 
 impl TerminalBackend for SshBackend {
@@ -1600,11 +1829,10 @@ impl TerminalBackend for SshBackend {
     }
 
     fn exec_handle(&self) -> Option<TerminalExecHandle> {
-        let tx = self.command_tx.clone();
-        let capture = self.exec_capture.clone();
-        Some(TerminalExecHandle::new(move |request| {
-            exec_in_ssh_terminal(tx.clone(), capture.clone(), request)
-        }))
+        Some(build_terminal_exec_handle(
+            self.command_tx.clone(),
+            self.exec_ids.clone(),
+        ))
     }
 
     fn resize(&self, size: TerminalSize) {
@@ -1619,40 +1847,4 @@ impl TerminalBackend for SshBackend {
     fn shutdown(&self) {
         let _ = self.command_tx.send(SshCommand::Shutdown);
     }
-}
-
-fn exec_in_ssh_terminal(
-    tx: UnboundedSender<SshCommand>,
-    capture: SshTerminalExecCapture,
-    request: TerminalExecRequest,
-) -> anyhow::Result<TerminalExecOutput> {
-    let mut input = request.command.clone().into_bytes();
-    if request.submit {
-        input.push(b'\n');
-    }
-
-    if !request.submit || !request.wait_for_output {
-        tx.send(SshCommand::Write(input))
-            .map_err(|_| anyhow::anyhow!("terminal input handle is not ready"))?;
-        return Ok(TerminalExecOutput {
-            completion: TerminalExecCompletion::SubmittedOnly,
-            exit_code: None,
-            output: String::new(),
-            duration_ms: 0,
-        });
-    }
-
-    let session = capture.start(request.command, request.timeout)?;
-    if tx.send(SshCommand::Write(input)).is_err() {
-        capture.cancel(session.id());
-        return Err(anyhow::anyhow!("terminal input handle is not ready"));
-    }
-    let result = session.wait();
-
-    Ok(TerminalExecOutput {
-        completion: result.completion,
-        exit_code: result.exit_code,
-        output: result.output,
-        duration_ms: result.duration_ms,
-    })
 }

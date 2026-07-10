@@ -1,12 +1,12 @@
-use crate::exec_capture::sanitize_captured_terminal_output;
 use crate::osc::OscEvent;
-use crate::{TerminalExecCompletion, TerminalExecOutput, TerminalExecRequest};
+use crate::{TerminalExecCompletion, TerminalExecRequest};
 use std::time::{Duration, Instant};
 
 mod model;
-pub(crate) use model::{
-    ExecEffect, ExecPhase, ShellCommandReadiness, TerminalExecError, TerminalInputSource,
-};
+mod operation;
+pub use model::TerminalExecError;
+pub(crate) use model::{ExecEffect, ExecPhase, ShellCommandReadiness, TerminalInputSource};
+use operation::output_with_completion;
 
 const CLEAR_INPUT_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -47,25 +47,40 @@ impl ExecSupervisor {
         if self.active.is_some() {
             return fail(id, TerminalExecError::Busy);
         }
-        match self.readiness {
-            ShellCommandReadiness::Ready { .. } => self.start_clear(id, request),
-            ShellCommandReadiness::Disconnected => fail(id, TerminalExecError::Disconnected),
-            ShellCommandReadiness::Initializing | ShellCommandReadiness::Unknown => {
-                fail(id, TerminalExecError::ReadinessUnknown)
-            }
-            _ => fail(id, TerminalExecError::Busy),
+        if matches!(self.readiness, ShellCommandReadiness::Ready { .. }) {
+            return self.start_clear(id, request);
         }
+        if self.readiness == ShellCommandReadiness::Disconnected {
+            return fail(id, TerminalExecError::Disconnected);
+        }
+        if self.readiness == ShellCommandReadiness::Unknown {
+            return fail(id, TerminalExecError::ReadinessUnknown);
+        }
+        if !request.ready_timeout.is_zero() {
+            return self.start_ready_wait(id, request);
+        }
+        fail(id, TerminalExecError::Busy)
     }
 
     pub(crate) fn on_input(&mut self, source: TerminalInputSource, data: &[u8]) -> Vec<ExecEffect> {
         self.input_seq = self.input_seq.saturating_add(1);
-        if source == TerminalInputSource::User && self.active_is_clearing() {
-            let id = self.active.take().expect("active exec exists").id;
-            self.readiness = ShellCommandReadiness::PromptRendering;
-            return fail(id, TerminalExecError::ConcurrentUserInput);
-        }
+        let pre_submit_phase = self.active.as_ref().map(|active| active.phase);
         if source == TerminalInputSource::User
-            && data.iter().any(|byte| matches!(byte, b'\r' | b'\n'))
+            && matches!(
+                pre_submit_phase,
+                Some(ExecPhase::WaitingForReady | ExecPhase::ClearingInput)
+            )
+        {
+            let active = self.active.take().expect("pre-submit exec exists");
+            if active.phase == ExecPhase::ClearingInput {
+                self.readiness = ShellCommandReadiness::PromptRendering;
+            }
+            return fail(active.id, TerminalExecError::ConcurrentUserInput);
+        }
+        if matches!(
+            source,
+            TerminalInputSource::User | TerminalInputSource::InitCommand
+        ) && data.iter().any(|byte| matches!(byte, b'\r' | b'\n'))
             && matches!(self.readiness, ShellCommandReadiness::Ready { .. })
         {
             self.command_epoch = self.command_epoch.saturating_add(1);
@@ -86,11 +101,30 @@ impl ExecSupervisor {
         }
     }
 
+    pub(crate) fn on_terminal_chunk(
+        &mut self,
+        data: &[u8],
+        events: &[OscEvent],
+    ) -> Vec<ExecEffect> {
+        if let Some(active) = self
+            .active
+            .as_mut()
+            .filter(|active| active.phase == ExecPhase::Observing)
+        {
+            active.raw.extend_from_slice(data);
+        }
+        events.iter().flat_map(|event| self.on_osc(event)).collect()
+    }
+
     pub(crate) fn cancel(&mut self, id: u64) -> Vec<ExecEffect> {
         let Some(active) = self.active.as_mut().filter(|active| active.id == id) else {
             return Vec::new();
         };
         match active.phase {
+            ExecPhase::WaitingForReady => {
+                self.active = None;
+                fail(id, TerminalExecError::CancelledBeforeSubmit)
+            }
             ExecPhase::ClearingInput => {
                 self.active = None;
                 self.readiness = ShellCommandReadiness::PromptRendering;
@@ -103,148 +137,48 @@ impl ExecSupervisor {
         }
     }
 
-    fn start_clear(&mut self, id: u64, request: TerminalExecRequest) -> Vec<ExecEffect> {
-        self.active = Some(ActiveExec {
-            id,
-            request,
-            phase: ExecPhase::ClearingInput,
-            started_at: Instant::now(),
-            raw: Vec::new(),
-            command_started: false,
-            detached: false,
-        });
-        self.readiness = ShellCommandReadiness::ClearingInput { command_epoch: id };
-        vec![
-            ExecEffect::Write {
-                source: TerminalInputSource::AgentPreflight,
-                data: vec![0x03],
-            },
-            ExecEffect::ArmTimeout {
-                id,
-                phase: ExecPhase::ClearingInput,
-                duration: CLEAR_INPUT_TIMEOUT,
-            },
-        ]
-    }
-
-    fn on_prompt_start(&mut self) -> Vec<ExecEffect> {
-        if !self.active_is_clearing() {
-            self.readiness = ShellCommandReadiness::PromptRendering;
-        }
-        Vec::new()
-    }
-
-    fn on_input_start(&mut self) -> Vec<ExecEffect> {
-        self.prompt_epoch = self.prompt_epoch.saturating_add(1);
-        self.readiness = ShellCommandReadiness::Ready {
-            prompt_epoch: self.prompt_epoch,
-        };
-        if self.active_is_clearing() {
-            return self.submit_active();
-        }
-        Vec::new()
-    }
-
-    fn submit_active(&mut self) -> Vec<ExecEffect> {
-        let mut active = self.active.take().expect("clearing exec exists");
-        let mut data = active.request.command.as_bytes().to_vec();
-        if active.request.submit {
-            data.push(b'\n');
-        }
-        let write = ExecEffect::Write {
-            source: TerminalInputSource::AgentCommand,
-            data,
-        };
-        if !active.request.submit || !active.request.wait_for_output {
-            return vec![write, complete_submitted(&active)];
-        }
-        active.phase = ExecPhase::Observing;
-        let id = active.id;
-        let timeout = active.request.timeout;
-        self.readiness = ShellCommandReadiness::SubmissionPending { command_epoch: id };
-        self.active = Some(active);
-        vec![
-            write,
-            ExecEffect::ArmTimeout {
-                id,
-                phase: ExecPhase::Observing,
-                duration: timeout,
-            },
-        ]
-    }
-
-    fn on_command_start(&mut self) -> Vec<ExecEffect> {
-        if let Some(active) = self
-            .active
-            .as_mut()
-            .filter(|active| active.phase == ExecPhase::Observing)
-        {
-            active.command_started = true;
-            self.readiness = ShellCommandReadiness::CommandRunning {
-                command_epoch: active.id,
-            };
-        }
-        Vec::new()
-    }
-
-    fn on_command_finished(&mut self, exit_code: i32) -> Vec<ExecEffect> {
-        let Some(active) = self
+    pub(crate) fn timeout(&mut self, id: u64, phase: ExecPhase) -> Vec<ExecEffect> {
+        let Some(_) = self
             .active
             .as_ref()
-            .filter(|active| active.phase == ExecPhase::Observing && active.command_started)
+            .filter(|active| active.id == id && active.phase == phase)
         else {
             return Vec::new();
         };
-        let id = active.id;
-        self.readiness = ShellCommandReadiness::AwaitingPrompt { command_epoch: id };
-        let active = self.active.take().expect("observing exec exists");
+        if phase == ExecPhase::WaitingForReady {
+            self.active = None;
+            return fail(id, TerminalExecError::ReadyTimeout);
+        }
+        if phase == ExecPhase::ClearingInput {
+            self.active = None;
+            self.readiness = ShellCommandReadiness::Unknown;
+            return fail(id, TerminalExecError::ClearInputTimeout);
+        }
+        let active = self.active.take().expect("timed out exec exists");
         if active.detached {
             return Vec::new();
         }
         vec![ExecEffect::Complete {
             id,
-            output: completed_output(&active, exit_code),
+            output: output_with_completion(&active, TerminalExecCompletion::TimedOut, None),
         }]
     }
 
-    fn active_is_clearing(&self) -> bool {
-        self.active
-            .as_ref()
-            .is_some_and(|active| active.phase == ExecPhase::ClearingInput)
+    pub(crate) fn disconnect(&mut self) -> Vec<ExecEffect> {
+        self.readiness = ShellCommandReadiness::Disconnected;
+        let Some(active) = self.active.take() else {
+            return Vec::new();
+        };
+        if active.detached {
+            Vec::new()
+        } else {
+            fail(active.id, TerminalExecError::Disconnected)
+        }
     }
 }
 
 fn fail(id: u64, error: TerminalExecError) -> Vec<ExecEffect> {
     vec![ExecEffect::Fail { id, error }]
-}
-
-fn complete_submitted(active: &ActiveExec) -> ExecEffect {
-    ExecEffect::Complete {
-        id: active.id,
-        output: TerminalExecOutput {
-            completion: TerminalExecCompletion::SubmittedOnly,
-            exit_code: None,
-            output: String::new(),
-            duration_ms: elapsed_ms(active.started_at),
-        },
-    }
-}
-
-fn completed_output(active: &ActiveExec, exit_code: i32) -> TerminalExecOutput {
-    TerminalExecOutput {
-        completion: TerminalExecCompletion::ShellIntegrationExit,
-        exit_code: Some(exit_code),
-        output: sanitize_captured_terminal_output(&active.raw, &active.request.command),
-        duration_ms: elapsed_ms(active.started_at),
-    }
-}
-
-fn elapsed_ms(started_at: Instant) -> u64 {
-    started_at
-        .elapsed()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

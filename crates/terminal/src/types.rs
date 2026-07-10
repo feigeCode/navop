@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
+
+use crate::TerminalExecError;
 
 #[derive(Clone)]
 pub struct TerminalInputHandle {
@@ -21,12 +26,16 @@ impl TerminalInputHandle {
 
 #[derive(Clone)]
 pub struct TerminalExecHandle {
-    exec_fn: Arc<dyn Fn(TerminalExecRequest) -> anyhow::Result<TerminalExecOutput> + Send + Sync>,
+    exec_fn:
+        Arc<dyn Fn(TerminalExecRequest, CancellationToken) -> TerminalExecFuture + Send + Sync>,
 }
+
+pub type TerminalExecFuture =
+    Pin<Box<dyn Future<Output = Result<TerminalExecOutput, TerminalExecError>> + Send + 'static>>;
 
 impl TerminalExecHandle {
     pub fn new(
-        exec_fn: impl Fn(TerminalExecRequest) -> anyhow::Result<TerminalExecOutput>
+        exec_fn: impl Fn(TerminalExecRequest, CancellationToken) -> TerminalExecFuture
         + Send
         + Sync
         + 'static,
@@ -36,8 +45,12 @@ impl TerminalExecHandle {
         }
     }
 
-    pub fn exec(&self, request: TerminalExecRequest) -> anyhow::Result<TerminalExecOutput> {
-        (self.exec_fn)(request)
+    pub async fn exec(
+        &self,
+        request: TerminalExecRequest,
+        cancellation: CancellationToken,
+    ) -> Result<TerminalExecOutput, TerminalExecError> {
+        (self.exec_fn)(request, cancellation).await
     }
 }
 
@@ -46,6 +59,7 @@ pub struct TerminalExecRequest {
     pub command: String,
     pub submit: bool,
     pub wait_for_output: bool,
+    pub ready_timeout: Duration,
     pub timeout: Duration,
 }
 
@@ -97,8 +111,10 @@ mod tests {
         TerminalExecCompletion, TerminalExecHandle, TerminalExecOutput, TerminalExecRequest,
         TerminalInputHandle,
     };
+    use crate::TerminalExecError;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn terminal_input_handle_forwards_bytes_to_writer() {
@@ -113,31 +129,67 @@ mod tests {
         assert_eq!(vec![b"df -h\n".to_vec()], *written.lock().unwrap());
     }
 
-    #[test]
-    fn terminal_exec_handle_delegates_to_executor() {
+    #[tokio::test]
+    async fn terminal_exec_handle_delegates_to_executor() {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let sink = requests.clone();
-        let handle = TerminalExecHandle::new(move |request| {
-            sink.lock().expect("requests lock").push(request.command);
-            Ok(TerminalExecOutput {
-                completion: TerminalExecCompletion::SubmittedOnly,
-                exit_code: None,
-                output: String::new(),
-                duration_ms: 0,
+        let handle = TerminalExecHandle::new(move |request, _cancellation| {
+            let sink = sink.clone();
+            Box::pin(async move {
+                sink.lock().expect("requests lock").push(request.command);
+                Ok(TerminalExecOutput {
+                    completion: TerminalExecCompletion::SubmittedOnly,
+                    exit_code: None,
+                    output: String::new(),
+                    duration_ms: 0,
+                })
             })
         });
 
         let result = handle
-            .exec(TerminalExecRequest {
-                command: "df -h".to_string(),
-                submit: true,
-                wait_for_output: false,
-                timeout: Duration::from_millis(1),
-            })
+            .exec(
+                TerminalExecRequest {
+                    command: "df -h".to_string(),
+                    submit: true,
+                    wait_for_output: false,
+                    ready_timeout: Duration::ZERO,
+                    timeout: Duration::from_millis(1),
+                },
+                CancellationToken::new(),
+            )
+            .await
             .expect("exec handle should delegate");
 
         assert_eq!(TerminalExecCompletion::SubmittedOnly, result.completion);
         assert_eq!(vec!["df -h".to_string()], *requests.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn terminal_exec_handle_forwards_cancellation() {
+        let handle = TerminalExecHandle::new(|_request, cancellation| {
+            Box::pin(async move {
+                cancellation.cancelled().await;
+                Err(TerminalExecError::CancelledBeforeSubmit)
+            })
+        });
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let error = handle
+            .exec(
+                TerminalExecRequest {
+                    command: "sleep 300".to_string(),
+                    submit: true,
+                    wait_for_output: true,
+                    ready_timeout: Duration::ZERO,
+                    timeout: Duration::from_secs(30),
+                },
+                cancellation,
+            )
+            .await
+            .expect_err("cancelled execution should fail before submission");
+
+        assert_eq!(TerminalExecError::CancelledBeforeSubmit, error);
     }
 }
 

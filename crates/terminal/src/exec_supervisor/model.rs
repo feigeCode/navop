@@ -27,17 +27,21 @@ pub(crate) enum TerminalInputSource {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExecPhase {
+    WaitingForReady,
     ClearingInput,
     Observing,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TerminalExecError {
+pub enum TerminalExecError {
     Busy,
     ReadinessUnknown,
     Disconnected,
+    ReadyTimeout,
     ConcurrentUserInput,
+    Cancelled,
     CancelledBeforeSubmit,
+    ClearInputTimeout,
 }
 
 impl fmt::Display for TerminalExecError {
@@ -46,8 +50,11 @@ impl fmt::Display for TerminalExecError {
             Self::Busy => "terminal_busy",
             Self::ReadinessUnknown => "readiness_unknown",
             Self::Disconnected => "terminal_disconnected",
+            Self::ReadyTimeout => "ready_timeout",
             Self::ConcurrentUserInput => "concurrent_user_input",
+            Self::Cancelled => "cancelled",
             Self::CancelledBeforeSubmit => "cancelled_before_submit",
+            Self::ClearInputTimeout => "clear_input_timeout",
         })
     }
 }
