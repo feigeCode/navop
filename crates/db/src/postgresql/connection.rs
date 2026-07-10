@@ -25,7 +25,7 @@ use crate::executor::{
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
-use ssh::LocalPortForwardTunnel;
+use connection_tunnel::TunnelGuard;
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
@@ -118,7 +118,7 @@ impl ServerCertVerifier for PostgresServerCertVerifier {
 pub struct PostgresDbConnection {
     config: DbConnectionConfig,
     client: Arc<Mutex<Option<Client>>>,
-    tunnel: Option<LocalPortForwardTunnel>,
+    tunnel: Option<TunnelGuard>,
 }
 
 impl PostgresDbConnection {
@@ -1634,6 +1634,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: extra_params
                 .iter()
                 .map(|(key, value)| (key.to_string(), value.to_string()))

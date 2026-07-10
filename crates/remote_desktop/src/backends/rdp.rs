@@ -53,15 +53,17 @@ impl RemoteDesktopBackend for RdpBackend {
         self: Box<Self>,
         initial_size: RemoteDesktopSize,
     ) -> anyhow::Result<RemoteDesktopRuntime> {
+        let (options, proxy_guard) = crate::backend::resolve_proxy_options(self.options.clone())?;
         let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
         let (output_tx, output_rx) = std::sync::mpsc::channel();
         let helper = self.helper.clone();
-        let mut connect = HelperRequest::connect_from_options(&self.options, initial_size);
-        let protocol = self.options.protocol;
+        let mut connect = HelperRequest::connect_from_options(&options, initial_size);
+        let protocol = options.protocol;
 
         std::thread::Builder::new()
             .name("remote-desktop-rdp".to_string())
             .spawn(move || {
+                let _proxy_guard = proxy_guard;
                 let mut latest_clipboard_text = None;
                 let mut reconnect_attempt = 0usize;
                 loop {

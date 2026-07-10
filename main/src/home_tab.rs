@@ -326,6 +326,7 @@ mod external_driver_form_tests {
                 service_name: None,
                 sid: None,
                 workspace_id: None,
+                proxy: None,
                 extra_params: std::collections::HashMap::new(),
             },
             None,
@@ -440,6 +441,7 @@ mod external_driver_form_tests {
             password: None,
             domain: None,
             read_only: false,
+            proxy: None,
         };
 
         assert_eq!(
@@ -458,6 +460,7 @@ mod external_driver_form_tests {
             password: None,
             domain: None,
             read_only: false,
+            proxy: None,
         };
 
         assert_eq!("10.0.0.9:5900", remote_desktop_connection_info(&params));
@@ -554,6 +557,7 @@ mod external_driver_form_tests {
                     service_name: None,
                     sid: None,
                     workspace_id: None,
+                    proxy: None,
                     extra_params: std::collections::HashMap::new(),
                 },
                 None,

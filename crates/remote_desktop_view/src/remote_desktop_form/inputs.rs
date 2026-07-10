@@ -12,6 +12,10 @@ pub struct RemoteDesktopInputs {
     pub username: Entity<InputState>,
     pub password: Entity<InputState>,
     pub domain: Entity<InputState>,
+    pub proxy_host: Entity<InputState>,
+    pub proxy_port: Entity<InputState>,
+    pub proxy_username: Entity<InputState>,
+    pub proxy_password: Entity<InputState>,
 }
 
 pub fn create_inputs(
@@ -36,6 +40,10 @@ pub fn create_inputs(
             InputState::new(window, cx)
                 .placeholder(t!("RemoteDesktopForm.placeholder_domain").to_string())
         }),
+        proxy_host: cx.new(|cx| InputState::new(window, cx).placeholder("127.0.0.1")),
+        proxy_port: cx.new(|cx| input_with_value("1080".to_string(), window, cx)),
+        proxy_username: cx.new(|cx| InputState::new(window, cx)),
+        proxy_password: cx.new(|cx| InputState::new(window, cx).masked(true)),
     }
 }
 

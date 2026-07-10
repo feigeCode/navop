@@ -191,6 +191,10 @@ ConnectionForm:
     en: SSH
     zh-CN: SSH
     zh-HK: SSH
+  proxy:
+    en: Proxy
+    zh-CN: 代理
+    zh-HK: 代理
   notes:
     en: Notes
     zh-CN: 备注
@@ -309,6 +313,34 @@ ConnectionForm:
     en: Application Name
     zh-CN: 应用名称
     zh-HK: 應用名稱
+  proxy_enabled:
+    en: Enable Proxy
+    zh-CN: 启用代理
+    zh-HK: 啟用代理
+  proxy_type:
+    en: Proxy Type
+    zh-CN: 代理类型
+    zh-HK: 代理類型
+  proxy_host:
+    en: Proxy Host
+    zh-CN: 代理主机
+    zh-HK: 代理主機
+  proxy_port:
+    en: Proxy Port
+    zh-CN: 代理端口
+    zh-HK: 代理端口
+  proxy_username:
+    en: Proxy Username
+    zh-CN: 代理用户名
+    zh-HK: 代理使用者名稱
+  proxy_password:
+    en: Proxy Password
+    zh-CN: 代理密码
+    zh-HK: 代理密碼
+  proxy_invalid:
+    en: Invalid proxy configuration
+    zh-CN: 代理配置无效
+    zh-HK: 代理設定無效
   ssh_tunnel_enabled:
     en: Enable SSH Tunnel
     zh-CN: 启用 SSH 隧道

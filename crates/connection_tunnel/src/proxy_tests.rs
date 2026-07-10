@@ -4,7 +4,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 
-use crate::{ProxyTunnelConfig, ProxyTunnelType, TunnelGuard, start_proxy_tunnel};
+use crate::{
+    ProxyTunnelConfig, ProxyTunnelType, TunnelGuard, resolve_connection_target_with_proxy,
+    start_proxy_tunnel,
+};
 
 #[test]
 fn proxy_config_requires_host_and_port() {
@@ -45,7 +48,7 @@ fn proxy_config_maps_trimmed_credentials_to_ssh_proxy() {
         host: " proxy.example.com ".to_string(),
         port: 1080,
         username: Some(" alice ".to_string()),
-        password: Some("secret".to_string()),
+        password: Some(" secret ".to_string()),
     };
 
     let proxy = config.to_ssh_proxy().expect("proxy config should be valid");
@@ -54,7 +57,7 @@ fn proxy_config_maps_trimmed_credentials_to_ssh_proxy() {
     assert_eq!("proxy.example.com", proxy.host);
     assert_eq!(1080, proxy.port);
     assert_eq!(Some("alice".to_string()), proxy.username);
-    assert_eq!(Some("secret".to_string()), proxy.password);
+    assert_eq!(Some(" secret ".to_string()), proxy.password);
 }
 
 #[test]
@@ -78,6 +81,31 @@ fn tunnel_guard_reports_proxy_local_address() {
     assert_eq!(local_addr, guard.local_addr());
 }
 
+#[tokio::test]
+async fn direct_proxy_route_returns_loopback_target_and_proxy_guard() {
+    let proxy = ProxyTunnelConfig {
+        proxy_type: ProxyTunnelType::Socks5,
+        host: "127.0.0.1".to_string(),
+        port: 9,
+        username: None,
+        password: None,
+    };
+
+    let target = resolve_connection_target_with_proxy("db.internal", 3306, None, Some(&proxy))
+        .await
+        .expect("direct proxy route should create a local listener");
+
+    assert!(
+        target
+            .host
+            .parse::<std::net::IpAddr>()
+            .unwrap()
+            .is_loopback()
+    );
+    assert_ne!(3306, target.port);
+    assert!(matches!(target.tunnel, Some(TunnelGuard::Proxy(_))));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn http_proxy_tunnel_forwards_bytes_to_requested_target() {
     let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -96,6 +124,7 @@ async fn http_proxy_tunnel_forwards_bytes_to_requested_target() {
         let (mut inbound, _) = proxy.accept().await.unwrap();
         let request = read_http_headers(&mut inbound).await;
         assert!(request.starts_with("CONNECT db.internal:5432 HTTP/1.1\r\n"));
+        assert!(request.contains("Proxy-Authorization: Basic YWxpY2U6\r\n"));
         let mut outbound = TcpStream::connect(target_addr).await.unwrap();
         inbound
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -111,7 +140,7 @@ async fn http_proxy_tunnel_forwards_bytes_to_requested_target() {
             proxy_type: ProxyTunnelType::Http,
             host: proxy_addr.ip().to_string(),
             port: proxy_addr.port(),
-            username: None,
+            username: Some("alice".to_string()),
             password: None,
         },
         "db.internal",

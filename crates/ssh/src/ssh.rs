@@ -1034,9 +1034,8 @@ pub async fn connect_via_proxy(
         ProxyType::Socks5 => {
             use tokio_socks::tcp::Socks5Stream;
 
-            let stream = if let (Some(username), Some(password)) =
-                (&proxy.username, &proxy.password)
-            {
+            let stream = if let Some(username) = &proxy.username {
+                let password = proxy.password.as_deref().unwrap_or_default();
                 Socks5Stream::connect_with_password(
                     proxy_addr.as_str(),
                     (target_host, target_port),
@@ -1066,9 +1065,8 @@ pub async fn connect_via_proxy(
             })?;
 
             // 发送CONNECT请求
-            let connect_request = if let (Some(username), Some(password)) =
-                (&proxy.username, &proxy.password)
-            {
+            let connect_request = if let Some(username) = &proxy.username {
+                let password = proxy.password.as_deref().unwrap_or_default();
                 let credentials = format!("{}:{}", username, password);
                 let encoded = base64_encode(&credentials);
                 format!(

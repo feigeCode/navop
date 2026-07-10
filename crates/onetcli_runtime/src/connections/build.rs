@@ -48,6 +48,7 @@ fn build_database(input: &Value) -> Result<StoredConnection, ToolError> {
         service_name: optional_value_str(values, "service_name").map(str::to_string),
         sid: optional_value_str(values, "sid").map(str::to_string),
         workspace_id: optional_i64(input, "workspace_id"),
+        proxy: None,
         extra_params: database_extra_params(values),
     };
     Ok(with_common_fields(

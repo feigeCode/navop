@@ -57,7 +57,8 @@ use gpui_component::input::InputEvent;
 pub use one_core::settings::{
     AppSettings, CustomFont, DatabaseOpenMode, GlobalCurrentUser, GlobalProxySettings, LOCALE_EN,
     LOCALE_SYSTEM, LOCALE_ZH_CN, LOCALE_ZH_HK, LargeTextCellEditorOpenMode,
-    PersonalSyncBackendKind, PersonalSyncSettings, ProxyType, StartupDefaultPage, SyncProvider,
+    LocalTerminalProfileKind, LocalTerminalProfileSettings, PersonalSyncBackendKind,
+    PersonalSyncSettings, ProxyType, StartupDefaultPage, SyncProvider,
     effective_locale_for_setting, is_installed_font_family, is_supported_grid_monospace_font,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
@@ -713,6 +714,7 @@ impl SettingsPanel {
                             )
                             .description(t!("Settings.General.Font.font_size_desc").to_string()),
                         ),
+                    local_terminal_setting_group(&default_settings.local_terminal_profile),
                     SettingGroup::new()
                         .title(t!("Settings.General.Database.group_title"))
                         .items(vec![
@@ -999,6 +1001,115 @@ impl SettingsPanel {
             )),
         ]
     }
+}
+
+fn local_terminal_setting_group(defaults: &LocalTerminalProfileSettings) -> SettingGroup {
+    SettingGroup::new()
+        .title(t!("Settings.General.LocalTerminal.group_title"))
+        .items(vec![
+            local_terminal_profile_item(defaults.kind),
+            local_terminal_custom_program_item(&defaults.custom_program),
+            local_terminal_custom_arguments_item(&defaults.custom_arguments),
+        ])
+}
+
+fn local_terminal_profile_item(default: LocalTerminalProfileKind) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.General.LocalTerminal.profile"),
+        SettingField::dropdown(
+            local_terminal_profile_options(cfg!(target_os = "windows")),
+            |cx: &App| {
+                SharedString::from(AppSettings::global(cx).local_terminal_profile.kind.as_str())
+            },
+            |value: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.local_terminal_profile.kind =
+                        LocalTerminalProfileKind::parse(value.as_ref());
+                });
+            },
+        )
+        .default_value(SharedString::from(default.as_str())),
+    )
+    .description(t!("Settings.General.LocalTerminal.profile_desc").to_string())
+}
+
+fn local_terminal_custom_program_item(default: &str) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.General.LocalTerminal.custom_program"),
+        SettingField::input(
+            |cx: &App| {
+                SharedString::from(
+                    AppSettings::global(cx)
+                        .local_terminal_profile
+                        .custom_program
+                        .clone(),
+                )
+            },
+            |value: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.local_terminal_profile.custom_program = value.trim().to_string();
+                });
+            },
+        )
+        .default_value(SharedString::from(default.to_string())),
+    )
+    .description(t!("Settings.General.LocalTerminal.custom_program_desc").to_string())
+}
+
+fn local_terminal_custom_arguments_item(default: &str) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.General.LocalTerminal.custom_arguments"),
+        SettingField::input(
+            |cx: &App| {
+                SharedString::from(
+                    AppSettings::global(cx)
+                        .local_terminal_profile
+                        .custom_arguments
+                        .clone(),
+                )
+            },
+            |value: SharedString, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.local_terminal_profile.custom_arguments = value.to_string();
+                });
+            },
+        )
+        .default_value(SharedString::from(default.to_string())),
+    )
+    .description(t!("Settings.General.LocalTerminal.custom_arguments_desc").to_string())
+}
+
+fn local_terminal_profile_options(include_windows: bool) -> Vec<(SharedString, SharedString)> {
+    let mut kinds = vec![
+        LocalTerminalProfileKind::System,
+        LocalTerminalProfileKind::PowerShell,
+    ];
+    if include_windows {
+        kinds.extend([
+            LocalTerminalProfileKind::Cmd,
+            LocalTerminalProfileKind::Wsl,
+            LocalTerminalProfileKind::GitBash,
+        ]);
+    }
+    kinds.push(LocalTerminalProfileKind::Custom);
+    kinds
+        .into_iter()
+        .map(|kind| {
+            let label = match kind {
+                LocalTerminalProfileKind::System => t!("Settings.General.LocalTerminal.system"),
+                LocalTerminalProfileKind::PowerShell => {
+                    t!("Settings.General.LocalTerminal.powershell")
+                }
+                LocalTerminalProfileKind::Cmd => t!("Settings.General.LocalTerminal.cmd"),
+                LocalTerminalProfileKind::Wsl => t!("Settings.General.LocalTerminal.wsl"),
+                LocalTerminalProfileKind::GitBash => {
+                    t!("Settings.General.LocalTerminal.git_bash")
+                }
+                LocalTerminalProfileKind::Custom => t!("Settings.General.LocalTerminal.custom"),
+            };
+            (kind.as_str().into(), label.into())
+        })
+        .collect()
 }
 
 fn sync_setting_group(
@@ -3360,10 +3471,10 @@ mod tests {
     use rust_i18n::t;
 
     use super::{
-        AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, ProxyType,
-        build_app_http_client, builtin_monospace_font_options, is_supported_font_file,
-        merge_font_options_with_custom_fonts, parse_font_families, personal_sync_backend_options,
-        personal_sync_status_label, personal_sync_status_view_model,
+        AppSettings, CustomFont, FontFamilyKind, GlobalProxySettings, LocalTerminalProfileKind,
+        ProxyType, build_app_http_client, builtin_monospace_font_options, is_supported_font_file,
+        local_terminal_profile_options, merge_font_options_with_custom_fonts, parse_font_families,
+        personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
         team_key_refresh_success_message,
     };
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
@@ -3437,6 +3548,21 @@ mod tests {
         assert_eq!(&["cmd-alt-t"], entry.keys_macos);
         assert_eq!(&["alt-t"], entry.keys_other);
         assert_eq!("Settings.Shortcuts.open_local_terminal", entry.label_key);
+    }
+
+    #[test]
+    fn windows_local_terminal_options_include_wsl_git_bash_and_custom() {
+        let options = local_terminal_profile_options(true)
+            .into_iter()
+            .map(|(value, _)| LocalTerminalProfileKind::parse(value.as_ref()))
+            .collect::<Vec<_>>();
+
+        assert!(options.contains(&LocalTerminalProfileKind::System));
+        assert!(options.contains(&LocalTerminalProfileKind::PowerShell));
+        assert!(options.contains(&LocalTerminalProfileKind::Cmd));
+        assert!(options.contains(&LocalTerminalProfileKind::Wsl));
+        assert!(options.contains(&LocalTerminalProfileKind::GitBash));
+        assert!(options.contains(&LocalTerminalProfileKind::Custom));
     }
 
     #[test]

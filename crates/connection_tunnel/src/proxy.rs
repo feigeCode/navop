@@ -67,7 +67,7 @@ impl ProxyTunnelConfig {
         if self.port == 0 {
             return Err(ProxyTunnelError::MissingField("port"));
         }
-        if optional_value(&self.username).is_none() && optional_value(&self.password).is_some() {
+        if optional_value(&self.username).is_none() && optional_secret(&self.password).is_some() {
             return Err(ProxyTunnelError::MissingField("username"));
         }
         Ok(())
@@ -80,7 +80,7 @@ impl ProxyTunnelConfig {
             host: self.host.trim().to_string(),
             port: self.port,
             username: optional_value(&self.username),
-            password: optional_value(&self.password),
+            password: optional_secret(&self.password),
         })
     }
 }
@@ -210,4 +210,8 @@ fn optional_value(value: &Option<String>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn optional_secret(value: &Option<String>) -> Option<String> {
+    value.as_ref().filter(|value| !value.is_empty()).cloned()
 }

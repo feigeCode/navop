@@ -495,7 +495,7 @@ fn resolve_default_windows_shell_from_env(
 }
 
 #[cfg(target_os = "windows")]
-fn build_local_shell(shell: Option<String>, _extra_args: Vec<String>) -> Option<tty::Shell> {
+fn build_local_shell(shell: Option<String>, extra_args: Vec<String>) -> Option<tty::Shell> {
     let program = shell.unwrap_or_else(|| {
         resolve_default_windows_shell_from_env(
             env::var_os("PATH").as_deref(),
@@ -505,7 +505,7 @@ fn build_local_shell(shell: Option<String>, _extra_args: Vec<String>) -> Option<
             env::var_os("COMSPEC").as_deref(),
         )
     });
-    Some(tty::Shell::new(program, vec![]))
+    Some(tty::Shell::new(program, extra_args))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1012,6 +1012,7 @@ impl Terminal {
             Self::create_term(DEFAULT_COLS, DEFAULT_ROWS, event_tx.clone());
         let LocalConfig {
             shell,
+            args,
             working_dir,
             env,
         } = config;
@@ -1019,7 +1020,9 @@ impl Terminal {
         let working_directory = resolve_local_working_dir(working_dir);
 
         // 准备 Shell Integration 环境（写入集成脚本、生成 wrapper 配置）
-        let (integration_env, shell_args) = prepare_shell_integration(shell.as_deref());
+        let (integration_env, integration_args) = prepare_shell_integration(shell.as_deref());
+        let mut shell_args = args;
+        shell_args.extend(integration_args);
 
         // 合并用户环境变量与 Shell Integration 环境变量
         let mut env_pairs = env;

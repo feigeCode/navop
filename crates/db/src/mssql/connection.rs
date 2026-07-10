@@ -17,12 +17,12 @@ use crate::executor::{
 };
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
-use ssh::LocalPortForwardTunnel;
+use connection_tunnel::TunnelGuard;
 
 pub struct MssqlDbConnection {
     config: DbConnectionConfig,
     client: Arc<Mutex<Option<Client<Compat<TcpStream>>>>>,
-    tunnel: Option<LocalPortForwardTunnel>,
+    tunnel: Option<TunnelGuard>,
 }
 
 impl MssqlDbConnection {

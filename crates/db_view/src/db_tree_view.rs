@@ -3106,6 +3106,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: HashMap::new(),
         }
     }

@@ -414,6 +414,7 @@ mod tests {
             password: Some("Seeyon123@cd".to_string()),
             domain: None,
             read_only: false,
+            proxy: None,
         }
     }
 

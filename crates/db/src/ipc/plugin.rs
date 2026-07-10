@@ -2189,6 +2189,7 @@ mod tests {
                     service_name: None,
                     sid: None,
                     workspace_id: None,
+                    proxy: None,
                     extra_params: Default::default(),
                 },
                 supports_alter_table_builder: true,
@@ -2446,6 +2447,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: Default::default(),
         };
 
@@ -2698,6 +2700,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: Default::default(),
         };
 
@@ -2738,6 +2741,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: Default::default(),
         };
 
@@ -2761,6 +2765,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: Default::default(),
         };
         config
@@ -3004,6 +3009,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params,
         };
 

@@ -14,6 +14,7 @@ pub mod backends;
 pub use backend::{RemoteDesktopBackend, RemoteDesktopProviderVersionError, create_backend};
 pub use capabilities::{RemoteDesktopCapabilities, ResizeSupport};
 pub use config::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopSize};
+pub use connection_tunnel::{ProxyTunnelConfig, ProxyTunnelType};
 pub use input::{RemoteDesktopInput, RemoteKey, RemoteMouseButton, RemoteNamedKey};
 pub use output::RemoteDesktopOutput;
 pub use provider::{

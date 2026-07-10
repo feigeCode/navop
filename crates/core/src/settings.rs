@@ -514,6 +514,53 @@ impl Default for PersonalSyncSettings {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalTerminalProfileKind {
+    #[default]
+    System,
+    PowerShell,
+    Cmd,
+    Wsl,
+    GitBash,
+    Custom,
+}
+
+impl LocalTerminalProfileKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::PowerShell => "powershell",
+            Self::Cmd => "cmd",
+            Self::Wsl => "wsl",
+            Self::GitBash => "git_bash",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "powershell" => Self::PowerShell,
+            "cmd" => Self::Cmd,
+            "wsl" => Self::Wsl,
+            "git_bash" => Self::GitBash,
+            "custom" => Self::Custom,
+            _ => Self::System,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LocalTerminalProfileSettings {
+    #[serde(default)]
+    pub kind: LocalTerminalProfileKind,
+    #[serde(default)]
+    pub custom_program: String,
+    #[serde(default)]
+    pub custom_arguments: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     #[serde(default = "default_locale")]
@@ -560,6 +607,8 @@ pub struct AppSettings {
     pub terminal_confirm_multiline_paste: bool,
     #[serde(default = "default_true")]
     pub terminal_confirm_high_risk_command: bool,
+    #[serde(default)]
+    pub local_terminal_profile: LocalTerminalProfileSettings,
     #[serde(default)]
     pub log_file_path: String,
     #[serde(default = "default_true")]
@@ -853,6 +902,7 @@ impl Default for AppSettings {
             terminal_cursor_blink: false,
             terminal_confirm_multiline_paste: default_true(),
             terminal_confirm_high_risk_command: default_true(),
+            local_terminal_profile: LocalTerminalProfileSettings::default(),
             log_file_path: String::new(),
             auto_update: true,
             sync_provider: SyncProvider::OnetCloud,
@@ -1036,9 +1086,10 @@ mod tests {
     use gpui_component::Theme;
 
     use super::{
-        AppSettings, CustomFont, LOCALE_SYSTEM, LargeTextCellEditorOpenMode, McpPermissionMode,
-        McpServerMode, PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage,
-        SyncProvider, default_grid_font_fallback_families, default_grid_monospace_font_family,
+        AppSettings, CustomFont, LOCALE_SYSTEM, LargeTextCellEditorOpenMode,
+        LocalTerminalProfileKind, LocalTerminalProfileSettings, McpPermissionMode, McpServerMode,
+        PersonalSyncBackendKind, RemoteFileOpenMode, StartupDefaultPage, SyncProvider,
+        default_grid_font_fallback_families, default_grid_monospace_font_family,
         grid_monospace_font, installed_grid_monospace_font, is_installed_font_family,
         resolve_installed_grid_monospace_font_family,
     };
@@ -1528,5 +1579,43 @@ mod tests {
         assert!(loaded.tool_exposure.mcp.database);
         assert!(loaded.tool_exposure.mcp.redis);
         assert!(!loaded.tool_exposure.agent.terminal_exec);
+    }
+
+    #[test]
+    fn local_terminal_profile_defaults_to_system() {
+        let settings = AppSettings::default();
+
+        assert_eq!(
+            LocalTerminalProfileKind::System,
+            settings.local_terminal_profile.kind
+        );
+        assert!(settings.local_terminal_profile.custom_program.is_empty());
+        assert!(settings.local_terminal_profile.custom_arguments.is_empty());
+    }
+
+    #[test]
+    fn local_terminal_profile_round_trip_preserves_custom_command() {
+        let mut settings = AppSettings::default();
+        settings.local_terminal_profile = LocalTerminalProfileSettings {
+            kind: LocalTerminalProfileKind::Custom,
+            custom_program: "/opt/homebrew/bin/fish".to_string(),
+            custom_arguments: "--login -C 'echo ready'".to_string(),
+        };
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            LocalTerminalProfileKind::Custom,
+            restored.local_terminal_profile.kind
+        );
+        assert_eq!(
+            "/opt/homebrew/bin/fish",
+            restored.local_terminal_profile.custom_program
+        );
+        assert_eq!(
+            "--login -C 'echo ready'",
+            restored.local_terminal_profile.custom_arguments
+        );
     }
 }

@@ -98,7 +98,7 @@
 
 ### Database Workspace
 
-Connect to MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse from a single interface. Browse schemas, tables, columns, indexes, foreign keys, procedures, functions, triggers, and sequences where supported.
+Connect to MySQL, PostgreSQL, SQLite, DuckDB, SQL Server, Oracle, and ClickHouse from a single interface. Network database connections can route through per-connection SOCKS5 or HTTP CONNECT proxies, including authenticated proxies and SSH tunnels reached through a proxy. Browse schemas, tables, columns, indexes, foreign keys, procedures, functions, triggers, and sequences where supported.
 
 Beyond the built-in drivers, OnetCli ships an extension marketplace that adds database drivers for Dameng DM, KingbaseES, GBase 8s, OceanBase, openGauss, Apache IoTDB, and a pure-Go Oracle driver that runs without Oracle Instant Client. Install the ones you need and they appear alongside the built-in connections.
 
@@ -112,7 +112,7 @@ Use the dedicated Redis viewer for key browsing, value inspection, and cluster c
 
 ### SSH, SFTP, Port Forwarding, Serial & Terminal
 
-Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and keep local terminals in multi-tab sessions. The terminal includes command history, SSH broadcast input across windows, remote shell integration management, and an SFTP sidebar with drag-and-drop upload support, path favorites, and quick jumps to frequently used directories.
+Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and keep local terminals in multi-tab sessions. Local terminal profiles support the system shell, PowerShell, Command Prompt, WSL, Git Bash, and custom programs with safely parsed arguments. The terminal also includes command history, SSH broadcast input across windows, remote shell integration management, and an SFTP sidebar with drag-and-drop upload support, path favorites, and quick jumps to frequently used directories.
 
 ### Port Forwarding
 
@@ -124,7 +124,7 @@ Edit remote files directly inside OnetCli with syntax highlighting and autocompl
 
 ### Remote Desktop (RDP & VNC)
 
-Open RDP and VNC sessions through installable remote desktop providers. Connect to Windows machines over RDP, or to any VNC server, and drive the remote desktop from the same workspace where your databases, terminals, and files live.
+Open RDP and VNC sessions through installable remote desktop providers. Each connection can use a SOCKS5 or HTTP CONNECT proxy without requiring a provider protocol upgrade. Connect to Windows machines over RDP, or to any VNC server, and drive the remote desktop from the same workspace where your databases, terminals, and files live.
 
 ### Monitoring & Charts
 

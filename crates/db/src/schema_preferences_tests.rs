@@ -15,6 +15,7 @@ fn config(extra_params: &[(&str, &str)]) -> DbConnectionConfig {
         service_name: None,
         sid: None,
         workspace_id: None,
+        proxy: None,
         extra_params: extra_params
             .iter()
             .map(|(key, value)| (key.to_string(), value.to_string()))

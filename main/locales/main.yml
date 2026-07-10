@@ -114,6 +114,10 @@ Home:
     en: New Connection
     zh-CN: 新建连接
     zh-HK: 新建連線
+  local_terminal_invalid_config:
+    en: "Invalid local terminal configuration: %{error}"
+    zh-CN: "本地终端配置无效：%{error}"
+    zh-HK: "本機終端設定無效：%{error}"
   port_forwarding_started:
     en: "Port Forwarding %{name} started on %{addr}"
     zh-CN: "端口转发 %{name} 已启动：%{addr}"
@@ -1065,6 +1069,60 @@ Settings:
         en: Adjust font size for better readability (8-72)
         zh-CN: 调整字体大小以获得更好的可读性（8-72）
         zh-HK: 調整字型大小以獲得更好的可讀性（8-72）
+
+    LocalTerminal:
+      group_title:
+        en: Local Terminal
+        zh-CN: 本地终端
+        zh-HK: 本機終端
+      profile:
+        en: Default shell
+        zh-CN: 默认终端
+        zh-HK: 預設終端
+      profile_desc:
+        en: Choose the shell used when opening a new local terminal tab
+        zh-CN: 选择新建本地终端标签页时使用的 shell
+        zh-HK: 選擇新增本機終端分頁時使用的 shell
+      system:
+        en: System Default
+        zh-CN: 系统默认
+        zh-HK: 系統預設
+      powershell:
+        en: PowerShell
+        zh-CN: PowerShell
+        zh-HK: PowerShell
+      cmd:
+        en: Command Prompt
+        zh-CN: 命令提示符（CMD）
+        zh-HK: 命令提示字元（CMD）
+      wsl:
+        en: WSL
+        zh-CN: WSL
+        zh-HK: WSL
+      git_bash:
+        en: Git Bash
+        zh-CN: Git Bash
+        zh-HK: Git Bash
+      custom:
+        en: Custom
+        zh-CN: 自定义
+        zh-HK: 自訂
+      custom_program:
+        en: Custom program
+        zh-CN: 自定义程序
+        zh-HK: 自訂程式
+      custom_program_desc:
+        en: Executable path or command used when the Custom profile is selected
+        zh-CN: 选择“自定义”时使用的可执行程序路径或命令
+        zh-HK: 選擇「自訂」時使用的可執行程式路徑或命令
+      custom_arguments:
+        en: Custom arguments
+        zh-CN: 自定义参数
+        zh-HK: 自訂參數
+      custom_arguments_desc:
+        en: Arguments are parsed safely and passed directly to the program without a command shell
+        zh-CN: 参数会被安全解析并直接传给程序，不经过命令 shell
+        zh-HK: 參數會被安全解析並直接傳給程式，不經過命令 shell
 
     # 终端设置
     Terminal:

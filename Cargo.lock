@@ -9822,6 +9822,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "connection_tunnel",
  "one-core",
  "process-util",
  "proptest 1.11.0",
@@ -12105,6 +12106,7 @@ dependencies = [
  "polling",
  "serde",
  "serialport",
+ "shell-words",
  "ssh",
  "tokio",
  "tracing",

@@ -8,6 +8,8 @@ use tokio::time::timeout;
 mod proxy;
 #[cfg(test)]
 mod proxy_tests;
+#[cfg(test)]
+mod tunnel_tests;
 
 pub use proxy::{
     ProxyTunnel, ProxyTunnelConfig, ProxyTunnelError, ProxyTunnelType, start_proxy_tunnel,
@@ -59,6 +61,8 @@ pub enum TunnelError {
     Establish(String),
     #[error("ssh tunnel connection timed out after {0}s")]
     Timeout(u64),
+    #[error(transparent)]
+    Proxy(#[from] ProxyTunnelError),
 }
 
 /// Reusable SSH tunnel configuration for connection types that need TCP forwarding.
@@ -151,14 +155,40 @@ pub async fn resolve_connection_target(
     direct_port: u16,
     tunnel: Option<&SshTunnelConfig>,
 ) -> Result<ResolvedConnectionTarget, TunnelError> {
-    let Some(tunnel) = tunnel.filter(|config| config.enabled) else {
-        return Ok(ResolvedConnectionTarget {
-            host: normalize_direct_host(direct_host),
-            port: direct_port,
-            tunnel: None,
-        });
-    };
+    resolve_connection_target_with_proxy(direct_host, direct_port, tunnel, None).await
+}
 
+pub async fn resolve_connection_target_with_proxy(
+    direct_host: &str,
+    direct_port: u16,
+    tunnel: Option<&SshTunnelConfig>,
+    proxy: Option<&ProxyTunnelConfig>,
+) -> Result<ResolvedConnectionTarget, TunnelError> {
+    if let Some(tunnel) = tunnel.filter(|config| config.enabled) {
+        return resolve_ssh_target(direct_host, direct_port, tunnel, proxy).await;
+    }
+    if let Some(proxy) = proxy {
+        let tunnel = start_proxy_tunnel(proxy.clone(), direct_host, direct_port)?;
+        let local_addr = tunnel.local_addr();
+        return Ok(ResolvedConnectionTarget {
+            host: local_addr.ip().to_string(),
+            port: local_addr.port(),
+            tunnel: Some(tunnel.into()),
+        });
+    }
+    Ok(ResolvedConnectionTarget {
+        host: normalize_direct_host(direct_host),
+        port: direct_port,
+        tunnel: None,
+    })
+}
+
+async fn resolve_ssh_target(
+    direct_host: &str,
+    direct_port: u16,
+    tunnel: &SshTunnelConfig,
+    proxy: Option<&ProxyTunnelConfig>,
+) -> Result<ResolvedConnectionTarget, TunnelError> {
     let ssh_host = required_value("host", &tunnel.host)?;
     let ssh_username = required_value("username", &tunnel.username)?;
     let auth = build_auth(tunnel)?;
@@ -174,7 +204,7 @@ pub async fn resolve_connection_target(
         keepalive_interval: None,
         keepalive_max: None,
         jump_server: None,
-        proxy: None,
+        proxy: proxy.map(ProxyTunnelConfig::to_ssh_proxy).transpose()?,
         keyboard_interactive_responder: None,
     };
 
@@ -237,38 +267,5 @@ fn build_auth(config: &SshTunnelConfig) -> Result<SshAuth, TunnelError> {
             "password",
             config.password.as_deref().unwrap_or(""),
         )?)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{SshTunnelConfig, resolve_tunnel_destination};
-
-    #[test]
-    fn tunnel_destination_uses_explicit_target() {
-        let tunnel = SshTunnelConfig {
-            enabled: true,
-            target_host: Some("mongo.internal".to_string()),
-            target_port: Some(27018),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            ("mongo.internal".to_string(), 27018),
-            resolve_tunnel_destination("localhost", 27017, Some(&tunnel))
-        );
-    }
-
-    #[test]
-    fn tunnel_destination_falls_back_to_direct_target() {
-        let tunnel = SshTunnelConfig {
-            enabled: true,
-            ..Default::default()
-        };
-
-        assert_eq!(
-            ("db.local".to_string(), 27017),
-            resolve_tunnel_destination("db.local", 27017, Some(&tunnel))
-        );
     }
 }

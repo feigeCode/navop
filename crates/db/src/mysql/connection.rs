@@ -18,7 +18,7 @@ use crate::executor::{
 use crate::rustls_provider::ensure_rustls_crypto_provider;
 use crate::ssh_tunnel::{resolve_connection_target, resolve_tunnel_destination};
 use crate::{DatabasePlugin, format_message, truncate_str};
-use ssh::LocalPortForwardTunnel;
+use connection_tunnel::TunnelGuard;
 
 fn is_mysql_access_denied(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
@@ -28,7 +28,7 @@ fn is_mysql_access_denied(message: &str) -> bool {
 pub struct MysqlDbConnection {
     config: DbConnectionConfig,
     conn: Arc<Mutex<Option<Conn>>>,
-    tunnel: Option<LocalPortForwardTunnel>,
+    tunnel: Option<TunnelGuard>,
 }
 
 impl MysqlDbConnection {
@@ -1010,6 +1010,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: extra_params
                 .iter()
                 .map(|(key, value)| (key.to_string(), value.to_string()))

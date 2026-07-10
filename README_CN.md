@@ -98,7 +98,7 @@
 
 ### 数据库工作区
 
-在同一界面连接 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle 和 ClickHouse。可浏览数据库、Schema、表、字段、索引、外键、过程、函数、触发器和序列等对象，具体能力取决于数据库类型。
+在同一界面连接 MySQL、PostgreSQL、SQLite、DuckDB、SQL Server、Oracle 和 ClickHouse。网络数据库连接支持每连接 SOCKS5 / HTTP CONNECT 代理、代理认证，以及“通过代理连接 SSH 再建立数据库隧道”。可浏览数据库、Schema、表、字段、索引、外键、过程、函数、触发器和序列等对象，具体能力取决于数据库类型。
 
 在内置驱动之外，OnetCli 还提供扩展市场，可按需安装达梦 DM、金仓 KingbaseES、南大通用 GBase 8s、OceanBase、openGauss、Apache IoTDB 的数据库驱动，以及一个无需 Oracle Instant Client 的纯 Go Oracle 驱动。安装后会与内置数据库一同出现在连接列表中。
 
@@ -112,7 +112,7 @@
 
 ### SSH、SFTP、端口转发、串口与终端
 
-集成 SSH 会话、SFTP 文件管理、端口转发、串口连接和本地终端，支持多标签页同时操作。终端支持命令历史、SSH 多窗口广播输入、远程 shell integration 管理，并内置 SFTP 侧边栏，可直接拖拽上传文件，也支持 SFTP 路径收藏和常用目录快速跳转。
+集成 SSH 会话、SFTP 文件管理、端口转发、串口连接和本地终端，支持多标签页同时操作。本地终端可选择系统默认、PowerShell、CMD、WSL、Git Bash，或配置自定义程序与安全解析的启动参数。终端还支持命令历史、SSH 多窗口广播输入、远程 shell integration 管理，并内置 SFTP 侧边栏，可直接拖拽上传文件，也支持 SFTP 路径收藏和常用目录快速跳转。
 
 ### 端口转发
 
@@ -124,7 +124,7 @@
 
 ### 远程桌面（RDP 与 VNC）
 
-通过可安装的远程桌面 provider 打开 RDP 和 VNC 会话。可经 RDP 连接 Windows 机器，或连接任意 VNC 服务端，在数据库、终端和文件所在的同一个工作台里直接操作远程桌面。
+通过可安装的远程桌面 provider 打开 RDP 和 VNC 会话。每个连接都可使用 SOCKS5 或 HTTP CONNECT 代理，无需升级 provider 协议。可经 RDP 连接 Windows 机器，或连接任意 VNC 服务端，在数据库、终端和文件所在的同一个工作台里直接操作远程桌面。
 
 ### 监控与图表
 

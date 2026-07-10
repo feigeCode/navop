@@ -85,6 +85,9 @@ pub trait TerminalBackend: Send {
 pub struct LocalConfig {
     /// Shell command (default: system default shell)
     pub shell: Option<String>,
+    /// Arguments passed directly to the shell process.
+    #[serde(default)]
+    pub args: Vec<String>,
     /// Working directory
     pub working_dir: Option<String>,
     /// Environment variables
@@ -145,6 +148,7 @@ impl Default for LocalConfig {
     fn default() -> Self {
         Self {
             shell: None,
+            args: Vec::new(),
             working_dir: None,
             env: vec![
                 ("TERM".to_string(), "xterm-256color".to_string()),

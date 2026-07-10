@@ -564,6 +564,7 @@ mod tests {
             database: None,
             service_name: None,
             sid: None,
+            proxy: None,
             extra_params: Default::default(),
         });
 

@@ -130,6 +130,7 @@ fn config(database_type: DatabaseType) -> DbConnectionConfig {
         service_name: None,
         sid: None,
         workspace_id: None,
+        proxy: None,
         extra_params: HashMap::new(),
     }
 }

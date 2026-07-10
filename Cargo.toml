@@ -81,6 +81,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 serde_yaml = "0.9"
 serde_repr = "0.1"
+shell-words = "1.1.1"
 smallvec = "1"
 smol = "2"
 sys-locale = "0.3.2"
