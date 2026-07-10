@@ -889,8 +889,8 @@ impl AgentChatView {
         }
         if let Err(err) = self.runtime.interrupt(&self.session_id) {
             self.transcript.push_system(format!("停止失败:{err}"));
-            self.set_running(false, cx);
         }
+        self.set_running(false, cx);
         cx.notify();
     }
 
@@ -965,10 +965,13 @@ impl AgentChatView {
         let terminal = matches!(
             event,
             RuntimeEvent::TurnCompleted { .. }
+                | RuntimeEvent::TurnCancelled { .. }
                 | RuntimeEvent::TurnFailed { .. }
                 | RuntimeEvent::NeedUserInput { .. }
         );
-        self.transcript.apply(&event);
+        if !self.transcript.apply(&event) {
+            return;
+        }
         self.sync_composer(cx);
         // 跟随流式输出 / 新卡片自动滚到底。
         self.request_scroll_to_bottom();
@@ -3433,6 +3436,22 @@ mod tests {
         assert_eq!(vec!["prod-a-renamed"], pool_labels);
         assert_eq!(Some("ssh-a".to_string()), default_id);
         assert_eq!(vec!["prod-a-renamed", "prod-db"], catalog_labels);
+    }
+
+    #[gpui::test]
+    fn local_stop_ack_immediately_clears_running_state(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            view.set_running(true, cx);
+            view.stop(cx);
+        });
+
+        assert!(!view.read_with(cx, |view, _| view.is_running));
     }
 
     #[test]

@@ -224,7 +224,7 @@ Add `clear_active_turn_if(turn_id)` and `is_turn_writable(turn_id)`. Guard assis
 Run: `rtk cargo test -p agent_runtime -- --nocapture`  
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `rtk git add crates/agent_runtime && rtk git commit -m "fix(agent): decouple turn cancellation from tool cleanup"`
 
@@ -232,7 +232,7 @@ Run: `rtk git add crates/agent_runtime && rtk git commit -m "fix(agent): decoupl
 
 **Files:** Modify/Test `crates/ai_chat_view/src/{agent_view,agent_transcript}.rs`; modify `docs/agent-tools-current-state.md`.
 
-- [ ] **Step 1: Write failing UI event tests**
+- [x] **Step 1: Write failing UI event tests**
 
 ```rust
 #[gpui::test]
@@ -249,21 +249,21 @@ fn cancelled_event_is_not_rendered_as_failure() {
 
 Add `running_agent_view` and `cancelled_event` helpers in the same test module using the existing runtime/view fixtures.
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `rtk cargo test -p ai_chat_view stop_ack_immediately_clears_running_state -- --nocapture`  
 Expected: FAIL because local stop waits for a later runtime event.
 
-- [ ] **Step 3: Implement UI cancellation handling**
+- [x] **Step 3: Implement UI cancellation handling**
 
 On successful `runtime.interrupt`, immediately call `set_running(false, cx)`. Treat `TurnCancelled` as a terminal event, persist once, and render cancellation separately from failure. Document readiness, safe replace, fail-closed behavior, and detached command ownership.
 
-- [ ] **Step 4: Run UI tests**
+- [x] **Step 4: Run UI tests**
 
 Run: `rtk cargo test -p ai_chat_view -- --nocapture`  
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `rtk git add crates/ai_chat_view docs/agent-tools-current-state.md && rtk git commit -m "fix(ai-chat): finish cancelled turns immediately"`
 
