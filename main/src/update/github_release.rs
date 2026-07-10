@@ -7,9 +7,9 @@ use serde::Deserialize;
 use super::UpdateDialogInfo;
 
 const GITHUB_OWNER: &str = "feigeCode";
-const GITHUB_REPO: &str = "onetcli";
-pub const GITHUB_API_URL: &str = "https://api.github.com/repos/feigeCode/onetcli/releases/latest";
-pub const GITHUB_LATEST_RELEASE_URL: &str = "https://github.com/feigeCode/onetcli/releases/latest";
+const GITHUB_REPO: &str = "navop";
+pub const GITHUB_API_URL: &str = "https://api.github.com/repos/feigeCode/navop/releases/latest";
+pub const GITHUB_LATEST_RELEASE_URL: &str = "https://github.com/feigeCode/navop/releases/latest";
 const GITHUB_USER_AGENT: &str = "onetcli-updater";
 
 const EXPECTED_ARCHIVE_NAME: &str =
@@ -17,11 +17,11 @@ const EXPECTED_ARCHIVE_NAME: &str =
 
 pub(crate) const fn expected_archive_name_for(os: &str, arch: &str) -> &'static str {
     match (os.as_bytes(), arch.as_bytes()) {
-        (b"macos", b"aarch64") => "onetcli-aarch64-apple-darwin.tar.gz",
-        (b"macos", b"x86_64") => "onetcli-x86_64-apple-darwin.tar.gz",
-        (b"linux", b"x86_64") => "onetcli-x86_64-unknown-linux-gnu.tar.gz",
-        (b"linux", b"aarch64") => "onetcli-aarch64-unknown-linux-gnu.tar.gz",
-        (b"windows", b"x86_64") => "onetcli-x86_64-pc-windows-msvc.zip",
+        (b"macos", b"aarch64") => "navop-aarch64-apple-darwin.tar.gz",
+        (b"macos", b"x86_64") => "navop-x86_64-apple-darwin.tar.gz",
+        (b"linux", b"x86_64") => "navop-x86_64-unknown-linux-gnu.tar.gz",
+        (b"linux", b"aarch64") => "navop-aarch64-unknown-linux-gnu.tar.gz",
+        (b"windows", b"x86_64") => "navop-x86_64-pc-windows-msvc.zip",
         _ => "",
     }
 }
@@ -163,8 +163,16 @@ mod tests {
     #[test]
     fn expected_archive_name_includes_linux_arm64() {
         assert_eq!(
-            "onetcli-aarch64-unknown-linux-gnu.tar.gz",
+            "navop-aarch64-unknown-linux-gnu.tar.gz",
             expected_archive_name_for("linux", "aarch64")
+        );
+    }
+
+    #[test]
+    fn expected_archive_name_uses_navop_brand() {
+        assert_eq!(
+            "navop-aarch64-apple-darwin.tar.gz",
+            expected_archive_name_for("macos", "aarch64")
         );
     }
 

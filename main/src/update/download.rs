@@ -216,7 +216,7 @@ mod tests {
     fn download_file_name_preserves_tar_gz_suffix() {
         let file_name = download_file_name(
             "0.3.2",
-            "https://example.com/onetcli-x86_64-apple-darwin.tar.gz",
+            "https://example.com/navop-x86_64-apple-darwin.tar.gz",
         );
 
         assert_eq!(file_name, "onetcli-update-0.3.2.tar.gz");
@@ -226,7 +226,7 @@ mod tests {
     fn download_file_name_preserves_zip_suffix() {
         let file_name = download_file_name(
             "0.3.2",
-            "https://example.com/onetcli-x86_64-pc-windows-msvc.zip",
+            "https://example.com/navop-x86_64-pc-windows-msvc.zip",
         );
 
         assert_eq!(file_name, "onetcli-update-0.3.2.zip");
@@ -245,9 +245,9 @@ mod tests {
         ]));
         let http_client: Arc<dyn HttpClient> = client.clone();
         let urls = vec![
-            "https://onetcli.pdyyds.cn/releases/v9.9.9/onetcli-x86_64-unknown-linux-gnu.tar.gz"
+            "https://onetcli.pdyyds.cn/releases/v9.9.9/navop-x86_64-unknown-linux-gnu.tar.gz"
                 .to_string(),
-            "https://github.com/feigeCode/onetcli/releases/download/v9.9.9/onetcli-x86_64-unknown-linux-gnu.tar.gz"
+            "https://github.com/feigeCode/navop/releases/download/v9.9.9/navop-x86_64-unknown-linux-gnu.tar.gz"
                 .to_string(),
         ];
 

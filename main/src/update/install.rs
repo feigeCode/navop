@@ -6,6 +6,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::extract::extract_archive;
 use super::util::UpdateInstallAction;
 
+#[cfg(target_os = "macos")]
+const CURRENT_APP_BUNDLE_NAME: &str = "Navop.app";
+#[cfg(target_os = "macos")]
+const LEGACY_APP_BUNDLE_NAME: &str = "OnetCli.app";
+
 pub(crate) fn start_install_update(download_path: PathBuf) -> Result<UpdateInstallAction, String> {
     let staging_dir = create_staging_dir()?;
     extract_archive(&download_path, &staging_dir)?;
@@ -236,7 +241,7 @@ fn find_first_app_bundle(staging_dir: &Path) -> Result<PathBuf, String> {
             let entry = entry.map_err(|err| format!("读取 staging 条目失败: {}", err))?;
             let path = entry.path();
             if path.is_dir() {
-                if path.extension().and_then(|ext| ext.to_str()) == Some("app") {
+                if is_supported_app_bundle(&path) {
                     return Ok(path);
                 }
                 stack.push(path);
@@ -244,7 +249,13 @@ fn find_first_app_bundle(staging_dir: &Path) -> Result<PathBuf, String> {
         }
     }
 
-    Err("未找到 OnetCli.app".to_string())
+    Err("未找到 Navop.app 或 OnetCli.app".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn is_supported_app_bundle(path: &Path) -> bool {
+    let name = path.file_name().and_then(|name| name.to_str());
+    name == Some(CURRENT_APP_BUNDLE_NAME) || name == Some(LEGACY_APP_BUNDLE_NAME)
 }
 
 #[cfg(target_os = "macos")]
@@ -557,6 +568,40 @@ mod tests {
         assert!(
             err.contains(".app"),
             "错误信息应说明 bundle 校验失败: {err}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn find_app_bundle_accepts_current_and_legacy_names() {
+        use super::find_first_app_bundle;
+
+        for name in ["Navop.app", "OnetCli.app"] {
+            let temp = TestDir::new("find-app-bundle");
+            let app = temp.path.join(name);
+            std::fs::create_dir_all(&app).expect("创建 app bundle 失败");
+
+            assert_eq!(
+                find_first_app_bundle(&temp.path).expect("应接受当前或旧版 app bundle"),
+                app
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn find_app_bundle_rejects_unsupported_name() {
+        use super::find_first_app_bundle;
+
+        let temp = TestDir::new("find-app-bundle-unsupported");
+        std::fs::create_dir_all(temp.path.join("Other.app")).expect("创建 app bundle 失败");
+
+        let err = find_first_app_bundle(&temp.path).expect_err("应拒绝未知 app bundle");
+
+        assert!(err.contains("Navop.app"), "错误应包含当前 bundle 名: {err}");
+        assert!(
+            err.contains("OnetCli.app"),
+            "错误应包含旧版 bundle 名: {err}"
         );
     }
 

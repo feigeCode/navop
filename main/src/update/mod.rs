@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(requests[1].uri, "https://api.github.com/");
         assert_eq!(
             requests[2].uri,
-            "https://api.github.com/repos/feigeCode/onetcli/releases/latest"
+            "https://api.github.com/repos/feigeCode/navop/releases/latest"
         );
     }
 
@@ -569,7 +569,7 @@ mod tests {
         assert_eq!(requests[0].uri, "https://api.github.com/");
         assert_eq!(
             requests[1].uri,
-            "https://api.github.com/repos/feigeCode/onetcli/releases/latest"
+            "https://api.github.com/repos/feigeCode/navop/releases/latest"
         );
     }
 
@@ -608,7 +608,7 @@ mod tests {
         assert_eq!(requests[2].uri, "https://api.github.com/");
         assert_eq!(
             requests[3].uri,
-            "https://api.github.com/repos/feigeCode/onetcli/releases/latest"
+            "https://api.github.com/repos/feigeCode/navop/releases/latest"
         );
     }
 
@@ -651,7 +651,7 @@ mod tests {
             info.fallback_download_url.as_deref(),
             Some(
                 format!(
-                    "https://github.com/feigeCode/onetcli/releases/download/v9.9.9/{}",
+                    "https://github.com/feigeCode/navop/releases/download/v9.9.9/{}",
                     expected_archive_name()
                 )
                 .as_str()
@@ -682,7 +682,7 @@ mod tests {
                     "{}": "https://onetcli.pdyyds.cn/releases/v{version}/{}"
                 }},
                 "fallback_downloads": {{
-                    "{}": "https://github.com/feigeCode/onetcli/releases/download/v{version}/{}"
+                    "{}": "https://github.com/feigeCode/navop/releases/download/v{version}/{}"
                 }}
             }}"#,
             current_target_key(),
