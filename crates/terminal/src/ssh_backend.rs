@@ -248,8 +248,12 @@ fn build_terminal_exec_handle(
 ) -> TerminalExecHandle {
     TerminalExecHandle::new(move |request, cancellation| {
         let command_tx = command_tx.clone();
-        let id = exec_ids.fetch_add(1, Ordering::Relaxed);
+        let exec_ids = exec_ids.clone();
         Box::pin(async move {
+            if cancellation.is_cancelled() {
+                return Err(TerminalExecError::CancelledBeforeSubmit);
+            }
+            let id = exec_ids.fetch_add(1, Ordering::Relaxed);
             let (result_tx, result_rx) = oneshot::channel();
             command_tx
                 .send(SshCommand::StartExec {
@@ -1778,6 +1782,22 @@ mod tests {
             TerminalExecError::Cancelled,
             task.await.unwrap().unwrap_err()
         );
+    }
+
+    #[tokio::test]
+    async fn pre_cancelled_terminal_exec_never_enqueues_start() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let handle = build_terminal_exec_handle(command_tx, Arc::new(AtomicU64::new(1)));
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let error = handle
+            .exec(request("pwd"), cancellation)
+            .await
+            .expect_err("pre-cancelled terminal exec should not start");
+
+        assert_eq!(TerminalExecError::CancelledBeforeSubmit, error);
+        assert!(command_rx.try_recv().is_err());
     }
 
     #[tokio::test]

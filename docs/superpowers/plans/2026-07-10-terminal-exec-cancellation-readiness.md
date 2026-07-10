@@ -288,7 +288,7 @@ Expected: exit 0.
 
 Verify partial-line replacement, foreground busy rejection, Agent cancellation without command interruption, `npm run dev &`, and `nohup` with/without explicit stdio redirection. Record any environment limitation rather than fabricating a pass.
 
-- [ ] **Step 4: Request code review and address findings**
+- [x] **Step 4: Request code review and address findings**
 
 Use `superpowers:requesting-code-review`, apply verified findings with `superpowers:receiving-code-review`, then rerun affected tests.
 

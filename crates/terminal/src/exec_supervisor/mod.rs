@@ -109,7 +109,7 @@ impl ExecSupervisor {
         if let Some(active) = self
             .active
             .as_mut()
-            .filter(|active| active.phase == ExecPhase::Observing)
+            .filter(|active| active.phase == ExecPhase::Observing && !active.detached)
         {
             active.raw.extend_from_slice(data);
         }

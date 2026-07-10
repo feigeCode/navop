@@ -60,6 +60,36 @@ fn ready_exec_clears_then_submits_after_fresh_input_start() {
 }
 
 #[test]
+fn submitted_only_exec_becomes_busy_before_command_start_arrives() {
+    let mut supervisor = ready_supervisor();
+    let mut submitted_only = request("sleep 1");
+    submitted_only.wait_for_output = false;
+    supervisor.start(34, submitted_only);
+
+    assert!(matches!(
+        supervisor.on_osc(&OscEvent::InputStart).as_slice(),
+        [
+            ExecEffect::Write {
+                source: TerminalInputSource::AgentCommand,
+                ..
+            },
+            ExecEffect::Complete { id: 34, .. }
+        ]
+    ));
+    assert_eq!(
+        ShellCommandReadiness::SubmissionPending { command_epoch: 34 },
+        supervisor.readiness()
+    );
+    assert_eq!(
+        vec![ExecEffect::Fail {
+            id: 35,
+            error: TerminalExecError::Busy,
+        }],
+        supervisor.start(35, request("pwd"))
+    );
+}
+
+#[test]
 fn running_terminal_rejects_without_writing() {
     let mut supervisor = ready_supervisor();
     assert!(
@@ -158,6 +188,22 @@ fn cancel_after_submit_detaches_without_control_write() {
     assert_eq!(
         ShellCommandReadiness::AwaitingPrompt { command_epoch: 22 },
         supervisor.readiness()
+    );
+}
+
+#[test]
+fn detached_observer_discards_late_output_instead_of_buffering_it() {
+    let mut supervisor = ready_supervisor();
+    submit(&mut supervisor, 36, "yes");
+    supervisor.on_terminal_chunk(b"yes\r\nbefore-cancel\r\n", &[OscEvent::CommandStart]);
+    let buffered_before_cancel = supervisor.active.as_ref().unwrap().raw.len();
+
+    supervisor.cancel(36);
+    supervisor.on_terminal_chunk(b"late-output\r\nlate-output\r\n", &[]);
+
+    assert_eq!(
+        buffered_before_cancel,
+        supervisor.active.as_ref().unwrap().raw.len()
     );
 }
 

@@ -99,13 +99,17 @@ impl ExecSupervisor {
             source: TerminalInputSource::AgentCommand,
             data,
         };
+        if active.request.submit {
+            self.readiness = ShellCommandReadiness::SubmissionPending {
+                command_epoch: active.id,
+            };
+        }
         if !active.request.submit || !active.request.wait_for_output {
             return vec![write, complete_submitted(&active)];
         }
         active.phase = ExecPhase::Observing;
         let id = active.id;
         let timeout = active.request.timeout;
-        self.readiness = ShellCommandReadiness::SubmissionPending { command_epoch: id };
         self.active = Some(active);
         vec![
             write,
