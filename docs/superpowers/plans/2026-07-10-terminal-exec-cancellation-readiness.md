@@ -32,7 +32,7 @@
 
 **Files:** Create/Test `crates/terminal/src/exec_supervisor.rs`; modify `crates/terminal/src/lib.rs`.
 
-- [ ] **Step 1: Write failing readiness and safe-replace tests**
+- [x] **Step 1: Write failing readiness and safe-replace tests**
 
 ```rust
 #[test]
@@ -51,12 +51,12 @@ fn running_terminal_rejects_without_writing() {
     assert_eq!(vec![Effect::Fail(TerminalExecError::Busy)], state.start(request("pwd"), 12));
 }
 ```
-- [ ] **Step 2: Run the focused tests and confirm red state**
+- [x] **Step 2: Run the focused tests and confirm red state**
 
 Run: `rtk cargo test -p terminal exec_supervisor -- --nocapture`  
 Expected: FAIL because `exec_supervisor` and its types do not exist.
 
-- [ ] **Step 3: Implement readiness, leases, phases, and effects**
+- [x] **Step 3: Implement readiness, leases, phases, and effects**
 
 ```rust
 pub(crate) enum Readiness { Initializing, PromptRendering, Ready { prompt_epoch: u64 }, Clearing, SubmissionPending, Running, AwaitingPrompt, Unknown, Disconnected }
@@ -65,7 +65,7 @@ pub(crate) struct ExecSupervisor { readiness: Readiness, event_seq: u64, input_s
 ```
 Implement `start`, `on_user_write`, `on_terminal_chunk`, `cancel`, `timeout`, and `disconnect`. `start` writes nothing unless readiness is `Ready`; safe replace emits ETX first; a newer `InputStart` submits the command; human writes invalidate pre-submit automation; post-submit cancellation removes only the result sender.
 
-- [ ] **Step 4: Add command-boundary tests**
+- [x] **Step 4: Add command-boundary tests**
 
 ```rust
 #[test]
@@ -85,12 +85,12 @@ fn stale_command_finished_does_not_complete_new_epoch() {
     assert!(state.on_command_finished(22, 0).is_empty());
 }
 ```
-- [ ] **Step 5: Run terminal supervisor tests**
+- [x] **Step 5: Run terminal supervisor tests**
 
 Run: `rtk cargo test -p terminal exec_supervisor -- --nocapture`  
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run: `rtk git add crates/terminal/src/exec_supervisor.rs crates/terminal/src/lib.rs && rtk git commit -m "feat(terminal): add exec readiness supervisor"`
 
@@ -98,7 +98,7 @@ Run: `rtk git add crates/terminal/src/exec_supervisor.rs crates/terminal/src/lib
 
 **Files:** Modify/Test `crates/terminal/src/{types,ssh_backend,exec_capture}.rs`.
 
-- [ ] **Step 1: Write failing async-handle and actor tests**
+- [x] **Step 1: Write failing async-handle and actor tests**
 
 ```rust
 #[tokio::test]
@@ -109,12 +109,12 @@ async fn terminal_exec_handle_forwards_cancellation() {
     assert_eq!(TerminalExecError::CancelledBeforeSubmit, handle.exec(request(), token).await.unwrap_err());
 }
 ```
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `rtk cargo test -p terminal terminal_exec_handle -- --nocapture`  
 Expected: FAIL because the handle is synchronous.
 
-- [ ] **Step 3: Implement the async handle and SSH command variants**
+- [x] **Step 3: Implement the async handle and SSH command variants**
 
 ```rust
 pub type TerminalExecFuture = Pin<Box<dyn Future<Output = Result<TerminalExecOutput, TerminalExecError>> + Send>>;
@@ -123,12 +123,12 @@ enum SshCommand { Write(TerminalWrite), StartExec { id: u64, request: TerminalEx
 ```
 The handle sends `StartExec` and selects between its oneshot and cancellation; on cancellation it sends `CancelExec`. The SSH actor converts OSC events and data into supervisor calls, executes returned writes/results, and schedules bounded timeout messages. Remove the blocking `session.wait()` path; keep output sanitization pure.
 
-- [ ] **Step 4: Verify SSH execution behavior**
+- [x] **Step 4: Verify SSH execution behavior**
 
 Run: `rtk cargo test -p terminal terminal_exec -- --nocapture`  
 Expected: PASS, including ready, busy, cancel-before-submit, detach-after-submit, background, nohup-equivalent, timeout, and disconnect cases.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `rtk git add crates/terminal/src/types.rs crates/terminal/src/ssh_backend.rs crates/terminal/src/exec_capture.rs crates/terminal/src/lib.rs && rtk git commit -m "refactor(terminal): make visible exec asynchronous"`
 
@@ -136,7 +136,7 @@ Run: `rtk git add crates/terminal/src/types.rs crates/terminal/src/ssh_backend.r
 
 **Files:** Modify `crates/tool_runtime/{Cargo.toml,src/registry.rs}`, `crates/agent_runtime/src/tools/runtime_adapter.rs`, `crates/public_mcp/src/{registry,terminal_exec}.rs`, `crates/public_mcp/src/tools/terminal_exec.rs`, and `crates/terminal_view/src/public_mcp.rs`; test `crates/public_mcp/tests/terminal_exec.rs` and `crates/agent_runtime/tests/tool_runtime_adapter.rs`.
 
-- [ ] **Step 1: Write failing cancellation propagation tests**
+- [x] **Step 1: Write failing cancellation propagation tests**
 
 ```rust
 #[tokio::test]
@@ -148,12 +148,12 @@ async fn agent_adapter_forwards_cancelled_token_to_runtime_tool() {
     assert!(observation.summary.contains("cancel"));
 }
 ```
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `rtk cargo test -p agent_runtime --test tool_runtime_adapter agent_adapter_forwards_cancelled_token_to_runtime_tool -- --nocapture`  
 Expected: FAIL because `ToolContext` creates no invocation cancellation path.
 
-- [ ] **Step 3: Add cancellable `ToolContext` and async terminal registry**
+- [x] **Step 3: Add cancellable `ToolContext` and async terminal registry**
 
 ```rust
 #[derive(Clone)]
@@ -165,12 +165,12 @@ impl ToolContext {
 ```
 Forward `ToolInvocation::cancellation` in the Agent adapter. Make `TerminalExecSessionHandle::exec_in_terminal` return a boxed future, make `PublicMcpRegistry::terminal_exec` async, remove `spawn_blocking`, pass `context.cancellation`, and parse optional `ready_timeout_ms`.
 
-- [ ] **Step 4: Run adapter/provider tests**
+- [x] **Step 4: Run adapter/provider tests**
 
 Run: `rtk cargo test -p tool_runtime -p public_mcp -p agent_runtime -p terminal_view terminal_exec -- --nocapture`  
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `rtk git add crates/tool_runtime crates/agent_runtime/src/tools/runtime_adapter.rs crates/public_mcp crates/terminal_view/src/public_mcp.rs && rtk git commit -m "feat(tools): propagate terminal exec cancellation"`
 
@@ -178,7 +178,7 @@ Run: `rtk git add crates/tool_runtime crates/agent_runtime/src/tools/runtime_ada
 
 **Files:** Modify `crates/agent_runtime/src/runtime/{active_turn,event,session,mod}.rs`; test `crates/agent_runtime/tests/integration.rs`.
 
-- [ ] **Step 1: Write failing immediate-cancel and stale-result tests**
+- [x] **Step 1: Write failing immediate-cancel and stale-result tests**
 
 ```rust
 #[tokio::test]
@@ -200,12 +200,12 @@ async fn cancelled_turn_cannot_clear_or_append_to_new_turn() {
 
 Add `BlockingToolFixture` in the same test module with a oneshot release gate and event receiver so both tests are deterministic.
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `rtk cargo test -p agent_runtime interrupt_emits_cancelled_before_blocked_tool_returns -- --nocapture`  
 Expected: FAIL because cancellation currently emits `TurnFailed` only after task return.
 
-- [ ] **Step 3: Implement turn-aware cancellation**
+- [x] **Step 3: Implement turn-aware cancellation**
 
 ```rust
 TurnCancelled { session_id: SessionId, turn_id: TurnId },
@@ -219,7 +219,7 @@ pub fn interrupt(&self, id: &SessionId) -> Result<TurnId, RuntimeError> {
 
 Add `clear_active_turn_if(turn_id)` and `is_turn_writable(turn_id)`. Guard assistant deltas/messages, tool calls, observations, plans, and final outcomes. Background workers call `finish_if_active`; cancelled/stale workers cannot emit another terminal outcome or clear a newer turn.
 
-- [ ] **Step 4: Run Agent runtime tests**
+- [x] **Step 4: Run Agent runtime tests**
 
 Run: `rtk cargo test -p agent_runtime -- --nocapture`  
 Expected: PASS.
