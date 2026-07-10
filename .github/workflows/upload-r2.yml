@@ -111,13 +111,13 @@ jobs:
           mkdir -p artifacts
           gh release download "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern "onetcli-aarch64-apple-darwin.tar.gz" \
-            --pattern "onetcli-x86_64-apple-darwin.tar.gz" \
-            --pattern "onetcli-x86_64-unknown-linux-gnu.tar.gz" \
-            --pattern "onetcli-aarch64-unknown-linux-gnu.tar.gz" \
-            --pattern "onetcli-x86_64-pc-windows-msvc.zip" \
-            --pattern "onetcli-aarch64-apple-darwin.dmg" \
-            --pattern "onetcli-x86_64-apple-darwin.dmg" \
+            --pattern "navop-aarch64-apple-darwin.tar.gz" \
+            --pattern "navop-x86_64-apple-darwin.tar.gz" \
+            --pattern "navop-x86_64-unknown-linux-gnu.tar.gz" \
+            --pattern "navop-aarch64-unknown-linux-gnu.tar.gz" \
+            --pattern "navop-x86_64-pc-windows-msvc.zip" \
+            --pattern "navop-aarch64-apple-darwin.dmg" \
+            --pattern "navop-x86_64-apple-darwin.dmg" \
             --pattern "sha256sums.txt" \
             --dir artifacts
           ls -la artifacts
@@ -127,13 +127,13 @@ jobs:
         run: |
           set -euo pipefail
           for file in \
-            onetcli-aarch64-apple-darwin.tar.gz \
-            onetcli-x86_64-apple-darwin.tar.gz \
-            onetcli-x86_64-unknown-linux-gnu.tar.gz \
-            onetcli-aarch64-unknown-linux-gnu.tar.gz \
-            onetcli-x86_64-pc-windows-msvc.zip \
-            onetcli-aarch64-apple-darwin.dmg \
-            onetcli-x86_64-apple-darwin.dmg \
+            navop-aarch64-apple-darwin.tar.gz \
+            navop-x86_64-apple-darwin.tar.gz \
+            navop-x86_64-unknown-linux-gnu.tar.gz \
+            navop-aarch64-unknown-linux-gnu.tar.gz \
+            navop-x86_64-pc-windows-msvc.zip \
+            navop-aarch64-apple-darwin.dmg \
+            navop-x86_64-apple-darwin.dmg \
             sha256sums.txt; do
             if [ ! -s "artifacts/${file}" ]; then
               echo "::error::Missing or empty GitHub Release asset: ${file}"
@@ -142,13 +142,13 @@ jobs:
           done
 
           for file in \
-            onetcli-aarch64-apple-darwin.tar.gz \
-            onetcli-x86_64-apple-darwin.tar.gz \
-            onetcli-x86_64-unknown-linux-gnu.tar.gz \
-            onetcli-aarch64-unknown-linux-gnu.tar.gz \
-            onetcli-x86_64-pc-windows-msvc.zip \
-            onetcli-aarch64-apple-darwin.dmg \
-            onetcli-x86_64-apple-darwin.dmg; do
+            navop-aarch64-apple-darwin.tar.gz \
+            navop-x86_64-apple-darwin.tar.gz \
+            navop-x86_64-unknown-linux-gnu.tar.gz \
+            navop-aarch64-unknown-linux-gnu.tar.gz \
+            navop-x86_64-pc-windows-msvc.zip \
+            navop-aarch64-apple-darwin.dmg \
+            navop-x86_64-apple-darwin.dmg; do
             if ! awk -v file="$file" '$2 == file && $1 ~ /^[0-9a-f]{64}$/ { found = 1 } END { exit found ? 0 : 1 }' artifacts/sha256sums.txt; then
               echo "::error::sha256sums.txt is missing checksum for ${file}"
               exit 1
@@ -183,11 +183,11 @@ jobs:
           );
 
           const appAssets = {
-            "aarch64-apple-darwin": "onetcli-aarch64-apple-darwin.tar.gz",
-            "x86_64-apple-darwin": "onetcli-x86_64-apple-darwin.tar.gz",
-            "x86_64-unknown-linux-gnu": "onetcli-x86_64-unknown-linux-gnu.tar.gz",
-            "aarch64-unknown-linux-gnu": "onetcli-aarch64-unknown-linux-gnu.tar.gz",
-            "x86_64-pc-windows-msvc": "onetcli-x86_64-pc-windows-msvc.zip",
+            "aarch64-apple-darwin": "navop-aarch64-apple-darwin.tar.gz",
+            "x86_64-apple-darwin": "navop-x86_64-apple-darwin.tar.gz",
+            "x86_64-unknown-linux-gnu": "navop-x86_64-unknown-linux-gnu.tar.gz",
+            "aarch64-unknown-linux-gnu": "navop-aarch64-unknown-linux-gnu.tar.gz",
+            "x86_64-pc-windows-msvc": "navop-x86_64-pc-windows-msvc.zip",
           };
 
           function checksumFor(fileName) {
@@ -268,13 +268,13 @@ jobs:
           }
 
           for file in \
-            onetcli-aarch64-apple-darwin.tar.gz \
-            onetcli-x86_64-apple-darwin.tar.gz \
-            onetcli-x86_64-unknown-linux-gnu.tar.gz \
-            onetcli-aarch64-unknown-linux-gnu.tar.gz \
-            onetcli-x86_64-pc-windows-msvc.zip \
-            onetcli-aarch64-apple-darwin.dmg \
-            onetcli-x86_64-apple-darwin.dmg \
+            navop-aarch64-apple-darwin.tar.gz \
+            navop-x86_64-apple-darwin.tar.gz \
+            navop-x86_64-unknown-linux-gnu.tar.gz \
+            navop-aarch64-unknown-linux-gnu.tar.gz \
+            navop-x86_64-pc-windows-msvc.zip \
+            navop-aarch64-apple-darwin.dmg \
+            navop-x86_64-apple-darwin.dmg \
             sha256sums.txt; do
             if [[ "$file" == *.zip ]]; then
               content_type="application/zip"

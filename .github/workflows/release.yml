@@ -30,23 +30,23 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             binary: onetcli
-            archive: onetcli-aarch64-apple-darwin.tar.gz
+            archive: navop-aarch64-apple-darwin.tar.gz
           - target: x86_64-apple-darwin
             os: macos-15-intel
             binary: onetcli
-            archive: onetcli-x86_64-apple-darwin.tar.gz
+            archive: navop-x86_64-apple-darwin.tar.gz
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             binary: onetcli
-            archive: onetcli-x86_64-unknown-linux-gnu.tar.gz
+            archive: navop-x86_64-unknown-linux-gnu.tar.gz
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
             binary: onetcli
-            archive: onetcli-aarch64-unknown-linux-gnu.tar.gz
+            archive: navop-aarch64-unknown-linux-gnu.tar.gz
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             binary: onetcli.exe
-            archive: onetcli-x86_64-pc-windows-msvc.zip
+            archive: navop-x86_64-pc-windows-msvc.zip
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -176,7 +176,7 @@ jobs:
           chmod +x script/bundle-macos-dmg.sh
           script/bundle-macos.sh ${{ matrix.target }}
           script/bundle-macos-dmg.sh ${{ matrix.target }}
-          tar czf ${{ matrix.archive }} -C target OnetCli.app
+          tar czf ${{ matrix.archive }} -C target Navop.app
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -206,11 +206,11 @@ jobs:
           set -euo pipefail
 
           PACKAGE_VERSION="${ONETCLI_VERSION//-/.}"
-          DEB_NAME="onetcli_${PACKAGE_VERSION}_amd64.deb"
-          RPM_NAME="onetcli-${PACKAGE_VERSION}-1.x86_64.rpm"
-          APPIMAGE_NAME="onetcli_${PACKAGE_VERSION}_amd64.AppImage"
+          DEB_NAME="navop_${PACKAGE_VERSION}_amd64.deb"
+          RPM_NAME="navop-${PACKAGE_VERSION}-1.x86_64.rpm"
+          APPIMAGE_NAME="navop_${PACKAGE_VERSION}_amd64.AppImage"
 
-          rm -rf package-deb rpmbuild OnetCli.AppDir linuxdeploy-x86_64.AppImage
+          rm -rf package-deb rpmbuild Navop.AppDir linuxdeploy-x86_64.AppImage
 
           mkdir -p package-deb/DEBIAN
           cp -a package/. package-deb/
@@ -221,8 +221,8 @@ jobs:
           Priority: optional
           Architecture: amd64
           Maintainer: feigeCode <noreply@github.com>
-          Homepage: https://github.com/feigeCode/onetcli
-          Description: One Net Client - Database, SSH, Terminal, AI Tools
+          Homepage: https://github.com/feigeCode/navop
+          Description: Navop - Database, SSH, Terminal, AI Tools
           EOF
           dpkg-deb --root-owner-group --build package-deb "${DEB_NAME}"
 
@@ -233,14 +233,14 @@ jobs:
           Name: onetcli
           Version: ${PACKAGE_VERSION}
           Release: 1%{?dist}
-          Summary: One Net Client - Database, SSH, Terminal, AI Tools
+          Summary: Navop - Database, SSH, Terminal, AI Tools
           License: Apache-2.0
-          URL: https://github.com/feigeCode/onetcli
+          URL: https://github.com/feigeCode/navop
           BuildArch: x86_64
           Source0: %{name}-%{version}.tar.gz
 
           %description
-          One Net Client - Database, SSH, Terminal, AI Tools.
+          Navop - Database, SSH, Terminal, AI Tools.
 
           %prep
           mkdir -p %{_builddir}/%{name}-%{version}
@@ -264,14 +264,14 @@ jobs:
           test -n "${generated_rpm}"
           cp "${generated_rpm}" "${RPM_NAME}"
 
-          mkdir -p OnetCli.AppDir
-          cp -a package/. OnetCli.AppDir/
+          mkdir -p Navop.AppDir
+          cp -a package/. Navop.AppDir/
           curl -L -o linuxdeploy-x86_64.AppImage \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           chmod +x linuxdeploy-x86_64.AppImage
           VERSION="${PACKAGE_VERSION}" APPIMAGE_EXTRACT_AND_RUN=1 ./linuxdeploy-x86_64.AppImage \
-            --appdir OnetCli.AppDir \
-            --executable OnetCli.AppDir/usr/bin/onetcli \
+            --appdir Navop.AppDir \
+            --executable Navop.AppDir/usr/bin/onetcli \
             --desktop-file resources/linux/onetcli.desktop \
             --icon-file package/usr/share/icons/hicolor/512x515/apps/onetcli.png \
             --output appimage
@@ -297,18 +297,18 @@ jobs:
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: onetcli-${{ matrix.target }}.dmg
+          name: navop-${{ matrix.target }}.dmg
           path: "*.dmg"
 
       - name: Upload Linux installer artifacts
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         uses: actions/upload-artifact@v4
         with:
-          name: onetcli-linux-x86_64-installers
+          name: navop-linux-x86_64-installers
           path: |
-            onetcli_*.deb
-            onetcli-*.rpm
-            onetcli_*.AppImage
+            navop_*.deb
+            navop-*.rpm
+            navop_*.AppImage
 
   release:
     name: Create Release
@@ -332,7 +332,7 @@ jobs:
         run: |
           cd artifacts
           shopt -s nullglob
-          release_files=(onetcli-* onetcli_*)
+          release_files=(navop-* navop_*)
           if [ "${#release_files[@]}" -eq 0 ]; then
             echo "::error::No release artifacts found for checksum generation"
             exit 1
@@ -361,13 +361,13 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: OnetCli ${{ github.ref_name }}
+          name: Navop ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            artifacts/onetcli-*.tar.gz
-            artifacts/onetcli-*.zip
-            artifacts/onetcli-*.dmg
-            artifacts/onetcli_*.deb
-            artifacts/onetcli-*.rpm
-            artifacts/onetcli_*.AppImage
+            artifacts/navop-*.tar.gz
+            artifacts/navop-*.zip
+            artifacts/navop-*.dmg
+            artifacts/navop_*.deb
+            artifacts/navop-*.rpm
+            artifacts/navop_*.AppImage
             artifacts/sha256sums.txt
