@@ -1,4 +1,5 @@
 pub(crate) mod exec_capture;
+pub(crate) mod exec_supervisor;
 pub mod history;
 pub mod osc;
 pub mod pty_backend;
