@@ -1,0 +1,199 @@
+use gpui::prelude::FluentBuilder;
+
+use super::*;
+
+impl Focusable for RemoteDesktopView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl EventEmitter<TabContentEvent> for RemoteDesktopView {}
+
+impl TabContent for RemoteDesktopView {
+    fn content_key(&self) -> &'static str {
+        "RemoteDesktop"
+    }
+
+    fn title(&self, _cx: &App) -> SharedString {
+        SharedString::from(remote_desktop_tab_title(&self.title, self.tab_index))
+    }
+
+    fn icon(&self, _cx: &App) -> Option<Icon> {
+        Some(match self.options.protocol {
+            RemoteDesktopProtocol::Rdp => IconName::Rdp.color(),
+            RemoteDesktopProtocol::Vnc => IconName::Vnc.color(),
+        })
+    }
+
+    fn closeable(&self, _cx: &App) -> bool {
+        true
+    }
+
+    fn can_split(&self, _cx: &App) -> bool {
+        true
+    }
+
+    fn try_close(
+        &mut self,
+        _tab_id: &str,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Task<bool> {
+        if let Some(input_tx) = &self.input_tx {
+            let _ = input_tx.send(RemoteDesktopInput::Close);
+        }
+        Task::ready(true)
+    }
+}
+
+impl Render for RemoteDesktopView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.drain_output(cx);
+        self.sync_local_clipboard(window, cx);
+        self.flush_pending_resize();
+        if let Some(latest_frame) = self.latest_frame.clone()
+            && let Some(retired) = self.rendered_frames.promote(latest_frame)
+            && let Err(error) = window.drop_image(retired)
+        {
+            tracing::warn!(?error, "failed to retire remote desktop frame");
+        }
+        let rendered_frame = self.rendered_frames.current().cloned();
+        let view = cx.entity();
+        let focus_handle = self.focus_handle.clone();
+        let show_status_overlay = self.status.as_ref() != "Connected";
+
+        let content = div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .overflow_hidden()
+            .track_focus(&self.focus_handle)
+            .key_context(REMOTE_DESKTOP_CONTEXT)
+            .on_action(cx.listener(Self::send_tab))
+            .on_action(cx.listener(Self::send_shift_tab))
+            .on_action(cx.listener(Self::remote_copy))
+            .on_action(cx.listener(Self::remote_paste))
+            .capture_key_down(cx.listener(Self::handle_key_down))
+            .capture_key_up(cx.listener(Self::handle_key_up))
+            .on_modifiers_changed(cx.listener(Self::handle_modifiers_changed))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.send_pointer_move(event.position, window);
+                cx.stop_propagation();
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&this.focus_handle, cx);
+                    this.send_pointer_move(event.position, window);
+                    this.send_mouse_button(event.button, true);
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&this.focus_handle, cx);
+                    this.send_pointer_move(event.position, window);
+                    this.send_mouse_button(event.button, true);
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&this.focus_handle, cx);
+                    this.send_pointer_move(event.position, window);
+                    this.send_mouse_button(event.button, true);
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.send_pointer_move(event.position, window);
+                    this.send_mouse_button(event.button, false);
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.send_pointer_move(event.position, window);
+                    this.send_mouse_button(event.button, false);
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.send_pointer_move(event.position, window);
+                    this.send_mouse_button(event.button, false);
+                    cx.stop_propagation();
+                }),
+            )
+            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+                this.send_scroll(event);
+                cx.stop_propagation();
+            }))
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, cx| {
+                        window.handle_input(&focus_handle, RemoteDesktopImeGuard::new(bounds), cx);
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
+            .when_some(rendered_frame.clone(), |this, frame| {
+                this.child(img(frame).size_full().object_fit(ObjectFit::Fill))
+            })
+            .when(rendered_frame.is_none(), |this| {
+                this.child(
+                    div()
+                        .px_4()
+                        .py_2()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(self.status.clone()),
+                )
+            });
+
+        div()
+            .size_full()
+            .relative()
+            .on_children_prepainted(move |bounds, window, cx| {
+                if let Some(bounds) = bounds.first().copied() {
+                    view.update(cx, |view, _| {
+                        view.update_content_bounds(bounds, window.scale_factor());
+                    });
+                }
+            })
+            .child(content)
+            .when(show_status_overlay, |this| {
+                this.child(
+                    div()
+                        .id("remote-desktop-status-overlay")
+                        .absolute()
+                        .top_2()
+                        .left_2()
+                        .max_w(px(520.0))
+                        .px_3()
+                        .py_1()
+                        .border_1()
+                        .rounded_sm()
+                        .bg(cx.theme().background)
+                        .border_color(cx.theme().border)
+                        .text_sm()
+                        .text_color(cx.theme().foreground)
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_reconnect();
+                            cx.stop_propagation();
+                        }))
+                        .child(self.status.clone()),
+                )
+            })
+    }
+}

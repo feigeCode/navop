@@ -380,13 +380,15 @@ impl HomePage {
             None
         };
         let title = conn.name.clone();
-        let view = cx.new(|cx| {
+        let window_handle = window.window_handle();
+        let view = cx.new(move |cx| {
             RemoteDesktopView::new(
                 RemoteDesktopViewConfig {
                     options,
                     title,
                     tab_index,
                 },
+                window_handle,
                 cx,
             )
         });
