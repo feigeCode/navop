@@ -16,19 +16,20 @@
 - Modify: `crates/ssh/src/ssh.rs`
 - Modify: `crates/ssh/src/lib.rs`
 - Modify: `crates/connection_tunnel/src/lib.rs`
+- Create: `crates/connection_tunnel/src/proxy.rs`
 - Modify: `crates/connection_tunnel/Cargo.toml`
 
-- [ ] **Step 1: 写代理配置映射与目标转发失败测试**
+- [x] **Step 1: 写代理配置映射与目标转发失败测试**
 
 在 `connection_tunnel` 测试中先引用尚不存在的 `ProxyTunnelConfig`、`start_proxy_tunnel` 和 `TunnelGuard`，覆盖 SOCKS5/HTTP、认证字段与本地监听地址。
 
-- [ ] **Step 2: 运行测试确认 RED**
+- [x] **Step 2: 运行测试确认 RED**
 
 Run: `rtk cargo test -p connection_tunnel`
 
 Expected: 因代理隧道 API 尚不存在而编译失败。
 
-- [ ] **Step 3: 暴露并复用 SSH 代理建连函数**
+- [x] **Step 3: 暴露并复用 SSH 代理建连函数**
 
 ```rust
 pub async fn connect_via_proxy(
@@ -38,7 +39,7 @@ pub async fn connect_via_proxy(
 ) -> anyhow::Result<tokio::net::TcpStream>;
 ```
 
-- [ ] **Step 4: 实现独立 runtime 的本地代理转发器**
+- [x] **Step 4: 实现独立 runtime 的本地代理转发器**
 
 ```rust
 pub struct ProxyTunnelConfig {
@@ -55,7 +56,7 @@ pub enum TunnelGuard {
 }
 ```
 
-- [ ] **Step 5: 运行测试确认 GREEN**
+- [x] **Step 5: 运行测试确认 GREEN**
 
 Run: `rtk cargo test -p connection_tunnel -p ssh`
 
@@ -213,4 +214,3 @@ Run: `rtk cargo clippy -p main --all-targets -- -D warnings`
 - [ ] **Step 4: 代码审查和需求逐项审计**
 
 核对 Issue #97 两项原始需求、序列化兼容、密码脱敏、所有入口一致性和测试证据；修复所有高/中优先级问题。
-

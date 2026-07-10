@@ -5,11 +5,43 @@ use ssh::{LocalPortForwardTunnel, SshAuth, SshConnectConfig, start_local_port_fo
 use thiserror::Error;
 use tokio::time::timeout;
 
+mod proxy;
+#[cfg(test)]
+mod proxy_tests;
+
+pub use proxy::{
+    ProxyTunnel, ProxyTunnelConfig, ProxyTunnelError, ProxyTunnelType, start_proxy_tunnel,
+};
+
 const DEFAULT_SSH_PORT: u16 = 22;
 const DEFAULT_SSH_AUTH_TYPE: &str = "password";
 const DEFAULT_SSH_TIMEOUT_SECS: u64 = 30;
 
-pub type TunnelGuard = LocalPortForwardTunnel;
+pub enum TunnelGuard {
+    Ssh(LocalPortForwardTunnel),
+    Proxy(ProxyTunnel),
+}
+
+impl TunnelGuard {
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        match self {
+            Self::Ssh(tunnel) => tunnel.local_addr(),
+            Self::Proxy(tunnel) => tunnel.local_addr(),
+        }
+    }
+}
+
+impl From<LocalPortForwardTunnel> for TunnelGuard {
+    fn from(tunnel: LocalPortForwardTunnel) -> Self {
+        Self::Ssh(tunnel)
+    }
+}
+
+impl From<ProxyTunnel> for TunnelGuard {
+    fn from(tunnel: ProxyTunnel) -> Self {
+        Self::Proxy(tunnel)
+    }
+}
 
 fn default_ssh_port() -> u16 {
     DEFAULT_SSH_PORT
@@ -83,7 +115,7 @@ impl Default for SshTunnelConfig {
 pub struct ResolvedConnectionTarget {
     pub host: String,
     pub port: u16,
-    pub tunnel: Option<LocalPortForwardTunnel>,
+    pub tunnel: Option<TunnelGuard>,
 }
 
 fn normalize_direct_host(host: &str) -> String {
@@ -161,7 +193,7 @@ pub async fn resolve_connection_target(
     Ok(ResolvedConnectionTarget {
         host: local_addr.ip().to_string(),
         port: local_addr.port(),
-        tunnel: Some(tunnel),
+        tunnel: Some(tunnel.into()),
     })
 }
 

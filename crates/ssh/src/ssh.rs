@@ -1023,7 +1023,7 @@ mod tests {
 }
 
 /// 通过代理建立TCP连接
-async fn connect_via_proxy(
+pub async fn connect_via_proxy(
     proxy: &ProxyConnectConfig,
     target_host: &str,
     target_port: u16,
