@@ -271,26 +271,46 @@ Run: `rtk git add crates/ai_chat_view docs/agent-tools-current-state.md && rtk g
 
 **Files:** Modify only files required by verified findings.
 
-- [ ] **Step 1: Run formatting and focused verification**
+- [x] **Step 1: Run formatting and focused verification**
 
 Run: `rtk cargo fmt --all -- --check`  
 Run: `rtk cargo test -p terminal -p tool_runtime -p agent_runtime -p public_mcp -p terminal_view -p ai_chat_view`  
 Run: `rtk cargo check -p terminal -p tool_runtime -p agent_runtime -p public_mcp -p terminal_view -p ai_chat_view -p main`  
 Expected: all exit 0; only the existing `block v0.1.6` future-incompatibility warning may remain.
 
-- [ ] **Step 2: Run clippy and repository checks**
+- [x] **Step 2: Run clippy and repository checks**
 
 Run: `rtk cargo clippy -p terminal -p tool_runtime -p agent_runtime -p public_mcp -p terminal_view -p ai_chat_view --all-targets -- -D warnings`  
 Run: `rtk git diff --check`  
 Expected: exit 0.
 
-- [ ] **Step 3: Perform manual terminal smoke**
+- [x] **Step 3: Perform manual terminal smoke**
 
 Verify partial-line replacement, foreground busy rejection, Agent cancellation without command interruption, `npm run dev &`, and `nohup` with/without explicit stdio redirection. Record any environment limitation rather than fabricating a pass.
 
 - [x] **Step 4: Request code review and address findings**
 
 Use `superpowers:requesting-code-review`, apply verified findings with `superpowers:receiving-code-review`, then rerun affected tests.
+
+## Verification Results (2026-07-10)
+
+- Related test matrix: `876 passed, 2 ignored` across terminal, tool runtime, Agent runtime,
+  Public MCP, terminal view, and AI chat view.
+- Cross-crate check including `main`: `0 errors`; only the existing `block v0.1.6`
+  future-incompatibility warning remains.
+- `git diff --check`: passed; feature worktree clean after commits.
+- Full `cargo fmt --all -- --check` was executed but is blocked by pre-existing formatting in
+  untouched `terminal_element.rs`, `sql_editor.rs`, and `results_delegate.rs`; no task file was
+  reported by rustfmt.
+- Full strict clippy was executed. After fixing the task-adjacent `result_large_err`, it remains
+  blocked by existing warnings in unchanged/shared code (`core`, `terminal`, `ai_chat_view`, and
+  UI dependencies). The first complete run exposed 105 dependency warnings; `--no-deps` still
+  exposed 18 pre-existing warnings in selected crates. These were not suppressed or folded into
+  this lifecycle change.
+- Manual native GPUI + live SSH smoke could not be performed in the non-interactive test
+  environment. The same lifecycle cases are covered by deterministic supervisor/runtime/UI tests:
+  partial input clearing, busy zero-write, pre-cancel zero-start, submitted command detach,
+  background/nohup command-boundary completion, and stale-turn write rejection.
 
 ## Plan Self-Review
 
