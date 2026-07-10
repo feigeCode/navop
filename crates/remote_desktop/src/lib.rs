@@ -5,6 +5,7 @@ pub mod framebuffer;
 pub mod helper_protocol;
 pub mod input;
 pub mod output;
+pub mod output_mailbox;
 pub mod provider;
 pub mod provider_registry;
 pub mod runtime;

@@ -61,7 +61,7 @@ pub struct RemoteDesktopView {
     options: RemoteDesktopConnectionOptions,
     title: String,
     input_tx: Option<tokio::sync::mpsc::UnboundedSender<RemoteDesktopInput>>,
-    output_rx: Option<std::sync::mpsc::Receiver<RemoteDesktopOutput>>,
+    output_rx: Option<remote_desktop::output_mailbox::OutputMailboxReceiver>,
     focus_handle: FocusHandle,
     frame: Option<Arc<RenderImage>>,
     remote_size: Option<(u16, u16)>,
@@ -132,11 +132,8 @@ impl RemoteDesktopView {
         let Some(output_rx) = self.output_rx.as_ref() else {
             return;
         };
-        let mut outputs = Vec::new();
-        while let Ok(output) = output_rx.try_recv() {
-            outputs.push(output);
-        }
-        for output in outputs {
+        let batch = output_rx.drain();
+        for output in batch.control.into_iter().chain(batch.latest_frame) {
             match output {
                 RemoteDesktopOutput::Connected { width, height, .. } => {
                     self.remote_size = Some((width, height));
@@ -494,7 +491,7 @@ fn is_meaningful_resize_delta(previous: Option<(u16, u16)>, next: (u16, u16)) ->
 
 fn failed_runtime(error: anyhow::Error) -> RemoteDesktopRuntime {
     let (input_tx, _input_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (output_tx, output_rx) = std::sync::mpsc::channel();
+    let (output_tx, output_rx) = remote_desktop::output_mailbox::output_mailbox();
     let _ = output_tx.send(RemoteDesktopOutput::ConnectionFailure(
         remote_desktop_error_message(&error),
     ));

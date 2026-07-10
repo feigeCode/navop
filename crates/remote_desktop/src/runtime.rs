@@ -1,6 +1,6 @@
-use crate::{RemoteDesktopInput, RemoteDesktopOutput};
+use crate::{RemoteDesktopInput, output_mailbox::OutputMailboxReceiver};
 
 pub struct RemoteDesktopRuntime {
     pub input_tx: tokio::sync::mpsc::UnboundedSender<RemoteDesktopInput>,
-    pub output_rx: std::sync::mpsc::Receiver<RemoteDesktopOutput>,
+    pub output_rx: OutputMailboxReceiver,
 }

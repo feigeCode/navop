@@ -8,6 +8,7 @@ use crate::{
     RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopRuntime,
     RemoteDesktopSize,
     helper_protocol::{HelperEvent, HelperRequest, decode_event_line, encode_request_line},
+    output_mailbox::{OutputMailboxSender, output_mailbox},
 };
 
 const RDP_BACKEND_POLL_INTERVAL: Duration = Duration::from_millis(8);
@@ -54,7 +55,7 @@ impl RemoteDesktopBackend for RdpBackend {
         initial_size: RemoteDesktopSize,
     ) -> anyhow::Result<RemoteDesktopRuntime> {
         let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (output_tx, output_rx) = std::sync::mpsc::channel();
+        let (output_tx, output_rx) = output_mailbox();
         let helper = self.helper.clone();
         let mut connect = HelperRequest::connect_from_options(&self.options, initial_size);
         let protocol = self.options.protocol;
@@ -135,7 +136,7 @@ fn run_helper_session(
     connect: &mut HelperRequest,
     latest_clipboard_text: &mut Option<String>,
     input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) -> HelperRunResult {
     let Ok((mut helper, mut stdin, signal_rx)) =
@@ -182,7 +183,7 @@ fn start_helper_session(
     helper: &HelperProcessConfig,
     connect: &HelperRequest,
     latest_clipboard_text: &Option<String>,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    output_tx: &OutputMailboxSender,
 ) -> Result<
     (
         std::process::Child,
@@ -220,7 +221,7 @@ fn handle_backend_signals(
     signal_rx: &std::sync::mpsc::Receiver<BackendSignal>,
     helper: &mut std::process::Child,
     stdin: &mut std::process::ChildStdin,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    output_tx: &OutputMailboxSender,
     was_connected: &mut bool,
 ) -> Option<HelperRunResult> {
     while let Ok(signal) = signal_rx.try_recv() {
@@ -249,7 +250,7 @@ fn handle_remote_input(
     latest_clipboard_text: &mut Option<String>,
     helper: &mut std::process::Child,
     stdin: &mut std::process::ChildStdin,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    output_tx: &OutputMailboxSender,
     was_connected: bool,
     protocol: RemoteDesktopProtocol,
 ) -> Option<HelperRunResult> {
@@ -333,7 +334,7 @@ where
 fn forward_remote_input(
     input: RemoteDesktopInput,
     stdin: &mut std::process::ChildStdin,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) -> Option<String> {
     let request = HelperRequest::from_remote_input_for_protocol(&input, protocol)?;
@@ -418,7 +419,7 @@ fn remember_reconnect_state(
 fn close_helper(
     helper: &mut std::process::Child,
     stdin: &mut std::process::ChildStdin,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    output_tx: &OutputMailboxSender,
 ) {
     let _ = write_request(stdin, &HelperRequest::Close, output_tx);
     if let Err(error) = helper.wait() {
@@ -465,13 +466,13 @@ fn helper_disconnect_message(event: &HelperEvent) -> Option<String> {
     }
 }
 
-fn send_status(output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>, message: &str) {
+fn send_status(output_tx: &OutputMailboxSender, message: &str) {
     let _ = output_tx.send(RemoteDesktopOutput::Status(message.to_string()));
 }
 
 fn spawn_helper(
     helper: &HelperProcessConfig,
-    output_tx: std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    output_tx: OutputMailboxSender,
 ) -> Option<std::process::Child> {
     let mut command = Command::new(&helper.command);
     process_util::configure_background_child(&mut command);
@@ -498,7 +499,7 @@ fn spawn_helper(
 
 fn spawn_output_reader(
     stdout: std::process::ChildStdout,
-    output_tx: std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    output_tx: OutputMailboxSender,
     signal_tx: std::sync::mpsc::Sender<BackendSignal>,
 ) {
     let _ = std::thread::Builder::new()
@@ -614,7 +615,7 @@ where
 
 fn forward_helper_output(
     helper_output: HelperOutput,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    output_tx: &OutputMailboxSender,
     signal_tx: &std::sync::mpsc::Sender<BackendSignal>,
 ) {
     if helper_output.connected {
@@ -629,7 +630,7 @@ fn forward_helper_output(
 fn write_request(
     stdin: &mut std::process::ChildStdin,
     request: &HelperRequest,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    output_tx: &OutputMailboxSender,
 ) -> anyhow::Result<()> {
     let line = encode_request_line(request)?;
     if let Err(error) = stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush()) {
@@ -676,7 +677,7 @@ fn rdp_capabilities() -> RemoteDesktopCapabilities {
     }
 }
 
-fn send_failure(output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>, message: &str) {
+fn send_failure(output_tx: &OutputMailboxSender, message: &str) {
     let _ = output_tx.send(RemoteDesktopOutput::ConnectionFailure(message.to_string()));
 }
 
@@ -826,6 +827,18 @@ mod tests {
     }
 
     #[test]
+    fn forwarded_frames_keep_only_latest_pending_output() {
+        let (output_tx, output_rx) = crate::output_mailbox::output_mailbox();
+        let (signal_tx, _signal_rx) = std::sync::mpsc::channel();
+
+        forward_helper_output(frame_output(1), &output_tx, &signal_tx);
+        forward_helper_output(frame_output(2), &output_tx, &signal_tx);
+
+        let batch = output_rx.drain();
+        assert_eq!(Some(frame(2)), batch.latest_frame);
+    }
+
+    #[test]
     fn reconnect_status_hides_internal_fast_path_error() {
         let status = reconnect_status_message(
             "[Fast-Path @ /Users/hufei/.cargo/git/checkouts/ironrdp/src/lib.rs:98] custom error",
@@ -872,5 +885,21 @@ mod tests {
             ],
             coalesced
         );
+    }
+
+    fn frame_output(value: u8) -> HelperOutput {
+        HelperOutput {
+            output: frame(value),
+            connected: false,
+            disconnect_message: None,
+        }
+    }
+
+    fn frame(value: u8) -> RemoteDesktopOutput {
+        RemoteDesktopOutput::FrameBgra {
+            width: 1,
+            height: 1,
+            bgra: vec![value, 0, 0, 255],
+        }
     }
 }
