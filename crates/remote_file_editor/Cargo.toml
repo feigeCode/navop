@@ -6,11 +6,16 @@ edition.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+extension-runtime = { workspace = true }
+futures = { workspace = true }
 gpui = { workspace = true}
 gpui-component = { workspace = true }
+notify = { workspace = true }
 one-core = { workspace = true }
+process-util = { workspace = true }
 rust-i18n.workspace = true
 sftp = { workspace = true }
+smol = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 

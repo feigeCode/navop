@@ -307,6 +307,16 @@ impl ContextMenuHandler for SftpView {
             FileListPanelEvent::Edit { full_path } => {
                 self.open_remote_file(full_path.clone(), window, cx);
             }
+            FileListPanelEvent::EditExternal {
+                full_path,
+                editor_key,
+            } => {
+                self.open_remote_external_editor(
+                    (full_path.clone(), editor_key.clone()),
+                    window,
+                    cx,
+                );
+            }
             FileListPanelEvent::Extract { name, full_path } => {
                 self.extract_archive(name.clone(), full_path.clone(), window, cx);
             }

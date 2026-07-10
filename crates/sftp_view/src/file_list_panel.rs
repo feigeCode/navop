@@ -11,6 +11,7 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
+use remote_file_editor::{external_editor_menu_label, external_editors_for_file};
 use rust_i18n::t;
 use std::collections::HashSet;
 use std::ops::Range;
@@ -673,7 +674,7 @@ impl FileListPanel {
         is_remote: bool,
         view: &Entity<Self>,
         window: &mut Window,
-        _cx: &mut Context<PopupMenu>,
+        cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
         let name_for_rename = name.to_string();
         let path_for_rename = full_path.to_string();
@@ -761,6 +762,25 @@ impl FileListPanel {
                             });
                         })),
                 );
+
+                for editor in external_editors_for_file(name, cx) {
+                    let view_external = view_ref.clone();
+                    let path_for_external = full_path.to_string();
+                    let editor_key = editor.editor_key;
+                    menu = menu.item(
+                        PopupMenuItem::new(external_editor_menu_label(&editor.display_name))
+                            .icon(IconName::Edit)
+                            .on_click(window.listener_for(
+                                &view_external,
+                                move |_this, _, _, cx| {
+                                    cx.emit(FileListPanelEvent::EditExternal {
+                                        full_path: path_for_external.clone(),
+                                        editor_key: editor_key.clone(),
+                                    });
+                                },
+                            )),
+                    );
+                }
             }
 
             if !is_dir && crate::archive_kind_for_name(name).is_some() {
@@ -972,6 +992,10 @@ pub enum FileListPanelEvent {
     },
     Edit {
         full_path: String,
+    },
+    EditExternal {
+        full_path: String,
+        editor_key: String,
     },
     Extract {
         name: String,
