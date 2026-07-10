@@ -53,7 +53,7 @@ fn running_terminal_rejects_without_writing() {
 ```
 - [x] **Step 2: Run the focused tests and confirm red state**
 
-Run: `rtk cargo test -p terminal exec_supervisor -- --nocapture`  
+Run: `rtk cargo test -p terminal exec_supervisor -- --nocapture`
 Expected: FAIL because `exec_supervisor` and its types do not exist.
 
 - [x] **Step 3: Implement readiness, leases, phases, and effects**
@@ -87,7 +87,7 @@ fn stale_command_finished_does_not_complete_new_epoch() {
 ```
 - [x] **Step 5: Run terminal supervisor tests**
 
-Run: `rtk cargo test -p terminal exec_supervisor -- --nocapture`  
+Run: `rtk cargo test -p terminal exec_supervisor -- --nocapture`
 Expected: PASS.
 
 - [x] **Step 6: Commit**
@@ -111,7 +111,7 @@ async fn terminal_exec_handle_forwards_cancellation() {
 ```
 - [x] **Step 2: Run and confirm failure**
 
-Run: `rtk cargo test -p terminal terminal_exec_handle -- --nocapture`  
+Run: `rtk cargo test -p terminal terminal_exec_handle -- --nocapture`
 Expected: FAIL because the handle is synchronous.
 
 - [x] **Step 3: Implement the async handle and SSH command variants**
@@ -125,7 +125,7 @@ The handle sends `StartExec` and selects between its oneshot and cancellation; o
 
 - [x] **Step 4: Verify SSH execution behavior**
 
-Run: `rtk cargo test -p terminal terminal_exec -- --nocapture`  
+Run: `rtk cargo test -p terminal terminal_exec -- --nocapture`
 Expected: PASS, including ready, busy, cancel-before-submit, detach-after-submit, background, nohup-equivalent, timeout, and disconnect cases.
 
 - [x] **Step 5: Commit**
@@ -150,7 +150,7 @@ async fn agent_adapter_forwards_cancelled_token_to_runtime_tool() {
 ```
 - [x] **Step 2: Run and confirm failure**
 
-Run: `rtk cargo test -p agent_runtime --test tool_runtime_adapter agent_adapter_forwards_cancelled_token_to_runtime_tool -- --nocapture`  
+Run: `rtk cargo test -p agent_runtime --test tool_runtime_adapter agent_adapter_forwards_cancelled_token_to_runtime_tool -- --nocapture`
 Expected: FAIL because `ToolContext` creates no invocation cancellation path.
 
 - [x] **Step 3: Add cancellable `ToolContext` and async terminal registry**
@@ -167,7 +167,7 @@ Forward `ToolInvocation::cancellation` in the Agent adapter. Make `TerminalExecS
 
 - [x] **Step 4: Run adapter/provider tests**
 
-Run: `rtk cargo test -p tool_runtime -p public_mcp -p agent_runtime -p terminal_view terminal_exec -- --nocapture`  
+Run: `rtk cargo test -p tool_runtime -p public_mcp -p agent_runtime -p terminal_view terminal_exec -- --nocapture`
 Expected: PASS.
 
 - [x] **Step 5: Commit**
@@ -202,7 +202,7 @@ Add `BlockingToolFixture` in the same test module with a oneshot release gate an
 
 - [x] **Step 2: Run and confirm failure**
 
-Run: `rtk cargo test -p agent_runtime interrupt_emits_cancelled_before_blocked_tool_returns -- --nocapture`  
+Run: `rtk cargo test -p agent_runtime interrupt_emits_cancelled_before_blocked_tool_returns -- --nocapture`
 Expected: FAIL because cancellation currently emits `TurnFailed` only after task return.
 
 - [x] **Step 3: Implement turn-aware cancellation**
@@ -221,7 +221,7 @@ Add `clear_active_turn_if(turn_id)` and `is_turn_writable(turn_id)`. Guard assis
 
 - [x] **Step 4: Run Agent runtime tests**
 
-Run: `rtk cargo test -p agent_runtime -- --nocapture`  
+Run: `rtk cargo test -p agent_runtime -- --nocapture`
 Expected: PASS.
 
 - [x] **Step 5: Commit**
@@ -251,7 +251,7 @@ Add `running_agent_view` and `cancelled_event` helpers in the same test module u
 
 - [x] **Step 2: Run and confirm failure**
 
-Run: `rtk cargo test -p ai_chat_view stop_ack_immediately_clears_running_state -- --nocapture`  
+Run: `rtk cargo test -p ai_chat_view stop_ack_immediately_clears_running_state -- --nocapture`
 Expected: FAIL because local stop waits for a later runtime event.
 
 - [x] **Step 3: Implement UI cancellation handling**
@@ -260,7 +260,7 @@ On successful `runtime.interrupt`, immediately call `set_running(false, cx)`. Tr
 
 - [x] **Step 4: Run UI tests**
 
-Run: `rtk cargo test -p ai_chat_view -- --nocapture`  
+Run: `rtk cargo test -p ai_chat_view -- --nocapture`
 Expected: PASS.
 
 - [x] **Step 5: Commit**
@@ -273,15 +273,15 @@ Run: `rtk git add crates/ai_chat_view docs/agent-tools-current-state.md && rtk g
 
 - [x] **Step 1: Run formatting and focused verification**
 
-Run: `rtk cargo fmt --all -- --check`  
-Run: `rtk cargo test -p terminal -p tool_runtime -p agent_runtime -p public_mcp -p terminal_view -p ai_chat_view`  
-Run: `rtk cargo check -p terminal -p tool_runtime -p agent_runtime -p public_mcp -p terminal_view -p ai_chat_view -p main`  
+Run: `rtk cargo fmt --all -- --check`
+Run: `rtk cargo test -p terminal -p tool_runtime -p agent_runtime -p public_mcp -p terminal_view -p ai_chat_view`
+Run: `rtk cargo check -p terminal -p tool_runtime -p agent_runtime -p public_mcp -p terminal_view -p ai_chat_view -p main`
 Expected: all exit 0; only the existing `block v0.1.6` future-incompatibility warning may remain.
 
 - [x] **Step 2: Run clippy and repository checks**
 
-Run: `rtk cargo clippy -p terminal -p tool_runtime -p agent_runtime -p public_mcp -p terminal_view -p ai_chat_view --all-targets -- -D warnings`  
-Run: `rtk git diff --check`  
+Run: `rtk cargo clippy -p terminal -p tool_runtime -p agent_runtime -p public_mcp -p terminal_view -p ai_chat_view --all-targets -- -D warnings`
+Run: `rtk git diff --check`
 Expected: exit 0.
 
 - [x] **Step 3: Perform manual terminal smoke**
