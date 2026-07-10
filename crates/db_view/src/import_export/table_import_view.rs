@@ -495,17 +495,16 @@ impl TableImportView {
             let connection_id_clone = connection_id.clone();
             let file_name = file_path_str.clone();
 
-            let import_handle = cx.background_spawn(async move {
-                global_state_clone
-                    .import_data_with_progress_sync(
-                        connection_id_clone,
-                        import_config,
-                        data,
-                        &file_name,
-                        Some(progress_tx),
-                    )
-                    .await
-            });
+            let import_handle = global_state_clone.import_data_with_progress(
+                cx,
+                db::ImportProgressRequest {
+                    connection_id: connection_id_clone,
+                    config: import_config,
+                    data,
+                    file_name,
+                    progress_tx: Some(progress_tx),
+                },
+            );
 
             while let Some(event) = progress_rx.recv().await {
                 let event_clone = event.clone();

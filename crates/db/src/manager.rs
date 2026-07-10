@@ -6,7 +6,8 @@ use crate::connection_config_resolver::ConnectionConfigResolver;
 #[cfg(feature = "builtin-duckdb")]
 use crate::duckdb::DuckDbPlugin;
 use crate::import_export::{
-    ExportConfig, ExportProgressSender, ExportResult, ImportConfig, ImportResult,
+    ExportConfig, ExportProgressRequest, ExportResult, ImportConfig, ImportProgressRequest,
+    ImportResult,
 };
 use crate::ipc::{ExternalDatabasePlugin, IpcDriverRegistry};
 use crate::mssql::MsSqlPlugin;
@@ -15,13 +16,14 @@ use crate::oracle::OraclePlugin;
 use crate::plugin::DatabasePlugin;
 use crate::plugin_manifest::DatabaseCapabilities;
 use crate::postgresql::PostgresPlugin;
+use crate::runtime_contract::require_tokio_runtime;
 use crate::sqlite::SqlitePlugin;
 use crate::{
     DbNode, DbNodeType, ExecOptions, SqlErrorInfo, SqlResult, SqlSource, TableDesign,
     TableSaveResponse,
 };
 use dashmap::DashMap;
-use gpui::{AppContext, AsyncApp, Global};
+use gpui::{AppContext, AsyncApp, Global, Task};
 use one_core::connection_notifier::{ConnectionDataEvent, GlobalConnectionNotifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ConnectionRepository, DatabaseType, DbConnectionConfig};
@@ -2560,65 +2562,37 @@ impl GlobalDbState {
         connection_id: String,
         config: ExportConfig,
     ) -> anyhow::Result<ExportResult> {
-        self.export_data_with_progress(cx, connection_id, config, None)
-            .await
-    }
-
-    /// Export data with progress callback
-    pub async fn export_data_with_progress(
-        &self,
-        cx: &mut AsyncApp,
-        connection_id: String,
-        config: ExportConfig,
-        progress_tx: Option<ExportProgressSender>,
-    ) -> anyhow::Result<ExportResult> {
-        let db_config = self
-            .get_config(&connection_id)
-            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
-
-        let clone_self = self.clone();
-        Tokio::spawn_result(cx, async move {
-            let plugin = clone_self.get_plugin(&db_config.database_type)?;
-            let session_id = clone_self
-                .connection_manager
-                .create_session(db_config.clone(), &clone_self.db_manager)
-                .await?;
-
-            let result = {
-                let mut guard = clone_self
-                    .connection_manager
-                    .get_session_connection(&session_id)
-                    .await?;
-                let conn = guard
-                    .connection()
-                    .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
-                plugin
-                    .export_data_with_progress(conn, &config, progress_tx)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{}", e))
-            };
-
-            clone_self
-                .connection_manager
-                .release_session(&session_id)
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-            result
-        })
+        self.export_data_with_progress(
+            cx,
+            ExportProgressRequest {
+                connection_id,
+                config,
+                progress_tx: None,
+            },
+        )
         .await
     }
 
-    /// Export data with progress callback (sync version for background tasks)
-    pub async fn export_data_with_progress_sync(
+    /// Export data with progress callback on the application Tokio runtime.
+    pub fn export_data_with_progress<C: AppContext>(
         &self,
-        connection_id: String,
-        config: ExportConfig,
-        progress_tx: Option<ExportProgressSender>,
+        cx: &C,
+        request: ExportProgressRequest,
+    ) -> Task<anyhow::Result<ExportResult>> {
+        let clone_self = self.clone();
+        Tokio::spawn_result(cx, async move {
+            clone_self.export_data_with_progress_on_tokio(request).await
+        })
+    }
+
+    async fn export_data_with_progress_on_tokio(
+        &self,
+        request: ExportProgressRequest,
     ) -> anyhow::Result<ExportResult> {
+        require_tokio_runtime("database export")?;
         let db_config = self
-            .get_config(&connection_id)
-            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+            .get_config(&request.connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", request.connection_id))?;
 
         let plugin = self.get_plugin(&db_config.database_type)?;
         let session_id = self
@@ -2635,15 +2609,15 @@ impl GlobalDbState {
                 .connection()
                 .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
             plugin
-                .export_data_with_progress(conn, &config, progress_tx)
+                .export_data_with_progress(conn, &request.config, request.progress_tx)
                 .await
-                .map_err(|e| anyhow::anyhow!("{}", e))
+                .map_err(|error| anyhow::anyhow!("{}", error))
         };
 
         self.connection_manager
             .release_session(&session_id)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .map_err(|error| anyhow::anyhow!("{}", error))?;
 
         result
     }
@@ -2656,56 +2630,39 @@ impl GlobalDbState {
         config: ImportConfig,
         data: String,
     ) -> anyhow::Result<ImportResult> {
-        let db_config = self
-            .get_config(&connection_id)
-            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
-
-        let clone_self = self.clone();
-        Tokio::spawn_result(cx, async move {
-            let session_id = clone_self
-                .connection_manager
-                .create_session(db_config.clone(), &clone_self.db_manager)
-                .await?;
-
-            let plugin = clone_self.get_plugin(&db_config.database_type)?;
-
-            let result = {
-                let mut guard = clone_self
-                    .connection_manager
-                    .get_session_connection(&session_id)
-                    .await?;
-                let conn = guard
-                    .connection()
-                    .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
-                plugin
-                    .import_data(&*conn, &config, &data)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{}", e))
-            };
-
-            clone_self
-                .connection_manager
-                .release_session(&session_id)
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-            result
-        })
+        self.import_data_with_progress(
+            cx,
+            ImportProgressRequest {
+                connection_id,
+                config,
+                data,
+                file_name: String::new(),
+                progress_tx: None,
+            },
+        )
         .await
     }
 
-    /// Import data with progress callback (sync version for background tasks)
-    pub async fn import_data_with_progress_sync(
+    /// Import data with progress callback on the application Tokio runtime.
+    pub fn import_data_with_progress<C: AppContext>(
         &self,
-        connection_id: String,
-        config: ImportConfig,
-        data: String,
-        file_name: &str,
-        progress_tx: Option<crate::import_export::ImportProgressSender>,
+        cx: &C,
+        request: ImportProgressRequest,
+    ) -> Task<anyhow::Result<ImportResult>> {
+        let clone_self = self.clone();
+        Tokio::spawn_result(cx, async move {
+            clone_self.import_data_with_progress_on_tokio(request).await
+        })
+    }
+
+    async fn import_data_with_progress_on_tokio(
+        &self,
+        request: ImportProgressRequest,
     ) -> anyhow::Result<ImportResult> {
+        require_tokio_runtime("database import")?;
         let db_config = self
-            .get_config(&connection_id)
-            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", connection_id))?;
+            .get_config(&request.connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {}", request.connection_id))?;
 
         let plugin = self.get_plugin(&db_config.database_type)?;
         let session_id = self
@@ -2722,15 +2679,21 @@ impl GlobalDbState {
                 .connection()
                 .ok_or_else(|| anyhow::anyhow!("Session connection not found"))?;
             plugin
-                .import_data_with_progress(conn, &config, &data, file_name, progress_tx)
+                .import_data_with_progress(
+                    conn,
+                    &request.config,
+                    &request.data,
+                    &request.file_name,
+                    request.progress_tx,
+                )
                 .await
-                .map_err(|e| anyhow::anyhow!("{}", e))
+                .map_err(|error| anyhow::anyhow!("{}", error))
         };
 
         self.connection_manager
             .release_session(&session_id)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .map_err(|error| anyhow::anyhow!("{}", error))?;
 
         result
     }
@@ -2904,7 +2867,7 @@ mod tests {
     use crate::ipc::{IpcDriverManifest, IpcDriverRegistry};
     use crate::plugin::ConnectionLifecycle;
     use crate::types::*;
-    use crate::{DatabaseOperationRequest, ImportProgressSender};
+    use crate::{DatabaseOperationRequest, ExportProgressSender, ImportProgressSender};
     use async_trait::async_trait;
     use one_core::storage::DatabaseType;
     use sqlparser::dialect::{Dialect, GenericDialect};
@@ -3959,3 +3922,7 @@ mod tests {
         assert_eq!(1, max_active_opens.load(Ordering::SeqCst));
     }
 }
+
+#[cfg(test)]
+#[path = "manager_runtime_contract_tests.rs"]
+mod runtime_contract_tests;
