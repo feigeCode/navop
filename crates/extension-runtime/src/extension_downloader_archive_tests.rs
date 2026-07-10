@@ -233,7 +233,7 @@ fn mcp_helper_tarball_bytes() -> Vec<u8> {
         br#"{
             "id": "onetcli-public-mcp",
             "name": "Navop MCP Helper",
-            "description": "OnetCli MCP stdio bridge",
+            "description": "Navop MCP stdio bridge",
             "version": "1.2.3",
             "entry": { "command": "./onetcli-public-mcp" }
         }"#,
