@@ -8,6 +8,15 @@ enum RemoteInputBatch {
     Disconnected,
 }
 
+pub(super) struct RemoteInputContext<'a> {
+    pub(super) connect: &'a mut HelperRequest,
+    pub(super) latest_clipboard_text: &'a mut Option<String>,
+    pub(super) helper: &'a mut std::process::Child,
+    pub(super) stdin: &'a mut std::process::ChildStdin,
+    pub(super) output_tx: &'a OutputMailboxSender,
+    pub(super) protocol: RemoteDesktopProtocol,
+}
+
 pub(super) fn handle_backend_signals(
     signal_rx: &std::sync::mpsc::Receiver<BackendSignal>,
     helper: &mut std::process::Child,
@@ -37,18 +46,13 @@ pub(super) fn handle_backend_signals(
 
 pub(super) fn handle_remote_input(
     input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
-    connect: &mut HelperRequest,
-    latest_clipboard_text: &mut Option<String>,
-    helper: &mut std::process::Child,
-    stdin: &mut std::process::ChildStdin,
-    output_tx: &OutputMailboxSender,
+    context: &mut RemoteInputContext<'_>,
     was_connected: bool,
-    protocol: RemoteDesktopProtocol,
 ) -> Option<HelperRunResult> {
     let inputs = match drain_remote_inputs(input_rx) {
         RemoteInputBatch::Inputs(inputs) => inputs,
         RemoteInputBatch::Disconnected => {
-            close_helper(helper, stdin, output_tx);
+            close_helper(context.helper, context.stdin, context.output_tx);
             return Some(HelperRunResult::InputClosed);
         }
     };
@@ -56,11 +60,11 @@ pub(super) fn handle_remote_input(
     for input in inputs {
         match input {
             RemoteDesktopInput::Close => {
-                close_helper(helper, stdin, output_tx);
+                close_helper(context.helper, context.stdin, context.output_tx);
                 return Some(HelperRunResult::Closed);
             }
             RemoteDesktopInput::Reconnect => {
-                close_helper(helper, stdin, output_tx);
+                close_helper(context.helper, context.stdin, context.output_tx);
                 return Some(reconnect_result(
                     "manual reconnect".to_string(),
                     true,
@@ -68,9 +72,11 @@ pub(super) fn handle_remote_input(
                 ));
             }
             input => {
-                remember_reconnect_state(&input, connect, latest_clipboard_text);
-                if let Some(reason) = forward_remote_input(input, stdin, output_tx, protocol) {
-                    close_helper(helper, stdin, output_tx);
+                remember_reconnect_state(&input, context.connect, context.latest_clipboard_text);
+                if let Some(reason) =
+                    forward_remote_input(input, context.stdin, context.output_tx, context.protocol)
+                {
+                    close_helper(context.helper, context.stdin, context.output_tx);
                     return Some(reconnect_result(reason, false, was_connected));
                 }
             }

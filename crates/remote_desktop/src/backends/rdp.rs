@@ -158,16 +158,17 @@ fn run_helper_session(
         ) {
             return result;
         }
-        if let Some(result) = input::handle_remote_input(
-            input_rx,
+        let mut input_context = input::RemoteInputContext {
             connect,
             latest_clipboard_text,
-            &mut helper,
-            &mut stdin,
+            helper: &mut helper,
+            stdin: &mut stdin,
             output_tx,
-            was_connected,
             protocol,
-        ) {
+        };
+        if let Some(result) =
+            input::handle_remote_input(input_rx, &mut input_context, was_connected)
+        {
             return result;
         }
         if let Some(result) = input::poll_helper_exit(&mut helper, was_connected) {
