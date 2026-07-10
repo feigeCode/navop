@@ -184,7 +184,7 @@ fn runtime_tool_to_mcp_tool(descriptor: ToolDescriptor) -> Tool {
 fn resource_sessions_tool() -> Tool {
     Tool::new(
         CONNECTIONS_LIST_SESSIONS_TOOL,
-        "List saved and active OnetCli connection sessions from the current resource pool. Pass kind or connection_type to filter; omit filters to return all available resources.",
+        "List saved and active Navop connection sessions from the current resource pool. Pass kind or connection_type to filter; omit filters to return all available resources.",
         schema_object(resource_sessions_schema()),
     )
     .with_annotations(

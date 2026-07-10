@@ -240,7 +240,7 @@ pub enum SftpCommand {
 
 #[derive(Debug, Parser)]
 #[command(name = "onetcli")]
-#[command(about = "OnetCli desktop app and automation commands")]
+#[command(about = "Navop desktop app and automation commands")]
 struct CliArgs {
     #[command(subcommand)]
     command: Option<CliCommand>,
@@ -248,12 +248,12 @@ struct CliArgs {
 
 #[derive(Debug, clap::Subcommand)]
 enum CliCommand {
-    /// Inspect and call OnetCli tools.
+    /// Inspect and call Navop tools.
     Tool {
         #[command(subcommand)]
         command: ToolCommand,
     },
-    /// Inspect saved OnetCli connections.
+    /// Inspect saved Navop connections.
     Connection {
         #[command(subcommand)]
         command: ConnectionCommand,

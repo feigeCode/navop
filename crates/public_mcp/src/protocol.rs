@@ -107,10 +107,10 @@ impl ServerHandler for PublicMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(
-                Implementation::new(SERVER_NAME, SERVER_VERSION).with_title("OnetCli Public MCP"),
+                Implementation::new(SERVER_NAME, SERVER_VERSION).with_title("Navop Public MCP"),
             )
             .with_instructions(
-                "Expose only currently connected OnetCli SSH terminal sessions.".to_string(),
+                "Expose only currently connected Navop SSH terminal sessions.".to_string(),
             )
     }
 

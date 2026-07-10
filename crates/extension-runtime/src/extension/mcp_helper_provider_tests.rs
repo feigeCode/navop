@@ -12,7 +12,7 @@ fn mcp_helper_provider_lists_installed_helper_summaries() {
         helper_dir.join("mcp_helper.json"),
         mcp_helper_json(
             "onetcli-public-mcp",
-            "OnetCli MCP Helper",
+            "Navop MCP Helper",
             "./onetcli-public-mcp",
         ),
     )
@@ -31,7 +31,7 @@ fn mcp_helper_provider_lists_installed_helper_summaries() {
     assert_eq!(ExtensionKind::McpHelper, list[0].kind);
     assert_eq!("onetcli-public-mcp", list[0].name);
     assert_eq!("1.2.3", list[0].version);
-    assert_eq!("OnetCli MCP Helper helper", list[0].description);
+    assert_eq!("Navop MCP Helper helper", list[0].description);
 }
 
 #[test]

@@ -585,7 +585,7 @@ mod tests {
 
         assert_eq!(
             Some(json!({
-                "name": "onetcli",
+                "name": "Navop",
                 "version": env!("CARGO_PKG_VERSION")
             })),
             result.structured_content

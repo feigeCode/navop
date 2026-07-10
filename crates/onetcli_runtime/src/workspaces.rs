@@ -82,12 +82,12 @@ impl ToolHandler for WorkspaceToolHandler {
             WorkspaceTool::List => (
                 "workspaces.list",
                 "List workspaces",
-                "List saved OnetCli workspaces with ids and names. Supports name_contains, limit, and cursor so automation can resolve workspace ids before creating or moving connections.",
+                "List saved Navop workspaces with ids and names. Supports name_contains, limit, and cursor so automation can resolve workspace ids before creating or moving connections.",
             ),
             WorkspaceTool::Show => (
                 "workspaces.show",
                 "Show workspace",
-                "Show one saved OnetCli workspace by numeric id or exact name. If a name is duplicated, the call fails and asks for an id.",
+                "Show one saved Navop workspace by numeric id or exact name. If a name is duplicated, the call fails and asks for an id.",
             ),
         };
         ToolDescriptor {

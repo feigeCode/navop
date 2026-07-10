@@ -223,19 +223,19 @@ impl RedisTool {
     fn description(self) -> &'static str {
         match self {
             RedisTool::ListConnections => {
-                "List currently active Redis connections exposed by the running OnetCli app. Use this to discover runtime Redis connection ids before calling Redis-specific tools. This does not list saved profiles; use connections.list for saved Redis connection profiles."
+                "List currently active Redis connections exposed by the running Navop app. Use this to discover runtime Redis connection ids before calling Redis-specific tools. This does not list saved profiles; use connections.list for saved Redis connection profiles."
             }
             RedisTool::Command => {
-                "Execute one Redis command against an active Redis connection in the running OnetCli app. Use redis.list_connections first to discover connection_id. Pass db to target a specific logical database. The command may mutate Redis data and therefore requires write approval."
+                "Execute one Redis command against an active Redis connection in the running Navop app. Use redis.list_connections first to discover connection_id. Pass db to target a specific logical database. The command may mutate Redis data and therefore requires write approval."
             }
             RedisTool::Keys => {
-                "List Redis keys matching a pattern against an active Redis connection in the running OnetCli app. This is read-only but may be expensive on large databases."
+                "List Redis keys matching a pattern against an active Redis connection in the running Navop app. This is read-only but may be expensive on large databases."
             }
             RedisTool::Get => {
-                "Read the string value for one Redis key against an active Redis connection in the running OnetCli app."
+                "Read the string value for one Redis key against an active Redis connection in the running Navop app."
             }
             RedisTool::Set => {
-                "Set the string value for one Redis key against an active Redis connection in the running OnetCli app. This mutates Redis data and requires write approval."
+                "Set the string value for one Redis key against an active Redis connection in the running Navop app. This mutates Redis data and requires write approval."
             }
         }
     }

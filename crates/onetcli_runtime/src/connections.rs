@@ -275,19 +275,19 @@ impl ToolHandler for ConnectionToolHandler {
             ConnectionTool::List => (
                 "connections.list",
                 "List saved connections",
-                "List saved OnetCli connection profiles with filters and pagination. Supports kind, database_type, workspace_id, name_contains, host, limit, cursor, and include_summary. By default it returns compact metadata without connection params; set include_summary=true when redacted fields are needed.",
+                "List saved Navop connection profiles with filters and pagination. Supports kind, database_type, workspace_id, name_contains, host, limit, cursor, and include_summary. By default it returns compact metadata without connection params; set include_summary=true when redacted fields are needed.",
                 true,
             ),
             ConnectionTool::Show => (
                 "connections.show",
                 "Show saved connection",
-                "Show one saved OnetCli connection profile by numeric id or exact name. If the name is duplicated, the call fails and asks for an id; use connections.find to list candidates. Returned details redact secrets.",
+                "Show one saved Navop connection profile by numeric id or exact name. If the name is duplicated, the call fails and asks for an id; use connections.find to list candidates. Returned details redact secrets.",
                 true,
             ),
             ConnectionTool::ListKinds => (
                 "connections.list_kinds",
                 "List connection kinds",
-                "List connection kinds that can be created through OnetCli, including kind ids such as ssh_sftp, database, redis, mongodb, serial, port_forwarding, rdp, and vnc. Use before connections.get_schema when you do not know the exact kind string.",
+                "List connection kinds that can be created through Navop, including kind ids such as ssh_sftp, database, redis, mongodb, serial, port_forwarding, rdp, and vnc. Use before connections.get_schema when you do not know the exact kind string.",
                 true,
             ),
             ConnectionTool::GetSchema => (
@@ -305,7 +305,7 @@ impl ToolHandler for ConnectionToolHandler {
             ConnectionTool::Save => (
                 "connections.save",
                 "Save connection",
-                "Create or update an OnetCli connection profile. Omit id and pass kind plus values to create; pass id plus patch to update top-level fields or connection params. Call connections.get_schema first for the selected kind, and call connections.validate first when unsure. Use top-level remark, not values.remark. Password-like values are redacted in responses but may still appear in MCP tool-call arguments/logs depending on the client.",
+                "Create or update a Navop connection profile. Omit id and pass kind plus values to create; pass id plus patch to update top-level fields or connection params. Call connections.get_schema first for the selected kind, and call connections.validate first when unsure. Use top-level remark, not values.remark. Password-like values are redacted in responses but may still appear in MCP tool-call arguments/logs depending on the client.",
                 false,
             ),
             ConnectionTool::Find => (
@@ -329,7 +329,7 @@ impl ToolHandler for ConnectionToolHandler {
             ConnectionTool::OpenSession => (
                 "connections.open_session",
                 "Open connection session",
-                "Open a saved OnetCli connection in the running app UI by numeric id or exact name. Use this when active session lists are empty and automation needs OnetCli to open a connection first. In CLI-only runtimes this resolves the connection and reports opened=false because no UI opener is available.",
+                "Open a saved Navop connection in the running app UI by numeric id or exact name. Use this when active session lists are empty and automation needs Navop to open a connection first. In CLI-only runtimes this resolves the connection and reports opened=false because no UI opener is available.",
                 false,
             ),
         };

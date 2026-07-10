@@ -1407,25 +1407,25 @@ Settings:
         zh-CN: 安装 Codex MCP 配置
         zh-HK: 安裝 Codex MCP 配置
       install_codex_config_desc:
-        en: Write or update the managed OnetCli MCP server entry in ~/.codex/config.toml
-        zh-CN: 在 ~/.codex/config.toml 中写入或更新 OnetCli MCP Server 托管配置
-        zh-HK: 在 ~/.codex/config.toml 中寫入或更新 OnetCli MCP Server 託管配置
+        en: Write or update the managed Navop MCP server entry in ~/.codex/config.toml
+        zh-CN: 在 ~/.codex/config.toml 中写入或更新 Navop MCP Server 托管配置
+        zh-HK: 在 ~/.codex/config.toml 中寫入或更新 Navop MCP Server 託管配置
       install_claude_config:
         en: Install Claude MCP Config
         zh-CN: 安装 Claude MCP 配置
         zh-HK: 安裝 Claude MCP 配置
       install_claude_config_desc:
-        en: Write or update the OnetCli MCP server entry in Claude Desktop config
-        zh-CN: 在 Claude Desktop 配置中写入或更新 OnetCli MCP Server
-        zh-HK: 在 Claude Desktop 配置中寫入或更新 OnetCli MCP Server
+        en: Write or update the Navop MCP server entry in Claude Desktop config
+        zh-CN: 在 Claude Desktop 配置中写入或更新 Navop MCP Server
+        zh-HK: 在 Claude Desktop 配置中寫入或更新 Navop MCP Server
       install_claude_code_config:
         en: Install Claude Code MCP Config
         zh-CN: 安装 Claude Code MCP 配置
         zh-HK: 安裝 Claude Code MCP 配置
       install_claude_code_config_desc:
-        en: Write or update the OnetCli MCP server entry in ~/.claude.json
-        zh-CN: 在 ~/.claude.json 中写入或更新 OnetCli MCP Server
-        zh-HK: 在 ~/.claude.json 中寫入或更新 OnetCli MCP Server
+        en: Write or update the Navop MCP server entry in ~/.claude.json
+        zh-CN: 在 ~/.claude.json 中写入或更新 Navop MCP Server
+        zh-HK: 在 ~/.claude.json 中寫入或更新 Navop MCP Server
       copy_agent_config:
         en: Copy MCP Config
         zh-CN: 复制 MCP 配置
@@ -1672,9 +1672,9 @@ Settings:
         zh-HK: Git
     Provider:
       onet_cloud:
-        en: OnetCli Cloud Sync
-        zh-CN: OnetCli 云同步
-        zh-HK: OnetCli 雲同步
+        en: Navop Cloud Sync
+        zh-CN: Navop 云同步
+        zh-HK: Navop 雲同步
       personal:
         en: Personal Sync
         zh-CN: 个人同步

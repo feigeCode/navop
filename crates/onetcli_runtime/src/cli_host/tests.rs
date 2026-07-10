@@ -58,7 +58,7 @@ fn call_runs_tool_with_default_empty_input() {
     .unwrap();
     let result: Value = serde_json::from_str(&output).unwrap();
 
-    assert_eq!("onetcli", result["name"]);
+    assert_eq!("Navop", result["name"]);
     assert_eq!(env!("CARGO_PKG_VERSION"), result["version"]);
 }
 

@@ -371,9 +371,9 @@ SSH:
     zh-CN: 卸载中...
     zh-HK: 解除安裝中...
   uninstall_shell_integration_desc:
-    en: Remove OnetCli managed rc blocks and ~/.config/onetcli shell integration scripts from the remote host. Future sessions will reinstall them when Shell integration is enabled.
-    zh-CN: 删除远端主机上由 OnetCli 管理的 rc 配置块和 ~/.config/onetcli Shell 集成脚本。后续会话在启用 Shell 集成时会重新安装。
-    zh-HK: 刪除遠端主機上由 OnetCli 管理的 rc 設定區塊和 ~/.config/onetcli Shell 整合腳本。後續工作階段在啟用 Shell 整合時會重新安裝。
+    en: Remove Navop-managed rc blocks and ~/.config/onetcli shell integration scripts from the remote host. Future sessions will reinstall them when Shell integration is enabled.
+    zh-CN: 删除远端主机上由 Navop 管理的 rc 配置块和 ~/.config/onetcli Shell 集成脚本。后续会话在启用 Shell 集成时会重新安装。
+    zh-HK: 刪除遠端主機上由 Navop 管理的 rc 設定區塊和 ~/.config/onetcli Shell 整合腳本。後續工作階段在啟用 Shell 整合時會重新安裝。
   uninstall_shell_integration_success:
     en: Remote Shell integration uninstalled.
     zh-CN: 已卸载远端 Shell 集成。

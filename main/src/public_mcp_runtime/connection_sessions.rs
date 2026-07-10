@@ -117,7 +117,7 @@ fn open_connection_on_active_window(
 ) -> Result<Value, String> {
     let active_window = cx
         .active_window()
-        .ok_or_else(|| "no active OnetCli window is available".to_string())?;
+        .ok_or_else(|| "no active Navop window is available".to_string())?;
     let home_page = cx
         .try_global::<GlobalHomePage>()
         .ok_or_else(|| "home page is not initialized".to_string())?

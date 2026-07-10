@@ -4,18 +4,18 @@ use crate::tasks::skill_prompt::append_skill_context;
 use crate::tools::ToolSpec;
 use crate::{Plan, ResourceContext};
 
-const AGENT_SYSTEM: &str = "你是 onetcli 的 AI 运维助手。请根据用户目标自主决定如何行动:\
+const AGENT_SYSTEM: &str = "你是 Navop 的 AI 运维助手。请根据用户目标自主决定如何行动:\
 简单问题直接、简洁地用简体中文回答;需要查询或操作资源时调用相应工具;\
 面对多步任务时,先调用 `update_plan` 列出步骤并随进展更新状态(每完成一步就更新)。\
 可用 `delegate_task` 将边界清晰的子任务交给隔离子代理执行;它不是后端或 Codex CLI 选择。\
 不要为简单问题强行制定计划。完成后直接给出最终回答。";
 
-const ASK_SYSTEM: &str = "你是 onetcli 的 AI 助手。当前处于 Ask 模式:\
+const ASK_SYSTEM: &str = "你是 Navop 的 AI 助手。当前处于 Ask 模式:\
 只直接、简洁地回答用户问题;不要创建计划;不要调用任何工具。\
 如果用户需要查询、操作或使用上下文资源,请提示切换到 Agent 或 Plan 模式。\
 回答使用简体中文。";
 
-const PLAN_SYSTEM: &str = "你是 onetcli 的 AI 助手。当前处于 Plan 模式:\
+const PLAN_SYSTEM: &str = "你是 Navop 的 AI 助手。当前处于 Plan 模式:\
 面对用户目标时先调用 `update_plan` 给出清晰步骤,再按步骤执行;每完成一步都更新计划状态。\
 可用 `delegate_task` 将边界清晰的子任务交给隔离子代理执行;它不是后端或 Codex CLI 选择。\
 如果目标缺少必要信息,先提出需要补充的问题。回答使用简体中文。";
@@ -190,6 +190,15 @@ fn system_prompt(kind: TaskKind) -> &'static str {
 mod tests {
     use super::*;
     use crate::skill::{SkillContext, SkillRef, SkillSummary};
+
+    #[test]
+    fn system_prompts_use_navop_brand() {
+        for kind in [TaskKind::Agent, TaskKind::Ask, TaskKind::Plan] {
+            let prompt = system_prompt(kind);
+            assert!(prompt.contains("Navop"));
+            assert!(!prompt.contains("onetcli"));
+        }
+    }
 
     #[test]
     fn system_prompt_includes_selected_skill_metadata_without_contents() {

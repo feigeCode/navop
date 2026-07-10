@@ -41,7 +41,7 @@ impl tool_runtime::ToolHandler for AppInfoTool {
         tool_runtime::ToolDescriptor {
             id: "onetcli.app_info".to_string(),
             title: "App Info".to_string(),
-            description: "Read metadata for the running OnetCli application, including app name and version. Use this for version checks, diagnostics, or compatibility reporting; it does not inspect remote hosts or saved connections.".to_string(),
+            description: "Read metadata for the running Navop application, including app name and version. Use this for version checks, diagnostics, or compatibility reporting; it does not inspect remote hosts or saved connections.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
@@ -73,7 +73,7 @@ impl tool_runtime::ToolHandler for AppInfoTool {
         let version = self.version;
         Box::pin(async move {
             Ok(tool_runtime::ToolResult::structured(serde_json::json!({
-                "name": "onetcli",
+                "name": "Navop",
                 "version": version
             })))
         })

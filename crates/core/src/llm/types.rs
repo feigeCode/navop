@@ -65,7 +65,7 @@ impl ProviderType {
             ProviderType::Google => "Google (Gemini)",
             ProviderType::AzureOpenAI => "Azure OpenAI",
             ProviderType::OpenAICompatible => "OpenAI Compatible",
-            ProviderType::OnetCli => "Onet CLI",
+            ProviderType::OnetCli => "Navop",
         }
     }
 
@@ -147,5 +147,20 @@ impl ProviderConfig {
     /// 是否为内置 provider
     pub fn is_builtin(&self) -> bool {
         self.provider_type.is_builtin()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProviderType;
+
+    #[test]
+    fn onetcli_provider_uses_navop_display_name_and_legacy_id() {
+        assert_eq!("Navop", ProviderType::OnetCli.display_name());
+        assert_eq!("onet_cli", ProviderType::OnetCli.as_str());
+        assert_eq!(
+            Some(ProviderType::OnetCli),
+            ProviderType::from_str("onet_cli")
+        );
     }
 }

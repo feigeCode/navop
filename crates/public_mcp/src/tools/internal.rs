@@ -98,7 +98,7 @@ impl ToolHandler for InternalFunctionListTool {
         ToolDescriptor {
             id: "internal_functions.list".to_string(),
             title: "List internal functions".to_string(),
-            description: "List named internal OnetCli functions available through MCP, including each function description, read-only flag, and input schema. Use this before internal_functions.call when you need app-level capabilities such as onetcli.app_info.".to_string(),
+            description: "List named internal Navop functions available through MCP, including each function description, read-only flag, and input schema. Use this before internal_functions.call when you need app-level capabilities such as onetcli.app_info.".to_string(),
             input_schema: empty_object_value_schema(),
             output_schema: json!({ "type": "object" }),
             permissions: Vec::new(),
@@ -132,7 +132,7 @@ impl ToolHandler for InternalFunctionCallTool {
         ToolDescriptor {
             id: "internal_functions.call".to_string(),
             title: "Call internal function".to_string(),
-            description: "Call one named internal OnetCli function with JSON arguments. Use internal_functions.list first to discover valid function names and schemas. Do not use this for SSH, SFTP, Redis, or saved connection operations; those have dedicated tool namespaces.".to_string(),
+            description: "Call one named internal Navop function with JSON arguments. Use internal_functions.list first to discover valid function names and schemas. Do not use this for SSH, SFTP, Redis, or saved connection operations; those have dedicated tool namespaces.".to_string(),
             input_schema: object_value_schema([
                 ("name", string_schema()),
                 ("arguments", json!({ "type": "object" })),

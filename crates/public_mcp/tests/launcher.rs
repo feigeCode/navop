@@ -81,7 +81,7 @@ async fn launcher_reports_stale_discovery_when_runtime_port_is_closed() {
 
     assert!(error.contains("failed to connect"));
     assert!(error.contains("discovery may be stale"));
-    assert!(error.contains("Start OnetCli and enable MCP"));
+    assert!(error.contains("Start Navop and enable MCP"));
 }
 
 #[tokio::test]
@@ -117,6 +117,10 @@ async fn launcher_connects_from_discovery_and_completes_initialize() {
     assert_eq!(
         "onetcli-public-mcp",
         response["result"]["serverInfo"]["name"]
+    );
+    assert_eq!(
+        "Navop Public MCP",
+        response["result"]["serverInfo"]["title"]
     );
 }
 

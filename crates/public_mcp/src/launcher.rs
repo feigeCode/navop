@@ -11,7 +11,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub fn load_discovery(path: &Path) -> Result<DiscoveryDocument> {
     if !path.exists() {
         bail!(
-            "OnetCli public MCP discovery file is missing at {}. Start OnetCli and enable MCP in Settings > General > MCP.",
+            "Navop public MCP discovery file is missing at {}. Start Navop and enable MCP in Settings > General > MCP.",
             path.display()
         );
     }
@@ -46,8 +46,8 @@ fn runtime_unavailable_message(
     discovery: &DiscoveryDocument,
 ) -> String {
     format!(
-        "{action} to OnetCli public MCP runtime at {addr}; discovery may be stale \
-         (pid {}, mode {:?}). Start OnetCli and enable MCP in Settings > General > MCP.",
+        "{action} to Navop public MCP runtime at {addr}; discovery may be stale \
+         (pid {}, mode {:?}). Start Navop and enable MCP in Settings > General > MCP.",
         discovery.pid, discovery.mode
     )
 }

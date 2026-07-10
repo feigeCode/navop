@@ -254,9 +254,9 @@ mod tests {
     #[test]
     fn constructs_http_transport_config() {
         let config =
-            AcpAgentConfig::new_http("onetcli-mcp", "Onetcli Tools", "http://127.0.0.1:3100/");
+            AcpAgentConfig::new_http("onetcli-mcp", "Navop Tools", "http://127.0.0.1:3100/");
         assert_eq!(config.id.as_ref(), "onetcli-mcp");
-        assert_eq!(config.name.as_ref(), "Onetcli Tools");
+        assert_eq!(config.name.as_ref(), "Navop Tools");
         match config.transport {
             AcpTransport::Http { url } => assert_eq!(url, "http://127.0.0.1:3100/"),
             _ => panic!("期望 Http 传输"),

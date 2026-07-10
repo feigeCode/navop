@@ -8,6 +8,16 @@ fn no_command_starts_gui() {
 }
 
 #[test]
+fn help_uses_navop_brand_and_legacy_command_name() {
+    let help = CliArgs::try_parse_from(["onetcli", "--help"])
+        .unwrap_err()
+        .to_string();
+
+    assert!(help.contains("Navop desktop app and automation commands"));
+    assert!(help.contains("Usage: onetcli"));
+}
+
+#[test]
 fn parses_tool_list_command() {
     let parsed = parse_from(["onetcli", "tool", "list", "--format", "json"]).unwrap();
 
