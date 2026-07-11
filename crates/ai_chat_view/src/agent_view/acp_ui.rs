@@ -1,3 +1,4 @@
+use super::acp_options::agent_selection_is_active;
 use super::*;
 use crate::AcpAgentConfig;
 
@@ -24,7 +25,14 @@ impl AgentChatView {
     }
 
     pub(super) fn select_acp_backend(&mut self, id: SharedString, cx: &mut Context<Self>) {
-        if self.acp_connecting || self.selected_ready_agent(&id) {
+        if self.acp_connecting
+            || agent_selection_is_active(
+                self.backend,
+                self.current_acp_id.as_ref(),
+                self.acp_pending.is_some(),
+                &id,
+            )
+        {
             return;
         }
         let Some(config) = self.ready_acp_config(&id) else {
@@ -48,10 +56,6 @@ impl AgentChatView {
             && self.current_acp_id.is_none()
     }
 
-    fn selected_ready_agent(&self, id: &SharedString) -> bool {
-        self.backend == Backend::Acp && self.current_acp_id.as_ref() == Some(id)
-    }
-
     fn ready_acp_config(&self, id: &SharedString) -> Option<AcpAgentConfig> {
         self.acp_agents
             .iter()
@@ -60,6 +64,8 @@ impl AgentChatView {
     }
 
     fn begin_acp_connect(&mut self, config: &AcpAgentConfig, cx: &mut Context<Self>) {
+        self.acp_pending = None;
+        self.acp_auth_methods.clear();
         self.acp_connecting = true;
         self.acp_connecting_id = Some(config.id.clone());
         self.set_running(false, cx);

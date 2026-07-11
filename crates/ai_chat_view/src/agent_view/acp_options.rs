@@ -50,3 +50,12 @@ pub(super) fn current_agent_label(
 pub(super) fn agent_option_disabled(agent: &ComposerAgentOption) -> bool {
     !agent.enabled || (agent.connecting && agent.id.is_some())
 }
+
+pub(super) fn agent_selection_is_active(
+    backend: Backend,
+    current_id: Option<&SharedString>,
+    has_pending: bool,
+    requested_id: &SharedString,
+) -> bool {
+    current_id == Some(requested_id) && (backend == Backend::Acp || has_pending)
+}

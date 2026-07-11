@@ -3823,6 +3823,18 @@ mod tests {
         assert!(agent_option_disabled(&options[1]));
     }
 
+    #[test]
+    fn pending_acp_agent_is_treated_as_selected() {
+        let selected = SharedString::from("codex");
+
+        assert!(acp_options::agent_selection_is_active(
+            Backend::Local,
+            Some(&selected),
+            true,
+            &selected,
+        ));
+    }
+
     #[gpui::test]
     fn gpui_refresh_acp_agents_updates_header_switcher_options(cx: &mut TestAppContext) {
         init_test_ui(cx);
