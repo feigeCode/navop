@@ -1,14 +1,18 @@
-use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::{
     RemoteDesktopBackend, RemoteDesktopCapabilities, RemoteDesktopConnectionOptions,
     RemoteDesktopInput, RemoteDesktopOutput, RemoteDesktopProtocol, RemoteDesktopRuntime,
     RemoteDesktopSize,
     helper_protocol::{HelperEvent, HelperRequest, decode_event_line, encode_request_line},
+    output_mailbox::{OutputMailboxSender, output_mailbox},
 };
+
+mod input;
+#[cfg(test)]
+mod tests;
+mod transport;
 
 const RDP_BACKEND_POLL_INTERVAL: Duration = Duration::from_millis(8);
 const MAX_INPUTS_PER_POLL: usize = 256;
@@ -53,15 +57,17 @@ impl RemoteDesktopBackend for RdpBackend {
         self: Box<Self>,
         initial_size: RemoteDesktopSize,
     ) -> anyhow::Result<RemoteDesktopRuntime> {
+        let (options, proxy_guard) = crate::backend::resolve_proxy_options(self.options.clone())?;
         let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (output_tx, output_rx) = std::sync::mpsc::channel();
+        let (output_tx, output_rx) = output_mailbox();
         let helper = self.helper.clone();
-        let mut connect = HelperRequest::connect_from_options(&self.options, initial_size);
-        let protocol = self.options.protocol;
+        let mut connect = HelperRequest::connect_from_options(&options, initial_size);
+        let protocol = options.protocol;
 
         std::thread::Builder::new()
             .name("remote-desktop-rdp".to_string())
             .spawn(move || {
+                let _proxy_guard = proxy_guard;
                 let mut latest_clipboard_text = None;
                 let mut reconnect_attempt = 0usize;
                 loop {
@@ -83,13 +89,19 @@ impl RemoteDesktopBackend for RdpBackend {
                                 reconnect_attempt = 0;
                             }
                             if manual {
-                                send_status(&output_tx, "reconnecting remote desktop session");
+                                transport::send_status(
+                                    &output_tx,
+                                    "reconnecting remote desktop session",
+                                );
                                 continue;
                             }
-                            let delay = reconnect_delay(reconnect_attempt);
+                            let delay = input::reconnect_delay(reconnect_attempt);
                             reconnect_attempt = reconnect_attempt.saturating_add(1);
-                            send_status(&output_tx, &reconnect_status_message(&reason, delay));
-                            if !wait_before_reconnect(
+                            transport::send_status(
+                                &output_tx,
+                                &input::reconnect_status_message(&reason, delay),
+                            );
+                            if !input::wait_before_reconnect(
                                 &mut connect,
                                 &mut latest_clipboard_text,
                                 &mut input_rx,
@@ -109,7 +121,7 @@ impl RemoteDesktopBackend for RdpBackend {
     }
 }
 
-enum HelperRunResult {
+pub(super) enum HelperRunResult {
     Closed,
     InputClosed,
     Reconnect {
@@ -119,27 +131,16 @@ enum HelperRunResult {
     },
 }
 
-enum BackendSignal {
-    Connected,
-    Disconnected(String),
-    OutputEnded,
-}
-
-enum RemoteInputBatch {
-    Inputs(Vec<RemoteDesktopInput>),
-    Disconnected,
-}
-
 fn run_helper_session(
     helper: &HelperProcessConfig,
     connect: &mut HelperRequest,
     latest_clipboard_text: &mut Option<String>,
     input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
+    output_tx: &OutputMailboxSender,
     protocol: RemoteDesktopProtocol,
 ) -> HelperRunResult {
     let Ok((mut helper, mut stdin, signal_rx)) =
-        start_helper_session(helper, connect, latest_clipboard_text, output_tx)
+        transport::start_helper_session(helper, connect, latest_clipboard_text, output_tx)
     else {
         return HelperRunResult::Reconnect {
             reason: "failed to start remote desktop helper".to_string(),
@@ -150,7 +151,7 @@ fn run_helper_session(
 
     let mut was_connected = false;
     loop {
-        if let Some(result) = handle_backend_signals(
+        if let Some(result) = input::handle_backend_signals(
             &signal_rx,
             &mut helper,
             &mut stdin,
@@ -159,718 +160,22 @@ fn run_helper_session(
         ) {
             return result;
         }
-        if let Some(result) = handle_remote_input(
-            input_rx,
+        let mut input_context = input::RemoteInputContext {
             connect,
             latest_clipboard_text,
-            &mut helper,
-            &mut stdin,
+            helper: &mut helper,
+            stdin: &mut stdin,
             output_tx,
-            was_connected,
             protocol,
-        ) {
+        };
+        if let Some(result) =
+            input::handle_remote_input(input_rx, &mut input_context, was_connected)
+        {
             return result;
         }
-        if let Some(result) = poll_helper_exit(&mut helper, was_connected) {
+        if let Some(result) = input::poll_helper_exit(&mut helper, was_connected) {
             return result;
         }
         std::thread::sleep(RDP_BACKEND_POLL_INTERVAL);
-    }
-}
-
-fn start_helper_session(
-    helper: &HelperProcessConfig,
-    connect: &HelperRequest,
-    latest_clipboard_text: &Option<String>,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
-) -> Result<
-    (
-        std::process::Child,
-        std::process::ChildStdin,
-        std::sync::mpsc::Receiver<BackendSignal>,
-    ),
-    (),
-> {
-    send_status(output_tx, "starting remote desktop helper");
-    let Some(mut helper) = spawn_helper(helper, output_tx.clone()) else {
-        return Err(());
-    };
-    let Some(stdout) = helper.stdout.take() else {
-        send_failure(output_tx, "remote desktop helper stdout unavailable");
-        return Err(());
-    };
-    let Some(mut stdin) = helper.stdin.take() else {
-        send_failure(output_tx, "remote desktop helper stdin unavailable");
-        return Err(());
-    };
-    let (signal_tx, signal_rx) = std::sync::mpsc::channel();
-    spawn_output_reader(stdout, output_tx.clone(), signal_tx);
-    write_request(&mut stdin, connect, output_tx).map_err(|_| ())?;
-    if let Some(text) = latest_clipboard_text.clone() {
-        let _ = write_request(
-            &mut stdin,
-            &HelperRequest::ClipboardText { text },
-            output_tx,
-        );
-    }
-    Ok((helper, stdin, signal_rx))
-}
-
-fn handle_backend_signals(
-    signal_rx: &std::sync::mpsc::Receiver<BackendSignal>,
-    helper: &mut std::process::Child,
-    stdin: &mut std::process::ChildStdin,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
-    was_connected: &mut bool,
-) -> Option<HelperRunResult> {
-    while let Ok(signal) = signal_rx.try_recv() {
-        match signal {
-            BackendSignal::Connected => *was_connected = true,
-            BackendSignal::Disconnected(reason) => {
-                close_helper(helper, stdin, output_tx);
-                return Some(reconnect_result(reason, false, *was_connected));
-            }
-            BackendSignal::OutputEnded => {
-                close_helper(helper, stdin, output_tx);
-                return Some(reconnect_result(
-                    "remote desktop helper output ended".to_string(),
-                    false,
-                    *was_connected,
-                ));
-            }
-        }
-    }
-    None
-}
-
-fn handle_remote_input(
-    input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
-    connect: &mut HelperRequest,
-    latest_clipboard_text: &mut Option<String>,
-    helper: &mut std::process::Child,
-    stdin: &mut std::process::ChildStdin,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
-    was_connected: bool,
-    protocol: RemoteDesktopProtocol,
-) -> Option<HelperRunResult> {
-    let inputs = match drain_remote_inputs(input_rx) {
-        RemoteInputBatch::Inputs(inputs) => inputs,
-        RemoteInputBatch::Disconnected => {
-            close_helper(helper, stdin, output_tx);
-            return Some(HelperRunResult::InputClosed);
-        }
-    };
-
-    for input in inputs {
-        match input {
-            RemoteDesktopInput::Close => {
-                close_helper(helper, stdin, output_tx);
-                return Some(HelperRunResult::Closed);
-            }
-            RemoteDesktopInput::Reconnect => {
-                close_helper(helper, stdin, output_tx);
-                return Some(reconnect_result(
-                    "manual reconnect".to_string(),
-                    true,
-                    was_connected,
-                ));
-            }
-            input => {
-                remember_reconnect_state(&input, connect, latest_clipboard_text);
-                if let Some(reason) = forward_remote_input(input, stdin, output_tx, protocol) {
-                    close_helper(helper, stdin, output_tx);
-                    return Some(reconnect_result(reason, false, was_connected));
-                }
-            }
-        }
-    }
-    None
-}
-
-fn drain_remote_inputs(
-    input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
-) -> RemoteInputBatch {
-    let mut inputs = Vec::new();
-    for _ in 0..MAX_INPUTS_PER_POLL {
-        match input_rx.try_recv() {
-            Ok(input) => inputs.push(input),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                if inputs.is_empty() {
-                    return RemoteInputBatch::Disconnected;
-                }
-                inputs.push(RemoteDesktopInput::Close);
-                break;
-            }
-        }
-    }
-    RemoteInputBatch::Inputs(coalesce_remote_inputs(inputs))
-}
-
-fn coalesce_remote_inputs<I>(inputs: I) -> Vec<RemoteDesktopInput>
-where
-    I: IntoIterator<Item = RemoteDesktopInput>,
-{
-    let mut coalesced = Vec::new();
-    let mut pending_mouse_move = None;
-    for input in inputs {
-        match input {
-            RemoteDesktopInput::MouseMove { .. } => pending_mouse_move = Some(input),
-            input => {
-                if let Some(mouse_move) = pending_mouse_move.take() {
-                    coalesced.push(mouse_move);
-                }
-                coalesced.push(input);
-            }
-        }
-    }
-    if let Some(mouse_move) = pending_mouse_move {
-        coalesced.push(mouse_move);
-    }
-    coalesced
-}
-
-fn forward_remote_input(
-    input: RemoteDesktopInput,
-    stdin: &mut std::process::ChildStdin,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
-    protocol: RemoteDesktopProtocol,
-) -> Option<String> {
-    let request = HelperRequest::from_remote_input_for_protocol(&input, protocol)?;
-    write_request(stdin, &request, output_tx)
-        .err()
-        .map(|_| "failed to send RDP helper request".to_string())
-}
-
-fn poll_helper_exit(
-    helper: &mut std::process::Child,
-    was_connected: bool,
-) -> Option<HelperRunResult> {
-    match helper.try_wait() {
-        Ok(Some(status)) => Some(reconnect_result(
-            format!("RDP helper exited with {status}"),
-            false,
-            was_connected,
-        )),
-        Ok(None) => None,
-        Err(error) => Some(reconnect_result(
-            format!("failed to poll RDP helper: {error}"),
-            false,
-            was_connected,
-        )),
-    }
-}
-
-fn reconnect_result(reason: String, manual: bool, was_connected: bool) -> HelperRunResult {
-    HelperRunResult::Reconnect {
-        reason,
-        manual,
-        was_connected,
-    }
-}
-
-fn wait_before_reconnect(
-    connect: &mut HelperRequest,
-    latest_clipboard_text: &mut Option<String>,
-    input_rx: &mut tokio::sync::mpsc::UnboundedReceiver<RemoteDesktopInput>,
-    delay: Duration,
-) -> bool {
-    let deadline = Instant::now() + delay;
-    loop {
-        match input_rx.try_recv() {
-            Ok(RemoteDesktopInput::Close) => return false,
-            Ok(RemoteDesktopInput::Reconnect) => return true,
-            Ok(input) => remember_reconnect_state(&input, connect, latest_clipboard_text),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
-        }
-        if Instant::now() >= deadline {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn remember_reconnect_state(
-    input: &RemoteDesktopInput,
-    connect: &mut HelperRequest,
-    latest_clipboard_text: &mut Option<String>,
-) {
-    match input {
-        RemoteDesktopInput::Resize { width, height } => {
-            if let HelperRequest::Connect {
-                width: connect_width,
-                height: connect_height,
-                ..
-            } = connect
-            {
-                *connect_width = *width;
-                *connect_height = *height;
-            }
-        }
-        RemoteDesktopInput::ClipboardText { text } => {
-            *latest_clipboard_text = Some(text.clone());
-        }
-        _ => {}
-    }
-}
-
-fn close_helper(
-    helper: &mut std::process::Child,
-    stdin: &mut std::process::ChildStdin,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
-) {
-    let _ = write_request(stdin, &HelperRequest::Close, output_tx);
-    if let Err(error) = helper.wait() {
-        send_failure(output_tx, &format!("failed to wait RDP helper: {error}"));
-    }
-}
-
-fn reconnect_delay(attempt: usize) -> Duration {
-    match attempt {
-        0 => Duration::from_secs(1),
-        1 => Duration::from_secs(2),
-        2 => Duration::from_secs(5),
-        _ => Duration::from_secs(10),
-    }
-}
-
-fn reconnect_status_message(reason: &str, delay: Duration) -> String {
-    format!(
-        "RDP disconnected: {}. Reconnecting in {}s",
-        user_facing_disconnect_reason(reason),
-        delay.as_secs()
-    )
-}
-
-fn user_facing_disconnect_reason(reason: &str) -> &'static str {
-    if reason.contains("Fast-Path") {
-        return "display update error";
-    }
-    if reason.contains("/Users/") || reason.contains(".cargo/git/checkouts") {
-        return "session error";
-    }
-    if reason.trim().is_empty() {
-        return "connection lost";
-    }
-    "connection lost"
-}
-
-fn helper_disconnect_message(event: &HelperEvent) -> Option<String> {
-    match event {
-        HelperEvent::ConnectionFailure { message } | HelperEvent::Terminated { message } => {
-            Some(message.clone())
-        }
-        _ => None,
-    }
-}
-
-fn send_status(output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>, message: &str) {
-    let _ = output_tx.send(RemoteDesktopOutput::Status(message.to_string()));
-}
-
-fn spawn_helper(
-    helper: &HelperProcessConfig,
-    output_tx: std::sync::mpsc::Sender<RemoteDesktopOutput>,
-) -> Option<std::process::Child> {
-    let mut command = Command::new(&helper.command);
-    process_util::configure_background_child(&mut command);
-
-    match command
-        .args(&helper.args)
-        .current_dir(&helper.working_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-    {
-        Ok(child) => Some(child),
-        Err(error) => {
-            let message = format!(
-                "failed to start remote desktop helper {}: {error}",
-                helper.command.display()
-            );
-            send_failure(&output_tx, &message);
-            None
-        }
-    }
-}
-
-fn spawn_output_reader(
-    stdout: std::process::ChildStdout,
-    output_tx: std::sync::mpsc::Sender<RemoteDesktopOutput>,
-    signal_tx: std::sync::mpsc::Sender<BackendSignal>,
-) {
-    let _ = std::thread::Builder::new()
-        .name("remote-desktop-rdp-output".to_string())
-        .spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            loop {
-                match read_helper_output(&mut reader) {
-                    Ok(Some(output)) => {
-                        forward_helper_output(output, &output_tx, &signal_tx);
-                    }
-                    Ok(None) => break,
-                    Err(error) => {
-                        send_failure(
-                            &output_tx,
-                            &format!("failed to read remote desktop helper: {error}"),
-                        );
-                        break;
-                    }
-                }
-            }
-            let _ = signal_tx.send(BackendSignal::OutputEnded);
-        });
-}
-
-struct HelperOutput {
-    output: RemoteDesktopOutput,
-    connected: bool,
-    disconnect_message: Option<String>,
-}
-
-fn read_helper_output(reader: &mut impl BufRead) -> anyhow::Result<Option<HelperOutput>> {
-    let mut line = Vec::new();
-    let header_bytes = reader.read_until(b'\n', &mut line)?;
-    if header_bytes == 0 {
-        return Ok(None);
-    }
-    let event = decode_event_line(std::str::from_utf8(&line)?)?;
-    let connected = matches!(event, HelperEvent::Connected { .. });
-    let disconnect_message = helper_disconnect_message(&event);
-    match event {
-        HelperEvent::FrameBytes {
-            width,
-            height,
-            rgba_len,
-        } => read_binary_frame_output(reader, width, height, rgba_len).map(Some),
-        HelperEvent::FrameBgraBytes {
-            width,
-            height,
-            bgra_len,
-        } => read_binary_bgra_frame_output(reader, width, height, bgra_len).map(Some),
-        event => Ok(Some(HelperOutput {
-            output: helper_event_to_output(event)?,
-            connected,
-            disconnect_message,
-        })),
-    }
-}
-
-fn read_binary_frame_output<R>(
-    reader: &mut R,
-    width: u16,
-    height: u16,
-    rgba_len: usize,
-) -> anyhow::Result<HelperOutput>
-where
-    R: Read + ?Sized,
-{
-    let expected_len = usize::from(width) * usize::from(height) * 4;
-    if rgba_len != expected_len {
-        anyhow::bail!(
-            "invalid binary frame payload length: expected {expected_len}, got {rgba_len}"
-        );
-    }
-    let mut rgba = vec![0; rgba_len];
-    reader.read_exact(&mut rgba)?;
-    Ok(HelperOutput {
-        output: RemoteDesktopOutput::Frame {
-            width,
-            height,
-            rgba,
-        },
-        connected: false,
-        disconnect_message: None,
-    })
-}
-
-fn read_binary_bgra_frame_output<R>(
-    reader: &mut R,
-    width: u16,
-    height: u16,
-    bgra_len: usize,
-) -> anyhow::Result<HelperOutput>
-where
-    R: Read + ?Sized,
-{
-    let expected_len = usize::from(width) * usize::from(height) * 4;
-    if bgra_len != expected_len {
-        anyhow::bail!("invalid BGRA frame payload length: expected {expected_len}, got {bgra_len}");
-    }
-    let mut bgra = vec![0; bgra_len];
-    reader.read_exact(&mut bgra)?;
-    Ok(HelperOutput {
-        output: RemoteDesktopOutput::FrameBgra {
-            width,
-            height,
-            bgra,
-        },
-        connected: false,
-        disconnect_message: None,
-    })
-}
-
-fn forward_helper_output(
-    helper_output: HelperOutput,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
-    signal_tx: &std::sync::mpsc::Sender<BackendSignal>,
-) {
-    if helper_output.connected {
-        let _ = signal_tx.send(BackendSignal::Connected);
-    }
-    if let Some(message) = helper_output.disconnect_message {
-        let _ = signal_tx.send(BackendSignal::Disconnected(message));
-    }
-    let _ = output_tx.send(helper_output.output);
-}
-
-fn write_request(
-    stdin: &mut std::process::ChildStdin,
-    request: &HelperRequest,
-    output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>,
-) -> anyhow::Result<()> {
-    let line = encode_request_line(request)?;
-    if let Err(error) = stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush()) {
-        send_failure(
-            output_tx,
-            &format!("failed to write RDP helper request: {error}"),
-        );
-        anyhow::bail!(error);
-    }
-    Ok(())
-}
-
-fn helper_event_to_output(event: HelperEvent) -> anyhow::Result<RemoteDesktopOutput> {
-    Ok(match event {
-        HelperEvent::Status { message } => RemoteDesktopOutput::Status(message),
-        HelperEvent::Connected { width, height } => RemoteDesktopOutput::Connected {
-            width,
-            height,
-            capabilities: rdp_capabilities(),
-        },
-        HelperEvent::Frame { width, height, .. } => RemoteDesktopOutput::Frame {
-            width,
-            height,
-            rgba: event.into_rgba()?,
-        },
-        HelperEvent::FrameBytes { .. } | HelperEvent::FrameBgraBytes { .. } => {
-            anyhow::bail!("binary frame payload is missing")
-        }
-        HelperEvent::CursorDefault => RemoteDesktopOutput::CursorDefault,
-        HelperEvent::CursorHidden => RemoteDesktopOutput::CursorHidden,
-        HelperEvent::CursorPosition { x, y } => RemoteDesktopOutput::CursorPosition { x, y },
-        HelperEvent::ClipboardText { text } => RemoteDesktopOutput::ClipboardText { text },
-        HelperEvent::ConnectionFailure { message } => {
-            RemoteDesktopOutput::ConnectionFailure(message)
-        }
-        HelperEvent::Terminated { message } => RemoteDesktopOutput::Terminated(message),
-    })
-}
-
-fn rdp_capabilities() -> RemoteDesktopCapabilities {
-    RemoteDesktopCapabilities {
-        clipboard_text: true,
-        ..RemoteDesktopCapabilities::rdp_mvp()
-    }
-}
-
-fn send_failure(output_tx: &std::sync::mpsc::Sender<RemoteDesktopOutput>, message: &str) {
-    let _ = output_tx.send(RemoteDesktopOutput::ConnectionFailure(message.to_string()));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ResizeSupport;
-    use crate::helper_protocol::HelperEvent;
-
-    #[test]
-    fn converts_helper_connected_event_to_rdp_capabilities() {
-        let output = helper_event_to_output(HelperEvent::Connected {
-            width: 1280,
-            height: 720,
-        })
-        .expect("event converts");
-
-        assert_eq!(
-            output,
-            RemoteDesktopOutput::Connected {
-                width: 1280,
-                height: 720,
-                capabilities: crate::RemoteDesktopCapabilities {
-                    resize: ResizeSupport::RemoteResize,
-                    clipboard_text: true,
-                    cursor_shape: false,
-                    audio: false,
-                    file_transfer: false,
-                }
-            }
-        );
-    }
-
-    #[test]
-    fn converts_helper_clipboard_text_event_to_output() {
-        let output = helper_event_to_output(HelperEvent::ClipboardText {
-            text: "remote 中文".to_string(),
-        })
-        .expect("event converts");
-
-        assert_eq!(
-            output,
-            RemoteDesktopOutput::ClipboardText {
-                text: "remote 中文".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn reconnect_delay_uses_bounded_backoff() {
-        assert_eq!(std::time::Duration::from_secs(1), reconnect_delay(0));
-        assert_eq!(std::time::Duration::from_secs(2), reconnect_delay(1));
-        assert_eq!(std::time::Duration::from_secs(5), reconnect_delay(2));
-        assert_eq!(std::time::Duration::from_secs(10), reconnect_delay(3));
-        assert_eq!(std::time::Duration::from_secs(10), reconnect_delay(20));
-    }
-
-    #[test]
-    fn helper_events_identify_disconnect_signals() {
-        assert_eq!(
-            Some("network".to_string()),
-            helper_disconnect_message(&HelperEvent::ConnectionFailure {
-                message: "network".to_string(),
-            })
-        );
-        assert_eq!(
-            Some("closed".to_string()),
-            helper_disconnect_message(&HelperEvent::Terminated {
-                message: "closed".to_string(),
-            })
-        );
-        assert_eq!(
-            None,
-            helper_disconnect_message(&HelperEvent::Connected {
-                width: 1,
-                height: 1
-            })
-        );
-    }
-
-    #[test]
-    fn reads_binary_frame_event_from_helper_stream() {
-        let mut input = std::io::Cursor::new(
-            b"{\"type\":\"FrameBytes\",\"width\":2,\"height\":1,\"rgba_len\":8}\n\
-              \x01\x02\x03\xff\x04\x05\x06\xff"
-                .to_vec(),
-        );
-
-        let output = read_helper_output(&mut input)
-            .expect("helper output reads")
-            .expect("helper output exists")
-            .output;
-
-        assert_eq!(
-            RemoteDesktopOutput::Frame {
-                width: 2,
-                height: 1,
-                rgba: vec![1, 2, 3, 255, 4, 5, 6, 255],
-            },
-            output
-        );
-    }
-
-    #[test]
-    fn reads_bgra_frame_event_from_helper_stream() {
-        let mut input = std::io::Cursor::new(
-            b"{\"type\":\"FrameBgraBytes\",\"width\":2,\"height\":1,\"bgra_len\":8}\n\
-              \x03\x02\x01\xff\x06\x05\x04\xff"
-                .to_vec(),
-        );
-
-        let output = read_helper_output(&mut input)
-            .expect("helper output reads")
-            .expect("helper output exists")
-            .output;
-
-        assert_eq!(
-            RemoteDesktopOutput::FrameBgra {
-                width: 2,
-                height: 1,
-                bgra: vec![3, 2, 1, 255, 6, 5, 4, 255],
-            },
-            output
-        );
-    }
-
-    #[test]
-    fn reads_legacy_base64_frame_event_from_helper_stream() {
-        let mut input = std::io::Cursor::new(
-            b"{\"type\":\"Frame\",\"width\":2,\"height\":1,\"rgba_base64\":\"AQID/wQFBv8=\"}\n"
-                .to_vec(),
-        );
-
-        let output = read_helper_output(&mut input)
-            .expect("helper output reads")
-            .expect("helper output exists")
-            .output;
-
-        assert_eq!(
-            RemoteDesktopOutput::Frame {
-                width: 2,
-                height: 1,
-                rgba: vec![1, 2, 3, 255, 4, 5, 6, 255],
-            },
-            output
-        );
-    }
-
-    #[test]
-    fn reconnect_status_hides_internal_fast_path_error() {
-        let status = reconnect_status_message(
-            "[Fast-Path @ /Users/hufei/.cargo/git/checkouts/ironrdp/src/lib.rs:98] custom error",
-            std::time::Duration::from_secs(1),
-        );
-
-        assert_eq!(
-            "RDP disconnected: display update error. Reconnecting in 1s",
-            status
-        );
-    }
-
-    #[test]
-    fn coalesces_consecutive_mouse_moves_without_reordering_actions() {
-        let inputs = vec![
-            RemoteDesktopInput::MouseMove { x: 10, y: 10 },
-            RemoteDesktopInput::MouseMove { x: 20, y: 20 },
-            RemoteDesktopInput::MouseButton {
-                button: crate::RemoteMouseButton::Left,
-                pressed: true,
-            },
-            RemoteDesktopInput::MouseMove { x: 30, y: 30 },
-            RemoteDesktopInput::MouseMove { x: 40, y: 40 },
-            RemoteDesktopInput::Key {
-                key: crate::RemoteKey::Named(crate::RemoteNamedKey::Enter),
-                pressed: true,
-            },
-        ];
-
-        let coalesced = coalesce_remote_inputs(inputs);
-
-        assert_eq!(
-            vec![
-                RemoteDesktopInput::MouseMove { x: 20, y: 20 },
-                RemoteDesktopInput::MouseButton {
-                    button: crate::RemoteMouseButton::Left,
-                    pressed: true,
-                },
-                RemoteDesktopInput::MouseMove { x: 40, y: 40 },
-                RemoteDesktopInput::Key {
-                    key: crate::RemoteKey::Named(crate::RemoteNamedKey::Enter),
-                    pressed: true,
-                },
-            ],
-            coalesced
-        );
     }
 }

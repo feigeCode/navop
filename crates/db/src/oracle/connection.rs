@@ -17,12 +17,12 @@ use crate::executor::{
 };
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, format_message, truncate_str};
-use ssh::LocalPortForwardTunnel;
+use connection_tunnel::TunnelGuard;
 
 pub struct OracleDbConnection {
     config: DbConnectionConfig,
     conn: Arc<Mutex<Option<oracle::Connection>>>,
-    tunnel: Option<LocalPortForwardTunnel>,
+    tunnel: Option<TunnelGuard>,
 }
 
 impl OracleDbConnection {
@@ -831,6 +831,7 @@ mod tests {
             service_name: Some("ORCL".to_string()),
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: HashMap::new(),
         }
     }

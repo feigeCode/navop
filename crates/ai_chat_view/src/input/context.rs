@@ -385,6 +385,7 @@ pub struct ComposerAgentOption {
     pub subtitle: SharedString,
     pub selected: bool,
     pub connecting: bool,
+    pub enabled: bool,
 }
 
 impl ComposerAgentOption {
@@ -395,6 +396,7 @@ impl ComposerAgentOption {
             subtitle: SharedString::from("内置 Agent"),
             selected,
             connecting,
+            enabled: true,
         }
     }
 
@@ -410,6 +412,22 @@ impl ComposerAgentOption {
             subtitle: SharedString::from("ACP Agent"),
             selected,
             connecting,
+            enabled: true,
+        }
+    }
+
+    pub fn invalid_acp(
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        diagnostic: impl Into<SharedString>,
+    ) -> Self {
+        Self {
+            id: Some(id.into()),
+            label: label.into(),
+            subtitle: diagnostic.into(),
+            selected: false,
+            connecting: false,
+            enabled: false,
         }
     }
 

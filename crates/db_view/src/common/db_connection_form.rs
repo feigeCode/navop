@@ -36,10 +36,12 @@ use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
     ConnectionRepository, ConnectionType, DatabaseType, DbConnectionConfig, GlobalStorageState,
-    StoredConnection, Workspace, get_config_dir,
+    ProxyConfig, ProxyType, StoredConnection, Workspace, get_config_dir,
 };
 use rust_i18n::t;
 use tracing::info;
+
+use super::connection_proxy::{self, ProxyValidationError};
 
 /// Form select item for dropdown fields
 #[derive(Clone, Debug)]
@@ -1271,6 +1273,7 @@ pub struct DbConnectionForm {
 
 impl DbConnectionForm {
     pub fn new(config: DbFormConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let config = connection_proxy::with_proxy_tab(config);
         let focus_handle = cx.focus_handle();
         let current_db_type = cx.new(|_| config.db_type.clone());
 
@@ -1612,6 +1615,26 @@ impl DbConnectionForm {
             if let Some(sid) = &params.sid {
                 self.set_field_value("sid", sid, window, cx);
             }
+            if let Some(proxy) = &params.proxy {
+                self.set_field_value("proxy_enabled", "true", window, cx);
+                self.set_field_value(
+                    "proxy_type",
+                    match proxy.proxy_type {
+                        ProxyType::Socks5 => "socks5",
+                        ProxyType::Http => "http",
+                    },
+                    window,
+                    cx,
+                );
+                self.set_field_value("proxy_host", &proxy.host, window, cx);
+                self.set_field_value("proxy_port", &proxy.port.to_string(), window, cx);
+                if let Some(username) = &proxy.username {
+                    self.set_field_value("proxy_username", username, window, cx);
+                }
+                if let Some(password) = &proxy.password {
+                    self.set_field_value("proxy_password", password, window, cx);
+                }
+            }
             for (key, value) in &params.extra_params {
                 self.set_field_value(key, value, window, cx);
             }
@@ -1715,7 +1738,9 @@ impl DbConnectionForm {
                     continue;
                 }
             }
-            if !basic_fields.contains(&field_name.as_str()) {
+            if !basic_fields.contains(&field_name.as_str())
+                && !connection_proxy::is_proxy_field(field_name)
+            {
                 let value = value_entity.read(cx).clone();
                 if !value.is_empty() {
                     extra_params.insert(field_name.clone(), value);
@@ -1744,6 +1769,7 @@ impl DbConnectionForm {
             service_name: self.get_field_value("service_name", cx),
             sid: self.get_field_value("sid", cx),
             workspace_id,
+            proxy: self.proxy_config(cx).ok().flatten(),
             extra_params,
         }
     }
@@ -1795,7 +1821,36 @@ impl DbConnectionForm {
 
         self.validate_oracle_client(cx)?;
         self.validate_ssh_tunnel(cx)?;
+        self.validate_proxy(cx)?;
         Ok(())
+    }
+
+    fn proxy_config(&self, cx: &App) -> Result<Option<ProxyConfig>, ProxyValidationError> {
+        connection_proxy::build_proxy_config(
+            self.field_bool_value("proxy_enabled", cx),
+            &self
+                .get_field_value("proxy_type", cx)
+                .unwrap_or_else(|| "socks5".to_string()),
+            &self.get_field_value("proxy_host", cx).unwrap_or_default(),
+            &self.get_field_value("proxy_port", cx).unwrap_or_default(),
+            &self
+                .get_field_value("proxy_username", cx)
+                .unwrap_or_default(),
+            &self
+                .get_field_value("proxy_password", cx)
+                .unwrap_or_default(),
+        )
+    }
+
+    fn validate_proxy(&self, cx: &App) -> Result<(), String> {
+        self.proxy_config(cx).map(|_| ()).map_err(|error| {
+            let field = error.field().unwrap_or("proxy");
+            format!(
+                "{}: {}",
+                t!("ConnectionForm.proxy_invalid"),
+                self.field_label(field)
+            )
+        })
     }
 
     fn validate_ssh_tunnel(&self, cx: &App) -> Result<(), String> {

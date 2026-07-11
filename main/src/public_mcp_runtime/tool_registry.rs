@@ -3,7 +3,8 @@ use gpui::App;
 use one_core::settings::ToolExposureToolsetSettings;
 use public_mcp::tools::{
     PublicMcpToolProvider, PublicMcpToolRegistry, ToolRuntimeMcpProvider,
-    internal_function_tool_registry, remote_ops_tool_registry, terminal_exec_tool_registry,
+    internal_function_tool_registry, remote_ops_tool_registry, terminal_control_tool_registry,
+    terminal_exec_tool_registry,
 };
 use std::sync::Arc;
 
@@ -19,7 +20,8 @@ pub(super) fn build_tool_registry(
                 runtime_registries.push(remote_ops_tool_registry(registry.clone()));
             }
             if toolsets.terminal_exec {
-                runtime_registries.push(terminal_exec_tool_registry(registry));
+                runtime_registries.push(terminal_exec_tool_registry(registry.clone()));
+                runtime_registries.push(terminal_control_tool_registry(registry));
             }
         } else {
             tracing::warn!("Public MCP terminal registry is not initialized");
@@ -138,8 +140,11 @@ mod tests {
     };
     use public_mcp::permissions::PermissionMode;
     use public_mcp::registry::{
-        ConnectionState, TerminalConnectionKind, TerminalExecSessionHandle, TerminalSessionHandle,
-        TerminalSessionSnapshot,
+        ConnectionState, TerminalConnectionKind, TerminalControlSessionHandle,
+        TerminalExecSessionHandle, TerminalSessionHandle, TerminalSessionSnapshot,
+    };
+    use public_mcp::terminal_control::{
+        TerminalControlReadiness, TerminalControlRequest, TerminalControlResult,
     };
     use public_mcp::terminal_exec::{
         TerminalExecCompletion, TerminalExecRequest, TerminalExecResult,
@@ -404,6 +409,7 @@ mod tests {
 
         assert!(tools.iter().any(|tool| tool.name == "ssh.exec"));
         assert!(tools.iter().any(|tool| tool.name == "terminal.exec"));
+        assert!(tools.iter().any(|tool| tool.name == "terminal.control"));
     }
 
     #[gpui::test]
@@ -426,6 +432,7 @@ mod tests {
 
         assert!(tools.iter().any(|tool| tool.name == "ssh.exec"));
         assert!(!tools.iter().any(|tool| tool.name == "terminal.exec"));
+        assert!(!tools.iter().any(|tool| tool.name == "terminal.control"));
     }
 
     #[gpui::test]
@@ -448,6 +455,7 @@ mod tests {
 
         assert!(!tools.iter().any(|tool| tool.name == "ssh.exec"));
         assert!(tools.iter().any(|tool| tool.name == "terminal.exec"));
+        assert!(tools.iter().any(|tool| tool.name == "terminal.control"));
     }
 
     #[gpui::test]
@@ -474,6 +482,7 @@ mod tests {
             );
             terminal_registry.register(terminal.clone());
             terminal_registry.register_terminal_exec(terminal.clone());
+            terminal_registry.register_terminal_control(terminal.clone());
             insert_database_connection(&repo, "prod-db", "10.2.4.54");
             (
                 build_tool_registry(cx, &toolsets).expect("terminal registry should build"),
@@ -484,6 +493,9 @@ mod tests {
         for target in ["10.2.4.54", "root@zn-54:~"] {
             let content = call_terminal_exec(&registry, target);
             assert_eq!(json!("ssh-terminal-prod-a"), content["target"]);
+            let control = call_terminal_control(&registry, target);
+            assert_eq!(json!("ssh-terminal-prod-a"), control["target"]);
+            assert_eq!(json!(true), control["sent"]);
         }
 
         assert_eq!(
@@ -520,6 +532,7 @@ mod tests {
             );
             terminal_registry.register(terminal.clone());
             terminal_registry.register_terminal_exec(terminal.clone());
+            terminal_registry.register_terminal_control(terminal.clone());
             insert_database_connection(&repo, "prod-db", "10.2.4.54");
             (registry, terminal, connection_id)
         });
@@ -667,20 +680,44 @@ mod tests {
         fn exec_in_terminal(
             &self,
             request: TerminalExecRequest,
-        ) -> anyhow::Result<TerminalExecResult> {
+            _cancellation: public_mcp::registry::TerminalExecCancellation,
+        ) -> public_mcp::registry::TerminalExecFuture {
             let suffix = if request.submit { "\n" } else { "" };
             self.inserted
                 .lock()
                 .expect("inserted lock")
                 .push(format!("{}{suffix}", request.command));
-            Ok(TerminalExecResult {
-                target: request.target,
-                command: request.command,
-                submitted: request.submit,
-                completion: TerminalExecCompletion::SubmittedOnly,
-                exit_code: None,
-                output: String::new(),
-                duration_ms: 0,
+            Box::pin(async move {
+                Ok(TerminalExecResult {
+                    target: request.target,
+                    command: request.command,
+                    submitted: request.submit,
+                    completion: TerminalExecCompletion::SubmittedOnly,
+                    exit_code: None,
+                    output: String::new(),
+                    duration_ms: 0,
+                })
+            })
+        }
+    }
+
+    impl TerminalControlSessionHandle for FakeTerminalSession {
+        fn snapshot(&self) -> TerminalSessionSnapshot {
+            self.snapshot()
+        }
+
+        fn control_terminal(
+            &self,
+            request: TerminalControlRequest,
+            _cancellation: public_mcp::registry::TerminalControlCancellation,
+        ) -> public_mcp::registry::TerminalControlFuture {
+            Box::pin(async move {
+                Ok(TerminalControlResult {
+                    target: request.target,
+                    action: request.action,
+                    sent: true,
+                    readiness_before: TerminalControlReadiness::CommandRunning,
+                })
             })
         }
     }
@@ -704,6 +741,26 @@ mod tests {
         .expect("terminal target alias should resolve to active terminal session")
         .structured_content
         .expect("terminal.exec should return structured content")
+    }
+
+    fn call_terminal_control(
+        registry: &public_mcp::tools::PublicMcpToolRegistry,
+        target: &str,
+    ) -> serde_json::Value {
+        futures::executor::block_on(registry.call_tool(
+            "terminal.control",
+            Some(serde_json::Map::from_iter([
+                ("target".to_string(), json!(target)),
+                ("action".to_string(), json!("interrupt")),
+            ])),
+            PublicMcpToolContext {
+                permission_mode: PermissionMode::Allow,
+                approver: PublicMcpApprovalManager::new(Arc::new(AlwaysApprove)),
+            },
+        ))
+        .expect("terminal control target alias should resolve to active terminal session")
+        .structured_content
+        .expect("terminal.control should return structured content")
     }
 
     struct AlwaysApprove;
@@ -753,6 +810,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: Default::default(),
         }
     }

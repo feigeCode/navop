@@ -38,6 +38,22 @@ RemoteFileEditor:
       en: Cancel
       zh-CN: 取消
       zh-HK: 取消
+    edit_with:
+      en: "Edit With %{editor}"
+      zh-CN: "使用 %{editor} 编辑"
+      zh-HK: "使用 %{editor} 編輯"
+    overwrite_remote:
+      en: Overwrite Remote
+      zh-CN: 覆盖远程文件
+      zh-HK: 覆蓋遠端檔案
+    reload_remote:
+      en: Reload Remote
+      zh-CN: 重新加载远程文件
+      zh-HK: 重新載入遠端檔案
+    launch:
+      en: Launch
+      zh-CN: 启动
+      zh-HK: 啟動
   status:
     loading:
       en: Loading...
@@ -94,11 +110,47 @@ RemoteFileEditor:
       en: Choose Save to upload the latest changes before closing.
       zh-CN: 选择“保存”可在关闭前上传最新更改。
       zh-HK: 選擇「儲存」可在關閉前上傳最新更改。
+    conflict_title:
+      en: Remote file conflict
+      zh-CN: 远程文件冲突
+      zh-HK: 遠端檔案衝突
+    remote_changed:
+      en: The remote file changed after it was opened.
+      zh-CN: 远程文件在打开后已被修改。
+      zh-HK: 遠端檔案在打開後已被修改。
+    remote_missing:
+      en: The remote file was deleted after it was opened.
+      zh-CN: 远程文件在打开后已被删除。
+      zh-HK: 遠端檔案在打開後已被刪除。
+    launch_title:
+      en: Confirm external editor
+      zh-CN: 确认外部编辑器
+      zh-HK: 確認外部編輯器
+    launch_message:
+      en: "Navop will launch: %{program}"
+      zh-CN: "Navop 将启动：%{program}"
+      zh-HK: "Navop 將啟動：%{program}"
   notification:
     saved:
       en: Remote file saved
       zh-CN: 远程文件已保存
       zh-HK: 遠端檔案已儲存
+    external_editor_missing:
+      en: External editor is not installed
+      zh-CN: 外部编辑器扩展未安装
+      zh-HK: 外部編輯器擴充套件未安裝
+    configure_program:
+      en: Configure the external editor executable path first
+      zh-CN: 请先配置外部编辑器可执行文件路径
+      zh-HK: 請先設定外部編輯器可執行檔路徑
+    external_uploaded:
+      en: Remote file uploaded
+      zh-CN: 远程文件已上传
+      zh-HK: 遠端檔案已上傳
+    external_reloaded:
+      en: Remote file reloaded
+      zh-CN: 已重新加载远程文件
+      zh-HK: 已重新載入遠端檔案
   body:
     loading:
       en: Loading remote file...

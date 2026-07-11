@@ -114,6 +114,10 @@ Home:
     en: New Connection
     zh-CN: 新建连接
     zh-HK: 新建連線
+  local_terminal_invalid_config:
+    en: "Invalid local terminal configuration: %{error}"
+    zh-CN: "本地终端配置无效：%{error}"
+    zh-HK: "本機終端設定無效：%{error}"
   port_forwarding_started:
     en: "Port Forwarding %{name} started on %{addr}"
     zh-CN: "端口转发 %{name} 已启动：%{addr}"
@@ -1066,6 +1070,60 @@ Settings:
         zh-CN: 调整字体大小以获得更好的可读性（8-72）
         zh-HK: 調整字型大小以獲得更好的可讀性（8-72）
 
+    LocalTerminal:
+      group_title:
+        en: Local Terminal
+        zh-CN: 本地终端
+        zh-HK: 本機終端
+      profile:
+        en: Default shell
+        zh-CN: 默认终端
+        zh-HK: 預設終端
+      profile_desc:
+        en: Choose the shell used when opening a new local terminal tab
+        zh-CN: 选择新建本地终端标签页时使用的 shell
+        zh-HK: 選擇新增本機終端分頁時使用的 shell
+      system:
+        en: System Default
+        zh-CN: 系统默认
+        zh-HK: 系統預設
+      powershell:
+        en: PowerShell
+        zh-CN: PowerShell
+        zh-HK: PowerShell
+      cmd:
+        en: Command Prompt
+        zh-CN: 命令提示符（CMD）
+        zh-HK: 命令提示字元（CMD）
+      wsl:
+        en: WSL
+        zh-CN: WSL
+        zh-HK: WSL
+      git_bash:
+        en: Git Bash
+        zh-CN: Git Bash
+        zh-HK: Git Bash
+      custom:
+        en: Custom
+        zh-CN: 自定义
+        zh-HK: 自訂
+      custom_program:
+        en: Custom program
+        zh-CN: 自定义程序
+        zh-HK: 自訂程式
+      custom_program_desc:
+        en: Executable path or command used when the Custom profile is selected
+        zh-CN: 选择“自定义”时使用的可执行程序路径或命令
+        zh-HK: 選擇「自訂」時使用的可執行程式路徑或命令
+      custom_arguments:
+        en: Custom arguments
+        zh-CN: 自定义参数
+        zh-HK: 自訂參數
+      custom_arguments_desc:
+        en: Arguments are parsed safely and passed directly to the program without a command shell
+        zh-CN: 参数会被安全解析并直接传给程序，不经过命令 shell
+        zh-HK: 參數會被安全解析並直接傳給程式，不經過命令 shell
+
     # 终端设置
     Terminal:
       group_title:
@@ -1104,6 +1162,44 @@ Settings:
         en: Paste clipboard content with middle mouse button
         zh-CN: 使用鼠标中键粘贴剪贴板内容
         zh-HK: 使用滑鼠中鍵貼上剪貼簿內容
+
+    RemoteFileEditor:
+      group_title:
+        en: Remote File Editor
+        zh-CN: 远程文件编辑器
+        zh-HK: 遠端檔案編輯器
+      default_editor:
+        en: Default External Editor
+        zh-CN: 默认外部编辑器
+        zh-HK: 預設外部編輯器
+      default_editor_desc:
+        en: Put this installed editor first in matching Edit With menus
+        zh-CN: 在匹配的“使用外部编辑器编辑”菜单中优先显示此编辑器
+        zh-HK: 在匹配的「使用外部編輯器編輯」選單中優先顯示此編輯器
+      none:
+        en: No preference
+        zh-CN: 无偏好
+        zh-HK: 無偏好
+      conflict_check:
+        en: Check Remote Changes Before Upload
+        zh-CN: 上传前检查远程文件变更
+        zh-HK: 上傳前檢查遠端檔案變更
+      conflict_check_desc:
+        en: Prompt before overwriting when the remote file changed after it was opened
+        zh-CN: 当远程文件在打开后发生变化时，覆盖前进行提示
+        zh-HK: 當遠端檔案在打開後發生變化時，覆蓋前進行提示
+      choose_program:
+        en: Choose Executable
+        zh-CN: 选择可执行文件
+        zh-HK: 選擇可執行檔
+      select_program:
+        en: Select the external editor executable
+        zh-CN: 选择外部编辑器可执行文件
+        zh-HK: 選擇外部編輯器可執行檔
+      program_override_desc:
+        en: Override the executable path contributed by this extension on this machine
+        zh-CN: 覆盖此扩展在当前设备上提供的可执行文件路径
+        zh-HK: 覆蓋此擴充套件在目前裝置上提供的可執行檔路徑
 
     # 数据库设置
     Database:
@@ -1206,9 +1302,9 @@ Settings:
         zh-CN: 可见终端执行
         zh-HK: 可見終端執行
       terminal_exec_desc:
-        en: Expose tools that type commands into visible terminal PTYs
-        zh-CN: 暴露向可见终端 PTY 输入命令的工具
-        zh-HK: 暴露向可見終端 PTY 輸入命令的工具
+        en: Expose tools that type commands or send explicit Ctrl+C to visible terminal PTYs
+        zh-CN: 暴露向可见终端 PTY 输入命令或显式发送 Ctrl+C 的工具
+        zh-HK: 暴露向可見終端 PTY 輸入命令或明確傳送 Ctrl+C 的工具
       connections:
         en: Connection Tools
         zh-CN: 连接工具

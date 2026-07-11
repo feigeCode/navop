@@ -37,7 +37,9 @@ use one_core::storage::{
     sftp_favorite_connection_key,
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
-use remote_file_editor::open_remote_file_editor;
+use remote_file_editor::{
+    ExternalEditorOpenRequest, open_remote_file_editor, open_remote_file_external_editor,
+};
 use remote_image_preview::{
     clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
 };
@@ -1253,6 +1255,31 @@ impl SftpView {
         };
 
         open_remote_file_editor(full_path, client, cx);
+    }
+
+    fn open_remote_external_editor(
+        &self,
+        selection: (String, String),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (full_path, editor_key) = selection;
+        let Some(client) = self.sftp_client.clone() else {
+            window.push_notification(
+                Notification::error("SFTP client is not connected".to_string()),
+                cx,
+            );
+            return;
+        };
+        open_remote_file_external_editor(
+            ExternalEditorOpenRequest {
+                remote_path: full_path,
+                editor_key,
+                client,
+            },
+            window,
+            cx,
+        );
     }
 
     fn navigate_local_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {

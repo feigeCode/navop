@@ -3,14 +3,16 @@ use crate::onetcli_app::GlobalTabContainer;
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
 use db_view::database_tab::DatabaseTabView;
 use gpui::{App, AppContext, Context, Entity, Window};
+use gpui_component::{WindowExt, notification::Notification};
 use mongodb_view::MongoTabView;
-use one_core::storage::{ConnectionType, StoredConnection, Workspace};
+use one_core::storage::{ConnectionType, ProxyConfig, ProxyType, StoredConnection, Workspace};
 use one_core::tab_container::{TabContainer, TabItem};
 use redis_view::RedisTabView;
 use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
 use remote_desktop_view::{RemoteDesktopView, RemoteDesktopViewConfig};
+use rust_i18n::t;
 use sftp_view::{SftpView, SftpViewEvent};
-use terminal::LocalConfig;
+use terminal::local_config_from_settings;
 use terminal_view::{
     TerminalConnectionKind, TerminalView, current_settings as current_terminal_settings,
 };
@@ -46,7 +48,10 @@ fn redis_tab_open_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use one_core::storage::{RedisMode, RedisParams};
+    use one_core::storage::{
+        ProxyConfig, ProxyType, RedisMode, RedisParams, RemoteDesktopParams,
+        RemoteDesktopProtocol as StoredRemoteDesktopProtocol,
+    };
 
     fn redis_connection(id: i64, name: &str, workspace_id: Option<i64>) -> StoredConnection {
         let params = RedisParams {
@@ -116,6 +121,37 @@ mod tests {
     }
 
     #[test]
+    fn remote_desktop_options_maps_connection_proxy() {
+        let connection = StoredConnection::new_remote_desktop(
+            "rdp".to_string(),
+            RemoteDesktopParams {
+                protocol: StoredRemoteDesktopProtocol::Rdp,
+                host: "10.0.0.8".to_string(),
+                port: 3389,
+                username: None,
+                password: None,
+                domain: None,
+                read_only: false,
+                proxy: Some(ProxyConfig {
+                    proxy_type: ProxyType::Http,
+                    host: "proxy.example.com".to_string(),
+                    port: 8080,
+                    username: Some("alice".to_string()),
+                    password: Some("secret".to_string()),
+                }),
+            },
+            None,
+        );
+
+        let options = remote_desktop_options(&connection, RemoteDesktopProtocol::Rdp).unwrap();
+        let proxy = options.proxy.expect("proxy should be mapped");
+
+        assert!(proxy.proxy_type == remote_desktop::ProxyTunnelType::Http);
+        assert_eq!("proxy.example.com", proxy.host);
+        assert_eq!(Some("alice".to_string()), proxy.username);
+    }
+
+    #[test]
     fn terminal_tabs_do_not_request_external_sidebar_mode() {
         let source = include_str!("home_tabs.rs");
         let external_sidebar_call = concat!(".with_", "external_sidebar");
@@ -132,6 +168,15 @@ mod tests {
                 "terminal tab construction should not opt into TabContainer sidebar mode:\n{nearby_source}"
             );
         }
+    }
+
+    #[test]
+    fn local_terminal_entry_points_use_profile_settings() {
+        let source = include_str!("home_tabs.rs");
+        let legacy_default = concat!("TerminalView::new_with_index(", "LocalConfig::default()");
+
+        assert!(source.matches("local_config_from_settings").count() >= 2);
+        assert!(!source.contains(legacy_default));
     }
 }
 
@@ -264,9 +309,15 @@ impl HomePage {
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis())
                             .unwrap_or(0);
-                        let config = LocalConfig {
-                            working_dir: Some(working_dir.clone()),
-                            ..Default::default()
+                        let config = match local_config_from_settings(
+                            AppSettings::global(cx),
+                            Some(working_dir.clone()),
+                        ) {
+                            Ok(config) => config,
+                            Err(error) => {
+                                push_local_terminal_config_error(window, &error, cx);
+                                return;
+                            }
                         };
                         let tab_id = format!("local-terminal-{}", ts);
                         // 统计已有本地终端数量
@@ -380,13 +431,15 @@ impl HomePage {
             None
         };
         let title = conn.name.clone();
-        let view = cx.new(|cx| {
+        let window_handle = window.window_handle();
+        let view = cx.new(move |cx| {
             RemoteDesktopView::new(
                 RemoteDesktopViewConfig {
                     options,
                     title,
                     tab_index,
                 },
+                window_handle,
                 cx,
             )
         });
@@ -558,6 +611,13 @@ impl HomePage {
     }
 
     pub(crate) fn add_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let config = match local_config_from_settings(AppSettings::global(cx), None) {
+            Ok(config) => config,
+            Err(error) => {
+                push_local_terminal_config_error(window, &error, cx);
+                return;
+            }
+        };
         // 使用时间戳生成唯一 tab_id，支持打开多个本地终端
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -582,9 +642,8 @@ impl HomePage {
         let home = cx.entity();
         window.defer(cx, move |window, cx| {
             home.update(cx, |_this, cx| {
-                let terminal_view = cx.new(|cx| {
-                    TerminalView::new_with_index(LocalConfig::default(), tab_index, window, cx)
-                });
+                let terminal_view =
+                    cx.new(|cx| TerminalView::new_with_index(config, tab_index, window, cx));
                 tab_container.update(cx, |tc, cx| {
                     let tab = TabItem::new(tab_id, "home", terminal_view);
                     tc.add_and_activate_tab_with_focus(tab, window, cx);
@@ -755,7 +814,42 @@ fn remote_desktop_options(
         password: params.password,
         domain: params.domain,
         read_only: params.read_only,
+        proxy: params.proxy.map(remote_desktop_proxy_config),
     })
+}
+
+fn remote_desktop_proxy_config(proxy: ProxyConfig) -> remote_desktop::ProxyTunnelConfig {
+    remote_desktop::ProxyTunnelConfig {
+        proxy_type: match proxy.proxy_type {
+            ProxyType::Socks5 => remote_desktop::ProxyTunnelType::Socks5,
+            ProxyType::Http => remote_desktop::ProxyTunnelType::Http,
+        },
+        host: proxy.host.trim().to_string(),
+        port: proxy.port,
+        username: normalized_optional(proxy.username),
+        password: preserved_secret(proxy.password),
+    }
+}
+
+fn normalized_optional(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn preserved_secret(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.is_empty())
+}
+
+fn push_local_terminal_config_error<T>(
+    window: &mut Window,
+    error: &dyn std::fmt::Display,
+    cx: &mut Context<T>,
+) {
+    window.push_notification(
+        Notification::error(t!("Home.local_terminal_invalid_config", error = error).to_string()),
+        cx,
+    );
 }
 
 fn remote_desktop_tab_kind(protocol: RemoteDesktopProtocol) -> &'static str {

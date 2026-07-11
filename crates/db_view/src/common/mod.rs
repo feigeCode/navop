@@ -1,3 +1,4 @@
+mod connection_proxy;
 mod database_editor_view;
 pub mod db_connection_form;
 mod generic_database_form;

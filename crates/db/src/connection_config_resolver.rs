@@ -95,6 +95,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: Some(7),
+            proxy: None,
             extra_params,
         }
     }

@@ -463,7 +463,7 @@ fn requires_tool_approval(
         .map(|spec| spec.risk);
     match mode {
         ToolExecutionMode::Manual => risk.is_some_and(|risk| risk != RiskLevel::Read),
-        ToolExecutionMode::Auto => risk.is_some_and(RiskLevel::requires_confirmation),
+        ToolExecutionMode::Auto => false,
         ToolExecutionMode::ReadOnly => false,
     }
 }

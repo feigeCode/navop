@@ -620,17 +620,25 @@ async fn interrupt_cancels_turn_while_model_stream_is_starting() {
         .await
         .expect("model should be called");
     runtime.interrupt(session.id()).expect("interrupt turn");
+    assert!(
+        !session.is_busy(),
+        "cancel acknowledgement should detach the turn"
+    );
 
-    let event = tokio::time::timeout(Duration::from_millis(200), async {
+    let cancelled_turn = tokio::time::timeout(Duration::from_millis(200), async {
         loop {
-            if let RuntimeEvent::TurnFailed { reason, .. } = rx.recv().await.unwrap() {
-                break reason;
+            if let RuntimeEvent::TurnCancelled { turn_id, .. } = rx.recv().await.unwrap() {
+                break turn_id;
             }
         }
     })
     .await
-    .expect("interrupt should emit TurnFailed promptly");
-    assert_eq!("任务已取消", event);
+    .expect("interrupt should emit TurnCancelled promptly");
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(!drain_events(&mut rx).iter().any(|event| {
+        matches!(event, RuntimeEvent::TurnFailed { turn_id, .. } if turn_id == &cancelled_turn)
+    }));
 }
 
 #[tokio::test]
@@ -1482,6 +1490,11 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
                     "ssh.exec",
                     "Execute a structured SSH command.",
                     RiskLevel::Low,
+                )))
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "terminal.control",
+                    "Control a visible terminal.",
+                    RiskLevel::High,
                 ))),
         )),
     ));
@@ -1503,11 +1516,15 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
     let requests = model.received_requests();
     let system = requests[0].messages[0].content_as_text();
     assert!(system.contains("terminal_exec"));
+    assert!(system.contains("terminal_control"));
     assert!(system.contains("ssh_exec"));
     assert!(system.contains("可见终端"));
     assert!(system.contains("submit=true"));
     assert!(system.contains("不要声称有 exit code"));
     assert!(system.contains("不要用 `ssh_exec` 替代"));
+    assert!(system.contains("Ctrl+C"));
+    assert!(system.contains("取消对话不会中断终端任务"));
+    assert!(system.contains("\\u0003"));
 }
 
 #[tokio::test]

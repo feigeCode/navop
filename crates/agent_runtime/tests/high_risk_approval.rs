@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use serde_json::json;
 
 struct HighRiskTool;
+struct CriticalRiskTool;
 
 #[async_trait]
 impl Tool for HighRiskTool {
@@ -43,8 +44,33 @@ impl Tool for HighRiskTool {
     }
 }
 
+#[async_trait]
+impl Tool for CriticalRiskTool {
+    fn name(&self) -> ToolName {
+        ToolName::new("critical_write")
+    }
+
+    fn spec(&self, _resources: &ResourceContext) -> ToolSpec {
+        ToolSpec::new(
+            "critical_write",
+            "执行关键风险写入。",
+            json!({ "type": "object" }),
+        )
+        .with_risk(RiskLevel::Critical)
+    }
+
+    async fn execute(&self, invocation: ToolInvocation) -> Result<ToolObservation, ToolError> {
+        Ok(ToolObservation::success(
+            invocation.call_id,
+            invocation.tool_name,
+            "critical write executed",
+            ObservationData::Text("executed".into()),
+        ))
+    }
+}
+
 #[tokio::test]
-async fn auto_tool_mode_requires_confirmation_for_high_risk_tools() {
+async fn auto_tool_mode_executes_high_risk_tools_without_confirmation() {
     let runtime = build_runtime(
         vec![
             ModelResponse::tool_call(function_tool_call(
@@ -69,50 +95,27 @@ async fn auto_tool_mode_requires_confirmation_for_high_risk_tools() {
         .await
         .expect("run auto turn");
 
-    let call_id = match outcome {
-        TaskOutcome::NeedUserInput {
-            pending_tool_call_id: Some(call_id),
-            ..
-        } => call_id,
-        other => panic!("high risk tool should pause for approval, got {other:?}"),
-    };
-    let events = drain_events(&mut rx);
-    assert!(events.iter().any(|event| {
-        matches!(
-            event,
-            RuntimeEvent::NeedUserInput {
-                pending_tool_call_id: Some(event_call_id),
-                tool_name: Some(tool_name),
-                arguments: Some(arguments),
-                ..
-            } if event_call_id == &call_id
-                && tool_name.as_str() == "dangerous_write"
-                && arguments["sql"] == "drop table users"
-        )
-    }));
-    assert!(
-        !events.iter().any(|event| {
-            matches!(
-                event,
-                RuntimeEvent::ObservationAdded { observation, .. }
-                    if observation.summary.contains("dangerous write executed")
-            )
-        }),
-        "high risk tool must not dispatch before approval in auto mode"
-    );
-
-    let outcome = runtime
-        .approve_pending_tool(session.id(), &call_id)
-        .await
-        .expect("approve pending high risk tool");
-
     assert!(
         matches!(outcome, TaskOutcome::Completed { answer: Some(answer) } if answer == "危险 SQL 已执行。")
     );
+    let events = drain_events(&mut rx);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::NeedUserInput { .. })),
+        "auto mode must not pause high-risk tools for confirmation"
+    );
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ObservationAdded { observation, .. }
+                if observation.summary == "dangerous write executed"
+        )
+    }));
 }
 
 #[tokio::test]
-async fn auto_tool_mode_batches_sibling_high_risk_approvals() {
+async fn auto_tool_mode_executes_sibling_high_risk_tools_without_confirmation() {
     let runtime = build_runtime(
         vec![
             ModelResponse::tool_calls(vec![
@@ -144,37 +147,15 @@ async fn auto_tool_mode_batches_sibling_high_risk_approvals() {
         .await
         .expect("run auto turn");
 
-    let call_id = match outcome {
-        TaskOutcome::NeedUserInput {
-            pending_tool_call_id: Some(call_id),
-            question,
-            ..
-        } => {
-            assert!(question.contains("2 个工具"));
-            call_id
-        }
-        other => panic!("high risk batch should pause for approval, got {other:?}"),
-    };
-    let events = drain_events(&mut rx);
-    assert!(events.iter().any(|event| {
-        matches!(
-            event,
-            RuntimeEvent::NeedUserInput {
-                pending_tool_calls,
-                ..
-            } if pending_tool_calls.len() == 2
-                && pending_tool_calls[0].call_id.as_str() == "c_drop_users"
-                && pending_tool_calls[1].call_id.as_str() == "c_drop_orders"
-        )
-    }));
-
-    let outcome = runtime
-        .approve_pending_tool(session.id(), &call_id)
-        .await
-        .expect("approve pending high risk tool batch");
-
     assert!(
         matches!(outcome, TaskOutcome::Completed { answer: Some(answer) } if answer == "危险 SQL 已执行。")
+    );
+    let events = drain_events(&mut rx);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::NeedUserInput { .. })),
+        "auto mode must not batch high-risk tools for approval"
     );
     let observations = session
         .history_snapshot()
@@ -189,6 +170,46 @@ async fn auto_tool_mode_batches_sibling_high_risk_approvals() {
         vec!["dangerous write executed", "dangerous write executed"],
         observations
     );
+}
+
+#[tokio::test]
+async fn auto_tool_mode_executes_critical_tools_without_confirmation() {
+    let runtime = build_runtime(
+        vec![
+            ModelResponse::tool_call(function_tool_call("c_critical", "critical_write", "{}")),
+            ModelResponse::text("关键操作已执行。"),
+        ],
+        ToolRegistry::new().with_tool(Arc::new(CriticalRiskTool)),
+    );
+    let session = runtime.create_session(ResourceContext::new());
+    let mut rx = runtime.subscribe();
+
+    let outcome = runtime
+        .run_turn_blocking_with_tool_mode(
+            session.id(),
+            "执行关键操作".into(),
+            TaskKind::Agent,
+            ToolExecutionMode::Auto,
+        )
+        .await
+        .expect("run auto critical turn");
+
+    assert!(
+        matches!(outcome, TaskOutcome::Completed { answer: Some(answer) } if answer == "关键操作已执行。")
+    );
+    let events = drain_events(&mut rx);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::NeedUserInput { .. }))
+    );
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::ObservationAdded { observation, .. }
+                if observation.summary == "critical write executed"
+        )
+    }));
 }
 
 fn build_runtime(responses: Vec<ModelResponse>, registry: ToolRegistry) -> Runtime {

@@ -8,6 +8,7 @@ use crate::{
         ApiVersions, CommandContrib, CommandHandlerContrib, ContributesManifest, Engines,
         HtmlPreviewTransformContrib, Manifest, MenuCommandRef, MenuContrib, RuntimeSection,
         WasmRuntime, WasmRuntimeKind,
+        contributes::{RemoteFileEditorCommandContrib, RemoteFileEditorContrib},
     },
 };
 
@@ -108,6 +109,62 @@ fn runtime_catalog_registers_wasm_html_preview_transform_with_assets() {
         PathBuf::from("/tmp/com.example.tools/assets/app.css"),
         resolve_extension_asset_url("onet-extension://com.example.tools/app.css").unwrap()
     );
+}
+
+#[test]
+fn runtime_catalog_registers_remote_file_editors() {
+    let mut manifest = base_manifest();
+    manifest
+        .contributes
+        .remote_file_editors
+        .push(RemoteFileEditorContrib {
+            id: "notepad-plus-plus".to_string(),
+            display_name: "Notepad++".to_string(),
+            platforms: vec!["windows".to_string()],
+            file_masks: vec!["*".to_string()],
+            priority: 100,
+            command: RemoteFileEditorCommandContrib {
+                program_candidates: vec!["notepad++.exe".to_string()],
+                args: vec!["{file}".to_string()],
+            },
+        });
+
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let editors = catalog.remote_file_editors();
+
+    assert_eq!(1, editors.len());
+    assert_eq!("com.example.tools", editors[0].extension_id);
+    assert_eq!("notepad-plus-plus", editors[0].id);
+    assert_eq!(
+        "com.example.tools::notepad-plus-plus",
+        editors[0].editor_key
+    );
+    assert_eq!("Notepad++", editors[0].display_name);
+    assert_eq!(vec!["windows"], editors[0].platforms);
+    assert_eq!(vec!["*"], editors[0].file_masks);
+    assert_eq!(100, editors[0].priority);
+    assert_eq!(vec!["notepad++.exe"], editors[0].command.program_candidates);
+    assert_eq!(vec!["{file}"], editors[0].command.args);
+}
+
+#[test]
+fn runtime_catalog_rejects_remote_editor_without_program_candidates() {
+    let mut manifest = base_manifest();
+    manifest
+        .contributes
+        .remote_file_editors
+        .push(RemoteFileEditorContrib {
+            id: "broken".to_string(),
+            display_name: "Broken Editor".to_string(),
+            platforms: Vec::new(),
+            file_masks: Vec::new(),
+            priority: 0,
+            command: RemoteFileEditorCommandContrib::default(),
+        });
+
+    let error = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap_err();
+
+    assert!(error.to_string().contains("programCandidates"));
 }
 
 #[test]

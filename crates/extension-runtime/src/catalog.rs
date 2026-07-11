@@ -13,7 +13,7 @@ use crate::extension::manifest::{Manifest, WasmRuntimeKind};
 use super::registration::load_installed_composite_manifests;
 use super::types::{
     ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredHtmlPreviewTransform,
-    RegisteredKeybindingContribution, WasmRuntimeBinding,
+    RegisteredKeybindingContribution, RegisteredRemoteFileEditorContribution, WasmRuntimeBinding,
 };
 
 static WASM_CATALOG_LOG_KEYS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -27,6 +27,7 @@ pub struct ExtensionRuntimeCatalog {
     pub(super) menu_slots: SlotRegistry,
     pub(super) keybindings: Vec<RegisteredKeybindingContribution>,
     pub(super) html_preview_transforms: Vec<RegisteredHtmlPreviewTransform>,
+    pub(super) remote_file_editors: Vec<RegisteredRemoteFileEditorContribution>,
 }
 
 #[derive(Debug)]
@@ -54,6 +55,7 @@ impl ExtensionRuntimeCatalog {
             menu_slots: SlotRegistry::default(),
             keybindings: Vec::new(),
             html_preview_transforms: Vec::new(),
+            remote_file_editors: Vec::new(),
         }
     }
 
@@ -125,6 +127,10 @@ impl ExtensionRuntimeCatalog {
                     .any(|candidate| candidate.eq_ignore_ascii_case(&language))
             })
             .collect()
+    }
+
+    pub fn remote_file_editors(&self) -> &[RegisteredRemoteFileEditorContribution] {
+        &self.remote_file_editors
     }
 
     #[cfg(feature = "wasm-components")]

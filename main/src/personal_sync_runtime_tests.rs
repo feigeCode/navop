@@ -270,6 +270,7 @@ fn test_connection(id: i64) -> StoredConnection {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: std::collections::HashMap::new(),
         },
         None,

@@ -8,9 +8,9 @@ use crate::{DatabasePlugin, format_message, truncate_str};
 
 use async_trait::async_trait;
 use clickhouse::Client;
+use connection_tunnel::TunnelGuard;
 use one_core::storage::DbConnectionConfig;
 use serde::Deserialize;
-use ssh::LocalPortForwardTunnel;
 use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
@@ -20,7 +20,7 @@ use tracing::{debug, error, info};
 pub struct ClickHouseDbConnection {
     config: DbConnectionConfig,
     client: Option<Client>,
-    tunnel: Option<LocalPortForwardTunnel>,
+    tunnel: Option<TunnelGuard>,
 }
 
 impl ClickHouseDbConnection {

@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-use std::path::Path;
-#[cfg(feature = "wasm-components")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use db_view::extension_menu::DbTreeExtensionMenuItem;
@@ -15,7 +13,8 @@ use crate::extension::manifest::{
 use super::catalog::ExtensionRuntimeCatalog;
 use super::types::{
     ExtensionRuntimeError, RegisteredDbTreeMenuContribution, RegisteredHtmlPreviewTransform,
-    RegisteredKeybindingContribution, WasmRuntimeBinding, command_descriptor, runtime_key,
+    RegisteredKeybindingContribution, RegisteredRemoteFileEditorCommand,
+    RegisteredRemoteFileEditorContribution, WasmRuntimeBinding, command_descriptor, runtime_key,
     slot_item_from_menu,
 };
 
@@ -32,6 +31,7 @@ impl ExtensionRuntimeCatalog {
         self.register_menu_slots(&manifest);
         self.register_toolbar_slots(&manifest);
         self.register_keybindings(&manifest);
+        self.register_remote_file_editors(&manifest)?;
         self.register_db_tree_menus(&manifest);
         Ok(())
     }
@@ -191,6 +191,30 @@ impl ExtensionRuntimeCatalog {
             }));
     }
 
+    fn register_remote_file_editors(
+        &mut self,
+        manifest: &Manifest,
+    ) -> Result<(), ExtensionRuntimeError> {
+        for editor in &manifest.contributes.remote_file_editors {
+            validate_remote_file_editor(editor)?;
+            self.remote_file_editors
+                .push(RegisteredRemoteFileEditorContribution {
+                    extension_id: manifest.id.clone(),
+                    id: editor.id.clone(),
+                    editor_key: runtime_key(&manifest.id, &editor.id),
+                    display_name: editor.display_name.clone(),
+                    platforms: editor.platforms.clone(),
+                    file_masks: editor.file_masks.clone(),
+                    priority: editor.priority,
+                    command: RegisteredRemoteFileEditorCommand {
+                        program_candidates: editor.command.program_candidates.clone(),
+                        args: editor.command.args.clone(),
+                    },
+                });
+        }
+        Ok(())
+    }
+
     fn register_db_tree_menus(&mut self, manifest: &Manifest) {
         let command_titles = command_titles(manifest);
         for (position, menus) in &manifest.contributes.menus {
@@ -218,6 +242,39 @@ impl ExtensionRuntimeCatalog {
             }
         }
     }
+}
+
+fn validate_remote_file_editor(
+    editor: &crate::extension::manifest::contributes::RemoteFileEditorContrib,
+) -> Result<(), ExtensionRuntimeError> {
+    let invalid = |reason: &str| ExtensionRuntimeError::InvalidRemoteFileEditor {
+        editor_id: editor.id.clone(),
+        reason: reason.to_string(),
+    };
+    if editor.id.trim().is_empty() {
+        return Err(invalid("id must not be empty"));
+    }
+    if editor.display_name.trim().is_empty() {
+        return Err(invalid("displayName must not be empty"));
+    }
+    if editor.command.program_candidates.is_empty()
+        || editor
+            .command
+            .program_candidates
+            .iter()
+            .any(|candidate| candidate.trim().is_empty())
+    {
+        return Err(invalid("command.programCandidates must not be empty"));
+    }
+    if editor.platforms.iter().any(|platform| {
+        !matches!(
+            platform.to_ascii_lowercase().as_str(),
+            "windows" | "macos" | "linux"
+        )
+    }) {
+        return Err(invalid("platforms contains an unsupported value"));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "wasm-components")]

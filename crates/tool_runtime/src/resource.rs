@@ -52,6 +52,7 @@ pub enum ResourceCapability {
     WriteFile,
     ExecCommand,
     TerminalExec,
+    TerminalControl,
     RemoteExec,
     List,
     OpenSession,

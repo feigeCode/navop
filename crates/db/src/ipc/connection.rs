@@ -25,13 +25,13 @@ use crate::ipc::registry::IpcDriverManifest;
 use crate::ssh_tunnel::resolve_connection_target;
 use crate::{DatabasePlugin, SqlErrorInfo, truncate_str};
 use async_trait::async_trait;
+use connection_tunnel::TunnelGuard;
 use extension_protocol::conn::ConnId;
 use extension_protocol::method;
 use extension_protocol::row::{CellValue, ColumnSpec, Row};
 use one_core::storage::{DatabaseType, DbConnectionConfig};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use ssh::LocalPortForwardTunnel;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -45,7 +45,7 @@ const DEFAULT_FETCH_SIZE: u32 = 2_000;
 pub struct ExternalDbConnection {
     config: DbConnectionConfig,
     driver: IpcDriverManifest,
-    tunnel: Option<LocalPortForwardTunnel>,
+    tunnel: Option<TunnelGuard>,
     /// `Arc` 让 `request` 能短锁拿 clone 后立刻释放,允许多 caller 并发调用
     /// `JsonRpcClient` 的 request 接口。
     client: Mutex<Option<Arc<JsonRpcClient>>>,

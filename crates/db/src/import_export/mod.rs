@@ -6,6 +6,9 @@ use tokio::sync::mpsc;
 use crate::connection::DbConnection;
 
 pub mod formats;
+mod task;
+
+pub use task::{ExportProgressRequest, ImportProgressRequest};
 
 use crate::DatabasePlugin;
 

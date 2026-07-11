@@ -14,6 +14,7 @@ mod manifest_helpers;
 pub mod metadata_cache;
 pub mod plugin;
 pub mod plugin_manifest;
+mod runtime_contract;
 pub mod rustls_provider;
 pub mod schema_preferences;
 pub mod sql_format;

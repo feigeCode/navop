@@ -124,6 +124,48 @@ fn manifest_parses_connection_importers() {
 }
 
 #[test]
+fn manifest_loads_remote_file_editor_contributions() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "schema_version": 1,
+            "id": "com.onetcli.editor.notepad-plus-plus",
+            "name": "Notepad++ External Editor",
+            "version": "0.1.0",
+            "engines": { "onetcli": ">=0.1.0" },
+            "contributes": {
+                "remoteFileEditors": [{
+                    "id": "notepad-plus-plus",
+                    "displayName": "Notepad++",
+                    "platforms": ["windows"],
+                    "fileMasks": ["*"],
+                    "priority": 100,
+                    "command": {
+                        "programCandidates": [
+                            "${env:ProgramFiles}\\Notepad++\\notepad++.exe",
+                            "${env:ProgramFiles(x86)}\\Notepad++\\notepad++.exe"
+                        ],
+                        "args": ["{file}"]
+                    }
+                }]
+            }
+        }"#,
+    );
+
+    let manifest = load_from_dir(tmp.path()).unwrap();
+    let editor = &manifest.contributes.remote_file_editors[0];
+
+    assert_eq!("notepad-plus-plus", editor.id);
+    assert_eq!("Notepad++", editor.display_name);
+    assert_eq!(vec!["windows"], editor.platforms);
+    assert_eq!(vec!["*"], editor.file_masks);
+    assert_eq!(100, editor.priority);
+    assert_eq!(2, editor.command.program_candidates.len());
+    assert_eq!(vec!["{file}"], editor.command.args);
+}
+
+#[test]
 fn manifest_accepts_windows_env_fs_permissions_for_connection_importers() {
     let tmp = tempfile::TempDir::new().unwrap();
     write_manifest(

@@ -63,6 +63,30 @@ RemoteDesktopForm:
     en: Domain
     zh-CN: 域
     zh-HK: 網域
+  label_proxy:
+    en: Proxy
+    zh-CN: 代理
+    zh-HK: 代理
+  label_proxy_type:
+    en: Proxy type
+    zh-CN: 代理类型
+    zh-HK: 代理類型
+  label_proxy_host:
+    en: Proxy host
+    zh-CN: 代理主机
+    zh-HK: 代理主機
+  label_proxy_port:
+    en: Proxy port
+    zh-CN: 代理端口
+    zh-HK: 代理端口
+  label_proxy_username:
+    en: Proxy username
+    zh-CN: 代理用户名
+    zh-HK: 代理使用者名稱
+  label_proxy_password:
+    en: Proxy password
+    zh-CN: 代理密码
+    zh-HK: 代理密碼
   label_workspace:
     en: Workspace
     zh-CN: 工作区
@@ -95,6 +119,10 @@ RemoteDesktopForm:
     en: "%{field} is invalid"
     zh-CN: "%{field} 无效"
     zh-HK: "%{field} 無效"
+  proxy_invalid:
+    en: "Invalid proxy field: %{field}"
+    zh-CN: "代理配置无效：%{field}"
+    zh-HK: "代理設定無效：%{field}"
     
 # 连接表单通用字段
 ConnectionForm:

@@ -231,83 +231,6 @@ impl ConnectionLayout {
     }
 }
 
-/// 拖拽排序的荷载，在渲染连接列表时由 on_drag 创建，
-/// 拖入另一个连接条目时由 on_drop handler 读取。
-#[derive(Clone)]
-#[allow(dead_code)]
-struct DragConnection {
-    source_index: usize,
-    source_id: Option<i64>,
-    name: String,
-    info: String,
-    connection_type: ConnectionType,
-}
-
-impl Render for DragConnection {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .id("drag-connection")
-            .cursor_grabbing()
-            .w(px(300.0))
-            .h(px(58.0))
-            .px_3()
-            .overflow_hidden()
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded(px(8.0))
-            .bg(cx.theme().popover)
-            .opacity(0.95)
-            .shadow_md()
-            .items_center()
-            .gap_3()
-            .child(Self::preview_icon(self.connection_type, cx))
-            .child(
-                v_flex()
-                    .min_w_0()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().foreground)
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(self.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(self.info.clone()),
-                    ),
-            )
-    }
-}
-
-impl DragConnection {
-    fn preview_icon(connection_type: ConnectionType, cx: &mut Context<Self>) -> AnyElement {
-        let icon = match connection_type {
-            ConnectionType::Database => IconName::Database.color(),
-            ConnectionType::SshSftp => IconName::TerminalColor.color(),
-            ConnectionType::Redis => IconName::Redis.color(),
-            ConnectionType::MongoDB => IconName::MongoDB.color(),
-            ConnectionType::Serial => IconName::SerialPort.color(),
-            ConnectionType::PortForwarding => IconName::PortForwardingColor.color(),
-            ConnectionType::Rdp => IconName::Rdp.color(),
-            ConnectionType::Vnc => IconName::Vnc.color(),
-            _ => IconName::Server.color(),
-        };
-        icon.with_size(px(22.0))
-            .text_color(cx.theme().foreground)
-            .flex_shrink_0()
-            .into_any_element()
-    }
-}
-
 pub struct HomePage {
     focus_handle: FocusHandle,
     selected_filter: ConnectionType,
@@ -403,6 +326,7 @@ mod external_driver_form_tests {
                 service_name: None,
                 sid: None,
                 workspace_id: None,
+                proxy: None,
                 extra_params: std::collections::HashMap::new(),
             },
             None,
@@ -517,6 +441,7 @@ mod external_driver_form_tests {
             password: None,
             domain: None,
             read_only: false,
+            proxy: None,
         };
 
         assert_eq!(
@@ -535,6 +460,7 @@ mod external_driver_form_tests {
             password: None,
             domain: None,
             read_only: false,
+            proxy: None,
         };
 
         assert_eq!("10.0.0.9:5900", remote_desktop_connection_info(&params));
@@ -631,6 +557,7 @@ mod external_driver_form_tests {
                     service_name: None,
                     sid: None,
                     workspace_id: None,
+                    proxy: None,
                     extra_params: std::collections::HashMap::new(),
                 },
                 None,
@@ -869,57 +796,6 @@ impl HomePage {
             }
         })
         .detach();
-    }
-
-    /// 拖拽排序：将 `from` 位置的连接移动到 `to` 位置，并异步持久化 sort_order。
-    #[allow(dead_code)]
-    fn reorder_connections(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
-        if from >= self.connections.len() || to >= self.connections.len() || from == to {
-            return;
-        }
-        let conn = self.connections.remove(from);
-        self.connections.insert(to, conn);
-
-        let orders: Vec<(i64, i32)> = self
-            .connections
-            .iter()
-            .enumerate()
-            .filter_map(|(i, c)| c.id.map(|id| (id, i as i32)))
-            .collect();
-
-        let storage = cx.global::<GlobalStorageState>().storage.clone();
-        cx.spawn(async move |_, _| {
-            if let Some(repo) = storage.get::<ConnectionRepository>() {
-                let _ = repo.update_sort_orders(&orders);
-            }
-        })
-        .detach();
-        cx.notify();
-    }
-
-    #[allow(dead_code)]
-    fn reorder_connection_by_id(
-        &mut self,
-        source_id: Option<i64>,
-        target_id: Option<i64>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(source_id) = source_id else { return };
-        let Some(target_id) = target_id else { return };
-        if source_id == target_id {
-            return;
-        }
-        let from = self
-            .connections
-            .iter()
-            .position(|c| c.id == Some(source_id));
-        let to = self
-            .connections
-            .iter()
-            .position(|c| c.id == Some(target_id));
-        if let (Some(from), Some(to)) = (from, to) {
-            self.reorder_connections(from, to, cx);
-        }
     }
 
     pub(crate) fn reorder_workspace_by_id(
@@ -4051,17 +3927,6 @@ impl HomePage {
                 })
                 .unwrap_or_default(),
             _ => String::new(),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn drag_connection(&self, conn: &StoredConnection, index: usize) -> DragConnection {
-        DragConnection {
-            source_index: index,
-            source_id: conn.id,
-            name: conn.name.clone(),
-            info: self.connection_info_text(conn),
-            connection_type: conn.connection_type,
         }
     }
 

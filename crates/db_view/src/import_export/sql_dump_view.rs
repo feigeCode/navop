@@ -261,15 +261,14 @@ impl SqlDumpView {
             let global_state_clone = global_state.clone();
             let connection_id_clone = connection_id.clone();
 
-            let export_handle = cx.background_spawn(async move {
-                global_state_clone
-                    .export_data_with_progress_sync(
-                        connection_id_clone,
-                        export_config,
-                        Some(progress_tx),
-                    )
-                    .await
-            });
+            let export_handle = global_state_clone.export_data_with_progress(
+                cx,
+                db::ExportProgressRequest {
+                    connection_id: connection_id_clone,
+                    config: export_config,
+                    progress_tx: Some(progress_tx),
+                },
+            );
 
             let file_path_for_write = full_path.clone();
             let mut file_created = false;

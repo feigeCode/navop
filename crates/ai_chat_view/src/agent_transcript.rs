@@ -6,9 +6,10 @@
 
 use agent_runtime::{
     HistoryItem, PendingToolCallSummary, Plan, PlanStatus, ResourceContext, RuntimeEvent,
-    StepStatus, ToolObservation, ids::ToolCallId,
+    StepStatus, ToolObservation,
+    ids::{ToolCallId, TurnId},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::agent_cards::{
     PlanCardData, PlanStepData, SUBAGENT_CARD, SubAgentCardData, TOOL_CARD, TOOL_CONFIRM_CARD,
@@ -18,10 +19,22 @@ use crate::agent_tool_input::build_tool_input_display;
 use crate::code_block::extract_fenced_code_blocks;
 use crate::{ChatMessageUI, MessageVariant, parse_chart_json_block};
 
+mod acp;
+
 /// 观测数据文本入卡片时的最大字符数(渲染时还会再截断展示)。
 const MAX_DATA_CHARS: usize = 2000;
 const MAX_TERMINAL_EXEC_DATA_CHARS: usize = 64_000;
 const DELEGATE_TASK_TOOL: &str = "delegate_task";
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum TerminalEventKey {
+    AwaitingInput {
+        turn_id: TurnId,
+        call_id: Option<ToolCallId>,
+        question: String,
+    },
+    Final(TurnId),
+}
 
 /// Agent 对话转录状态。
 #[derive(Default)]
@@ -32,12 +45,16 @@ pub struct AgentTranscript {
     streaming_id: Option<String>,
     /// 当前轻量状态消息 id(若存在未完成状态)。
     active_status_id: Option<String>,
+    /// ACP 连接生命周期状态消息 id，与单轮执行状态分开维护。
+    acp_status_id: Option<String>,
     /// 本轮最新计划(渲染到输入框上方的 Tasks 面板,不进消息流)。
     latest_plan: Option<PlanCardData>,
     /// 当前会话最近的子代理(渲染到输入框上方的子代理面板,不进消息流)。
     active_subagents: Vec<SubAgentCardData>,
     /// 当前资源池 id -> label 快照,用于工具结果卡片展示目标资源。
     resource_labels: HashMap<String, String>,
+    /// 已归约的审批/终态事件,防止重复事件写入转录或触发持久化。
+    terminal_events: HashSet<TerminalEventKey>,
 }
 
 impl AgentTranscript {
@@ -59,8 +76,10 @@ impl AgentTranscript {
         self.messages.clear();
         self.streaming_id = None;
         self.active_status_id = None;
+        self.acp_status_id = None;
         self.latest_plan = None;
         self.active_subagents.clear();
+        self.terminal_events.clear();
     }
 
     /// 当前轮的最新计划(供输入框上方的 Tasks 面板渲染;不进消息流)。
@@ -142,118 +161,148 @@ impl AgentTranscript {
     }
 
     /// 应用一个运行时事件,更新消息列表。
-    pub fn apply(&mut self, event: &RuntimeEvent) {
+    pub fn apply(&mut self, event: &RuntimeEvent) -> bool {
+        if let Some(key) = terminal_event_key(event)
+            && !self.terminal_events.insert(key)
+        {
+            return false;
+        }
+        match event {
+            RuntimeEvent::TurnStarted { .. }
+            | RuntimeEvent::AssistantMessageDelta { .. }
+            | RuntimeEvent::ReasoningDelta { .. }
+            | RuntimeEvent::AssistantMessage { .. }
+            | RuntimeEvent::UserMessage { .. }
+            | RuntimeEvent::Status { .. } => self.apply_message_event(event),
+            RuntimeEvent::PlanUpdated { .. }
+            | RuntimeEvent::SubAgentStarted { .. }
+            | RuntimeEvent::SubAgentUpdated { .. }
+            | RuntimeEvent::SubAgentFinished { .. } => self.apply_progress_event(event),
+            RuntimeEvent::ToolCallStarted { .. }
+            | RuntimeEvent::ObservationAdded { .. }
+            | RuntimeEvent::ToolCallFinished { .. }
+            | RuntimeEvent::NeedUserInput { .. }
+            | RuntimeEvent::ToolApprovalResolved { .. } => self.apply_tool_event(event),
+            RuntimeEvent::TurnFailed { .. }
+            | RuntimeEvent::TurnCancelled { .. }
+            | RuntimeEvent::TurnCompleted { .. } => self.apply_terminal_event(event),
+        }
+        true
+    }
+
+    fn apply_message_event(&mut self, event: &RuntimeEvent) {
         match event {
             RuntimeEvent::TurnStarted { .. } => {
-                // 新一轮只重置本轮临时输出;已有计划需保留到下一次 PlanUpdated。
                 self.streaming_id = None;
                 self.active_status_id = None;
             }
-            RuntimeEvent::AssistantMessageDelta { delta, .. } => {
-                self.append_delta(delta);
-            }
-            RuntimeEvent::ReasoningDelta { delta, .. } => {
-                self.append_reasoning_delta(delta);
-            }
-            RuntimeEvent::AssistantMessage { text, .. } => {
-                self.finalize_assistant(text);
-            }
-            RuntimeEvent::UserMessage { text, .. } => {
-                self.push_user(text, 0);
-            }
-            RuntimeEvent::Status { title, is_done, .. } => {
-                self.upsert_status(title, *is_done);
-            }
-            RuntimeEvent::PlanUpdated { plan, .. } => {
-                self.upsert_plan(plan);
-            }
-            RuntimeEvent::ToolCallStarted {
-                call_id,
-                tool_name,
-                arguments,
-                ..
-            } => {
-                self.push_tool_call(call_id.as_str(), tool_name.as_str(), arguments);
-            }
-            RuntimeEvent::ObservationAdded { observation, .. } => {
-                self.apply_observation(observation);
-            }
-            RuntimeEvent::ToolCallFinished {
-                call_id, success, ..
-            } => {
-                self.finish_tool_call(call_id.as_str(), *success);
-            }
+            RuntimeEvent::AssistantMessageDelta { delta, .. } => self.append_delta(delta),
+            RuntimeEvent::ReasoningDelta { delta, .. } => self.append_reasoning_delta(delta),
+            RuntimeEvent::AssistantMessage { text, .. } => self.finalize_assistant(text),
+            RuntimeEvent::UserMessage { text, .. } => self.push_user(text, 0),
+            RuntimeEvent::Status { title, is_done, .. } => self.upsert_status(title, *is_done),
+            _ => unreachable!("non-message event routed to apply_message_event"),
+        }
+    }
+
+    fn apply_progress_event(&mut self, event: &RuntimeEvent) {
+        match event {
+            RuntimeEvent::PlanUpdated { plan, .. } => self.upsert_plan(plan),
             RuntimeEvent::SubAgentStarted {
                 subagent_id,
                 name,
                 task,
                 ..
-            } => {
-                self.push_subagent(subagent_id.as_str(), name, task);
-            }
+            } => self.push_subagent(subagent_id.as_str(), name, task),
             RuntimeEvent::SubAgentUpdated {
                 subagent_id,
                 summary,
                 ..
-            } => {
-                self.update_subagent(subagent_id.as_str(), summary);
-            }
+            } => self.update_subagent(subagent_id.as_str(), summary),
             RuntimeEvent::SubAgentFinished {
                 subagent_id,
                 success,
                 summary,
                 ..
-            } => {
-                self.finish_subagent(subagent_id.as_str(), *success, summary);
-            }
-            RuntimeEvent::NeedUserInput {
-                question,
-                pending_tool_call_id,
+            } => self.finish_subagent(subagent_id.as_str(), *success, summary),
+            _ => unreachable!("non-progress event routed to apply_progress_event"),
+        }
+    }
+
+    fn apply_tool_event(&mut self, event: &RuntimeEvent) {
+        match event {
+            RuntimeEvent::ToolCallStarted {
+                call_id,
                 tool_name,
                 arguments,
-                pending_tool_calls,
                 ..
-            } => {
-                self.finish_active_status();
-                let tool_name_text = tool_name
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| "unknown".into());
-                let input = self.confirm_input_display(
-                    pending_tool_call_id.as_ref(),
-                    &tool_name_text,
-                    arguments.as_ref(),
-                );
-                let data = ToolConfirmCardData {
-                    call_id: pending_tool_call_id
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_default(),
-                    tool_name: tool_name_text,
-                    items: self.confirm_items_display(pending_tool_calls),
-                    input_summary: input.summary,
-                    input_json: input.json,
-                    question: question.clone(),
-                    status: "pending".into(),
-                };
-                self.messages
-                    .push(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
+            } => self.push_tool_call(call_id.as_str(), tool_name.as_str(), arguments),
+            RuntimeEvent::ObservationAdded { observation, .. } => {
+                self.apply_observation(observation)
             }
+            RuntimeEvent::ToolCallFinished {
+                call_id, success, ..
+            } => self.finish_tool_call(call_id.as_str(), *success),
+            RuntimeEvent::NeedUserInput { .. } => self.push_tool_confirmation(event),
             RuntimeEvent::ToolApprovalResolved {
                 call_id, approved, ..
-            } => {
-                self.resolve_tool_confirm(call_id.as_str(), *approved);
-            }
+            } => self.resolve_tool_confirm(call_id.as_str(), *approved),
+            _ => unreachable!("non-tool event routed to apply_tool_event"),
+        }
+    }
+
+    fn push_tool_confirmation(&mut self, event: &RuntimeEvent) {
+        let RuntimeEvent::NeedUserInput {
+            question,
+            pending_tool_call_id,
+            tool_name,
+            arguments,
+            pending_tool_calls,
+            ..
+        } = event
+        else {
+            unreachable!("non-input event routed to push_tool_confirmation");
+        };
+        self.finish_active_status();
+        let tool_name = tool_name
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "unknown".into());
+        let input = self.confirm_input_display(
+            pending_tool_call_id.as_ref(),
+            &tool_name,
+            arguments.as_ref(),
+        );
+        let data = ToolConfirmCardData {
+            call_id: pending_tool_call_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            tool_name,
+            items: self.confirm_items_display(pending_tool_calls),
+            input_summary: input.summary,
+            input_json: input.json,
+            question: question.to_string(),
+            status: "pending".into(),
+        };
+        self.messages
+            .push(ChatMessageUI::card(TOOL_CONFIRM_CARD, data.to_json()));
+    }
+
+    fn apply_terminal_event(&mut self, event: &RuntimeEvent) {
+        self.finish_active_status();
+        match event {
             RuntimeEvent::TurnFailed { reason, .. } => {
                 self.streaming_id = None;
-                self.finish_active_status();
                 self.messages
                     .push(ChatMessageUI::system(format!("⚠️ 任务失败:{reason}")));
             }
-            RuntimeEvent::TurnCompleted { .. } => {
-                self.finish_active_status();
+            RuntimeEvent::TurnCancelled { .. } => {
                 self.close_streaming_segment();
+                self.messages.push(ChatMessageUI::system("任务已取消"));
             }
+            RuntimeEvent::TurnCompleted { .. } => self.close_streaming_segment(),
+            _ => unreachable!("non-terminal event routed to apply_terminal_event"),
         }
     }
 
@@ -603,6 +652,27 @@ impl AgentTranscript {
     }
 }
 
+fn terminal_event_key(event: &RuntimeEvent) -> Option<TerminalEventKey> {
+    match event {
+        RuntimeEvent::NeedUserInput {
+            turn_id,
+            pending_tool_call_id,
+            question,
+            ..
+        } => Some(TerminalEventKey::AwaitingInput {
+            turn_id: turn_id.clone(),
+            call_id: pending_tool_call_id.clone(),
+            question: question.clone(),
+        }),
+        RuntimeEvent::TurnCompleted { turn_id, .. }
+        | RuntimeEvent::TurnCancelled { turn_id, .. }
+        | RuntimeEvent::TurnFailed { turn_id, .. } => {
+            Some(TerminalEventKey::Final(turn_id.clone()))
+        }
+        _ => None,
+    }
+}
+
 // ===== 枚举 → 卡片字符串 =====
 
 fn delegate_task_args(arguments: &serde_json::Value) -> Option<(String, String)> {
@@ -840,6 +910,32 @@ mod tests {
     }
 
     #[test]
+    fn acp_phase_status_replaces_previous_phase() {
+        let mut transcript = AgentTranscript::new();
+
+        transcript.set_acp_status("正在启动 Codex");
+        transcript.set_acp_status("正在协商 ACP 协议");
+
+        assert_eq!(1, transcript.acp_status_count());
+        assert_eq!(Some("正在协商 ACP 协议"), transcript.acp_status_text());
+    }
+
+    #[test]
+    fn empty_response_replaces_running_status_with_recovery_error() {
+        let mut transcript = AgentTranscript::new();
+        transcript.set_acp_status("ACP 正在响应…");
+
+        transcript.set_acp_error(&crate::AcpError::empty_response("opencode", "OpenCode"));
+
+        assert_eq!(0, transcript.pending_status_count());
+        assert!(
+            transcript
+                .last_message_content()
+                .is_some_and(|content| content.contains("没有返回任何内容"))
+        );
+    }
+
+    #[test]
     fn pending_status_is_removed_when_turn_completes_without_output() {
         let mut tr = AgentTranscript::new();
         tr.apply(&RuntimeEvent::Status {
@@ -855,6 +951,29 @@ mod tests {
         });
 
         assert!(tr.messages.is_empty());
+    }
+
+    #[test]
+    fn cancelled_event_closes_stream_and_is_idempotent() {
+        let mut tr = AgentTranscript::new();
+        tr.apply(&RuntimeEvent::AssistantMessageDelta {
+            session_id: sid(),
+            turn_id: tid(),
+            delta: "部分回答".to_string(),
+        });
+        let event = RuntimeEvent::TurnCancelled {
+            session_id: sid(),
+            turn_id: tid(),
+        };
+
+        assert!(tr.apply(&event));
+        assert!(!tr.apply(&event));
+
+        assert_eq!(2, tr.messages.len());
+        assert_eq!("部分回答", tr.messages[0].content);
+        assert!(!tr.messages[0].is_streaming);
+        assert_eq!("任务已取消", tr.messages[1].content);
+        assert!(!tr.messages[1].content.contains("失败"));
     }
 
     #[test]
@@ -1209,6 +1328,50 @@ mod tests {
 
         let data = ToolConfirmCardData::from_json(&tr.messages[0].content).unwrap();
         assert_eq!(data.status, "approved");
+    }
+
+    #[test]
+    fn same_turn_accepts_distinct_tool_approval_requests() {
+        let mut tr = AgentTranscript::new();
+        let first_call = ToolCallId::from_string("call_first");
+        let second_call = ToolCallId::from_string("call_second");
+
+        tr.apply(&RuntimeEvent::NeedUserInput {
+            session_id: sid(),
+            turn_id: tid(),
+            question: "确认第一条命令吗？".into(),
+            pending_tool_call_id: Some(first_call.clone()),
+            tool_name: Some(ToolName::new("terminal_exec")),
+            arguments: Some(serde_json::json!({"command": "kill 334"})),
+            pending_tool_calls: Vec::new(),
+        });
+        tr.apply(&RuntimeEvent::ToolApprovalResolved {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: first_call,
+            approved: true,
+        });
+        let second = RuntimeEvent::NeedUserInput {
+            session_id: sid(),
+            turn_id: tid(),
+            question: "确认第二条命令吗？".into(),
+            pending_tool_call_id: Some(second_call),
+            tool_name: Some(ToolName::new("terminal_exec")),
+            arguments: Some(serde_json::json!({
+                "command": "nohup ping 127.0.0.1 > /tmp/ping.log 2>&1 &"
+            })),
+            pending_tool_calls: Vec::new(),
+        };
+
+        assert!(tr.apply(&second));
+        assert!(!tr.apply(&second));
+        assert_eq!(2, tr.messages.len());
+
+        let first = ToolConfirmCardData::from_json(&tr.messages[0].content).unwrap();
+        let second = ToolConfirmCardData::from_json(&tr.messages[1].content).unwrap();
+        assert_eq!("approved", first.status);
+        assert_eq!("call_second", second.call_id);
+        assert_eq!("pending", second.status);
     }
 
     #[test]

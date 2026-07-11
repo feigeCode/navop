@@ -126,6 +126,11 @@ pub enum RuntimeEvent {
         turn_id: TurnId,
         answer: Option<String>,
     },
+    /// 一轮已被用户取消。取消是独立终态,不等同于失败。
+    TurnCancelled {
+        session_id: SessionId,
+        turn_id: TurnId,
+    },
     /// 一轮失败。
     TurnFailed {
         session_id: SessionId,
@@ -154,6 +159,7 @@ impl RuntimeEvent {
             | RuntimeEvent::NeedUserInput { session_id, .. }
             | RuntimeEvent::ToolApprovalResolved { session_id, .. }
             | RuntimeEvent::TurnCompleted { session_id, .. }
+            | RuntimeEvent::TurnCancelled { session_id, .. }
             | RuntimeEvent::TurnFailed { session_id, .. } => session_id,
         }
     }

@@ -1,5 +1,5 @@
 use alacritty_terminal::term::TermMode;
-use gpui::{Bounds, Keystroke, MouseButton, Pixels, Point, px};
+use gpui::{Bounds, Hsla, Keystroke, MouseButton, Pixels, Point, px};
 use one_core::storage::TerminalHistoryScope;
 use terminal::terminal::{TerminalConnectionKind, TerminalModelEvent};
 
@@ -111,11 +111,16 @@ pub(super) fn should_confirm_local_terminal_close(
 
 pub(super) const HISTORY_PROMPT_DROPDOWN_MIN_WIDTH: f32 = 300.0;
 pub(super) const HISTORY_PROMPT_DROPDOWN_MAX_WIDTH: f32 = 500.0;
+const HISTORY_PROMPT_DROPDOWN_BACKGROUND_OPACITY: f32 = 0.88;
 const HISTORY_PROMPT_DROPDOWN_GAP_Y: f32 = 6.0;
 const HISTORY_PROMPT_DROPDOWN_EDGE_PADDING: f32 = 8.0;
 const HISTORY_PROMPT_DROPDOWN_ROW_PADDING_Y: f32 = 12.0;
 const HISTORY_PROMPT_DROPDOWN_CONTAINER_PADDING_Y: f32 = 16.0;
 const HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT: f32 = 20.0;
+
+pub(super) fn history_prompt_dropdown_background(background: Hsla) -> Hsla {
+    background.opacity(HISTORY_PROMPT_DROPDOWN_BACKGROUND_OPACITY)
+}
 
 fn estimate_history_prompt_dropdown_height(
     line_height: Pixels,
@@ -169,4 +174,22 @@ pub(super) fn history_prompt_dropdown_origin(
 
 pub(super) fn history_prompt_overlay_bounds(terminal_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(Point::new(px(0.0), px(0.0)), terminal_bounds.size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::history_prompt_dropdown_background;
+    use gpui::{Hsla, rgb};
+
+    #[test]
+    fn history_prompt_dropdown_applies_translucent_background() {
+        let background: Hsla = rgb(0x1E1E1E).into();
+
+        let dropdown = history_prompt_dropdown_background(background);
+
+        assert_eq!(background.h, dropdown.h);
+        assert_eq!(background.s, dropdown.s);
+        assert_eq!(background.l, dropdown.l);
+        assert!((dropdown.a - 0.88).abs() < f32::EPSILON);
+    }
 }

@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 # Async runtime
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 futures = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -16,6 +17,7 @@ ssh = { workspace = true }
 # Terminal emulation
 alacritty_terminal.workspace = true
 serde = { workspace = true }
+shell-words = { workspace = true }
 tracing = { workspace = true }
 serialport = { workspace = true }
 base64 = { workspace = true }

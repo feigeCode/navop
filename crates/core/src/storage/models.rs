@@ -321,6 +321,8 @@ pub struct RemoteDesktopParams {
     pub domain: Option<String>,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfig>,
 }
 
 /// 跳板机配置
@@ -340,7 +342,7 @@ pub enum ProxyType {
 }
 
 /// 代理配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProxyConfig {
     pub proxy_type: ProxyType,
     pub host: String,
@@ -349,6 +351,19 @@ pub struct ProxyConfig {
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+}
+
+impl fmt::Debug for ProxyConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProxyConfig")
+            .field("proxy_type", &self.proxy_type)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -759,6 +774,8 @@ pub struct DbConnectionConfig {
     pub sid: Option<String>,
     #[serde(skip)]
     pub workspace_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfig>,
     #[serde(default)]
     pub extra_params: std::collections::HashMap<String, String>,
 }
@@ -794,6 +811,7 @@ impl DbConnectionConfig {
             || self.database != other.database
             || self.service_name != other.service_name
             || self.sid != other.sid
+            || self.proxy != other.proxy
             || self.extra_params != other.extra_params
     }
 
@@ -812,6 +830,9 @@ impl DbConnectionConfig {
         }
 
         let ssh_params = ssh_connection.to_ssh_params()?;
+        if self.proxy.is_none() {
+            self.proxy = ssh_params.proxy.clone();
+        }
         self.extra_params
             .insert("ssh_host".to_string(), ssh_params.host);
         self.extra_params
@@ -1422,8 +1443,102 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: Some(7),
+            proxy: None,
             extra_params,
         }
+    }
+
+    #[test]
+    fn database_config_deserializes_legacy_json_without_proxy() {
+        let json = r#"{
+            "database_type":"MySQL",
+            "host":"db.internal",
+            "port":3306,
+            "username":"root",
+            "password":"secret",
+            "database":null,
+            "service_name":null,
+            "sid":null,
+            "extra_params":{}
+        }"#;
+
+        let config: DbConnectionConfig = serde_json::from_str(json).unwrap();
+
+        assert!(config.proxy.is_none());
+    }
+
+    #[test]
+    fn database_config_round_trip_preserves_proxy() {
+        let mut config = database_config_with_ssh_ref(42);
+        config.proxy = Some(ProxyConfig {
+            proxy_type: ProxyType::Http,
+            host: "proxy.example.com".to_string(),
+            port: 8080,
+            username: Some("alice".to_string()),
+            password: Some("secret".to_string()),
+        });
+
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: DbConnectionConfig = serde_json::from_str(&json).unwrap();
+
+        let proxy = restored.proxy.expect("proxy should round trip");
+        assert_eq!(ProxyType::Http, proxy.proxy_type);
+        assert_eq!("proxy.example.com", proxy.host);
+        assert_eq!(Some("alice".to_string()), proxy.username);
+    }
+
+    #[test]
+    fn database_config_change_detection_includes_proxy() {
+        let original = database_config_with_ssh_ref(42);
+        let mut proxied = original.clone();
+        proxied.proxy = Some(ProxyConfig {
+            proxy_type: ProxyType::Socks5,
+            host: "proxy.example.com".to_string(),
+            port: 1080,
+            username: None,
+            password: None,
+        });
+
+        assert!(original.is_change(&proxied));
+    }
+
+    #[test]
+    fn referenced_ssh_tunnel_inherits_proxy_when_database_has_none() {
+        let mut ssh = ssh_connection_with_id(42, SshAuthMethod::Agent);
+        let mut ssh_params = ssh.to_ssh_params().unwrap();
+        ssh_params.proxy = Some(ProxyConfig {
+            proxy_type: ProxyType::Socks5,
+            host: "proxy.example.com".to_string(),
+            port: 1080,
+            username: Some("alice".to_string()),
+            password: Some("secret".to_string()),
+        });
+        ssh.params = serde_json::to_string(&ssh_params).unwrap();
+        let mut database = database_config_with_ssh_ref(42);
+
+        database.apply_referenced_ssh_tunnel(&ssh).unwrap();
+
+        assert_eq!(
+            Some("proxy.example.com"),
+            database.proxy.as_ref().map(|proxy| proxy.host.as_str())
+        );
+    }
+
+    #[test]
+    fn proxy_config_debug_redacts_password() {
+        let proxy = ProxyConfig {
+            proxy_type: ProxyType::Http,
+            host: "proxy.example.com".to_string(),
+            port: 8080,
+            username: Some("alice".to_string()),
+            password: Some("proxy-secret".to_string()),
+        };
+
+        let debug = format!("{proxy:?}");
+
+        assert!(debug.contains("proxy.example.com"));
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("proxy-secret"));
     }
 
     #[test]
@@ -1440,6 +1555,7 @@ mod tests {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: HashMap::new(),
         };
         assert_eq!(
@@ -1514,6 +1630,7 @@ mod tests {
             password: None,
             domain: None,
             read_only: false,
+            proxy: None,
         };
         assert_eq!(
             "winhost:3389",
@@ -2072,6 +2189,7 @@ mod serial_tests {
             password: Some("secret".to_string()),
             domain: Some("corp".to_string()),
             read_only: false,
+            proxy: None,
         };
 
         let conn = StoredConnection::new_remote_desktop("win-rdp".to_string(), params, Some(42));
@@ -2091,6 +2209,51 @@ mod serial_tests {
         assert!(raw_params.get("width").is_none());
         assert!(raw_params.get("height").is_none());
         assert_eq!(RemoteDesktopProtocol::Vnc.default_port(), 5900);
+    }
+
+    #[test]
+    fn remote_desktop_params_deserialize_legacy_json_without_proxy() {
+        let json = r#"{
+            "protocol":"Rdp",
+            "host":"10.0.0.8",
+            "port":3389,
+            "username":null,
+            "password":null,
+            "domain":null,
+            "read_only":false
+        }"#;
+
+        let params: RemoteDesktopParams = serde_json::from_str(json).unwrap();
+
+        assert!(params.proxy.is_none());
+    }
+
+    #[test]
+    fn remote_desktop_params_round_trip_preserves_proxy() {
+        let params = RemoteDesktopParams {
+            protocol: RemoteDesktopProtocol::Vnc,
+            host: "10.0.0.9".to_string(),
+            port: 5900,
+            username: None,
+            password: Some("vnc-secret".to_string()),
+            domain: None,
+            read_only: true,
+            proxy: Some(ProxyConfig {
+                proxy_type: ProxyType::Socks5,
+                host: "proxy.example.com".to_string(),
+                port: 1080,
+                username: Some("alice".to_string()),
+                password: Some("proxy-secret".to_string()),
+            }),
+        };
+
+        let json = serde_json::to_string(&params).unwrap();
+        let restored: RemoteDesktopParams = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            Some("proxy.example.com"),
+            restored.proxy.as_ref().map(|proxy| proxy.host.as_str())
+        );
     }
 
     #[test]

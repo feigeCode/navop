@@ -8,7 +8,8 @@ edition.workspace = true
 serde.workspace = true
 ssh.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util", "net"] }
+tracing.workspace = true
 
 [lints]
 workspace = true

@@ -6,6 +6,7 @@ use agent_runtime::{
     ToolCall, ToolCallId, ToolExecutionMode, ToolName, ToolSpec, TurnId,
 };
 use serde_json::json;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tool_runtime::{
     RuntimeToolDescriptor, ToolAdapter, ToolAnnotations, ToolContext, ToolDescriptor, ToolHandler,
@@ -65,10 +66,9 @@ fn tool_execution_mode_maps_to_runtime_permission_profile() {
         tool_runtime::PermissionProfile::Confirm,
         permission_policy_for_tool_mode(ToolExecutionMode::Manual).mode,
     );
-    assert_eq!(
-        tool_runtime::PermissionProfile::Auto,
-        permission_policy_for_tool_mode(ToolExecutionMode::Auto).mode,
-    );
+    let auto = permission_policy_for_tool_mode(ToolExecutionMode::Auto);
+    assert_eq!(tool_runtime::PermissionProfile::Auto, auto.mode);
+    assert_eq!(tool_runtime::OperationPolicy::Allow, auto.high_risk_policy);
 }
 
 #[test]
@@ -143,6 +143,27 @@ async fn runtime_registry_agent_tool_executes_canonical_runtime_tool() {
     );
 }
 
+#[tokio::test]
+async fn runtime_registry_agent_tool_forwards_invocation_cancellation() {
+    let handler = Arc::new(RuntimeEchoTool::new("terminal.exec"));
+    let registry = ToolRegistry::new(vec![handler.clone()]);
+    let agent_registry = agent_runtime::tools::tool_runtime_agent_tool_registry(
+        registry,
+        tool_runtime::ToolAdapter::FunctionCalling,
+    );
+    let tool = agent_registry
+        .get(&ToolName::new("terminal.exec"))
+        .expect("runtime tool should be exposed to agent");
+    let invocation = agent_invocation("terminal.exec", json!({ "command": "pwd" }));
+    invocation.cancellation.cancel();
+
+    tool.execute(invocation)
+        .await
+        .expect("runtime tool call should execute");
+
+    assert!(handler.last_cancellation_state());
+}
+
 fn runtime_descriptor(id: &str, annotations: ToolAnnotations) -> RuntimeToolDescriptor {
     RuntimeToolDescriptor {
         id: ToolId::new(id),
@@ -164,6 +185,7 @@ fn runtime_descriptor(id: &str, annotations: ToolAnnotations) -> RuntimeToolDesc
 struct RuntimeEchoTool {
     descriptor: ToolDescriptor,
     last_input: Arc<Mutex<Option<serde_json::Value>>>,
+    last_cancellation_state: Arc<AtomicBool>,
 }
 
 impl RuntimeEchoTool {
@@ -181,6 +203,7 @@ impl RuntimeEchoTool {
                 annotations: ToolAnnotations::read_only("Echo"),
             },
             last_input: Arc::new(Mutex::new(None)),
+            last_cancellation_state: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -191,6 +214,10 @@ impl RuntimeEchoTool {
             .clone()
             .expect("runtime tool should receive input")
     }
+
+    fn last_cancellation_state(&self) -> bool {
+        self.last_cancellation_state.load(Ordering::Acquire)
+    }
 }
 
 impl ToolHandler for RuntimeEchoTool {
@@ -198,8 +225,10 @@ impl ToolHandler for RuntimeEchoTool {
         self.descriptor.clone()
     }
 
-    fn call(&self, input: serde_json::Value, _context: ToolContext) -> tool_runtime::ToolFuture {
+    fn call(&self, input: serde_json::Value, context: ToolContext) -> tool_runtime::ToolFuture {
         *self.last_input.lock().expect("last input lock") = Some(input.clone());
+        self.last_cancellation_state
+            .store(context.cancellation.is_cancelled(), Ordering::Release);
         Box::pin(async move { Ok(ToolResult::structured(input)) })
     }
 }

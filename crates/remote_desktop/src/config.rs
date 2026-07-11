@@ -2,6 +2,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use connection_tunnel::ProxyTunnelConfig;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteDesktopProtocol {
@@ -33,6 +35,7 @@ pub struct RemoteDesktopConnectionOptions {
     pub password: Option<String>,
     pub domain: Option<String>,
     pub read_only: bool,
+    pub proxy: Option<ProxyTunnelConfig>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,8 +53,19 @@ impl fmt::Debug for RemoteDesktopConnectionOptions {
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field("domain", &self.domain)
             .field("read_only", &self.read_only)
+            .field("proxy", &proxy_debug_label(self.proxy.as_ref()))
             .finish()
     }
+}
+
+fn proxy_debug_label(proxy: Option<&ProxyTunnelConfig>) -> Option<String> {
+    proxy.map(|proxy| {
+        let kind = match proxy.proxy_type {
+            connection_tunnel::ProxyTunnelType::Socks5 => "socks5",
+            connection_tunnel::ProxyTunnelType::Http => "http",
+        };
+        format!("{kind}://{}:{}", proxy.host, proxy.port)
+    })
 }
 
 #[cfg(test)]
@@ -67,6 +81,7 @@ mod tests {
             password: Some("secret".to_string()),
             domain: None,
             read_only: false,
+            proxy: None,
         };
 
         let debug = format!("{options:?}");

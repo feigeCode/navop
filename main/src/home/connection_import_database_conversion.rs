@@ -51,6 +51,7 @@ pub(crate) fn to_database_connection(
         service_name: None,
         sid: None,
         workspace_id: None,
+        proxy: None,
         extra_params: extra_params(imported),
     };
     Ok(StoredConnection::from_db_connection(config))

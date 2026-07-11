@@ -105,6 +105,7 @@ fn test_config() -> DbConnectionConfig {
         service_name: None,
         sid: None,
         workspace_id: None,
+        proxy: None,
         extra_params: Default::default(),
     }
 }

@@ -39,7 +39,10 @@ use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConf
 use one_core::sidebar_contribution::SidebarPlacement;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::acp::{AcpAgentConfig, AcpConnection, AcpSessionState, build_acp_agent_configs};
+use crate::acp::{
+    AcpAgentEntry, AcpConnectOutcome, AcpConnection, AcpError, AcpErrorKind, AcpPendingConnection,
+    AcpRecoveryAction, AcpSessionState, build_acp_agent_entries,
+};
 use crate::agent_cards::{ApproveToolCall, PlanCardData, RejectToolCall, SubAgentCardData};
 use crate::agent_skills::AgentSkillState;
 use crate::agent_transcript::AgentTranscript;
@@ -58,6 +61,11 @@ use crate::persistence;
 use crate::resource_display::first_visible_alias;
 use crate::session_sidebar::{self, SessionRowStyle, SessionSummary};
 use crate::theme::{AgentChatTheme, resolve_agent_chat_theme};
+
+mod acp_options;
+mod acp_ui;
+
+use acp_options::{agent_option_disabled, composer_agent_options, current_agent_label};
 
 /// Agent 聊天视图事件。
 #[derive(Clone, Debug)]
@@ -253,7 +261,7 @@ pub struct AgentChatViewConfig {
     /// 宿主 frame 当前所在位置,用于禁用移动菜单里的当前位置。
     pub sidebar_frame_placement: SidebarPlacement,
     /// 可接入的外部 ACP agent(自定义命令)。非空时头部显示后端切换控件。
-    pub acp_agents: Vec<AcpAgentConfig>,
+    pub acp_agents: Vec<AcpAgentEntry>,
     /// 可选的局部聊天主题。用于终端侧边栏等嵌入场景,普通 Agent tab 保持应用主题。
     pub theme: Option<AgentChatTheme>,
 }
@@ -317,7 +325,7 @@ impl AgentChatViewConfig {
     }
 
     /// 注入可接入的外部 ACP agent 列表。
-    pub fn with_acp_agents(mut self, agents: Vec<AcpAgentConfig>) -> Self {
+    pub fn with_acp_agents(mut self, agents: Vec<AcpAgentEntry>) -> Self {
         self.acp_agents = agents;
         self
     }
@@ -484,11 +492,15 @@ pub struct AgentChatView {
     /// 当前驱动后端(默认 One_Agent)。
     backend: Backend,
     /// 可接入的外部 ACP agent 列表。
-    acp_agents: Vec<AcpAgentConfig>,
+    acp_agents: Vec<AcpAgentEntry>,
     /// 本地 Codex-style Skill 管理状态。
     skills: AgentSkillState,
     /// 已建立的 ACP 连接(backend == Acp 时存在)。
     acp: Option<AcpConnection>,
+    /// 等待用户选择鉴权方式的 ACP 连接。
+    acp_pending: Option<AcpPendingConnection>,
+    /// 当前 pending 连接公布的鉴权方式。
+    acp_auth_methods: Vec<String>,
     /// 当前选中的 ACP agent id(用于头部切换控件高亮)。
     current_acp_id: Option<SharedString>,
     /// 正在连接 ACP agent(拉起子进程中)。
@@ -646,6 +658,8 @@ impl AgentChatView {
             acp_agents,
             skills,
             acp: None,
+            acp_pending: None,
+            acp_auth_methods: Vec::new(),
             current_acp_id: None,
             acp_connecting: false,
             acp_connecting_id: None,
@@ -889,8 +903,8 @@ impl AgentChatView {
         }
         if let Err(err) = self.runtime.interrupt(&self.session_id) {
             self.transcript.push_system(format!("停止失败:{err}"));
-            self.set_running(false, cx);
         }
+        self.set_running(false, cx);
         cx.notify();
     }
 
@@ -965,10 +979,20 @@ impl AgentChatView {
         let terminal = matches!(
             event,
             RuntimeEvent::TurnCompleted { .. }
+                | RuntimeEvent::TurnCancelled { .. }
                 | RuntimeEvent::TurnFailed { .. }
                 | RuntimeEvent::NeedUserInput { .. }
         );
-        self.transcript.apply(&event);
+        let applied = match &event {
+            RuntimeEvent::TurnFailed { reason, .. } if self.backend == Backend::Acp => {
+                let error = self.acp_turn_error(reason);
+                self.transcript.apply_acp_failure(&event, &error)
+            }
+            _ => self.transcript.apply(&event),
+        };
+        if !applied {
+            return;
+        }
         self.sync_composer(cx);
         // 跟随流式输出 / 新卡片自动滚到底。
         self.request_scroll_to_bottom();
@@ -981,6 +1005,25 @@ impl AgentChatView {
             }
         }
         cx.notify();
+    }
+
+    fn acp_turn_error(&self, reason: &str) -> AcpError {
+        let agent_id = self
+            .current_acp_id
+            .clone()
+            .unwrap_or_else(|| SharedString::from("acp"));
+        let agent_name = self.acp_agent_name(&agent_id);
+        if reason.contains("没有返回任何内容") {
+            return AcpError::empty_response(agent_id.to_string(), agent_name.to_string());
+        }
+        AcpError::new(
+            AcpErrorKind::PromptFailed,
+            agent_id.to_string(),
+            agent_name.to_string(),
+            "ACP 请求失败",
+        )
+        .with_detail(reason)
+        .with_recovery(AcpRecoveryAction::Retry)
     }
 
     fn request_scroll_to_bottom(&mut self) {
@@ -1016,7 +1059,7 @@ impl AgentChatView {
     }
 
     fn refresh_acp_agents(&mut self, cx: &mut Context<Self>) {
-        match build_acp_agent_configs(cx) {
+        match build_acp_agent_entries(cx) {
             Ok(agents) => self.refresh_acp_agents_from(agents, cx),
             Err(error) => {
                 tracing::warn!(%error, "Failed to refresh ACP agent configs");
@@ -1024,7 +1067,7 @@ impl AgentChatView {
         }
     }
 
-    fn refresh_acp_agents_from(&mut self, agents: Vec<AcpAgentConfig>, cx: &mut Context<Self>) {
+    fn refresh_acp_agents_from(&mut self, agents: Vec<AcpAgentEntry>, cx: &mut Context<Self>) {
         self.acp_agents = agents;
         self.sync_composer(cx);
         cx.notify();
@@ -1220,80 +1263,8 @@ impl AgentChatView {
     /// 切换驱动后端:`None` = One_Agent(自研);`Some(id)` = 对应 ACP agent。
     fn select_backend(&mut self, agent_id: Option<SharedString>, cx: &mut Context<Self>) {
         match agent_id {
-            // 切回自研 One_Agent。
-            None => {
-                if self.backend == Backend::Local && !self.acp_connecting {
-                    return;
-                }
-                self.acp = None;
-                self.current_acp_id = None;
-                self.backend = Backend::Local;
-                self.acp_connecting = false;
-                self.acp_connecting_id = None;
-                self.transcript.clear();
-                self.set_running(false, cx);
-                self._event_task =
-                    Self::spawn_event_pump(self.runtime.subscribe(), self.session_id.clone(), cx);
-                self.sync_composer(cx);
-                cx.notify();
-            }
-            // 切到某个 ACP agent(惰性拉起子进程)。
-            Some(id) => {
-                if self.acp_connecting {
-                    return;
-                }
-                if self.backend == Backend::Acp && self.current_acp_id.as_ref() == Some(&id) {
-                    return;
-                }
-                let Some(config) = self.acp_agents.iter().find(|a| a.id == id).cloned() else {
-                    return;
-                };
-                let config = config.with_skill_context(&self.skills.selected_context());
-                self.acp_connecting = true;
-                self.acp_connecting_id = Some(config.id.clone());
-                self.set_running(false, cx);
-                self.transcript.clear();
-                self.transcript
-                    .push_system(format!("正在连接 ACP agent「{}」…", config.name));
-                self.sync_composer(cx);
-                cx.notify();
-
-                cx.spawn(async move |this, cx| {
-                    let connected = AcpConnection::connect(&config, cx).await;
-                    let _ = this.update(cx, |this, cx| match connected {
-                        Ok(conn) => {
-                            if this.acp_connecting_id.as_ref() != Some(&config.id) {
-                                return;
-                            }
-                            let rx = conn.subscribe();
-                            let sid = conn.session_id();
-                            this.acp = Some(conn);
-                            this.backend = Backend::Acp;
-                            this.current_acp_id = Some(config.id.clone());
-                            this.acp_connecting = false;
-                            this.acp_connecting_id = None;
-                            this.transcript.clear();
-                            this._event_task = Self::spawn_event_pump(rx, sid, cx);
-                            this.sync_composer(cx);
-                            cx.notify();
-                        }
-                        Err(err) => {
-                            if this.acp_connecting_id.as_ref() != Some(&config.id) {
-                                return;
-                            }
-                            this.acp_connecting = false;
-                            this.acp_connecting_id = None;
-                            this.backend = Backend::Local;
-                            this.current_acp_id = None;
-                            this.transcript
-                                .push_system(format!("连接 ACP agent 失败:{err}"));
-                            this.sync_composer(cx);
-                            cx.notify();
-                        }
-                    });
-                })
-                .detach();
-            }
+            None => self.select_local_backend(cx),
+            Some(id) => self.select_acp_backend(id, cx),
         }
     }
 
@@ -2199,6 +2170,7 @@ impl Render for AgentChatView {
                     .when(!self.sidebar_mode, |this| this.p_3())
                     .child(self.input.clone()),
             );
+        let auth_actions = self.render_acp_auth_actions(cx);
 
         if self.sidebar_mode {
             // 侧边栏视图:紧凑头部(新建对话 / 历史记录) + 消息 + 输入。
@@ -2223,6 +2195,7 @@ impl Render for AgentChatView {
                         .overflow_hidden()
                         .when_some(header, |this, header| this.child(header))
                         .child(messages)
+                        .when_some(auth_actions, |this, actions| this.child(actions))
                         .child(input_area),
                 )
         } else {
@@ -2242,6 +2215,7 @@ impl Render for AgentChatView {
                                 .size_full()
                                 .child(toolbar)
                                 .child(messages)
+                                .when_some(auth_actions, |this, actions| this.child(actions))
                                 .child(input_area),
                         ),
                     ),
@@ -2258,7 +2232,7 @@ fn build_composer_context(
     plan: Option<&PlanCardData>,
     subagents: &[SubAgentCardData],
     backend: Backend,
-    acp_agents: &[AcpAgentConfig],
+    acp_agents: &[AcpAgentEntry],
     current_acp_id: Option<&SharedString>,
     acp_connecting: bool,
     acp_state: Option<AcpSessionState>,
@@ -2455,46 +2429,6 @@ fn subagent_status_for_composer(subagent: &SubAgentCardData) -> &'static str {
     }
 }
 
-fn composer_agent_options(
-    backend: Backend,
-    acp_agents: &[AcpAgentConfig],
-    current_acp_id: Option<&SharedString>,
-    acp_connecting: bool,
-) -> Vec<ComposerAgentOption> {
-    let mut options = vec![ComposerAgentOption::local(
-        "One Agent",
-        backend == Backend::Local,
-        acp_connecting,
-    )];
-    options.extend(acp_agents.iter().map(|agent| {
-        ComposerAgentOption::acp(
-            agent.id.clone(),
-            agent.name.clone(),
-            backend == Backend::Acp && current_acp_id == Some(&agent.id),
-            acp_connecting,
-        )
-    }));
-    options
-}
-
-fn current_agent_label(
-    backend: Backend,
-    acp_agents: &[AcpAgentConfig],
-    current_acp_id: Option<&SharedString>,
-    acp_connecting: bool,
-) -> SharedString {
-    if acp_connecting {
-        return SharedString::from("连接中...");
-    }
-    if backend == Backend::Local {
-        return SharedString::from("One Agent");
-    }
-    current_acp_id
-        .and_then(|id| acp_agents.iter().find(|agent| &agent.id == id))
-        .map(|agent| agent.name.clone())
-        .unwrap_or_else(|| SharedString::from("ACP Agent"))
-}
-
 fn current_agent_icon(backend: Backend) -> Icon {
     if backend == Backend::Acp {
         Icon::new(IconName::Bot)
@@ -2627,10 +2561,6 @@ fn current_agent_icon_for_option(agent: &ComposerAgentOption) -> Icon {
     } else {
         Icon::new(IconName::AI).color()
     }
-}
-
-fn agent_option_disabled(agent: &ComposerAgentOption) -> bool {
-    agent.connecting && agent.id.is_some()
 }
 
 fn resource_pool_summary(resources: &ResourceContext) -> ComposerResourcePoolSummary {
@@ -3118,6 +3048,7 @@ fn now_secs() -> i64 {
 mod tests {
     use super::*;
     use crate::agent_cards::{TOOL_CARD, TOOL_CONFIRM_CARD, ToolCardData, ToolConfirmCardData};
+    use crate::{AcpAgentConfig, AcpConfigDiagnostic};
     use agent_runtime::RuntimeServices;
     use agent_runtime::model::MockModelClient;
     use agent_runtime::model::function_tool_call;
@@ -3435,6 +3366,22 @@ mod tests {
         assert_eq!(vec!["prod-a-renamed", "prod-db"], catalog_labels);
     }
 
+    #[gpui::test]
+    fn local_stop_ack_immediately_clears_running_state(cx: &mut TestAppContext) {
+        init_test_ui(cx);
+        let config =
+            AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), Vec::new());
+        let (view, cx) =
+            cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
+
+        view.update(cx, |view, cx| {
+            view.set_running(true, cx);
+            view.stop(cx);
+        });
+
+        assert!(!view.read_with(cx, |view, _| view.is_running));
+    }
+
     #[test]
     fn applying_mentioned_resource_adds_from_catalog_and_sets_default() {
         let mut resources = ResourceContext::new();
@@ -3715,7 +3662,11 @@ mod tests {
             }],
         };
         let acp_id = SharedString::from("codex");
-        let acp_agents = vec![AcpAgentConfig::new(acp_id.clone(), "Codex ACP", "codex")];
+        let acp_agents = vec![AcpAgentEntry::ready(AcpAgentConfig::new(
+            acp_id.clone(),
+            "Codex ACP",
+            "codex",
+        ))];
 
         let local = build_composer_context(
             &ResourceContext::new(),
@@ -3836,8 +3787,12 @@ mod tests {
         let codex_id = SharedString::from("codex");
         let opencode_id = SharedString::from("opencode");
         let acp_agents = vec![
-            AcpAgentConfig::new(codex_id.clone(), "Codex", "codex"),
-            AcpAgentConfig::new(opencode_id.clone(), "OpenCode", "opencode"),
+            AcpAgentEntry::ready(AcpAgentConfig::new(codex_id.clone(), "Codex", "codex")),
+            AcpAgentEntry::ready(AcpAgentConfig::new(
+                opencode_id.clone(),
+                "OpenCode",
+                "opencode",
+            )),
         ];
 
         let options = composer_agent_options(Backend::Acp, &acp_agents, Some(&opencode_id), false);
@@ -3854,19 +3809,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn invalid_acp_agent_remains_visible_but_disabled() {
+        let diagnostic = AcpConfigDiagnostic::new("缺少环境变量 OPENAI_API_KEY");
+        let entries = vec![AcpAgentEntry::invalid("codex", "Codex", diagnostic.clone())];
+
+        let options = composer_agent_options(Backend::Local, &entries, None, false);
+
+        assert_eq!(2, options.len());
+        assert_eq!("Codex", options[1].label.as_ref());
+        assert!(!options[1].enabled);
+        assert_eq!(diagnostic.message, options[1].subtitle.as_ref());
+        assert!(agent_option_disabled(&options[1]));
+    }
+
+    #[test]
+    fn pending_acp_agent_is_treated_as_selected() {
+        let selected = SharedString::from("codex");
+
+        assert!(acp_options::agent_selection_is_active(
+            Backend::Local,
+            Some(&selected),
+            true,
+            &selected,
+        ));
+    }
+
     #[gpui::test]
     fn gpui_refresh_acp_agents_updates_header_switcher_options(cx: &mut TestAppContext) {
         init_test_ui(cx);
         let config = AgentChatViewConfig::new(test_runtime("m"), ResourceContext::new(), vec![])
-            .with_acp_agents(vec![AcpAgentConfig::new("codex", "Codex", "codex")]);
+            .with_acp_agents(vec![AcpAgentEntry::ready(AcpAgentConfig::new(
+                "codex", "Codex", "codex",
+            ))]);
 
         let (view, cx) =
             cx.add_window_view(move |window, cx| AgentChatView::new(config, window, cx));
         view.update(cx, |view, cx| {
             view.refresh_acp_agents_from(
                 vec![
-                    AcpAgentConfig::new("codex", "Codex", "codex"),
-                    AcpAgentConfig::new("opencode", "OpenCode", "opencode"),
+                    AcpAgentEntry::ready(AcpAgentConfig::new("codex", "Codex", "codex")),
+                    AcpAgentEntry::ready(AcpAgentConfig::new("opencode", "OpenCode", "opencode")),
                 ],
                 cx,
             );
@@ -3889,7 +3872,9 @@ mod tests {
 
     #[test]
     fn header_agent_switcher_keeps_local_available_while_acp_connects() {
-        let acp_agents = vec![AcpAgentConfig::new("codex", "Codex", "codex")];
+        let acp_agents = vec![AcpAgentEntry::ready(AcpAgentConfig::new(
+            "codex", "Codex", "codex",
+        ))];
         let options = composer_agent_options(Backend::Local, &acp_agents, None, true);
 
         assert!(!agent_option_disabled(&options[0]));
@@ -4657,10 +4642,25 @@ mod tests {
         let json = cx
             .debug_bounds("agent-tool-json-block")
             .expect("tool json block should render");
+        let frame = cx
+            .debug_bounds("agent-tool-json-frame")
+            .expect("tool json frame should render");
+        let input = cx
+            .debug_bounds("agent-tool-json-input-slot")
+            .expect("tool json input slot should render");
 
         assert!(
             json.size.width > column.size.width * 0.75,
             "tool confirm json block should use the available sidebar column width: column={column:?}, json={json:?}"
+        );
+        assert!(
+            frame.size.width > column.size.width * 0.75,
+            "tool confirm json frame should use the available sidebar column width: column={column:?}, frame={frame:?}"
+        );
+        assert!(frame.right() <= json.right());
+        assert!(
+            input.size.width > column.size.width * 0.75,
+            "tool confirm json input should use the available sidebar column width: column={column:?}, input={input:?}"
         );
     }
 

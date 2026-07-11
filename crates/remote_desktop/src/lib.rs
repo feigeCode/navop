@@ -5,6 +5,7 @@ pub mod framebuffer;
 pub mod helper_protocol;
 pub mod input;
 pub mod output;
+pub mod output_mailbox;
 pub mod provider;
 pub mod provider_registry;
 pub mod runtime;
@@ -14,6 +15,7 @@ pub mod backends;
 pub use backend::{RemoteDesktopBackend, RemoteDesktopProviderVersionError, create_backend};
 pub use capabilities::{RemoteDesktopCapabilities, ResizeSupport};
 pub use config::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopSize};
+pub use connection_tunnel::{ProxyTunnelConfig, ProxyTunnelType};
 pub use input::{RemoteDesktopInput, RemoteKey, RemoteMouseButton, RemoteNamedKey};
 pub use output::RemoteDesktopOutput;
 pub use provider::{

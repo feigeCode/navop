@@ -3,9 +3,10 @@ use crate::{
     RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopProviderManifest,
     RemoteDesktopProviderRegistry, RemoteDesktopRuntime, RemoteDesktopSize,
 };
+use connection_tunnel::{TunnelGuard, start_proxy_tunnel};
 
-const MIN_RDP_PROVIDER_VERSION: &str = "0.1.3";
-const MIN_VNC_PROVIDER_VERSION: &str = "0.1.1";
+const MIN_RDP_PROVIDER_VERSION: &str = "0.1.4";
+const MIN_VNC_PROVIDER_VERSION: &str = "0.1.2";
 
 pub trait RemoteDesktopBackend: Send + 'static {
     fn name(&self) -> &'static str {
@@ -51,6 +52,34 @@ pub fn create_backend_with_registry(
     validate_provider_requirement(&provider)?;
     let helper = provider_helper_process(&provider);
     Ok(Box::new(RdpBackend::new_with_helper(options, helper)))
+}
+
+pub(crate) fn resolve_proxy_options(
+    mut options: RemoteDesktopConnectionOptions,
+) -> anyhow::Result<(RemoteDesktopConnectionOptions, Option<TunnelGuard>)> {
+    let Some(proxy) = options.proxy.take() else {
+        return Ok((options, None));
+    };
+    let (host, port) = split_destination(&options.destination)?;
+    let tunnel = start_proxy_tunnel(proxy, host, port)?;
+    let local_addr = tunnel.local_addr();
+    options.destination = local_addr.to_string();
+    Ok((options, Some(tunnel.into())))
+}
+
+fn split_destination(destination: &str) -> anyhow::Result<(String, u16)> {
+    let (host, port) = destination
+        .trim()
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow::anyhow!("remote desktop destination must include a port"))?;
+    let host = host.trim_matches(['[', ']']).trim();
+    if host.is_empty() {
+        anyhow::bail!("remote desktop destination host is required");
+    }
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| anyhow::anyhow!("remote desktop destination port is invalid"))?;
+    Ok((host.to_string(), port))
 }
 
 fn validate_provider_requirement(provider: &RemoteDesktopProviderManifest) -> anyhow::Result<()> {
@@ -140,6 +169,7 @@ mod tests {
         RemoteDesktopConnectionOptions, RemoteDesktopProtocol, RemoteDesktopProviderRegistry,
         backend::RemoteDesktopProviderVersionError,
     };
+    use connection_tunnel::{ProxyTunnelConfig, ProxyTunnelType, TunnelGuard};
 
     #[test]
     fn create_backend_with_registry_requires_installed_provider() {
@@ -182,7 +212,7 @@ mod tests {
             "rdp",
             "RDP",
             "rdp",
-            "0.1.2",
+            "0.1.3",
             "./onetcli-rdp-helper",
         );
         let registry = RemoteDesktopProviderRegistry::load_from_dir(temp.path()).unwrap();
@@ -199,8 +229,8 @@ mod tests {
             .downcast_ref::<RemoteDesktopProviderVersionError>()
             .expect("version error");
         assert_eq!(RemoteDesktopProtocol::Rdp, version_error.protocol);
-        assert_eq!("0.1.2", version_error.installed);
-        assert_eq!("0.1.3", version_error.required);
+        assert_eq!("0.1.3", version_error.installed);
+        assert_eq!("0.1.4", version_error.required);
         assert!(!version_error.invalid);
     }
 
@@ -212,7 +242,7 @@ mod tests {
             "vnc",
             "VNC",
             "vnc",
-            "0.1.0",
+            "0.1.1",
             "./onetcli-vnc-helper",
         );
         let registry = RemoteDesktopProviderRegistry::load_from_dir(temp.path()).unwrap();
@@ -229,9 +259,36 @@ mod tests {
             .downcast_ref::<RemoteDesktopProviderVersionError>()
             .expect("version error");
         assert_eq!(RemoteDesktopProtocol::Vnc, version_error.protocol);
-        assert_eq!("0.1.0", version_error.installed);
-        assert_eq!("0.1.1", version_error.required);
+        assert_eq!("0.1.1", version_error.installed);
+        assert_eq!("0.1.2", version_error.required);
         assert!(!version_error.invalid);
+    }
+
+    #[test]
+    fn proxied_options_use_loopback_destination_and_keep_guard() {
+        let mut options = options(RemoteDesktopProtocol::Rdp);
+        options.proxy = Some(ProxyTunnelConfig {
+            proxy_type: ProxyTunnelType::Socks5,
+            host: "127.0.0.1".to_string(),
+            port: 9,
+            username: None,
+            password: None,
+        });
+
+        let (resolved, guard) = super::resolve_proxy_options(options).unwrap();
+
+        let destination = resolved
+            .destination
+            .split_once(':')
+            .expect("proxied destination should contain a port");
+        assert!(
+            destination
+                .0
+                .parse::<std::net::IpAddr>()
+                .unwrap()
+                .is_loopback()
+        );
+        assert!(matches!(guard, Some(TunnelGuard::Proxy(_))));
     }
 
     fn options(protocol: RemoteDesktopProtocol) -> RemoteDesktopConnectionOptions {
@@ -242,6 +299,7 @@ mod tests {
             password: None,
             domain: None,
             read_only: false,
+            proxy: None,
         }
     }
 

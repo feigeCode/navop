@@ -6,9 +6,9 @@
 //! - Selection and search highlighting
 //! - Theme colors support
 
+use crate::TerminalTheme;
 use crate::addon::{AddonManager, CellDecoration, DecorationSpan};
 use crate::view::block_selection::BlockSelectionBounds;
-use crate::TerminalTheme;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::selection::SelectionRange;
 use alacritty_terminal::term::cell::Flags;
@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 use terminal::pty_backend::GpuiEventProxy;
-
 
 /// 预缓存的字体变体，避免每帧重复创建 Font 对象
 #[derive(Clone)]
@@ -423,6 +422,36 @@ struct CachedCursor {
     column: usize,
     line: usize,
     shape: CursorShape,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BlockCursorGlyph {
+    character: char,
+    font_role: TextRunFontRole,
+    bold: bool,
+    italic: bool,
+    cell_width_cols: usize,
+}
+
+fn block_cursor_glyph_at(line: &CachedLine, column: usize) -> Option<BlockCursorGlyph> {
+    line.text_runs.iter().find_map(|run| {
+        let offset = column.checked_sub(run.start_col)?;
+        if run.cell_width_cols == 0
+            || offset >= run.column_count
+            || offset % run.cell_width_cols != 0
+        {
+            return None;
+        }
+
+        let character = run.text.chars().nth(offset / run.cell_width_cols)?;
+        Some(BlockCursorGlyph {
+            character,
+            font_role: run.font_role,
+            bold: run.bold,
+            italic: run.italic,
+            cell_width_cols: run.cell_width_cols,
+        })
+    })
 }
 
 enum DamageSnapshot {
@@ -1411,7 +1440,44 @@ impl Element for TerminalElementImpl {
 
                     match cursor.shape {
                         CursorShape::Block => {
-                            window.paint_quad(fill(cursor_bounds, cursor_color));
+                            let glyph =
+                                block_cursor_glyph_at(&self.lines[cursor.line], cursor.column);
+                            let cursor_width_cols = glyph.map_or(1, |glyph| glyph.cell_width_cols);
+                            let block_bounds = Bounds::new(
+                                cursor_bounds.origin,
+                                size(tb.cell_width * cursor_width_cols as f32, tb.cell_height),
+                            );
+                            window.paint_quad(fill(block_bounds, cursor_color));
+
+                            if let Some(glyph) = glyph {
+                                let text = glyph.character.to_string();
+                                let text_len = text.len();
+                                let font = fonts.get(glyph.font_role, glyph.bold, glyph.italic);
+                                let shaped = window.text_system().shape_line(
+                                    text.into(),
+                                    self.font_size,
+                                    &[TextRun {
+                                        len: text_len,
+                                        font: font.clone(),
+                                        color: ensure_minimum_contrast(
+                                            self.custom_background,
+                                            cursor_color,
+                                        ),
+                                        background_color: None,
+                                        underline: None,
+                                        strikethrough: None,
+                                    }],
+                                    Some(block_bounds.size.width),
+                                );
+                                let _ = shaped.paint(
+                                    block_bounds.origin,
+                                    tb.cell_height,
+                                    TextAlign::Left,
+                                    None,
+                                    window,
+                                    cx,
+                                );
+                            }
                         }
                         CursorShape::Underline => {
                             let h = px(2.0);
@@ -1660,8 +1726,8 @@ fn indexed_color_to_hsla(idx: u8) -> Hsla {
 #[cfg(test)]
 mod tests {
     use super::{
-        block_element_geometry, terminal_text_font_role, BlockRect, CellData, RenderCache,
-        TextRunFontRole,
+        BlockRect, CachedLine, CachedTextRun, CellData, RenderCache, TextRunFontRole,
+        block_cursor_glyph_at, block_element_geometry, terminal_text_font_role,
     };
     use alacritty_terminal::term::cell::Flags;
     use alacritty_terminal::term::color::Colors;
@@ -1748,6 +1814,59 @@ mod tests {
         assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('协'));
         assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('，'));
         assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('あ'));
+    }
+
+    #[test]
+    fn block_cursor_glyph_keeps_the_character_under_the_cursor() {
+        let line = CachedLine {
+            background_rects: Vec::new(),
+            underline_rects: Vec::new(),
+            text_runs: vec![CachedTextRun {
+                start_col: 0,
+                text: "vim".to_string(),
+                color: gpui::Hsla::white(),
+                bold: false,
+                italic: false,
+                underline: false,
+                cell_width_cols: 1,
+                column_count: 3,
+                font_role: TextRunFontRole::Primary,
+            }],
+            block_glyphs: Vec::new(),
+        };
+
+        let glyph = block_cursor_glyph_at(&line, 1).expect("cursor glyph");
+
+        assert_eq!('i', glyph.character);
+        assert_eq!(1, glyph.cell_width_cols);
+        assert_eq!(TextRunFontRole::Primary, glyph.font_role);
+    }
+
+    #[test]
+    fn block_cursor_glyph_preserves_wide_character_width() {
+        let line = CachedLine {
+            background_rects: Vec::new(),
+            underline_rects: Vec::new(),
+            text_runs: vec![CachedTextRun {
+                start_col: 2,
+                text: "协同".to_string(),
+                color: gpui::Hsla::white(),
+                bold: true,
+                italic: false,
+                underline: false,
+                cell_width_cols: 2,
+                column_count: 4,
+                font_role: TextRunFontRole::CjkFallback,
+            }],
+            block_glyphs: Vec::new(),
+        };
+
+        let glyph = block_cursor_glyph_at(&line, 4).expect("wide cursor glyph");
+
+        assert_eq!('同', glyph.character);
+        assert_eq!(2, glyph.cell_width_cols);
+        assert!(glyph.bold);
+        assert_eq!(TextRunFontRole::CjkFallback, glyph.font_role);
     }
 
     #[test]

@@ -765,7 +765,8 @@ fn tool_card_json_block(
                 .child(label),
         )
         .child(
-            div()
+            h_flex()
+                .debug_selector(|| "agent-tool-json-frame".to_string())
                 .w_full()
                 .min_w_0()
                 .h(height)
@@ -775,15 +776,22 @@ fn tool_card_json_block(
                 .bg(theme.code_background)
                 .overflow_hidden()
                 .child(
-                    Input::new(&input)
-                        .bare()
-                        .w_full()
+                    div()
+                        .debug_selector(|| "agent-tool-json-input-slot".to_string())
+                        .flex_1()
                         .min_w_0()
                         .h_full()
-                        .appearance(false)
-                        .disabled(true)
-                        .text_xs()
-                        .text_color(theme.code_foreground),
+                        .child(
+                            Input::new(&input)
+                                .bare()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .appearance(false)
+                                .disabled(true)
+                                .text_xs()
+                                .text_color(theme.code_foreground),
+                        ),
                 ),
         )
         .into_any_element()

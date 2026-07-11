@@ -188,6 +188,7 @@ impl Fixture {
             service_name: None,
             sid: None,
             workspace_id: None,
+            proxy: None,
             extra_params: Default::default(),
         };
         let mut conn = StoredConnection::new_database(name.to_string(), params, None);

@@ -16,7 +16,7 @@ use tool_runtime::{
 };
 
 #[tokio::test]
-async fn agent_auto_mode_requests_approval_before_public_mcp_open_world_tool() {
+async fn agent_auto_mode_executes_public_mcp_open_world_tool_without_approval() {
     let handler = Arc::new(RuntimeOpenWorldTool::default());
     let agent_registry = public_mcp_agent_registry(handler.clone());
     let runtime = agent_runtime(agent_registry);
@@ -32,27 +32,10 @@ async fn agent_auto_mode_requests_approval_before_public_mcp_open_world_tool() {
         .await
         .expect("agent turn should run");
 
-    let call_id = match outcome {
-        TaskOutcome::NeedUserInput {
-            pending_tool_call_id: Some(call_id),
-            tool_name: Some(tool_name),
-            arguments: Some(arguments),
-            ..
-        } => {
-            assert_eq!("terminal_exec", tool_name.as_str());
-            assert_eq!("df -h", arguments["command"]);
-            call_id
-        }
-        other => panic!("open-world tool should pause for approval, got {other:?}"),
-    };
-    assert_eq!(0, handler.call_count());
-
-    let outcome = runtime
-        .approve_pending_tool(session.id(), &call_id)
-        .await
-        .expect("approval should resume the turn");
-
-    assert!(matches!(outcome, TaskOutcome::Completed { .. }));
+    assert!(matches!(
+        outcome,
+        TaskOutcome::Completed { answer: Some(answer) } if answer == "磁盘信息已查看。"
+    ));
     assert_eq!(1, handler.call_count());
     assert_eq!(json!({ "command": "df -h" }), handler.last_input());
 }

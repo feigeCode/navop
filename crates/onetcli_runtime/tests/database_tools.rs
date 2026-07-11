@@ -296,6 +296,7 @@ fn sqlite_config(path: impl Into<String>) -> DbConnectionConfig {
         service_name: None,
         sid: None,
         workspace_id: None,
+        proxy: None,
         extra_params: Default::default(),
     }
 }

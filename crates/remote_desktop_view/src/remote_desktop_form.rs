@@ -1,5 +1,6 @@
 mod inputs;
 mod persistence;
+mod proxy;
 mod selects;
 mod view;
 
@@ -10,7 +11,9 @@ use one_core::cloud_sync::{
     GlobalCloudUser, TeamOption, ensure_team_key_ready_for_save, get_cached_team_options,
 };
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
-use one_core::storage::{RemoteDesktopParams, RemoteDesktopProtocol, StoredConnection, Workspace};
+use one_core::storage::{
+    ProxyType, RemoteDesktopParams, RemoteDesktopProtocol, StoredConnection, Workspace,
+};
 use rust_i18n::t;
 
 use self::inputs::{create_inputs, input_text, non_empty_text, parse_u16};
@@ -40,9 +43,15 @@ pub struct RemoteDesktopFormWindow {
     username_input: Entity<InputState>,
     password_input: Entity<InputState>,
     domain_input: Entity<InputState>,
+    proxy_host_input: Entity<InputState>,
+    proxy_port_input: Entity<InputState>,
+    proxy_username_input: Entity<InputState>,
+    proxy_password_input: Entity<InputState>,
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
     read_only: bool,
+    proxy_enabled: bool,
+    proxy_type: ProxyType,
     sync_enabled: bool,
     error: Option<String>,
 }
@@ -87,9 +96,15 @@ impl RemoteDesktopFormWindow {
             username_input: inputs.username,
             password_input: inputs.password,
             domain_input: inputs.domain,
+            proxy_host_input: inputs.proxy_host,
+            proxy_port_input: inputs.proxy_port,
+            proxy_username_input: inputs.proxy_username,
+            proxy_password_input: inputs.proxy_password,
             workspace_select: create_workspace_select(&config, window, cx),
             team_select: create_team_select(&config, window, cx),
             read_only: false,
+            proxy_enabled: false,
+            proxy_type: ProxyType::Socks5,
             sync_enabled: config
                 .editing_connection
                 .as_ref()
@@ -143,6 +158,7 @@ impl RemoteDesktopFormWindow {
         self.domain_input
             .update(cx, |state, cx| state.set_value(&domain, window, cx));
         self.read_only = params.read_only;
+        self.apply_proxy(params.proxy, window, cx);
     }
 
     fn build_params(&self, cx: &App) -> Result<RemoteDesktopParams, String> {
@@ -151,6 +167,15 @@ impl RemoteDesktopFormWindow {
             return Err(t!("RemoteDesktopForm.host_required").to_string());
         }
         let port_label = t!("RemoteDesktopForm.label_port").to_string();
+        let proxy = proxy::build_proxy_config(
+            self.proxy_enabled,
+            self.proxy_type,
+            &input_text(&self.proxy_host_input, cx),
+            &input_text(&self.proxy_port_input, cx),
+            &input_text(&self.proxy_username_input, cx),
+            &input_text(&self.proxy_password_input, cx),
+        )
+        .map_err(proxy::proxy_error_message)?;
         Ok(RemoteDesktopParams {
             protocol: self.protocol,
             host,
@@ -159,6 +184,7 @@ impl RemoteDesktopFormWindow {
             password: non_empty_text(&self.password_input, cx),
             domain: non_empty_text(&self.domain_input, cx),
             read_only: self.read_only,
+            proxy,
         })
     }
 
