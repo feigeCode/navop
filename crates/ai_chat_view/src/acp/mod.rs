@@ -6,6 +6,9 @@
 //!
 //! 翻译层 [`translate`] 把 ACP `SessionUpdate` 映射为 `agent_runtime::RuntimeEvent`。
 
+mod auth;
+#[cfg(test)]
+mod auth_tests;
 mod config;
 mod connection;
 mod error;
@@ -15,6 +18,9 @@ mod permission;
 mod provider;
 mod state;
 mod translate;
+mod turn;
+#[cfg(test)]
+mod turn_tests;
 
 pub use config::{
     AcpAgentConfig, AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
