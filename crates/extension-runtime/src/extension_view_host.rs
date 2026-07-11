@@ -125,14 +125,14 @@ impl extension_view::ExtensionViewHost for MainExtensionViewHost {
         if summary.kind == extension_view::ExtensionKind::Language {
             gpui_component::highlighter::LanguageRegistry::singleton().unregister(&summary.name);
         }
-        reload_extension_runtime(cx);
+        reload_extension_runtime(Some(summary.kind), cx);
         let installed = self.list_installed()?;
         ensure_reloaded_path_present(summary, &installed)?;
         Ok(installed)
     }
 
     fn refresh_after_extension_change(&self, cx: &mut App) {
-        reload_extension_runtime(cx);
+        reload_extension_runtime(None, cx);
     }
 }
 
@@ -172,8 +172,17 @@ fn ensure_reloaded_path_present(
     );
 }
 
-fn reload_extension_runtime(cx: &mut App) {
-    reload_language_extensions();
+fn should_reload_languages(kind: extension_view::ExtensionKind) -> bool {
+    matches!(
+        kind,
+        extension_view::ExtensionKind::Language | extension_view::ExtensionKind::LanguageBundle
+    )
+}
+
+fn reload_extension_runtime(kind: Option<extension_view::ExtensionKind>, cx: &mut App) {
+    if kind.is_none_or(should_reload_languages) {
+        reload_language_extensions();
+    }
     crate::refresh_global_runtime_catalog(cx);
     crate::extension::refresh_runtime_contributions(cx);
 }
@@ -389,6 +398,28 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn per_item_reload_only_reloads_language_registry_for_language_extensions() {
+        assert!(should_reload_languages(
+            extension_view::ExtensionKind::Language
+        ));
+        assert!(should_reload_languages(
+            extension_view::ExtensionKind::LanguageBundle
+        ));
+        for kind in [
+            extension_view::ExtensionKind::DatabaseDriver,
+            extension_view::ExtensionKind::RemoteDesktopProvider,
+            extension_view::ExtensionKind::McpHelper,
+            extension_view::ExtensionKind::AcpAgent,
+            extension_view::ExtensionKind::Composite,
+        ] {
+            assert!(
+                !should_reload_languages(kind),
+                "unexpected reload for {kind:?}"
+            );
+        }
+    }
 
     #[test]
     fn to_view_summary_preserves_database_driver_metadata() {

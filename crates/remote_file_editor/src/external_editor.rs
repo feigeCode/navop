@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, anyhow};
+use extension_runtime::extension::manifest::RemoteFileEditorLaunchMode;
 use extension_runtime::{GlobalExtensionRuntimeCatalog, RegisteredRemoteFileEditorContribution};
 use futures::channel::mpsc;
 use gpui::{App, AppContext as _, Context, Window};
@@ -36,6 +37,7 @@ pub(crate) struct ExternalEditLaunch {
     pub(crate) remote_path: String,
     pub(crate) editor_key: String,
     pub(crate) program: String,
+    pub(crate) launch_mode: RemoteFileEditorLaunchMode,
     pub(crate) templates: Vec<String>,
     pub(crate) client: Arc<Mutex<RusshSftpClient>>,
     pub(crate) check_conflict: bool,
@@ -108,6 +110,7 @@ pub fn open_remote_file_external_editor<T: 'static>(
         remote_path: request.remote_path,
         editor_key: request.editor_key,
         program,
+        launch_mode: editor.command.launch_mode,
         templates: templates.to_vec(),
         client: request.client,
         check_conflict,
@@ -161,7 +164,7 @@ impl ExternalEditLaunch {
                 name: file_name(&self.remote_path),
             },
         );
-        launch_external_editor(&self.program, &args)?;
+        launch_external_editor(&self.program, &args, self.launch_mode)?;
         let (sender, receiver) = mpsc::unbounded();
         let watcher = watch_local_file(prepared.local_path.clone(), sender)?;
         let config = ExternalEditControllerConfig {

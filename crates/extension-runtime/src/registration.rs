@@ -207,6 +207,7 @@ impl ExtensionRuntimeCatalog {
                     file_masks: editor.file_masks.clone(),
                     priority: editor.priority,
                     command: RegisteredRemoteFileEditorCommand {
+                        launch_mode: editor.command.launch_mode,
                         program_candidates: editor.command.program_candidates.clone(),
                         args: editor.command.args.clone(),
                     },

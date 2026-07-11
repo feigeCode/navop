@@ -352,6 +352,20 @@
 - **验证方式**：补结构性回归测试，断言外层有 flex/h_full/min/overflow_hidden 边界、内层有 size_full/overflow_y_scrollbar；运行相关 UI 模块的定向 `cargo test`，必要时手工打开窗口验证滚轮。
 - **适用范围**：GPUI popup、dialog、tab 面板中需要滚动的列表、卡片网格、表单内容区域。
 
+- **标题**：扩展管理器的单项 reload 必须按扩展 kind 缩小刷新范围
+- **触发信号**：重新加载一个静态 composite、数据库驱动或 provider 时，UI 长时间无响应，日志出现大量 `cranelift_codegen`、`wasmtime` 或 Tree-sitter 语言扩展编译记录。
+- **根因 / 约束**：统一 reload 路径如果无条件调用 `load_language_extensions_from_root`，会在 GPUI 线程同步重新编译全部语言 WASM；单个非语言扩展 reload 实际只需要刷新 runtime catalog 和贡献点。
+- **正确做法**：`Language` 与 `LanguageBundle` 单项 reload 才重载语言 registry；其他 kind 跳过语言加载，只调用 `refresh_global_runtime_catalog` 和 `refresh_runtime_contributions`。安装/卸载的无 kind 全量刷新可单独保留。
+- **验证方式**：用纯 reload-scope contract 覆盖所有 `ExtensionKind`，并手工重新加载静态 composite，确认日志不再出现 Cranelift/Wasmtime 语言编译且 busy 状态及时清除。
+- **适用范围**：`crates/extension-runtime/src/extension_view_host.rs`、扩展管理页的重新加载、安装与卸载刷新路径。
+
+- **标题**：macOS GUI 编辑器不要直接依赖 Bundle 内部 executable 处理重复打开
+- **触发信号**：第一次能打开外部编辑器，但编辑器已运行时再次打开远程文件没有反应、产生第二个无效进程，或编辑器随 OnetCli 生命周期收到 `SIGHUP`。
+- **根因 / 约束**：部分 macOS 应用（例如 Notepad--）依赖 LaunchServices 的 `QEvent::FileOpen` 向已有实例交付文件；直接执行 `.app/Contents/MacOS/*` 会绕过该机制。编辑器安装检测仍应检查真实 executable，不能简单把 `/usr/bin/open` 当作可用性候选。
+- **正确做法**：manifest 用 `launchMode: macos_open` 声明 LaunchServices 模式，`programCandidates` 继续负责真实 executable 检测与首次确认；Host 从 executable 推导 `.app` Bundle，再以参数数组执行 `/usr/bin/open -a <bundle> <file>`，不经过 shell。Linux/Windows 和未声明该模式的编辑器保持 direct launch。
+- **验证方式**：覆盖默认 direct、manifest/runtime mode 传递、`.app` 推导、非 Bundle 拒绝及完整 `open` argv；在编辑器已运行时连续打开两个文件，确认复用同一实例并正确收到文件。
+- **适用范围**：`crates/remote_file_editor`、`contributes.remoteFileEditors` manifest/runtime contract，以及所有 macOS `.app` 外部编辑器扩展。
+
 - **标题**：可见终端执行不能用 EOF 绑定 Agent 取消与命令完成
 - **触发信号**：`terminal.exec` 执行 `command &`、`npm run dev &` 或 `nohup command &` 后一直 pending；点击 Agent 的 × 后对话仍显示运行中；或取消 Agent 时误向终端发送 Ctrl+C、终止仍在运行的命令。
 - **根因 / 约束**：后台进程会继承 PTY/stdout/stderr，shell leader 退出不代表 reader 能收到 EOF。Agent turn、tool waiter 与终端命令若共用同一个 future，进程或 FD 清理就会反向阻塞对话终态。可见终端命令由用户终端拥有，Agent 取消无权终止它。
