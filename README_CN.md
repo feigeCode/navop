@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **本仓库已经归档，OnetCli 已停止维护。**
+> OnetCli 今后不再提供新功能、问题修复或新版本发布。项目后续开发已迁移至 **Navop**：
+> [官方网站](https://navop.dev) · [GitHub 仓库](https://github.com/feigeCode/navop)
+
 <div align="center">
   <p>
     <img src="logo.svg" alt="OnetCli" width="120" />
@@ -169,6 +174,8 @@ OnetCli 基于 GPUI 原生渲染，并持续优化高负载 UI 路径。近期�
 | [![扩展市场](extension.png)](extension.png) |
 
 ## 安装
+
+> OnetCli 下载内容仅作为历史版本保留。新用户请使用仍在持续维护的后续项目 [Navop](https://navop.dev)。
 
 请从 [Releases](https://github.com/feigeCode/onetcli/releases/latest) 页面下载最新版本。
 

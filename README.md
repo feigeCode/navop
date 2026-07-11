@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **This repository has been archived and OnetCli is no longer maintained.**
+> OnetCli will not receive new features, bug fixes, or releases. Active development has moved to **Navop**:
+> [Official Website](https://navop.dev) · [GitHub Repository](https://github.com/feigeCode/navop)
+
 <div align="center">
   <p>
     <img src="logo.svg" alt="OnetCli" width="120" />
@@ -169,6 +174,8 @@ Sync connections and settings across devices with encrypted key storage based on
 | [![Extensions](extension.png)](extension.png) |
 
 ## Install
+
+> OnetCli downloads are retained as historical releases. New users should use [Navop](https://navop.dev), the actively maintained successor to OnetCli.
 
 Download the latest build from the [Releases](https://github.com/feigeCode/onetcli/releases/latest) page.
 
