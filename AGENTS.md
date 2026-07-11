@@ -366,6 +366,13 @@
 - **验证方式**：覆盖默认 direct、manifest/runtime mode 传递、`.app` 推导、非 Bundle 拒绝及完整 `open` argv；在编辑器已运行时连续打开两个文件，确认复用同一实例并正确收到文件。
 - **适用范围**：`crates/remote_file_editor`、`contributes.remoteFileEditors` manifest/runtime contract，以及所有 macOS `.app` 外部编辑器扩展。
 
+- **标题**：外部编辑器自动上传必须以磁盘写盘为边界，并用轮询补偿 watcher 丢事件
+- **触发信号**：编辑器已经保存本地临时文件，但 OnetCli 偶发没有上传；或编辑器采用原子替换、文件系统 watcher 丢事件，导致只依赖事件监听不稳定。
+- **根因 / 约束**：OnetCli 无法访问第三方编辑器尚未写盘的内存 buffer，也不应修改编辑器配置或模拟保存快捷键；不同编辑器的文件事件语义不一致。
+- **正确做法**：Host 同时使用精确文件事件和定时轮询，先比较本地内容指纹，未变化时禁止远端 I/O；成功上传或远端重载后更新指纹以去重。全局自动上传关闭时，新会话不创建 watcher、poller 或上传 controller。
+- **验证方式**：覆盖默认设置、显式关闭、内容指纹变化/不变、远端重载指纹更新；手工验证 Zed 与 Notepad-- 保存后上传，以及关闭开关后远端不变。
+- **适用范围**：`crates/remote_file_editor`、远程文件编辑器设置及所有外部编辑器贡献。
+
 - **标题**：可见终端执行不能用 EOF 绑定 Agent 取消与命令完成
 - **触发信号**：`terminal.exec` 执行 `command &`、`npm run dev &` 或 `nohup command &` 后一直 pending；点击 Agent 的 × 后对话仍显示运行中；或取消 Agent 时误向终端发送 Ctrl+C、终止仍在运行的命令。
 - **根因 / 约束**：后台进程会继承 PTY/stdout/stderr，shell leader 退出不代表 reader 能收到 EOF。Agent turn、tool waiter 与终端命令若共用同一个 future，进程或 FD 清理就会反向阻塞对话终态。可见终端命令由用户终端拥有，Agent 取消无权终止它。

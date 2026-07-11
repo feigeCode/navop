@@ -1180,6 +1180,14 @@ Settings:
         en: No preference
         zh-CN: 无偏好
         zh-HK: 無偏好
+      auto_upload:
+        en: Automatically Upload External Editor Changes
+        zh-CN: 自动上传外部编辑器的修改
+        zh-HK: 自動上傳外部編輯器的修改
+      auto_upload_desc:
+        en: Automatically upload changes after an external editor saves the local temporary file
+        zh-CN: 外部编辑器保存本地临时文件后，自动将修改上传到远程服务器
+        zh-HK: 外部編輯器儲存本機暫存檔案後，自動將修改上傳到遠端伺服器
       conflict_check:
         en: Check Remote Changes Before Upload
         zh-CN: 上传前检查远程文件变更

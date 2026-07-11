@@ -1,5 +1,7 @@
 # External Editor Autosave and Auto Upload Implementation Plan
 
+> **Superseded by user clarification:** Do not change editor/extension behavior. The active plan is `2026-07-11-external-file-monitoring-auto-upload.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a generic extension contract for per-session external-editor autosave preparation and a default-on global setting that controls whether saved external-editor changes are uploaded automatically.

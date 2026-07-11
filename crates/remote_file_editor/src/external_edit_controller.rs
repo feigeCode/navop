@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{collections::hash_map::DefaultHasher, hash::Hasher as _};
 
 use anyhow::{Result, anyhow};
 use futures::{StreamExt as _, channel::mpsc};
@@ -17,20 +18,26 @@ use crate::external_session::snapshot_from_metadata;
 use crate::{MAX_EDITABLE_FILE_SIZE, RemoteFileSnapshot, UploadDecision, decide_upload};
 
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const RELOAD_SUPPRESSION: Duration = Duration::from_secs(2);
 
-struct SyncCheck {
-    current: Option<RemoteFileSnapshot>,
-    bytes: Vec<u8>,
+enum SyncCheck {
+    Unchanged,
+    Changed {
+        current: Option<RemoteFileSnapshot>,
+        bytes: Vec<u8>,
+        local_hash: u64,
+    },
 }
 
 struct ConflictPrompt {
     bytes: Vec<u8>,
+    local_hash: u64,
     decision: UploadDecision,
 }
 
 struct SnapshotCompletion {
-    task: gpui::Task<Result<RemoteFileSnapshot>>,
+    task: gpui::Task<Result<(RemoteFileSnapshot, u64)>>,
     success_message: String,
 }
 
@@ -39,6 +46,7 @@ pub(crate) struct ExternalEditController {
     remote_path: String,
     local_path: PathBuf,
     snapshot: RemoteFileSnapshot,
+    last_local_hash: u64,
     check_conflict: bool,
     syncing: bool,
     pending_sync: bool,
@@ -51,6 +59,7 @@ pub(crate) struct ExternalEditControllerConfig {
     pub(crate) remote_path: String,
     pub(crate) local_path: PathBuf,
     pub(crate) snapshot: RemoteFileSnapshot,
+    pub(crate) initial_local_hash: u64,
     pub(crate) check_conflict: bool,
 }
 
@@ -61,6 +70,7 @@ impl ExternalEditController {
             remote_path: config.remote_path,
             local_path: config.local_path,
             snapshot: config.snapshot,
+            last_local_hash: config.initial_local_hash,
             check_conflict: config.check_conflict,
             syncing: false,
             pending_sync: false,
@@ -99,7 +109,13 @@ impl ExternalEditController {
         let client = self.client.clone();
         let remote_path = self.remote_path.clone();
         let local_path = self.local_path.clone();
+        let last_local_hash = self.last_local_hash;
         Tokio::spawn_result(cx, async move {
+            let bytes = tokio::fs::read(local_path).await?;
+            let local_hash = local_content_hash(&bytes);
+            if local_hash == last_local_hash {
+                return Ok(SyncCheck::Unchanged);
+            }
             let current = client
                 .lock()
                 .await
@@ -107,22 +123,35 @@ impl ExternalEditController {
                 .await?
                 .as_ref()
                 .map(snapshot_from_metadata);
-            let bytes = tokio::fs::read(local_path).await?;
-            Ok(SyncCheck { current, bytes })
+            Ok(SyncCheck::Changed {
+                current,
+                bytes,
+                local_hash,
+            })
         })
     }
 
     fn handle_sync_check(&mut self, check: SyncCheck, window: &mut Window, cx: &mut Context<Self>) {
+        let SyncCheck::Changed {
+            current,
+            bytes,
+            local_hash,
+        } = check
+        else {
+            self.finish_sync(window, cx);
+            return;
+        };
         let decision = if self.check_conflict {
-            decide_upload(self.snapshot, check.current)
+            decide_upload(self.snapshot, current)
         } else {
             UploadDecision::Upload
         };
         match decision {
-            UploadDecision::Upload => self.upload(check.bytes, window, cx),
+            UploadDecision::Upload => self.upload(bytes, local_hash, window, cx),
             UploadDecision::Conflict | UploadDecision::RemoteMissing => self.prompt_conflict(
                 ConflictPrompt {
-                    bytes: check.bytes,
+                    bytes,
+                    local_hash,
                     decision,
                 },
                 window,
@@ -159,7 +188,7 @@ impl ExternalEditController {
             .spawn(cx, async move |cx| {
                 let selection = answer.await.ok();
                 let _ = entity.update_in(cx, |this, window, cx| match selection {
-                    Some(0) => this.upload(conflict.bytes, window, cx),
+                    Some(0) => this.upload(conflict.bytes, conflict.local_hash, window, cx),
                     Some(1) => this.reload(window, cx),
                     _ => this.finish_sync(window, cx),
                 });
@@ -167,7 +196,13 @@ impl ExternalEditController {
             .detach();
     }
 
-    fn upload(&mut self, bytes: Vec<u8>, window: &mut Window, cx: &mut Context<Self>) {
+    fn upload(
+        &mut self,
+        bytes: Vec<u8>,
+        local_hash: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let client = self.client.clone();
         let remote_path = self.remote_path.clone();
         let task = Tokio::spawn_result(cx, async move {
@@ -177,7 +212,7 @@ impl ExternalEditController {
                 .stat(&remote_path)
                 .await?
                 .ok_or_else(|| anyhow!("Remote file disappeared after upload"))?;
-            Ok(snapshot_from_metadata(&metadata))
+            Ok((snapshot_from_metadata(&metadata), local_hash))
         });
         self.await_snapshot_task(
             SnapshotCompletion {
@@ -202,8 +237,9 @@ impl ExternalEditController {
             let bytes = client
                 .read_file(&remote_path, MAX_EDITABLE_FILE_SIZE)
                 .await?;
+            let local_hash = local_content_hash(&bytes);
             tokio::fs::write(local_path, bytes).await?;
-            Ok(snapshot_from_metadata(&metadata))
+            Ok((snapshot_from_metadata(&metadata), local_hash))
         });
         self.suppress_until = Some(std::time::Instant::now() + RELOAD_SUPPRESSION);
         self.await_snapshot_task(
@@ -225,9 +261,10 @@ impl ExternalEditController {
         let entity = cx.entity().clone();
         window
             .spawn(cx, async move |cx| match completion.task.await {
-                Ok(snapshot) => {
+                Ok((snapshot, local_hash)) => {
                     let _ = entity.update_in(cx, |this, window, cx| {
                         this.snapshot = snapshot;
+                        this.last_local_hash = local_hash;
                         window.push_notification(
                             Notification::success(completion.success_message),
                             cx,
@@ -265,6 +302,18 @@ impl ExternalEditWatchLoop {
     }
 
     pub(crate) fn run(mut self, window: &mut Window, cx: &mut gpui::App) {
+        let polling_controller = self.controller.clone();
+        window
+            .spawn(cx, async move |cx| {
+                loop {
+                    Timer::after(POLL_INTERVAL).await;
+                    Timer::after(SAVE_DEBOUNCE).await;
+                    let _ = polling_controller.update_in(cx, |this, window, cx| {
+                        this.request_sync(window, cx);
+                    });
+                }
+            })
+            .detach();
         window
             .spawn(cx, async move |cx| {
                 while self.receiver.next().await.is_some() {
@@ -279,6 +328,12 @@ impl ExternalEditWatchLoop {
     }
 }
 
+pub(crate) fn local_content_hash(bytes: &[u8]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hasher.write(bytes);
+    hasher.finish()
+}
+
 fn finish_with_error(
     entity: &Entity<ExternalEditController>,
     message: String,
@@ -288,4 +343,15 @@ fn finish_with_error(
         window.push_notification(Notification::error(message), cx);
         this.finish_sync(window, cx);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_content_hash;
+
+    #[test]
+    fn local_content_hash_changes_with_file_content() {
+        assert_eq!(local_content_hash(b"same"), local_content_hash(b"same"));
+        assert_ne!(local_content_hash(b"before"), local_content_hash(b"after"));
+    }
 }
