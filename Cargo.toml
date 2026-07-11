@@ -65,6 +65,7 @@ reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662
 ], package = "zed-reqwest", version = "0.12.15-zed" }
 
 anyhow = "1.0.102"
+argon2 = "0.5.3"
 clap = { version = "4.5", features = ["derive"] }
 log = "0.4"
 lsp-types = { version = "0.97.0", features = ["proposed"] }

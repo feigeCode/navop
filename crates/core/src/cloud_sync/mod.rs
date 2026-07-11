@@ -29,7 +29,12 @@ mod service;
 pub mod state_manager;
 pub mod supabase;
 pub mod sync_type;
+pub mod team_key_envelope;
 pub mod team_key_manager;
+
+#[cfg(test)]
+#[path = "team_key_envelope_tests.rs"]
+mod team_key_envelope_tests;
 mod workspace_sync;
 
 use std::sync::{Arc, RwLock};

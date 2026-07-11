@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
+argon2.workspace = true
 agent-client-protocol.workspace = true
 agent_runtime.workspace = true
 async-trait.workspace = true

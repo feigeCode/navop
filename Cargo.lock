@@ -8021,6 +8021,7 @@ dependencies = [
  "agent-client-protocol",
  "agent_runtime",
  "anyhow",
+ "argon2",
  "async-trait",
  "base64 0.22.1",
  "chrono",
