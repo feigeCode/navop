@@ -24,10 +24,14 @@ const MAX_DATA_CHARS: usize = 2000;
 const MAX_TERMINAL_EXEC_DATA_CHARS: usize = 64_000;
 const DELEGATE_TASK_TOOL: &str = "delegate_task";
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum TerminalEventPhase {
-    AwaitingInput,
-    Final,
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum TerminalEventKey {
+    AwaitingInput {
+        turn_id: TurnId,
+        call_id: Option<ToolCallId>,
+        question: String,
+    },
+    Final(TurnId),
 }
 
 /// Agent 对话转录状态。
@@ -45,8 +49,8 @@ pub struct AgentTranscript {
     active_subagents: Vec<SubAgentCardData>,
     /// 当前资源池 id -> label 快照,用于工具结果卡片展示目标资源。
     resource_labels: HashMap<String, String>,
-    /// 已归约的终态阶段,防止重复或冲突终态重复写转录与触发持久化。
-    terminal_events: HashSet<(TurnId, TerminalEventPhase)>,
+    /// 已归约的审批/终态事件,防止重复事件写入转录或触发持久化。
+    terminal_events: HashSet<TerminalEventKey>,
 }
 
 impl AgentTranscript {
@@ -643,15 +647,22 @@ impl AgentTranscript {
     }
 }
 
-fn terminal_event_key(event: &RuntimeEvent) -> Option<(TurnId, TerminalEventPhase)> {
+fn terminal_event_key(event: &RuntimeEvent) -> Option<TerminalEventKey> {
     match event {
-        RuntimeEvent::NeedUserInput { turn_id, .. } => {
-            Some((turn_id.clone(), TerminalEventPhase::AwaitingInput))
-        }
+        RuntimeEvent::NeedUserInput {
+            turn_id,
+            pending_tool_call_id,
+            question,
+            ..
+        } => Some(TerminalEventKey::AwaitingInput {
+            turn_id: turn_id.clone(),
+            call_id: pending_tool_call_id.clone(),
+            question: question.clone(),
+        }),
         RuntimeEvent::TurnCompleted { turn_id, .. }
         | RuntimeEvent::TurnCancelled { turn_id, .. }
         | RuntimeEvent::TurnFailed { turn_id, .. } => {
-            Some((turn_id.clone(), TerminalEventPhase::Final))
+            Some(TerminalEventKey::Final(turn_id.clone()))
         }
         _ => None,
     }
@@ -1286,6 +1297,50 @@ mod tests {
 
         let data = ToolConfirmCardData::from_json(&tr.messages[0].content).unwrap();
         assert_eq!(data.status, "approved");
+    }
+
+    #[test]
+    fn same_turn_accepts_distinct_tool_approval_requests() {
+        let mut tr = AgentTranscript::new();
+        let first_call = ToolCallId::from_string("call_first");
+        let second_call = ToolCallId::from_string("call_second");
+
+        tr.apply(&RuntimeEvent::NeedUserInput {
+            session_id: sid(),
+            turn_id: tid(),
+            question: "确认第一条命令吗？".into(),
+            pending_tool_call_id: Some(first_call.clone()),
+            tool_name: Some(ToolName::new("terminal_exec")),
+            arguments: Some(serde_json::json!({"command": "kill 334"})),
+            pending_tool_calls: Vec::new(),
+        });
+        tr.apply(&RuntimeEvent::ToolApprovalResolved {
+            session_id: sid(),
+            turn_id: tid(),
+            call_id: first_call,
+            approved: true,
+        });
+        let second = RuntimeEvent::NeedUserInput {
+            session_id: sid(),
+            turn_id: tid(),
+            question: "确认第二条命令吗？".into(),
+            pending_tool_call_id: Some(second_call),
+            tool_name: Some(ToolName::new("terminal_exec")),
+            arguments: Some(serde_json::json!({
+                "command": "nohup ping 127.0.0.1 > /tmp/ping.log 2>&1 &"
+            })),
+            pending_tool_calls: Vec::new(),
+        };
+
+        assert!(tr.apply(&second));
+        assert!(!tr.apply(&second));
+        assert_eq!(2, tr.messages.len());
+
+        let first = ToolConfirmCardData::from_json(&tr.messages[0].content).unwrap();
+        let second = ToolConfirmCardData::from_json(&tr.messages[1].content).unwrap();
+        assert_eq!("approved", first.status);
+        assert_eq!("call_second", second.call_id);
+        assert_eq!("pending", second.status);
     }
 
     #[test]
