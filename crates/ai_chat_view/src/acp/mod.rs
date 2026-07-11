@@ -8,6 +8,9 @@
 
 mod config;
 mod connection;
+mod error;
+#[cfg(test)]
+mod error_tests;
 mod permission;
 mod provider;
 mod state;
@@ -18,6 +21,7 @@ pub use config::{
     AcpTimeoutConfig, AcpTransport,
 };
 pub use connection::AcpConnection;
+pub use error::{AcpError, AcpErrorKind, AcpRecoveryAction};
 pub use permission::{
     AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome, AcpPermissionProvider,
     AcpPermissionRequest, set_acp_permission_provider,

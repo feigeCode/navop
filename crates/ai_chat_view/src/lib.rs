@@ -65,10 +65,10 @@ mod workbench_tab_tests;
 
 pub use acp::{
     AcpAgentConfig, AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
-    AcpConnection, AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome,
-    AcpPermissionProvider, AcpPermissionRequest, AcpTimeoutConfig, AcpTransport,
-    build_acp_agent_configs, build_acp_agent_entries, set_acp_agent_config_provider,
-    set_acp_permission_provider,
+    AcpConnection, AcpError, AcpErrorKind, AcpPermissionFuture, AcpPermissionOption,
+    AcpPermissionOutcome, AcpPermissionProvider, AcpPermissionRequest, AcpRecoveryAction,
+    AcpTimeoutConfig, AcpTransport, build_acp_agent_configs, build_acp_agent_entries,
+    set_acp_agent_config_provider, set_acp_permission_provider,
 };
 pub use agent_cards::{PlanCardData, PlanStepData, SubAgentCardData, ToolCardData};
 pub use agent_tab::{AGENT_TAB_CONTENT_KEY, AgentTabContent};
