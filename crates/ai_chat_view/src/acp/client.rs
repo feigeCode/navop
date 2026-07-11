@@ -10,11 +10,9 @@ pub(super) fn build_initialize_request() -> InitializeRequest {
 }
 
 fn build_client_capabilities() -> ClientCapabilities {
-    ClientCapabilities::new().fs(
-        FileSystemCapabilities::new()
-            .read_text_file(true)
-            .write_text_file(true),
-    )
+    ClientCapabilities::new().fs(FileSystemCapabilities::new()
+        .read_text_file(true)
+        .write_text_file(true))
 }
 
 pub(super) fn handle_read_text_file_request(
@@ -41,10 +39,7 @@ pub(super) fn handle_write_text_file_request(
     Ok(WriteTextFileResponse::new())
 }
 
-fn validate_workspace_path(
-    path: &Path,
-    root: &Path,
-) -> Result<(), agent_client_protocol::Error> {
+fn validate_workspace_path(path: &Path, root: &Path) -> Result<(), agent_client_protocol::Error> {
     if workspace_path_allowed(path, root) {
         Ok(())
     } else {

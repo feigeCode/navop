@@ -72,7 +72,10 @@ pub(crate) async fn authenticate(
             agent_name,
             "ACP Agent 鉴权失败",
         )
-        .with_detail(extract_rpc_error_detail(&error.message, error.data.as_ref()))
+        .with_detail(extract_rpc_error_detail(
+            &error.message,
+            error.data.as_ref(),
+        ))
         .with_recovery(AcpRecoveryAction::Authenticate)),
         Err(_) => Err(AcpError::new(
             AcpErrorKind::AuthenticationTimeout,
