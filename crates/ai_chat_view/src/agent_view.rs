@@ -4676,10 +4676,25 @@ mod tests {
         let json = cx
             .debug_bounds("agent-tool-json-block")
             .expect("tool json block should render");
+        let frame = cx
+            .debug_bounds("agent-tool-json-frame")
+            .expect("tool json frame should render");
+        let input = cx
+            .debug_bounds("agent-tool-json-input-slot")
+            .expect("tool json input slot should render");
 
         assert!(
             json.size.width > column.size.width * 0.75,
             "tool confirm json block should use the available sidebar column width: column={column:?}, json={json:?}"
+        );
+        assert!(
+            frame.size.width > column.size.width * 0.75,
+            "tool confirm json frame should use the available sidebar column width: column={column:?}, frame={frame:?}"
+        );
+        assert!(frame.right() <= json.right());
+        assert!(
+            input.size.width > column.size.width * 0.75,
+            "tool confirm json input should use the available sidebar column width: column={column:?}, input={input:?}"
         );
     }
 
