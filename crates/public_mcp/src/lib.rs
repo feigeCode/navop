@@ -9,5 +9,6 @@ pub mod registry;
 pub mod remote_ops;
 pub mod runtime;
 pub mod server;
+pub mod terminal_control;
 pub mod terminal_exec;
 pub mod tools;

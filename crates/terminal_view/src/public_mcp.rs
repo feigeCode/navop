@@ -1,8 +1,12 @@
 use gpui::{App, Global};
 use public_mcp::registry::{
     ConnectionState as McpConnectionState, PublicMcpRegistry, TerminalConnectionKind as McpKind,
+    TerminalControlCancellation, TerminalControlFuture, TerminalControlSessionHandle,
     TerminalExecCancellation, TerminalExecFuture, TerminalExecSessionHandle, TerminalSessionHandle,
     TerminalSessionSnapshot,
+};
+use public_mcp::terminal_control::{
+    TerminalControlAction, TerminalControlReadiness, TerminalControlRequest, TerminalControlResult,
 };
 use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, TerminalExecResult};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,6 +14,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use terminal::terminal::{ConnectionState, Terminal, TerminalConnectionKind};
 use terminal::{
+    TerminalControlAction as CoreTerminalControlAction, TerminalControlHandle,
+    TerminalControlReadiness as CoreTerminalControlReadiness,
+    TerminalControlRequest as CoreTerminalControlRequest,
     TerminalExecCompletion as CoreTerminalExecCompletion, TerminalExecHandle,
     TerminalExecRequest as CoreTerminalExecRequest,
 };
@@ -37,7 +44,9 @@ pub struct TerminalPublicMcpRegistration {
     state: Arc<Mutex<TerminalSessionSnapshot>>,
     registry: PublicMcpRegistry,
     exec: Arc<Mutex<Option<TerminalExecHandle>>>,
+    control: Arc<Mutex<Option<TerminalControlHandle>>>,
     terminal_exec_registered: AtomicBool,
+    terminal_control_registered: AtomicBool,
 }
 
 impl TerminalPublicMcpRegistration {
@@ -49,18 +58,32 @@ impl TerminalPublicMcpRegistration {
         self.refresh_parts(
             snapshot_for_terminal(self.session_id.clone(), terminal),
             terminal.external_exec_handle(),
+            terminal.external_control_handle(),
         );
     }
 
-    fn refresh_parts(&self, snapshot: TerminalSessionSnapshot, exec: Option<TerminalExecHandle>) {
+    fn refresh_parts(
+        &self,
+        snapshot: TerminalSessionSnapshot,
+        exec: Option<TerminalExecHandle>,
+        control: Option<TerminalControlHandle>,
+    ) {
         {
             let mut exec_slot = self.exec.lock().expect("public MCP exec lock poisoned");
             *exec_slot = exec;
+        }
+        {
+            let mut control_slot = self
+                .control
+                .lock()
+                .expect("public MCP control lock poisoned");
+            *control_slot = control;
         }
         let mut state = self.state.lock().expect("public MCP state lock poisoned");
         *state = snapshot;
         drop(state);
         self.ensure_terminal_exec_registered();
+        self.ensure_terminal_control_registered();
     }
 
     fn ensure_terminal_exec_registered(&self) {
@@ -79,11 +102,32 @@ impl TerminalPublicMcpRegistration {
             });
     }
 
+    fn ensure_terminal_control_registered(&self) {
+        let has_control = self
+            .control
+            .lock()
+            .expect("public MCP control lock poisoned")
+            .is_some();
+        if !has_control
+            || self
+                .terminal_control_registered
+                .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        self.registry
+            .register_terminal_control(ThreadSafeTerminalControlHandle {
+                state: self.state.clone(),
+                control: self.control.clone(),
+            });
+    }
+
     pub fn unregister(&self, cx: &App) {
         if let Some(registry) = registry(cx) {
             registry.unregister(&self.session_id);
             registry.unregister_remote_ops(&self.session_id);
             registry.unregister_terminal_exec(&self.session_id);
+            registry.unregister_terminal_control(&self.session_id);
         }
     }
 }
@@ -104,6 +148,7 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
         state: state.clone(),
     });
     let exec = Arc::new(Mutex::new(terminal.external_exec_handle()));
+    let control = Arc::new(Mutex::new(terminal.external_control_handle()));
 
     // 注册结构化远程操作桥。remote ops 与 terminal handle 共享同一份 state，一次 refresh 同步两者。
     if let Some(session_manager) = terminal.ssh_session_manager() {
@@ -121,9 +166,12 @@ pub fn register_terminal(terminal: &Terminal, cx: &App) -> Option<TerminalPublic
         state,
         registry: target_registry,
         exec,
+        control,
         terminal_exec_registered: AtomicBool::new(false),
+        terminal_control_registered: AtomicBool::new(false),
     };
     registration.ensure_terminal_exec_registered();
+    registration.ensure_terminal_control_registered();
     Some(registration)
 }
 
@@ -143,6 +191,52 @@ impl TerminalSessionHandle for ThreadSafeTerminalHandle {
 struct ThreadSafeTerminalExecHandle {
     state: Arc<Mutex<TerminalSessionSnapshot>>,
     exec: Arc<Mutex<Option<TerminalExecHandle>>>,
+}
+
+struct ThreadSafeTerminalControlHandle {
+    state: Arc<Mutex<TerminalSessionSnapshot>>,
+    control: Arc<Mutex<Option<TerminalControlHandle>>>,
+}
+
+impl TerminalControlSessionHandle for ThreadSafeTerminalControlHandle {
+    fn snapshot(&self) -> TerminalSessionSnapshot {
+        self.state
+            .lock()
+            .expect("public MCP state lock poisoned")
+            .clone()
+    }
+
+    fn control_terminal(
+        &self,
+        request: TerminalControlRequest,
+        cancellation: TerminalControlCancellation,
+    ) -> TerminalControlFuture {
+        let control_handle = self
+            .control
+            .lock()
+            .expect("public MCP control lock poisoned")
+            .clone();
+        Box::pin(async move {
+            let control_handle = control_handle
+                .ok_or_else(|| anyhow::anyhow!("terminal control handle is not ready"))?;
+            let target = request.target;
+            let output = control_handle
+                .control(
+                    CoreTerminalControlRequest {
+                        action: map_control_action(request.action),
+                    },
+                    cancellation,
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!(error))?;
+            Ok(TerminalControlResult {
+                target,
+                action: request.action,
+                sent: output.sent,
+                readiness_before: map_control_readiness(output.readiness_before),
+            })
+        })
+    }
 }
 
 impl TerminalExecSessionHandle for ThreadSafeTerminalExecHandle {
@@ -205,6 +299,21 @@ fn map_exec_completion(completion: CoreTerminalExecCompletion) -> TerminalExecCo
     }
 }
 
+fn map_control_action(action: TerminalControlAction) -> CoreTerminalControlAction {
+    match action {
+        TerminalControlAction::Interrupt => CoreTerminalControlAction::Interrupt,
+    }
+}
+
+fn map_control_readiness(readiness: CoreTerminalControlReadiness) -> TerminalControlReadiness {
+    match readiness {
+        CoreTerminalControlReadiness::SubmissionPending => {
+            TerminalControlReadiness::SubmissionPending
+        }
+        CoreTerminalControlReadiness::CommandRunning => TerminalControlReadiness::CommandRunning,
+    }
+}
+
 fn snapshot_for_terminal(session_id: String, terminal: &Terminal) -> TerminalSessionSnapshot {
     TerminalSessionSnapshot {
         session_id,
@@ -252,7 +361,17 @@ fn map_state(state: &ConnectionState) -> McpConnectionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use public_mcp::registry::{TerminalControlCancellation, TerminalControlSessionHandle};
+    use public_mcp::terminal_control::{
+        TerminalControlAction, TerminalControlReadiness, TerminalControlRequest,
+    };
     use std::sync::{Arc, Mutex};
+    use terminal::{
+        TerminalControlAction as CoreTerminalControlAction, TerminalControlHandle,
+        TerminalControlOutput as CoreTerminalControlOutput,
+        TerminalControlReadiness as CoreTerminalControlReadiness,
+        TerminalControlRequest as CoreTerminalControlRequest,
+    };
 
     fn snapshot(state: McpConnectionState) -> TerminalSessionSnapshot {
         TerminalSessionSnapshot {
@@ -280,6 +399,51 @@ mod tests {
                 Ok(output)
             })
         })
+    }
+
+    fn fake_control_handle(
+        requests: Arc<Mutex<Vec<CoreTerminalControlRequest>>>,
+    ) -> TerminalControlHandle {
+        TerminalControlHandle::new(move |request, _cancellation| {
+            let requests = requests.clone();
+            Box::pin(async move {
+                requests.lock().expect("requests lock").push(request);
+                Ok(CoreTerminalControlOutput {
+                    action: CoreTerminalControlAction::Interrupt,
+                    sent: true,
+                    readiness_before: CoreTerminalControlReadiness::CommandRunning,
+                })
+            })
+        })
+    }
+
+    #[tokio::test]
+    async fn terminal_control_handle_maps_interrupt_to_backend_control_handle() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let handle = ThreadSafeTerminalControlHandle {
+            state: Arc::new(Mutex::new(snapshot(McpConnectionState::Connected))),
+            control: Arc::new(Mutex::new(Some(fake_control_handle(requests.clone())))),
+        };
+
+        let result = handle
+            .control_terminal(
+                TerminalControlRequest {
+                    target: "terminal-1".to_string(),
+                    action: TerminalControlAction::Interrupt,
+                },
+                TerminalControlCancellation::new(),
+            )
+            .await
+            .expect("terminal control should call backend handle");
+
+        let recorded = requests.lock().unwrap();
+        assert_eq!(1, recorded.len());
+        assert_eq!(CoreTerminalControlAction::Interrupt, recorded[0].action);
+        assert!(result.sent);
+        assert_eq!(
+            TerminalControlReadiness::CommandRunning,
+            result.readiness_before
+        );
     }
 
     #[tokio::test]
@@ -406,7 +570,9 @@ mod tests {
             state,
             registry: registry.clone(),
             exec: Arc::new(Mutex::new(None)),
+            control: Arc::new(Mutex::new(None)),
             terminal_exec_registered: std::sync::atomic::AtomicBool::new(false),
+            terminal_control_registered: std::sync::atomic::AtomicBool::new(false),
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
 
@@ -421,6 +587,7 @@ mod tests {
                     duration_ms: 0,
                 },
             )),
+            None,
         );
 
         let sessions = registry.list_sessions();
