@@ -65,9 +65,9 @@ mod workbench_tab_tests;
 
 pub use acp::{
     AcpAgentConfig, AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
-    AcpConnectOutcome, AcpConnection, AcpError, AcpErrorKind, AcpPendingConnection,
-    AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome, AcpPermissionProvider,
-    AcpPermissionRequest, AcpRecoveryAction, AcpTimeoutConfig, AcpTransport,
+    AcpConnectOutcome, AcpConnection, AcpConnectionPhase, AcpError, AcpErrorKind,
+    AcpPendingConnection, AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome,
+    AcpPermissionProvider, AcpPermissionRequest, AcpRecoveryAction, AcpTimeoutConfig, AcpTransport,
     build_acp_agent_configs, build_acp_agent_entries, set_acp_agent_config_provider,
     set_acp_permission_provider,
 };

@@ -50,6 +50,10 @@ pub(crate) struct AcpUsage {
 }
 
 impl AcpSessionState {
+    pub(crate) fn phase(&self) -> &AcpConnectionPhase {
+        &self.phase
+    }
+
     pub(crate) fn transition(&mut self, next: AcpConnectionPhase) -> Result<(), String> {
         if phase_transition_allowed(&self.phase, &next) {
             self.phase = next;

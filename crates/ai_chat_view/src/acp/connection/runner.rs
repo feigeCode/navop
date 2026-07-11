@@ -58,15 +58,39 @@ pub(super) async fn connect(
     cx: &mut AsyncApp,
 ) -> anyhow::Result<AcpConnectOutcome> {
     let permission_provider = cx.update(|cx| acp_permission_provider(cx));
-    let shared = prepare_shared(config, cx);
+    let handle = cx.update(|cx| Tokio::handle(cx));
+    connect_with_parts(config, handle, permission_provider).await
+}
+
+pub(super) async fn connect_with_runtime(
+    config: &AcpAgentConfig,
+    handle: tokio::runtime::Handle,
+) -> anyhow::Result<AcpConnectOutcome> {
+    connect_with_parts(config, handle, None).await
+}
+
+async fn connect_with_parts(
+    config: &AcpAgentConfig,
+    handle: tokio::runtime::Handle,
+    permission_provider: Option<AcpPermissionProvider>,
+) -> anyhow::Result<AcpConnectOutcome> {
+    let shared = prepare_shared(config, handle);
     let mut spawned = spawn_client(shared.clone(), permission_provider);
     let ready_rx = spawned.ready_rx.take().expect("ready receiver must exist");
-    let ready = tokio::time::timeout(config.timeouts.connect, ready_rx).await;
+    let ready = wait_for_ready(&shared.handle, config.timeouts.connect, ready_rx).await;
     finish_connect(shared, spawned, ready)
 }
 
-fn prepare_shared(config: &AcpAgentConfig, cx: &mut AsyncApp) -> ConnectShared {
-    let handle = cx.update(|cx| Tokio::handle(cx));
+async fn wait_for_ready(
+    handle: &tokio::runtime::Handle,
+    timeout: std::time::Duration,
+    ready_rx: oneshot::Receiver<ReadyMessage>,
+) -> ReadyWait {
+    let _runtime = handle.enter();
+    tokio::time::timeout(timeout, ready_rx).await
+}
+
+fn prepare_shared(config: &AcpAgentConfig, handle: tokio::runtime::Handle) -> ConnectShared {
     let (events_tx, _keep) = broadcast::channel(512);
     let state = Arc::new(Mutex::new(AcpSessionState::default()));
     transition_state(&state, AcpConnectionPhase::Initializing);

@@ -51,12 +51,27 @@ impl AcpConnection {
         runner::connect(config, cx).await
     }
 
+    #[doc(hidden)]
+    pub async fn connect_with_runtime(
+        config: &AcpAgentConfig,
+        handle: tokio::runtime::Handle,
+    ) -> anyhow::Result<AcpConnectOutcome> {
+        runner::connect_with_runtime(config, handle).await
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<RuntimeEvent> {
         self.events_tx.subscribe()
     }
 
     pub fn session_id(&self) -> SessionId {
         self.session_id.clone()
+    }
+
+    pub fn phase(&self) -> AcpConnectionPhase {
+        self.state
+            .lock()
+            .map(|state| state.phase().clone())
+            .unwrap_or(AcpConnectionPhase::Closed)
     }
 
     pub(crate) fn state(&self) -> AcpSessionState {

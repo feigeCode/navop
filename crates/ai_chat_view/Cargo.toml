@@ -32,5 +32,11 @@ sum-tree.workspace = true
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 
+[[bin]]
+name = "fake_acp_agent"
+path = "tests/fixtures/fake_acp_agent.rs"
+test = false
+bench = false
+
 [lints]
 workspace = true
