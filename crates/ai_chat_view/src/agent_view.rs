@@ -39,7 +39,9 @@ use one_core::llm::{GlobalProviderState, LlmConnector, LlmProvider, ProviderConf
 use one_core::sidebar_contribution::SidebarPlacement;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::acp::{AcpAgentConfig, AcpConnection, AcpSessionState, build_acp_agent_configs};
+use crate::acp::{
+    AcpAgentConfig, AcpConnectOutcome, AcpConnection, AcpSessionState, build_acp_agent_configs,
+};
 use crate::agent_cards::{ApproveToolCall, PlanCardData, RejectToolCall, SubAgentCardData};
 use crate::agent_skills::AgentSkillState;
 use crate::agent_transcript::AgentTranscript;
@@ -1262,7 +1264,17 @@ impl AgentChatView {
                 cx.notify();
 
                 cx.spawn(async move |this, cx| {
-                    let connected = AcpConnection::connect(&config, cx).await;
+                    let connected = match AcpConnection::connect(&config, cx).await {
+                        Ok(AcpConnectOutcome::Ready(connection)) => Ok(connection),
+                        Ok(AcpConnectOutcome::AuthenticationRequired(pending)) => {
+                            let method = pending.methods().into_iter().next();
+                            match method {
+                                Some(method) => pending.authenticate(method).await.map_err(Into::into),
+                                None => Err(anyhow::anyhow!("ACP agent 未提供可用鉴权方式")),
+                            }
+                        }
+                        Err(error) => Err(error),
+                    };
                     let _ = this.update(cx, |this, cx| match connected {
                         Ok(conn) => {
                             if this.acp_connecting_id.as_ref() != Some(&config.id) {

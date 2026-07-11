@@ -2,10 +2,36 @@ use agent_client_protocol::schema::{
     AgentCapabilities, AvailableCommand, LoadSessionResponse, NewSessionResponse,
     ResumeSessionResponse, SessionConfigOption, SessionMode, SessionModeId, SessionUpdate,
 };
+use agent_runtime::TurnId;
+
+use super::AcpError;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum AcpConnectionPhase {
+    #[default]
+    Starting,
+    Initializing,
+    AuthenticationRequired {
+        methods: Vec<String>,
+    },
+    Authenticating {
+        method_id: String,
+    },
+    CreatingSession,
+    Ready,
+    RunningTurn {
+        turn_id: TurnId,
+    },
+    Failed {
+        error: AcpError,
+    },
+    Closed,
+}
 
 /// ACP 会话状态快照。用于保存协议层元数据,不直接承担渲染职责。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct AcpSessionState {
+    phase: AcpConnectionPhase,
     agent_capabilities: AgentCapabilities,
     available_commands: Vec<AvailableCommand>,
     current_mode_id: Option<SessionModeId>,
@@ -24,6 +50,15 @@ pub(crate) struct AcpUsage {
 }
 
 impl AcpSessionState {
+    pub(crate) fn transition(&mut self, next: AcpConnectionPhase) -> Result<(), String> {
+        if phase_transition_allowed(&self.phase, &next) {
+            self.phase = next;
+            Ok(())
+        } else {
+            Err(format!("{:?} -> {:?}", self.phase, next))
+        }
+    }
+
     pub(crate) fn agent_capabilities(&self) -> &AgentCapabilities {
         &self.agent_capabilities
     }
@@ -121,6 +156,34 @@ impl AcpSessionState {
     }
 }
 
+fn phase_transition_allowed(current: &AcpConnectionPhase, next: &AcpConnectionPhase) -> bool {
+    use AcpConnectionPhase as Phase;
+    matches!(
+        (current, next),
+        (Phase::Starting, Phase::Initializing)
+            | (Phase::Initializing, Phase::Authenticating { .. })
+            | (Phase::Initializing, Phase::AuthenticationRequired { .. })
+            | (Phase::Initializing, Phase::CreatingSession)
+            | (Phase::Authenticating { .. }, Phase::CreatingSession)
+            | (
+                Phase::Authenticating { .. },
+                Phase::AuthenticationRequired { .. }
+            )
+            | (
+                Phase::AuthenticationRequired { .. },
+                Phase::Authenticating { .. }
+            )
+            | (Phase::AuthenticationRequired { .. }, Phase::Closed)
+            | (Phase::CreatingSession, Phase::Ready)
+            | (Phase::Ready, Phase::RunningTurn { .. })
+            | (Phase::Ready, Phase::Closed)
+            | (Phase::RunningTurn { .. }, Phase::Ready)
+            | (Phase::RunningTurn { .. }, Phase::Closed)
+            | (_, Phase::Failed { .. })
+            | (Phase::Failed { .. }, Phase::Closed)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use agent_client_protocol::schema::{
@@ -129,7 +192,7 @@ mod tests {
         SessionInfoUpdate, SessionMode, SessionModeState, SessionUpdate, TextContent, UsageUpdate,
     };
 
-    use super::AcpSessionState;
+    use super::{AcpConnectionPhase, AcpSessionState};
 
     #[test]
     fn applies_initial_modes_and_config_options_from_new_session() {
@@ -195,5 +258,16 @@ mod tests {
             Some((42, 100)),
             state.usage().map(|usage| (usage.used, usage.size))
         );
+    }
+
+    #[test]
+    fn ready_cannot_be_entered_before_session_creation() {
+        let mut state = AcpSessionState::default();
+
+        state.transition(AcpConnectionPhase::Initializing).unwrap();
+        let error = state.transition(AcpConnectionPhase::Ready).unwrap_err();
+
+        assert!(error.contains("Initializing -> Ready"));
+        assert_eq!(AcpConnectionPhase::Initializing, state.phase);
     }
 }

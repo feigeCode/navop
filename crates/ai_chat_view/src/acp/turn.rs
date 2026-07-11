@@ -1,8 +1,6 @@
 use agent_client_protocol::schema::{ContentBlock, SessionUpdate, StopReason};
 use agent_runtime::TurnId;
 
-use super::AcpError;
-
 #[derive(Clone, Debug)]
 pub(crate) struct AcpTurnTracker {
     turn_id: TurnId,
@@ -67,7 +65,6 @@ pub(crate) enum TurnOutcome {
     Completed,
     Cancelled,
     EmptyResponse,
-    Failed(AcpError),
 }
 
 fn content_is_non_empty(content: &ContentBlock) -> bool {

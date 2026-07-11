@@ -62,6 +62,32 @@ fn missing_credentials_without_fallback_is_an_error() {
     assert_eq!(AcpErrorKind::MissingCredentials, error.kind);
 }
 
+#[test]
+fn requested_legacy_agent_method_requires_interaction() {
+    let auth = AcpAuthConfig {
+        requested_method: Some("opencode-login".to_string()),
+        preferred_method: None,
+        allow_unauthenticated_fallback: true,
+        methods: Vec::new(),
+    };
+
+    let decision = select_auth(
+        &advertised(&["opencode-login"]),
+        &auth,
+        &BTreeSet::new(),
+        "opencode",
+        "OpenCode",
+    )
+    .unwrap();
+
+    assert_eq!(
+        AuthDecision::RequireInteraction {
+            methods: advertised(&["opencode-login"]),
+        },
+        decision
+    );
+}
+
 fn advertised(ids: &[&str]) -> Vec<AuthMethodId> {
     ids.iter().map(|id| AuthMethodId::new(*id)).collect()
 }

@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
+use std::time::Duration;
 
-use agent_client_protocol::schema::AuthMethodId;
+use agent_client_protocol::schema::{AuthMethodId, AuthenticateRequest};
+use agent_client_protocol::{Agent, ConnectionTo};
 
+use super::error::extract_rpc_error_detail;
 use super::{AcpAuthConfig, AcpAuthMethodConfig, AcpError, AcpErrorKind, AcpRecoveryAction};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +53,37 @@ pub(crate) fn select_auth(
     Err(missing_credentials(agent_id, agent_name, config))
 }
 
+pub(crate) async fn authenticate(
+    connection: &ConnectionTo<Agent>,
+    method_id: AuthMethodId,
+    timeout: Duration,
+    agent_id: &str,
+    agent_name: &str,
+) -> Result<(), AcpError> {
+    tracing::info!(method = %method_id.0, "ACP authenticating");
+    let request = connection
+        .send_request(AuthenticateRequest::new(method_id))
+        .block_task();
+    match tokio::time::timeout(timeout, request).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(AcpError::new(
+            AcpErrorKind::AuthenticationFailed,
+            agent_id,
+            agent_name,
+            "ACP Agent 鉴权失败",
+        )
+        .with_detail(extract_rpc_error_detail(&error.message, error.data.as_ref()))
+        .with_recovery(AcpRecoveryAction::Authenticate)),
+        Err(_) => Err(AcpError::new(
+            AcpErrorKind::AuthenticationTimeout,
+            agent_id,
+            agent_name,
+            "ACP Agent 鉴权超时",
+        )
+        .with_recovery(AcpRecoveryAction::Authenticate)),
+    }
+}
+
 fn select_requested(
     requested: &str,
     advertised: &[AuthMethodId],
@@ -58,12 +92,16 @@ fn select_requested(
     agent_id: &str,
     agent_name: &str,
 ) -> Result<AuthDecision, AcpError> {
-    let configured = config.methods.iter().find(|method| method.id == requested);
-    let advertised = advertised
+    let Some(advertised) = advertised
         .iter()
-        .find(|method| method.0.as_ref() == requested);
-    let (Some(configured), Some(advertised)) = (configured, advertised) else {
+        .find(|method| method.0.as_ref() == requested)
+    else {
         return Err(unsupported_method(agent_id, agent_name, requested));
+    };
+    let Some(configured) = config.methods.iter().find(|method| method.id == requested) else {
+        return Ok(AuthDecision::RequireInteraction {
+            methods: vec![advertised.clone()],
+        });
     };
     if configured.interactive {
         return Ok(AuthDecision::RequireInteraction {
