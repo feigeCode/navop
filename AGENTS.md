@@ -345,6 +345,13 @@
 - **验证方式**：覆盖 Tokio runtime 内外的 contract 测试；用结构回归测试保证受影响 View 不出现 `background_spawn` 或危险的 direct/sync API；运行相关 `db`、`db_view` 测试和 `main` 编译检查，并确认崩溃栈不再从 GPUI background executor 进入数据库连接初始化。
 - **适用范围**：`crates/db/src/manager.rs`、`crates/db_view/src/import_export/*`，以及任何会调用 Tokio timer、socket、数据库驱动或 Tokio channel 的 GPUI 后台任务。
 
+- **标题**：GPUI foreground Future 创建 Tokio timer 前必须进入应用 Tokio runtime
+- **触发信号**：从 `cx.spawn` / `AsyncApp` 启动 ACP、外部进程或其他异步流程时，在 `tokio::time::timeout` / `sleep` 创建处直接出现“there is no reactor running” panic，即使后续实际工作已经通过 Tokio handle spawn。
+- **根因 / 约束**：GPUI foreground executor 不是 Tokio runtime；只把子任务 spawn 到 Tokio 不会让包裹该子任务的 GPUI Future 自动拥有 Tokio reactor。Tokio timer 在创建时就要求当前线程已进入 runtime context。
+- **正确做法**：优先把 timeout 放入 Tokio handle spawn 的 Future；若必须在 GPUI foreground Future 中等待 Tokio channel，则先用应用持有的 `tokio::runtime::Handle::enter()` 覆盖 timer 的创建与轮询范围。协议集成测试使用纯 Tokio 入口，不用 deterministic GPUI test scheduler 等待真实 Tokio worker。
+- **验证方式**：从 GPUI `AsyncApp` 入口运行连接测试，确认不再出现 reactor panic；再用真实 stdio fake agent 覆盖连接 timeout、prompt timeout/cancel、进程退出和连接复用。
+- **适用范围**：`crates/ai_chat_view/src/acp/connection/*`，以及任何从 GPUI foreground executor 调用 Tokio timer、socket、process 或 channel 的路径。
+
 - **标题**：GPUI `overflow_y_scrollbar()` 不要直接承担父级 flex 裁剪职责
 - **触发信号**：窗口或面板里已经调用 `.overflow_y_scrollbar()`，但列表/卡片区域仍无法上下滚动，尤其是该区域同时需要 `.flex_1()`、`.min_h_0()` 或 `.min_w_0()` 参与父级布局。
 - **根因 / 约束**：`gpui_component::scroll::ScrollableElement::overflow_y_scrollbar()` 会生成额外的 `Scrollable` 外层 wrapper；该 wrapper 渲染时主要继承原元素的 `size`，不能假设原元素上的 flex/min 尺寸约束会作为父级布局约束稳定作用到外层滚动盒。
