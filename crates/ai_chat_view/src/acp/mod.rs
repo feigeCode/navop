@@ -13,11 +13,16 @@ mod provider;
 mod state;
 mod translate;
 
-pub use config::{AcpAgentConfig, AcpTransport};
+pub use config::{
+    AcpAgentConfig, AcpAgentEntry, AcpAuthConfig, AcpAuthMethodConfig, AcpConfigDiagnostic,
+    AcpTimeoutConfig, AcpTransport,
+};
 pub use connection::AcpConnection;
 pub use permission::{
     AcpPermissionFuture, AcpPermissionOption, AcpPermissionOutcome, AcpPermissionProvider,
     AcpPermissionRequest, set_acp_permission_provider,
 };
-pub use provider::{build_acp_agent_configs, set_acp_agent_config_provider};
+pub use provider::{
+    build_acp_agent_configs, build_acp_agent_entries, set_acp_agent_config_provider,
+};
 pub(crate) use state::AcpSessionState;
