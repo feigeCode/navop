@@ -31,7 +31,7 @@ pub enum TaskKind {
 /// 本轮工具执行策略。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ToolExecutionMode {
-    /// 自动:把可用工具暴露给模型,并执行模型请求的工具。
+    /// 自动:执行模型请求的工具,包括 High/Critical,不进行人工确认。
     Auto,
     /// 只读:只暴露 `RiskLevel::Read` 工具。
     ReadOnly,

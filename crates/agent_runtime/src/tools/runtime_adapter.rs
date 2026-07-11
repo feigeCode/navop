@@ -20,12 +20,20 @@ pub fn runtime_descriptors_to_specs(
 }
 
 pub fn permission_policy_for_tool_mode(mode: ToolExecutionMode) -> tool_runtime::PermissionPolicy {
-    let profile = match mode {
-        ToolExecutionMode::ReadOnly => tool_runtime::PermissionProfile::Safe,
-        ToolExecutionMode::Manual => tool_runtime::PermissionProfile::Confirm,
-        ToolExecutionMode::Auto => tool_runtime::PermissionProfile::Auto,
-    };
-    tool_runtime::PermissionPolicy::for_profile(profile)
+    match mode {
+        ToolExecutionMode::ReadOnly => {
+            tool_runtime::PermissionPolicy::for_profile(tool_runtime::PermissionProfile::Safe)
+        }
+        ToolExecutionMode::Manual => {
+            tool_runtime::PermissionPolicy::for_profile(tool_runtime::PermissionProfile::Confirm)
+        }
+        ToolExecutionMode::Auto => {
+            let mut policy =
+                tool_runtime::PermissionPolicy::for_profile(tool_runtime::PermissionProfile::Auto);
+            policy.high_risk_policy = tool_runtime::OperationPolicy::Allow;
+            policy
+        }
+    }
 }
 
 pub fn runtime_tool_invocation_from_call(

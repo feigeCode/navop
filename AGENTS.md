@@ -373,6 +373,13 @@
 - **验证方式**：覆盖 running/submission-pending 允许、ready/awaiting-prompt not-running、busy/unknown/disconnected 零写入、预取消零入队、control 后 observer 仍由真实终态完成；验证 Agent prompt 区分 `terminal_exec`、`terminal_control` 与取消按钮。
 - **适用范围**：`crates/terminal/src/exec_supervisor/*`、`crates/terminal/src/ssh_backend.rs`、`crates/terminal_view/src/public_mcp.rs`、Public MCP terminal control 工具与 Agent prompt。
 
+- **标题**：Agent Auto 模式不进行工具审批，High/Critical 也直接执行
+- **触发信号**：Auto 模式下出现 `NeedUserInput` 工具确认卡，或 Agent→tool_runtime 映射仍把 high-risk policy 设为 `Ask`。
+- **根因 / 约束**：`ToolExecutionMode::Auto` 表达用户已授权 Agent 自主执行当前暴露工具；风险等级仍用于展示、审计和 Manual 模式审批，但不能在 Auto 模式再次暂停。`ReadOnly` 仍通过工具暴露过滤保证只读，不能用 Auto 的放行规则扩大其工具集合。
+- **正确做法**：`requires_tool_approval` 对 Auto 始终返回 false；Agent runtime adapter 保持 `PermissionProfile::Auto` 标识，同时将 `high_risk_policy` 覆盖为 `Allow`。Manual 继续确认所有非 Read 业务工具，ReadOnly 只暴露 Read 工具。
+- **验证方式**：覆盖 Auto 的 High、Critical、同轮多个 High 直接执行且无 `NeedUserInput`；覆盖 Manual 非 Read 仍审批、ReadOnly 仍过滤写工具；验证 Agent Auto permission policy 的 `mode=Auto` 且 `high_risk_policy=Allow`。
+- **适用范围**：`crates/agent_runtime/src/tasks/agent.rs`、`crates/agent_runtime/src/tools/runtime_adapter.rs`、Agent 工具模式 UI 与相关审批测试。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

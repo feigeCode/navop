@@ -66,10 +66,9 @@ fn tool_execution_mode_maps_to_runtime_permission_profile() {
         tool_runtime::PermissionProfile::Confirm,
         permission_policy_for_tool_mode(ToolExecutionMode::Manual).mode,
     );
-    assert_eq!(
-        tool_runtime::PermissionProfile::Auto,
-        permission_policy_for_tool_mode(ToolExecutionMode::Auto).mode,
-    );
+    let auto = permission_policy_for_tool_mode(ToolExecutionMode::Auto);
+    assert_eq!(tool_runtime::PermissionProfile::Auto, auto.mode);
+    assert_eq!(tool_runtime::OperationPolicy::Allow, auto.high_risk_policy);
 }
 
 #[test]

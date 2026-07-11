@@ -239,9 +239,9 @@ Agent registry 构建入口：
    `tool_runtime_agent_tool_registry(...)` 桥接到 Agent。
 5. 旧 native Agent DB / SSH 工具模块已删除；旧 Redis Agent 工具不再注册。
 6. Public MCP adapter 转 Agent 工具时，Agent 风险等级从 MCP annotations 推导。
-   `destructive` 或 `openWorld` 工具在 Agent Auto 模式下会先产生确认卡片；
-   用户批准后，adapter 使用内部 approved context 调用底层 MCP/runtime tool，
-   避免外部 MCP permission mode 在 Agent 确认后再次静默拒绝。
+   `destructive` 或 `openWorld` 工具映射为 High 风险；Agent Auto 模式直接执行，
+   Manual 模式经确认后由 adapter 使用内部 approved context 调用底层 MCP/runtime tool，
+   避免外部 MCP permission mode 在 Agent 决策后再次静默拒绝。
 
 ### 3.1 通用 Public MCP adapter 工具
 
@@ -262,10 +262,10 @@ Agent registry 构建入口：
 
 - `readOnly` tools 映射为 Agent `RiskLevel::Read`。
 - `destructive` 或 `openWorld` tools 映射为 Agent `RiskLevel::High`。
-- `ssh_exec` 和 `terminal_exec` 因为是开放世界执行工具，在 Agent Auto 模式下必须
-  弹出确认卡片，不能直接返回 `permission_denied`。
+- `ssh_exec`、`terminal_exec` 和 `terminal_control` 等开放世界执行工具在 Agent Auto
+  模式下直接执行；Manual 模式仍弹出确认卡片。
 - 外部 MCP server 的 `safe/confirm/auto` permission profile 仍只约束外部 MCP
-  clients；Agent 入口使用 Agent 自己的工具模式和确认卡片作为审批入口。
+  clients；Agent 入口使用 Agent 自己的 `Auto / ReadOnly / Manual` 工具模式。
 
 ### 3.2 DB Agent 工具
 
@@ -351,7 +351,8 @@ Agent function tools：
 
 1. `update_plan` 和 `delegate_task` 不走人工确认。
 2. `ToolExecutionMode::Manual`：所有业务工具都需要确认。
-3. `ToolExecutionMode::Auto`：`spec.risk.requires_confirmation()` 为 true 的工具需要确认。
+3. `ToolExecutionMode::Auto`：所有已暴露工具直接执行，包括 `High` 和 `Critical`。
+4. `ToolExecutionMode::ReadOnly`：只暴露 `RiskLevel::Read` 工具，不进入业务工具审批。
 
 当前高风险 Agent function tools：
 

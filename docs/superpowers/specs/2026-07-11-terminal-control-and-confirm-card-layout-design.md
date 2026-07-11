@@ -44,7 +44,7 @@
 }
 ```
 
-`target` 和 `action` 必填，`action` 只接受 `interrupt`。该工具属于开放世界写操作，风险等级为 High，不支持并行调用，Agent Auto 模式下必须展示审批卡。
+`target` 和 `action` 必填，`action` 只接受 `interrupt`。该工具属于开放世界写操作，风险等级为 High，不支持并行调用。Agent Auto 模式直接执行，Manual 模式展示审批卡。
 
 成功结果为结构化数据：
 
@@ -143,7 +143,7 @@ control_unavailable
 - terminal control handle 把 request 交给 SSH actor 并返回结构化结果。
 - Public MCP schema 只接受 `action=interrupt`，并将工具声明为 High risk。
 - registry 能按 terminal target 解析 control handle，未知目标和未注册能力返回稳定错误。
-- Agent adapter 暴露规范化的 `terminal_control`，高风险调用触发审批。
+- Agent adapter 暴露规范化的 `terminal_control`；Auto 直接执行，Manual 高风险调用触发审批。
 - system prompt 指导模型区分 `terminal_exec`、`terminal_control` 和 Agent cancel。
 
 ### Verification
