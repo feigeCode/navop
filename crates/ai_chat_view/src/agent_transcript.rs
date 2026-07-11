@@ -19,6 +19,8 @@ use crate::agent_tool_input::build_tool_input_display;
 use crate::code_block::extract_fenced_code_blocks;
 use crate::{ChatMessageUI, MessageVariant, parse_chart_json_block};
 
+mod acp;
+
 /// 观测数据文本入卡片时的最大字符数(渲染时还会再截断展示)。
 const MAX_DATA_CHARS: usize = 2000;
 const MAX_TERMINAL_EXEC_DATA_CHARS: usize = 64_000;
@@ -39,6 +41,8 @@ pub struct AgentTranscript {
     streaming_id: Option<String>,
     /// 当前轻量状态消息 id(若存在未完成状态)。
     active_status_id: Option<String>,
+    /// ACP 连接生命周期状态消息 id，与单轮执行状态分开维护。
+    acp_status_id: Option<String>,
     /// 本轮最新计划(渲染到输入框上方的 Tasks 面板,不进消息流)。
     latest_plan: Option<PlanCardData>,
     /// 当前会话最近的子代理(渲染到输入框上方的子代理面板,不进消息流)。
@@ -68,6 +72,7 @@ impl AgentTranscript {
         self.messages.clear();
         self.streaming_id = None;
         self.active_status_id = None;
+        self.acp_status_id = None;
         self.latest_plan = None;
         self.active_subagents.clear();
         self.terminal_events.clear();
@@ -891,6 +896,32 @@ mod tests {
         assert_eq!(1, tr.messages.len());
         assert_eq!("回答", tr.messages[0].content);
         assert!(matches!(tr.messages[0].variant, MessageVariant::Text));
+    }
+
+    #[test]
+    fn acp_phase_status_replaces_previous_phase() {
+        let mut transcript = AgentTranscript::new();
+
+        transcript.set_acp_status("正在启动 Codex");
+        transcript.set_acp_status("正在协商 ACP 协议");
+
+        assert_eq!(1, transcript.acp_status_count());
+        assert_eq!(Some("正在协商 ACP 协议"), transcript.acp_status_text());
+    }
+
+    #[test]
+    fn empty_response_replaces_running_status_with_recovery_error() {
+        let mut transcript = AgentTranscript::new();
+        transcript.set_acp_status("ACP 正在响应…");
+
+        transcript.set_acp_error(&crate::AcpError::empty_response("opencode", "OpenCode"));
+
+        assert_eq!(0, transcript.pending_status_count());
+        assert!(
+            transcript
+                .last_message_content()
+                .is_some_and(|content| content.contains("没有返回任何内容"))
+        );
     }
 
     #[test]

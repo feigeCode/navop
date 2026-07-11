@@ -170,6 +170,7 @@ fn non_empty_trimmed(value: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
 }
 
+#[cfg(test)]
 fn normalize_acp_agent_config_ids(configs: &mut [AcpAgentConfig]) {
     let mut used = HashSet::new();
     for (index, config) in configs.iter_mut().enumerate() {
