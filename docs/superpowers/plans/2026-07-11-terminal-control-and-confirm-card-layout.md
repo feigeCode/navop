@@ -10,6 +10,16 @@
 
 ---
 
+## Execution Status
+
+- Completed: Task 1 UI flex contract and nested bounds regression test (`f1cbd4b`).
+- Completed: Tasks 2-3 terminal supervisor and SSH actor control path (`f95b278`).
+- Completed: Tasks 4-5 Public MCP tool, registry capability and terminal_view bridge (`7c3e0ee`).
+- Completed: Task 6 main registry/resource resolution and Agent guidance.
+- Completed: Task 7 documentation and verification; repository-wide fmt remains blocked by unrelated existing `db_view` formatting differences.
+
+---
+
 ## File Map
 
 - Modify `crates/ai_chat_view/src/agent_cards.rs`: 为 JSON frame/Input 增加明确 flex 约束和 debug selector。

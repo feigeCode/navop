@@ -1490,6 +1490,11 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
                     "ssh.exec",
                     "Execute a structured SSH command.",
                     RiskLevel::Low,
+                )))
+                .with_tool(Arc::new(PromptOnlyTool::new(
+                    "terminal.control",
+                    "Control a visible terminal.",
+                    RiskLevel::High,
                 ))),
         )),
     ));
@@ -1511,11 +1516,15 @@ async fn system_prompt_guides_visible_terminal_requests_to_terminal_exec() {
     let requests = model.received_requests();
     let system = requests[0].messages[0].content_as_text();
     assert!(system.contains("terminal_exec"));
+    assert!(system.contains("terminal_control"));
     assert!(system.contains("ssh_exec"));
     assert!(system.contains("可见终端"));
     assert!(system.contains("submit=true"));
     assert!(system.contains("不要声称有 exit code"));
     assert!(system.contains("不要用 `ssh_exec` 替代"));
+    assert!(system.contains("Ctrl+C"));
+    assert!(system.contains("取消对话不会中断终端任务"));
+    assert!(system.contains("\\u0003"));
 }
 
 #[tokio::test]

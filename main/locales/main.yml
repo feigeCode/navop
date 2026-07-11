@@ -1302,9 +1302,9 @@ Settings:
         zh-CN: 可见终端执行
         zh-HK: 可見終端執行
       terminal_exec_desc:
-        en: Expose tools that type commands into visible terminal PTYs
-        zh-CN: 暴露向可见终端 PTY 输入命令的工具
-        zh-HK: 暴露向可見終端 PTY 輸入命令的工具
+        en: Expose tools that type commands or send explicit Ctrl+C to visible terminal PTYs
+        zh-CN: 暴露向可见终端 PTY 输入命令或显式发送 Ctrl+C 的工具
+        zh-HK: 暴露向可見終端 PTY 輸入命令或明確傳送 Ctrl+C 的工具
       connections:
         en: Connection Tools
         zh-CN: 连接工具

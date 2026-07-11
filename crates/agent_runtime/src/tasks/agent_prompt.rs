@@ -54,8 +54,9 @@ pub(super) fn build_system_prompt(
 
 fn append_terminal_tool_selection_rules(prompt: &mut String, tools: &[ToolSpec]) {
     let terminal_exec = find_tool_name(tools, &["terminal_exec", "terminal.exec"]);
+    let terminal_control = find_tool_name(tools, &["terminal_control", "terminal.control"]);
     let ssh_exec = find_tool_name(tools, &["ssh_exec", "ssh.exec", "ssh_remote_exec"]);
-    if terminal_exec.is_none() && ssh_exec.is_none() {
+    if terminal_exec.is_none() && terminal_control.is_none() && ssh_exec.is_none() {
         return;
     }
 
@@ -68,6 +69,11 @@ fn append_terminal_tool_selection_rules(prompt: &mut String, tools: &[ToolSpec])
     if let Some(name) = ssh_exec {
         prompt.push_str(&format!(
             " 当用户只要求后台/结构化 SSH 命令执行、收集 stdout/stderr 或非交互检查时，使用 `{name}`；如果用户要求可见终端执行且可用工具里有终端执行工具，不要用 `{name}` 替代。"
+        ));
+    }
+    if let Some(name) = terminal_control {
+        prompt.push_str(&format!(
+            " 当用户明确要求停止、打断当前可见终端的前台任务或发送 Ctrl+C 时，调用 `{name}` 并设置 `action=interrupt`；只有工具结果明确返回 `sent=true` 后才能声称已发送 Ctrl+C。不要把 `\\u0003` 作为 `terminal_exec` 的 command；Agent 取消对话不会中断终端任务。"
         ));
     }
 }

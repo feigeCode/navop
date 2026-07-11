@@ -359,6 +359,13 @@
 - **验证方式**：覆盖 busy/unknown 零写入、半行输入清理、fresh prompt 握手、`wait_for_output=false` 立即 busy、预取消不排队、取消后不发送控制字符、detached output 不增长、background/nohup 不等 EOF、旧 turn 不清理或污染新 turn；再运行 terminal/tool-runtime/agent-runtime/UI 的定向测试、check 与 clippy。
 - **适用范围**：`crates/terminal/src/exec_supervisor/*`、SSH terminal actor、`terminal.exec` Public MCP/Agent adapter、`agent_runtime` turn cancellation 与 `ai_chat_view` 终态处理。
 
+- **标题**：显式终端 Ctrl+C 必须走 supervisor control，不能复用 Agent 取消或任意输入接口
+- **触发信号**：AI 需要停止当前可见终端的前台任务；有人考虑把 Agent 的 × 映射成 Ctrl+C、把 `"\\u0003"` 当作 `terminal.exec.command`，或直接向 Agent 暴露任意 PTY 字节写入。
+- **根因 / 约束**：Agent turn 取消只表达“停止当前对话等待”，不拥有终端进程；`terminal.exec` 的 safe-replace 只允许在可信 `Ready` prompt 上清理半行并提交命令，而真正需要 Ctrl+C 时通常处于 `SubmissionPending` / `CommandRunning`。任意字节输入会绕过 readiness、审批和自动化 lease，产生竞态或误中断。
+- **正确做法**：使用独立高风险 `terminal.control(action=interrupt)`。由 terminal actor 内的 supervisor 原子检查 readiness，仅在明确的前台运行状态写入一次 ETX (`0x03`)；其他状态全部 fail closed、零写入。control 不移除 exec observer、不伪造 exit code，真实完成仍由 OSC `CommandFinished` / prompt epoch 收口。
+- **验证方式**：覆盖 running/submission-pending 允许、ready/awaiting-prompt not-running、busy/unknown/disconnected 零写入、预取消零入队、control 后 observer 仍由真实终态完成；验证 Agent prompt 区分 `terminal_exec`、`terminal_control` 与取消按钮。
+- **适用范围**：`crates/terminal/src/exec_supervisor/*`、`crates/terminal/src/ssh_backend.rs`、`crates/terminal_view/src/public_mcp.rs`、Public MCP terminal control 工具与 Agent prompt。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

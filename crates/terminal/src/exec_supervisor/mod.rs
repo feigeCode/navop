@@ -48,6 +48,13 @@ impl ExecSupervisor {
     pub(crate) fn interrupt_foreground(
         &self,
     ) -> Result<TerminalControlReadiness, TerminalControlError> {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.phase == ExecPhase::WaitingForReady)
+        {
+            return Err(TerminalControlError::Busy);
+        }
         match self.readiness {
             ShellCommandReadiness::SubmissionPending { .. } => {
                 Ok(TerminalControlReadiness::SubmissionPending)

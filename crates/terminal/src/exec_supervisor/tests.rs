@@ -388,3 +388,25 @@ fn terminal_control_preserves_exec_observer_until_real_completion() {
                 && output.completion == TerminalExecCompletion::ShellIntegrationExit
     ));
 }
+
+#[test]
+fn terminal_control_rejects_when_an_exec_is_waiting_for_ready() {
+    let mut supervisor = ready_supervisor();
+    supervisor.on_input(TerminalInputSource::User, b"sleep 300\n");
+    supervisor.on_osc(&OscEvent::CommandStart);
+    let mut waiting = request("echo queued");
+    waiting.ready_timeout = Duration::from_secs(5);
+
+    assert!(matches!(
+        supervisor.start(43, waiting).as_slice(),
+        [ExecEffect::ArmTimeout {
+            id: 43,
+            phase: ExecPhase::WaitingForReady,
+            ..
+        }]
+    ));
+    assert_eq!(
+        Err(TerminalControlError::Busy),
+        supervisor.interrupt_foreground()
+    );
+}

@@ -66,11 +66,16 @@
 | `ssh.command.cancel` | 取消后台 SSH command | 写/破坏性 |
 | `ssh.exec` | 在活跃 SSH terminal session 上执行结构化非交互命令 | 写/开放世界 |
 | `terminal.exec` | 把命令写入可见 terminal PTY，形成“像手动输入一样执行”的效果 | 写/开放世界 |
+| `terminal.control` | 对运行中的可见 terminal 前台任务执行显式控制；当前支持 `action=interrupt` 发送 Ctrl+C | 写/开放世界 |
 
 注意：
 
 - `ssh.exec` 是结构化 SSH 执行，不会把命令写入可见终端。
 - `terminal.exec` 是可见终端执行，会写入 live terminal input path。
+- `terminal.control` 是显式终端控制，不执行 shell command。当前仅接受
+  `{ target, action: "interrupt" }`，并只在 supervisor 明确处于
+  `SubmissionPending` 或 `CommandRunning` 时发送 ETX (`0x03`)；空闲 prompt、
+  readiness 未知、断开或 automation 冲突状态全部零写入并返回结构化错误。
 - `terminal.exec` 只会在 OSC 133 shell integration 明确报告终端处于 `Ready`
   prompt 时自动执行；前台任务运行、readiness 未知或终端断开时都会 fail closed，
   不向终端写入任何预检字符或命令字节。
@@ -86,6 +91,8 @@
   如果 `terminal.exec` 尚未提交命令，则取消本次自动执行；如果命令已经提交，则只
   detach observer，不发送 Ctrl+C、signal 或关闭 terminal，终端中的命令继续运行，
   其 observer 由 terminal supervisor 在后台有界清理。
+- Agent 取消与 `terminal.control` 完全解耦。取消按钮不会隐式发送 Ctrl+C；AI 只有在
+  `terminal.control` 工具结果明确返回 `sent=true` 后，才能声称已经中断终端前台任务。
 - `ssh.remote_exec`、`ssh.remote_command_poll`、`ssh.remote_command_output`、
   `ssh.remote_command_cancel` 已不再作为 alias 接受。
 

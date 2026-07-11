@@ -1,10 +1,14 @@
 use public_mcp::registry::{
     ConnectionState, PublicMcpRegistry, RemoteOpsSessionHandle, TerminalConnectionKind,
-    TerminalExecFuture, TerminalExecSessionHandle, TerminalSessionHandle, TerminalSessionSnapshot,
+    TerminalControlFuture, TerminalControlSessionHandle, TerminalExecFuture,
+    TerminalExecSessionHandle, TerminalSessionHandle, TerminalSessionSnapshot,
 };
 use public_mcp::remote_ops::{
     RemoteCommandMode, RemoteExecRequest, RemoteExecResult, RemoteFileWriteRequest,
     RemoteFileWriteResult, SessionDiagnosticsRequest, SessionDiagnosticsResult,
+};
+use public_mcp::terminal_control::{
+    TerminalControlReadiness, TerminalControlRequest, TerminalControlResult,
 };
 use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, TerminalExecResult};
 use std::collections::BTreeMap;
@@ -52,6 +56,27 @@ impl TerminalExecSessionHandle for FakeTerminal {
                 exit_code: None,
                 output: String::new(),
                 duration_ms: 0,
+            })
+        })
+    }
+}
+
+impl TerminalControlSessionHandle for FakeTerminal {
+    fn snapshot(&self) -> TerminalSessionSnapshot {
+        <Self as TerminalSessionHandle>::snapshot(self)
+    }
+
+    fn control_terminal(
+        &self,
+        request: TerminalControlRequest,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> TerminalControlFuture {
+        Box::pin(async move {
+            Ok(TerminalControlResult {
+                target: request.target,
+                action: request.action,
+                sent: true,
+                readiness_before: TerminalControlReadiness::CommandRunning,
             })
         })
     }
@@ -138,6 +163,7 @@ fn list_sessions_reports_registered_execution_capabilities() {
     assert!(sessions[0].capabilities.is_empty());
 
     registry.register_terminal_exec(terminal.clone());
+    registry.register_terminal_control(terminal.clone());
     registry.register_remote_ops(FakeRemoteOps { terminal });
 
     let sessions = registry.list_sessions();
@@ -146,6 +172,11 @@ fn list_sessions_reports_registered_execution_capabilities() {
         sessions[0]
             .capabilities
             .contains(&ResourceCapability::TerminalExec)
+    );
+    assert!(
+        sessions[0]
+            .capabilities
+            .contains(&ResourceCapability::TerminalControl)
     );
     assert!(
         sessions[0]
