@@ -1,4 +1,6 @@
 mod acp_agent_provider;
+#[cfg(test)]
+mod acp_agent_provider_tests;
 mod composite_provider;
 mod database_driver_provider;
 mod kind;
@@ -11,7 +13,8 @@ mod remote_desktop_provider;
 mod summary;
 
 pub use acp_agent_provider::{
-    AcpAgentExtensionAgent, AcpAgentExtensionProvider, AcpAgentExtensionTransport,
+    AcpAgentExtensionAgent, AcpAgentExtensionAuth, AcpAgentExtensionAuthMethod,
+    AcpAgentExtensionProvider, AcpAgentExtensionTimeouts, AcpAgentExtensionTransport,
 };
 pub use composite_provider::CompositeExtensionProvider;
 pub use database_driver_provider::DatabaseDriverExtensionProvider;

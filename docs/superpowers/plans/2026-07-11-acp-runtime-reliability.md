@@ -8,6 +8,14 @@
 
 **Tech Stack:** Rust 2024, GPUI, Tokio, `agent-client-protocol` 0.14, Serde/serde_json, anyhow, tracing, workspace Cargo tests.
 
+## Execution status (2026-07-11)
+
+- Tasks 1-7 are implemented and committed on `feature/acp-runtime-reliability`.
+- Task 8 smoke coverage is complete for installed OpenCode, Codex, and Claude wrappers. OpenCode and Codex returned non-empty output; Claude returned the actionable provider message that its configured model was retired.
+- Task 9 review findings were applied, including stale pending-auth cleanup, Tokio-runtime-bound connection setup, fake-agent lifecycle coverage, and result-size Clippy fixes.
+- Targeted ACP formatting, tests, integration tests, compile checks, and scoped Clippy checks pass. The repository-wide format check remains blocked only by pre-existing differences in `crates/db_view/src/sql_editor.rs` and `crates/db_view/src/table_data/results_delegate.rs`.
+- Full dependency Clippy remains blocked by a pre-existing `clippy::too_many_arguments` warning in `crates/ui/src/highlighter/registry.rs`; the changed targets pass `--all-targets --no-deps -D warnings` with command-line allowances limited to verified pre-existing lints outside this change.
+
 ---
 
 ## File map

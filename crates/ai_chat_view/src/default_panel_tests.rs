@@ -2,7 +2,7 @@ use crate::default_panel::{
     DefaultAgentChatPanelMode, build_sidebar_config, build_workbench_config,
     enabled_provider_configs, panel_title_for_mode, should_refresh_resource_catalog,
 };
-use crate::{AcpAgentConfig, AgentChatViewConfig};
+use crate::{AcpAgentConfig, AcpAgentEntry, AgentChatViewConfig};
 use agent_runtime::model::{MockModelClient, ModelClient};
 use agent_runtime::{
     ResourceContext, ResourceKind, ResourceRef, Runtime, RuntimeServices, ToolRegistry, ToolRouter,
@@ -38,7 +38,11 @@ fn enabled_provider_configs_filters_disabled_entries() {
 #[test]
 fn sidebar_config_keeps_acp_agents_available() {
     let config = AgentChatViewConfig::new(test_runtime(), ResourceContext::new(), Vec::new());
-    let agents = vec![AcpAgentConfig::new("codex", "Codex ACP", "codex")];
+    let agents = vec![AcpAgentEntry::ready(AcpAgentConfig::new(
+        "codex",
+        "Codex ACP",
+        "codex",
+    ))];
 
     let config = build_sidebar_config(config, agents);
 
@@ -71,7 +75,11 @@ fn sidebar_config_preserves_available_resource_catalog() {
 fn workbench_config_uses_full_view_task_history_sidebar() {
     let config = AgentChatViewConfig::new(test_runtime(), ResourceContext::new(), Vec::new())
         .sidebar_mode(true);
-    let agents = vec![AcpAgentConfig::new("codex", "Codex ACP", "codex")];
+    let agents = vec![AcpAgentEntry::ready(AcpAgentConfig::new(
+        "codex",
+        "Codex ACP",
+        "codex",
+    ))];
 
     let config = build_workbench_config(config, agents);
 

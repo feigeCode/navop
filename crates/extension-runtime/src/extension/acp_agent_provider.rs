@@ -6,6 +6,10 @@ use serde::Deserialize;
 
 use crate::extension::{ExtensionKind, ExtensionProvider, ExtensionSummary};
 
+mod config;
+
+pub use config::{AcpAgentExtensionAuth, AcpAgentExtensionAuthMethod, AcpAgentExtensionTimeouts};
+
 const MANIFEST_FILE: &str = "acp_agent.json";
 
 pub struct AcpAgentExtensionProvider;
@@ -84,6 +88,10 @@ pub struct AcpAgentExtensionAgent {
     pub id: String,
     pub name: String,
     pub transport: AcpAgentExtensionTransport,
+    #[serde(default)]
+    pub auth: AcpAgentExtensionAuth,
+    #[serde(default)]
+    pub timeouts: AcpAgentExtensionTimeouts,
     #[serde(skip)]
     pub manifest_dir: PathBuf,
 }
@@ -107,6 +115,8 @@ impl AcpAgentExtensionAgent {
                 args,
                 env,
             },
+            auth: AcpAgentExtensionAuth::default(),
+            timeouts: AcpAgentExtensionTimeouts::default(),
             manifest_dir,
         }
     }
@@ -178,6 +188,8 @@ fn validate_agent(agent: &AcpAgentExtensionAgent, dir: &Path) -> Result<()> {
             }
         }
     }
+    agent.auth.validate()?;
+    agent.timeouts.validate()?;
     Ok(())
 }
 

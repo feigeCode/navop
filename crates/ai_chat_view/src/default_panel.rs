@@ -18,8 +18,8 @@ use one_core::{
 };
 
 use crate::{
-    AcpAgentConfig, AgentChatTheme, AgentChatView, AgentChatViewConfig, AgentChatViewEvent,
-    CodeBlockAction, MentionItem, build_acp_agent_configs, build_plan_tool_registry,
+    AcpAgentEntry, AgentChatTheme, AgentChatView, AgentChatViewConfig, AgentChatViewEvent,
+    CodeBlockAction, MentionItem, build_acp_agent_entries, build_plan_tool_registry,
 };
 
 #[derive(Clone, Debug)]
@@ -369,7 +369,7 @@ impl DefaultAgentChatPanel {
             tracing::warn!(%error, "Failed to build plan tool registry");
             agent_runtime::ToolRegistry::new()
         });
-        let acp_agents = build_acp_agent_configs(cx).unwrap_or_else(|error| {
+        let acp_agents = build_acp_agent_entries(cx).unwrap_or_else(|error| {
             tracing::warn!(%error, "Failed to build ACP agent configs");
             Vec::new()
         });
@@ -566,14 +566,14 @@ pub(crate) fn enabled_provider_configs(configs: Vec<ProviderConfig>) -> Vec<Prov
 
 pub(crate) fn build_sidebar_config(
     config: AgentChatViewConfig,
-    acp_agents: Vec<AcpAgentConfig>,
+    acp_agents: Vec<AcpAgentEntry>,
 ) -> AgentChatViewConfig {
     config.sidebar_mode(true).with_acp_agents(acp_agents)
 }
 
 pub(crate) fn build_workbench_config(
     config: AgentChatViewConfig,
-    acp_agents: Vec<AcpAgentConfig>,
+    acp_agents: Vec<AcpAgentEntry>,
 ) -> AgentChatViewConfig {
     config.sidebar_mode(false).with_acp_agents(acp_agents)
 }
