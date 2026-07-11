@@ -1678,14 +1678,22 @@ impl CloudApiClient for SupabaseClient {
             deleted_at: chrono::Utc::now().to_rfc3339(),
         };
 
-        let (status, _) = self
-            .patch_json_with_retry::<serde_json::Value, _>(&url, vec![], &payload)
+        let headers = vec![("Prefer", "return=representation".to_string())];
+        let (status, result) = self
+            .patch_json_with_retry::<Vec<SyncDataRow>, _>(&url, headers, &payload)
             .await?;
 
         if status.is_success() {
-            Ok(())
-        } else if status == StatusCode::NOT_FOUND || status.as_u16() == 404 {
-            Ok(()) // 已删除
+            let rows = result.map_err(CloudApiError::ParseError)?;
+            match rows.len() {
+                1 => Ok(()),
+                0 => Err(CloudApiError::Conflict(
+                    "删除目标不存在或当前账号无权限".to_string(),
+                )),
+                count => Err(CloudApiError::ParseError(format!(
+                    "删除同步数据返回了 {count} 条记录"
+                ))),
+            }
         } else {
             Err(CloudApiError::ServerError("删除同步数据失败".to_string()))
         }
@@ -2062,10 +2070,38 @@ mod tests {
         assert!(matches!(error, CloudApiError::Conflict(_)));
     }
 
+    #[tokio::test]
+    async fn delete_sync_data_requires_exactly_one_returned_row() {
+        let one = r#"[{"id":"cloud-1","owner_id":"user-1","team_id":null,"data_type":"connection","encrypted_data":"enc","key_version":1,"checksum":"a","version":7,"updated_at":"2026-07-03T00:00:00Z","deleted_at":"2026-07-12T00:00:00Z"}]"#;
+        let (client, http) = delete_client(one);
+        client.delete_sync_data("cloud-1").await.expect("one row");
+        assert_eq!(
+            Some("return=representation".to_string()),
+            http.last_prefer()
+        );
+
+        let error = delete_client("[]")
+            .0
+            .delete_sync_data("cloud-1")
+            .await
+            .expect_err("zero rows must fail");
+        assert!(matches!(error, CloudApiError::Conflict(_)));
+
+        let two = format!("[{row},{row}]", row = &one[1..one.len() - 1]);
+        let leaked: &'static str = Box::leak(two.into_boxed_str());
+        let error = delete_client(leaked)
+            .0
+            .delete_sync_data("cloud-1")
+            .await
+            .expect_err("multiple rows must fail");
+        assert!(matches!(error, CloudApiError::ParseError(_)));
+    }
+
     struct RecordingHttpClient {
         status: u16,
         body: &'static str,
         last_url: Mutex<Option<String>>,
+        last_prefer: Mutex<Option<String>>,
     }
 
     impl RecordingHttpClient {
@@ -2074,6 +2110,7 @@ mod tests {
                 status,
                 body,
                 last_url: Mutex::new(None),
+                last_prefer: Mutex::new(None),
             }
         }
 
@@ -2083,6 +2120,10 @@ mod tests {
                 .expect("last_url lock")
                 .clone()
                 .expect("request captured")
+        }
+
+        fn last_prefer(&self) -> Option<String> {
+            self.last_prefer.lock().expect("prefer lock").clone()
         }
     }
 
@@ -2096,6 +2137,11 @@ mod tests {
             req: Request<AsyncBody>,
         ) -> futures::future::BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
             *self.last_url.lock().expect("last_url lock") = Some(req.uri().to_string());
+            *self.last_prefer.lock().expect("prefer lock") = req
+                .headers()
+                .get("Prefer")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
             let response = Response::builder()
                 .status(self.status)
                 .body(AsyncBody::from(self.body.as_bytes().to_vec()))
@@ -2113,6 +2159,17 @@ mod tests {
             project_url: "https://project.supabase.co".to_string(),
             api_key: "anon".to_string(),
         }
+    }
+
+    fn delete_client(body: &'static str) -> (SupabaseClient, Arc<RecordingHttpClient>) {
+        let http = Arc::new(RecordingHttpClient::respond_json(200, body));
+        let client = SupabaseClient::new(test_config(), http.clone());
+        client.set_auth(
+            "access".to_string(),
+            "refresh".to_string(),
+            "user-1".to_string(),
+        );
+        (client, http)
     }
 
     fn test_cloud_sync_data() -> CloudSyncData {
