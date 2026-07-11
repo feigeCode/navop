@@ -12,11 +12,12 @@ use super::connection_sync::ConnectionSyncHandler;
 use super::generic_sync::generic_sync;
 use super::sync_type::SyncTypeHandler;
 use super::workspace_sync::WorkspaceSyncType;
+use crate::cloud_sync::CloudAccountScope;
 use crate::cloud_sync::client::CloudApiClient;
 use crate::cloud_sync::models::{ConflictResolution, SyncResult, Team, TeamRole};
 use crate::cloud_sync::queue::OperationQueue;
 use crate::cloud_sync::service::{CloudSyncService, SyncError};
-use crate::cloud_sync::team_key_manager::{TeamKeyError, TeamKeyManager, TeamKeyStatus};
+use crate::cloud_sync::team_key_manager::{TeamKeyError, TeamKeyLoadStatus, TeamKeyManager};
 use crate::crypto;
 use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
 use std::future::Future;
@@ -240,10 +241,7 @@ impl SyncEngine {
             .unwrap_or(false)
     }
 
-    /// 刷新当前用户团队列表并写入本地团队密钥缓存。
-    ///
-    /// 只同步团队元数据和当前用户角色，不上传或下载连接/工作空间数据。
-    pub async fn refresh_team_key_cache(&self) -> Result<usize, SyncError> {
+    fn account_scope(&self) -> Result<CloudAccountScope, SyncError> {
         let user_id = self
             .crypto_service
             .read()
@@ -251,14 +249,25 @@ impl SyncEngine {
             .user_id()
             .map(str::to_string)
             .ok_or(SyncError::NotLoggedIn)?;
+        Ok(CloudAccountScope::new(
+            self.cloud_client.environment_id(),
+            user_id,
+        ))
+    }
+
+    /// 刷新当前用户团队列表并写入本地团队密钥缓存。
+    ///
+    /// 只同步团队元数据和当前用户角色，不上传或下载连接/工作空间数据。
+    pub async fn refresh_team_key_cache(&self) -> Result<usize, SyncError> {
+        let scope = self.account_scope()?;
         let teams = self
             .cloud_client
             .list_teams()
             .await
             .map_err(|e| SyncError::NetworkError(e.to_string()))?;
         tracing::info!("[同步] 获取到 {} 个团队", teams.len());
-        let cached_count = self.cache_team_roles(&teams, &user_id).await;
-        self.restore_cached_team_keys(&teams);
+        let cached_count = self.cache_team_roles(&teams, &scope).await;
+        self.restore_cached_team_keys(&teams, &scope);
         self.cached_teams
             .write()
             .map_err(|_| SyncError::StorageError("团队缓存锁获取失败".to_string()))?
@@ -267,14 +276,14 @@ impl SyncEngine {
     }
 
     /// 缓存团队角色信息到 team_key_cache 表
-    async fn cache_team_roles(&self, teams: &[Team], user_id: &str) -> usize {
+    async fn cache_team_roles(&self, teams: &[Team], scope: &CloudAccountScope) -> usize {
         let repo = match self.storage.get::<TeamKeyCacheRepository>() {
             Some(repo) => repo,
             None => return 0,
         };
         let mut cached_count = 0;
         for team in teams {
-            if self.cache_team_role(repo.as_ref(), team, user_id).await {
+            if self.cache_team_role(repo.as_ref(), team, scope).await {
                 cached_count += 1;
             }
         }
@@ -285,7 +294,7 @@ impl SyncEngine {
         &self,
         repo: &TeamKeyCacheRepository,
         team: &Team,
-        user_id: &str,
+        scope: &CloudAccountScope,
     ) -> bool {
         let members = match self.cloud_client.list_team_members(&team.id).await {
             Ok(members) => members,
@@ -294,17 +303,17 @@ impl SyncEngine {
                 return false;
             }
         };
-        let Some(member) = members.iter().find(|m| m.user_id == user_id) else {
+        let Some(member) = members.iter().find(|m| m.user_id == scope.user_id) else {
             return false;
         };
-        let existing_cache = match repo.get(&team.id) {
+        let existing_cache = match repo.get(scope, &team.id) {
             Ok(cache) => cache,
             Err(e) => {
                 tracing::warn!("[同步] 读取团队 {} 缓存失败: {}", team.id, e);
                 None
             }
         };
-        let cache = team_key_cache_for_cloud_team(team, member.role, existing_cache);
+        let cache = team_key_cache_for_cloud_team(scope, team, member.role, existing_cache);
         match repo.upsert(&cache) {
             Ok(()) => true,
             Err(e) => {
@@ -314,21 +323,22 @@ impl SyncEngine {
         }
     }
 
-    fn restore_cached_team_keys(&self, teams: &[Team]) {
+    fn restore_cached_team_keys(&self, teams: &[Team], scope: &CloudAccountScope) {
         let Some(personal_key) = crypto::get_raw_master_key() else {
             return;
         };
         let Some(repo) = self.storage.get::<TeamKeyCacheRepository>() else {
             return;
         };
-        let manager = TeamKeyManager::new((*repo).clone(), self.crypto_service.clone());
+        let manager =
+            TeamKeyManager::new((*repo).clone(), self.crypto_service.clone(), scope.clone());
         for (team_id, status) in manager.load_cached_team_keys(teams, &personal_key) {
             match status {
-                Ok(TeamKeyStatus::Unlocked) => {
+                Ok(TeamKeyLoadStatus::Unlocked | TeamKeyLoadStatus::LegacyUnlocked) => {
                     tracing::info!("[同步] 已从本地缓存解锁团队 {}", team_id);
                 }
-                Ok(TeamKeyStatus::Missing | TeamKeyStatus::Cached) => {}
-                Ok(TeamKeyStatus::VersionMismatch) => {
+                Ok(TeamKeyLoadStatus::Missing) => {}
+                Ok(TeamKeyLoadStatus::VersionMismatch) => {
                     tracing::warn!("[同步] 团队 {} 的本地密钥版本已过期", team_id);
                 }
                 Err(error) => {
@@ -383,7 +393,8 @@ impl SyncEngine {
         team_id: &str,
         team_key: &str,
         personal_key: &str,
-    ) -> Result<TeamKeyStatus, SyncError> {
+    ) -> Result<TeamKeyLoadStatus, SyncError> {
+        let scope = self.account_scope()?;
         let repo = self
             .storage
             .get::<TeamKeyCacheRepository>()
@@ -391,10 +402,10 @@ impl SyncEngine {
                 SyncError::StorageError("TeamKeyCacheRepository not found".to_string())
             })?;
         let cache = repo
-            .get(team_id)
+            .get(&scope, team_id)
             .map_err(|e| SyncError::StorageError(e.to_string()))?
             .ok_or_else(|| SyncError::StorageError("团队缓存不存在".to_string()))?;
-        let manager = TeamKeyManager::new((*repo).clone(), self.crypto_service.clone());
+        let manager = TeamKeyManager::new((*repo).clone(), self.crypto_service.clone(), scope);
         if cache.key_verification.is_some() {
             return manager
                 .save_key_for_cached_team(team_id, team_key, personal_key)
@@ -415,6 +426,7 @@ impl SyncEngine {
     }
 
     fn save_rotated_team_key(&self, team: &Team, new_key: &str) -> Result<(), SyncError> {
+        let scope = self.account_scope()?;
         let personal_key = crypto::get_raw_master_key().ok_or(SyncError::NotUnlocked)?;
         let repo = self
             .storage
@@ -422,7 +434,7 @@ impl SyncEngine {
             .ok_or_else(|| {
                 SyncError::StorageError("TeamKeyCacheRepository not found".to_string())
             })?;
-        TeamKeyManager::new((*repo).clone(), self.crypto_service.clone())
+        TeamKeyManager::new((*repo).clone(), self.crypto_service.clone(), scope)
             .save_verified_team_key(team, new_key, &personal_key)
             .map_err(|e| SyncError::StorageError(e.to_string()))?;
         self.update_cached_team(team.clone())
@@ -601,18 +613,27 @@ impl SyncEngine {
 }
 
 fn team_key_cache_for_cloud_team(
+    scope: &CloudAccountScope,
     team: &Team,
     role: TeamRole,
     existing: Option<TeamKeyCache>,
 ) -> TeamKeyCache {
-    let (encrypted_team_key, last_verified_at) = existing
-        .map(|cache| (cache.encrypted_team_key, cache.last_verified_at))
-        .unwrap_or((None, None));
+    let (cached_key_version, encrypted_team_key, last_verified_at) = existing
+        .map(|cache| {
+            (
+                cache.cached_key_version,
+                cache.encrypted_team_key,
+                cache.last_verified_at,
+            )
+        })
+        .unwrap_or((None, None, None));
 
     TeamKeyCache {
+        scope: scope.clone(),
         team_id: team.id.clone(),
         team_name: team.name.clone(),
         key_version: team.key_version,
+        cached_key_version,
         key_verification: team.key_verification.clone(),
         encrypted_team_key,
         last_verified_at,
@@ -649,7 +670,7 @@ mod tests {
         AuthResponse, CloudApiClient, CloudApiError, OAuthResponse, UserInfo,
     };
     use crate::cloud_sync::models::{CloudSyncData, CloudUserConfig, Team, TeamMember, TeamRole};
-    use crate::cloud_sync::{CloudSyncService, SyncEngine, TeamKeyStatus};
+    use crate::cloud_sync::{CloudAccountScope, CloudSyncService, SyncEngine, TeamKeyLoadStatus};
     use crate::crypto;
     use crate::storage::connection::SqliteConnection;
     use crate::storage::migration::run_migrations;
@@ -668,6 +689,10 @@ mod tests {
             created_at: 100,
             updated_at: 200,
         }
+    }
+
+    fn test_scope() -> CloudAccountScope {
+        CloudAccountScope::new("default", "user-1")
     }
 
     fn member(role: TeamRole) -> TeamMember {
@@ -845,7 +870,7 @@ mod tests {
 
     #[test]
     fn builds_team_cache_for_cloud_team_without_existing_key() {
-        let cache = team_key_cache_for_cloud_team(&team(), TeamRole::Admin, None);
+        let cache = team_key_cache_for_cloud_team(&test_scope(), &team(), TeamRole::Admin, None);
 
         assert_eq!("team-1", cache.team_id);
         assert_eq!("Platform", cache.team_name);
@@ -858,9 +883,11 @@ mod tests {
     #[test]
     fn preserving_existing_team_key_when_cloud_team_metadata_changes() {
         let existing = TeamKeyCache {
+            scope: test_scope(),
             team_id: "team-1".to_string(),
             team_name: "Old name".to_string(),
             key_version: 3,
+            cached_key_version: Some(3),
             key_verification: Some("old-verification".to_string()),
             encrypted_team_key: Some("encrypted-key".to_string()),
             last_verified_at: Some(1234),
@@ -868,7 +895,8 @@ mod tests {
             role: Some("member".to_string()),
         };
 
-        let cache = team_key_cache_for_cloud_team(&team(), TeamRole::Owner, Some(existing));
+        let cache =
+            team_key_cache_for_cloud_team(&test_scope(), &team(), TeamRole::Owner, Some(existing));
 
         assert_eq!("Platform", cache.team_name);
         assert_eq!(7, cache.key_version);
@@ -902,7 +930,7 @@ mod tests {
         let refreshed = engine.refresh_team_key_cache().await.unwrap();
 
         let cache = repo
-            .get("team-1")
+            .get(&test_scope(), "team-1")
             .expect("cache read")
             .expect("team cache exists");
         assert_eq!(1, refreshed);
@@ -915,9 +943,11 @@ mod tests {
     async fn save_or_initialize_team_key_initializes_missing_verification() {
         let (storage, repo) = test_storage();
         repo.upsert(&TeamKeyCache {
+            scope: test_scope(),
             team_id: "team-1".to_string(),
             team_name: "Platform".to_string(),
             key_version: 0,
+            cached_key_version: None,
             key_verification: None,
             encrypted_team_key: None,
             last_verified_at: None,
@@ -927,6 +957,10 @@ mod tests {
         .expect("cache seed");
         let initialized_team = Arc::new(Mutex::new(None));
         let service = Arc::new(RwLock::new(CloudSyncService::new()));
+        service
+            .write()
+            .expect("service lock")
+            .set_logged_in("user-1".to_string());
         let engine = SyncEngine::new(
             Arc::new(FakeCloudClient {
                 teams: Vec::new(),
@@ -948,10 +982,10 @@ mod tests {
             .clone()
             .expect("team initialized");
         let cache = repo
-            .get("team-1")
+            .get(&test_scope(), "team-1")
             .expect("cache read")
             .expect("cache exists");
-        assert_eq!(TeamKeyStatus::Unlocked, status);
+        assert_eq!(TeamKeyLoadStatus::LegacyUnlocked, status);
         assert_eq!(1, initialized.key_version);
         assert!(crypto::verify_master_key(
             "team-secret",

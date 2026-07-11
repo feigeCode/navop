@@ -50,6 +50,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260705000001",
         include_str!("../../migrations/20260705000001_terminal_command_history.sql"),
     ),
+    (
+        "20260711000001",
+        include_str!("../../migrations/20260711000001_scoped_team_key_cache.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

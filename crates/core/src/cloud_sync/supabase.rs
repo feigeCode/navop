@@ -1108,6 +1108,10 @@ impl From<&TeamMember> for TeamMemberRow {
 
 #[async_trait]
 impl CloudApiClient for SupabaseClient {
+    fn environment_id(&self) -> &str {
+        self.config.project_url.trim_end_matches('/')
+    }
+
     // ========================================================================
     // 认证相关
     // ========================================================================

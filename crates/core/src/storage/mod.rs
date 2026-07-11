@@ -7,8 +7,13 @@ pub mod quick_command;
 pub mod repository;
 pub mod row_mapping;
 pub mod sftp_favorite_path;
+pub mod team_key_cache;
 pub mod terminal_command_history;
 pub mod traits;
+
+#[cfg(test)]
+#[path = "team_key_cache_tests.rs"]
+mod team_key_cache_tests;
 
 use gpui::App;
 pub use manager::*;
@@ -16,6 +21,7 @@ pub use models::*;
 pub use quick_command::*;
 pub use repository::*;
 pub use sftp_favorite_path::*;
+pub use team_key_cache::*;
 pub use terminal_command_history::*;
 
 pub fn init(cx: &mut App) {

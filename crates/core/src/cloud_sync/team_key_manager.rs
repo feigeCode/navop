@@ -1,15 +1,26 @@
 use std::fmt;
 use std::sync::{Arc, RwLock};
 
-use crate::cloud_sync::{CloudSyncData, CloudSyncService, Team};
+use crate::cloud_sync::team_key_envelope::{
+    TeamKeyEnvelopeError, TeamKeyScheme, detect_team_key_scheme, unlock_team_key,
+};
+use crate::cloud_sync::{CloudAccountScope, CloudSyncData, CloudSyncService, Team};
 use crate::crypto;
 use crate::storage::{TeamKeyCache, TeamKeyCacheRepository, now};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TeamKeyStatus {
+pub enum TeamKeyCacheStatus {
     Missing,
     Cached,
+    VersionMismatch,
+    LegacyNeedsUpgrade,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TeamKeyLoadStatus {
     Unlocked,
+    LegacyUnlocked,
+    Missing,
     VersionMismatch,
 }
 
@@ -23,6 +34,7 @@ pub enum TeamKeyError {
     InvalidCachedKey,
     Storage(String),
     ServiceLock,
+    KeyTooShort { minimum: usize },
 }
 
 impl fmt::Display for TeamKeyError {
@@ -38,6 +50,7 @@ impl fmt::Display for TeamKeyError {
             Self::InvalidCachedKey => write!(f, "本地缓存的团队密钥无法解密或验证"),
             Self::Storage(error) => write!(f, "团队密钥缓存读写失败: {error}"),
             Self::ServiceLock => write!(f, "同步服务锁获取失败"),
+            Self::KeyTooShort { minimum } => write!(f, "团队密钥至少需要 {minimum} 个字符"),
         }
     }
 }
@@ -47,6 +60,7 @@ impl std::error::Error for TeamKeyError {}
 pub struct TeamKeyManager {
     repo: TeamKeyCacheRepository,
     service: Arc<RwLock<CloudSyncService>>,
+    scope: CloudAccountScope,
 }
 
 pub struct TeamKeyRotation {
@@ -55,8 +69,16 @@ pub struct TeamKeyRotation {
 }
 
 impl TeamKeyManager {
-    pub fn new(repo: TeamKeyCacheRepository, service: Arc<RwLock<CloudSyncService>>) -> Self {
-        Self { repo, service }
+    pub fn new(
+        repo: TeamKeyCacheRepository,
+        service: Arc<RwLock<CloudSyncService>>,
+        scope: CloudAccountScope,
+    ) -> Self {
+        Self {
+            repo,
+            service,
+            scope,
+        }
     }
 
     pub fn save_verified_team_key(
@@ -64,8 +86,8 @@ impl TeamKeyManager {
         team: &Team,
         team_key: &str,
         personal_key: &str,
-    ) -> Result<TeamKeyStatus, TeamKeyError> {
-        self.verify_team_key(team, team_key)?;
+    ) -> Result<TeamKeyLoadStatus, TeamKeyError> {
+        let unlocked = self.unlock_team_key(team, team_key)?;
         let encrypted = crypto::encrypt_with_key(team_key, personal_key);
         let cache = self.cache_for_team(team, Some(encrypted), Some(now()))?;
         self.repo
@@ -74,8 +96,8 @@ impl TeamKeyManager {
         self.service
             .write()
             .map_err(|_| TeamKeyError::ServiceLock)?
-            .set_team_key(&team.id, team_key.to_string());
-        Ok(TeamKeyStatus::Unlocked)
+            .set_team_key(&team.id, unlocked.data_key);
+        Ok(load_status_for_scheme(unlocked.scheme))
     }
 
     pub fn save_key_for_cached_team(
@@ -83,10 +105,10 @@ impl TeamKeyManager {
         team_id: &str,
         team_key: &str,
         personal_key: &str,
-    ) -> Result<TeamKeyStatus, TeamKeyError> {
+    ) -> Result<TeamKeyLoadStatus, TeamKeyError> {
         let cache = self
             .repo
-            .get(team_id)
+            .get(&self.scope, team_id)
             .map_err(|e| TeamKeyError::Storage(e.to_string()))?
             .ok_or_else(|| TeamKeyError::Storage("团队缓存不存在".to_string()))?;
         let team = Team {
@@ -106,46 +128,47 @@ impl TeamKeyManager {
         &self,
         team: &Team,
         personal_key: &str,
-    ) -> Result<TeamKeyStatus, TeamKeyError> {
+    ) -> Result<TeamKeyLoadStatus, TeamKeyError> {
         let Some(cache) = self
             .repo
-            .get(&team.id)
+            .get(&self.scope, &team.id)
             .map_err(|e| TeamKeyError::Storage(e.to_string()))?
         else {
-            return Ok(TeamKeyStatus::Missing);
+            return Ok(TeamKeyLoadStatus::Missing);
         };
-        if cache.key_version != team.key_version {
+        if cache.cached_key_version != Some(team.key_version) {
             self.service
                 .write()
                 .map_err(|_| TeamKeyError::ServiceLock)?
                 .remove_team_key(&team.id);
-            return Ok(TeamKeyStatus::VersionMismatch);
+            return Ok(TeamKeyLoadStatus::VersionMismatch);
         }
         let Some(encrypted) = cache.encrypted_team_key else {
-            return Ok(TeamKeyStatus::Missing);
+            return Ok(TeamKeyLoadStatus::Missing);
         };
         let team_key = crypto::decrypt_with_key(&encrypted, personal_key)
             .map_err(|_| TeamKeyError::InvalidCachedKey)?;
-        self.verify_team_key(team, &team_key)
+        let unlocked = self
+            .unlock_team_key(team, &team_key)
             .map_err(|_| TeamKeyError::InvalidCachedKey)?;
         self.service
             .write()
             .map_err(|_| TeamKeyError::ServiceLock)?
-            .set_team_key(&team.id, team_key);
-        Ok(TeamKeyStatus::Unlocked)
+            .set_team_key(&team.id, unlocked.data_key);
+        Ok(load_status_for_scheme(unlocked.scheme))
     }
 
     pub fn load_cached_team_key_by_id(
         &self,
         team_id: &str,
         personal_key: &str,
-    ) -> Result<TeamKeyStatus, TeamKeyError> {
+    ) -> Result<TeamKeyLoadStatus, TeamKeyError> {
         let Some(cache) = self
             .repo
-            .get(team_id)
+            .get(&self.scope, team_id)
             .map_err(|e| TeamKeyError::Storage(e.to_string()))?
         else {
-            return Ok(TeamKeyStatus::Missing);
+            return Ok(TeamKeyLoadStatus::Missing);
         };
         let team = Team {
             id: cache.team_id,
@@ -164,7 +187,7 @@ impl TeamKeyManager {
         &self,
         teams: &[Team],
         personal_key: &str,
-    ) -> Vec<(String, Result<TeamKeyStatus, TeamKeyError>)> {
+    ) -> Vec<(String, Result<TeamKeyLoadStatus, TeamKeyError>)> {
         teams
             .iter()
             .map(|team| {
@@ -210,11 +233,12 @@ impl TeamKeyManager {
     pub fn forget_team_key(&self, team_id: &str) -> Result<(), TeamKeyError> {
         if let Some(cache) = self
             .repo
-            .get(team_id)
+            .get(&self.scope, team_id)
             .map_err(|e| TeamKeyError::Storage(e.to_string()))?
         {
             self.repo
                 .upsert(&TeamKeyCache {
+                    cached_key_version: None,
                     encrypted_team_key: None,
                     last_verified_at: None,
                     ..cache
@@ -228,16 +252,16 @@ impl TeamKeyManager {
         Ok(())
     }
 
-    fn verify_team_key(&self, team: &Team, team_key: &str) -> Result<(), TeamKeyError> {
+    fn unlock_team_key(
+        &self,
+        team: &Team,
+        team_key: &str,
+    ) -> Result<crate::cloud_sync::team_key_envelope::UnlockedTeamKey, TeamKeyError> {
         let verification = team
             .key_verification
             .as_deref()
             .ok_or(TeamKeyError::MissingVerification)?;
-        if crypto::verify_master_key(team_key, verification) {
-            Ok(())
-        } else {
-            Err(TeamKeyError::InvalidTeamKey)
-        }
+        unlock_team_key(verification, team_key).map_err(team_key_envelope_error)
     }
 
     fn cache_for_team(
@@ -248,12 +272,14 @@ impl TeamKeyManager {
     ) -> Result<TeamKeyCache, TeamKeyError> {
         let existing = self
             .repo
-            .get(&team.id)
+            .get(&self.scope, &team.id)
             .map_err(|e| TeamKeyError::Storage(e.to_string()))?;
         Ok(TeamKeyCache {
+            scope: self.scope.clone(),
             team_id: team.id.clone(),
             team_name: team.name.clone(),
             key_version: team.key_version,
+            cached_key_version: encrypted_team_key.as_ref().map(|_| team.key_version),
             key_verification: team.key_verification.clone(),
             encrypted_team_key,
             last_verified_at,
@@ -263,13 +289,46 @@ impl TeamKeyManager {
     }
 }
 
+pub fn team_key_cache_status(cache: &TeamKeyCache) -> TeamKeyCacheStatus {
+    if cache.cached_key_version.is_some() && cache.cached_key_version != Some(cache.key_version) {
+        return TeamKeyCacheStatus::VersionMismatch;
+    }
+    if cache.encrypted_team_key.is_none() || cache.cached_key_version.is_none() {
+        return TeamKeyCacheStatus::Missing;
+    }
+    match cache.key_verification.as_deref() {
+        Some(verification) if detect_team_key_scheme(verification) == TeamKeyScheme::EnvelopeV2 => {
+            TeamKeyCacheStatus::Cached
+        }
+        Some(_) => TeamKeyCacheStatus::LegacyNeedsUpgrade,
+        None => TeamKeyCacheStatus::Missing,
+    }
+}
+
+fn load_status_for_scheme(scheme: TeamKeyScheme) -> TeamKeyLoadStatus {
+    match scheme {
+        TeamKeyScheme::Legacy => TeamKeyLoadStatus::LegacyUnlocked,
+        TeamKeyScheme::EnvelopeV2 => TeamKeyLoadStatus::Unlocked,
+    }
+}
+
+fn team_key_envelope_error(error: TeamKeyEnvelopeError) -> TeamKeyError {
+    match error {
+        TeamKeyEnvelopeError::KeyTooShort { minimum } => TeamKeyError::KeyTooShort { minimum },
+        TeamKeyEnvelopeError::InvalidKeyOrEnvelope | TeamKeyEnvelopeError::CreationFailed => {
+            TeamKeyError::InvalidTeamKey
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, RwLock};
 
     use crate::cloud_sync::{
-        CloudSyncData, CloudSyncService, Team, TeamKeyManager, TeamKeyStatus, data_type,
+        CloudAccountScope, CloudSyncData, CloudSyncService, Team, TeamKeyLoadStatus,
+        TeamKeyManager, data_type,
     };
     use crate::crypto;
     use crate::storage::connection::SqliteConnection;
@@ -277,6 +336,10 @@ mod tests {
     use crate::storage::{TeamKeyCache, TeamKeyCacheRepository};
 
     static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn test_scope() -> CloudAccountScope {
+        CloudAccountScope::new("default", "user-1")
+    }
 
     fn test_repo() -> TeamKeyCacheRepository {
         let counter = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -315,7 +378,10 @@ mod tests {
 
     fn manager(repo: TeamKeyCacheRepository) -> (TeamKeyManager, Arc<RwLock<CloudSyncService>>) {
         let service = Arc::new(RwLock::new(CloudSyncService::new()));
-        (TeamKeyManager::new(repo, service.clone()), service)
+        (
+            TeamKeyManager::new(repo, service.clone(), test_scope()),
+            service,
+        )
     }
 
     #[test]
@@ -329,7 +395,7 @@ mod tests {
             .save_verified_team_key(&team, "team-secret", "personal-secret")
             .expect("team key saves");
 
-        assert_eq!(TeamKeyStatus::Unlocked, status);
+        assert_eq!(TeamKeyLoadStatus::LegacyUnlocked, status);
         assert_eq!(
             Some("team-secret".to_string()),
             service
@@ -340,7 +406,7 @@ mod tests {
         );
 
         let cache = repo
-            .get("team-1")
+            .get(&test_scope(), "team-1")
             .expect("cache read")
             .expect("cache exists");
         assert_ne!(Some("team-secret".to_string()), cache.encrypted_team_key);
@@ -363,7 +429,7 @@ mod tests {
             .load_cached_team_key(&team, "personal-secret")
             .expect("cached key loads");
 
-        assert_eq!(TeamKeyStatus::Unlocked, status);
+        assert_eq!(TeamKeyLoadStatus::LegacyUnlocked, status);
         assert_eq!(
             Some("team-secret".to_string()),
             second_service
@@ -380,9 +446,11 @@ mod tests {
         let verification_service = CloudSyncService::new();
         let team = team(&verification_service, 4);
         repo.upsert(&TeamKeyCache {
+            scope: test_scope(),
             team_id: team.id.clone(),
             team_name: team.name.clone(),
             key_version: team.key_version,
+            cached_key_version: None,
             key_verification: team.key_verification.clone(),
             encrypted_team_key: None,
             last_verified_at: None,
@@ -396,9 +464,9 @@ mod tests {
             .save_key_for_cached_team("team-1", "team-secret", "personal-secret")
             .expect("team key saves");
 
-        assert_eq!(TeamKeyStatus::Unlocked, status);
+        assert_eq!(TeamKeyLoadStatus::LegacyUnlocked, status);
         assert!(
-            repo.get("team-1")
+            repo.get(&test_scope(), "team-1")
                 .expect("cache read")
                 .expect("cache exists")
                 .encrypted_team_key
@@ -440,8 +508,8 @@ mod tests {
 
         assert_eq!(
             vec![
-                ("team-1".to_string(), Ok(TeamKeyStatus::Unlocked)),
-                ("team-2".to_string(), Ok(TeamKeyStatus::Missing)),
+                ("team-1".to_string(), Ok(TeamKeyLoadStatus::LegacyUnlocked)),
+                ("team-2".to_string(), Ok(TeamKeyLoadStatus::Missing)),
             ],
             statuses
         );
@@ -474,7 +542,7 @@ mod tests {
             .load_cached_team_key_by_id("team-1", "personal-secret")
             .expect("cached key loads");
 
-        assert_eq!(TeamKeyStatus::Unlocked, status);
+        assert_eq!(TeamKeyLoadStatus::LegacyUnlocked, status);
         assert!(
             service
                 .read()
@@ -550,7 +618,11 @@ mod tests {
         let result = manager.save_verified_team_key(&team, "wrong-key", "personal-secret");
 
         assert!(result.is_err());
-        assert!(repo.get("team-1").expect("cache read").is_none());
+        assert!(
+            repo.get(&test_scope(), "team-1")
+                .expect("cache read")
+                .is_none()
+        );
         assert!(
             !service
                 .read()
@@ -574,7 +646,7 @@ mod tests {
             .load_cached_team_key(&new_team, "personal-secret")
             .expect("cached key status resolves");
 
-        assert_eq!(TeamKeyStatus::VersionMismatch, status);
+        assert_eq!(TeamKeyLoadStatus::VersionMismatch, status);
         assert!(
             !service
                 .read()
@@ -587,9 +659,11 @@ mod tests {
     fn forget_team_key_preserves_team_metadata() {
         let repo = test_repo();
         repo.upsert(&TeamKeyCache {
+            scope: test_scope(),
             team_id: "team-1".to_string(),
             team_name: "Platform".to_string(),
             key_version: 1,
+            cached_key_version: Some(1),
             key_verification: Some("verification".to_string()),
             encrypted_team_key: Some("encrypted".to_string()),
             last_verified_at: Some(123),
@@ -606,7 +680,7 @@ mod tests {
         manager.forget_team_key("team-1").expect("forget key");
 
         let cache = repo
-            .get("team-1")
+            .get(&test_scope(), "team-1")
             .expect("cache read")
             .expect("cache exists");
         assert_eq!("Platform", cache.team_name);

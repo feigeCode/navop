@@ -65,6 +65,10 @@ impl std::error::Error for CloudApiError {}
 /// 定义与云端服务交互的通用接口。
 #[async_trait]
 pub trait CloudApiClient: Send + Sync {
+    fn environment_id(&self) -> &str {
+        "default"
+    }
+
     // ========================================================================
     // 认证相关
     // ========================================================================
