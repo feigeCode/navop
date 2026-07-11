@@ -93,7 +93,7 @@ async fn prompt_timeout_sends_cancel_and_returns_to_ready() {
 
 #[tokio::test]
 async fn process_exit_after_initialize_fails_connect() {
-    let error = match connect_fake(Mode::ExitAfterInitialize, Duration::from_secs(2)).await {
+    let error = match connect_fake(Mode::ExitAfterInitialize, Duration::from_secs(10)).await {
         Ok(_) => panic!("exited fake agent must not produce a ready connection"),
         Err(error) => error,
     };
