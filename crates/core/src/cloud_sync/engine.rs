@@ -268,12 +268,42 @@ impl SyncEngine {
             .map_err(|e| SyncError::NetworkError(e.to_string()))?;
         tracing::info!("[同步] 获取到 {} 个团队", teams.len());
         let cached_count = self.cache_team_roles(&teams, &scope).await;
+        self.remove_departed_team_keys(&teams, &scope)?;
         self.restore_cached_team_keys(&teams, &scope);
         self.cached_teams
             .write()
             .map_err(|_| SyncError::StorageError("团队缓存锁获取失败".to_string()))?
             .clone_from(&teams);
         Ok(cached_count)
+    }
+
+    fn remove_departed_team_keys(
+        &self,
+        teams: &[Team],
+        scope: &CloudAccountScope,
+    ) -> Result<(), SyncError> {
+        let Some(repo) = self.storage.get::<TeamKeyCacheRepository>() else {
+            return Ok(());
+        };
+        let remote_ids = teams
+            .iter()
+            .map(|team| team.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        for cache in repo
+            .list(scope)
+            .map_err(|error| SyncError::StorageError(error.to_string()))?
+        {
+            if remote_ids.contains(cache.team_id.as_str()) {
+                continue;
+            }
+            repo.delete(scope, &cache.team_id)
+                .map_err(|error| SyncError::StorageError(error.to_string()))?;
+            self.crypto_service
+                .write()
+                .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?
+                .remove_team_key(&cache.team_id);
+        }
+        Ok(())
     }
 
     /// 缓存团队角色信息到 team_key_cache 表
@@ -635,11 +665,15 @@ fn team_key_cache_for_cloud_team(
 ) -> TeamKeyCache {
     let (cached_key_version, encrypted_team_key, last_verified_at) = existing
         .map(|cache| {
-            (
-                cache.cached_key_version,
-                cache.encrypted_team_key,
-                cache.last_verified_at,
-            )
+            if cache.cached_key_version == Some(team.key_version) {
+                (
+                    cache.cached_key_version,
+                    cache.encrypted_team_key,
+                    cache.last_verified_at,
+                )
+            } else {
+                (cache.cached_key_version, None, None)
+            }
         })
         .unwrap_or((None, None, None));
 
@@ -896,7 +930,7 @@ mod tests {
     }
 
     #[test]
-    fn preserving_existing_team_key_when_cloud_team_metadata_changes() {
+    fn remote_key_version_change_invalidates_existing_team_key() {
         let existing = TeamKeyCache {
             scope: test_scope(),
             team_id: "team-1".to_string(),
@@ -915,9 +949,9 @@ mod tests {
 
         assert_eq!("Platform", cache.team_name);
         assert_eq!(7, cache.key_version);
-        assert_eq!(Some("encrypted-key".to_string()), cache.encrypted_team_key);
+        assert_eq!(None, cache.encrypted_team_key);
         assert_eq!(team().key_verification, cache.key_verification);
-        assert_eq!(Some(1234), cache.last_verified_at);
+        assert_eq!(None, cache.last_verified_at);
         assert_eq!(Some("owner".to_string()), cache.role);
     }
 
@@ -952,6 +986,56 @@ mod tests {
         assert_eq!("Platform", cache.team_name);
         assert_eq!(Some("verification".to_string()), cache.key_verification);
         assert_eq!(Some("owner".to_string()), cache.role);
+    }
+
+    #[tokio::test]
+    async fn refresh_removes_departed_team_cache_and_runtime_key() {
+        let (storage, repo) = test_storage();
+        repo.upsert(&TeamKeyCache {
+            scope: test_scope(),
+            team_id: "departed-team".to_string(),
+            team_name: "Departed".to_string(),
+            key_version: 1,
+            cached_key_version: Some(1),
+            key_verification: Some("TEAMKEY2:cached".to_string()),
+            encrypted_team_key: Some("encrypted".to_string()),
+            last_verified_at: Some(123),
+            updated_at: 200,
+            role: Some("admin".to_string()),
+        })
+        .expect("seed departed team");
+        let service = Arc::new(RwLock::new(CloudSyncService::new()));
+        service
+            .write()
+            .expect("service lock")
+            .set_logged_in("user-1".to_string());
+        service
+            .write()
+            .expect("service lock")
+            .set_team_key("departed-team", "runtime-key".to_string());
+        let engine = SyncEngine::new(
+            Arc::new(FakeCloudClient {
+                teams: Vec::new(),
+                members: Vec::new(),
+                initialized_team: Arc::new(Mutex::new(None)),
+            }),
+            service.clone(),
+            storage,
+        );
+
+        engine.refresh_team_key_cache().await.expect("refresh");
+
+        assert!(
+            repo.get(&test_scope(), "departed-team")
+                .expect("read departed team")
+                .is_none()
+        );
+        assert!(
+            !service
+                .read()
+                .expect("service lock")
+                .is_team_unlocked("departed-team")
+        );
     }
 
     #[tokio::test]
