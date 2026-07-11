@@ -15,7 +15,10 @@ use smol::Timer;
 use tokio::sync::Mutex;
 
 use crate::external_session::snapshot_from_metadata;
-use crate::{MAX_EDITABLE_FILE_SIZE, RemoteFileSnapshot, UploadDecision, decide_upload};
+use crate::{
+    MAX_EDITABLE_FILE_SIZE, RemoteFileSnapshot, RemoteMutationCallback, UploadDecision,
+    decide_upload,
+};
 
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(750);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -39,6 +42,7 @@ struct ConflictPrompt {
 struct SnapshotCompletion {
     task: gpui::Task<Result<(RemoteFileSnapshot, u64)>>,
     success_message: String,
+    remote_changed: bool,
 }
 
 pub(crate) struct ExternalEditController {
@@ -52,6 +56,7 @@ pub(crate) struct ExternalEditController {
     pending_sync: bool,
     suppress_until: Option<std::time::Instant>,
     _watcher: RecommendedWatcher,
+    on_remote_changed: RemoteMutationCallback,
 }
 
 pub(crate) struct ExternalEditControllerConfig {
@@ -61,6 +66,7 @@ pub(crate) struct ExternalEditControllerConfig {
     pub(crate) snapshot: RemoteFileSnapshot,
     pub(crate) initial_local_hash: u64,
     pub(crate) check_conflict: bool,
+    pub(crate) on_remote_changed: RemoteMutationCallback,
 }
 
 impl ExternalEditController {
@@ -76,6 +82,7 @@ impl ExternalEditController {
             pending_sync: false,
             suppress_until: None,
             _watcher: watcher,
+            on_remote_changed: config.on_remote_changed,
         }
     }
 
@@ -218,6 +225,7 @@ impl ExternalEditController {
             SnapshotCompletion {
                 task,
                 success_message: t!("RemoteFileEditor.notification.external_uploaded").to_string(),
+                remote_changed: true,
             },
             window,
             cx,
@@ -246,6 +254,7 @@ impl ExternalEditController {
             SnapshotCompletion {
                 task,
                 success_message: t!("RemoteFileEditor.notification.external_reloaded").to_string(),
+                remote_changed: false,
             },
             window,
             cx,
@@ -265,6 +274,9 @@ impl ExternalEditController {
                     let _ = entity.update_in(cx, |this, window, cx| {
                         this.snapshot = snapshot;
                         this.last_local_hash = local_hash;
+                        if completion.remote_changed {
+                            this.on_remote_changed.notify(cx);
+                        }
                         window.push_notification(
                             Notification::success(completion.success_message),
                             cx,

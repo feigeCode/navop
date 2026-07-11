@@ -21,8 +21,9 @@ use crate::external_edit_controller::{
 use crate::external_editor_confirmation::confirm_external_program;
 use crate::external_session::snapshot_from_metadata;
 use crate::{
-    LaunchTemplateContext, MAX_EDITABLE_FILE_SIZE, RemoteFileSnapshot, launch_external_editor,
-    matching_editors, render_args, resolve_editor_program, session_temp_file,
+    LaunchTemplateContext, MAX_EDITABLE_FILE_SIZE, RemoteFileSnapshot, RemoteMutationCallback,
+    launch_external_editor, matching_editors, render_args, resolve_editor_program,
+    session_temp_file,
 };
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
@@ -31,6 +32,7 @@ pub struct ExternalEditorOpenRequest {
     pub remote_path: String,
     pub editor_key: String,
     pub client: Arc<Mutex<RusshSftpClient>>,
+    pub on_remote_changed: RemoteMutationCallback,
 }
 
 pub(crate) struct ExternalEditLaunch {
@@ -42,6 +44,7 @@ pub(crate) struct ExternalEditLaunch {
     pub(crate) client: Arc<Mutex<RusshSftpClient>>,
     pub(crate) check_conflict: bool,
     pub(crate) auto_upload: bool,
+    pub(crate) on_remote_changed: RemoteMutationCallback,
 }
 
 pub fn external_editor_menu_label(editor: &str) -> String {
@@ -118,6 +121,7 @@ pub fn open_remote_file_external_editor<T: 'static>(
         client: request.client,
         check_conflict,
         auto_upload,
+        on_remote_changed: request.on_remote_changed,
     };
     if editor_override.is_none() {
         confirm_external_program(launch, window, cx);
@@ -181,6 +185,7 @@ impl ExternalEditLaunch {
             snapshot: prepared.snapshot,
             initial_local_hash: prepared.local_hash,
             check_conflict: self.check_conflict,
+            on_remote_changed: self.on_remote_changed,
         };
         let controller = cx.new(|_| ExternalEditController::new(config, watcher));
         ExternalEditWatchLoop::new(controller, receiver).run(window, cx);

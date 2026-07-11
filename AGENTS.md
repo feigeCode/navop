@@ -373,6 +373,13 @@
 - **验证方式**：覆盖默认设置、显式关闭、内容指纹变化/不变、远端重载指纹更新；手工验证 Zed 与 Notepad-- 保存后上传，以及关闭开关后远端不变。
 - **适用范围**：`crates/remote_file_editor`、远程文件编辑器设置及所有外部编辑器贡献。
 
+- **标题**：远端写操作成功后统一刷新当前可见目录
+- **触发信号**：外部编辑器上传或内置编辑器保存已经成功，但 SFTP 侧边栏仍显示旧的大小、时间或目录内容，需要手动刷新。
+- **根因 / 约束**：远端编辑器与 SFTP 视图分属不同 crate，不能通过反向依赖直接刷新；同一个内置编辑器窗口还可能承载来自不同 SFTP 面板的 tab。
+- **正确做法**：由调用方传入类型擦除且可克隆的远端变更成功回调，每个 tab/外部会话保存自己的回调；只有远端写成功后触发，失败、取消和只读操作不触发。回调刷新调用方当前可见目录，不改变当前路径；同路径 tab 被其他面板重新打开时更新为最新回调。
+- **验证方式**：覆盖回调调用 contract；运行 `remote_file_editor`、`sftp_view`、`terminal_view` 测试和 `main` check；手工确认外部上传与内置保存后侧边栏无需手动刷新。
+- **适用范围**：`crates/remote_file_editor`、`crates/sftp_view`、`crates/terminal_view/src/sidebar/file_manager_panel.rs`。
+
 - **标题**：可见终端执行不能用 EOF 绑定 Agent 取消与命令完成
 - **触发信号**：`terminal.exec` 执行 `command &`、`npm run dev &` 或 `nohup command &` 后一直 pending；点击 Agent 的 × 后对话仍显示运行中；或取消 Agent 时误向终端发送 Ctrl+C、终止仍在运行的命令。
 - **根因 / 约束**：后台进程会继承 PTY/stdout/stderr，shell leader 退出不代表 reader 能收到 EOF。Agent turn、tool waiter 与终端命令若共用同一个 future，进程或 FD 清理就会反向阻塞对话终态。可见终端命令由用户终端拥有，Agent 取消无权终止它。

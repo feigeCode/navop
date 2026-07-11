@@ -8,11 +8,11 @@
 
 ## Tasks
 
-- [ ] Add a callback contract and a failing invocation-count test.
-- [ ] Carry the callback through external editor launch/controller and invoke after successful upload.
-- [ ] Carry the callback through the built-in editor and invoke after successful save.
-- [ ] Update SFTP and terminal-sidebar call sites with weak-entity callbacks.
-- [ ] Consolidate successful remote mutation refresh calls behind one helper.
-- [ ] Verify cancellation/failure paths do not refresh and current path is preserved.
-- [ ] Run focused tests, `cargo check -p main`, formatting and diff checks.
+- [x] Add a callback contract and a failing invocation-count test.
+- [x] Carry the callback through external editor launch/controller and invoke after successful upload.
+- [x] Carry the callback through the built-in editor and invoke after successful save.
+- [x] Update SFTP and terminal-sidebar call sites with weak-entity callbacks.
+- [x] Consolidate editor-originated successful remote mutation refresh behind one helper per caller.
+- [x] Verify cancellation/failure paths do not invoke the success callback and current path is preserved.
+- [x] Run focused tests, `cargo check -p main`, formatting and diff checks.
 - [ ] Review, commit, rebuild the worktree app and manually verify sidebar refresh.
