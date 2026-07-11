@@ -1,5 +1,7 @@
 use crate::osc::OscEvent;
-use crate::{TerminalExecCompletion, TerminalExecRequest};
+use crate::{
+    TerminalControlError, TerminalControlReadiness, TerminalExecCompletion, TerminalExecRequest,
+};
 use std::time::{Duration, Instant};
 
 mod model;
@@ -41,6 +43,27 @@ impl ExecSupervisor {
 
     pub(crate) fn readiness(&self) -> ShellCommandReadiness {
         self.readiness
+    }
+
+    pub(crate) fn interrupt_foreground(
+        &self,
+    ) -> Result<TerminalControlReadiness, TerminalControlError> {
+        match self.readiness {
+            ShellCommandReadiness::SubmissionPending { .. } => {
+                Ok(TerminalControlReadiness::SubmissionPending)
+            }
+            ShellCommandReadiness::CommandRunning { .. } => {
+                Ok(TerminalControlReadiness::CommandRunning)
+            }
+            ShellCommandReadiness::Ready { .. } | ShellCommandReadiness::AwaitingPrompt { .. } => {
+                Err(TerminalControlError::NotRunning)
+            }
+            ShellCommandReadiness::Initializing
+            | ShellCommandReadiness::PromptRendering
+            | ShellCommandReadiness::ClearingInput { .. } => Err(TerminalControlError::Busy),
+            ShellCommandReadiness::Unknown => Err(TerminalControlError::ReadinessUnknown),
+            ShellCommandReadiness::Disconnected => Err(TerminalControlError::Disconnected),
+        }
     }
 
     pub(crate) fn start(&mut self, id: u64, request: TerminalExecRequest) -> Vec<ExecEffect> {

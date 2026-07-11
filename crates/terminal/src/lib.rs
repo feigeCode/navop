@@ -17,6 +17,8 @@ pub use serial_backend::SerialBackend;
 pub use ssh_backend::SshBackend;
 pub use terminal::TerminalScrollProxy;
 pub use types::{
-    LocalConfig, TerminalBackend, TerminalExecCompletion, TerminalExecHandle, TerminalExecOutput,
-    TerminalExecRequest, TerminalInputHandle, TerminalSize,
+    LocalConfig, TerminalBackend, TerminalControlAction, TerminalControlError,
+    TerminalControlHandle, TerminalControlOutput, TerminalControlReadiness, TerminalControlRequest,
+    TerminalExecCompletion, TerminalExecHandle, TerminalExecOutput, TerminalExecRequest,
+    TerminalInputHandle, TerminalSize,
 };

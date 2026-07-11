@@ -7,6 +7,84 @@ use tokio_util::sync::CancellationToken;
 
 use crate::TerminalExecError;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalControlReadiness {
+    SubmissionPending,
+    CommandRunning,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalControlAction {
+    Interrupt,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalControlRequest {
+    pub action: TerminalControlAction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalControlOutput {
+    pub action: TerminalControlAction,
+    pub sent: bool,
+    pub readiness_before: TerminalControlReadiness,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalControlError {
+    NotRunning,
+    Busy,
+    ReadinessUnknown,
+    Disconnected,
+    Cancelled,
+}
+
+impl std::fmt::Display for TerminalControlError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::NotRunning => "terminal_not_running",
+            Self::Busy => "terminal_busy",
+            Self::ReadinessUnknown => "readiness_unknown",
+            Self::Disconnected => "terminal_disconnected",
+            Self::Cancelled => "cancelled",
+        })
+    }
+}
+
+impl std::error::Error for TerminalControlError {}
+
+#[derive(Clone)]
+pub struct TerminalControlHandle {
+    control_fn: Arc<
+        dyn Fn(TerminalControlRequest, CancellationToken) -> TerminalControlFuture + Send + Sync,
+    >,
+}
+
+pub type TerminalControlFuture = Pin<
+    Box<dyn Future<Output = Result<TerminalControlOutput, TerminalControlError>> + Send + 'static>,
+>;
+
+impl TerminalControlHandle {
+    pub fn new(
+        control_fn: impl Fn(TerminalControlRequest, CancellationToken) -> TerminalControlFuture
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            control_fn: Arc::new(control_fn),
+        }
+    }
+
+    pub async fn control(
+        &self,
+        request: TerminalControlRequest,
+        cancellation: CancellationToken,
+    ) -> Result<TerminalControlOutput, TerminalControlError> {
+        (self.control_fn)(request, cancellation).await
+    }
+}
+
 #[derive(Clone)]
 pub struct TerminalInputHandle {
     write_fn: Arc<dyn Fn(Vec<u8>) + Send + Sync>,
@@ -92,6 +170,10 @@ pub trait TerminalBackend: Send {
     fn exec_handle(&self) -> Option<TerminalExecHandle> {
         None
     }
+
+    fn control_handle(&self) -> Option<TerminalControlHandle> {
+        None
+    }
 }
 
 /// Local terminal configuration
@@ -111,8 +193,9 @@ pub struct LocalConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        TerminalExecCompletion, TerminalExecHandle, TerminalExecOutput, TerminalExecRequest,
-        TerminalInputHandle,
+        TerminalControlAction, TerminalControlHandle, TerminalControlOutput,
+        TerminalControlReadiness, TerminalControlRequest, TerminalExecCompletion,
+        TerminalExecHandle, TerminalExecOutput, TerminalExecRequest, TerminalInputHandle,
     };
     use crate::TerminalExecError;
     use std::sync::{Arc, Mutex};
@@ -193,6 +276,39 @@ mod tests {
             .expect_err("cancelled execution should fail before submission");
 
         assert_eq!(TerminalExecError::CancelledBeforeSubmit, error);
+    }
+
+    #[tokio::test]
+    async fn terminal_control_handle_delegates_to_controller() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let sink = requests.clone();
+        let handle = TerminalControlHandle::new(move |request, _cancellation| {
+            let sink = sink.clone();
+            Box::pin(async move {
+                sink.lock().expect("requests lock").push(request.action);
+                Ok(TerminalControlOutput {
+                    action: request.action,
+                    sent: true,
+                    readiness_before: TerminalControlReadiness::CommandRunning,
+                })
+            })
+        });
+
+        let result = handle
+            .control(
+                TerminalControlRequest {
+                    action: TerminalControlAction::Interrupt,
+                },
+                CancellationToken::new(),
+            )
+            .await
+            .expect("control handle should delegate");
+
+        assert!(result.sent);
+        assert_eq!(
+            vec![TerminalControlAction::Interrupt],
+            *requests.lock().unwrap()
+        );
     }
 }
 

@@ -3,7 +3,9 @@ use super::{
     TerminalInputSource,
 };
 use crate::osc::OscEvent;
-use crate::{TerminalExecCompletion, TerminalExecRequest};
+use crate::{
+    TerminalControlError, TerminalControlReadiness, TerminalExecCompletion, TerminalExecRequest,
+};
 use std::time::Duration;
 
 mod ready_wait;
@@ -308,4 +310,81 @@ fn cancel_before_submit_never_writes_agent_command() {
         supervisor.cancel(29)
     );
     assert!(supervisor.on_osc(&OscEvent::InputStart).is_empty());
+}
+
+#[test]
+fn terminal_control_allows_only_active_foreground_states() {
+    let mut supervisor = ExecSupervisor::new();
+
+    supervisor.readiness = ShellCommandReadiness::SubmissionPending { command_epoch: 41 };
+    assert_eq!(
+        Ok(TerminalControlReadiness::SubmissionPending),
+        supervisor.interrupt_foreground()
+    );
+
+    supervisor.readiness = ShellCommandReadiness::CommandRunning { command_epoch: 41 };
+    assert_eq!(
+        Ok(TerminalControlReadiness::CommandRunning),
+        supervisor.interrupt_foreground()
+    );
+}
+
+#[test]
+fn terminal_control_rejects_non_running_states() {
+    let cases = [
+        (
+            ShellCommandReadiness::Initializing,
+            TerminalControlError::Busy,
+        ),
+        (
+            ShellCommandReadiness::PromptRendering,
+            TerminalControlError::Busy,
+        ),
+        (
+            ShellCommandReadiness::ClearingInput { command_epoch: 7 },
+            TerminalControlError::Busy,
+        ),
+        (
+            ShellCommandReadiness::Ready { prompt_epoch: 7 },
+            TerminalControlError::NotRunning,
+        ),
+        (
+            ShellCommandReadiness::AwaitingPrompt { command_epoch: 7 },
+            TerminalControlError::NotRunning,
+        ),
+        (
+            ShellCommandReadiness::Unknown,
+            TerminalControlError::ReadinessUnknown,
+        ),
+        (
+            ShellCommandReadiness::Disconnected,
+            TerminalControlError::Disconnected,
+        ),
+    ];
+
+    for (readiness, expected) in cases {
+        let mut supervisor = ExecSupervisor::new();
+        supervisor.readiness = readiness;
+        assert_eq!(Err(expected), supervisor.interrupt_foreground());
+    }
+}
+
+#[test]
+fn terminal_control_preserves_exec_observer_until_real_completion() {
+    let mut supervisor = ready_supervisor();
+    submit(&mut supervisor, 42, "sleep 300");
+    supervisor.on_osc(&OscEvent::CommandStart);
+
+    assert_eq!(
+        Ok(TerminalControlReadiness::CommandRunning),
+        supervisor.interrupt_foreground()
+    );
+
+    let effects = supervisor.on_osc(&OscEvent::CommandFinished { exit_code: 130 });
+    assert!(matches!(
+        effects.as_slice(),
+        [ExecEffect::Complete { id: 42, output }]
+            if output.exit_code == Some(130)
+                && output.completion == TerminalExecCompletion::ShellIntegrationExit
+    ));
 }

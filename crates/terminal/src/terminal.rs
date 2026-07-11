@@ -53,8 +53,8 @@ use crate::pty_backend::{GpuiEventProxy, LocalPtyBackend};
 use crate::shell_integration::embedded_shell_integration_script;
 
 use crate::{
-    LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalEvent, TerminalExecHandle,
-    TerminalInputHandle, TerminalSize,
+    LocalConfig, SerialBackend, SshBackend, TerminalBackend, TerminalControlHandle, TerminalEvent,
+    TerminalExecHandle, TerminalInputHandle, TerminalSize,
 };
 use ssh::{
     ChannelEvent, KeyboardInteractiveRequest, KeyboardInteractiveResponder,
@@ -1923,6 +1923,12 @@ impl Terminal {
         self.backend
             .as_ref()
             .and_then(|backend| backend.exec_handle())
+    }
+
+    pub fn external_control_handle(&self) -> Option<TerminalControlHandle> {
+        self.backend
+            .as_ref()
+            .and_then(|backend| backend.control_handle())
     }
 
     /// 调整终端大小

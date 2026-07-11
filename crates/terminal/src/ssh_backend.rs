@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
@@ -20,8 +21,9 @@ use crate::shell_integration::{
     embedded_shell_integration_script, normalized_shell_integration_script,
 };
 use crate::{
-    TerminalBackend, TerminalExecError, TerminalExecHandle, TerminalExecOutput,
-    TerminalExecRequest, TerminalInputHandle, TerminalSize,
+    TerminalBackend, TerminalControlAction, TerminalControlError, TerminalControlHandle,
+    TerminalControlOutput, TerminalControlRequest, TerminalExecError, TerminalExecHandle,
+    TerminalExecOutput, TerminalExecRequest, TerminalInputHandle, TerminalSize,
 };
 
 /// 整个 shell integration 安装流程的硬超时，避免远端受限或挂死卡住连接。
@@ -219,6 +221,11 @@ fn format_setup_failure_context(script: &str, stdout: &[u8], stderr: &[u8]) -> S
 
 enum SshCommand {
     Write(Vec<u8>),
+    InterruptForeground {
+        request: TerminalControlRequest,
+        cancellation: CancellationToken,
+        result: oneshot::Sender<Result<TerminalControlOutput, TerminalControlError>>,
+    },
     StartExec {
         id: u64,
         request: TerminalExecRequest,
@@ -270,6 +277,28 @@ fn build_terminal_exec_handle(
                 }
                 result = result_rx => result.unwrap_or(Err(TerminalExecError::Disconnected)),
             }
+        })
+    })
+}
+
+fn build_terminal_control_handle(command_tx: UnboundedSender<SshCommand>) -> TerminalControlHandle {
+    TerminalControlHandle::new(move |request, cancellation| {
+        let command_tx = command_tx.clone();
+        Box::pin(async move {
+            if cancellation.is_cancelled() {
+                return Err(TerminalControlError::Cancelled);
+            }
+            let (result_tx, result_rx) = oneshot::channel();
+            command_tx
+                .send(SshCommand::InterruptForeground {
+                    request,
+                    cancellation,
+                    result: result_tx,
+                })
+                .map_err(|_| TerminalControlError::Disconnected)?;
+            result_rx
+                .await
+                .unwrap_or(Err(TerminalControlError::Disconnected))
         })
     })
 }
@@ -394,6 +423,38 @@ impl SshBackend {
                                     &mut exec_results,
                                 ).await || !send_terminal_data(&mut channel, &data).await {
                                     break;
+                                }
+                            }
+                            SshCommand::InterruptForeground {
+                                request,
+                                cancellation,
+                                result,
+                            } => {
+                                if cancellation.is_cancelled() {
+                                    let _ = result.send(Err(TerminalControlError::Cancelled));
+                                    continue;
+                                }
+                                let readiness = match request.action {
+                                    TerminalControlAction::Interrupt => {
+                                        exec_supervisor.interrupt_foreground()
+                                    }
+                                };
+                                match readiness {
+                                    Ok(readiness_before) => {
+                                        if send_terminal_data(&mut channel, &[0x03]).await {
+                                            let _ = result.send(Ok(TerminalControlOutput {
+                                                action: request.action,
+                                                sent: true,
+                                                readiness_before,
+                                            }));
+                                        } else {
+                                            let _ = result.send(Err(TerminalControlError::Disconnected));
+                                            break;
+                                        }
+                                    }
+                                    Err(error) => {
+                                        let _ = result.send(Err(error));
+                                    }
                                 }
                             }
                             SshCommand::StartExec { id, request, result } => {
@@ -860,8 +921,8 @@ impl SshBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TerminalExecCompletion;
     use crate::osc::parse_osc_payload;
+    use crate::{TerminalControlReadiness, TerminalExecCompletion};
     use anyhow::{Result, anyhow};
     use async_trait::async_trait;
     use ssh::SshConnectConfig;
@@ -1825,6 +1886,57 @@ mod tests {
         assert_eq!(result, task.await.unwrap().unwrap());
     }
 
+    #[tokio::test]
+    async fn terminal_control_handle_returns_actor_result() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let handle = build_terminal_control_handle(command_tx);
+        let task = tokio::spawn(async move {
+            handle
+                .control(
+                    TerminalControlRequest {
+                        action: TerminalControlAction::Interrupt,
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+        });
+
+        let output = TerminalControlOutput {
+            action: TerminalControlAction::Interrupt,
+            sent: true,
+            readiness_before: TerminalControlReadiness::CommandRunning,
+        };
+        match command_rx.recv().await {
+            Some(SshCommand::InterruptForeground { result, .. }) => {
+                result.send(Ok(output.clone())).unwrap();
+            }
+            _ => panic!("expected terminal control command"),
+        }
+
+        assert_eq!(output, task.await.unwrap().unwrap());
+    }
+
+    #[tokio::test]
+    async fn pre_cancelled_terminal_control_never_enqueues_command() {
+        let (command_tx, mut command_rx) = unbounded_channel();
+        let handle = build_terminal_control_handle(command_tx);
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let error = handle
+            .control(
+                TerminalControlRequest {
+                    action: TerminalControlAction::Interrupt,
+                },
+                cancellation,
+            )
+            .await
+            .expect_err("pre-cancelled control should not start");
+
+        assert_eq!(TerminalControlError::Cancelled, error);
+        assert!(command_rx.try_recv().is_err());
+    }
+
     fn request(command: &str) -> TerminalExecRequest {
         TerminalExecRequest {
             command: command.to_string(),
@@ -1853,6 +1965,10 @@ impl TerminalBackend for SshBackend {
             self.command_tx.clone(),
             self.exec_ids.clone(),
         ))
+    }
+
+    fn control_handle(&self) -> Option<TerminalControlHandle> {
+        Some(build_terminal_control_handle(self.command_tx.clone()))
     }
 
     fn resize(&self, size: TerminalSize) {
