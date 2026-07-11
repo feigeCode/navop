@@ -9,8 +9,6 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
-use crate::crypto;
-
 pub const TEAM_KEY_ENVELOPE_PREFIX: &str = "TEAMKEY2:";
 pub const MIN_NEW_TEAM_KEY_CHARS: usize = 12;
 
@@ -20,12 +18,6 @@ const DATA_KEY_LEN: usize = 32;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const WRAPPED_MAGIC: &[u8] = b"NAVOP_TEAM_KEY_V2\0";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TeamKeyScheme {
-    Legacy,
-    EnvelopeV2,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct TeamKeyKdfParams {
@@ -61,7 +53,6 @@ pub struct CreatedTeamKeyEnvelope {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlockedTeamKey {
-    pub scheme: TeamKeyScheme,
     pub data_key: String,
 }
 
@@ -94,14 +85,6 @@ struct TeamKeyEnvelopeV2 {
     salt: String,
     nonce: String,
     wrapped_data_key: String,
-}
-
-pub fn detect_team_key_scheme(verification: &str) -> TeamKeyScheme {
-    if verification.starts_with(TEAM_KEY_ENVELOPE_PREFIX) {
-        TeamKeyScheme::EnvelopeV2
-    } else {
-        TeamKeyScheme::Legacy
-    }
 }
 
 pub fn create_team_key_envelope(
@@ -150,17 +133,6 @@ pub fn unlock_team_key(
     verification: &str,
     passphrase: &str,
 ) -> Result<UnlockedTeamKey, TeamKeyEnvelopeError> {
-    if detect_team_key_scheme(verification) == TeamKeyScheme::Legacy {
-        return if crypto::verify_master_key(passphrase, verification) {
-            Ok(UnlockedTeamKey {
-                scheme: TeamKeyScheme::Legacy,
-                data_key: passphrase.to_string(),
-            })
-        } else {
-            Err(TeamKeyEnvelopeError::InvalidKeyOrEnvelope)
-        };
-    }
-
     unlock_v2(verification, passphrase)
 }
 
@@ -196,7 +168,6 @@ fn unlock_v2(
         .ok_or(TeamKeyEnvelopeError::InvalidKeyOrEnvelope)?;
 
     Ok(UnlockedTeamKey {
-        scheme: TeamKeyScheme::EnvelopeV2,
         data_key: BASE64.encode(data_key),
     })
 }

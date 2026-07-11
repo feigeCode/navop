@@ -11,7 +11,7 @@ use crate::storage::migration::run_migrations;
 use crate::storage::{TeamKeyCache, TeamKeyCacheRepository};
 
 #[test]
-fn cache_status_distinguishes_version_mismatch_and_legacy_scheme() {
+fn cache_status_distinguishes_version_mismatch_and_invalid_envelope() {
     let mut cache = cached_team();
     cache.cached_key_version = Some(3);
     assert_eq!(
@@ -21,10 +21,7 @@ fn cache_status_distinguishes_version_mismatch_and_legacy_scheme() {
 
     cache.cached_key_version = Some(4);
     cache.key_verification = Some(crypto::generate_key_verification("legacy-key"));
-    assert_eq!(
-        TeamKeyCacheStatus::LegacyNeedsUpgrade,
-        team_key_cache_status(&cache)
-    );
+    assert_eq!(TeamKeyCacheStatus::Invalid, team_key_cache_status(&cache));
 }
 
 #[test]
@@ -65,7 +62,7 @@ fn v2_cached_passphrase_unlocks_random_data_key() {
 }
 
 #[test]
-fn legacy_cached_passphrase_reports_legacy_unlocked() {
+fn non_v2_cached_passphrase_is_rejected() {
     let repo = test_repo("legacy");
     let scope = test_scope();
     let verification = crypto::generate_key_verification("legacy-key");
@@ -79,18 +76,16 @@ fn legacy_cached_passphrase_reports_legacy_unlocked() {
     let service = Arc::new(RwLock::new(CloudSyncService::new()));
     let manager = TeamKeyManager::new(repo, service.clone(), scope);
 
-    let status = manager
-        .load_cached_team_key(&team(verification), "personal-key")
-        .expect("load legacy key");
-
-    assert_eq!(TeamKeyLoadStatus::LegacyUnlocked, status);
-    assert_eq!(
-        Some("legacy-key".to_string()),
-        service
+    assert!(
+        manager
+            .load_cached_team_key(&team(verification), "personal-key")
+            .is_err()
+    );
+    assert!(
+        !service
             .read()
             .expect("service lock")
-            .get_team_key("team-1")
-            .cloned()
+            .is_team_unlocked("team-1")
     );
 }
 

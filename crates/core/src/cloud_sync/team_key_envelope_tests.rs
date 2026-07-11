@@ -1,6 +1,6 @@
 use super::team_key_envelope::{
-    MIN_NEW_TEAM_KEY_CHARS, TeamKeyEnvelopeError, TeamKeyKdfParams, TeamKeyScheme,
-    create_team_key_envelope, detect_team_key_scheme, unlock_team_key,
+    MIN_NEW_TEAM_KEY_CHARS, TeamKeyEnvelopeError, TeamKeyKdfParams, create_team_key_envelope,
+    unlock_team_key,
 };
 use crate::crypto;
 
@@ -15,10 +15,7 @@ fn v2_envelopes_use_random_salt_and_data_keys() {
 
     assert_ne!(first.verification, second.verification);
     assert_ne!(first.data_key, second.data_key);
-    assert_eq!(
-        TeamKeyScheme::EnvelopeV2,
-        detect_team_key_scheme(&first.verification)
-    );
+    assert!(first.verification.starts_with("TEAMKEY2:"));
 }
 
 #[test]
@@ -29,7 +26,6 @@ fn v2_envelope_unlocks_only_with_the_correct_passphrase() {
     let unlocked = unlock_team_key(&created.verification, PASSPHRASE).expect("unlock envelope");
     let wrong = unlock_team_key(&created.verification, "wrong team passphrase");
 
-    assert_eq!(TeamKeyScheme::EnvelopeV2, unlocked.scheme);
     assert_eq!(created.data_key, unlocked.data_key);
     assert_eq!(Err(TeamKeyEnvelopeError::InvalidKeyOrEnvelope), wrong);
 }
@@ -50,14 +46,13 @@ fn v2_envelope_rejects_tampering() {
 }
 
 #[test]
-fn legacy_verification_remains_readable() {
+fn non_v2_verification_is_rejected() {
     let verification = crypto::generate_key_verification("legacy-key");
 
-    let unlocked = unlock_team_key(&verification, "legacy-key").expect("unlock legacy key");
-
-    assert_eq!(TeamKeyScheme::Legacy, detect_team_key_scheme(&verification));
-    assert_eq!(TeamKeyScheme::Legacy, unlocked.scheme);
-    assert_eq!("legacy-key", unlocked.data_key);
+    assert_eq!(
+        Err(TeamKeyEnvelopeError::InvalidKeyOrEnvelope),
+        unlock_team_key(&verification, "legacy-key")
+    );
 }
 
 #[test]

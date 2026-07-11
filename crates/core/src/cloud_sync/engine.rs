@@ -17,6 +17,7 @@ use crate::cloud_sync::client::CloudApiClient;
 use crate::cloud_sync::models::{ConflictResolution, SyncResult, Team, TeamRole};
 use crate::cloud_sync::queue::OperationQueue;
 use crate::cloud_sync::service::{CloudSyncService, SyncError};
+use crate::cloud_sync::team_key_envelope::TeamKeyKdfParams;
 use crate::cloud_sync::team_key_manager::{TeamKeyError, TeamKeyLoadStatus, TeamKeyManager};
 use crate::crypto;
 use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
@@ -334,12 +335,15 @@ impl SyncEngine {
             TeamKeyManager::new((*repo).clone(), self.crypto_service.clone(), scope.clone());
         for (team_id, status) in manager.load_cached_team_keys(teams, &personal_key) {
             match status {
-                Ok(TeamKeyLoadStatus::Unlocked | TeamKeyLoadStatus::LegacyUnlocked) => {
+                Ok(TeamKeyLoadStatus::Unlocked) => {
                     tracing::info!("[同步] 已从本地缓存解锁团队 {}", team_id);
                 }
                 Ok(TeamKeyLoadStatus::Missing) => {}
                 Ok(TeamKeyLoadStatus::VersionMismatch) => {
                     tracing::warn!("[同步] 团队 {} 的本地密钥版本已过期", team_id);
+                }
+                Ok(TeamKeyLoadStatus::Invalid) => {
+                    tracing::warn!("[同步] 团队 {} 的密钥格式无效", team_id);
                 }
                 Err(error) => {
                     tracing::warn!("[同步] 恢复团队 {} 密钥失败: {}", team_id, error);
@@ -374,9 +378,14 @@ impl SyncEngine {
             .into_iter()
             .filter(|record| !record.encrypted_data.is_empty())
             .collect::<Vec<_>>();
-        let rotation =
-            TeamKeyManager::rotate_team_key_records(&team, old_key, new_key, &records_to_rotate)
-                .map_err(|e| SyncError::DataFormatError(e.to_string()))?;
+        let rotation = TeamKeyManager::rotate_team_key_records(
+            &team,
+            old_key,
+            new_key,
+            &records_to_rotate,
+            TeamKeyKdfParams::production(),
+        )
+        .map_err(|e| SyncError::DataFormatError(e.to_string()))?;
         self.cloud_client
             .rotate_team_key(&rotation.team, &rotation.records)
             .await
@@ -412,10 +421,16 @@ impl SyncEngine {
                 .map_err(team_key_error_to_sync_error);
         }
 
-        let team = initial_team_key_team_from_cache(&cache, team_key);
+        let team = initial_team_key_team_from_cache(&cache);
+        let prepared = TeamKeyManager::prepare_initial_team_key(
+            &team,
+            team_key,
+            TeamKeyKdfParams::production(),
+        )
+        .map_err(team_key_error_to_sync_error)?;
         let initialized = self
             .cloud_client
-            .initialize_team_key(&team)
+            .initialize_team_key(&prepared.team)
             .await
             .map_err(|e| SyncError::NetworkError(e.to_string()))?;
         let status = manager
@@ -642,13 +657,13 @@ fn team_key_cache_for_cloud_team(
     }
 }
 
-fn initial_team_key_team_from_cache(cache: &TeamKeyCache, team_key: &str) -> Team {
+fn initial_team_key_team_from_cache(cache: &TeamKeyCache) -> Team {
     Team {
         id: cache.team_id.clone(),
         name: cache.team_name.clone(),
         owner_id: String::new(),
         description: None,
-        key_verification: Some(crypto::generate_key_verification(team_key)),
+        key_verification: None,
         key_version: cache.key_version.max(1),
         created_at: 0,
         updated_at: cache.updated_at,
@@ -972,7 +987,11 @@ mod tests {
         );
 
         let status = engine
-            .save_or_initialize_team_key_for_cached_team("team-1", "team-secret", "personal-secret")
+            .save_or_initialize_team_key_for_cached_team(
+                "team-1",
+                "team-secret-key",
+                "personal-secret",
+            )
             .await
             .unwrap();
 
@@ -985,12 +1004,15 @@ mod tests {
             .get(&test_scope(), "team-1")
             .expect("cache read")
             .expect("cache exists");
-        assert_eq!(TeamKeyLoadStatus::LegacyUnlocked, status);
+        assert_eq!(TeamKeyLoadStatus::Unlocked, status);
         assert_eq!(1, initialized.key_version);
-        assert!(crypto::verify_master_key(
-            "team-secret",
-            initialized.key_verification.as_deref().unwrap()
-        ));
+        assert!(
+            initialized
+                .key_verification
+                .as_deref()
+                .unwrap()
+                .starts_with("TEAMKEY2:")
+        );
         assert!(cache.key_verification.is_some());
         assert!(cache.encrypted_team_key.is_some());
         assert!(

@@ -157,9 +157,10 @@ pub fn ensure_team_key_ready_for_save(team_id: Option<&str>, cx: &App) -> Result
     let service = Arc::new(RwLock::new(CloudSyncService::new()));
     let manager = TeamKeyManager::new((*repo).clone(), service, scope);
     match manager.load_cached_team_key_by_id(team_id, &raw_key)? {
-        TeamKeyLoadStatus::Unlocked | TeamKeyLoadStatus::LegacyUnlocked => Ok(()),
+        TeamKeyLoadStatus::Unlocked => Ok(()),
         TeamKeyLoadStatus::Missing => Err(TeamKeyError::MissingTeamKey),
         TeamKeyLoadStatus::VersionMismatch => Err(TeamKeyError::VersionMismatch),
+        TeamKeyLoadStatus::Invalid => Err(TeamKeyError::InvalidTeamKey),
     }
 }
 
