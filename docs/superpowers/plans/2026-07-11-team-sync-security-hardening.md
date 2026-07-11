@@ -10,6 +10,29 @@
 
 ---
 
+## 2026-07-12 approved scope amendment: V2 only
+
+The product has not shipped. This amendment overrides every legacy-compatibility or legacy-upgrade instruction below:
+
+- Delete `TeamKeyScheme` and all legacy detection/fallback behavior.
+- `unlock_team_key` accepts only `TEAMKEY2:` envelopes; non-V2 input returns `InvalidKeyOrEnvelope`.
+- Use `TeamKeyCacheStatus::{Missing, Cached, VersionMismatch, Invalid}`.
+- Use `TeamKeyLoadStatus::{Unlocked, Missing, VersionMismatch, Invalid}`.
+- Initialization and every rotation require the 12-character password policy.
+- Rotation always unwraps a V2 envelope and generates a fresh envelope plus random data key. Identical old/new passphrases are allowed but do not reuse the data key.
+- Remove legacy UI badges, upgrade actions, compatibility warnings, tests, and locale keys. Invalid/missing verification is reinitialized by owner/admin; members see it as unavailable.
+- Keep legacy handling only where unrelated to team encryption, such as personal master-key verification or old connection payload deserialization.
+
+Before Task 4, add a TDD cleanup checkpoint:
+
+1. Replace envelope tests with non-V2 rejection tests and verify RED against the existing fallback.
+2. Remove `TeamKeyScheme`, legacy unlock, `LegacyNeedsUpgrade`, and `LegacyUnlocked`.
+3. Update manager/engine matches and tests to strict V2 or `Invalid`.
+4. Run `rtk cargo test -p one-core team_key --lib -- --test-threads=1` and require all tests to pass.
+5. Commit as `refactor(sync): require v2 team key envelopes`.
+
+All later tasks must follow this amendment even where older examples below mention legacy behavior.
+
 ## File map
 
 - Create `crates/core/src/cloud_sync/team_key_envelope.rs`: versioned envelope creation, parsing, legacy unlock, password policy.
