@@ -1,6 +1,6 @@
 use public_mcp::registry::{
     ConnectionState, PublicMcpRegistry, RemoteOpsSessionHandle, TerminalConnectionKind,
-    TerminalExecSessionHandle, TerminalSessionHandle, TerminalSessionSnapshot,
+    TerminalExecFuture, TerminalExecSessionHandle, TerminalSessionHandle, TerminalSessionSnapshot,
 };
 use public_mcp::remote_ops::{
     RemoteCommandMode, RemoteExecRequest, RemoteExecResult, RemoteFileWriteRequest,
@@ -38,15 +38,21 @@ impl TerminalExecSessionHandle for FakeTerminal {
         <Self as TerminalSessionHandle>::snapshot(self)
     }
 
-    fn exec_in_terminal(&self, request: TerminalExecRequest) -> anyhow::Result<TerminalExecResult> {
-        Ok(TerminalExecResult {
-            target: request.target,
-            command: request.command,
-            submitted: request.submit,
-            completion: TerminalExecCompletion::SubmittedOnly,
-            exit_code: None,
-            output: String::new(),
-            duration_ms: 0,
+    fn exec_in_terminal(
+        &self,
+        request: TerminalExecRequest,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> TerminalExecFuture {
+        Box::pin(async move {
+            Ok(TerminalExecResult {
+                target: request.target,
+                command: request.command,
+                submitted: request.submit,
+                completion: TerminalExecCompletion::SubmittedOnly,
+                exit_code: None,
+                output: String::new(),
+                duration_ms: 0,
+            })
         })
     }
 }

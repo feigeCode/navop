@@ -1,10 +1,11 @@
 use public_mcp::registry::{
-    ConnectionState, PublicMcpRegistry, TerminalConnectionKind, TerminalExecSessionHandle,
-    TerminalSessionSnapshot,
+    ConnectionState, PublicMcpRegistry, TerminalConnectionKind, TerminalExecFuture,
+    TerminalExecSessionHandle, TerminalSessionSnapshot,
 };
 use public_mcp::terminal_exec::{TerminalExecCompletion, TerminalExecRequest, TerminalExecResult};
 use public_mcp::tools::{PublicMcpToolRegistry, terminal_exec_tool_registry};
 use serde_json::json;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tool_runtime::{ToolAdapter, ToolContext};
@@ -13,7 +14,8 @@ use tool_runtime::{ToolAdapter, ToolContext};
 struct FakeTerminalExec {
     id: String,
     inserted: Arc<Mutex<Vec<String>>>,
-    output_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<String>>>>,
+    output_rx: Arc<Mutex<Option<tokio::sync::oneshot::Receiver<String>>>>,
+    saw_cancelled_context: Arc<AtomicBool>,
 }
 
 impl FakeTerminalExec {
@@ -22,16 +24,21 @@ impl FakeTerminalExec {
             id: id.to_string(),
             inserted: Arc::new(Mutex::new(Vec::new())),
             output_rx: Arc::new(Mutex::new(None)),
+            saw_cancelled_context: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    fn with_output_receiver(mut self, output_rx: std::sync::mpsc::Receiver<String>) -> Self {
+    fn with_output_receiver(mut self, output_rx: tokio::sync::oneshot::Receiver<String>) -> Self {
         self.output_rx = Arc::new(Mutex::new(Some(output_rx)));
         self
     }
 
     fn inserted(&self) -> Vec<String> {
         self.inserted.lock().expect("inserted lock").clone()
+    }
+
+    fn saw_cancelled_context(&self) -> bool {
+        self.saw_cancelled_context.load(Ordering::Acquire)
     }
 }
 
@@ -50,32 +57,45 @@ impl TerminalExecSessionHandle for FakeTerminalExec {
         }
     }
 
-    fn exec_in_terminal(&self, request: TerminalExecRequest) -> anyhow::Result<TerminalExecResult> {
+    fn exec_in_terminal(
+        &self,
+        request: TerminalExecRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> TerminalExecFuture {
+        self.saw_cancelled_context
+            .store(cancellation.is_cancelled(), Ordering::Release);
         let suffix = if request.submit { "\n" } else { "" };
         self.inserted
             .lock()
             .expect("inserted lock")
             .push(format!("{}{}", request.command, suffix));
-        let configured_rx = self.output_rx.lock().expect("output rx lock").take();
-        let output = configured_rx
-            .as_ref()
-            .and_then(|rx| rx.recv_timeout(Duration::from_millis(50)).ok());
-        let completion = if configured_rx.is_none() || output.is_some() {
-            TerminalExecCompletion::ObservedOutput
-        } else {
-            TerminalExecCompletion::TimedOut
-        };
-        Ok(TerminalExecResult {
-            target: request.target,
-            command: request.command,
-            submitted: request.submit,
-            completion,
-            exit_code: None,
-            output: output.unwrap_or_else(|| {
-                "Filesystem Size Used Avail Use% Mounted on\n/dev/sda1 47G 42G 5G 90% /\n"
-                    .to_string()
-            }),
-            duration_ms: 12,
+        let output_rx = self.output_rx.lock().expect("output rx lock").take();
+        Box::pin(async move {
+            let had_receiver = output_rx.is_some();
+            let output = match output_rx {
+                Some(receiver) => tokio::time::timeout(Duration::from_millis(50), receiver)
+                    .await
+                    .ok()
+                    .and_then(Result::ok),
+                None => None,
+            };
+            let completion = if !had_receiver || output.is_some() {
+                TerminalExecCompletion::ObservedOutput
+            } else {
+                TerminalExecCompletion::TimedOut
+            };
+            Ok(TerminalExecResult {
+                target: request.target,
+                command: request.command,
+                submitted: request.submit,
+                completion,
+                exit_code: None,
+                output: output.unwrap_or_else(|| {
+                    "Filesystem Size Used Avail Use% Mounted on\n/dev/sda1 47G 42G 5G 90% /\n"
+                        .to_string()
+                }),
+                duration_ms: 12,
+            })
         })
     }
 }
@@ -113,6 +133,14 @@ fn terminal_exec_descriptor_uses_target_and_command_schema() {
     assert_eq!(json!(["target", "command"]), tool.input_schema["required"]);
     assert_eq!("string", tool.input_schema["properties"]["target"]["type"]);
     assert_eq!("string", tool.input_schema["properties"]["command"]["type"]);
+    assert_eq!(
+        json!(0),
+        tool.input_schema["properties"]["ready_timeout_ms"]["default"]
+    );
+    assert_eq!(
+        json!(10_000),
+        tool.input_schema["properties"]["ready_timeout_ms"]["maximum"]
+    );
     assert!(!tool.annotations.read_only);
     assert!(tool.annotations.open_world);
 }
@@ -154,7 +182,7 @@ fn terminal_exec_inserts_command_into_terminal_and_returns_observed_output() {
 #[tokio::test(flavor = "current_thread")]
 async fn terminal_exec_does_not_block_runtime_while_waiting_for_output() {
     let registry = PublicMcpRegistry::default();
-    let (output_tx, output_rx) = std::sync::mpsc::channel();
+    let (output_tx, output_rx) = tokio::sync::oneshot::channel();
     let terminal = FakeTerminalExec::new("terminal-1").with_output_receiver(output_rx);
     registry.register_terminal_exec(terminal);
     let runtime_registry = terminal_exec_tool_registry(registry);
@@ -186,4 +214,28 @@ async fn terminal_exec_does_not_block_runtime_while_waiting_for_output() {
         json!("stream output from pty"),
         result.structured_content["output"]
     );
+}
+
+#[tokio::test]
+async fn terminal_exec_forwards_tool_context_cancellation_to_provider() {
+    let (registry, terminal) = registry_with_terminal();
+    let runtime_registry = terminal_exec_tool_registry(registry);
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    cancellation.cancel();
+
+    runtime_registry
+        .call(
+            "terminal.exec",
+            json!({
+                "target": "terminal-1",
+                "command": "pwd",
+                "submit": true,
+                "wait_for_output": true
+            }),
+            ToolContext::for_adapter(ToolAdapter::Mcp).with_cancellation(cancellation),
+        )
+        .await
+        .expect("provider should decide how cancellation affects terminal execution");
+
+    assert!(terminal.saw_cancelled_context());
 }

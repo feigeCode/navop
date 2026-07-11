@@ -18,6 +18,10 @@ use crate::tools::{ToolCall, ToolObservation};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+#[path = "session_turns.rs"]
+mod turns;
+use turns::TurnState;
+
 /// 会话的可持久化快照:足以重建一个 [`Session`] 全部对话状态的最小集合。
 ///
 /// 只包含可序列化的对话事实(标识、资源、历史、当前计划),**不含**运行时瞬态
@@ -45,7 +49,7 @@ pub struct Session {
     resources: Mutex<ResourceContext>,
     skills: Mutex<SkillContext>,
     input_queue: Mutex<InputQueue>,
-    active_turn: Mutex<Option<ActiveTurn>>,
+    turns: Mutex<TurnState>,
     pending_tool_approval: Mutex<Option<PendingToolApproval>>,
     events: RuntimeEventSender,
 }
@@ -58,7 +62,7 @@ impl Session {
             resources: Mutex::new(resources),
             skills: Mutex::new(SkillContext::new()),
             input_queue: Mutex::new(InputQueue::new()),
-            active_turn: Mutex::new(None),
+            turns: Mutex::new(TurnState::default()),
             pending_tool_approval: Mutex::new(None),
             events,
         })
@@ -79,7 +83,7 @@ impl Session {
             resources: Mutex::new(snapshot.resources),
             skills: Mutex::new(snapshot.skills),
             input_queue: Mutex::new(InputQueue::new()),
-            active_turn: Mutex::new(None),
+            turns: Mutex::new(TurnState::default()),
             pending_tool_approval: Mutex::new(None),
             events,
         })
@@ -207,70 +211,82 @@ impl Session {
     ) {
         let text = text.into();
         let reasoning = reasoning.into();
-        self.state
-            .lock()
-            .expect("session 锁中毒")
-            .history
-            .record_assistant_with_reasoning(text.clone(), reasoning);
-        self.emit(RuntimeEvent::AssistantMessage {
-            session_id: self.id.clone(),
-            turn_id: turn_id.clone(),
-            text,
+        let _ = self.with_writable_turn(turn_id, || {
+            self.state
+                .lock()
+                .expect("session 锁中毒")
+                .history
+                .record_assistant_with_reasoning(text.clone(), reasoning);
+            self.emit(RuntimeEvent::AssistantMessage {
+                session_id: self.id.clone(),
+                turn_id: turn_id.clone(),
+                text,
+            });
         });
     }
 
     /// 发出一段助手文本增量(流式)。增量不写入历史,最终由
     /// [`Session::record_assistant_message`] 落历史并发完整消息。
     pub fn emit_assistant_delta(&self, turn_id: &TurnId, delta: impl Into<String>) {
-        self.emit(RuntimeEvent::AssistantMessageDelta {
-            session_id: self.id.clone(),
-            turn_id: turn_id.clone(),
-            delta: delta.into(),
+        let delta = delta.into();
+        let _ = self.with_writable_turn(turn_id, || {
+            self.emit(RuntimeEvent::AssistantMessageDelta {
+                session_id: self.id.clone(),
+                turn_id: turn_id.clone(),
+                delta,
+            });
         });
     }
 
     /// 发出一段思考增量。增量不写入历史,只用于 UI 折叠展示。
     pub fn emit_reasoning_delta(&self, turn_id: &TurnId, delta: impl Into<String>) {
-        self.emit(RuntimeEvent::ReasoningDelta {
-            session_id: self.id.clone(),
-            turn_id: turn_id.clone(),
-            delta: delta.into(),
+        let delta = delta.into();
+        let _ = self.with_writable_turn(turn_id, || {
+            self.emit(RuntimeEvent::ReasoningDelta {
+                session_id: self.id.clone(),
+                turn_id: turn_id.clone(),
+                delta,
+            });
         });
     }
 
     pub fn record_tool_call(&self, turn_id: &TurnId, call: &ToolCall) {
-        self.state
-            .lock()
-            .expect("session 锁中毒")
-            .history
-            .record_tool_call(call.clone());
-        self.emit(RuntimeEvent::ToolCallStarted {
-            session_id: self.id.clone(),
-            turn_id: turn_id.clone(),
-            call_id: call.call_id.clone(),
-            tool_name: call.tool_name.clone(),
-            arguments: call.arguments.clone(),
+        let _ = self.with_writable_turn(turn_id, || {
+            self.state
+                .lock()
+                .expect("session 锁中毒")
+                .history
+                .record_tool_call(call.clone());
+            self.emit(RuntimeEvent::ToolCallStarted {
+                session_id: self.id.clone(),
+                turn_id: turn_id.clone(),
+                call_id: call.call_id.clone(),
+                tool_name: call.tool_name.clone(),
+                arguments: call.arguments.clone(),
+            });
         });
     }
 
     pub fn record_observation(&self, turn_id: &TurnId, observation: ToolObservation) {
         let call_id = observation.call_id.clone();
         let success = observation.success;
-        self.state
-            .lock()
-            .expect("session 锁中毒")
-            .history
-            .record_observation(observation.clone());
-        self.emit(RuntimeEvent::ObservationAdded {
-            session_id: self.id.clone(),
-            turn_id: turn_id.clone(),
-            observation,
-        });
-        self.emit(RuntimeEvent::ToolCallFinished {
-            session_id: self.id.clone(),
-            turn_id: turn_id.clone(),
-            call_id,
-            success,
+        let _ = self.with_writable_turn(turn_id, || {
+            self.state
+                .lock()
+                .expect("session 锁中毒")
+                .history
+                .record_observation(observation.clone());
+            self.emit(RuntimeEvent::ObservationAdded {
+                session_id: self.id.clone(),
+                turn_id: turn_id.clone(),
+                observation,
+            });
+            self.emit(RuntimeEvent::ToolCallFinished {
+                session_id: self.id.clone(),
+                turn_id: turn_id.clone(),
+                call_id,
+                success,
+            });
         });
     }
 
@@ -281,12 +297,16 @@ impl Session {
         name: impl Into<String>,
         task: impl Into<String>,
     ) {
-        self.emit(RuntimeEvent::SubAgentStarted {
-            session_id: self.id.clone(),
-            turn_id: turn_id.clone(),
-            subagent_id,
-            name: name.into(),
-            task: task.into(),
+        let name = name.into();
+        let task = task.into();
+        let _ = self.with_writable_turn(turn_id, || {
+            self.emit(RuntimeEvent::SubAgentStarted {
+                session_id: self.id.clone(),
+                turn_id: turn_id.clone(),
+                subagent_id,
+                name,
+                task,
+            });
         });
     }
 
@@ -296,11 +316,14 @@ impl Session {
         subagent_id: SubAgentId,
         summary: impl Into<String>,
     ) {
-        self.emit(RuntimeEvent::SubAgentUpdated {
-            session_id: self.id.clone(),
-            turn_id: turn_id.clone(),
-            subagent_id,
-            summary: summary.into(),
+        let summary = summary.into();
+        let _ = self.with_writable_turn(turn_id, || {
+            self.emit(RuntimeEvent::SubAgentUpdated {
+                session_id: self.id.clone(),
+                turn_id: turn_id.clone(),
+                subagent_id,
+                summary,
+            });
         });
     }
 
@@ -311,23 +334,28 @@ impl Session {
         success: bool,
         summary: impl Into<String>,
     ) {
-        self.emit(RuntimeEvent::SubAgentFinished {
-            session_id: self.id.clone(),
-            turn_id: turn_id.clone(),
-            subagent_id,
-            success,
-            summary: summary.into(),
+        let summary = summary.into();
+        let _ = self.with_writable_turn(turn_id, || {
+            self.emit(RuntimeEvent::SubAgentFinished {
+                session_id: self.id.clone(),
+                turn_id: turn_id.clone(),
+                subagent_id,
+                success,
+                summary,
+            });
         });
     }
 
     // ===== 计划 =====
 
     pub fn update_plan(&self, turn_id: &TurnId, plan: Plan) {
-        self.state.lock().expect("session 锁中毒").current_plan = Some(plan.clone());
-        self.emit(RuntimeEvent::PlanUpdated {
-            session_id: self.id.clone(),
-            turn_id: turn_id.clone(),
-            plan,
+        let _ = self.with_writable_turn(turn_id, || {
+            self.state.lock().expect("session 锁中毒").current_plan = Some(plan.clone());
+            self.emit(RuntimeEvent::PlanUpdated {
+                session_id: self.id.clone(),
+                turn_id: turn_id.clone(),
+                plan,
+            });
         });
     }
 
@@ -341,20 +369,18 @@ impl Session {
         step_id: &crate::ids::PlanStepId,
         status: StepStatus,
     ) {
-        let plan = {
-            let mut state = self.state.lock().expect("session 锁中毒");
-            let Some(plan) = state.current_plan.as_mut() else {
-                return;
+        let _ = self.with_writable_turn(turn_id, || {
+            let plan = {
+                let mut state = self.state.lock().expect("session 锁中毒");
+                let plan = state.current_plan.as_mut()?;
+                plan.mark_step(step_id, status).then(|| plan.clone())?
             };
-            if !plan.mark_step(step_id, status) {
-                return;
-            }
-            plan.clone()
-        };
-        self.emit(RuntimeEvent::PlanUpdated {
-            session_id: self.id.clone(),
-            turn_id: turn_id.clone(),
-            plan,
+            self.emit(RuntimeEvent::PlanUpdated {
+                session_id: self.id.clone(),
+                turn_id: turn_id.clone(),
+                plan,
+            });
+            Some(())
         });
     }
 
@@ -378,7 +404,10 @@ impl Session {
     // ===== 工具审批 =====
 
     pub fn set_pending_tool_approval(&self, pending: PendingToolApproval) {
-        *self.pending_tool_approval.lock().expect("session 锁中毒") = Some(pending);
+        let turn_id = pending.turn_id.clone();
+        let _ = self.with_writable_turn(&turn_id, || {
+            *self.pending_tool_approval.lock().expect("session 锁中毒") = Some(pending);
+        });
     }
 
     pub fn take_pending_tool_approval(&self) -> Option<PendingToolApproval> {
@@ -390,27 +419,6 @@ impl Session {
 
     pub fn restore_pending_tool_approval(&self, pending: PendingToolApproval) {
         self.set_pending_tool_approval(pending);
-    }
-
-    // ===== 当前轮 / 中断 =====
-
-    pub fn set_active_turn(&self, turn: ActiveTurn) {
-        *self.active_turn.lock().expect("session 锁中毒") = Some(turn);
-    }
-
-    pub fn clear_active_turn(&self) {
-        *self.active_turn.lock().expect("session 锁中毒") = None;
-    }
-
-    pub fn is_busy(&self) -> bool {
-        self.active_turn.lock().expect("session 锁中毒").is_some()
-    }
-
-    /// 请求中断当前轮(若有)。
-    pub fn cancel_active_turn(&self) {
-        if let Some(turn) = self.active_turn.lock().expect("session 锁中毒").as_ref() {
-            turn.cancel();
-        }
     }
 
     // ===== 事件 =====
@@ -552,3 +560,7 @@ mod tests {
         assert_eq!(restored_plan.steps.len(), 1);
     }
 }
+
+#[cfg(test)]
+#[path = "session_cancellation_tests.rs"]
+mod cancellation_tests;

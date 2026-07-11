@@ -8,6 +8,8 @@ pub struct TerminalExecRequest {
     pub submit: bool,
     #[serde(default = "default_wait_for_output")]
     pub wait_for_output: bool,
+    #[serde(default)]
+    pub ready_timeout_ms: u64,
     pub timeout_ms: Option<u64>,
 }
 

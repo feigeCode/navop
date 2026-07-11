@@ -9,7 +9,10 @@ use crate::terminal_exec::{TerminalExecRequest, TerminalExecResult};
 use anyhow::{Result, anyhow};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
 use tool_runtime::ResourceCapability;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -77,8 +80,16 @@ pub trait RemoteOpsSessionHandle: Send + Sync + 'static {
 /// session, while remote ops execute structured non-interactive commands.
 pub trait TerminalExecSessionHandle: Send + Sync + 'static {
     fn snapshot(&self) -> TerminalSessionSnapshot;
-    fn exec_in_terminal(&self, request: TerminalExecRequest) -> Result<TerminalExecResult>;
+    fn exec_in_terminal(
+        &self,
+        request: TerminalExecRequest,
+        cancellation: TerminalExecCancellation,
+    ) -> TerminalExecFuture;
 }
+
+pub type TerminalExecFuture =
+    Pin<Box<dyn Future<Output = Result<TerminalExecResult>> + Send + 'static>>;
+pub type TerminalExecCancellation = CancellationToken;
 
 #[derive(Clone, Default)]
 pub struct PublicMcpRegistry {
@@ -184,14 +195,15 @@ impl PublicMcpRegistry {
         handle.write_file(request)
     }
 
-    pub fn terminal_exec(
+    pub async fn terminal_exec(
         &self,
         target: &str,
         request: TerminalExecRequest,
+        cancellation: CancellationToken,
     ) -> Result<TerminalExecResult> {
         let handle = self.terminal_exec_handle(target)?;
         ensure_exposed_session(&handle.snapshot())?;
-        handle.exec_in_terminal(request)
+        handle.exec_in_terminal(request, cancellation).await
     }
 
     /// background 命令存储。执行桥用它注册命令，MCP 工具用它 poll/output/cancel。

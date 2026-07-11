@@ -1,4 +1,5 @@
 pub(crate) mod exec_capture;
+pub(crate) mod exec_supervisor;
 pub mod history;
 mod local_shell;
 pub mod osc;
@@ -9,6 +10,7 @@ pub mod ssh_backend;
 pub mod terminal;
 pub mod types;
 
+pub use exec_supervisor::TerminalExecError;
 pub use local_shell::local_config_from_settings;
 pub use pty_backend::{GpuiEventProxy, TerminalEvent};
 pub use serial_backend::SerialBackend;

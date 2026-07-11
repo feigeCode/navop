@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 # Async runtime
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 futures = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }

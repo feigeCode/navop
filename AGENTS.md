@@ -352,6 +352,13 @@
 - **验证方式**：补结构性回归测试，断言外层有 flex/h_full/min/overflow_hidden 边界、内层有 size_full/overflow_y_scrollbar；运行相关 UI 模块的定向 `cargo test`，必要时手工打开窗口验证滚轮。
 - **适用范围**：GPUI popup、dialog、tab 面板中需要滚动的列表、卡片网格、表单内容区域。
 
+- **标题**：可见终端执行不能用 EOF 绑定 Agent 取消与命令完成
+- **触发信号**：`terminal.exec` 执行 `command &`、`npm run dev &` 或 `nohup command &` 后一直 pending；点击 Agent 的 × 后对话仍显示运行中；或取消 Agent 时误向终端发送 Ctrl+C、终止仍在运行的命令。
+- **根因 / 约束**：后台进程会继承 PTY/stdout/stderr，shell leader 退出不代表 reader 能收到 EOF。Agent turn、tool waiter 与终端命令若共用同一个 future，进程或 FD 清理就会反向阻塞对话终态。可见终端命令由用户终端拥有，Agent 取消无权终止它。
+- **正确做法**：用 OSC 133 supervisor 独立管理 readiness、safe-replace、命令 epoch、observer 与 timeout。只有 `Ready` 才能发送 ETX，收到 fresh `InputStart` 后再提交命令；提交动作必须立即把 readiness 悲观切到 `SubmissionPending`，即使 `wait_for_output=false`。命令完成以 `CommandFinished` 或新 prompt epoch 为边界，不依赖 EOF。取消前未开始的调用零写入；提交后的取消只 detach waiter，后台 supervisor 继续有界清理，并停止缓存无人消费的输出。Agent turn 同时立即发出 `TurnCancelled`，旧 turn 的迟到写入按 turn id 丢弃。
+- **验证方式**：覆盖 busy/unknown 零写入、半行输入清理、fresh prompt 握手、`wait_for_output=false` 立即 busy、预取消不排队、取消后不发送控制字符、detached output 不增长、background/nohup 不等 EOF、旧 turn 不清理或污染新 turn；再运行 terminal/tool-runtime/agent-runtime/UI 的定向测试、check 与 clippy。
+- **适用范围**：`crates/terminal/src/exec_supervisor/*`、SSH terminal actor、`terminal.exec` Public MCP/Agent adapter、`agent_runtime` turn cancellation 与 `ai_chat_view` 终态处理。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

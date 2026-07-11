@@ -71,6 +71,21 @@
 
 - `ssh.exec` 是结构化 SSH 执行，不会把命令写入可见终端。
 - `terminal.exec` 是可见终端执行，会写入 live terminal input path。
+- `terminal.exec` 只会在 OSC 133 shell integration 明确报告终端处于 `Ready`
+  prompt 时自动执行；前台任务运行、readiness 未知或终端断开时都会 fail closed，
+  不向终端写入任何预检字符或命令字节。
+- 每次自动执行都会先发送 ETX 清掉当前未提交输入，并等待一个新的 `InputStart`
+  事件确认 shell 已重新进入可输入状态，之后才提交命令。用户在握手期间输入会使本次
+  automation lease 失效。
+- `ready_timeout_ms` 控制等待终端进入 `Ready` 的可选有界时间，默认 `0` 表示忙时
+  立即返回；`timeout_ms` 只控制已提交命令的完成观测。
+- 命令完成以 OSC 133 `CommandFinished` 或对应的新 prompt epoch 为边界，不依赖
+  PTY/stdout/stderr EOF。因此 `command &`、`npm run dev &` 与 `nohup command &`
+  不会因为后台进程继续持有终端文件描述符而卡住 tool call。
+- 点击 Agent 的 × 只会让当前 turn 立即进入 `TurnCancelled` 并停止等待 tool result。
+  如果 `terminal.exec` 尚未提交命令，则取消本次自动执行；如果命令已经提交，则只
+  detach observer，不发送 Ctrl+C、signal 或关闭 terminal，终端中的命令继续运行，
+  其 observer 由 terminal supervisor 在后台有界清理。
 - `ssh.remote_exec`、`ssh.remote_command_poll`、`ssh.remote_command_output`、
   `ssh.remote_command_cancel` 已不再作为 alias 接受。
 

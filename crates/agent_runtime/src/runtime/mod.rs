@@ -156,8 +156,9 @@ impl Runtime {
         };
         let outcome = task.run(ctx, cancellation).await;
 
-        session.clear_active_turn();
-        emit_outcome(&session, &turn.turn_id, &outcome);
+        if session.clear_active_turn_if(&turn.turn_id) {
+            emit_outcome(&session, &turn.turn_id, &outcome);
+        }
         Ok(outcome)
     }
 
@@ -223,8 +224,9 @@ impl Runtime {
         )
         .await;
 
-        session.clear_active_turn();
-        emit_outcome(&session, &turn_id, &outcome);
+        if session.clear_active_turn_if(&turn_id) {
+            emit_outcome(&session, &turn_id, &outcome);
+        }
         Ok(outcome)
     }
 
@@ -267,8 +269,9 @@ impl Runtime {
                 input: vec![TurnInput::User(input)],
             };
             let outcome = task.run(ctx, cancel_run).await;
-            session_run.clear_active_turn();
-            emit_outcome(&session_run, &turn_run.turn_id, &outcome);
+            if session_run.clear_active_turn_if(&turn_run.turn_id) {
+                emit_outcome(&session_run, &turn_run.turn_id, &outcome);
+            }
         });
 
         Ok(turn_id)
@@ -279,7 +282,12 @@ impl Runtime {
         let session = self
             .session(session_id)
             .ok_or_else(|| RuntimeError::SessionNotFound(session_id.clone()))?;
-        session.cancel_active_turn();
+        if let Some(turn_id) = session.cancel_and_detach_active_turn() {
+            session.emit(RuntimeEvent::TurnCancelled {
+                session_id: session_id.clone(),
+                turn_id,
+            });
+        }
         Ok(())
     }
 
@@ -332,10 +340,9 @@ fn emit_outcome(session: &Session, turn_id: &TurnId, outcome: &TaskOutcome) {
             turn_id: turn_id.clone(),
             reason: reason.clone(),
         },
-        TaskOutcome::Cancelled => RuntimeEvent::TurnFailed {
+        TaskOutcome::Cancelled => RuntimeEvent::TurnCancelled {
             session_id,
             turn_id: turn_id.clone(),
-            reason: "任务已取消".to_string(),
         },
     };
     session.emit(event);

@@ -620,17 +620,25 @@ async fn interrupt_cancels_turn_while_model_stream_is_starting() {
         .await
         .expect("model should be called");
     runtime.interrupt(session.id()).expect("interrupt turn");
+    assert!(
+        !session.is_busy(),
+        "cancel acknowledgement should detach the turn"
+    );
 
-    let event = tokio::time::timeout(Duration::from_millis(200), async {
+    let cancelled_turn = tokio::time::timeout(Duration::from_millis(200), async {
         loop {
-            if let RuntimeEvent::TurnFailed { reason, .. } = rx.recv().await.unwrap() {
-                break reason;
+            if let RuntimeEvent::TurnCancelled { turn_id, .. } = rx.recv().await.unwrap() {
+                break turn_id;
             }
         }
     })
     .await
-    .expect("interrupt should emit TurnFailed promptly");
-    assert_eq!("任务已取消", event);
+    .expect("interrupt should emit TurnCancelled promptly");
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(!drain_events(&mut rx).iter().any(|event| {
+        matches!(event, RuntimeEvent::TurnFailed { turn_id, .. } if turn_id == &cancelled_turn)
+    }));
 }
 
 #[tokio::test]

@@ -7,6 +7,8 @@ use tool_runtime::{
     ToolDescriptor, ToolError, ToolHandler, ToolMode, ToolRegistry, ToolResult, ToolTargetSpec,
 };
 
+const MAX_READY_TIMEOUT_MS: u64 = 10_000;
+
 #[derive(Clone)]
 struct TerminalExecRuntime {
     registry: PublicMcpRegistry,
@@ -17,12 +19,13 @@ impl TerminalExecRuntime {
         Self { registry }
     }
 
-    fn exec(&self, input: Value) -> Result<ToolResult, ToolError> {
+    async fn exec(&self, input: Value, context: ToolContext) -> Result<ToolResult, ToolError> {
         let request = parse_exec_request(input)?;
         let target = request.target.clone();
         let result = self
             .registry
-            .terminal_exec(&target, request)
+            .terminal_exec(&target, request, context.cancellation)
+            .await
             .map_err(tool_error)?;
         terminal_exec_result(result)
     }
@@ -64,25 +67,10 @@ impl ToolHandler for TerminalExecRuntime {
         )
     }
 
-    fn call(&self, input: Value, _context: ToolContext) -> tool_runtime::ToolFuture {
+    fn call(&self, input: Value, context: ToolContext) -> tool_runtime::ToolFuture {
         let runtime = self.clone();
-        Box::pin(async move { run_terminal_exec(runtime, input).await })
+        Box::pin(async move { runtime.exec(input, context).await })
     }
-}
-
-async fn run_terminal_exec(
-    runtime: TerminalExecRuntime,
-    input: Value,
-) -> Result<ToolResult, ToolError> {
-    if tokio::runtime::Handle::try_current().is_err() {
-        return runtime.exec(input);
-    }
-
-    tokio::task::spawn_blocking(move || runtime.exec(input))
-        .await
-        .map_err(|error| ToolError::Failed {
-            message: format!("terminal.exec task failed: {error}"),
-        })?
 }
 
 fn exec_schema() -> Value {
@@ -107,6 +95,13 @@ fn exec_schema() -> Value {
                 "default": true,
                 "description": "When true, wait for a bounded terminal output delta."
             },
+            "ready_timeout_ms": {
+                "type": "integer",
+                "default": 0,
+                "minimum": 0,
+                "maximum": MAX_READY_TIMEOUT_MS,
+                "description": "Bounded time to wait for a safe shell input prompt before failing."
+            },
             "timeout_ms": {
                 "type": ["integer", "null"],
                 "default": 60000
@@ -121,12 +116,16 @@ fn parse_exec_request(input: Value) -> Result<TerminalExecRequest, ToolError> {
     let command = required_str(&input, "command")?.to_string();
     let submit = optional_bool(&input, "submit").unwrap_or(true);
     let wait_for_output = optional_bool(&input, "wait_for_output").unwrap_or(true);
+    let ready_timeout_ms = optional_u64(&input, "ready_timeout_ms")
+        .unwrap_or(0)
+        .min(MAX_READY_TIMEOUT_MS);
     let timeout_ms = optional_u64(&input, "timeout_ms");
     Ok(TerminalExecRequest {
         target,
         command,
         submit,
         wait_for_output,
+        ready_timeout_ms,
         timeout_ms,
     })
 }

@@ -50,7 +50,9 @@ pub async fn handle_delegate_task(
 ) -> ToolObservation {
     let args = match parse_args(call) {
         Ok(args) => args,
-        Err(observation) => return observation,
+        Err(message) => {
+            return ToolObservation::failure(call.call_id.clone(), call.tool_name.clone(), message);
+        }
     };
     let name = args.name;
     let subagent_id = SubAgentId::from_string(call.call_id.as_str().to_string());
@@ -77,28 +79,14 @@ pub async fn handle_delegate_task(
     }
 }
 
-fn parse_args(call: &ToolCall) -> Result<DelegateTaskArgs, ToolObservation> {
-    let args =
-        serde_json::from_value::<DelegateTaskArgs>(call.arguments.clone()).map_err(|err| {
-            ToolObservation::failure(
-                call.call_id.clone(),
-                call.tool_name.clone(),
-                format!("delegate_task 参数无效:{err}"),
-            )
-        })?;
+fn parse_args(call: &ToolCall) -> Result<DelegateTaskArgs, String> {
+    let args = serde_json::from_value::<DelegateTaskArgs>(call.arguments.clone())
+        .map_err(|err| format!("delegate_task 参数无效:{err}"))?;
     if args.task.trim().is_empty() {
-        return Err(ToolObservation::failure(
-            call.call_id.clone(),
-            call.tool_name.clone(),
-            "delegate_task.task 不能为空",
-        ));
+        return Err("delegate_task.task 不能为空".to_string());
     }
     if args.name.trim().is_empty() {
-        return Err(ToolObservation::failure(
-            call.call_id.clone(),
-            call.tool_name.clone(),
-            "delegate_task.name 不能为空",
-        ));
+        return Err("delegate_task.name 不能为空".to_string());
     }
     Ok(args)
 }

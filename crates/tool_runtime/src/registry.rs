@@ -1,6 +1,7 @@
 use std::{collections::BTreeSet, error::Error, fmt, future::Future, pin::Pin, sync::Arc};
 
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     RuntimeToolDescriptor, ToolAdapter, ToolAlias, ToolAnnotations, ToolDescriptor, ToolError,
@@ -9,14 +10,23 @@ use crate::{
 
 pub type ToolFuture = Pin<Box<dyn Future<Output = Result<ToolResult, ToolError>> + Send + 'static>>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct ToolContext {
     pub adapter: ToolAdapter,
+    pub cancellation: CancellationToken,
 }
 
 impl ToolContext {
     pub fn for_adapter(adapter: ToolAdapter) -> Self {
-        Self { adapter }
+        Self {
+            adapter,
+            cancellation: CancellationToken::new(),
+        }
+    }
+
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
     }
 }
 

@@ -12109,6 +12109,7 @@ dependencies = [
  "shell-words",
  "ssh",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -12585,6 +12586,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio-util",
 ]
 
 [[package]]
