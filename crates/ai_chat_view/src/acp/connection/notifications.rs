@@ -5,7 +5,7 @@ use agent_runtime::{RuntimeEvent, SessionId};
 use tokio::sync::broadcast;
 
 use crate::acp::state::AcpSessionState;
-use crate::acp::translate::{AcpEventTranslator, session_update_to_events};
+use crate::acp::translate::{AcpEventTranslator, session_update_to_events_for_agent};
 use crate::acp::turn::AcpTurnTracker;
 
 use super::runner::ConnectShared;
@@ -16,6 +16,7 @@ pub(super) struct NotificationContext {
     state: Arc<Mutex<AcpSessionState>>,
     active_turn: Arc<Mutex<Option<AcpTurnTracker>>>,
     translator: Arc<Mutex<AcpEventTranslator>>,
+    agent_name: String,
 }
 
 impl NotificationContext {
@@ -26,6 +27,7 @@ impl NotificationContext {
             state: shared.state.clone(),
             active_turn: shared.active_turn.clone(),
             translator: Arc::new(Mutex::new(AcpEventTranslator)),
+            agent_name: shared.config.name.to_string(),
         }
     }
 }
@@ -46,9 +48,21 @@ pub(super) fn handle_notification(
         return Ok(());
     };
     let events = context.translator.lock().map_or_else(
-        |_| session_update_to_events(&notification.update, &context.session_id, &turn_id),
+        |_| {
+            session_update_to_events_for_agent(
+                &notification.update,
+                &context.session_id,
+                &turn_id,
+                &context.agent_name,
+            )
+        },
         |mut translator| {
-            translator.session_update_to_events(&notification.update, &context.session_id, &turn_id)
+            translator.session_update_to_events(
+                &notification.update,
+                &context.session_id,
+                &turn_id,
+                &context.agent_name,
+            )
         },
     );
     for event in events {

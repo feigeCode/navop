@@ -24,18 +24,29 @@ impl AcpEventTranslator {
         update: &SessionUpdate,
         session_id: &SessionId,
         turn_id: &TurnId,
+        agent_name: &str,
     ) -> Vec<RuntimeEvent> {
-        session_update_to_events(update, session_id, turn_id)
+        session_update_to_events_for_agent(update, session_id, turn_id, agent_name)
     }
 }
 
 /// 把一条 ACP `SessionUpdate` 翻译为 0..N 条 `RuntimeEvent`。
 ///
 /// `session_id` / `turn_id` 为本次 ACP 会话的合成 id(view 侧事件泵据此过滤)。
+#[cfg(test)]
 pub(crate) fn session_update_to_events(
     update: &SessionUpdate,
     session_id: &SessionId,
     turn_id: &TurnId,
+) -> Vec<RuntimeEvent> {
+    session_update_to_events_for_agent(update, session_id, turn_id, "Agent")
+}
+
+pub(crate) fn session_update_to_events_for_agent(
+    update: &SessionUpdate,
+    session_id: &SessionId,
+    turn_id: &TurnId,
+    agent_name: &str,
 ) -> Vec<RuntimeEvent> {
     match update {
         SessionUpdate::UserMessageChunk(chunk) => {
@@ -50,9 +61,9 @@ pub(crate) fn session_update_to_events(
             let delta = content_block_text(&chunk.content);
             reasoning_delta_events(delta, session_id, turn_id)
         }
-        SessionUpdate::ToolCall(call) => tool_call_events(call, session_id, turn_id),
+        SessionUpdate::ToolCall(call) => tool_call_events(call, session_id, turn_id, agent_name),
         SessionUpdate::ToolCallUpdate(update) => {
-            tool_call_update_events(update, session_id, turn_id)
+            tool_call_update_events(update, session_id, turn_id, agent_name)
         }
         SessionUpdate::Plan(plan) => vec![RuntimeEvent::PlanUpdated {
             session_id: session_id.clone(),
@@ -154,7 +165,12 @@ fn acp_update_kind(update: &SessionUpdate) -> &'static str {
     }
 }
 
-fn tool_call_events(call: &AcpToolCall, sid: &SessionId, tid: &TurnId) -> Vec<RuntimeEvent> {
+fn tool_call_events(
+    call: &AcpToolCall,
+    sid: &SessionId,
+    tid: &TurnId,
+    agent_name: &str,
+) -> Vec<RuntimeEvent> {
     let call_id = ToolCallId::from_string(call.tool_call_id.0.to_string());
     let tool_name = ToolName::new(call.title.clone());
     let mut events = vec![RuntimeEvent::ToolCallStarted {
@@ -181,11 +197,17 @@ fn tool_call_events(call: &AcpToolCall, sid: &SessionId, tid: &TurnId) -> Vec<Ru
             call_id,
             success,
         });
+        events.push(continuing_status_event(sid, tid, agent_name));
     }
     events
 }
 
-fn tool_call_update_events(u: &ToolCallUpdate, sid: &SessionId, tid: &TurnId) -> Vec<RuntimeEvent> {
+fn tool_call_update_events(
+    u: &ToolCallUpdate,
+    sid: &SessionId,
+    tid: &TurnId,
+    agent_name: &str,
+) -> Vec<RuntimeEvent> {
     let Some(status) = u.fields.status else {
         return Vec::new();
     };
@@ -213,7 +235,21 @@ fn tool_call_update_events(u: &ToolCallUpdate, sid: &SessionId, tid: &TurnId) ->
             call_id,
             success,
         },
+        continuing_status_event(sid, tid, agent_name),
     ]
+}
+
+fn continuing_status_event(
+    session_id: &SessionId,
+    turn_id: &TurnId,
+    agent_name: &str,
+) -> RuntimeEvent {
+    RuntimeEvent::Status {
+        session_id: session_id.clone(),
+        turn_id: turn_id.clone(),
+        title: format!("{agent_name} 正在继续响应…"),
+        is_done: false,
+    }
 }
 
 fn build_observation(
@@ -449,12 +485,13 @@ mod tests {
 
         let events = session_update_to_events(&update, &sid, &tid);
 
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3);
         assert!(matches!(events[0], RuntimeEvent::ObservationAdded { .. }));
         assert!(matches!(
             events[1],
             RuntimeEvent::ToolCallFinished { success: true, .. }
         ));
+        assert!(matches!(events[2], RuntimeEvent::Status { .. }));
     }
 
     #[test]
@@ -463,7 +500,7 @@ mod tests {
         let mut translator = AcpEventTranslator::default();
         let start = SessionUpdate::ToolCall(AcpToolCall::new("sub_1", "Task: review runtime"));
 
-        let started = translator.session_update_to_events(&start, &sid, &tid);
+        let started = translator.session_update_to_events(&start, &sid, &tid, "Agent");
 
         assert_eq!(started.len(), 1);
         assert!(matches!(
@@ -477,30 +514,72 @@ mod tests {
         fields.raw_output = Some(serde_json::json!("review complete"));
         let update = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("sub_1", fields));
 
-        let finished = translator.session_update_to_events(&update, &sid, &tid);
+        let finished = translator.session_update_to_events(&update, &sid, &tid, "Agent");
 
-        assert_eq!(finished.len(), 2);
+        assert_eq!(finished.len(), 3);
         assert!(matches!(finished[0], RuntimeEvent::ObservationAdded { .. }));
         assert!(matches!(
             finished[1],
             RuntimeEvent::ToolCallFinished { success: true, .. }
         ));
+        assert!(matches!(finished[2], RuntimeEvent::Status { .. }));
     }
 
     #[test]
-    fn completed_tool_update_emits_observation_and_finished() {
+    fn completed_tool_update_restores_pending_response_status() {
         let (sid, tid) = ids();
+        let mut translator = AcpEventTranslator;
         let mut fields = ToolCallUpdateFields::default();
         fields.status = Some(ToolCallStatus::Completed);
         fields.title = Some("执行 SQL".to_string());
         let update = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("call_1", fields));
-        let events = session_update_to_events(&update, &sid, &tid);
-        assert_eq!(events.len(), 2);
+        let events = translator.session_update_to_events(&update, &sid, &tid, "OpenCode");
+        assert_eq!(events.len(), 3);
         assert!(matches!(events[0], RuntimeEvent::ObservationAdded { .. }));
         assert!(matches!(
             events[1],
             RuntimeEvent::ToolCallFinished { success: true, .. }
         ));
+        assert!(matches!(
+            &events[2],
+            RuntimeEvent::Status { title, is_done: false, .. }
+                if title == "OpenCode 正在继续响应…"
+        ));
+    }
+
+    #[test]
+    fn assistant_delta_replaces_post_tool_pending_status() {
+        let (sid, tid) = ids();
+        let mut translator = AcpEventTranslator;
+        let mut transcript = crate::agent_transcript::AgentTranscript::new();
+        let mut fields = ToolCallUpdateFields::default();
+        fields.status = Some(ToolCallStatus::Completed);
+        let update = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("call_1", fields));
+
+        for event in translator.session_update_to_events(&update, &sid, &tid, "Codex") {
+            transcript.apply(&event);
+        }
+        assert!(matches!(
+            transcript.messages.last().map(|message| &message.variant),
+            Some(crate::MessageVariant::Status { title, is_done: false })
+                if title == "Codex 正在继续响应…"
+        ));
+
+        let delta = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new("继续回答"),
+        )));
+        for event in translator.session_update_to_events(&delta, &sid, &tid, "Codex") {
+            transcript.apply(&event);
+        }
+
+        assert_eq!(2, transcript.messages.len());
+        assert!(!transcript.messages.iter().any(|message| matches!(
+            message.variant,
+            crate::MessageVariant::Status { is_done: false, .. }
+        )));
+        let answer = transcript.messages.last().expect("answer should be last");
+        assert_eq!("继续回答", answer.content);
+        assert!(matches!(answer.variant, crate::MessageVariant::Text));
     }
 
     #[test]

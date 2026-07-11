@@ -173,6 +173,7 @@ impl<E: MessageExtension> ChatMessageUIGeneric<E> {
 
     pub fn finalize_streaming(&mut self) {
         self.is_streaming = false;
+        self.is_reasoning_expanded = false;
         self.cached_content_hash = None;
         self.extension.on_finalize_streaming();
     }
@@ -223,5 +224,16 @@ mod tests {
         msg = msg.with_content("new");
 
         assert_ne!(old_hash, msg.content_hash());
+    }
+
+    #[test]
+    fn finalizing_streaming_message_collapses_reasoning() {
+        let mut msg = ChatMessageUI::streaming_assistant();
+        assert!(msg.is_reasoning_expanded);
+
+        msg.finalize_streaming();
+
+        assert!(!msg.is_streaming);
+        assert!(!msg.is_reasoning_expanded);
     }
 }

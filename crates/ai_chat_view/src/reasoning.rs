@@ -3,7 +3,7 @@ use crate::{ChatMessageUIGeneric, MessageExtension};
 use gpui::prelude::FluentBuilder;
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, div};
 use gpui_component::{
-    IconName, Sizable,
+    Disableable, IconName, Sizable,
     button::{Button, ButtonVariants},
     h_flex, v_flex,
 };
@@ -17,9 +17,9 @@ pub fn render_reasoning_block<E: MessageExtension>(
     let theme = resolve_agent_chat_theme(theme, cx);
     let state_id = SharedString::from(format!("reasoning-expanded-{}", msg.id));
     let expanded_state = window.use_keyed_state(state_id, cx, |_, _| {
-        msg.is_streaming || msg.is_reasoning_expanded
+        msg.is_reasoning_expanded && !msg.is_streaming
     });
-    let is_expanded = *expanded_state.read(cx);
+    let is_expanded = reasoning_is_expanded(msg.is_streaming, *expanded_state.read(cx));
 
     v_flex()
         .w_full()
@@ -67,6 +67,7 @@ fn reasoning_header<E: MessageExtension>(
                 .ghost()
                 .xsmall()
                 .icon(icon)
+                .disabled(msg.is_streaming)
                 .tooltip(tooltip)
                 .on_click(move |_, _, cx| {
                     expanded_state.update(cx, |expanded, cx| {
@@ -85,6 +86,10 @@ fn reasoning_header<E: MessageExtension>(
                 .child("思考过程"),
         )
         .into_any_element()
+}
+
+fn reasoning_is_expanded(is_streaming: bool, is_user_expanded: bool) -> bool {
+    is_streaming || is_user_expanded
 }
 
 fn reasoning_body<E: MessageExtension>(
@@ -109,4 +114,16 @@ fn reasoning_body<E: MessageExtension>(
             .selectable(true),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reasoning_is_expanded;
+
+    #[test]
+    fn streaming_reasoning_expands_without_persisting_completed_state() {
+        assert!(reasoning_is_expanded(true, false));
+        assert!(!reasoning_is_expanded(false, false));
+        assert!(reasoning_is_expanded(false, true));
+    }
 }
