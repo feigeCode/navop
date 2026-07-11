@@ -1,10 +1,10 @@
-# Zed 工作区自动保存与外部编辑器自动上传设计
+# 外部编辑器通用自动保存与自动上传设计
 
 ## 背景
 
 OnetCli 的 SFTP 外部编辑器链路已经能够监听本地临时文件的写盘事件，并在 750ms 防抖后把内容上传到远端。该机制只能观察磁盘文件，无法观察 Zed 尚未保存的内存 buffer。
 
-Zed 支持工作区级 `.zed/settings.json`，可通过以下配置在停止输入 1 秒后自动写盘：
+外部编辑器的内存 buffer 归编辑器进程所有，OnetCli 不能直接替第三方编辑器执行保存。完整的通用方案必须由编辑器扩展声明该编辑器可靠支持的 autosave 准备方式，再由 Host 在隔离的临时会话中执行。Zed 支持工作区级 `.zed/settings.json`，可通过以下配置在停止输入 1 秒后自动写盘：
 
 ```json
 {
@@ -20,7 +20,9 @@ Zed 支持工作区级 `.zed/settings.json`，可通过以下配置在停止输�
 
 ## 目标
 
-- 从 OnetCli 打开的 Zed 临时工作区固定启用停止输入 1 秒后自动保存。
+- 建立适用于所有外部编辑器扩展的 autosave/workspace 准备 contract，而不是在 Host 中硬编码 Zed。
+- 对声明了可靠 autosave 准备方式的编辑器，在启动前自动完成该配置。
+- 从 OnetCli 打开的 Zed 临时工作区固定启用停止输入 1 秒后自动保存，作为首个完整适配。
 - 不修改用户的 Zed 全局设置。
 - 为 OnetCli 增加全局“自动上传外部编辑器的修改”开关。
 - 新开关默认开启，保持现有外部编辑器保存后自动上传的行为。
@@ -31,7 +33,7 @@ Zed 支持工作区级 `.zed/settings.json`，可通过以下配置在停止输�
 ## 非目标
 
 - 不修改、合并或恢复 `~/.config/zed/settings.json`。
-- 不为 Notepad-- 猜测或模拟它没有公开支持的工作区自动保存配置。
+- 不使用模拟键盘、Accessibility 自动点击或定时向第三方应用发送保存快捷键。这类做法会影响当前前台窗口、要求额外系统权限且无法证明保存的是目标会话。
 - 不在已经打开的外部编辑会话中热切换 watcher。
 - 不新增手动“立即上传”按钮；关闭自动上传后，修改只保留在会话临时文件中。
 - 不改变内置远程文件编辑器的保存行为。
@@ -92,6 +94,19 @@ pub workspace_files: Vec<RemoteFileEditorWorkspaceFileContrib>,
 注册后的运行时 command 保留等价字段，使 manifest 解析、注册和实际启动链路完整传递工作区文件。
 
 未声明 `workspaceFiles` 时默认空数组，现有扩展和 direct/macOS LaunchServices 启动行为保持不变。
+
+该 contract 是通用外部编辑器能力：任何扩展都可以通过安全的会话相对文件声明项目级 autosave、格式化、编码或其他启动前工作区配置。Host 不根据 editor ID、应用名称或平台写特殊分支。
+
+## Autosave 能力语义
+
+OnetCli 将“autosave 已适配”定义为：扩展能通过声明式启动准备，让目标编辑器把当前会话的内存修改可靠写回 OnetCli 提供的本地临时主文件。只有扩展能够提供可验证的原生接口时才声明该能力。
+
+- Zed：通过会话内 `.zed/settings.json` 完整适配 1000ms `after_delay` autosave。
+- 其他支持项目级设置的编辑器：由各自扩展声明对应 workspace 文件，复用相同 Host contract。
+- Notepad--：上游源码包含“Cycle Auto Save”功能，但当前实现是应用内工具栏开关，周期固定为 3 分钟；没有发现会话级配置文件、CLI 参数或 LaunchServices 参数可以只为 OnetCli 会话可靠开启。当前扩展因此不伪造 autosave 声明，用户在 Notepad-- 内主动开启原生 Cycle Auto Save 后，OnetCli 的通用 auto upload 会接收其写盘事件。
+- Notepad++：当前官方核心没有可由 OnetCli 会话隔离配置的原生 autosave contract；若用户安装提供真实文件写盘能力的插件，OnetCli 的通用 auto upload 同样接收写盘事件。
+
+“通用实现”指 Host contract、验证、会话准备、上传策略和设置对所有外部编辑器统一生效；不声称 OnetCli 能越过第三方编辑器公开能力保存其私有内存 buffer。
 
 ## 工作区文件安全边界
 
@@ -185,9 +200,9 @@ pub auto_upload_external_changes: bool,
 
 自动上传开启时继续使用现有行为：精确监听主编辑文件、750ms 防抖、同步串行化、pending sync 合并、上传成功通知和失败通知。
 
-## Zed 扩展变更
+## 编辑器扩展变更
 
-Zed macOS 和 Linux contribution 都声明同一个 `.zed/settings.json` 工作区文件，使两端行为一致。Notepad-- 扩展不声明 `workspaceFiles`，继续使用原有启动和保存机制。
+Zed macOS 和 Linux contribution 都声明同一个 `.zed/settings.json` 工作区文件，使两端行为一致。Notepad-- 与 Notepad++ 扩展继续使用原有启动机制；只要编辑器自身或插件将目标文件写盘，Host 的自动上传行为完全一致。未来确认到可靠的会话级 autosave 接口时，只需更新扩展 manifest，无需修改 OnetCli Host。
 
 扩展版本递增，并同步更新 marketplace 版本、release tag、archive 和校验信息。打包后必须检查 archive 内的 manifest，确认 Zed 两个平台 contribution 都携带 1000ms autosave 设置。
 
@@ -244,5 +259,6 @@ Zed macOS 和 Linux contribution 都声明同一个 `.zed/settings.json` 工作�
 - 自动上传关闭时，新开的外部编辑会话不会执行 watcher、远端检查或上传。
 - 自动上传开启时，现有防抖、冲突保护和上传通知保持不变。
 - 工作区文件不能逃逸会话目录，非法扩展声明被明确拒绝。
-- Zed macOS/Linux 扩展、Notepad-- 扩展及现有不含新字段的第三方扩展保持兼容。
+- 通用 contract 能被任意外部编辑器扩展使用，且 Host 不包含 Zed/Notepad--/Notepad++ 的 editor-key 特判。
+- Zed macOS/Linux 扩展完成原生 autosave 适配；Notepad--、Notepad++ 和现有不含新字段的第三方扩展保持兼容，并在实际写盘后使用同一自动上传链路。
 - 相关 Rust 测试、扩展 verifier、格式检查、构建检查和人工验收均有真实验证记录。
