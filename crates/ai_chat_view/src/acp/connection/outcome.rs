@@ -16,11 +16,11 @@ pub(super) fn finish_connect(
 ) -> anyhow::Result<AcpConnectOutcome> {
     match ready {
         Ok(Ok(Ok((connection, SetupOutcome::Ready(session_id))))) => Ok(AcpConnectOutcome::Ready(
-            build_ready(shared, spawned, connection, session_id),
+            Box::new(build_ready(shared, spawned, connection, session_id)),
         )),
         Ok(Ok(Ok((connection, SetupOutcome::AuthenticationRequired(methods))))) => {
-            Ok(AcpConnectOutcome::AuthenticationRequired(build_pending(
-                shared, spawned, connection, methods,
+            Ok(AcpConnectOutcome::AuthenticationRequired(Box::new(
+                build_pending(shared, spawned, connection, methods),
             )))
         }
         Ok(Ok(Err(error))) => {

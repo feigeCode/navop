@@ -25,8 +25,8 @@ use lifecycle::AcpConnectionLifecycle;
 pub use pending::AcpPendingConnection;
 
 pub enum AcpConnectOutcome {
-    Ready(AcpConnection),
-    AuthenticationRequired(AcpPendingConnection),
+    Ready(Box<AcpConnection>),
+    AuthenticationRequired(Box<AcpPendingConnection>),
 }
 
 pub struct AcpConnection {

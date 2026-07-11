@@ -55,7 +55,7 @@ async fn interactive_authentication_can_complete_connection() {
     };
     assert_eq!(vec!["fake-login"], pending.methods());
 
-    let connection = pending
+    let connection = (*pending)
         .authenticate("fake-login".to_string())
         .await
         .expect("fake authentication should succeed");
@@ -109,7 +109,7 @@ async fn ready_connection(mode: Mode, prompt_timeout: Duration) -> AcpConnection
         .await
         .expect("fake agent should connect")
     {
-        AcpConnectOutcome::Ready(connection) => connection,
+        AcpConnectOutcome::Ready(connection) => *connection,
         AcpConnectOutcome::AuthenticationRequired(_) => panic!("unexpected authentication"),
     }
 }

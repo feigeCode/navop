@@ -89,10 +89,10 @@ impl AgentChatView {
         }
         match outcome {
             Ok(AcpConnectOutcome::Ready(connection)) => {
-                self.finish_ready_connect(config.id.clone(), connection, cx)
+                self.finish_ready_connect(config.id.clone(), *connection, cx)
             }
             Ok(AcpConnectOutcome::AuthenticationRequired(pending)) => {
-                self.finish_pending_connect(config, pending, cx)
+                self.finish_pending_connect(config, *pending, cx)
             }
             Err(error) => self.finish_connect_error(config, error, cx),
         }

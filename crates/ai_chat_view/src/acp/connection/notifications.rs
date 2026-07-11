@@ -25,7 +25,7 @@ impl NotificationContext {
             session_id: shared.session_id.clone(),
             state: shared.state.clone(),
             active_turn: shared.active_turn.clone(),
-            translator: Arc::new(Mutex::new(AcpEventTranslator::default())),
+            translator: Arc::new(Mutex::new(AcpEventTranslator)),
         }
     }
 }

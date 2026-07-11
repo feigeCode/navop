@@ -38,11 +38,11 @@ pub enum AcpRecoveryAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AcpError {
     pub kind: AcpErrorKind,
-    pub agent_id: String,
-    pub agent_name: String,
-    pub phase: String,
-    pub summary: String,
-    pub detail: String,
+    pub agent_id: Box<str>,
+    pub agent_name: Box<str>,
+    pub phase: Box<str>,
+    pub summary: Box<str>,
+    pub detail: Box<str>,
     pub recovery: AcpRecoveryAction,
 }
 
@@ -55,22 +55,22 @@ impl AcpError {
     ) -> Self {
         Self {
             kind,
-            agent_id: agent_id.into(),
-            agent_name: agent_name.into(),
-            phase: String::new(),
-            summary: summary.into(),
-            detail: String::new(),
+            agent_id: agent_id.into().into_boxed_str(),
+            agent_name: agent_name.into().into_boxed_str(),
+            phase: Box::from(""),
+            summary: summary.into().into_boxed_str(),
+            detail: Box::from(""),
             recovery: AcpRecoveryAction::None,
         }
     }
 
     pub fn with_phase(mut self, phase: impl Into<String>) -> Self {
-        self.phase = phase.into();
+        self.phase = phase.into().into_boxed_str();
         self
     }
 
     pub fn with_detail(mut self, detail: impl AsRef<str>) -> Self {
-        self.detail = sanitize_detail(detail.as_ref());
+        self.detail = sanitize_detail(detail.as_ref()).into_boxed_str();
         self
     }
 
