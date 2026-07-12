@@ -1764,18 +1764,10 @@ fn show_team_key_rotation_dialog(team: TeamOption, window: &mut Window, cx: &mut
             .on_ok(move |_, window, cx| {
                 let old_key = old_ok.read(cx).text().to_string();
                 let new_key = new_ok.read(cx).text().to_string();
-                if old_key.is_empty() || new_key.is_empty() {
+                if !team_key_rotation_inputs_valid(&old_key, &new_key) {
                     set_team_key_dialog_error(
                         &error_ok,
                         t!("TeamSync.rotate_key_empty").to_string(),
-                        cx,
-                    );
-                    return false;
-                }
-                if old_key == new_key {
-                    set_team_key_dialog_error(
-                        &error_ok,
-                        t!("TeamSync.new_key_same").to_string(),
                         cx,
                     );
                     return false;
@@ -1808,6 +1800,10 @@ fn team_key_input(window: &mut Window, cx: &mut App, placeholder: String) -> Ent
             .placeholder(placeholder)
             .masked(true)
     })
+}
+
+fn team_key_rotation_inputs_valid(old_key: &str, new_key: &str) -> bool {
+    !old_key.is_empty() && !new_key.is_empty()
 }
 
 fn set_team_key_dialog_error(error: &Entity<Option<String>>, message: String, cx: &mut App) {
@@ -3476,10 +3472,19 @@ mod tests {
         ProxyType, build_app_http_client, builtin_monospace_font_options, is_supported_font_file,
         local_terminal_profile_options, merge_font_options_with_custom_fonts, parse_font_families,
         personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
-        team_key_refresh_success_message,
+        team_key_refresh_success_message, team_key_rotation_inputs_valid,
     };
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
     use std::path::Path;
+
+    #[test]
+    fn team_key_rotation_allows_same_passphrase() {
+        assert!(team_key_rotation_inputs_valid(
+            "same secure passphrase",
+            "same secure passphrase"
+        ));
+        assert!(!team_key_rotation_inputs_valid("", "new secure passphrase"));
+    }
 
     #[test]
     fn global_proxy_settings_build_proxy_url_without_auth() {
