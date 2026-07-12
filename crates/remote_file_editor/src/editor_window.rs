@@ -3,7 +3,8 @@ use crate::file_policy::{
 };
 use crate::language::language_for_path;
 use crate::{
-    CloseIntercept, active_index_after_close, active_index_after_open, decide_close_intercept,
+    CloseIntercept, RemoteMutationCallback, active_index_after_close, active_index_after_open,
+    decide_close_intercept,
 };
 use gpui::{
     AnyWindowHandle, App, AppContext, Context, Entity, InteractiveElement as _, IntoElement,
@@ -52,13 +53,18 @@ struct RemoteEditorWindowRef {
 pub fn open_remote_file_editor<T: 'static>(
     remote_path: String,
     client: Arc<Mutex<RusshSftpClient>>,
+    on_remote_changed: RemoteMutationCallback,
     cx: &mut Context<T>,
 ) {
     init_keybindings(cx);
     cx.spawn(async move |_this, cx| {
         let remote_path_for_log = remote_path.clone();
         let result = cx.update(|cx| {
-            if open_in_existing_window(remote_path.clone(), cx)? {
+            if open_in_existing_window(
+                remote_path.clone(),
+                on_remote_changed.clone(),
+                cx,
+            )? {
                 return Ok(());
             }
 
@@ -67,7 +73,13 @@ pub fn open_remote_file_editor<T: 'static>(
                 PopupWindowOptions::new(title).size(960.0, 720.0).min_width(640.0).min_height(480.0),
                 move |window, cx| {
                     let view = cx.new(|cx| {
-                        RemoteFileEditorWindow::new(remote_path, client, window, cx)
+                        RemoteFileEditorWindow::new(
+                            remote_path,
+                            client,
+                            on_remote_changed,
+                            window,
+                            cx,
+                        )
                     });
                     set_editor_window(RemoteEditorWindowRef {
                         window: window.window_handle(),
@@ -88,7 +100,11 @@ pub fn open_remote_file_editor<T: 'static>(
     .detach();
 }
 
-fn open_in_existing_window(remote_path: String, cx: &mut App) -> anyhow::Result<bool> {
+fn open_in_existing_window(
+    remote_path: String,
+    on_remote_changed: RemoteMutationCallback,
+    cx: &mut App,
+) -> anyhow::Result<bool> {
     let Some(editor_window) = current_editor_window() else {
         return Ok(false);
     };
@@ -98,7 +114,7 @@ fn open_in_existing_window(remote_path: String, cx: &mut App) -> anyhow::Result<
         editor_window
             .view
             .update(cx, |this, cx| {
-                this.open_or_focus_tab(remote_path, window, cx);
+                this.open_or_focus_tab(remote_path, on_remote_changed, window, cx);
             })
             .is_ok()
     });
@@ -219,10 +235,11 @@ struct RemoteEditorTab {
     soft_wrap: bool,
     status_message: String,
     load_error: Option<String>,
+    on_remote_changed: RemoteMutationCallback,
 }
 
 impl RemoteEditorTab {
-    fn new(id: u64, remote_path: String) -> Self {
+    fn new(id: u64, remote_path: String, on_remote_changed: RemoteMutationCallback) -> Self {
         Self {
             id,
             display_name: display_name_from_path(&remote_path),
@@ -240,6 +257,7 @@ impl RemoteEditorTab {
             soft_wrap: false,
             status_message: t!("RemoteFileEditor.status.loading").to_string(),
             load_error: None,
+            on_remote_changed,
         }
     }
 
@@ -272,6 +290,7 @@ impl RemoteFileEditorWindow {
     fn new(
         remote_path: String,
         client: Arc<Mutex<RusshSftpClient>>,
+        on_remote_changed: RemoteMutationCallback,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -285,7 +304,7 @@ impl RemoteFileEditorWindow {
             next_tab_id: 1,
         };
         this.register_close_guard(window, cx);
-        this.open_or_focus_tab(remote_path, window, cx);
+        this.open_or_focus_tab(remote_path, on_remote_changed, window, cx);
         this
     }
 
@@ -300,6 +319,7 @@ impl RemoteFileEditorWindow {
     fn open_or_focus_tab(
         &mut self,
         remote_path: String,
+        on_remote_changed: RemoteMutationCallback,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -308,11 +328,13 @@ impl RemoteFileEditorWindow {
         if active_index == self.tabs.len() {
             let tab_id = self.next_tab_id;
             self.next_tab_id += 1;
-            self.tabs.push(RemoteEditorTab::new(tab_id, remote_path));
+            self.tabs
+                .push(RemoteEditorTab::new(tab_id, remote_path, on_remote_changed));
             self.active_tab = active_index;
             self.reload_tab(active_index, window, cx);
         } else {
             self.active_tab = active_index;
+            self.tabs[active_index].on_remote_changed = on_remote_changed;
             self.focus_editor(window, cx);
             cx.notify();
         }
@@ -585,6 +607,7 @@ impl RemoteFileEditorWindow {
         tab.file_size = tab.saved_text.len();
         tab.saving = false;
         tab.status_message = t!("RemoteFileEditor.status.saved").to_string();
+        let on_remote_changed = tab.on_remote_changed.clone();
 
         if self.close_window_after_saves && !self.has_dirty_tabs(cx) {
             self.close_window_after_saves = false;
@@ -599,6 +622,7 @@ impl RemoteFileEditorWindow {
             );
             cx.notify();
         }
+        on_remote_changed.notify(cx);
     }
 
     fn apply_save_error(

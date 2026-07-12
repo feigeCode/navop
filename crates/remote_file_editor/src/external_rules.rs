@@ -81,6 +81,7 @@ fn compare_editors(
 mod tests {
     use extension_runtime::{
         RegisteredRemoteFileEditorCommand, RegisteredRemoteFileEditorContribution,
+        extension::manifest::RemoteFileEditorLaunchMode,
     };
 
     use super::{matches_file_mask, matching_editors};
@@ -129,6 +130,7 @@ mod tests {
             file_masks: vec!["*".to_string()],
             priority,
             command: RegisteredRemoteFileEditorCommand {
+                launch_mode: RemoteFileEditorLaunchMode::Direct,
                 program_candidates: vec!["editor".to_string()],
                 args: Vec::new(),
             },

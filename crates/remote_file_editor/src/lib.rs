@@ -10,6 +10,7 @@ mod external_rules;
 mod external_session;
 mod file_policy;
 mod language;
+mod remote_mutation;
 
 pub use editor_window::{open_remote_file_editor, refresh_keybindings};
 pub use external_editor::{
@@ -37,3 +38,4 @@ pub use file_policy::{
     decode_text_content, determine_file_policy,
 };
 pub use language::language_for_path;
+pub use remote_mutation::RemoteMutationCallback;

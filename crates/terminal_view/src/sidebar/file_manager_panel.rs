@@ -36,8 +36,8 @@ use one_core::storage::{
     sftp_favorite_connection_key,
 };
 use remote_file_editor::{
-    ExternalEditorOpenRequest, external_editor_menu_label, external_editors_for_file,
-    open_remote_file_editor, open_remote_file_external_editor,
+    ExternalEditorOpenRequest, RemoteMutationCallback, external_editor_menu_label,
+    external_editors_for_file, open_remote_file_editor, open_remote_file_external_editor,
 };
 use remote_image_preview::{
     clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
@@ -3288,7 +3288,7 @@ impl FileManagerPanel {
             return;
         };
 
-        open_remote_file_editor(full_path, client, cx);
+        open_remote_file_editor(full_path, client, self.remote_mutation_callback(cx), cx);
     }
 
     fn open_remote_external_editor(
@@ -3310,10 +3310,18 @@ impl FileManagerPanel {
                 remote_path: full_path,
                 editor_key,
                 client,
+                on_remote_changed: self.remote_mutation_callback(cx),
             },
             window,
             cx,
         );
+    }
+
+    fn remote_mutation_callback(&self, cx: &Context<Self>) -> RemoteMutationCallback {
+        let panel = cx.entity().downgrade();
+        RemoteMutationCallback::new(move |cx| {
+            let _ = panel.update(cx, |this, cx| this.refresh_dir(cx));
+        })
     }
 
     // ── 渲染方法 ──────────────────────────────────────────────

@@ -1,6 +1,6 @@
 use std::fs;
 
-use super::{ManifestError, load_from_dir};
+use super::{ManifestError, RemoteFileEditorLaunchMode, load_from_dir};
 
 fn write_manifest(dir: &std::path::Path, body: &str) {
     fs::write(dir.join("extension.json"), body).unwrap();
@@ -161,8 +161,46 @@ fn manifest_loads_remote_file_editor_contributions() {
     assert_eq!(vec!["windows"], editor.platforms);
     assert_eq!(vec!["*"], editor.file_masks);
     assert_eq!(100, editor.priority);
+    assert_eq!(
+        RemoteFileEditorLaunchMode::Direct,
+        editor.command.launch_mode
+    );
     assert_eq!(2, editor.command.program_candidates.len());
     assert_eq!(vec!["{file}"], editor.command.args);
+}
+
+#[test]
+fn manifest_loads_macos_open_remote_file_editor_launch_mode() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    write_manifest(
+        tmp.path(),
+        r#"{
+            "schema_version": 1,
+            "id": "com.onetcli.editor.notepad-minus-minus",
+            "name": "Notepad-- External Editor",
+            "version": "0.1.1",
+            "engines": { "onetcli": ">=0.8.6" },
+            "contributes": {
+                "remoteFileEditors": [{
+                    "id": "notepad-minus-minus",
+                    "displayName": "Notepad--",
+                    "platforms": ["macos"],
+                    "command": {
+                        "launchMode": "macos_open",
+                        "programCandidates": [
+                            "/Applications/Notepad--.app/Contents/MacOS/Notepad--"
+                        ],
+                        "args": ["{file}"]
+                    }
+                }]
+            }
+        }"#,
+    );
+
+    let manifest = load_from_dir(tmp.path()).unwrap();
+    let command = &manifest.contributes.remote_file_editors[0].command;
+
+    assert_eq!(RemoteFileEditorLaunchMode::MacosOpen, command.launch_mode);
 }
 
 #[test]

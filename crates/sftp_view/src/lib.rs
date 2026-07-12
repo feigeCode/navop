@@ -38,7 +38,8 @@ use one_core::storage::{
 };
 use one_core::tab_container::{TabContent, TabContentEvent};
 use remote_file_editor::{
-    ExternalEditorOpenRequest, open_remote_file_editor, open_remote_file_external_editor,
+    ExternalEditorOpenRequest, RemoteMutationCallback, open_remote_file_editor,
+    open_remote_file_external_editor,
 };
 use remote_image_preview::{
     clipboard_upload_paths, image_format_for_path, open_remote_image_preview,
@@ -1254,7 +1255,7 @@ impl SftpView {
             return;
         };
 
-        open_remote_file_editor(full_path, client, cx);
+        open_remote_file_editor(full_path, client, self.remote_mutation_callback(cx), cx);
     }
 
     fn open_remote_external_editor(
@@ -1276,10 +1277,18 @@ impl SftpView {
                 remote_path: full_path,
                 editor_key,
                 client,
+                on_remote_changed: self.remote_mutation_callback(cx),
             },
             window,
             cx,
         );
+    }
+
+    fn remote_mutation_callback(&self, cx: &Context<Self>) -> RemoteMutationCallback {
+        let view = cx.entity().downgrade();
+        RemoteMutationCallback::new(move |cx| {
+            let _ = view.update(cx, |this, cx| this.refresh_remote_dir(cx));
+        })
     }
 
     fn navigate_local_to(&mut self, path: PathBuf, cx: &mut Context<Self>) {

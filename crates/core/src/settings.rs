@@ -1107,6 +1107,7 @@ mod tests {
                 .remote_file_editor
                 .check_remote_modified_before_upload
         );
+        assert!(settings.remote_file_editor.auto_upload_external_changes);
         assert!(
             settings
                 .remote_file_editor
@@ -1133,6 +1134,21 @@ mod tests {
                 .remote_file_editor
                 .check_remote_modified_before_upload
         );
+        assert!(settings.remote_file_editor.auto_upload_external_changes);
+    }
+
+    #[test]
+    fn app_settings_deserializes_disabled_external_auto_upload() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "locale": "en",
+            "theme_mode": "dark",
+            "remote_file_editor": {
+                "auto_upload_external_changes": false
+            }
+        }))
+        .expect("settings should deserialize");
+
+        assert!(!settings.remote_file_editor.auto_upload_external_changes);
     }
 
     #[test]

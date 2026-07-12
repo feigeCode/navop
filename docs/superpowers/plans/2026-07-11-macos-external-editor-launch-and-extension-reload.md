@@ -98,6 +98,7 @@ Expected: failure because launch planning and Bundle derivation are not implemen
 
 ```text
 Language  -> reload languages
+LanguageBundle -> reload languages
 Composite -> skip language reload
 DatabaseDriver/other kinds -> skip language reload
 ```

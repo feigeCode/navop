@@ -10,7 +10,7 @@ use one_core::{
 };
 use serde_json::Value;
 
-use crate::extension::manifest::{CommandContrib, WasmRuntimeKind};
+use crate::extension::manifest::{CommandContrib, RemoteFileEditorLaunchMode, WasmRuntimeKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRemoteFileEditorContribution {
@@ -26,6 +26,7 @@ pub struct RegisteredRemoteFileEditorContribution {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRemoteFileEditorCommand {
+    pub launch_mode: RemoteFileEditorLaunchMode,
     pub program_candidates: Vec<String>,
     pub args: Vec<String>,
 }
