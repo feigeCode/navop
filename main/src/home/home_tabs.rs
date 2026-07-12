@@ -1,10 +1,12 @@
 use crate::home_tab::HomePage;
+use crate::license::is_feature_enabled;
 use crate::onetcli_app::GlobalTabContainer;
 use crate::setting_tab::{AppSettings, DatabaseOpenMode, SettingsPanel};
 use db_view::database_tab::DatabaseTabView;
 use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use mongodb_view::MongoTabView;
+use one_core::license::Feature;
 use one_core::storage::{ConnectionType, ProxyConfig, ProxyType, StoredConnection, Workspace};
 use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
 use redis_view::RedisTabView;
@@ -600,6 +602,10 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !is_feature_enabled(Feature::TeamManagement, cx) {
+            return;
+        }
+
         let tab_container = self.active_tab_container(cx);
         window.defer(cx, move |window, cx| {
             tab_container.update(cx, |tc, cx| {

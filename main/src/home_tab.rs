@@ -513,6 +513,34 @@ mod external_driver_form_tests {
     }
 
     #[test]
+    fn team_key_entry_uses_team_management_feature_gate() {
+        let source = include_str!("home_tab.rs");
+        let toolbar = source
+            .rsplit("fn render_toolbar(")
+            .next()
+            .expect("render_toolbar exists")
+            .split("fn render_connection_list(")
+            .next()
+            .expect("render_toolbar has an end marker");
+
+        assert!(toolbar.contains("is_feature_enabled(Feature::TeamManagement, cx)"));
+    }
+
+    #[test]
+    fn team_key_settings_tab_has_feature_guard() {
+        let source = include_str!("home/home_tabs.rs");
+        let entry = source
+            .split("pub(crate) fn add_team_key_settings_tab(")
+            .nth(1)
+            .expect("team key settings entry exists")
+            .split("pub(crate) fn add_extensions_tab(")
+            .next()
+            .expect("team key settings entry has an end marker");
+
+        assert!(entry.contains("is_feature_enabled(Feature::TeamManagement, cx)"));
+    }
+
+    #[test]
     fn home_render_uses_cached_external_driver_registry() {
         let source = include_str!("home_tab.rs");
         let quick_open = include_str!("home/home_connection_quick_open.rs");
@@ -2512,8 +2540,8 @@ impl HomePage {
             HomeSyncRoute::Personal => !personal_sync_ready || personal_syncing,
         };
         let has_master_key = crypto::has_master_key();
-        let show_team_key_button =
-            should_show_team_key_button(route, get_cached_team_options(cx).len());
+        let show_team_key_button = is_feature_enabled(Feature::TeamManagement, cx)
+            && should_show_team_key_button(route, get_cached_team_options(cx).len());
         let personal_conflict_count = if route == HomeSyncRoute::Personal {
             crate::personal_sync_conflicts::current_personal_conflict_count(cx)
         } else {

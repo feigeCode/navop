@@ -36,7 +36,7 @@ impl PlanTier {
     pub fn features(&self) -> Vec<Feature> {
         match self {
             PlanTier::Free => vec![],
-            PlanTier::Pro => vec![Feature::CloudSync],
+            PlanTier::Pro => vec![Feature::CloudSync, Feature::TeamManagement],
         }
     }
 
@@ -118,7 +118,7 @@ impl LicenseInfo {
         if self.is_subscription_expired() {
             return false;
         }
-        self.features.contains(&feature)
+        self.features.contains(&feature) || self.plan.has_feature(feature)
     }
 
     /// 检查是否是 Pro 用户
@@ -271,18 +271,26 @@ mod tests {
     fn test_plan_tier_features() {
         assert!(PlanTier::Free.features().is_empty());
         assert!(PlanTier::Pro.features().contains(&Feature::CloudSync));
-        assert!(!PlanTier::Pro.features().contains(&Feature::TeamManagement));
+        assert!(PlanTier::Pro.features().contains(&Feature::TeamManagement));
     }
 
     #[test]
     fn test_license_info_has_feature() {
         let license = LicenseInfo::new("user1".to_string(), PlanTier::Pro, None);
         assert!(license.has_feature(Feature::CloudSync));
-        assert!(!license.has_feature(Feature::TeamManagement));
+        assert!(license.has_feature(Feature::TeamManagement));
 
         let free_license = LicenseInfo::new("user2".to_string(), PlanTier::Free, None);
         assert!(!free_license.has_feature(Feature::CloudSync));
         assert!(!free_license.has_feature(Feature::TeamManagement));
+    }
+
+    #[test]
+    fn pro_license_uses_current_plan_features_when_cached_features_are_stale() {
+        let mut license = LicenseInfo::new("user1".to_string(), PlanTier::Pro, None);
+        license.features = vec![Feature::CloudSync];
+
+        assert!(license.has_feature(Feature::TeamManagement));
     }
 
     #[test]
@@ -291,6 +299,7 @@ mod tests {
         let expired_license = LicenseInfo::new("user1".to_string(), PlanTier::Pro, Some(0));
         assert!(expired_license.is_subscription_expired());
         assert!(!expired_license.has_feature(Feature::CloudSync));
+        assert!(!expired_license.has_feature(Feature::TeamManagement));
 
         // 未过期的订阅
         let future_time = std::time::SystemTime::now()

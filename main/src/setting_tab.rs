@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::app_init::is_valid_system_hotkey;
 use crate::auth::get_auth_service;
-use crate::license::{get_license_service, offline_license_public_key};
+use crate::license::{get_license_service, is_feature_enabled, offline_license_public_key};
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::mcp_settings::mcp_setting_group;
 use crate::settings::remote_file_editor_settings::remote_file_editor_setting_group;
@@ -46,6 +46,7 @@ use one_core::cloud_sync::{
 use one_core::crypto;
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::action_id;
+use one_core::license::Feature;
 use one_core::llm::manager::GlobalProviderState;
 use one_core::popup_window::{PopupWindowOptions, open_popup_window};
 use one_core::storage::GlobalStorageState;
@@ -414,7 +415,7 @@ impl SettingsPanel {
         let app_font_options = app_font_options(cx);
         let font_options = self.cached_monospace_font_options(cx);
 
-        vec![
+        let mut pages = vec![
             SettingPage::new(t!("Settings.General.title"))
                 .resettable(true)
                 .default_open(true)
@@ -999,7 +1000,11 @@ impl SettingsPanel {
                         t!("Settings.About.data_safety_title").to_string(),
                     ]),
             )),
-        ]
+        ];
+        if !is_feature_enabled(Feature::TeamManagement, cx) {
+            pages.remove(TEAM_KEYS_SETTINGS_PAGE_INDEX);
+        }
+        pages
     }
 }
 
@@ -2001,7 +2006,14 @@ impl Render for SettingsPanel {
             init_settings(cx);
         }
 
-        let settings_id = if self.initial_page_index == TEAM_KEYS_SETTINGS_PAGE_INDEX {
+        let team_keys_page_hidden = self.initial_page_index == TEAM_KEYS_SETTINGS_PAGE_INDEX
+            && !is_feature_enabled(Feature::TeamManagement, cx);
+        let initial_page_index = if team_keys_page_hidden {
+            0
+        } else {
+            self.initial_page_index
+        };
+        let settings_id = if initial_page_index == TEAM_KEYS_SETTINGS_PAGE_INDEX {
             "main-app-settings-team-keys"
         } else {
             "main-app-settings"
@@ -2012,7 +2024,7 @@ impl Render for SettingsPanel {
                 .with_size(self.size)
                 .with_group_variant(self.group_variant)
                 .default_selected_index(SelectIndex {
-                    page_ix: self.initial_page_index,
+                    page_ix: initial_page_index,
                     ..Default::default()
                 })
                 .pages(self.setting_pages(window, cx)),
@@ -3713,6 +3725,28 @@ mod tests {
 
         assert!(setting_pages.contains("self.cached_monospace_font_options(cx)"));
         assert!(!setting_pages.contains("let font_options = monospace_font_options(cx);"));
+    }
+
+    #[test]
+    fn team_key_settings_page_uses_team_management_feature_gate() {
+        let source = include_str!("setting_tab.rs");
+        let setting_pages = source
+            .split("fn setting_pages(")
+            .nth(1)
+            .expect("setting_pages exists")
+            .split("fn render_personal_sync_path_field")
+            .next()
+            .expect("setting_pages has an end marker");
+
+        assert!(setting_pages.contains("is_feature_enabled(Feature::TeamManagement, cx)"));
+        assert!(setting_pages.contains("pages.remove(TEAM_KEYS_SETTINGS_PAGE_INDEX)"));
+        let render = source
+            .split("impl Render for SettingsPanel")
+            .nth(1)
+            .expect("SettingsPanel render exists");
+        assert!(render.contains("let team_keys_page_hidden"));
+        assert!(render.contains("is_feature_enabled(Feature::TeamManagement, cx)"));
+        assert!(render.contains("page_ix: initial_page_index"));
     }
 
     #[test]
