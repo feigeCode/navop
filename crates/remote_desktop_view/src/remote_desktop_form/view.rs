@@ -1,3 +1,4 @@
+use connection_form::team::{refresh_teams_tooltip, team_label};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Context, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window, div,
@@ -61,7 +62,7 @@ impl RemoteDesktopFormWindow {
             ))
             .child(
                 self.render_form_row(
-                    t!("RemoteDesktopForm.label_team").to_string(),
+                    team_label(),
                     h_flex()
                         .gap_2()
                         .child(Select::new(&self.team_select).w_full())
@@ -69,7 +70,7 @@ impl RemoteDesktopFormWindow {
                             Button::new("sync-remote-desktop-teams")
                                 .icon(IconName::Refresh)
                                 .ghost()
-                                .tooltip(t!("Home.sync_tooltip"))
+                                .tooltip(refresh_teams_tooltip())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.request_team_sync(window, cx);
                                 })),

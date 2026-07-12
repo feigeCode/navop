@@ -1,0 +1,23 @@
+_version: 2
+
+TeamSync:
+  personal:
+    en: Personal
+    zh-CN: 个人
+    zh-HK: 個人
+  team_label:
+    en: Team
+    zh-CN: 团队归属
+    zh-HK: 團隊歸屬
+  refresh_tooltip:
+    en: Refresh teams
+    zh-CN: 刷新团队列表
+    zh-HK: 重新整理團隊列表
+  key_missing_short:
+    en: Needs key
+    zh-CN: 需密钥
+    zh-HK: 需密鑰
+  key_cached_short:
+    en: Key saved
+    zh-CN: 已保存密钥
+    zh-HK: 已保存密鑰

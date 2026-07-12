@@ -27,6 +27,7 @@ extension-component = { workspace = true }
 ferrum-flow.workspace = true
 gpui-component = { workspace = true }
 one-ui.workspace = true
+connection-form.workspace = true
 one-core.workspace = true
 sum-tree.workspace = true
 lsp-types.workspace = true

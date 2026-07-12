@@ -1,6 +1,5 @@
 use gpui::SharedString;
 use gpui_component::select::SelectItem;
-use one_core::cloud_sync::{TeamKeyStatus, TeamOption};
 use one_core::storage::{PortForwardingKind, StoredConnection, Workspace};
 use rust_i18n::t;
 
@@ -28,51 +27,6 @@ impl WorkspaceSelectItem {
 
 impl SelectItem for WorkspaceSelectItem {
     type Value = Option<i64>;
-
-    fn title(&self) -> SharedString {
-        self.name.clone().into()
-    }
-
-    fn value(&self) -> &Self::Value {
-        &self.id
-    }
-}
-
-#[derive(Clone, Default, PartialEq)]
-pub(super) struct TeamSelectItem {
-    id: Option<String>,
-    name: String,
-}
-
-impl TeamSelectItem {
-    pub(super) fn personal() -> Self {
-        Self {
-            id: None,
-            name: t!("TeamSync.personal").to_string(),
-        }
-    }
-
-    pub(super) fn from_team(team: &TeamOption) -> Self {
-        Self {
-            id: Some(team.id.clone()),
-            name: team_select_name(team),
-        }
-    }
-}
-
-fn team_select_name(team: &TeamOption) -> String {
-    match team.key_status {
-        TeamKeyStatus::Missing | TeamKeyStatus::VersionMismatch => {
-            format!("{} ({})", team.name, t!("TeamSync.key_missing_short"))
-        }
-        TeamKeyStatus::Cached | TeamKeyStatus::Unlocked => {
-            format!("{} ({})", team.name, t!("TeamSync.key_cached_short"))
-        }
-    }
-}
-
-impl SelectItem for TeamSelectItem {
-    type Value = Option<String>;
 
     fn title(&self) -> SharedString {
         self.name.clone().into()

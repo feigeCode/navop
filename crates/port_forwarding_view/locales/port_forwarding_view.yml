@@ -25,14 +25,6 @@ Home:
     zh-CN: 与云端同步数据
     zh-HK: 與雲端同步數據
 
-TeamSync:
-  personal:
-    en: Personal
-    zh-CN: 个人
-  team_label:
-    en: Team
-    zh-CN: 团队
-
 PortForwarding:
   new:
     en: New Port Forwarding
