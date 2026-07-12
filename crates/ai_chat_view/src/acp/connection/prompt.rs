@@ -77,7 +77,7 @@ impl AcpConnection {
         let _ = self.events_tx.send(RuntimeEvent::Status {
             session_id: self.session_id.clone(),
             turn_id,
-            title: "ACP 正在响应…".to_string(),
+            title: responding_status_title(&self.agent_name),
             is_done: false,
         });
     }
@@ -89,6 +89,10 @@ impl AcpConnection {
             reason: reason.to_string(),
         });
     }
+}
+
+fn responding_status_title(agent_name: &str) -> String {
+    format!("{agent_name} 正在响应…")
 }
 
 struct PromptContext {
@@ -195,4 +199,15 @@ fn emit_failed(context: &PromptContext, turn_id: TurnId, error: AcpError) {
         turn_id,
         reason: error.to_string(),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn responding_status_uses_visible_agent_name() {
+        assert_eq!(
+            "Claude Code 正在响应…",
+            super::responding_status_title("Claude Code")
+        );
+    }
 }

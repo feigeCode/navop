@@ -42,6 +42,10 @@ fn connection_registry_lists_save_tools() {
         .iter()
         .find(|tool| tool.id == "connections.save")
         .expect("save tool should be registered");
+    let open_session = tools
+        .iter()
+        .find(|tool| tool.id == "connections.open_session")
+        .expect("open_session tool should be registered");
 
     assert_eq!(
         json!([
@@ -54,6 +58,12 @@ fn connection_registry_lists_save_tools() {
         save.description
             .contains("Call connections.get_schema first")
     );
+    assert!(
+        open_session
+            .description
+            .contains("open the session in the background")
+    );
+    assert!(open_session.description.contains("session.activated"));
     assert_eq!(
         json!("integer"),
         save.input_schema["properties"]["id"]["type"]

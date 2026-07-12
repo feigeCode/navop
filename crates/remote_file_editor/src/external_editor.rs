@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result, anyhow};
+use extension_runtime::extension::manifest::RemoteFileEditorLaunchMode;
 use extension_runtime::{GlobalExtensionRuntimeCatalog, RegisteredRemoteFileEditorContribution};
 use futures::channel::mpsc;
 use gpui::{App, AppContext as _, Context, Window};
@@ -15,13 +16,14 @@ use sftp::{RusshSftpClient, SftpClient};
 use tokio::sync::Mutex;
 
 use crate::external_edit_controller::{
-    ExternalEditController, ExternalEditControllerConfig, ExternalEditWatchLoop,
+    ExternalEditController, ExternalEditControllerConfig, ExternalEditWatchLoop, local_content_hash,
 };
 use crate::external_editor_confirmation::confirm_external_program;
 use crate::external_session::snapshot_from_metadata;
 use crate::{
-    LaunchTemplateContext, MAX_EDITABLE_FILE_SIZE, RemoteFileSnapshot, launch_external_editor,
-    matching_editors, render_args, resolve_editor_program, session_temp_file,
+    LaunchTemplateContext, MAX_EDITABLE_FILE_SIZE, RemoteFileSnapshot, RemoteMutationCallback,
+    launch_external_editor, matching_editors, render_args, resolve_editor_program,
+    session_temp_file,
 };
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
@@ -30,15 +32,19 @@ pub struct ExternalEditorOpenRequest {
     pub remote_path: String,
     pub editor_key: String,
     pub client: Arc<Mutex<RusshSftpClient>>,
+    pub on_remote_changed: RemoteMutationCallback,
 }
 
 pub(crate) struct ExternalEditLaunch {
     pub(crate) remote_path: String,
     pub(crate) editor_key: String,
     pub(crate) program: String,
+    pub(crate) launch_mode: RemoteFileEditorLaunchMode,
     pub(crate) templates: Vec<String>,
     pub(crate) client: Arc<Mutex<RusshSftpClient>>,
     pub(crate) check_conflict: bool,
+    pub(crate) auto_upload: bool,
+    pub(crate) on_remote_changed: RemoteMutationCallback,
 }
 
 pub fn external_editor_menu_label(editor: &str) -> String {
@@ -69,6 +75,7 @@ pub fn external_editors_for_file(
 struct PreparedExternalEdit {
     local_path: PathBuf,
     snapshot: RemoteFileSnapshot,
+    local_hash: u64,
 }
 
 pub fn open_remote_file_external_editor<T: 'static>(
@@ -104,13 +111,17 @@ pub fn open_remote_file_external_editor<T: 'static>(
     let check_conflict = settings
         .remote_file_editor
         .check_remote_modified_before_upload;
+    let auto_upload = settings.remote_file_editor.auto_upload_external_changes;
     let launch = ExternalEditLaunch {
         remote_path: request.remote_path,
         editor_key: request.editor_key,
         program,
+        launch_mode: editor.command.launch_mode,
         templates: templates.to_vec(),
         client: request.client,
         check_conflict,
+        auto_upload,
+        on_remote_changed: request.on_remote_changed,
     };
     if editor_override.is_none() {
         confirm_external_program(launch, window, cx);
@@ -161,7 +172,10 @@ impl ExternalEditLaunch {
                 name: file_name(&self.remote_path),
             },
         );
-        launch_external_editor(&self.program, &args)?;
+        launch_external_editor(&self.program, &args, self.launch_mode)?;
+        if !self.auto_upload {
+            return Ok(());
+        }
         let (sender, receiver) = mpsc::unbounded();
         let watcher = watch_local_file(prepared.local_path.clone(), sender)?;
         let config = ExternalEditControllerConfig {
@@ -169,7 +183,9 @@ impl ExternalEditLaunch {
             remote_path: self.remote_path,
             local_path: prepared.local_path,
             snapshot: prepared.snapshot,
+            initial_local_hash: prepared.local_hash,
             check_conflict: self.check_conflict,
+            on_remote_changed: self.on_remote_changed,
         };
         let controller = cx.new(|_| ExternalEditController::new(config, watcher));
         ExternalEditWatchLoop::new(controller, receiver).run(window, cx);
@@ -202,10 +218,12 @@ fn prepare_external_edit<T>(
         if let Some(parent) = local_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
+        let local_hash = local_content_hash(&bytes);
         tokio::fs::write(&local_path, bytes).await?;
         Ok(PreparedExternalEdit {
             local_path,
             snapshot: snapshot_from_metadata(&metadata),
+            local_hash,
         })
     })
 }

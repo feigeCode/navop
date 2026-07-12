@@ -2,6 +2,7 @@ use gpui::{AppContext, AsyncApp, Context, PromptLevel, WeakEntity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::{DatabaseType, DbConnectionConfig, StoredConnection, Workspace};
+use one_core::tab_container::TabOpenMode;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -33,6 +34,7 @@ pub trait DatabaseDriverConnectionOpener: Sized + 'static {
         &mut self,
         connection: &StoredConnection,
         workspace: Option<Workspace>,
+        mode: TabOpenMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     );
@@ -75,6 +77,7 @@ pub fn open_database_connection_with_driver_guard<T>(
     home: &mut T,
     connection: StoredConnection,
     workspace: Option<Workspace>,
+    mode: TabOpenMode,
     window: &mut Window,
     cx: &mut Context<T>,
 ) where
@@ -90,7 +93,7 @@ pub fn open_database_connection_with_driver_guard<T>(
 
     match required_driver_for_config(&config) {
         DriverRequirement::NotRequired => {
-            home.open_database_connection(&connection, workspace, window, cx)
+            home.open_database_connection(&connection, workspace, mode, window, cx)
         }
         DriverRequirement::InvalidConfig { message } => notify_error(window, cx, message),
         DriverRequirement::Required { driver_id } => {
@@ -98,9 +101,9 @@ pub fn open_database_connection_with_driver_guard<T>(
                 .find(&driver_id)
                 .is_some()
             {
-                home.open_database_connection(&connection, workspace, window, cx);
+                home.open_database_connection(&connection, workspace, mode, window, cx);
             } else {
-                prompt_install_driver(connection, workspace, driver_id, window, cx);
+                prompt_install_driver(connection, workspace, driver_id, mode, window, cx);
             }
         }
     }
@@ -110,6 +113,7 @@ fn prompt_install_driver<T>(
     connection: StoredConnection,
     workspace: Option<Workspace>,
     driver_id: String,
+    mode: TabOpenMode,
     window: &mut Window,
     cx: &mut Context<T>,
 ) where
@@ -122,7 +126,7 @@ fn prompt_install_driver<T>(
         window,
         cx,
         move |home, window, cx| {
-            home.open_database_connection(&connection, workspace, window, cx);
+            home.open_database_connection(&connection, workspace, mode, window, cx);
         },
     );
 }

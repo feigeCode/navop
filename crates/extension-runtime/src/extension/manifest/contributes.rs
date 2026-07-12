@@ -90,10 +90,20 @@ pub struct RemoteFileEditorContrib {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RemoteFileEditorCommandContrib {
+    #[serde(default, rename = "launchMode")]
+    pub launch_mode: RemoteFileEditorLaunchMode,
     #[serde(default, rename = "programCandidates")]
     pub program_candidates: Vec<String>,
     #[serde(default)]
     pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteFileEditorLaunchMode {
+    #[default]
+    Direct,
+    MacosOpen,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

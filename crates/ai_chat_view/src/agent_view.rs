@@ -99,11 +99,11 @@ struct RuntimeBinding {
 
 #[cfg(test)]
 fn sidebar_mode_header_action_ids(show_frame_controls: bool) -> Vec<&'static str> {
-    let mut ids = Vec::new();
+    let mut ids = vec!["new", "history"];
     if show_frame_controls {
         ids.push("frame-options");
     }
-    ids.extend(["new", "history", "close"]);
+    ids.push("close");
     ids
 }
 
@@ -1893,9 +1893,6 @@ impl AgentChatView {
                 h_flex()
                     .gap_1()
                     .items_center()
-                    .when(self.show_sidebar_frame_controls, |this| {
-                        this.child(self.render_sidebar_frame_options(cx))
-                    })
                     .child(
                         Button::new("agent-sidebar-new")
                             .icon(IconName::Plus)
@@ -1925,6 +1922,9 @@ impl AgentChatView {
                             )
                             .when_some(history_list, |popover, list| popover.child(list)),
                     )
+                    .when(self.show_sidebar_frame_controls, |this| {
+                        this.child(self.render_sidebar_frame_options(cx))
+                    })
                     .child(
                         Button::new("agent-sidebar-close")
                             .icon(IconName::Close)
@@ -4385,7 +4385,7 @@ mod tests {
         assert!(config.show_sidebar_frame_controls);
         assert_eq!(SidebarPlacement::Bottom, config.sidebar_frame_placement);
         assert_eq!(
-            vec!["frame-options", "new", "history", "close"],
+            vec!["new", "history", "frame-options", "close"],
             sidebar_mode_header_action_ids(config.show_sidebar_frame_controls)
         );
     }

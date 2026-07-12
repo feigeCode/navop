@@ -42,7 +42,7 @@ use one_core::storage::{
     RemoteDesktopProtocol as StoredRemoteDesktopProtocol, StoredConnection, Workspace,
     WorkspaceRepository,
 };
-use one_core::tab_container::{TabContainer, TabContent, TabContentEvent};
+use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabOpenMode};
 use port_forwarding::{
     DynamicForwardingRequest, LocalForwardingRequest, PortForwardingRuntime,
     build_dynamic_forwarding_request, build_local_forwarding_request,
@@ -1544,6 +1544,16 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_connection_from_quick_with_mode(connection, TabOpenMode::Activate, window, cx);
+    }
+
+    pub(crate) fn open_connection_from_quick_with_mode(
+        &mut self,
+        connection: &StoredConnection,
+        open_mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.ensure_master_key_ready_for_saved_connections(window, cx) {
             return;
         }
@@ -1554,7 +1564,7 @@ impl HomePage {
             .workspace_id
             .and_then(|id| self.workspaces.iter().find(|w| w.id == Some(id)).cloned());
         let strategy = build_connection_open_strategy(connection, workspace);
-        strategy.open(self, window, cx);
+        strategy.open(self, open_mode, window, cx);
         cx.notify();
     }
 

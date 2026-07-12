@@ -8,7 +8,9 @@ use crate::{
         ApiVersions, CommandContrib, CommandHandlerContrib, ContributesManifest, Engines,
         HtmlPreviewTransformContrib, Manifest, MenuCommandRef, MenuContrib, RuntimeSection,
         WasmRuntime, WasmRuntimeKind,
-        contributes::{RemoteFileEditorCommandContrib, RemoteFileEditorContrib},
+        contributes::{
+            RemoteFileEditorCommandContrib, RemoteFileEditorContrib, RemoteFileEditorLaunchMode,
+        },
     },
 };
 
@@ -124,6 +126,7 @@ fn runtime_catalog_registers_remote_file_editors() {
             file_masks: vec!["*".to_string()],
             priority: 100,
             command: RemoteFileEditorCommandContrib {
+                launch_mode: RemoteFileEditorLaunchMode::MacosOpen,
                 program_candidates: vec!["notepad++.exe".to_string()],
                 args: vec!["{file}".to_string()],
             },
@@ -143,6 +146,10 @@ fn runtime_catalog_registers_remote_file_editors() {
     assert_eq!(vec!["windows"], editors[0].platforms);
     assert_eq!(vec!["*"], editors[0].file_masks);
     assert_eq!(100, editors[0].priority);
+    assert_eq!(
+        RemoteFileEditorLaunchMode::MacosOpen,
+        editors[0].command.launch_mode
+    );
     assert_eq!(vec!["notepad++.exe"], editors[0].command.program_candidates);
     assert_eq!(vec!["{file}"], editors[0].command.args);
 }

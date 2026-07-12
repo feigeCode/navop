@@ -17,6 +17,7 @@ pub fn remote_file_editor_setting_group(
     let editors = installed_editors(cx);
     let mut items = vec![
         default_editor_item(default_settings, &editors),
+        auto_upload_item(default_settings),
         conflict_check_item(default_settings),
     ];
     items.extend(editors.into_iter().map(editor_override_item));
@@ -81,6 +82,26 @@ fn default_editor_item(
         )),
     )
     .description(t!("Settings.General.RemoteFileEditor.default_editor_desc").to_string())
+}
+
+fn auto_upload_item(default_settings: &RemoteFileEditorUserSettings) -> SettingItem {
+    SettingItem::new(
+        t!("Settings.General.RemoteFileEditor.auto_upload"),
+        SettingField::checkbox(
+            |cx: &App| {
+                AppSettings::global(cx)
+                    .remote_file_editor
+                    .auto_upload_external_changes
+            },
+            |value, cx: &mut App| {
+                AppSettings::update_and_save(cx, |settings| {
+                    settings.remote_file_editor.auto_upload_external_changes = value;
+                });
+            },
+        )
+        .default_value(default_settings.auto_upload_external_changes),
+    )
+    .description(t!("Settings.General.RemoteFileEditor.auto_upload_desc").to_string())
 }
 
 fn conflict_check_item(default_settings: &RemoteFileEditorUserSettings) -> SettingItem {

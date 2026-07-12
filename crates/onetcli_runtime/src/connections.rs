@@ -329,7 +329,7 @@ impl ToolHandler for ConnectionToolHandler {
             ConnectionTool::OpenSession => (
                 "connections.open_session",
                 "Open connection session",
-                "Open a saved Navop connection in the running app UI by numeric id or exact name. Use this when active session lists are empty and automation needs Navop to open a connection first. In CLI-only runtimes this resolves the connection and reports opened=false because no UI opener is available.",
+                "Open a saved Navop connection in the running app UI by numeric id or exact name. Use this when active session lists are empty and automation needs Navop to open a connection first. Built-in AI surfaces open the session in the background without changing the user's active tab; inspect session.activated to determine whether the UI switched. In CLI-only runtimes this resolves the connection and reports opened=false because no UI opener is available.",
                 false,
             ),
         };

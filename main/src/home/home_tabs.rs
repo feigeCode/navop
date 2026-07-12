@@ -6,7 +6,7 @@ use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use mongodb_view::MongoTabView;
 use one_core::storage::{ConnectionType, ProxyConfig, ProxyType, StoredConnection, Workspace};
-use one_core::tab_container::{TabContainer, TabItem};
+use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
 use redis_view::RedisTabView;
 use remote_desktop::{RemoteDesktopConnectionOptions, RemoteDesktopProtocol};
 use remote_desktop_view::{RemoteDesktopView, RemoteDesktopViewConfig};
@@ -197,6 +197,16 @@ impl HomePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_ssh_terminal_with_mode(conn, TabOpenMode::Activate, window, cx);
+    }
+
+    pub(crate) fn open_ssh_terminal_with_mode(
+        &mut self,
+        conn: StoredConnection,
+        mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let conn_id = conn.id.unwrap_or(0);
         // 使用时间戳生成唯一 tab_id，支持同一连接打开多个 SSH 终端
         let timestamp = std::time::SystemTime::now()
@@ -226,13 +236,23 @@ impl HomePage {
         });
         tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, "ssh", terminal_view);
-            tc.add_and_activate_tab_with_focus(tab, window, cx);
+            tc.add_tab_with_mode(tab, mode, window, cx);
         });
     }
 
     pub(crate) fn open_serial_terminal(
         &mut self,
         conn: StoredConnection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_serial_terminal_with_mode(conn, TabOpenMode::Activate, window, cx);
+    }
+
+    pub(crate) fn open_serial_terminal_with_mode(
+        &mut self,
+        conn: StoredConnection,
+        mode: TabOpenMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -261,7 +281,7 @@ impl HomePage {
             cx.new(|cx| TerminalView::new_serial_with_index(conn, tab_index, window, cx));
         tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, "serial", terminal_view);
-            tc.add_and_activate_tab_with_focus(tab, window, cx);
+            tc.add_tab_with_mode(tab, mode, window, cx);
         });
     }
 
@@ -395,10 +415,11 @@ impl HomePage {
         });
     }
 
-    pub(crate) fn open_remote_desktop(
+    pub(crate) fn open_remote_desktop_with_mode(
         &mut self,
         conn: StoredConnection,
         protocol: RemoteDesktopProtocol,
+        mode: TabOpenMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -445,14 +466,15 @@ impl HomePage {
         });
         tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, tab_kind, view);
-            tc.add_and_activate_tab_with_focus(tab, window, cx);
+            tc.add_tab_with_mode(tab, mode, window, cx);
         });
     }
 
-    pub(crate) fn open_redis_tab(
+    pub(crate) fn open_redis_tab_with_mode(
         &mut self,
         conn: StoredConnection,
         workspace: Option<Workspace>,
+        mode: TabOpenMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -470,8 +492,9 @@ impl HomePage {
         window.defer(cx, move |window, cx| {
             let tab_id_for_tab = tab_id.clone();
             tab_container.update(cx, |tc, cx| {
-                tc.activate_or_add_tab_lazy(
+                tc.activate_or_add_tab_lazy_with_mode(
                     tab_id,
+                    mode,
                     move |window, cx| {
                         let redis_view = cx.new(|cx| {
                             RedisTabView::new_with_active_conn(
@@ -492,10 +515,11 @@ impl HomePage {
         });
     }
 
-    pub(crate) fn open_mongodb_tab(
+    pub(crate) fn open_mongodb_tab_with_mode(
         &mut self,
         conn: StoredConnection,
         workspace: Option<Workspace>,
+        mode: TabOpenMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -531,8 +555,9 @@ impl HomePage {
         window.defer(cx, move |window, cx| {
             let tab_id_for_tab = tab_id.clone();
             tab_container.update(cx, |tc, cx| {
-                tc.activate_or_add_tab_lazy(
+                tc.activate_or_add_tab_lazy_with_mode(
                     tab_id,
+                    mode,
                     move |window, cx| {
                         let mongo_view = cx.new(|cx| {
                             MongoTabView::new_with_active_conn(
@@ -652,10 +677,11 @@ impl HomePage {
         });
     }
 
-    pub(crate) fn add_item_to_tab(
+    pub(crate) fn add_item_to_tab_with_mode(
         &mut self,
         conn: &StoredConnection,
         workspace: Option<Workspace>,
+        mode: TabOpenMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -686,8 +712,9 @@ impl HomePage {
             tab_container.update(cx, |tc, cx| match open_mode {
                 DatabaseOpenMode::Single => {
                     let tab_id = format!("database-tab-{}", conn_clone.id.unwrap_or(0));
-                    tc.activate_or_add_tab_lazy(
+                    tc.activate_or_add_tab_lazy_with_mode(
                         tab_id.clone(),
+                        mode,
                         move |window, cx| {
                             let db_view = cx.new(|cx| {
                                 DatabaseTabView::new_with_active_conn(
@@ -713,8 +740,9 @@ impl HomePage {
                     };
 
                     let active_conn_id = conn_clone.id;
-                    tc.activate_or_add_tab_lazy(
+                    tc.activate_or_add_tab_lazy_with_mode(
                         tab_id.clone(),
+                        mode,
                         move |window, cx| {
                             let db_view = cx.new(|cx| {
                                 DatabaseTabView::new_with_active_conn(
