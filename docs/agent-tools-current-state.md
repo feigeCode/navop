@@ -117,7 +117,7 @@
 | `connections.find` | 查找保存连接 |
 | `connections.delete` | 删除保存连接 |
 | `connections.test` | 测试数据库连接 |
-| `connections.open_session` | 在运行中的 App UI 里打开保存连接；headless runtime 只解析连接并返回 `opened=false` |
+| `connections.open_session` | 在运行中的 App UI 里打开保存连接；内置 AI 工作台/侧边栏后台打开且不切换当前标签，外部 MCP 保持前台打开；headless runtime 只解析连接并返回 `opened=false` |
 | `connections.list_sessions` | 列出当前 resource pool 中已打开/可用的连接会话 |
 | `workspaces.list` | 列出 workspace |
 | `workspaces.show` | 查看 workspace |

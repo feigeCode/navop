@@ -21,12 +21,14 @@ use crate::extension_downloader::{
     fetch_manifest_url, install_from_staging_generic, install_marketplace_entry_generic,
 };
 use one_core::storage::StoredConnection;
+use one_core::tab_container::TabOpenMode;
 
 pub trait RemoteDesktopConnectionOpener: Sized + 'static {
     fn open_remote_desktop_connection(
         &mut self,
         connection: &StoredConnection,
         protocol: RemoteDesktopProtocol,
+        mode: TabOpenMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     );
@@ -63,6 +65,7 @@ pub fn open_remote_desktop_connection_with_provider_guard<T>(
     home: &mut T,
     connection: StoredConnection,
     protocol: RemoteDesktopProtocol,
+    mode: TabOpenMode,
     window: &mut Window,
     cx: &mut Context<T>,
 ) where
@@ -72,15 +75,16 @@ pub fn open_remote_desktop_connection_with_provider_guard<T>(
         .find(protocol)
         .is_some()
     {
-        home.open_remote_desktop_connection(&connection, protocol, window, cx);
+        home.open_remote_desktop_connection(&connection, protocol, mode, window, cx);
         return;
     }
-    prompt_install_provider(connection, protocol, window, cx);
+    prompt_install_provider(connection, protocol, mode, window, cx);
 }
 
 fn prompt_install_provider<T>(
     connection: StoredConnection,
     protocol: RemoteDesktopProtocol,
+    mode: TabOpenMode,
     window: &mut Window,
     cx: &mut Context<T>,
 ) where
@@ -95,7 +99,7 @@ fn prompt_install_provider<T>(
         window,
         cx,
         move |home, window, cx| {
-            home.open_remote_desktop_connection(&connection, protocol, window, cx);
+            home.open_remote_desktop_connection(&connection, protocol, mode, window, cx);
         },
     );
 }

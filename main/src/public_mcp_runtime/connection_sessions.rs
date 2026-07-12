@@ -3,6 +3,7 @@ use gpui::{App, AsyncApp};
 use gpui_component::WindowExt;
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::storage::StoredConnection;
+use one_core::tab_container::TabOpenMode;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
@@ -33,12 +34,13 @@ struct GpuiConnectionSaveNotifier {
 
 pub(super) fn connection_session_opener(
     cx: &mut App,
+    open_mode: TabOpenMode,
 ) -> Arc<dyn onetcli_runtime::connections::ConnectionSessionOpener> {
     let (tx, mut rx) = mpsc::unbounded_channel::<OpenConnectionRequest>();
     cx.spawn(async move |cx: &mut AsyncApp| {
         while let Some(request) = rx.recv().await {
             let result = cx
-                .update(|cx| open_connection_on_active_window(request.connection, cx))
+                .update(|cx| open_connection_on_active_window(request.connection, open_mode, cx))
                 .map_err(|error| error.to_string());
             let _ = request.reply.send(result);
         }
@@ -113,6 +115,7 @@ fn emit_connection_save_event(event: ConnectionSaveEvent, cx: &mut App) {
 
 fn open_connection_on_active_window(
     connection: StoredConnection,
+    open_mode: TabOpenMode,
     cx: &mut App,
 ) -> Result<Value, String> {
     let active_window = cx
@@ -129,11 +132,11 @@ fn open_connection_on_active_window(
 
     active_window
         .update(cx, |_, window, cx| {
-            if window.has_active_dialog(cx) {
+            if open_mode == TabOpenMode::Activate && window.has_active_dialog(cx) {
                 window.close_all_dialogs(cx);
             }
             home_page.update(cx, |home, cx| {
-                home.open_connection_from_quick(&connection, window, cx);
+                home.open_connection_from_quick_with_mode(&connection, open_mode, window, cx);
             });
         })
         .map_err(|error| error.to_string())?;
@@ -142,6 +145,7 @@ fn open_connection_on_active_window(
         "target": "active_window",
         "connection_id": connection_id,
         "connection_name": connection_name,
-        "connection_type": connection_type
+        "connection_type": connection_type,
+        "activated": open_mode == TabOpenMode::Activate
     }))
 }

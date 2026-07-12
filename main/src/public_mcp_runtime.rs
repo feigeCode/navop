@@ -39,7 +39,7 @@ use public_mcp::discovery::{
 use public_mcp::runtime::PublicMcpRuntime;
 use public_mcp::tools::InternalFunctionDefinition;
 use std::path::PathBuf;
-use tool_registry::build_tool_registry;
+use tool_registry::{build_agent_tool_registry, build_tool_registry};
 
 pub struct GlobalPublicMcpRuntime {
     runtime: Option<PublicMcpRuntime>,
@@ -113,7 +113,7 @@ pub fn agent_runtime_tool_registry(cx: &mut App) -> anyhow::Result<agent_runtime
     agent_toolsets.database = false;
     agent_toolsets.redis = false;
     agent_toolsets.sftp = false;
-    let registry = build_tool_registry(cx, &agent_toolsets)?;
+    let registry = build_agent_tool_registry(cx, &agent_toolsets)?;
     let mut agent_registry = public_mcp::tools::agent_runtime_tool_registry(
         registry,
         config.permission_mode,

@@ -1,6 +1,7 @@
 use super::{internal_functions, redis, resource_pool};
 use gpui::App;
 use one_core::settings::ToolExposureToolsetSettings;
+use one_core::tab_container::TabOpenMode;
 use public_mcp::tools::{
     PublicMcpToolProvider, PublicMcpToolRegistry, ToolRuntimeMcpProvider,
     internal_function_tool_registry, remote_ops_tool_registry, terminal_control_tool_registry,
@@ -8,9 +9,39 @@ use public_mcp::tools::{
 };
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolRegistrySurface {
+    Agent,
+    PublicMcp,
+}
+
+impl ToolRegistrySurface {
+    fn connection_session_open_mode(self) -> TabOpenMode {
+        match self {
+            Self::Agent => TabOpenMode::Background,
+            Self::PublicMcp => TabOpenMode::Activate,
+        }
+    }
+}
+
 pub(super) fn build_tool_registry(
     cx: &mut App,
     toolsets: &ToolExposureToolsetSettings,
+) -> anyhow::Result<PublicMcpToolRegistry> {
+    build_tool_registry_for_surface(cx, toolsets, ToolRegistrySurface::PublicMcp)
+}
+
+pub(super) fn build_agent_tool_registry(
+    cx: &mut App,
+    toolsets: &ToolExposureToolsetSettings,
+) -> anyhow::Result<PublicMcpToolRegistry> {
+    build_tool_registry_for_surface(cx, toolsets, ToolRegistrySurface::Agent)
+}
+
+fn build_tool_registry_for_surface(
+    cx: &mut App,
+    toolsets: &ToolExposureToolsetSettings,
+    surface: ToolRegistrySurface,
 ) -> anyhow::Result<PublicMcpToolRegistry> {
     let mut providers: Vec<Arc<dyn PublicMcpToolProvider>> = Vec::new();
     let mut runtime_registries = Vec::new();
@@ -44,7 +75,10 @@ pub(super) fn build_tool_registry(
                 let workspace_repo = storage
                     .storage
                     .get::<one_core::storage::WorkspaceRepository>();
-                let session_opener = super::connection_sessions::connection_session_opener(cx);
+                let session_opener = super::connection_sessions::connection_session_opener(
+                    cx,
+                    surface.connection_session_open_mode(),
+                );
                 let save_notifier = super::connection_sessions::connection_save_notifier(cx);
                 runtime_registries.push(
                     onetcli_runtime::connections::connection_tool_registry_with_workspaces_and_hooks(
@@ -122,7 +156,7 @@ pub(super) fn build_tool_registry(
 
 #[cfg(test)]
 mod tests {
-    use super::build_tool_registry;
+    use super::{ToolRegistrySurface, build_tool_registry};
     use crate::public_mcp_runtime::register_internal_function;
     use gpui::TestAppContext;
     use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
@@ -152,6 +186,18 @@ mod tests {
     use public_mcp::tools::{InternalFunctionDefinition, PublicMcpToolContext};
     use serde_json::json;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn registry_surface_selects_connection_session_open_mode() {
+        assert_eq!(
+            one_core::tab_container::TabOpenMode::Background,
+            ToolRegistrySurface::Agent.connection_session_open_mode()
+        );
+        assert_eq!(
+            one_core::tab_container::TabOpenMode::Activate,
+            ToolRegistrySurface::PublicMcp.connection_session_open_mode()
+        );
+    }
 
     #[gpui::test]
     fn build_tool_registry_includes_internal_function_tools(cx: &mut TestAppContext) {

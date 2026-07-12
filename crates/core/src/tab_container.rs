@@ -199,6 +199,13 @@ pub enum TabContainerEvent {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TabOpenMode {
+    #[default]
+    Activate,
+    Background,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SidebarPanelOverride {
     visible: bool,
@@ -1016,6 +1023,21 @@ impl TabContainer {
         cx.notify();
     }
 
+    pub fn add_tab_with_mode(
+        &mut self,
+        tab: TabItem,
+        mode: TabOpenMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if mode == TabOpenMode::Activate {
+            self.add_and_activate_tab_with_focus(tab, window, cx);
+            return;
+        }
+        self.subscribe_tab_content(&tab, window, cx);
+        self.add_tab(tab, cx);
+    }
+
     fn subscribe_tab_content(
         &mut self,
         tab: &TabItem,
@@ -1093,16 +1115,35 @@ impl TabContainer {
     ) where
         F: FnOnce(&mut Window, &mut Context<Self>) -> TabItem,
     {
+        self.activate_or_add_tab_lazy_with_mode(
+            tab_id,
+            TabOpenMode::Activate,
+            create_fn,
+            window,
+            cx,
+        );
+    }
+
+    pub fn activate_or_add_tab_lazy_with_mode<F>(
+        &mut self,
+        tab_id: impl Into<String>,
+        mode: TabOpenMode,
+        create_fn: F,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) where
+        F: FnOnce(&mut Window, &mut Context<Self>) -> TabItem,
+    {
         let tab_id = tab_id.into();
 
         if let Some(index) = self.tabs.iter().position(|t| t.id() == tab_id) {
-            // 激活现有 tab，复用 set_active_index 逻辑
-            self.set_active_index(index, window, cx);
-        } else {
-            // 创建新 tab 并激活
-            let tab = create_fn(window, cx);
-            self.add_and_activate_tab_with_focus(tab, window, cx);
+            if mode == TabOpenMode::Activate {
+                self.set_active_index(index, window, cx);
+            }
+            return;
         }
+        let tab = create_fn(window, cx);
+        self.add_tab_with_mode(tab, mode, window, cx);
     }
 
     /// Add a new tab, activate it, and focus its content
@@ -3822,8 +3863,48 @@ impl Render for TabContainer {
 
 #[cfg(test)]
 mod tests {
-    use super::tab_display_number;
+    use super::*;
     use crate::tab_navigation::ActiveTabSlot;
+    use gpui::{TestAppContext, WindowOptions};
+    use gpui_component::Theme;
+
+    struct TestTab {
+        title: SharedString,
+        focus_handle: FocusHandle,
+    }
+
+    impl TestTab {
+        fn new(title: &'static str, cx: &mut Context<Self>) -> Self {
+            Self {
+                title: title.into(),
+                focus_handle: cx.focus_handle(),
+            }
+        }
+    }
+
+    impl EventEmitter<TabContentEvent> for TestTab {}
+
+    impl Focusable for TestTab {
+        fn focus_handle(&self, _cx: &App) -> FocusHandle {
+            self.focus_handle.clone()
+        }
+    }
+
+    impl Render for TestTab {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    impl TabContent for TestTab {
+        fn content_key(&self) -> &'static str {
+            "TestTab"
+        }
+
+        fn title(&self, _cx: &App) -> SharedString {
+            self.title.clone()
+        }
+    }
 
     #[test]
     fn tab_display_number_matches_flat_alt_number_order() {
@@ -3831,5 +3912,149 @@ mod tests {
         assert_eq!(2, tab_display_number(ActiveTabSlot::Pinned(1), 2));
         assert_eq!(3, tab_display_number(ActiveTabSlot::Regular(0), 2));
         assert_eq!(5, tab_display_number(ActiveTabSlot::Regular(2), 2));
+    }
+
+    #[gpui::test]
+    fn background_open_adds_tab_without_changing_active_tab(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let active = cx.new(|cx| TestTab::new("active", cx));
+                let background = cx.new(|cx| TestTab::new("background", cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("active", "test", active.clone()),
+                        window,
+                        cx,
+                    );
+                    container.add_tab_with_mode(
+                        TabItem::new("background", "test", background.clone()),
+                        TabOpenMode::Background,
+                        window,
+                        cx,
+                    );
+                });
+
+                let container_ref = container.read(cx);
+                assert_eq!(2, container_ref.tabs().len());
+                assert_eq!("active", container_ref.active_tab().unwrap().id().as_ref());
+                assert!(active.read(cx).focus_handle(cx).is_focused(window));
+                assert!(!background.read(cx).focus_handle(cx).is_focused(window));
+                container
+            })
+            .expect("window opens");
+        });
+    }
+
+    #[gpui::test]
+    fn background_open_existing_tab_keeps_current_tab(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let active = cx.new(|cx| TestTab::new("active", cx));
+                let background = cx.new(|cx| TestTab::new("background", cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("active", "test", active.clone()),
+                        window,
+                        cx,
+                    );
+                    container.add_tab_with_mode(
+                        TabItem::new("background", "test", background),
+                        TabOpenMode::Background,
+                        window,
+                        cx,
+                    );
+                    container.activate_or_add_tab_lazy_with_mode(
+                        "background",
+                        TabOpenMode::Background,
+                        |_, _| panic!("existing tab must be reused"),
+                        window,
+                        cx,
+                    );
+                });
+
+                let container_ref = container.read(cx);
+                assert_eq!("active", container_ref.active_tab().unwrap().id().as_ref());
+                assert!(active.read(cx).focus_handle(cx).is_focused(window));
+                container
+            })
+            .expect("window opens");
+        });
+    }
+
+    #[gpui::test]
+    fn background_open_keeps_pinned_tab_active(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let pinned = cx.new(|cx| TestTab::new("pinned", cx));
+                let background = cx.new(|cx| TestTab::new("background", cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_pinned_tab(TabItem::new("pinned", "test", pinned.clone()), cx);
+                    container.activate_pinned_tab(window, cx);
+                    container.add_tab_with_mode(
+                        TabItem::new("background", "test", background.clone()),
+                        TabOpenMode::Background,
+                        window,
+                        cx,
+                    );
+                });
+
+                let container_ref = container.read(cx);
+                assert_eq!(Some(0), container_ref.active_pinned_index());
+                assert!(pinned.read(cx).focus_handle(cx).is_focused(window));
+                assert!(!background.read(cx).focus_handle(cx).is_focused(window));
+                container
+            })
+            .expect("window opens");
+        });
+    }
+
+    #[gpui::test]
+    fn activate_mode_still_switches_to_existing_tab(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::default());
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let active = cx.new(|cx| TestTab::new("active", cx));
+                let target = cx.new(|cx| TestTab::new("target", cx));
+                let container = cx.new(|cx| TabContainer::new(window, cx));
+
+                container.update(cx, |container, cx| {
+                    container.add_and_activate_tab_with_focus(
+                        TabItem::new("active", "test", active),
+                        window,
+                        cx,
+                    );
+                    container.add_tab_with_mode(
+                        TabItem::new("target", "test", target.clone()),
+                        TabOpenMode::Background,
+                        window,
+                        cx,
+                    );
+                    container.activate_or_add_tab_lazy_with_mode(
+                        "target",
+                        TabOpenMode::Activate,
+                        |_, _| panic!("existing tab must be reused"),
+                        window,
+                        cx,
+                    );
+                });
+
+                assert_eq!(
+                    "target",
+                    container.read(cx).active_tab().unwrap().id().as_ref()
+                );
+                assert!(target.read(cx).focus_handle(cx).is_focused(window));
+                container
+            })
+            .expect("window opens");
+        });
     }
 }
