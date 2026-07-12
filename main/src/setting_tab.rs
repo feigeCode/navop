@@ -43,6 +43,7 @@ use one_core::cloud_sync::{
     forget_team_key_for_cached_team, get_cached_team_options, personal::SyncStoreHealth,
     save_team_key_for_cached_team,
 };
+use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::crypto;
 use one_core::gpui_tokio::Tokio;
 use one_core::keybindings::action_id;
@@ -1718,6 +1719,7 @@ fn show_team_key_entry_dialog(team: TeamOption, window: &mut Window, cx: &mut Ap
                 match save_team_key_for_cached_team(&team_id_ok, &team_key, cx) {
                     Ok(()) => {
                         window.push_notification(t!("TeamSync.save_success").to_string(), cx);
+                        team_key_change_completed(window, cx);
                         true
                     }
                     Err(error) => {
@@ -1818,6 +1820,17 @@ fn set_team_key_dialog_error(error: &Entity<Option<String>>, message: String, cx
     });
 }
 
+fn team_key_change_completed(window: &mut Window, cx: &mut App) {
+    window.refresh();
+    let Some(notifier) = get_notifier(cx) else {
+        tracing::warn!("团队密钥状态变化后无法通知首页同步：GlobalConnectionNotifier 未初始化");
+        return;
+    };
+    notifier.update(cx, |_, cx| {
+        cx.emit(ConnectionDataEvent::CloudSyncRequested);
+    });
+}
+
 fn team_key_refresh_success_message(count: usize) -> String {
     t!("TeamSync.refresh_success", count = count).to_string()
 }
@@ -1890,13 +1903,17 @@ fn initialize_team_key_from_settings(
             let result = engine
                 .save_or_initialize_team_key_for_cached_team(&team_id, &team_key, &personal_key)
                 .await;
-            let message = match result {
-                Ok(_) => t!("TeamSync.initialize_success").to_string(),
-                Err(error) => error.to_string(),
+            let (message, key_changed) = match result {
+                Ok(_) => (t!("TeamSync.initialize_success").to_string(), true),
+                Err(error) => (error.to_string(), false),
             };
             if let Err(error) = cx.update(|window, cx: &mut App| {
                 window.push_notification(message, cx);
-                window.refresh();
+                if key_changed {
+                    team_key_change_completed(window, cx);
+                } else {
+                    window.refresh();
+                }
             }) {
                 tracing::warn!("团队密钥初始化完成后更新窗口失败: {error}");
             }
@@ -1908,7 +1925,7 @@ fn forget_team_key_from_settings(team_id: String, window: &mut Window, cx: &mut 
     match forget_team_key_for_cached_team(&team_id, cx) {
         Ok(()) => {
             window.push_notification(t!("TeamSync.forget_success").to_string(), cx);
-            window.refresh();
+            team_key_change_completed(window, cx);
         }
         Err(error) => window.push_notification(error.to_string(), cx),
     }
@@ -1942,18 +1959,25 @@ fn rotate_team_key_from_settings(
     window
         .spawn(cx, async move |cx| {
             let result = engine.rotate_team_key(&team_id, &old_key, &new_key).await;
-            let message = match result {
-                Ok(rotation) => t!(
-                    "TeamSync.rotate_success",
-                    count = rotation.re_encrypted,
-                    version = rotation.key_version
-                )
-                .to_string(),
-                Err(error) => error.to_string(),
+            let (message, key_changed) = match result {
+                Ok(rotation) => (
+                    t!(
+                        "TeamSync.rotate_success",
+                        count = rotation.re_encrypted,
+                        version = rotation.key_version
+                    )
+                    .to_string(),
+                    true,
+                ),
+                Err(error) => (error.to_string(), false),
             };
             if let Err(error) = cx.update(|window, cx: &mut App| {
                 window.push_notification(message, cx);
-                window.refresh();
+                if key_changed {
+                    team_key_change_completed(window, cx);
+                } else {
+                    window.refresh();
+                }
             }) {
                 tracing::warn!("团队密钥轮换完成后更新窗口失败: {error}");
             }
@@ -3577,6 +3601,46 @@ mod tests {
                 "{function}"
             );
             assert!(body.contains("window.push_notification(message, cx)"));
+        }
+    }
+
+    #[test]
+    fn successful_team_key_changes_request_runtime_reload() {
+        let source = include_str!("setting_tab.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source exists");
+
+        assert!(production.contains("fn team_key_change_completed("));
+        assert!(production.contains("ConnectionDataEvent::CloudSyncRequested"));
+        for (function, next_function) in [
+            (
+                "fn show_team_key_entry_dialog(",
+                "fn show_team_key_rotation_dialog(",
+            ),
+            (
+                "fn initialize_team_key_from_settings(",
+                "fn forget_team_key_from_settings(",
+            ),
+            (
+                "fn forget_team_key_from_settings(",
+                "fn rotate_team_key_from_settings(",
+            ),
+            (
+                "fn rotate_team_key_from_settings(",
+                "fn team_key_role_can_rotate(",
+            ),
+        ] {
+            let body = production
+                .split(function)
+                .nth(1)
+                .expect("team key change function exists")
+                .split(next_function)
+                .next()
+                .expect("team key change function has an end marker");
+
+            assert!(body.contains("team_key_change_completed("), "{function}");
         }
     }
 

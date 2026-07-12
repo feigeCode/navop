@@ -141,23 +141,34 @@ impl TeamKeyManager {
             .get(&self.scope, &team.id)
             .map_err(|e| TeamKeyError::Storage(e.to_string()))?
         else {
+            self.clear_runtime_team_key(&team.id)?;
             return Ok(TeamKeyLoadStatus::Missing);
         };
-        if cache.cached_key_version != Some(team.key_version) {
-            self.service
-                .write()
-                .map_err(|_| TeamKeyError::ServiceLock)?
-                .remove_team_key(&team.id);
+        let (Some(encrypted), Some(cached_key_version)) = (
+            cache.encrypted_team_key.as_deref(),
+            cache.cached_key_version,
+        ) else {
+            self.clear_runtime_team_key(&team.id)?;
+            return Ok(TeamKeyLoadStatus::Missing);
+        };
+        if cached_key_version != team.key_version {
+            self.clear_runtime_team_key(&team.id)?;
             return Ok(TeamKeyLoadStatus::VersionMismatch);
         }
-        let Some(encrypted) = cache.encrypted_team_key else {
-            return Ok(TeamKeyLoadStatus::Missing);
+        let team_key = match crypto::decrypt_with_key(encrypted, personal_key) {
+            Ok(team_key) => team_key,
+            Err(_) => {
+                self.clear_runtime_team_key(&team.id)?;
+                return Err(TeamKeyError::InvalidCachedKey);
+            }
         };
-        let team_key = crypto::decrypt_with_key(&encrypted, personal_key)
-            .map_err(|_| TeamKeyError::InvalidCachedKey)?;
-        let unlocked = self
-            .unlock_team_key(team, &team_key)
-            .map_err(|_| TeamKeyError::InvalidCachedKey)?;
+        let unlocked = match self.unlock_team_key(team, &team_key) {
+            Ok(unlocked) => unlocked,
+            Err(_) => {
+                self.clear_runtime_team_key(&team.id)?;
+                return Err(TeamKeyError::InvalidCachedKey);
+            }
+        };
         self.service
             .write()
             .map_err(|_| TeamKeyError::ServiceLock)?
@@ -281,6 +292,14 @@ impl TeamKeyManager {
         Ok(())
     }
 
+    fn clear_runtime_team_key(&self, team_id: &str) -> Result<(), TeamKeyError> {
+        self.service
+            .write()
+            .map_err(|_| TeamKeyError::ServiceLock)?
+            .remove_team_key(team_id);
+        Ok(())
+    }
+
     fn unlock_team_key(
         &self,
         team: &Team,
@@ -350,7 +369,7 @@ mod tests {
         TeamKeyKdfParams, create_team_key_envelope, unlock_team_key,
     };
     use crate::cloud_sync::{
-        CloudAccountScope, CloudSyncData, CloudSyncService, Team, TeamKeyLoadStatus,
+        CloudAccountScope, CloudSyncData, CloudSyncService, Team, TeamKeyError, TeamKeyLoadStatus,
         TeamKeyManager, data_type,
     };
     use crate::crypto;
@@ -573,6 +592,78 @@ mod tests {
         assert_eq!(TeamKeyLoadStatus::Unlocked, status);
         assert!(
             service
+                .read()
+                .expect("service lock")
+                .is_team_unlocked("team-1")
+        );
+    }
+
+    #[test]
+    fn missing_cached_secret_clears_runtime_team_key() {
+        let repo = test_repo();
+        let verification_service = CloudSyncService::new();
+        let team = team(&verification_service, 1);
+        repo.upsert(&TeamKeyCache {
+            scope: test_scope(),
+            team_id: team.id.clone(),
+            team_name: team.name.clone(),
+            key_version: team.key_version,
+            cached_key_version: None,
+            key_verification: team.key_verification.clone(),
+            encrypted_team_key: None,
+            last_verified_at: None,
+            updated_at: team.updated_at,
+            role: Some("member".to_string()),
+        })
+        .expect("cache seed");
+        let (manager, service) = manager(repo);
+        service
+            .write()
+            .expect("service lock")
+            .set_team_key("team-1", "stale-runtime-key".to_string());
+
+        let status = manager
+            .load_cached_team_key(&team, "personal-secret")
+            .expect("missing key status resolves");
+
+        assert_eq!(TeamKeyLoadStatus::Missing, status);
+        assert!(
+            !service
+                .read()
+                .expect("service lock")
+                .is_team_unlocked("team-1")
+        );
+    }
+
+    #[test]
+    fn invalid_cached_secret_clears_runtime_team_key() {
+        let repo = test_repo();
+        let verification_service = CloudSyncService::new();
+        let team = team(&verification_service, 1);
+        repo.upsert(&TeamKeyCache {
+            scope: test_scope(),
+            team_id: team.id.clone(),
+            team_name: team.name.clone(),
+            key_version: team.key_version,
+            cached_key_version: Some(team.key_version),
+            key_verification: team.key_verification.clone(),
+            encrypted_team_key: Some("invalid-encrypted-key".to_string()),
+            last_verified_at: Some(123),
+            updated_at: team.updated_at,
+            role: Some("member".to_string()),
+        })
+        .expect("cache seed");
+        let (manager, service) = manager(repo);
+        service
+            .write()
+            .expect("service lock")
+            .set_team_key("team-1", "stale-runtime-key".to_string());
+
+        let result = manager.load_cached_team_key(&team, "personal-secret");
+
+        assert_eq!(Err(TeamKeyError::InvalidCachedKey), result);
+        assert!(
+            !service
                 .read()
                 .expect("service lock")
                 .is_team_unlocked("team-1")
