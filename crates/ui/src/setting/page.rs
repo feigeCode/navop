@@ -1,5 +1,5 @@
 use gpui::{
-    App, Entity, InteractiveElement as _, IntoElement, ListAlignment, ListState,
+    App, Entity, InteractiveElement as _, IntoElement, ListAlignment, ListOffset, ListState,
     ParentElement as _, SharedString, StyleRefinement, Styled, Window, div, list,
     prelude::FluentBuilder as _, px,
 };
@@ -14,6 +14,13 @@ use crate::{
     setting::{RenderOptions, SettingGroup, settings::SettingsState},
     v_flex,
 };
+
+fn settings_group_list_offset(group_ix: usize) -> ListOffset {
+    ListOffset {
+        item_ix: group_ix,
+        offset_in_item: px(0.),
+    }
+}
 
 /// A setting page that can contain multiple setting groups.
 #[derive(Clone)]
@@ -136,7 +143,7 @@ impl SettingPage {
             state.update(cx, |state, _| {
                 state.deferred_scroll_group_ix = None;
             });
-            list_state.scroll_to_reveal_item(ix);
+            list_state.scroll_to(settings_group_list_offset(ix));
         }
 
         v_flex()
@@ -206,5 +213,19 @@ impl SettingPage {
                     )
                     .vertical_scrollbar(&list_state),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::settings_group_list_offset;
+    use gpui::px;
+
+    #[test]
+    fn settings_group_list_offset_aligns_group_to_top() {
+        let offset = settings_group_list_offset(7);
+
+        assert_eq!(7, offset.item_ix);
+        assert_eq!(px(0.), offset.offset_in_item);
     }
 }
