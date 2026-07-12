@@ -4,13 +4,14 @@ mod proxy;
 mod selects;
 mod view;
 
+use connection_form::team::{
+    TeamSelectItem, create_team_select, refresh_team_options, resolve_team_assignment,
+    selected_team_id,
+};
 use gpui::{App, Context, Entity, FocusHandle, Window};
 use gpui_component::input::InputState;
 use gpui_component::select::SelectState;
-use one_core::cloud_sync::{
-    GlobalCloudUser, TeamOption, ensure_team_key_ready_for_save, get_cached_team_options,
-};
-use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
+use one_core::cloud_sync::TeamOption;
 use one_core::storage::{
     ProxyType, RemoteDesktopParams, RemoteDesktopProtocol, StoredConnection, Workspace,
 };
@@ -18,9 +19,7 @@ use rust_i18n::t;
 
 use self::inputs::{create_inputs, input_text, non_empty_text, parse_u16};
 use self::persistence::{emit_saved_connection, persist_connection};
-use self::selects::{
-    TeamSelectItem, WorkspaceSelectItem, create_team_select, create_workspace_select,
-};
+use self::selects::{WorkspaceSelectItem, create_workspace_select};
 
 pub struct RemoteDesktopFormWindowConfig {
     pub protocol: RemoteDesktopProtocol,
@@ -101,7 +100,7 @@ impl RemoteDesktopFormWindow {
             proxy_username_input: inputs.proxy_username,
             proxy_password_input: inputs.proxy_password,
             workspace_select: create_workspace_select(&config, window, cx),
-            team_select: create_team_select(&config, window, cx),
+            team_select: create_team_select(&config.teams, None, window, cx),
             read_only: false,
             proxy_enabled: false,
             proxy_type: ProxyType::Socks5,
@@ -215,16 +214,17 @@ impl RemoteDesktopFormWindow {
             self.workspace_id(cx),
         );
         connection.sync_enabled = self.sync_enabled;
-        connection.team_id = self.team_id(cx);
-        ensure_team_key_ready_for_save(connection.team_id.as_deref(), cx)
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        connection.owner_id = if self.is_editing {
+        let assignment = resolve_team_assignment(
+            self.team_id(cx),
+            self.is_editing,
             self.editing_connection
                 .as_ref()
-                .and_then(|connection| connection.owner_id.clone())
-        } else {
-            GlobalCloudUser::get_user(cx).map(|user| user.id)
-        };
+                .and_then(|connection| connection.owner_id.clone()),
+            cx,
+        )
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        connection.team_id = assignment.team_id;
+        connection.owner_id = assignment.owner_id;
         if self.is_editing {
             connection.id = self.editing_id;
             connection.cloud_id = self.editing_cloud_id.clone();
@@ -233,23 +233,8 @@ impl RemoteDesktopFormWindow {
         persist_connection(connection, self.is_editing, cx)
     }
 
-    fn reload_team_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let selected = self.team_id(cx);
-        let mut items = vec![TeamSelectItem::personal()];
-        items.extend(
-            get_cached_team_options(cx)
-                .iter()
-                .map(TeamSelectItem::from_team),
-        );
-        self.team_select.update(cx, |select, cx| {
-            select.set_items(items, window, cx);
-            select.set_selected_value(&selected, window, cx);
-        });
-    }
-
     fn request_team_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        emit_connection_event(ConnectionDataEvent::CloudSyncRequested, cx);
-        self.reload_team_options(window, cx);
+        refresh_team_options(&self.team_select, window, cx);
     }
 
     fn connection_name(&self, params: &RemoteDesktopParams, cx: &App) -> String {
@@ -270,10 +255,6 @@ impl RemoteDesktopFormWindow {
     }
 
     fn team_id(&self, cx: &App) -> Option<String> {
-        self.team_select
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .flatten()
+        selected_team_id(&self.team_select, cx)
     }
 }

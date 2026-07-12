@@ -1,6 +1,9 @@
+use connection_form::team::{
+    TeamSelectItem, create_team_select, resolve_team_assignment, selected_team_id,
+};
 use gpui::{App, AppContext, Context, Entity, FocusHandle, Window};
 use gpui_component::{IndexPath, input::InputState, select::SelectState};
-use one_core::cloud_sync::{GlobalCloudUser, TeamOption, ensure_team_key_ready_for_save};
+use one_core::cloud_sync::TeamOption;
 use one_core::storage::{
     ConnectionType, PortForwardingKind, PortForwardingParams, StoredConnection, Workspace,
 };
@@ -8,9 +11,7 @@ use rust_i18n::t;
 
 use crate::input_values::{non_empty_text, parse_port, trimmed_text};
 use crate::persistence::save_connection;
-use crate::selects::{
-    ForwardingKindSelectItem, SshConnectionSelectItem, TeamSelectItem, WorkspaceSelectItem,
-};
+use crate::selects::{ForwardingKindSelectItem, SshConnectionSelectItem, WorkspaceSelectItem};
 
 pub struct PortForwardingFormWindowConfig {
     pub editing_connection: Option<StoredConnection>,
@@ -25,6 +26,7 @@ pub struct PortForwardingFormWindow {
     pub(super) editing_id: Option<i64>,
     pub(super) editing_cloud_id: Option<String>,
     pub(super) editing_last_synced_at: Option<i64>,
+    pub(super) editing_owner_id: Option<String>,
     pub(super) name_input: Entity<InputState>,
     pub(super) bind_host_input: Entity<InputState>,
     pub(super) bind_port_input: Entity<InputState>,
@@ -85,11 +87,7 @@ impl PortForwardingFormWindow {
             );
             SelectState::new(items, Some(IndexPath::default()), window, cx)
         });
-        let team_select = cx.new(|cx| {
-            let mut items = vec![TeamSelectItem::personal()];
-            items.extend(config.teams.iter().map(TeamSelectItem::from_team));
-            SelectState::new(items, Some(IndexPath::default()), window, cx)
-        });
+        let team_select = create_team_select(&config.teams, None, window, cx);
 
         let mut form = Self {
             focus_handle: cx.focus_handle(),
@@ -103,6 +101,10 @@ impl PortForwardingFormWindow {
                 .editing_connection
                 .as_ref()
                 .and_then(|c| c.last_synced_at),
+            editing_owner_id: config
+                .editing_connection
+                .as_ref()
+                .and_then(|c| c.owner_id.clone()),
             name_input,
             bind_host_input,
             bind_port_input,
@@ -233,16 +235,22 @@ impl PortForwardingFormWindow {
         let name = self.connection_name(&params, cx);
         let mut conn = StoredConnection::new_port_forwarding(name, params, self.workspace_id(cx));
         conn.sync_enabled = self.sync_enabled;
-        conn.team_id = self.team_id(cx);
-        if let Err(error) = ensure_team_key_ready_for_save(conn.team_id.as_deref(), cx) {
-            self.validation_error = Some(error.to_string());
-            cx.notify();
-            return;
-        }
+        let assignment = match resolve_team_assignment(
+            self.team_id(cx),
+            self.is_editing,
+            self.editing_owner_id.clone(),
+            cx,
+        ) {
+            Ok(assignment) => assignment,
+            Err(error) => {
+                self.validation_error = Some(error.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        conn.team_id = assignment.team_id;
+        conn.owner_id = assignment.owner_id;
         conn.remark = non_empty_text(&self.remark_input, cx);
-        if !self.is_editing {
-            conn.owner_id = GlobalCloudUser::get_user(cx).map(|user| user.id);
-        }
         if self.is_editing {
             conn.id = self.editing_id;
             conn.cloud_id = self.editing_cloud_id.clone();
@@ -277,10 +285,6 @@ impl PortForwardingFormWindow {
     }
 
     fn team_id(&self, cx: &App) -> Option<String> {
-        self.team_select
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .flatten()
+        selected_team_id(&self.team_select, cx)
     }
 }

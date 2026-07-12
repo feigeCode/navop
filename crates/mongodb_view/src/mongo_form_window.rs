@@ -1,5 +1,9 @@
 //! MongoDB 连接表单窗口
 
+use connection_form::team::{
+    TeamSelectItem, create_team_select, refresh_team_options, refresh_teams_tooltip,
+    resolve_team_assignment, selected_team_id, team_label,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
@@ -17,11 +21,8 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use one_core::cloud_sync::{
-    GlobalCloudUser, TeamKeyCacheStatus, TeamOption, ensure_team_key_ready_for_save,
-    get_cached_team_options,
-};
-use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
+use one_core::cloud_sync::TeamOption;
+use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
@@ -81,53 +82,6 @@ impl WorkspaceSelectItem {
 
 impl SelectItem for WorkspaceSelectItem {
     type Value = Option<i64>;
-
-    fn title(&self) -> SharedString {
-        self.name.clone().into()
-    }
-
-    fn value(&self) -> &Self::Value {
-        &self.id
-    }
-}
-
-#[derive(Clone, Default, PartialEq)]
-struct TeamSelectItem {
-    id: Option<String>,
-    name: String,
-}
-
-impl TeamSelectItem {
-    fn personal() -> Self {
-        Self {
-            id: None,
-            name: t!("TeamSync.personal").to_string(),
-        }
-    }
-
-    fn from_team(team: &TeamOption) -> Self {
-        Self {
-            id: Some(team.id.clone()),
-            name: team_select_name(team),
-        }
-    }
-}
-
-fn team_select_name(team: &TeamOption) -> String {
-    match team.key_status {
-        TeamKeyCacheStatus::Missing
-        | TeamKeyCacheStatus::VersionMismatch
-        | TeamKeyCacheStatus::Invalid => {
-            format!("{} ({})", team.name, t!("TeamSync.key_missing_short"))
-        }
-        TeamKeyCacheStatus::Cached => {
-            format!("{} ({})", team.name, t!("TeamSync.key_cached_short"))
-        }
-    }
-}
-
-impl SelectItem for TeamSelectItem {
-    type Value = Option<String>;
 
     fn title(&self) -> SharedString {
         self.name.clone().into()
@@ -422,19 +376,10 @@ impl MongoFormWindow {
             state
         });
 
-        let team_items = {
-            let mut items = vec![TeamSelectItem::personal()];
-            items.extend(config.teams.iter().map(TeamSelectItem::from_team));
-            items
-        };
-
-        let team_select = cx.new(|cx| {
-            let mut state = SelectState::new(team_items, None, window, cx);
-            if let Some(team_id) = connection_to_load.as_ref().and_then(|c| c.team_id.clone()) {
-                state.set_selected_value(&Some(team_id), window, cx);
-            }
-            state
-        });
+        let selected_team_id = connection_to_load
+            .as_ref()
+            .and_then(|c| c.team_id.as_deref());
+        let team_select = create_team_select(&config.teams, selected_team_id, window, cx);
 
         let sync_enabled = connection_to_load
             .as_ref()
@@ -624,30 +569,11 @@ impl MongoFormWindow {
     }
 
     fn get_team_id(&self, cx: &App) -> Option<String> {
-        self.team_select
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .flatten()
-    }
-
-    fn reload_team_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let selected = self.get_team_id(cx);
-        let mut items = vec![TeamSelectItem::personal()];
-        items.extend(
-            get_cached_team_options(cx)
-                .iter()
-                .map(TeamSelectItem::from_team),
-        );
-        self.team_select.update(cx, |select, cx| {
-            select.set_items(items, window, cx);
-            select.set_selected_value(&selected, window, cx);
-        });
+        selected_team_id(&self.team_select, cx)
     }
 
     fn request_team_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        emit_connection_event(ConnectionDataEvent::CloudSyncRequested, cx);
-        self.reload_team_options(window, cx);
+        refresh_team_options(&self.team_select, window, cx);
     }
 
     fn selected_ssh_connection(&self, cx: &App) -> Option<&StoredConnection> {
@@ -895,15 +821,18 @@ impl MongoFormWindow {
 
         let workspace_id = self.get_workspace_id(cx);
         let team_id = self.get_team_id(cx);
-        if let Err(error) = ensure_team_key_ready_for_save(team_id.as_deref(), cx) {
-            self.test_result = Some(Err(error.to_string()));
-            cx.notify();
-            return;
-        }
-        let owner_id = if self.is_editing {
-            self.editing_owner_id.clone()
-        } else {
-            GlobalCloudUser::get_user(cx).map(|u| u.id)
+        let assignment = match resolve_team_assignment(
+            team_id,
+            self.is_editing,
+            self.editing_owner_id.clone(),
+            cx,
+        ) {
+            Ok(assignment) => assignment,
+            Err(error) => {
+                self.test_result = Some(Err(error.to_string()));
+                cx.notify();
+                return;
+            }
         };
         let remark = {
             let value = self.remark_input.read(cx).text().to_string();
@@ -930,8 +859,8 @@ impl MongoFormWindow {
                 let mut connection = StoredConnection::new_mongodb(name, parameters, workspace_id);
                 connection.sync_enabled = sync_enabled;
                 connection.remark = remark;
-                connection.team_id = team_id;
-                connection.owner_id = owner_id;
+                connection.team_id = assignment.team_id;
+                connection.owner_id = assignment.owner_id;
 
                 if is_editing {
                     connection.id = editing_id;
@@ -1031,7 +960,7 @@ impl MongoFormWindow {
             ))
             .child(
                 self.render_form_row(
-                    t!("TeamSync.team_label").as_ref(),
+                    &team_label(),
                     h_flex()
                         .gap_2()
                         .child(Select::new(&self.team_select).w_full())
@@ -1039,7 +968,7 @@ impl MongoFormWindow {
                             Button::new("sync-mongo-teams")
                                 .icon(IconName::Refresh)
                                 .ghost()
-                                .tooltip(t!("Home.sync_tooltip"))
+                                .tooltip(refresh_teams_tooltip())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.request_team_sync(window, cx);
                                 })),

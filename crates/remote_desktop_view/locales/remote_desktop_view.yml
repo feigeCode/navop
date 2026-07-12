@@ -1,11 +1,5 @@
 _version: 2
 
-Home:
-  sync_tooltip:
-    en: Sync data with cloud
-    zh-CN: 与云端同步数据
-    zh-HK: 與雲端同步數據
-
 RemoteDesktop:
   provider_version_too_old:
     en: "%{protocol} provider version %{installed} is too old. Please update the provider to %{required} or newer."
@@ -16,21 +10,6 @@ RemoteDesktop:
     zh-CN: "%{protocol} 扩展版本 %{installed} 无效，请更新到 %{required} 或更高版本。"
     zh-HK: "%{protocol} 擴展版本 %{installed} 無效，請更新到 %{required} 或更高版本。"
 
-
-# 团队同步
-TeamSync:
-  personal:
-    en: Personal
-    zh-CN: 个人
-    zh-HK: 個人
-  team_label:
-    en: Team
-    zh-CN: 团队归属
-    zh-HK: 團隊歸屬
-  key_missing_short:
-    en: Needs key
-    zh-CN: 需密钥
-    zh-HK: 需密鑰
 
 # 远程桌面连接表单
 RemoteDesktopForm:
@@ -94,10 +73,6 @@ RemoteDesktopForm:
     en: Workspace
     zh-CN: 工作区
     zh-HK: 工作區
-  label_team:
-    en: Team
-    zh-CN: 团队
-    zh-HK: 團隊
   label_read_only:
     en: Read only
     zh-CN: 只读

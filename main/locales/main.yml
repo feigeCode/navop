@@ -343,30 +343,14 @@ TeamManagement:
 
 # 团队同步
 TeamSync:
-  personal:
-    en: Personal
-    zh-CN: 个人
-    zh-HK: 個人
   select_team:
     en: Team
     zh-CN: 团队
     zh-HK: 團隊
-  team_label:
-    en: Team
-    zh-CN: 团队归属
-    zh-HK: 團隊歸屬
   no_permission:
     en: No edit permission
     zh-CN: 无编辑权限
     zh-HK: 無編輯權限
-  key_missing_short:
-    en: Needs key
-    zh-CN: 需密钥
-    zh-HK: 需密鑰
-  key_cached_short:
-    en: Key saved
-    zh-CN: 已保存密钥
-    zh-HK: 已保存密鑰
   manage_keys:
     en: Team keys
     zh-CN: 团队密钥

@@ -1,5 +1,9 @@
 //! Redis 连接表单窗口（多标签页）
 
+use connection_form::team::{
+    TeamSelectItem, create_team_select, refresh_team_options, refresh_teams_tooltip,
+    resolve_team_assignment, selected_team_id, team_label,
+};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
@@ -16,11 +20,8 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use one_core::cloud_sync::{
-    GlobalCloudUser, TeamKeyCacheStatus, TeamOption, ensure_team_key_ready_for_save,
-    get_cached_team_options,
-};
-use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
+use one_core::cloud_sync::TeamOption;
+use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
@@ -81,53 +82,6 @@ impl WorkspaceSelectItem {
 
 impl SelectItem for WorkspaceSelectItem {
     type Value = Option<i64>;
-
-    fn title(&self) -> SharedString {
-        self.name.clone().into()
-    }
-
-    fn value(&self) -> &Self::Value {
-        &self.id
-    }
-}
-
-#[derive(Clone, Default, PartialEq)]
-struct TeamSelectItem {
-    id: Option<String>,
-    name: String,
-}
-
-impl TeamSelectItem {
-    fn personal() -> Self {
-        Self {
-            id: None,
-            name: t!("TeamSync.personal").to_string(),
-        }
-    }
-
-    fn from_team(team: &TeamOption) -> Self {
-        Self {
-            id: Some(team.id.clone()),
-            name: team_select_name(team),
-        }
-    }
-}
-
-fn team_select_name(team: &TeamOption) -> String {
-    match team.key_status {
-        TeamKeyCacheStatus::Missing
-        | TeamKeyCacheStatus::VersionMismatch
-        | TeamKeyCacheStatus::Invalid => {
-            format!("{} ({})", team.name, t!("TeamSync.key_missing_short"))
-        }
-        TeamKeyCacheStatus::Cached => {
-            format!("{} ({})", team.name, t!("TeamSync.key_cached_short"))
-        }
-    }
-}
-
-impl SelectItem for TeamSelectItem {
-    type Value = Option<String>;
 
     fn title(&self) -> SharedString {
         self.name.clone().into()
@@ -565,19 +519,9 @@ impl RedisFormWindow {
             state
         });
 
-        // 团队选择
-        let mut team_items = vec![TeamSelectItem::personal()];
-        team_items.extend(config.teams.iter().map(TeamSelectItem::from_team));
-
         let selected_team_id = connection_to_load.as_ref().and_then(|c| c.team_id.clone());
-
-        let team_select = cx.new(|cx| {
-            let mut state = SelectState::new(team_items, Some(Default::default()), window, cx);
-            if let Some(ref team_id) = selected_team_id {
-                state.set_selected_value(&Some(team_id.clone()), window, cx);
-            }
-            state
-        });
+        let team_select =
+            create_team_select(&config.teams, selected_team_id.as_deref(), window, cx);
 
         // 加载模式和高级设置
         let mut mode = ModeSelection::Standalone;
@@ -651,30 +595,11 @@ impl RedisFormWindow {
 
     /// 获取团队 ID
     fn get_team_id(&self, cx: &App) -> Option<String> {
-        self.team_select
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .flatten()
-    }
-
-    fn reload_team_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let selected = self.get_team_id(cx);
-        let mut items = vec![TeamSelectItem::personal()];
-        items.extend(
-            get_cached_team_options(cx)
-                .iter()
-                .map(TeamSelectItem::from_team),
-        );
-        self.team_select.update(cx, |select, cx| {
-            select.set_items(items, window, cx);
-            select.set_selected_value(&selected, window, cx);
-        });
+        selected_team_id(&self.team_select, cx)
     }
 
     fn request_team_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        emit_connection_event(ConnectionDataEvent::CloudSyncRequested, cx);
-        self.reload_team_options(window, cx);
+        refresh_team_options(&self.team_select, window, cx);
     }
 
     fn selected_ssh_connection(&self, cx: &App) -> Option<&StoredConnection> {
@@ -916,12 +841,19 @@ impl RedisFormWindow {
 
         let workspace_id = self.get_workspace_id(cx);
         let team_id = self.get_team_id(cx);
-        if let Err(error) = ensure_team_key_ready_for_save(team_id.as_deref(), cx) {
-            self.test_result = Some(Err(error.to_string()));
-            cx.notify();
-            return;
-        }
-        let owner_id = GlobalCloudUser::get_user(cx).map(|u| u.id);
+        let assignment = match resolve_team_assignment(
+            team_id,
+            self.is_editing,
+            self.editing_owner_id.clone(),
+            cx,
+        ) {
+            Ok(assignment) => assignment,
+            Err(error) => {
+                self.test_result = Some(Err(error.to_string()));
+                cx.notify();
+                return;
+            }
+        };
         let remark = {
             let r = self.remark_input.read(cx).text().to_string();
             if r.is_empty() { None } else { Some(r) }
@@ -931,7 +863,6 @@ impl RedisFormWindow {
         let editing_id = self.editing_id;
         let editing_cloud_id = self.editing_cloud_id.clone();
         let editing_last_synced_at = self.editing_last_synced_at;
-        let editing_owner_id = self.editing_owner_id.clone();
         let on_saved = self.on_saved.clone();
 
         let storage = cx
@@ -948,12 +879,8 @@ impl RedisFormWindow {
                 let mut conn = StoredConnection::new_redis(name, params, workspace_id);
                 conn.sync_enabled = sync_enabled;
                 conn.remark = remark;
-                conn.team_id = team_id;
-                conn.owner_id = if is_editing {
-                    editing_owner_id
-                } else {
-                    owner_id
-                };
+                conn.team_id = assignment.team_id;
+                conn.owner_id = assignment.owner_id;
 
                 if is_editing {
                     conn.id = editing_id;
@@ -1035,7 +962,7 @@ impl RedisFormWindow {
             ))
             .child(
                 self.render_form_row(
-                    &t!("TeamSync.team_label"),
+                    &team_label(),
                     h_flex()
                         .gap_2()
                         .child(Select::new(&self.team_select).w_full())
@@ -1043,7 +970,7 @@ impl RedisFormWindow {
                             Button::new("sync-redis-teams")
                                 .icon(IconName::Refresh)
                                 .ghost()
-                                .tooltip(t!("Home.sync_tooltip"))
+                                .tooltip(refresh_teams_tooltip())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.request_team_sync(window, cx);
                                 })),

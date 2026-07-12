@@ -2,6 +2,10 @@ use anyhow::Error;
 use std::collections::HashMap;
 use std::time::Instant;
 
+use connection_form::team::{
+    TeamSelectItem, create_team_select, refresh_team_options, refresh_teams_tooltip,
+    replace_team_options, resolve_team_assignment, selected_team_id, team_label,
+};
 use db::plugin_manifest::FormVisibilityRule;
 use db::{
     DEFAULT_SCHEMA_PARAM, GlobalDbState, SCHEMA_FILTER_EXCLUDE_PARAM, SCHEMA_FILTER_INCLUDE_PARAM,
@@ -27,11 +31,7 @@ use gpui_component::{
     tab::{Tab, TabBar},
     v_flex,
 };
-use one_core::cloud_sync::{
-    GlobalCloudUser, TeamKeyCacheStatus, TeamOption, ensure_team_key_ready_for_save,
-    get_cached_team_options,
-};
-use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
+use one_core::cloud_sync::TeamOption;
 use one_core::gpui_tokio::Tokio;
 use one_core::storage::traits::Repository;
 use one_core::storage::{
@@ -96,54 +96,6 @@ impl WorkspaceSelectItem {
 
 impl SelectItem for WorkspaceSelectItem {
     type Value = Option<i64>;
-
-    fn title(&self) -> SharedString {
-        self.name.clone().into()
-    }
-
-    fn value(&self) -> &Self::Value {
-        &self.id
-    }
-}
-
-/// Team select item for dropdown
-#[derive(Clone, Debug)]
-pub struct TeamSelectItem {
-    pub id: Option<String>,
-    pub name: String,
-}
-
-impl TeamSelectItem {
-    pub fn personal() -> Self {
-        Self {
-            id: None,
-            name: t!("TeamSync.personal").to_string(),
-        }
-    }
-
-    pub fn from_team(team: &TeamOption) -> Self {
-        Self {
-            id: Some(team.id.clone()),
-            name: team_select_name(team),
-        }
-    }
-}
-
-fn team_select_name(team: &TeamOption) -> String {
-    match team.key_status {
-        TeamKeyCacheStatus::Missing
-        | TeamKeyCacheStatus::VersionMismatch
-        | TeamKeyCacheStatus::Invalid => {
-            format!("{} ({})", team.name, t!("TeamSync.key_missing_short"))
-        }
-        TeamKeyCacheStatus::Cached => {
-            format!("{} ({})", team.name, t!("TeamSync.key_cached_short"))
-        }
-    }
-}
-
-impl SelectItem for TeamSelectItem {
-    type Value = Option<String>;
 
     fn title(&self) -> SharedString {
         self.name.clone().into()
@@ -1378,9 +1330,7 @@ impl DbConnectionForm {
         let workspace_select =
             cx.new(|cx| SelectState::new(workspace_items, Some(Default::default()), window, cx));
 
-        let team_items = vec![TeamSelectItem::personal()];
-        let team_select =
-            cx.new(|cx| SelectState::new(team_items, Some(Default::default()), window, cx));
+        let team_select = create_team_select(&[], None, window, cx);
 
         let ssh_connection_items = SearchableVec::new(vec![SshConnectionSelectItem::none()]);
         let ssh_connection_select = cx.new(|cx| {
@@ -1532,37 +1482,12 @@ impl DbConnectionForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut items = vec![TeamSelectItem::personal()];
-        items.extend(teams.iter().map(TeamSelectItem::from_team));
-
-        self.team_select.update(cx, |select, cx| {
-            select.set_items(items, window, cx);
-        });
+        replace_team_options(&self.team_select, &teams, window, cx);
         cx.notify();
     }
 
-    fn reload_team_options(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let selected = self
-            .team_select
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .flatten();
-        let mut items = vec![TeamSelectItem::personal()];
-        items.extend(
-            get_cached_team_options(cx)
-                .iter()
-                .map(TeamSelectItem::from_team),
-        );
-        self.team_select.update(cx, |select, cx| {
-            select.set_items(items, window, cx);
-            select.set_selected_value(&selected, window, cx);
-        });
-    }
-
     fn request_team_sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        emit_connection_event(ConnectionDataEvent::CloudSyncRequested, cx);
-        self.reload_team_options(window, cx);
+        refresh_team_options(&self.team_select, window, cx);
     }
 
     pub fn set_ssh_connections(
@@ -2037,13 +1962,7 @@ impl DbConnectionForm {
         let remark = self.get_field_value("remark", cx);
         let is_update = self.editing_connection.is_some();
         let sync_enabled = *self.sync_enabled.read(cx);
-        let team_id = self
-            .team_select
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .flatten();
-        ensure_team_key_ready_for_save(team_id.as_deref(), cx).map_err(|e| e.to_string())?;
+        let team_id = selected_team_id(&self.team_select, cx);
 
         let mut stored = match &self.editing_connection {
             Some(conn) => {
@@ -2051,7 +1970,6 @@ impl DbConnectionForm {
                 c.name = StoredConnection::from_db_connection(connection.clone()).name;
                 c.workspace_id = connection.workspace_id;
                 c.sync_enabled = sync_enabled;
-                c.team_id = team_id;
                 c.params = serde_json::to_string(&connection)
                     .map_err(|e| format!("{}: {}", t!("ConnectionForm.serialize_failed"), e))?;
                 // Keep selected_databases aligned with the current database config.
@@ -2065,13 +1983,14 @@ impl DbConnectionForm {
             None => {
                 let mut c = StoredConnection::from_db_connection(connection);
                 c.sync_enabled = sync_enabled;
-                c.team_id = team_id;
-                // Auto-fill owner_id for newly created connections.
-                c.owner_id = GlobalCloudUser::get_user(cx).map(|u| u.id);
                 c
             }
         };
 
+        let assignment = resolve_team_assignment(team_id, is_update, stored.owner_id.clone(), cx)
+            .map_err(|error| error.to_string())?;
+        stored.team_id = assignment.team_id;
+        stored.owner_id = assignment.owner_id;
         stored.remark = remark;
         Ok((stored, is_update))
     }
@@ -2505,7 +2424,7 @@ impl DbConnectionForm {
                 )
                 .child(
                     field()
-                        .label(t!("TeamSync.team_label").to_string())
+                        .label(team_label())
                         .items_center()
                         .label_justify_end()
                         .child(
@@ -2516,7 +2435,7 @@ impl DbConnectionForm {
                                     Button::new("sync-db-teams")
                                         .icon(IconName::Refresh)
                                         .ghost()
-                                        .tooltip(t!("Home.sync_tooltip"))
+                                        .tooltip(refresh_teams_tooltip())
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.request_team_sync(window, cx);
                                         })),

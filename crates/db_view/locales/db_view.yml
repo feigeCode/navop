@@ -1,11 +1,5 @@
 _version: 2
 
-Home:
-  sync_tooltip:
-    en: Sync data with cloud
-    zh-CN: 与云端同步数据
-    zh-HK: 與雲端同步數據
-
 # 通用操作
 Common:
   ok:
@@ -3413,18 +3407,3 @@ Compare:
     en: "INSERT: %{insert} | UPDATE: %{update} | DELETE: %{delete} | DDL: %{ddl} | Total: %{total}"
     zh-CN: "INSERT: %{insert} | UPDATE: %{update} | DELETE: %{delete} | DDL: %{ddl} | 总计: %{total}"
     zh-HK: "INSERT: %{insert} | UPDATE: %{update} | DELETE: %{delete} | DDL: %{ddl} | 總計: %{total}"
-
-# 团队同步
-TeamSync:
-  personal:
-    en: Personal
-    zh-CN: 个人
-    zh-HK: 個人
-  team_label:
-    en: Team
-    zh-CN: 团队归属
-    zh-HK: 團隊歸屬
-  key_missing_short:
-    en: Needs key
-    zh-CN: 需密钥
-    zh-HK: 需密鑰

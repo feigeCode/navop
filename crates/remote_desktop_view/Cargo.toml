@@ -8,6 +8,7 @@ publish.workspace = true
 anyhow = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
+connection-form = { workspace = true }
 one-core = { workspace = true }
 one-ui = { workspace = true }
 remote_desktop = { workspace = true }

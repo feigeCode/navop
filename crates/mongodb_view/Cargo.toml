@@ -16,6 +16,7 @@ ai_chat_view.workspace = true
 mongodb.workspace = true
 one-core.workspace = true
 one-ui.workspace = true
+connection-form.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

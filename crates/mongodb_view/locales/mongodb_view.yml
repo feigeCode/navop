@@ -1,12 +1,5 @@
 _version: 2
 
-
-Home:
-  sync_tooltip:
-    en: Sync data with cloud
-    zh-CN: 与云端同步数据
-    zh-HK: 與雲端同步數據
-
 Common:
   none:
     en: "None"
@@ -902,21 +895,6 @@ MongoCollection:
     en: "Please select a collection."
     zh-CN: "请选择一个集合。"
     zh-HK: "請選擇一個集合。"
-
-# 团队同步
-TeamSync:
-  personal:
-    en: Personal
-    zh-CN: 个人
-    zh-HK: 個人
-  team_label:
-    en: Team
-    zh-CN: 团队归属
-    zh-HK: 團隊歸屬
-  key_missing_short:
-    en: Needs key
-    zh-CN: 需密钥
-    zh-HK: 需密鑰
 
 # 连接表单通用
 ConnectionForm:

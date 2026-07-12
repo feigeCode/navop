@@ -1,6 +1,5 @@
 use gpui::{AppContext, Context, Entity, SharedString, Window};
 use gpui_component::select::{SelectItem, SelectState};
-use one_core::cloud_sync::{TeamKeyCacheStatus, TeamOption};
 use one_core::storage::Workspace;
 use rust_i18n::t;
 
@@ -40,53 +39,6 @@ impl SelectItem for WorkspaceSelectItem {
     }
 }
 
-#[derive(Clone, Default, PartialEq)]
-pub struct TeamSelectItem {
-    pub id: Option<String>,
-    name: String,
-}
-
-impl TeamSelectItem {
-    pub fn personal() -> Self {
-        Self {
-            id: None,
-            name: t!("TeamSync.personal").to_string(),
-        }
-    }
-
-    pub fn from_team(team: &TeamOption) -> Self {
-        Self {
-            id: Some(team.id.clone()),
-            name: team_select_name(team),
-        }
-    }
-}
-
-fn team_select_name(team: &TeamOption) -> String {
-    match team.key_status {
-        TeamKeyCacheStatus::Missing
-        | TeamKeyCacheStatus::VersionMismatch
-        | TeamKeyCacheStatus::Invalid => {
-            format!("{} ({})", team.name, t!("TeamSync.key_missing_short"))
-        }
-        TeamKeyCacheStatus::Cached => {
-            format!("{} ({})", team.name, t!("TeamSync.key_cached_short"))
-        }
-    }
-}
-
-impl SelectItem for TeamSelectItem {
-    type Value = Option<String>;
-
-    fn title(&self) -> SharedString {
-        self.name.clone().into()
-    }
-
-    fn value(&self) -> &Self::Value {
-        &self.id
-    }
-}
-
 pub fn create_workspace_select(
     config: &RemoteDesktopFormWindowConfig,
     window: &mut Window,
@@ -99,15 +51,5 @@ pub fn create_workspace_select(
             .iter()
             .map(WorkspaceSelectItem::from_workspace),
     );
-    cx.new(|cx| SelectState::new(items, Some(Default::default()), window, cx))
-}
-
-pub fn create_team_select(
-    config: &RemoteDesktopFormWindowConfig,
-    window: &mut Window,
-    cx: &mut Context<RemoteDesktopFormWindow>,
-) -> Entity<SelectState<Vec<TeamSelectItem>>> {
-    let mut items = vec![TeamSelectItem::personal()];
-    items.extend(config.teams.iter().map(TeamSelectItem::from_team));
     cx.new(|cx| SelectState::new(items, Some(Default::default()), window, cx))
 }

@@ -2028,6 +2028,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "connection-form"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
+ "one-core",
+ "rust-i18n",
+]
+
+[[package]]
 name = "connection-import-protocol"
 version = "0.1.0"
 dependencies = [
@@ -2898,6 +2908,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "connection-form",
  "db",
  "er_flow",
  "extension-component",
@@ -7258,6 +7269,7 @@ dependencies = [
  "ai_chat_view",
  "anyhow",
  "async-trait",
+ "connection-form",
  "connection_tunnel",
  "dashmap 5.5.3",
  "futures-util",
@@ -8824,6 +8836,7 @@ name = "port_forwarding_view"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "connection-form",
  "gpui",
  "gpui-component",
  "one-core",
@@ -9699,6 +9712,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "connection-form",
  "dashmap 5.5.3",
  "futures",
  "gpui",
@@ -9841,6 +9855,7 @@ name = "remote_desktop_view"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "connection-form",
  "gpui",
  "gpui-component",
  "image",
@@ -12124,6 +12139,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "connection-form",
  "gpui",
  "gpui-component",
  "one-core",
