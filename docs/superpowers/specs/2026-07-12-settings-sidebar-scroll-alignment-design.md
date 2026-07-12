@@ -14,7 +14,7 @@
 
 1. 左侧分组点击后继续写入 `deferred_scroll_group_ix`。
 2. 右侧设置页面渲染时继续读取并清空该索引。
-3. 使用 `ListState::scroll_to_item(group_ix, ScrollStrategy::Top)`，让目标设置块顶部对齐到列表可视区域顶部。
+3. 使用 `ListState::scroll_to(ListOffset { item_ix: group_ix, offset_in_item: px(0.) })`，让目标设置块顶部对齐到列表可视区域顶部。
 4. 页面标题栏位于列表外部，因此保持固定，不参与滚动坐标计算。
 
 不引入元素坐标测量、额外滚动偏移或编辑器相关逻辑。
@@ -28,7 +28,7 @@
 
 ## 测试与验证
 
-- 增加针对设置分组导航滚动策略的回归测试，验证延迟滚动请求使用 `ScrollStrategy::Top`。
+- 增加针对设置分组导航滚动目标的回归测试，验证目标索引不变且项内偏移为零。
 - 运行 `ui` crate 中与设置组件相关的定向测试。
 - 运行 `cargo check -p main`，确认主应用调用链可编译。
 - 运行 `git diff --check`，确认没有空白错误。
