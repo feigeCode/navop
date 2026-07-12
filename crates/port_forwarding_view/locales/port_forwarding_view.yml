@@ -32,6 +32,10 @@ TeamSync:
   team_label:
     en: Team
     zh-CN: 团队
+  key_missing_short:
+    en: Needs key
+    zh-CN: 需密钥
+    zh-HK: 需密鑰
 
 PortForwarding:
   new:

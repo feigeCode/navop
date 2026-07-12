@@ -990,3 +990,7 @@ TeamSync:
     en: Team
     zh-CN: 团队归属
     zh-HK: 團隊歸屬
+  key_missing_short:
+    en: Needs key
+    zh-CN: 需密钥
+    zh-HK: 需密鑰
