@@ -112,7 +112,7 @@ Use the dedicated Redis viewer for key browsing, value inspection, and cluster c
 
 ### SSH, SFTP, Port Forwarding, Serial & Terminal
 
-Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and keep local terminals in multi-tab sessions. Local terminal profiles support the system shell, PowerShell, Command Prompt, WSL, Git Bash, and custom programs with safely parsed arguments. The terminal also includes command history, SSH broadcast input across windows, remote shell integration management, and an SFTP sidebar with drag-and-drop upload support, path favorites, and quick jumps to frequently used directories.
+Open integrated SSH sessions, manage SFTP files, start port forwarding tunnels, connect to serial devices, and keep local terminals in multi-tab sessions. Local terminal profiles support the system shell, PowerShell, Command Prompt, WSL, Git Bash, and custom programs with safely parsed arguments. The terminal also includes command history, SSH broadcast input across windows, and remote shell integration management. The built-in SFTP sidebar supports drag-and-drop uploads, files copied from the system file manager can be uploaded by pasting, and path favorites provide quick jumps to frequently used directories. Terminal sessions can also paste clipboard images into compatible server-side TUI applications.
 
 ### Port Forwarding
 
@@ -132,7 +132,7 @@ Use built-in server monitoring and native rendered charts to inspect remote mach
 
 ### AI Assistant
 
-Chat with AI inside the app. Navop supports natural language to SQL, query explanation, BI-style data analysis, chart generation, streaming LLM responses, AI Agent workflows, and Function Calling for tool-based task execution. HTML code blocks can be opened in the browser or previewed in an in-app dialog, and generated terminal commands can be quickly pasted into a terminal session and run.
+Chat with AI inside the app. Navop supports natural language to SQL, query explanation, BI-style data analysis, chart generation, streaming LLM responses, AI Agent workflows, and Function Calling for tool-based task execution. Navop also supports ACP (Agent Client Protocol), allowing external AI agents to connect through extensions; ACP extensions are currently available for Codex, Claude Code, and OpenCode. HTML code blocks can be opened in the browser or previewed in an in-app dialog, and generated terminal commands can be quickly pasted into a terminal session and run.
 
 ### Performance & Rendering
 
