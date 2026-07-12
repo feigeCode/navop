@@ -1840,7 +1840,6 @@ fn refresh_team_key_cache_from_settings(window: &mut Window, cx: &mut App) {
         sync_service,
         storage.storage.clone(),
     );
-    let target_window = window.window_handle();
     window.push_notification(t!("TeamSync.refresh_started").to_string(), cx);
     window
         .spawn(cx, async move |cx| {
@@ -1848,12 +1847,12 @@ fn refresh_team_key_cache_from_settings(window: &mut Window, cx: &mut App) {
             let message = result
                 .map(team_key_refresh_success_message)
                 .unwrap_or_else(|error| error.to_string());
-            let _ = cx.update(|_view, cx: &mut App| {
-                let _ = cx.update_window(target_window, |_, window, cx| {
-                    window.push_notification(message, cx);
-                    window.refresh();
-                });
-            });
+            if let Err(error) = cx.update(|window, cx: &mut App| {
+                window.push_notification(message, cx);
+                window.refresh();
+            }) {
+                tracing::warn!("团队列表刷新完成后更新窗口失败: {error}");
+            }
         })
         .detach();
 }
@@ -1885,7 +1884,6 @@ fn initialize_team_key_from_settings(
         sync_service,
         storage.storage.clone(),
     );
-    let target_window = window.window_handle();
     window.push_notification(t!("TeamSync.initialize_started").to_string(), cx);
     window
         .spawn(cx, async move |cx| {
@@ -1896,12 +1894,12 @@ fn initialize_team_key_from_settings(
                 Ok(_) => t!("TeamSync.initialize_success").to_string(),
                 Err(error) => error.to_string(),
             };
-            let _ = cx.update(|_view, cx: &mut App| {
-                let _ = cx.update_window(target_window, |_, window, cx| {
-                    window.push_notification(message, cx);
-                    window.refresh();
-                });
-            });
+            if let Err(error) = cx.update(|window, cx: &mut App| {
+                window.push_notification(message, cx);
+                window.refresh();
+            }) {
+                tracing::warn!("团队密钥初始化完成后更新窗口失败: {error}");
+            }
         })
         .detach();
 }
@@ -1940,7 +1938,6 @@ fn rotate_team_key_from_settings(
         sync_service,
         storage.storage.clone(),
     );
-    let target_window = window.window_handle();
     window.push_notification(t!("TeamSync.rotate_started").to_string(), cx);
     window
         .spawn(cx, async move |cx| {
@@ -1954,12 +1951,12 @@ fn rotate_team_key_from_settings(
                 .to_string(),
                 Err(error) => error.to_string(),
             };
-            let _ = cx.update(|_view, cx: &mut App| {
-                let _ = cx.update_window(target_window, |_, window, cx| {
-                    window.push_notification(message, cx);
-                    window.refresh();
-                });
-            });
+            if let Err(error) = cx.update(|window, cx: &mut App| {
+                window.push_notification(message, cx);
+                window.refresh();
+            }) {
+                tracing::warn!("团队密钥轮换完成后更新窗口失败: {error}");
+            }
         })
         .detach();
 }
@@ -3547,6 +3544,40 @@ mod tests {
             "Team list refreshed. 2 teams cached.",
             team_key_refresh_success_message(2)
         );
+    }
+
+    #[test]
+    fn async_team_key_operations_notify_through_the_current_window() {
+        let source = include_str!("setting_tab.rs");
+        for (function, next_function) in [
+            (
+                "fn refresh_team_key_cache_from_settings(",
+                "fn initialize_team_key_from_settings(",
+            ),
+            (
+                "fn initialize_team_key_from_settings(",
+                "fn forget_team_key_from_settings(",
+            ),
+            (
+                "fn rotate_team_key_from_settings(",
+                "fn team_key_role_can_rotate(",
+            ),
+        ] {
+            let body = source
+                .split(function)
+                .nth(1)
+                .expect("team key operation exists")
+                .split(next_function)
+                .next()
+                .expect("team key operation has an end marker");
+
+            assert!(!body.contains("update_window("), "{function}");
+            assert!(
+                body.contains("cx.update(|window, cx: &mut App|"),
+                "{function}"
+            );
+            assert!(body.contains("window.push_notification(message, cx)"));
+        }
     }
 
     #[test]
