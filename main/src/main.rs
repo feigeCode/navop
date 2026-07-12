@@ -101,9 +101,6 @@ fn main() {
     if update::handle_update_command() {
         return;
     }
-    if let Some(exit_code) = handle_cli_command() {
-        std::process::exit(exit_code);
-    }
 
     let app = gpui_platform::application()
         .with_assets(AppAssets::new())
@@ -154,12 +151,14 @@ fn main() {
     });
 }
 
-#[cfg(not(target_os = "windows"))]
-fn handle_cli_command() -> Option<i32> {
-    onetcli_runtime::cli_host::handle_command(|| crate::public_mcp_runtime::cli_tool_registry())
-}
+#[cfg(test)]
+mod embedded_cli_removal_tests {
+    #[test]
+    fn main_does_not_route_business_cli() {
+        let source = include_str!("main.rs");
+        let handler_name = ["handle", "cli", "command"].join("_");
 
-#[cfg(target_os = "windows")]
-fn handle_cli_command() -> Option<i32> {
-    None
+        assert!(!source.contains(&handler_name));
+        assert!(source.contains("update::handle_update_command()"));
+    }
 }

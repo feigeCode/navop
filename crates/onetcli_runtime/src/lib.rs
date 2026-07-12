@@ -1,4 +1,3 @@
-pub mod cli_host;
 pub mod connections;
 pub mod database_tools;
 pub mod redis_tools;
@@ -59,7 +58,6 @@ impl tool_runtime::ToolHandler for AppInfoTool {
             adapters: vec![
                 tool_runtime::ToolAdapter::Mcp,
                 tool_runtime::ToolAdapter::FunctionCalling,
-                tool_runtime::ToolAdapter::Cli,
             ],
             annotations: tool_runtime::ToolAnnotations::read_only("App Info"),
         }
@@ -77,5 +75,19 @@ impl tool_runtime::ToolHandler for AppInfoTool {
                 "version": version
             })))
         })
+    }
+}
+
+#[cfg(test)]
+mod embedded_cli_removal_tests {
+    #[test]
+    fn runtime_has_no_embedded_command_module() {
+        let source = include_str!("lib.rs");
+        let manifest = include_str!("../Cargo.toml");
+        let module_declaration = ["pub mod cli", "host;"].join("_");
+        let cli_dependency = ["onetcli", "cli"].join("_");
+
+        assert!(!source.contains(&module_declaration));
+        assert!(!manifest.contains(&format!("{cli_dependency} =")));
     }
 }

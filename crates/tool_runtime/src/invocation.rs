@@ -9,7 +9,6 @@ pub enum ToolCaller {
     Agent,
     Acp,
     Mcp,
-    Cli,
     Ui,
 }
 

@@ -2,20 +2,18 @@ use one_core::storage::connection::SqliteConnection;
 use one_core::storage::migration::run_migrations;
 use one_core::storage::traits::Repository;
 use one_core::storage::{ConnectionRepository, DatabaseType, DbConnectionConfig, StoredConnection};
-use onetcli_cli::{OutputFormat, ToolCommand};
-use onetcli_runtime::cli_host::run_tool_command;
 use serde_json::json;
 use std::sync::Arc;
-use tool_runtime::{ResourceKind, ToolAdapter};
+use tool_runtime::{ResourceKind, ToolAdapter, ToolContext, ToolError};
 
 #[test]
-fn onetcli_tool_registry_exposes_redis_command_to_cli() {
+fn runtime_tool_registry_exposes_redis_command_to_automation() {
     let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
     let tool = registry
         .get("redis.command", ToolAdapter::FunctionCalling)
-        .expect("redis.command should be CLI-callable");
+        .expect("redis.command should be automation-callable");
 
     assert_eq!(
         json!(["connection", "command"]),
@@ -27,7 +25,7 @@ fn onetcli_tool_registry_exposes_redis_command_to_cli() {
 }
 
 #[test]
-fn onetcli_tool_registry_rejects_redis_execute_command_alias() {
+fn runtime_tool_registry_rejects_redis_execute_command_alias() {
     let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
@@ -39,19 +37,19 @@ fn onetcli_tool_registry_rejects_redis_execute_command_alias() {
 }
 
 #[test]
-fn onetcli_tool_registry_exposes_redis_read_and_write_convenience_tools() {
+fn runtime_tool_registry_exposes_redis_read_and_write_convenience_tools() {
     let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
     let keys = registry
         .get("redis.keys", ToolAdapter::FunctionCalling)
-        .expect("redis.keys should be CLI-callable");
+        .expect("redis.keys should be automation-callable");
     let get = registry
         .get("redis.get", ToolAdapter::FunctionCalling)
-        .expect("redis.get should be CLI-callable");
+        .expect("redis.get should be automation-callable");
     let set = registry
         .get("redis.set", ToolAdapter::FunctionCalling)
-        .expect("redis.set should be CLI-callable");
+        .expect("redis.set should be automation-callable");
 
     assert_eq!(
         json!(["connection", "pattern"]),
@@ -85,82 +83,24 @@ fn onetcli_redis_tools_target_saved_redis_resources() {
 }
 
 #[test]
-fn onetcli_tool_call_requires_allow_write_for_redis_commands() {
+fn onetcli_redis_read_tool_reaches_connection_resolution() {
     let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
-    let error = run_tool_command(
-        ToolCommand::Call {
-            tool_id: "redis.command".to_string(),
-            input: Some(
-                json!({
-                    "connection": "prod mysql",
-                    "command": "PING"
-                })
-                .to_string(),
-            ),
-            positional_input: None,
-            allow_write: false,
-            format: OutputFormat::Json,
-        },
-        registry,
-    )
-    .expect_err("redis command should require explicit write permission");
-
-    assert!(error.to_string().contains("write_not_allowed"));
-}
-
-#[test]
-fn onetcli_tool_call_allows_redis_read_convenience_tools_without_allow_write() {
-    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
-        .expect("tool registry should build");
-
-    let error = run_tool_command(
-        ToolCommand::Call {
-            tool_id: "redis.get".to_string(),
-            input: Some(
-                json!({
-                    "connection": "missing redis",
-                    "key": "user:1"
-                })
-                .to_string(),
-            ),
-            positional_input: None,
-            allow_write: false,
-            format: OutputFormat::Json,
-        },
-        registry,
-    )
+    let error = futures::executor::block_on(registry.call(
+        "redis.get",
+        json!({
+            "connection": "missing redis",
+            "key": "user:1"
+        }),
+        ToolContext::for_adapter(ToolAdapter::FunctionCalling),
+    ))
     .expect_err("read redis tool should reach connection resolution without allow-write");
 
-    assert!(error.to_string().contains("unknown Redis connection"));
-}
-
-#[test]
-fn onetcli_tool_call_requires_allow_write_for_redis_set() {
-    let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
-        .expect("tool registry should build");
-
-    let error = run_tool_command(
-        ToolCommand::Call {
-            tool_id: "redis.set".to_string(),
-            input: Some(
-                json!({
-                    "connection": "prod redis",
-                    "key": "user:1",
-                    "value": "Ada"
-                })
-                .to_string(),
-            ),
-            positional_input: None,
-            allow_write: false,
-            format: OutputFormat::Json,
-        },
-        registry,
-    )
-    .expect_err("redis.set should require explicit write permission");
-
-    assert!(error.to_string().contains("write_not_allowed"));
+    assert!(matches!(
+        error,
+        ToolError::Failed { message } if message.contains("unknown Redis connection")
+    ));
 }
 
 #[test]
@@ -168,25 +108,20 @@ fn onetcli_tool_call_rejects_redis_execute_command_alias() {
     let registry = onetcli_runtime::tool_registry_with_version(repo(), "test")
         .expect("tool registry should build");
 
-    let error = run_tool_command(
-        ToolCommand::Call {
-            tool_id: "redis.execute_command".to_string(),
-            input: Some(
-                json!({
-                    "connection": "prod mysql",
-                    "command": "PING"
-                })
-                .to_string(),
-            ),
-            positional_input: None,
-            allow_write: true,
-            format: OutputFormat::Json,
-        },
-        registry,
-    )
+    let error = futures::executor::block_on(registry.call(
+        "redis.execute_command",
+        json!({
+            "connection": "prod mysql",
+            "command": "PING"
+        }),
+        ToolContext::for_adapter(ToolAdapter::FunctionCalling),
+    ))
     .expect_err("legacy redis alias should be unknown");
 
-    assert!(error.to_string().contains("unknown_tool"));
+    assert!(matches!(
+        error,
+        ToolError::UnknownTool { id } if id == "redis.execute_command"
+    ));
 }
 
 #[test]
@@ -196,25 +131,20 @@ fn onetcli_tool_call_resolves_saved_connection_before_executing_redis_command() 
     let registry = onetcli_runtime::tool_registry_with_version(repo, "test")
         .expect("tool registry should build");
 
-    let error = run_tool_command(
-        ToolCommand::Call {
-            tool_id: "redis.command".to_string(),
-            input: Some(
-                json!({
-                    "connection": "prod mysql",
-                    "command": "PING"
-                })
-                .to_string(),
-            ),
-            positional_input: None,
-            allow_write: true,
-            format: OutputFormat::Json,
-        },
-        registry,
-    )
+    let error = futures::executor::block_on(registry.call(
+        "redis.command",
+        json!({
+            "connection": "prod mysql",
+            "command": "PING"
+        }),
+        ToolContext::for_adapter(ToolAdapter::FunctionCalling),
+    ))
     .expect_err("non-redis connection should be rejected before connecting");
 
-    assert!(error.to_string().contains("connection is not redis"));
+    assert!(matches!(
+        error,
+        ToolError::Failed { message } if message.contains("connection is not redis")
+    ));
 }
 
 fn repo() -> Arc<ConnectionRepository> {

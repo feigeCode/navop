@@ -100,10 +100,10 @@ fn connection_show_descriptor_identifies_connection_reference() {
 }
 
 #[test]
-fn connection_registry_exposes_save_tools_to_cli() {
+fn connection_registry_exposes_save_tools_to_function_calling() {
     let registry = connection_tool_registry(repo());
     let tool_ids = registry
-        .list(ToolAdapter::Cli)
+        .list(ToolAdapter::FunctionCalling)
         .into_iter()
         .map(|tool| tool.id)
         .collect::<Vec<_>>();
@@ -255,7 +255,7 @@ fn list_saved_connections_returns_redacted_summaries() {
     let result = futures::executor::block_on(registry.call(
         "connections.list",
         json!({ "include_summary": true }),
-        ToolContext::for_adapter(ToolAdapter::Cli),
+        ToolContext::for_adapter(ToolAdapter::FunctionCalling),
     ))
     .expect("list saved connections should run");
 
@@ -288,13 +288,13 @@ fn show_saved_connection_supports_id_and_name() {
     let by_id = futures::executor::block_on(registry.call(
         "connections.show",
         json!({ "connection": id.to_string() }),
-        ToolContext::for_adapter(ToolAdapter::Cli),
+        ToolContext::for_adapter(ToolAdapter::FunctionCalling),
     ))
     .expect("show by id should run");
     let by_name = futures::executor::block_on(registry.call(
         "connections.show",
         json!({ "connection": "prod ssh" }),
-        ToolContext::for_adapter(ToolAdapter::Cli),
+        ToolContext::for_adapter(ToolAdapter::FunctionCalling),
     ))
     .expect("show by name should run");
 

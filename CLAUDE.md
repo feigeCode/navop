@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**onetcli** (One Net Client) is a cross-platform desktop application built on [GPUI](https://gpui.rs) that provides a unified interface for database management, SSH/SFTP, terminal, and AI tools.
+**Navop** is a cross-platform desktop application built on [GPUI](https://gpui.rs) that provides a unified interface for database management, SSH/SFTP, terminal, and AI tools. The project was migrated from OnetCli, so some compatibility-sensitive protocols, persisted identifiers, and internal Rust names still use the historical `onetcli` / `OnetCli` spelling.
 
 Key capabilities:
 - Multi-protocol database management (PostgreSQL, MySQL, SQLite, SQL Server, Oracle, ClickHouse)
@@ -12,7 +12,7 @@ Key capabilities:
 - SSH terminal and SFTP file management
 - Local terminal with multi-tab workflows
 - Cloud sync and account system with encrypted key storage
-- Built-in AI chat (OnetCli Provider via `llm-connector`)
+- Built-in AI chat (Navop built-in provider via `llm-connector`)
 
 ## Common Commands
 
@@ -70,6 +70,8 @@ The workspace has four default members (`crates/ui`, `crates/story`, `crates/ass
 ### Application Layer
 
 - **`main/`** — Application entry point and main UI. Orchestrates all subsystems: auth, settings, licensing, updates, home page. Entry: `main/src/main.rs` → `OnetCliApp`.
+
+The `navop` executable is GUI/update-only and does not embed database, SSH, SFTP, or tool business subcommands. A future standalone `navop-cli` should connect to the running application through Public MCP discovery and its authenticated tool interface instead of linking directly to `main` or application state.
 
 ### Core Infrastructure
 
@@ -163,7 +165,7 @@ Text input based on Rope (`ropey` crate) with:
 
 - **Environment files**: `.env.local` (priority) → `.env` (fallback), loaded from CWD + exe directory + macOS Resources directory
 - **Build-time config**: `SUPABASE_URL`, `SUPABASE_ANON_KEY` can be baked in at compile time, overridden at runtime
-- **Update URL**: `ONETCLI_UPDATE_URL` env var
+- **Update URL**: the implementation currently accepts the legacy `ONETCLI_UPDATE_URL` env var for compatibility
 - **Log level**: `RUST_LOG` env var (default: `info`)
 
 ## Language Convention

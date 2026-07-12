@@ -87,19 +87,19 @@ pub enum ApiVersionParseError {
 
 #[derive(Debug, Error)]
 pub enum CompatibilityError {
-    #[error("manifest schema 版本 {found} 高于宿主支持的最高版本 {max},请升级 onetcli")]
+    #[error("manifest schema 版本 {found} 高于宿主支持的最高版本 {max},请升级 Navop")]
     SchemaVersionTooNew { found: u32, max: u32 },
 
     #[error("manifest schema 版本 {found} 不合法(必须 >= 1)")]
     SchemaVersionInvalid { found: u32 },
 
-    #[error("engines.onetcli 字段为空,需要声明依赖的 onetcli 版本范围")]
+    #[error("engines.onetcli 字段为空,需要声明依赖的 Navop 版本范围")]
     EnginesOnetcliMissing,
 
     #[error("engines.onetcli {required:?} 不是合法 SemVer range: {reason}")]
     EnginesOnetcliInvalid { required: String, reason: String },
 
-    #[error("扩展要求 onetcli {required:?},当前 onetcli 版本 {current},请升级或寻找兼容版本")]
+    #[error("扩展要求 Navop {required:?},当前 Navop 版本 {current},请升级或寻找兼容版本")]
     HostVersionMismatch { required: String, current: String },
 
     #[error("扩展 api.{api} = {required:?} 不合法: {reason}")]
@@ -206,4 +206,32 @@ pub fn current_host_version() -> Version {
 
 fn host_version_override() -> &'static RwLock<Option<Version>> {
     HOST_VERSION_OVERRIDE.get_or_init(|| RwLock::new(None))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CompatibilityError;
+
+    #[test]
+    fn compatibility_errors_use_navop_product_name() {
+        let schema_error = CompatibilityError::SchemaVersionTooNew { found: 2, max: 1 };
+        let mismatch_error = CompatibilityError::HostVersionMismatch {
+            required: ">=1.0.0".to_string(),
+            current: "0.8.6".to_string(),
+        };
+
+        for message in [schema_error.to_string(), mismatch_error.to_string()] {
+            assert!(message.contains("Navop"));
+            assert!(!message.contains("升级 onetcli"));
+            assert!(!message.contains("当前 onetcli"));
+        }
+    }
+
+    #[test]
+    fn missing_engine_error_keeps_field_name_and_uses_navop_brand() {
+        let message = CompatibilityError::EnginesOnetcliMissing.to_string();
+
+        assert!(message.contains("engines.onetcli"));
+        assert!(message.contains("Navop"));
+    }
 }

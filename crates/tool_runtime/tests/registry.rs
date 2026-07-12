@@ -22,7 +22,9 @@ fn registry_rejects_duplicate_tool_ids() {
 fn registry_lists_tools_for_requested_adapter_only() {
     let registry = ToolRegistry::new(vec![
         Arc::new(EchoHandler::new("example.mcp").with_adapters(vec![ToolAdapter::Mcp])),
-        Arc::new(EchoHandler::new("example.cli").with_adapters(vec![ToolAdapter::Cli])),
+        Arc::new(
+            EchoHandler::new("example.function").with_adapters(vec![ToolAdapter::FunctionCalling]),
+        ),
     ]);
 
     let tools = registry.list(ToolAdapter::Mcp);

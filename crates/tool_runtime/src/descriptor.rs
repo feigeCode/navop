@@ -6,7 +6,6 @@ use crate::{ResourceCapability, ResourceKind, ToolId};
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolAdapter {
-    Cli,
     FunctionCalling,
     Mcp,
     Gui,
@@ -94,7 +93,6 @@ pub enum ToolOrigin {
     PublicMcp,
     ExternalMcp,
     Acp,
-    Cli,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]

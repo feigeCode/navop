@@ -68,7 +68,6 @@ pub enum ResourceOrigin {
     PublicMcp,
     ExternalMcp,
     Acp,
-    Cli,
     Other(String),
 }
 

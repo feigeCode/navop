@@ -341,11 +341,7 @@ impl ToolHandler for ConnectionToolHandler {
             output_schema: json!({ "type": "object" }),
             permissions: Vec::new(),
             mode: ToolMode::Deterministic,
-            adapters: vec![
-                ToolAdapter::Mcp,
-                ToolAdapter::FunctionCalling,
-                ToolAdapter::Cli,
-            ],
+            adapters: vec![ToolAdapter::Mcp, ToolAdapter::FunctionCalling],
             annotations: match self.tool {
                 ConnectionTool::Save => save_annotations(title),
                 _ => annotations(title, read_only),
@@ -421,7 +417,6 @@ fn input_schema(tool: ConnectionTool) -> Value {
 
 fn adapter_name(adapter: ToolAdapter) -> &'static str {
     match adapter {
-        ToolAdapter::Cli => "cli",
         ToolAdapter::FunctionCalling => "function_calling",
         ToolAdapter::Mcp => "mcp",
         ToolAdapter::Gui => "gui",

@@ -193,11 +193,7 @@ impl ToolHandler for DatabaseToolHandler {
             output_schema: json!({ "type": "object" }),
             permissions: Vec::new(),
             mode: ToolMode::Deterministic,
-            adapters: vec![
-                ToolAdapter::Mcp,
-                ToolAdapter::FunctionCalling,
-                ToolAdapter::Cli,
-            ],
+            adapters: vec![ToolAdapter::Mcp, ToolAdapter::FunctionCalling],
             annotations,
         }
     }
