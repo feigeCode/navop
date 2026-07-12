@@ -1,0 +1,57 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Navop"
+    Manufacturer="feigeCode"
+    Version="$(Version)"
+    UpgradeCode="2EAB58E6-27F7-4D97-81A1-7CE4B50FA294"
+    Language="1033"
+    InstallerVersion="500"
+    Scope="perUser">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Navop is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="NavopIcon" SourceFile="$(IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="NavopIcon" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="LocalProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Navop" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="Navop" />
+    </StandardDirectory>
+
+    <Feature Id="ProductFeature" Title="Navop" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="ApplicationExecutable" Guid="*">
+        <File Id="NavopExecutable" Source="$(SourceDir)\navop.exe" KeyPath="yes">
+          <Shortcut
+            Id="StartMenuShortcut"
+            Directory="ApplicationProgramsFolder"
+            Name="Navop"
+            Description="Navop - Database, SSH, Terminal, AI Tools"
+            WorkingDirectory="INSTALLFOLDER"
+            Icon="NavopIcon"
+            Advertise="no" />
+        </File>
+      </Component>
+      <Component Id="StartMenuFolderCleanup" Directory="ApplicationProgramsFolder" Guid="*">
+        <RemoveFolder Id="RemoveApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Navop"
+          Name="Installed"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

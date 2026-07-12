@@ -177,10 +177,12 @@ Navop 基于 GPUI 原生渲染，并持续优化高负载 UI 路径。近期已�
 | 平台 | 架构 | 产物 |
 |------|------|------|
 | macOS | Apple Silicon、Intel | `.dmg`、`.tar.gz` |
-| Linux | x86_64 | `.tar.gz` |
-| Windows | x86_64 | `.zip` |
+| Linux | x86_64 | `.tar.gz`、`.deb`、`.rpm`、`.AppImage` |
+| Windows | x86_64 | `.msi`、`.zip` |
 
 每个版本会同时发布 `sha256sums.txt` 校验文件。
+
+Windows 推荐使用 `.msi` 安装到 `%LOCALAPPDATA%\Programs\Navop`，无需管理员权限；`.zip` 继续用于便携运行和应用内自动更新。
 
 ### macOS Gatekeeper
 

@@ -116,6 +116,7 @@ jobs:
             --pattern "navop-x86_64-unknown-linux-gnu.tar.gz" \
             --pattern "navop-aarch64-unknown-linux-gnu.tar.gz" \
             --pattern "navop-x86_64-pc-windows-msvc.zip" \
+            --pattern "navop-x86_64-pc-windows-msvc.msi" \
             --pattern "navop-aarch64-apple-darwin.dmg" \
             --pattern "navop-x86_64-apple-darwin.dmg" \
             --pattern "sha256sums.txt" \
@@ -132,6 +133,7 @@ jobs:
             navop-x86_64-unknown-linux-gnu.tar.gz \
             navop-aarch64-unknown-linux-gnu.tar.gz \
             navop-x86_64-pc-windows-msvc.zip \
+            navop-x86_64-pc-windows-msvc.msi \
             navop-aarch64-apple-darwin.dmg \
             navop-x86_64-apple-darwin.dmg \
             sha256sums.txt; do
@@ -147,6 +149,7 @@ jobs:
             navop-x86_64-unknown-linux-gnu.tar.gz \
             navop-aarch64-unknown-linux-gnu.tar.gz \
             navop-x86_64-pc-windows-msvc.zip \
+            navop-x86_64-pc-windows-msvc.msi \
             navop-aarch64-apple-darwin.dmg \
             navop-x86_64-apple-darwin.dmg; do
             if ! awk -v file="$file" '$2 == file && $1 ~ /^[0-9a-f]{64}$/ { found = 1 } END { exit found ? 0 : 1 }' artifacts/sha256sums.txt; then
@@ -273,11 +276,14 @@ jobs:
             navop-x86_64-unknown-linux-gnu.tar.gz \
             navop-aarch64-unknown-linux-gnu.tar.gz \
             navop-x86_64-pc-windows-msvc.zip \
+            navop-x86_64-pc-windows-msvc.msi \
             navop-aarch64-apple-darwin.dmg \
             navop-x86_64-apple-darwin.dmg \
             sha256sums.txt; do
             if [[ "$file" == *.zip ]]; then
               content_type="application/zip"
+            elif [[ "$file" == *.msi ]]; then
+              content_type="application/x-msi"
             elif [[ "$file" == *.dmg ]]; then
               content_type="application/x-apple-diskimage"
             elif [[ "$file" == *.txt ]]; then

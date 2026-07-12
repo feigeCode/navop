@@ -29,23 +29,23 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            binary: onetcli
+            binary: navop
             archive: navop-aarch64-apple-darwin.tar.gz
           - target: x86_64-apple-darwin
             os: macos-15-intel
-            binary: onetcli
+            binary: navop
             archive: navop-x86_64-apple-darwin.tar.gz
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            binary: onetcli
+            binary: navop
             archive: navop-x86_64-unknown-linux-gnu.tar.gz
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
-            binary: onetcli
+            binary: navop
             archive: navop-aarch64-unknown-linux-gnu.tar.gz
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            binary: onetcli.exe
+            binary: navop.exe
             archive: navop-x86_64-pc-windows-msvc.zip
     runs-on: ${{ matrix.os }}
 
@@ -187,10 +187,10 @@ jobs:
           mkdir -p package/usr/share/icons/hicolor/256x256/apps
           mkdir -p package/usr/share/icons/hicolor/512x515/apps
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} package/usr/bin/
-          cp resources/linux/onetcli.desktop package/usr/share/applications/
-          cp resources/linux/onetcli-128.png package/usr/share/icons/hicolor/128x128/apps/onetcli.png
-          cp resources/linux/onetcli-256.png package/usr/share/icons/hicolor/256x256/apps/onetcli.png
-          cp resources/linux/onetcli-512.png package/usr/share/icons/hicolor/512x515/apps/onetcli.png
+          cp resources/linux/navop.desktop package/usr/share/applications/
+          cp resources/linux/navop-128.png package/usr/share/icons/hicolor/128x128/apps/navop.png
+          cp resources/linux/navop-256.png package/usr/share/icons/hicolor/256x256/apps/navop.png
+          cp resources/linux/navop-512.png package/usr/share/icons/hicolor/512x515/apps/navop.png
           tar czf ${{ matrix.archive }} -C package .
 
       - name: Install Linux packaging dependencies
@@ -215,11 +215,14 @@ jobs:
           mkdir -p package-deb/DEBIAN
           cp -a package/. package-deb/
           cat > package-deb/DEBIAN/control <<EOF
-          Package: onetcli
+          Package: navop
           Version: ${PACKAGE_VERSION}
           Section: utils
           Priority: optional
           Architecture: amd64
+          Provides: onetcli
+          Replaces: onetcli
+          Conflicts: onetcli
           Maintainer: feigeCode <noreply@github.com>
           Homepage: https://github.com/feigeCode/navop
           Description: Navop - Database, SSH, Terminal, AI Tools
@@ -228,15 +231,17 @@ jobs:
 
           RPM_ROOT="${PWD}/rpmbuild"
           mkdir -p "${RPM_ROOT}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-          tar czf "${RPM_ROOT}/SOURCES/onetcli-${PACKAGE_VERSION}.tar.gz" -C package .
-          cat > "${RPM_ROOT}/SPECS/onetcli.spec" <<EOF
-          Name: onetcli
+          tar czf "${RPM_ROOT}/SOURCES/navop-${PACKAGE_VERSION}.tar.gz" -C package .
+          cat > "${RPM_ROOT}/SPECS/navop.spec" <<EOF
+          Name: navop
           Version: ${PACKAGE_VERSION}
           Release: 1%{?dist}
           Summary: Navop - Database, SSH, Terminal, AI Tools
           License: Apache-2.0
           URL: https://github.com/feigeCode/navop
           BuildArch: x86_64
+          Provides: onetcli = %{version}-%{release}
+          Obsoletes: onetcli < %{version}-%{release}
           Source0: %{name}-%{version}.tar.gz
 
           %description
@@ -253,14 +258,14 @@ jobs:
           cp -a %{_builddir}/%{name}-%{version}/* %{buildroot}/
 
           %files
-          /usr/bin/onetcli
-          /usr/share/applications/onetcli.desktop
-          /usr/share/icons/hicolor/128x128/apps/onetcli.png
-          /usr/share/icons/hicolor/256x256/apps/onetcli.png
-          /usr/share/icons/hicolor/512x515/apps/onetcli.png
+          /usr/bin/navop
+          /usr/share/applications/navop.desktop
+          /usr/share/icons/hicolor/128x128/apps/navop.png
+          /usr/share/icons/hicolor/256x256/apps/navop.png
+          /usr/share/icons/hicolor/512x515/apps/navop.png
           EOF
-          rpmbuild --define "_topdir ${RPM_ROOT}" -bb "${RPM_ROOT}/SPECS/onetcli.spec"
-          generated_rpm="$(find "${RPM_ROOT}/RPMS" -name "onetcli-${PACKAGE_VERSION}-1*.x86_64.rpm" -print -quit)"
+          rpmbuild --define "_topdir ${RPM_ROOT}" -bb "${RPM_ROOT}/SPECS/navop.spec"
+          generated_rpm="$(find "${RPM_ROOT}/RPMS" -name "navop-${PACKAGE_VERSION}-1*.x86_64.rpm" -print -quit)"
           test -n "${generated_rpm}"
           cp "${generated_rpm}" "${RPM_NAME}"
 
@@ -271,9 +276,9 @@ jobs:
           chmod +x linuxdeploy-x86_64.AppImage
           VERSION="${PACKAGE_VERSION}" APPIMAGE_EXTRACT_AND_RUN=1 ./linuxdeploy-x86_64.AppImage \
             --appdir Navop.AppDir \
-            --executable Navop.AppDir/usr/bin/onetcli \
-            --desktop-file resources/linux/onetcli.desktop \
-            --icon-file package/usr/share/icons/hicolor/512x515/apps/onetcli.png \
+            --executable Navop.AppDir/usr/bin/navop \
+            --desktop-file resources/linux/navop.desktop \
+            --icon-file package/usr/share/icons/hicolor/512x515/apps/navop.png \
             --output appimage
           generated_appimage="$(find . -maxdepth 1 -name '*.AppImage' ! -name 'linuxdeploy-x86_64.AppImage' -print -quit)"
           test -n "${generated_appimage}"
@@ -287,6 +292,26 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "package/${{ matrix.binary }}"
           Compress-Archive -Path "package/*" -DestinationPath "${{ matrix.archive }}"
 
+      - name: Install WiX Toolset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: dotnet tool install --global wix --version 6.0.2
+
+      - name: Build Windows MSI installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msiVersion = ($env:ONETCLI_VERSION -split '-')[0]
+          if ($msiVersion -notmatch '^\d+\.\d+\.\d+$') {
+            $msiVersion = '0.0.0'
+          }
+          wix build installer/windows/navop.wxs `
+            -arch x64 `
+            -d Version="$msiVersion" `
+            -d SourceDir="${{ github.workspace }}\package" `
+            -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
+            -out "navop-x86_64-pc-windows-msvc.msi"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -299,6 +324,13 @@ jobs:
         with:
           name: navop-${{ matrix.target }}.dmg
           path: "*.dmg"
+
+      - name: Upload Windows MSI artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: navop-x86_64-pc-windows-msvc.msi
+          path: navop-x86_64-pc-windows-msvc.msi
 
       - name: Upload Linux installer artifacts
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -366,6 +398,7 @@ jobs:
           files: |
             artifacts/navop-*.tar.gz
             artifacts/navop-*.zip
+            artifacts/navop-*.msi
             artifacts/navop-*.dmg
             artifacts/navop_*.deb
             artifacts/navop-*.rpm

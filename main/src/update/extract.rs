@@ -59,13 +59,13 @@ mod tests {
 
         write_tar_gz(
             &archive_path,
-            &[("Navop.app/Contents/MacOS/onetcli", b"binary".as_slice())],
+            &[("Navop.app/Contents/MacOS/navop", b"binary".as_slice())],
         );
 
         let result = extract_archive(&archive_path, &dest_dir);
 
         assert!(result.is_ok(), "tar.gz 解压应成功: {result:?}");
-        let extracted_path = dest_dir.join("Navop.app/Contents/MacOS/onetcli");
+        let extracted_path = dest_dir.join("Navop.app/Contents/MacOS/navop");
         let contents = std::fs::read(&extracted_path).expect("应能读取解压后的文件");
         assert_eq!(contents, b"binary");
     }

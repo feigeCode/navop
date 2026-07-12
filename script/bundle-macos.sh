@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="Navop"
-BINARY_NAME="onetcli"
+BINARY_NAME="navop"
 TARGET="${1:-aarch64-apple-darwin}"
 VERSION="${ONETCLI_VERSION:-0.1.0}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -32,16 +32,13 @@ sed "s/\${ONETCLI_VERSION}/${VERSION}/g" \
     "${PROJECT_DIR}/resources/macos/Info.plist" \
     > "$APP_DIR/Contents/Info.plist"
 
-# Regenerate the macOS icon from the transparent PNG master before bundling.
-bash "${PROJECT_DIR}/script/generate-macos-icon.sh"
-
 # Copy icon
 ICNS_PATH="${PROJECT_DIR}/resources/macos/Navop.icns"
-if [ -f "$ICNS_PATH" ]; then
-    cp "$ICNS_PATH" "$APP_DIR/Contents/Resources/Navop.icns"
-else
-    echo "Warning: Icon file not found at ${ICNS_PATH}"
+if [ ! -f "$ICNS_PATH" ]; then
+    echo "Error: Icon file not found at ${ICNS_PATH}"
+    exit 1
 fi
+cp "$ICNS_PATH" "$APP_DIR/Contents/Resources/Navop.icns"
 
 # Write PkgInfo
 echo -n "APPL????" > "$APP_DIR/Contents/PkgInfo"

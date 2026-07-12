@@ -177,10 +177,12 @@ Release artifacts are currently published by platform:
 | Platform | Architecture | Artifact |
 |----------|--------------|----------|
 | macOS | Apple Silicon, Intel | `.dmg`, `.tar.gz` |
-| Linux | x86_64 | `.tar.gz` |
-| Windows | x86_64 | `.zip` |
+| Linux | x86_64 | `.tar.gz`, `.deb`, `.rpm`, `.AppImage` |
+| Windows | x86_64 | `.msi`, `.zip` |
 
 Checksums are published as `sha256sums.txt` in each release.
+
+On Windows, use the `.msi` package for a standard per-user installation under `%LOCALAPPDATA%\Programs\Navop`; administrator privileges are not required. The `.zip` archive remains available for portable use and in-app updates.
 
 ### macOS Gatekeeper
 

@@ -1,11 +1,11 @@
 [Desktop Entry]
 Name=Navop
 Comment=Navop - Database, SSH, Terminal, AI Tools
-Exec=onetcli
-Icon=onetcli
+Exec=navop
+Icon=navop
 Type=Application
 Categories=Development;Utility;Database;
 Terminal=false
-StartupWMClass=onetcli
+StartupWMClass=navop
 MimeType=
 Keywords=database;ssh;sftp;terminal;redis;mongodb;postgresql;mysql;
