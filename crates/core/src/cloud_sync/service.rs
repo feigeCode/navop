@@ -274,16 +274,6 @@ impl CloudSyncService {
         self.team_keys.contains_key(team_id)
     }
 
-    /// 验证团队密钥
-    pub fn verify_team_key(&self, team_key: &str, key_verification: &str) -> bool {
-        crypto::verify_master_key(team_key, key_verification)
-    }
-
-    /// 生成团队密钥验证数据
-    pub fn generate_team_key_verification(&self, team_key: &str) -> String {
-        crypto::generate_key_verification(team_key)
-    }
-
     /// 获取用户 ID
     pub fn user_id(&self) -> Option<&str> {
         self.user_id.as_deref()

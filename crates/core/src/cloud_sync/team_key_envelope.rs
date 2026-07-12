@@ -136,19 +136,15 @@ pub fn unlock_team_key(
     unlock_v2(verification, passphrase)
 }
 
+pub fn is_team_key_envelope(verification: &str) -> bool {
+    parse_envelope(verification).is_ok()
+}
+
 fn unlock_v2(
     verification: &str,
     passphrase: &str,
 ) -> Result<UnlockedTeamKey, TeamKeyEnvelopeError> {
-    let encoded = verification
-        .strip_prefix(TEAM_KEY_ENVELOPE_PREFIX)
-        .ok_or(TeamKeyEnvelopeError::InvalidKeyOrEnvelope)?;
-    let json = BASE64
-        .decode(encoded)
-        .map_err(|_| TeamKeyEnvelopeError::InvalidKeyOrEnvelope)?;
-    let envelope: TeamKeyEnvelopeV2 =
-        serde_json::from_slice(&json).map_err(|_| TeamKeyEnvelopeError::InvalidKeyOrEnvelope)?;
-    validate_envelope(&envelope)?;
+    let envelope = parse_envelope(verification)?;
     let salt = decode_exact::<SALT_LEN>(&envelope.salt)?;
     let nonce = decode_exact::<NONCE_LEN>(&envelope.nonce)?;
     let wrapped = BASE64
@@ -170,6 +166,27 @@ fn unlock_v2(
     Ok(UnlockedTeamKey {
         data_key: BASE64.encode(data_key),
     })
+}
+
+fn parse_envelope(verification: &str) -> Result<TeamKeyEnvelopeV2, TeamKeyEnvelopeError> {
+    let encoded = verification
+        .strip_prefix(TEAM_KEY_ENVELOPE_PREFIX)
+        .ok_or(TeamKeyEnvelopeError::InvalidKeyOrEnvelope)?;
+    let json = BASE64
+        .decode(encoded)
+        .map_err(|_| TeamKeyEnvelopeError::InvalidKeyOrEnvelope)?;
+    let envelope: TeamKeyEnvelopeV2 =
+        serde_json::from_slice(&json).map_err(|_| TeamKeyEnvelopeError::InvalidKeyOrEnvelope)?;
+    validate_envelope(&envelope)?;
+    decode_exact::<SALT_LEN>(&envelope.salt)?;
+    decode_exact::<NONCE_LEN>(&envelope.nonce)?;
+    let wrapped = BASE64
+        .decode(&envelope.wrapped_data_key)
+        .map_err(|_| TeamKeyEnvelopeError::InvalidKeyOrEnvelope)?;
+    if wrapped.len() != WRAPPED_MAGIC.len() + DATA_KEY_LEN + 16 {
+        return Err(TeamKeyEnvelopeError::InvalidKeyOrEnvelope);
+    }
+    Ok(envelope)
 }
 
 fn validate_envelope(envelope: &TeamKeyEnvelopeV2) -> Result<(), TeamKeyEnvelopeError> {

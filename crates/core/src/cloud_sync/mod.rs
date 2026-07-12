@@ -238,6 +238,7 @@ fn role_can_edit_team_connection(role: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{role_can_edit_team_connection, team_option_from_cache};
+    use crate::cloud_sync::team_key_envelope::{TeamKeyKdfParams, create_team_key_envelope};
     use crate::cloud_sync::{CloudAccountScope, TeamKeyCacheStatus};
     use crate::storage::TeamKeyCache;
 
@@ -248,7 +249,14 @@ mod tests {
             team_name: "Platform".to_string(),
             key_version: 3,
             cached_key_version: encrypted_team_key.map(|_| 3),
-            key_verification: Some("TEAMKEY2:test".to_string()),
+            key_verification: Some(
+                create_team_key_envelope(
+                    "correct horse battery staple",
+                    TeamKeyKdfParams::for_tests(),
+                )
+                .expect("create envelope")
+                .verification,
+            ),
             encrypted_team_key: encrypted_team_key.map(str::to_string),
             last_verified_at,
             updated_at: 100,

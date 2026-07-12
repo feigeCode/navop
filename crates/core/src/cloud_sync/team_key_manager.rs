@@ -2,7 +2,7 @@ use std::fmt;
 use std::sync::{Arc, RwLock};
 
 use crate::cloud_sync::team_key_envelope::{
-    TEAM_KEY_ENVELOPE_PREFIX, TeamKeyEnvelopeError, TeamKeyKdfParams, create_team_key_envelope,
+    TeamKeyEnvelopeError, TeamKeyKdfParams, create_team_key_envelope, is_team_key_envelope,
     unlock_team_key,
 };
 use crate::cloud_sync::{CloudAccountScope, CloudSyncData, CloudSyncService, Team};
@@ -326,9 +326,7 @@ pub fn team_key_cache_status(cache: &TeamKeyCache) -> TeamKeyCacheStatus {
         return TeamKeyCacheStatus::Missing;
     }
     match cache.key_verification.as_deref() {
-        Some(verification) if verification.starts_with(TEAM_KEY_ENVELOPE_PREFIX) => {
-            TeamKeyCacheStatus::Cached
-        }
+        Some(verification) if is_team_key_envelope(verification) => TeamKeyCacheStatus::Cached,
         Some(_) => TeamKeyCacheStatus::Invalid,
         None => TeamKeyCacheStatus::Missing,
     }

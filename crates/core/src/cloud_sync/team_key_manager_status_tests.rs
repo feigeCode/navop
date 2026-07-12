@@ -22,6 +22,9 @@ fn cache_status_distinguishes_version_mismatch_and_invalid_envelope() {
     cache.cached_key_version = Some(4);
     cache.key_verification = Some(crypto::generate_key_verification("legacy-key"));
     assert_eq!(TeamKeyCacheStatus::Invalid, team_key_cache_status(&cache));
+
+    cache.key_verification = Some("TEAMKEY2:not-base64".to_string());
+    assert_eq!(TeamKeyCacheStatus::Invalid, team_key_cache_status(&cache));
 }
 
 #[test]
