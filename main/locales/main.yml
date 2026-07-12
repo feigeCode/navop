@@ -55,37 +55,6 @@ Common:
     zh-CN: 无
     zh-HK: 無
 
-# 项目归档迁移公告
-ArchiveNotice:
-  title:
-    en: OnetCli is no longer maintained
-    zh-CN: OnetCli 已停止维护
-    zh-HK: OnetCli 已停止維護
-  badge:
-    en: Project archived
-    zh-CN: 项目已归档
-    zh-HK: 專案已封存
-  message:
-    en: OnetCli has been archived and will no longer receive feature updates, bug fixes, or new releases. Ongoing development has moved to Navop. You can continue using this version, or visit Navop for future updates.
-    zh-CN: OnetCli 项目已经归档，今后将不再提供功能更新、问题修复或新版本发布。后续开发已迁移至 Navop。你可以继续使用当前版本，或前往 Navop 获取后续更新。
-    zh-HK: OnetCli 專案已經封存，今後將不再提供功能更新、問題修復或新版本發佈。後續開發已遷移至 Navop。你可以繼續使用目前版本，或前往 Navop 取得後續更新。
-  navop_description:
-    en: The actively maintained successor to OnetCli.
-    zh-CN: OnetCli 的后续项目，正在持续维护和更新。
-    zh-HK: OnetCli 的後續專案，正在持續維護和更新。
-  continue_action:
-    en: Continue with OnetCli
-    zh-CN: 继续使用 OnetCli
-    zh-HK: 繼續使用 OnetCli
-  github_action:
-    en: View GitHub
-    zh-CN: 查看 GitHub
-    zh-HK: 查看 GitHub
-  website_action:
-    en: Visit Navop Website
-    zh-CN: 访问 Navop 官网
-    zh-HK: 前往 Navop 官網
-
 # 应用退出
 Quit:
   confirm_title:

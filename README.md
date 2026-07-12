@@ -1,8 +1,3 @@
-> [!IMPORTANT]
-> **This repository has been archived and OnetCli is no longer maintained.**
-> OnetCli will not receive new features, bug fixes, or releases. Active development has moved to **Navop**:
-> [Official Website](https://navop.dev) · [GitHub Repository](https://github.com/feigeCode/navop)
-
 <div align="center">
   <p>
     <img src="resources/navop-icon.png" alt="Navop" width="120" />

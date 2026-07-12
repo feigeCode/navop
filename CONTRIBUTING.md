@@ -1,10 +1,5 @@
 # Contributing Guide
 
-> [!IMPORTANT]
-> OnetCli has been archived and no longer accepts feature or bug-fix contributions. Active development has moved to [Navop](https://github.com/feigeCode/navop); please open new issues and pull requests there. Visit [navop.dev](https://navop.dev) for project information.
-
-The remaining instructions are retained for historical reference.
-
 Please ensure that you are using clean code, following the coding style and code organization in existing code, and make sure all the tests pass.
 
 Please submit **one PR that does one thing**, this is important, and helps us to review your code more easily and push to merge fast.
