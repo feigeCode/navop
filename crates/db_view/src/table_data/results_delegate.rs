@@ -5,8 +5,8 @@ use super::data_grid::DataGrid;
 use db::{ColumnInfo, FieldType};
 use gpui::{
     App, AppContext, ClipboardItem, Context, Font, InteractiveElement, IntoElement,
-    ParentElement as _, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    WeakEntity, Window, div, prelude::FluentBuilder, px,
+    ParentElement as _, SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
+    Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::calendar::Date;
 use gpui_component::date_picker::{DatePickerEvent, DatePickerState};
@@ -1391,15 +1391,13 @@ impl EditTableDelegate for EditorTableDelegate {
                 .text_color(cx.theme().muted_foreground.opacity(0.5))
                 .italic()
                 .child("NULL"),
-            Some(s) => {
-                div()
-                    .font(font)
-                    .w_full()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(s)
-            }
+            Some(s) => div()
+                .font(font)
+                .w_full()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(s),
         }
     }
 

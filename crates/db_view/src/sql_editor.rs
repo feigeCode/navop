@@ -6,8 +6,8 @@ use db::sql_editor::sql_context_inferrer::{ContextInferrer, SqlContext as Inferr
 use db::sql_editor::sql_symbol_table::SymbolTable;
 use db::sql_editor::sql_tokenizer::SqlTokenizer;
 use gpui::{
-    App, AppContext, Context, Entity, Font, IntoElement, Render, Styled as _,
-    Subscription, Task, Window,
+    App, AppContext, Context, Entity, Font, IntoElement, Render, Styled as _, Subscription, Task,
+    Window,
 };
 use gpui_component::input::{
     CodeActionProvider, CompletionProvider, HoverProvider, Input, InputContextMenuItem, InputEvent,
@@ -19,7 +19,7 @@ use lsp_types::{
     InlineCompletionContext, InlineCompletionItem, InlineCompletionResponse, InsertReplaceEdit,
     InsertTextFormat, Range as LspRange,
 };
-use one_core::settings::{installed_grid_monospace_font, AppSettings};
+use one_core::settings::{AppSettings, installed_grid_monospace_font};
 use rust_i18n::t;
 use sum_tree::Bias;
 
