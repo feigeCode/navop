@@ -335,6 +335,17 @@ impl SyncEngine {
             }
         };
         let Some(member) = members.iter().find(|m| m.user_id == scope.user_id) else {
+            if let Err(error) = repo.delete(scope, &team.id) {
+                tracing::warn!(
+                    "[同步] 删除已失去成员资格的团队 {} 缓存失败: {}",
+                    team.id,
+                    error
+                );
+                return false;
+            }
+            if let Ok(mut service) = self.crypto_service.write() {
+                service.remove_team_key(&team.id);
+            }
             return false;
         };
         let existing_cache = match repo.get(scope, &team.id) {
@@ -1035,6 +1046,56 @@ mod tests {
                 .read()
                 .expect("service lock")
                 .is_team_unlocked("departed-team")
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_removes_team_when_membership_is_confirmed_absent() {
+        let (storage, repo) = test_storage();
+        repo.upsert(&TeamKeyCache {
+            scope: test_scope(),
+            team_id: "team-1".to_string(),
+            team_name: "Platform".to_string(),
+            key_version: 7,
+            cached_key_version: Some(7),
+            key_verification: Some("TEAMKEY2:cached".to_string()),
+            encrypted_team_key: Some("encrypted".to_string()),
+            last_verified_at: Some(123),
+            updated_at: 200,
+            role: Some("admin".to_string()),
+        })
+        .expect("seed membership");
+        let service = Arc::new(RwLock::new(CloudSyncService::new()));
+        service
+            .write()
+            .expect("service lock")
+            .set_logged_in("user-1".to_string());
+        service
+            .write()
+            .expect("service lock")
+            .set_team_key("team-1", "runtime-key".to_string());
+        let engine = SyncEngine::new(
+            Arc::new(FakeCloudClient {
+                teams: vec![team()],
+                members: Vec::new(),
+                initialized_team: Arc::new(Mutex::new(None)),
+            }),
+            service.clone(),
+            storage,
+        );
+
+        engine.refresh_team_key_cache().await.expect("refresh");
+
+        assert!(
+            repo.get(&test_scope(), "team-1")
+                .expect("read team")
+                .is_none()
+        );
+        assert!(
+            !service
+                .read()
+                .expect("service lock")
+                .is_team_unlocked("team-1")
         );
     }
 

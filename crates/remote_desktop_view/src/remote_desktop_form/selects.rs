@@ -1,6 +1,6 @@
 use gpui::{AppContext, Context, Entity, SharedString, Window};
 use gpui_component::select::{SelectItem, SelectState};
-use one_core::cloud_sync::{TeamKeyStatus, TeamOption};
+use one_core::cloud_sync::{TeamKeyCacheStatus, TeamOption};
 use one_core::storage::Workspace;
 use rust_i18n::t;
 
@@ -64,10 +64,12 @@ impl TeamSelectItem {
 
 fn team_select_name(team: &TeamOption) -> String {
     match team.key_status {
-        TeamKeyStatus::Missing | TeamKeyStatus::VersionMismatch => {
+        TeamKeyCacheStatus::Missing
+        | TeamKeyCacheStatus::VersionMismatch
+        | TeamKeyCacheStatus::Invalid => {
             format!("{} ({})", team.name, t!("TeamSync.key_missing_short"))
         }
-        TeamKeyStatus::Cached | TeamKeyStatus::Unlocked => {
+        TeamKeyCacheStatus::Cached => {
             format!("{} ({})", team.name, t!("TeamSync.key_cached_short"))
         }
     }

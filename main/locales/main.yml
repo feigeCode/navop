@@ -491,6 +491,10 @@ TeamSync:
     en: Version changed
     zh-CN: 版本已变更
     zh-HK: 版本已變更
+  status_invalid:
+    en: Invalid team key format
+    zh-CN: 团队密钥格式无效
+    zh-HK: 團隊密鑰格式無效
   version:
     en: Version
     zh-CN: 版本

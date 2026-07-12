@@ -39,7 +39,7 @@ use gpui_component::{
     v_flex,
 };
 use one_core::cloud_sync::{
-    CloudSyncService, GlobalCloudUser, SyncEngine, TeamKeyStatus, TeamOption,
+    CloudSyncService, GlobalCloudUser, SyncEngine, TeamKeyCacheStatus, TeamOption,
     forget_team_key_for_cached_team, get_cached_team_options, personal::SyncStoreHealth,
     save_team_key_for_cached_team,
 };
@@ -1541,7 +1541,7 @@ fn render_team_key_empty(cx: &mut App) -> gpui::AnyElement {
 
 fn render_team_key_row(team: TeamOption, cx: &mut App) -> gpui::AnyElement {
     let can_rotate = team_key_role_can_rotate(team.role.as_deref());
-    let can_forget = !matches!(team.key_status, TeamKeyStatus::Missing);
+    let can_forget = !matches!(team.key_status, TeamKeyCacheStatus::Missing);
     let team_for_save = team.clone();
     let team_for_rotate = team.clone();
     let team_id_for_forget = team.id.clone();
@@ -1644,21 +1644,22 @@ fn render_team_key_meta(team: &TeamOption, cx: &mut App) -> gpui::AnyElement {
         .into_any_element()
 }
 
-fn team_key_status_badge(status: TeamKeyStatus, cx: &mut App) -> gpui::AnyElement {
+fn team_key_status_badge(status: TeamKeyCacheStatus, cx: &mut App) -> gpui::AnyElement {
     let (label, color) = match status {
-        TeamKeyStatus::Missing => (
+        TeamKeyCacheStatus::Missing => (
             t!("TeamSync.status_missing").to_string(),
             cx.theme().warning,
         ),
-        TeamKeyStatus::Cached => (t!("TeamSync.status_cached").to_string(), cx.theme().success),
-        TeamKeyStatus::Unlocked => (
-            t!("TeamSync.status_unlocked").to_string(),
-            cx.theme().success,
-        ),
-        TeamKeyStatus::VersionMismatch => (
+        TeamKeyCacheStatus::Cached => {
+            (t!("TeamSync.status_cached").to_string(), cx.theme().success)
+        }
+        TeamKeyCacheStatus::VersionMismatch => (
             t!("TeamSync.status_version_mismatch").to_string(),
             cx.theme().danger,
         ),
+        TeamKeyCacheStatus::Invalid => {
+            (t!("TeamSync.status_invalid").to_string(), cx.theme().danger)
+        }
     };
     div()
         .text_xs()

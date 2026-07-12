@@ -13,7 +13,7 @@ use gpui_component::{
     v_flex,
 };
 use one_core::cloud_sync::{
-    GlobalCloudUser, TeamKeyStatus, TeamOption, ensure_team_key_ready_for_save,
+    GlobalCloudUser, TeamKeyCacheStatus, TeamOption, ensure_team_key_ready_for_save,
     get_cached_team_options,
 };
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
@@ -87,10 +87,12 @@ impl TeamSelectItem {
 
 fn team_select_name(team: &TeamOption) -> String {
     match team.key_status {
-        TeamKeyStatus::Missing | TeamKeyStatus::VersionMismatch => {
+        TeamKeyCacheStatus::Missing
+        | TeamKeyCacheStatus::VersionMismatch
+        | TeamKeyCacheStatus::Invalid => {
             format!("{} ({})", team.name, t!("TeamSync.key_missing_short"))
         }
-        TeamKeyStatus::Cached | TeamKeyStatus::Unlocked => {
+        TeamKeyCacheStatus::Cached => {
             format!("{} ({})", team.name, t!("TeamSync.key_cached_short"))
         }
     }
