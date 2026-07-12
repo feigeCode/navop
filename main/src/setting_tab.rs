@@ -3496,8 +3496,10 @@ fn render_shortcuts_section(
 
 #[cfg(test)]
 mod tests {
-    use gpui::http_client::HttpClient;
+    use gpui::{AppContext, EmptyView, TestAppContext, http_client::HttpClient};
+    use gpui_component::{Root, Theme};
     use one_core::cloud_sync::personal::SyncStoreHealth;
+    use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
     use rust_i18n::t;
 
     use super::{
@@ -3505,10 +3507,12 @@ mod tests {
         ProxyType, build_app_http_client, builtin_monospace_font_options, is_supported_font_file,
         local_terminal_profile_options, merge_font_options_with_custom_fonts, parse_font_families,
         personal_sync_backend_options, personal_sync_status_label, personal_sync_status_view_model,
-        team_key_refresh_success_message, team_key_rotation_inputs_valid,
+        team_key_change_completed, team_key_refresh_success_message,
+        team_key_rotation_inputs_valid,
     };
     use crate::personal_sync_status::PersonalSyncRuntimeStatus;
     use std::path::Path;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn team_key_rotation_allows_same_passphrase() {
@@ -3642,6 +3646,46 @@ mod tests {
 
             assert!(body.contains("team_key_change_completed("), "{function}");
         }
+    }
+
+    #[gpui::test]
+    fn team_key_change_emits_cloud_sync_request(cx: &mut TestAppContext) {
+        let events = Arc::new(Mutex::new(Vec::<ConnectionDataEvent>::new()));
+        let events_for_subscription = events.clone();
+        let (window, _subscription) = cx.update(|cx| {
+            cx.set_global(Theme::default());
+            one_core::connection_notifier::init(cx);
+            let notifier = get_notifier(cx).expect("connection notifier initialized");
+            let subscription = cx.subscribe(&notifier, move |_, event, _| {
+                events_for_subscription
+                    .lock()
+                    .expect("events lock")
+                    .push(event.clone());
+            });
+            let window = cx
+                .open_window(Default::default(), |window, cx| {
+                    let content = cx.new(|_| EmptyView);
+                    cx.new(|cx| Root::new(content, window, cx))
+                })
+                .expect("test window opens");
+            (window, subscription)
+        });
+
+        cx.update(|cx| {
+            window
+                .update(cx, |_, window, cx| {
+                    team_key_change_completed(window, cx);
+                })
+                .expect("team key completion updates window");
+        });
+
+        assert!(
+            events
+                .lock()
+                .expect("events lock")
+                .iter()
+                .any(|event| matches!(event, ConnectionDataEvent::CloudSyncRequested))
+        );
     }
 
     #[test]
