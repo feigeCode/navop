@@ -8724,7 +8724,9 @@ dependencies = [
  "gpui",
  "gpui-component",
  "one-core",
+ "port_forwarding",
  "rust-i18n",
+ "tokio",
  "tracing",
 ]
 

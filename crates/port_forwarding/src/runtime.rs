@@ -66,6 +66,20 @@ impl PortForwardingRuntime {
             || self.dynamic_tunnels.contains_key(&connection_id)
     }
 
+    pub async fn stop(&mut self, connection_id: i64) -> Result<bool> {
+        if let Some(tunnel) = self.local_tunnels.get_mut(&connection_id) {
+            tunnel.close().await?;
+            self.local_tunnels.remove(&connection_id);
+            return Ok(true);
+        }
+        if let Some(tunnel) = self.dynamic_tunnels.get_mut(&connection_id) {
+            tunnel.close().await?;
+            self.dynamic_tunnels.remove(&connection_id);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     pub async fn start_dynamic(
         &mut self,
         connection_id: i64,

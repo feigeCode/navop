@@ -1,0 +1,25 @@
+services:
+  target:
+    image: nginx:alpine
+    container_name: onetcli-pf-target
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  ssh:
+    build:
+      context: .
+      dockerfile: Dockerfile.ssh
+    container_name: onetcli-pf-ssh
+    depends_on:
+      target:
+        condition: service_healthy
+    ports:
+      - "2222:22"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 22"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

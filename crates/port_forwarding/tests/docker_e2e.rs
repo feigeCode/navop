@@ -42,6 +42,13 @@ async fn docker_local_and_dynamic_forwarding_roundtrip() -> Result<()> {
     assert_socks_http_response(dynamic_addr, &target_host, target_port, "Welcome to nginx!")
         .await?;
 
+    assert!(runtime.stop(LOCAL_FORWARDING_ID).await?);
+    assert!(runtime.stop(DYNAMIC_FORWARDING_ID).await?);
+    assert!(!runtime.is_running(LOCAL_FORWARDING_ID));
+    assert!(!runtime.is_running(DYNAMIC_FORWARDING_ID));
+    assert_listener_closed(local_addr).await?;
+    assert_listener_closed(dynamic_addr).await?;
+
     Ok(())
 }
 
@@ -186,6 +193,16 @@ async fn tcp_connect(addr: SocketAddr) -> Result<TcpStream> {
         .await
         .context("timed out connecting to local forwarded socket")?
         .context("failed to connect to local forwarded socket")
+}
+
+async fn assert_listener_closed(addr: SocketAddr) -> Result<()> {
+    let result = timeout(IO_TIMEOUT, TcpStream::connect(addr))
+        .await
+        .context("timed out checking closed forwarded socket")?;
+    if result.is_ok() {
+        bail!("forwarded socket should be closed: {addr}");
+    }
+    Ok(())
 }
 
 async fn write_http_request(stream: &mut TcpStream, host_header: &str) -> Result<()> {

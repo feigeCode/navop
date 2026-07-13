@@ -3,7 +3,9 @@ use one_core::storage::{
     StoredConnection,
 };
 
-use crate::{build_dynamic_forwarding_request, build_local_forwarding_request};
+use crate::{
+    PortForwardingRuntime, build_dynamic_forwarding_request, build_local_forwarding_request,
+};
 
 fn ssh_connection(id: i64) -> StoredConnection {
     let mut connection = StoredConnection::new_ssh(
@@ -119,4 +121,14 @@ fn dynamic_request_uses_referenced_ssh_connection_and_bind_params() {
     assert_eq!(request.bind_port, 1080);
     assert_eq!(request.ssh_config.host, "bastion.example.com");
     assert_eq!(request.ssh_config.username, "deploy");
+}
+
+#[tokio::test]
+async fn stopping_unknown_connection_is_idempotent() {
+    let mut runtime = PortForwardingRuntime::new();
+
+    let stopped = runtime.stop(42).await.unwrap();
+
+    assert!(!stopped);
+    assert!(!runtime.is_running(42));
 }

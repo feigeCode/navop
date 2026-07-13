@@ -185,7 +185,7 @@ impl ConnectionOpenStrategy for PortForwardingOpenStrategy {
         window: &mut Window,
         cx: &mut Context<HomePage>,
     ) {
-        home.open_port_forwarding(self.connection, window, cx);
+        home.open_port_forwarding_tab(self.connection, _mode, window, cx);
     }
 }
 
