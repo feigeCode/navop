@@ -62,7 +62,7 @@ pub fn is_feature_enabled(feature: Feature, cx: &App) -> bool {
 mod global_tests {
     use std::sync::Arc;
 
-    use gpui::{AppContext, TestAppContext};
+    use gpui::TestAppContext;
 
     use super::{
         Feature, GlobalLicenseService, LicenseError, LicenseInfo, LicenseService, LicenseStorage,
