@@ -12,6 +12,8 @@ use rust_i18n::t;
 use crate::tab::PortForwardingTab;
 use crate::tab_state::PortForwardingTabState;
 
+const ACTIVITY_MAX_HEIGHT: f32 = 220.0;
+
 pub(crate) fn render_tab(
     tab: &mut PortForwardingTab,
     _window: &mut Window,
@@ -72,7 +74,7 @@ fn render_header(
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(Icon::new(IconName::PortForwardingColor).with_size(Size::Large)),
+                        .child(IconName::PortForwardingColor.color().with_size(Size::Large)),
                 )
                 .child(
                     v_flex()
@@ -236,12 +238,18 @@ fn render_events(tab: &PortForwardingTab, cx: &mut Context<PortForwardingTab>) -
                 .font_semibold()
                 .child(t!("PortForwardingTab.activity").to_string()),
         )
-        .children(tab.events.iter().map(|event| {
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(event.clone())
-        }))
+        .child(
+            v_flex()
+                .gap_2()
+                .max_h(px(ACTIVITY_MAX_HEIGHT))
+                .overflow_y_scrollbar()
+                .children(tab.events.iter().map(|event| {
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(event.clone())
+                })),
+        )
 }
 
 fn actual_bind(tab: &PortForwardingTab) -> String {

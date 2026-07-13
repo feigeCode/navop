@@ -6,5 +6,4 @@ PermitRootLogin no
 AllowTcpForwarding yes
 GatewayPorts no
 X11Forwarding no
-UsePAM no
 Subsystem sftp internal-sftp

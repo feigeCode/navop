@@ -1393,10 +1393,11 @@ impl SshClient for RusshClient {
     }
 
     async fn disconnect(&mut self) -> Result<()> {
-        self.session
+        let result = self
+            .session
             .disconnect(Disconnect::ByApplication, "", "English")
-            .await?;
-        Ok(())
+            .await;
+        normalize_disconnect_result(result, self.session.is_closed())
     }
 
     fn is_connected(&self) -> bool {
@@ -1421,9 +1422,20 @@ impl RusshClient {
     }
 }
 
+fn normalize_disconnect_result(
+    result: std::result::Result<(), russh::Error>,
+    session_closed: bool,
+) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(russh::Error::SendError) if session_closed => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 #[cfg(test)]
 mod port_forward_tests {
-    use super::build_local_forward_bind_addr;
+    use super::{build_local_forward_bind_addr, normalize_disconnect_result};
 
     #[test]
     fn local_forward_bind_addr_uses_requested_host_and_port() {
@@ -1431,6 +1443,20 @@ mod port_forward_tests {
             build_local_forward_bind_addr("127.0.0.1", 15432),
             "127.0.0.1:15432"
         );
+    }
+
+    #[test]
+    fn closed_session_treats_disconnect_send_error_as_success() {
+        let result = normalize_disconnect_result(Err(russh::Error::SendError), true);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn open_session_preserves_disconnect_send_error() {
+        let result = normalize_disconnect_result(Err(russh::Error::SendError), false);
+
+        assert!(result.is_err());
     }
 }
 
