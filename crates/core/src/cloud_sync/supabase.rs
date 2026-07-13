@@ -845,6 +845,33 @@ struct SupabaseUser {
     created_at: Option<String>,
 }
 
+fn user_info_from_supabase_user(user: SupabaseUser) -> UserInfo {
+    let created_at = user
+        .created_at
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(&value).ok())
+        .map(|value| value.timestamp())
+        .unwrap_or(0);
+    let metadata = user.user_metadata.as_ref();
+
+    UserInfo {
+        id: user.id,
+        email: user.email.unwrap_or_default(),
+        display_name: metadata_string(metadata, "display_name"),
+        username: metadata_string(metadata, "username"),
+        avatar_url: metadata_string(metadata, "avatar_url"),
+        created_at,
+    }
+}
+
+fn metadata_string(metadata: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    metadata
+        .and_then(|value| value.get(key))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 #[derive(Debug, Deserialize)]
 struct SupabaseError {
     error: Option<String>,
@@ -1312,30 +1339,7 @@ impl CloudApiClient for SupabaseClient {
 
         if status.is_success() {
             let user = result.map_err(|e| CloudApiError::ParseError(e))?;
-
-            let created_at = user
-                .created_at
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-                .map(|dt| dt.timestamp())
-                .unwrap_or(0);
-
-            Ok(Some(UserInfo {
-                id: user.id,
-                email: user.email.unwrap_or_default(),
-                username: user
-                    .user_metadata
-                    .as_ref()
-                    .and_then(|m| m.get("username"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                avatar_url: user
-                    .user_metadata
-                    .as_ref()
-                    .and_then(|m| m.get("avatar_url"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from),
-                created_at,
-            }))
+            Ok(Some(user_info_from_supabase_user(user)))
         } else if status == StatusCode::UNAUTHORIZED {
             // 重试后仍然 401
             self.clear_auth();
@@ -1998,6 +2002,29 @@ mod tests {
     use super::*;
     use futures::FutureExt;
     use std::sync::Mutex;
+
+    #[test]
+    fn get_current_user_reads_display_name() {
+        let user = SupabaseUser {
+            id: "user-1".to_string(),
+            email: Some("mail@example.com".to_string()),
+            user_metadata: Some(serde_json::json!({
+                "display_name": " Display ",
+                "username": " legacy ",
+                "avatar_url": " https://example.com/avatar.png "
+            })),
+            created_at: Some("2026-07-13T00:00:00Z".to_string()),
+        };
+
+        let mapped = user_info_from_supabase_user(user);
+
+        assert_eq!(mapped.display_name.as_deref(), Some("Display"));
+        assert_eq!(mapped.username.as_deref(), Some("legacy"));
+        assert_eq!(
+            mapped.avatar_url.as_deref(),
+            Some("https://example.com/avatar.png")
+        );
+    }
 
     #[test]
     fn team_member_row_preserves_admin_role() {

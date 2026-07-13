@@ -310,6 +310,7 @@ impl AuthService {
                     Ok(None) => Ok(UserInfo {
                         id: auth_resp.user_id,
                         email: auth_resp.email,
+                        display_name: None,
                         username: None,
                         avatar_url: None,
                         created_at: 0,

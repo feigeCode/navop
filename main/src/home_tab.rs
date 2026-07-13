@@ -3107,11 +3107,10 @@ impl HomePage {
                                         .icon(IconName::User)
                                         .ghost()
                                         .small()
-                                        .tooltip(if user.is_some() {
-                                            "账号".to_string()
-                                        } else {
-                                            t!("Auth.login").to_string()
-                                        })
+                                        .tooltip(
+                                            user.map(UserInfo::resolved_display_name)
+                                                .unwrap_or_else(|| t!("Auth.login").to_string()),
+                                        )
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             if this.current_user.is_none() {
                                                 this.show_login_dialog(window, cx);

@@ -214,10 +214,67 @@ pub struct UserInfo {
     pub id: String,
     /// 用户邮箱
     pub email: String,
+    /// 用户显示名称（Supabase user_metadata.display_name）
+    pub display_name: Option<String>,
     /// 用户名（可选）
     pub username: Option<String>,
     /// 头像 URL（可选）
     pub avatar_url: Option<String>,
     /// 创建时间
     pub created_at: i64,
+}
+
+impl UserInfo {
+    pub fn resolved_display_name(&self) -> String {
+        self.display_name
+            .as_deref()
+            .and_then(non_blank)
+            .or_else(|| self.username.as_deref().and_then(non_blank))
+            .or_else(|| {
+                self.email
+                    .split_once('@')
+                    .map(|(local, _)| local)
+                    .and_then(non_blank)
+            })
+            .unwrap_or("User")
+            .to_string()
+    }
+}
+
+fn non_blank(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+#[cfg(test)]
+mod user_info_tests {
+    use super::UserInfo;
+
+    fn test_user() -> UserInfo {
+        UserInfo {
+            id: "user-1".into(),
+            email: "mail@example.com".into(),
+            display_name: None,
+            username: None,
+            avatar_url: None,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn user_display_name_uses_shared_fallback_order() {
+        let mut user = test_user();
+        user.display_name = Some(" Display ".into());
+        user.username = Some("legacy".into());
+        assert_eq!(user.resolved_display_name(), "Display");
+
+        user.display_name = Some("   ".into());
+        assert_eq!(user.resolved_display_name(), "legacy");
+
+        user.username = None;
+        assert_eq!(user.resolved_display_name(), "mail");
+
+        user.email.clear();
+        assert_eq!(user.resolved_display_name(), "User");
+    }
 }

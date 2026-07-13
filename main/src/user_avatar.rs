@@ -15,6 +15,26 @@ use gpui_component::{
 use one_core::cloud_sync::UserInfo;
 use rust_i18n::t;
 
+#[derive(Debug, PartialEq)]
+struct UserAvatarPresentation {
+    display_name: String,
+    email: String,
+    avatar_url: Option<String>,
+}
+
+fn user_avatar_presentation(user: &UserInfo) -> UserAvatarPresentation {
+    UserAvatarPresentation {
+        display_name: user.resolved_display_name(),
+        email: user.email.clone(),
+        avatar_url: user
+            .avatar_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+    }
+}
+
 /// 渲染用户头像区域
 ///
 /// - 已登录：显示头像、用户名、邮箱
@@ -31,20 +51,10 @@ pub fn render_user_avatar<V: 'static>(
     cx: &App,
 ) -> AnyElement {
     if let Some(user) = user {
-        let email: SharedString = user.email.clone().into();
-        let display_name: SharedString = user
-            .username
-            .clone()
-            .unwrap_or_else(|| {
-                // 从邮箱提取用户名
-                user.email
-                    .split('@')
-                    .next()
-                    .unwrap_or(&user.email)
-                    .to_string()
-            })
-            .into();
-        let avatar_url = user.avatar_url.clone();
+        let presentation = user_avatar_presentation(user);
+        let email: SharedString = presentation.email.into();
+        let display_name: SharedString = presentation.display_name.into();
+        let avatar_url = presentation.avatar_url;
 
         let avatar = if let Some(url) = &avatar_url {
             Avatar::new().src(url.as_str()).with_size(Size::Small)
@@ -109,5 +119,28 @@ pub fn render_user_avatar<V: 'static>(
                 });
             })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_avatar_presentation_uses_resolved_profile() {
+        let user = UserInfo {
+            id: "user-1".into(),
+            email: "mail@example.com".into(),
+            display_name: Some(" Display ".into()),
+            username: Some("legacy".into()),
+            avatar_url: Some("   ".into()),
+            created_at: 0,
+        };
+
+        let presentation = user_avatar_presentation(&user);
+
+        assert_eq!(presentation.display_name, "Display");
+        assert_eq!(presentation.email, "mail@example.com");
+        assert_eq!(presentation.avatar_url, None);
     }
 }
