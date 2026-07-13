@@ -8,9 +8,9 @@ use one_core::storage::{
     StoredConnection,
 };
 use ssh::{
-    DynamicSocksConfig, DynamicSocksTunnel, JumpServerConnectConfig, LocalPortForwardConfig,
-    LocalPortForwardTunnel, ProxyConnectConfig, ProxyType, SshAuth, SshConnectConfig,
-    start_dynamic_socks_forward, start_local_port_forward_with_config,
+    DynamicSocksConfig, DynamicSocksTunnel, JumpServerConnectConfig, LocalPortForwardActivity,
+    LocalPortForwardConfig, LocalPortForwardTunnel, ProxyConnectConfig, ProxyType, SshAuth,
+    SshConnectConfig, start_dynamic_socks_forward, start_local_port_forward_with_config,
 };
 
 pub struct LocalForwardingRequest {
@@ -19,6 +19,7 @@ pub struct LocalForwardingRequest {
     pub bind_port: u16,
     pub target_host: String,
     pub target_port: u16,
+    pub activity_tx: Option<tokio::sync::mpsc::UnboundedSender<LocalPortForwardActivity>>,
 }
 
 pub struct DynamicForwardingRequest {
@@ -53,6 +54,7 @@ impl PortForwardingRuntime {
                 bind_port: request.bind_port,
                 target_host: request.target_host,
                 target_port: request.target_port,
+                activity_tx: request.activity_tx,
             },
         )
         .await?;
@@ -133,6 +135,7 @@ pub fn build_local_forwarding_request(
         bind_port: params.bind_port,
         target_host: params.target_host,
         target_port: params.target_port,
+        activity_tx: None,
     })
 }
 

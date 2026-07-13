@@ -241,6 +241,23 @@ pub struct LocalPortForwardConfig {
     pub bind_port: u16,
     pub target_host: String,
     pub target_port: u16,
+    pub activity_tx: Option<tokio::sync::mpsc::UnboundedSender<LocalPortForwardActivity>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocalPortForwardActivity {
+    Connected {
+        source: SocketAddr,
+        target_host: String,
+        target_port: u16,
+    },
+    Closed {
+        source: SocketAddr,
+    },
+    Failed {
+        source: SocketAddr,
+        error: String,
+    },
 }
 
 impl LocalPortForwardTunnel {
@@ -1177,6 +1194,7 @@ pub async fn start_local_port_forward(
             bind_port: 0,
             target_host: target_host.into(),
             target_port,
+            activity_tx: None,
         },
     )
     .await
@@ -1188,6 +1206,7 @@ pub async fn start_local_port_forward_with_config(
 ) -> Result<LocalPortForwardTunnel> {
     let target_host = forward_config.target_host;
     let target_port = forward_config.target_port;
+    let activity_tx = forward_config.activity_tx;
     let bind_addr =
         build_local_forward_bind_addr(&forward_config.bind_host, forward_config.bind_port);
     let listener = TcpListener::bind(&bind_addr)
@@ -1218,6 +1237,7 @@ pub async fn start_local_port_forward_with_config(
 
                     let client_for_conn = Arc::clone(&client_for_task);
                     let target_host_for_conn = target_host_for_task.clone();
+                    let activity_tx = activity_tx.clone();
                     tokio::spawn(async move {
                         let origin_host = match inbound_addr {
                             SocketAddr::V4(v4) => v4.ip().to_string(),
@@ -1238,15 +1258,33 @@ pub async fn start_local_port_forward_with_config(
                             {
                                 Ok(channel) => channel,
                                 Err(err) => {
+                                    if let Some(tx) = &activity_tx {
+                                        let _ = tx.send(LocalPortForwardActivity::Failed {
+                                            source: inbound_addr,
+                                            error: err.to_string(),
+                                        });
+                                    }
                                     tracing::error!("打开 SSH direct-tcpip 通道失败: {}", err);
                                     return;
                                 }
                             }
                         };
 
+                        if let Some(tx) = &activity_tx {
+                            let _ = tx.send(LocalPortForwardActivity::Connected {
+                                source: inbound_addr,
+                                target_host: target_host_for_conn,
+                                target_port,
+                            });
+                        }
                         let mut outbound = direct_channel.into_stream();
                         if let Err(err) = copy_bidirectional(&mut inbound, &mut outbound).await {
                             tracing::debug!("SSH 端口转发连接结束: {}", err);
+                        }
+                        if let Some(tx) = &activity_tx {
+                            let _ = tx.send(LocalPortForwardActivity::Closed {
+                                source: inbound_addr,
+                            });
                         }
                     });
                 }
@@ -1271,8 +1309,9 @@ impl SshClient for RusshClient {
     type Channel = RusshChannel;
 
     async fn connect(config: SshConnectConfig) -> Result<Self> {
+        let connect_timeout = config.timeout;
         let russh_config = Arc::new(client::Config {
-            inactivity_timeout: config.timeout.or(Some(defaults::INACTIVITY_TIMEOUT)),
+            inactivity_timeout: Some(defaults::INACTIVITY_TIMEOUT),
             keepalive_interval: config
                 .keepalive_interval
                 .or(Some(defaults::KEEPALIVE_INTERVAL)),
@@ -1280,110 +1319,119 @@ impl SshClient for RusshClient {
             ..<_>::default()
         });
 
-        // 情况1: 使用跳板机连接
-        if let Some(ref jump) = config.jump_server {
-            tracing::info!("通过跳板机 {}:{} 连接", jump.host, jump.port);
+        let connect = async {
+            // 情况1: 使用跳板机连接
+            if let Some(ref jump) = config.jump_server {
+                tracing::info!("通过跳板机 {}:{} 连接", jump.host, jump.port);
 
-            // 先连接到跳板机（可能通过代理）
-            let jump_session = if let Some(ref proxy) = config.proxy {
-                tracing::info!("通过代理 {}:{} 连接跳板机", proxy.host, proxy.port);
-                let stream = connect_via_proxy(proxy, &jump.host, jump.port).await?;
-                let handler = RusshHandler;
-                client::connect_stream(russh_config.clone(), stream, handler).await?
-            } else {
-                let addrs = (jump.host.as_str(), jump.port);
-                let handler = RusshHandler;
-                client::connect(russh_config.clone(), addrs, handler).await?
-            };
+                // 先连接到跳板机（可能通过代理）
+                let jump_session = if let Some(ref proxy) = config.proxy {
+                    tracing::info!("通过代理 {}:{} 连接跳板机", proxy.host, proxy.port);
+                    let stream = connect_via_proxy(proxy, &jump.host, jump.port).await?;
+                    let handler = RusshHandler;
+                    client::connect_stream(russh_config.clone(), stream, handler).await?
+                } else {
+                    let addrs = (jump.host.as_str(), jump.port);
+                    let handler = RusshHandler;
+                    client::connect(russh_config.clone(), addrs, handler).await?
+                };
 
-            // 认证跳板机
-            let mut jump_session = jump_session;
-            authenticate_with_strategy_for_target(
-                &mut jump_session,
-                &jump.username,
-                &jump.auth,
-                default_auth_failure_messages(),
-                KeyboardInteractiveTarget::JumpServer,
-                config.keyboard_interactive_responder.clone(),
-            )
-            .await?;
-
-            // 通过跳板机建立到目标服务器的端口转发
-            tracing::info!("通过跳板机转发到目标服务器 {}:{}", config.host, config.port);
-            let forwarded_channel = jump_session
-                .channel_open_direct_tcpip(&config.host, config.port as u32, "127.0.0.1", 0)
+                // 认证跳板机
+                let mut jump_session = jump_session;
+                authenticate_with_strategy_for_target(
+                    &mut jump_session,
+                    &jump.username,
+                    &jump.auth,
+                    default_auth_failure_messages(),
+                    KeyboardInteractiveTarget::JumpServer,
+                    config.keyboard_interactive_responder.clone(),
+                )
                 .await?;
 
-            // 使用转发通道创建SSH会话
-            let handler = RusshHandler;
-            let mut session =
-                client::connect_stream(russh_config, forwarded_channel.into_stream(), handler)
+                // 通过跳板机建立到目标服务器的端口转发
+                tracing::info!("通过跳板机转发到目标服务器 {}:{}", config.host, config.port);
+                let forwarded_channel = jump_session
+                    .channel_open_direct_tcpip(&config.host, config.port as u32, "127.0.0.1", 0)
                     .await?;
 
-            // 认证目标服务器
-            authenticate_with_strategy_for_target(
-                &mut session,
-                &config.username,
-                &config.auth,
-                default_auth_failure_messages(),
-                KeyboardInteractiveTarget::TargetServer,
-                config.keyboard_interactive_responder.clone(),
-            )
-            .await?;
+                // 使用转发通道创建SSH会话
+                let handler = RusshHandler;
+                let mut session =
+                    client::connect_stream(russh_config, forwarded_channel.into_stream(), handler)
+                        .await?;
 
-            Ok(Self {
-                session,
-                _jump_session: Some(jump_session),
-            })
-        }
-        // 情况2: 仅使用代理连接
-        else if let Some(ref proxy) = config.proxy {
-            tracing::info!(
-                "通过代理 {}:{} 连接目标服务器 {}:{}",
-                proxy.host,
-                proxy.port,
-                config.host,
-                config.port
-            );
-            let stream = connect_via_proxy(proxy, &config.host, config.port).await?;
-            let handler = RusshHandler;
-            let mut session = client::connect_stream(russh_config, stream, handler).await?;
+                // 认证目标服务器
+                authenticate_with_strategy_for_target(
+                    &mut session,
+                    &config.username,
+                    &config.auth,
+                    default_auth_failure_messages(),
+                    KeyboardInteractiveTarget::TargetServer,
+                    config.keyboard_interactive_responder.clone(),
+                )
+                .await?;
 
-            authenticate_with_strategy_for_target(
-                &mut session,
-                &config.username,
-                &config.auth,
-                default_auth_failure_messages(),
-                KeyboardInteractiveTarget::TargetServer,
-                config.keyboard_interactive_responder.clone(),
-            )
-            .await?;
+                Ok(Self {
+                    session,
+                    _jump_session: Some(jump_session),
+                })
+            }
+            // 情况2: 仅使用代理连接
+            else if let Some(ref proxy) = config.proxy {
+                tracing::info!(
+                    "通过代理 {}:{} 连接目标服务器 {}:{}",
+                    proxy.host,
+                    proxy.port,
+                    config.host,
+                    config.port
+                );
+                let stream = connect_via_proxy(proxy, &config.host, config.port).await?;
+                let handler = RusshHandler;
+                let mut session = client::connect_stream(russh_config, stream, handler).await?;
 
-            Ok(Self {
-                session,
-                _jump_session: None,
-            })
-        }
-        // 情况3: 直接连接
-        else {
-            let addrs = (config.host.as_str(), config.port);
-            let handler = RusshHandler;
-            let mut session = client::connect(russh_config, addrs, handler).await?;
+                authenticate_with_strategy_for_target(
+                    &mut session,
+                    &config.username,
+                    &config.auth,
+                    default_auth_failure_messages(),
+                    KeyboardInteractiveTarget::TargetServer,
+                    config.keyboard_interactive_responder.clone(),
+                )
+                .await?;
 
-            authenticate_with_strategy_for_target(
-                &mut session,
-                &config.username,
-                &config.auth,
-                default_auth_failure_messages(),
-                KeyboardInteractiveTarget::TargetServer,
-                config.keyboard_interactive_responder.clone(),
-            )
-            .await?;
+                Ok(Self {
+                    session,
+                    _jump_session: None,
+                })
+            }
+            // 情况3: 直接连接
+            else {
+                let addrs = (config.host.as_str(), config.port);
+                let handler = RusshHandler;
+                let mut session = client::connect(russh_config, addrs, handler).await?;
 
-            Ok(Self {
-                session,
-                _jump_session: None,
-            })
+                authenticate_with_strategy_for_target(
+                    &mut session,
+                    &config.username,
+                    &config.auth,
+                    default_auth_failure_messages(),
+                    KeyboardInteractiveTarget::TargetServer,
+                    config.keyboard_interactive_responder.clone(),
+                )
+                .await?;
+
+                Ok(Self {
+                    session,
+                    _jump_session: None,
+                })
+            }
+        };
+
+        match connect_timeout {
+            Some(duration) => tokio::time::timeout(duration, connect)
+                .await
+                .context("SSH connection timed out")?,
+            None => connect.await,
         }
     }
 

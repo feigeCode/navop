@@ -175,3 +175,12 @@ PortForwardingTab:
   event_stop_failed:
     en: "Stop failed: %{error}"
     zh-CN: "停止失败：%{error}"
+  event_connection_opened:
+    en: "Connection %{source} opened to %{target}"
+    zh-CN: "连接 %{source} 已转发到 %{target}"
+  event_connection_closed:
+    en: "Connection %{source} closed"
+    zh-CN: "连接 %{source} 已关闭"
+  event_connection_failed:
+    en: "Connection %{source} failed: %{error}"
+    zh-CN: "连接 %{source} 失败：%{error}"

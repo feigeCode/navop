@@ -10,11 +10,11 @@ use one_core::gpui_tokio::Tokio;
 use one_core::storage::{ActiveConnections, PortForwardingKind, StoredConnection};
 use one_core::tab_container::{TabContent, TabContentEvent};
 use port_forwarding::{
-    DynamicForwardingRequest, LocalForwardingRequest, PortForwardingRuntime,
-    build_dynamic_forwarding_request, build_local_forwarding_request,
+    DynamicForwardingRequest, LocalForwardingRequest, LocalPortForwardActivity,
+    PortForwardingRuntime, build_dynamic_forwarding_request, build_local_forwarding_request,
 };
 use rust_i18n::t;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::PortForwardingTabConfig;
 use crate::tab_render::render_tab;
@@ -24,7 +24,6 @@ enum StartRequest {
     Local(LocalForwardingRequest),
     Dynamic(DynamicForwardingRequest),
 }
-
 pub struct PortForwardingTab {
     pub(crate) connection_id: i64,
     pub(crate) name: String,
@@ -67,13 +66,20 @@ impl PortForwardingTab {
     }
 
     fn start_forwarding(&mut self, cx: &mut Context<Self>) {
-        let request = match build_request(&self.connection, &self.ssh_connection, self.kind) {
+        let (activity_tx, activity_rx) = mpsc::unbounded_channel();
+        let request = match build_request(
+            &self.connection,
+            &self.ssh_connection,
+            self.kind,
+            activity_tx,
+        ) {
             Ok(request) => request,
             Err(error) => {
                 self.finish_start(Err(error), cx);
                 return;
             }
         };
+        self.listen_for_activity(activity_rx, cx);
         self.start_in_flight = true;
         let runtime = Arc::clone(&self.runtime);
         let connection_id = self.connection_id;
@@ -233,10 +239,14 @@ fn build_request(
     connection: &StoredConnection,
     ssh: &StoredConnection,
     kind: PortForwardingKind,
+    activity_tx: mpsc::UnboundedSender<LocalPortForwardActivity>,
 ) -> anyhow::Result<StartRequest> {
     match kind {
         PortForwardingKind::Local => {
-            build_local_forwarding_request(connection, ssh).map(StartRequest::Local)
+            build_local_forwarding_request(connection, ssh).map(|mut request| {
+                request.activity_tx = Some(activity_tx);
+                StartRequest::Local(request)
+            })
         }
         PortForwardingKind::Dynamic => {
             build_dynamic_forwarding_request(connection, ssh).map(StartRequest::Dynamic)

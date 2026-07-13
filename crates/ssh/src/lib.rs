@@ -10,9 +10,9 @@ pub use session_manager::SshSessionManager;
 pub use ssh::{
     AuthFailureMessages, ChannelEvent, JumpServerConnectConfig, KeyboardInteractivePrompt,
     KeyboardInteractiveRequest, KeyboardInteractiveResponder, KeyboardInteractiveTarget,
-    LocalPortForwardConfig, LocalPortForwardTunnel, ProxyConnectConfig, ProxyType, PtyConfig,
-    RusshChannel, RusshClient, ShellIntegrationSetup, SshAuth, SshChannel, SshClient,
-    SshConnectConfig, authenticate_session, authenticate_session_with_fallbacks,
+    LocalPortForwardActivity, LocalPortForwardConfig, LocalPortForwardTunnel, ProxyConnectConfig,
+    ProxyType, PtyConfig, RusshChannel, RusshClient, ShellIntegrationSetup, SshAuth, SshChannel,
+    SshClient, SshConnectConfig, authenticate_session, authenticate_session_with_fallbacks,
     authenticate_with_strategy, connect_via_proxy, defaults, expand_auto_publickey_auth,
     start_local_port_forward, start_local_port_forward_with_config,
 };
