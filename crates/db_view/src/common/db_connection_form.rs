@@ -5,6 +5,7 @@ use std::time::Instant;
 use connection_form::team::{
     TeamSelectItem, create_team_select, refresh_team_options, refresh_teams_tooltip,
     replace_team_options, resolve_team_assignment, selected_team_id, team_label,
+    team_management_enabled,
 };
 use db::plugin_manifest::FormVisibilityRule;
 use db::{
@@ -2422,26 +2423,28 @@ impl DbConnectionForm {
                         .label_justify_end()
                         .child(Select::new(&self.workspace_select).w_full()),
                 )
-                .child(
-                    field()
-                        .label(team_label())
-                        .items_center()
-                        .label_justify_end()
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .child(Select::new(&self.team_select).w_full())
-                                .child(
-                                    Button::new("sync-db-teams")
-                                        .icon(IconName::Refresh)
-                                        .ghost()
-                                        .tooltip(refresh_teams_tooltip())
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.request_team_sync(window, cx);
-                                        })),
-                                ),
-                        ),
-                )
+                .when(team_management_enabled(cx), |form| {
+                    form.child(
+                        field()
+                            .label(team_label())
+                            .items_center()
+                            .label_justify_end()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(Select::new(&self.team_select).w_full())
+                                    .child(
+                                        Button::new("sync-db-teams")
+                                            .icon(IconName::Refresh)
+                                            .ghost()
+                                            .tooltip(refresh_teams_tooltip())
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.request_team_sync(window, cx);
+                                            })),
+                                    ),
+                            ),
+                    )
+                })
                 .child(
                     field()
                         .label(t!("ConnectionForm.cloud_sync").to_string())

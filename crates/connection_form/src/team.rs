@@ -5,6 +5,7 @@ use one_core::cloud_sync::{
     get_cached_team_options,
 };
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
+use one_core::license::{Feature, is_feature_enabled};
 use rust_i18n::t;
 
 #[derive(Clone, Default, PartialEq)]
@@ -61,6 +62,10 @@ pub fn team_select_items(teams: &[TeamOption]) -> Vec<TeamSelectItem> {
     std::iter::once(TeamSelectItem::personal())
         .chain(teams.iter().map(TeamSelectItem::from_team))
         .collect()
+}
+
+pub fn team_management_enabled(cx: &App) -> bool {
+    is_feature_enabled(Feature::TeamManagement, cx)
 }
 
 pub fn create_team_select<T: 'static>(
@@ -338,5 +343,44 @@ mod tests {
                 })
                 .expect("test window updates");
         });
+    }
+
+    #[test]
+    fn every_team_field_uses_the_shared_feature_gate() {
+        for (name, source) in [
+            (
+                "database",
+                include_str!("../../db_view/src/common/db_connection_form.rs"),
+            ),
+            (
+                "mongodb",
+                include_str!("../../mongodb_view/src/mongo_form_window.rs"),
+            ),
+            (
+                "redis",
+                include_str!("../../redis_view/src/redis_form_window.rs"),
+            ),
+            (
+                "ssh",
+                include_str!("../../terminal_view/src/ssh_form_window.rs"),
+            ),
+            (
+                "serial",
+                include_str!("../../terminal_view/src/serial_form_window.rs"),
+            ),
+            (
+                "port forwarding",
+                include_str!("../../port_forwarding_view/src/view.rs"),
+            ),
+            (
+                "remote desktop",
+                include_str!("../../remote_desktop_view/src/remote_desktop_form/view.rs"),
+            ),
+        ] {
+            assert!(
+                source.contains("team_management_enabled(cx)"),
+                "{name} team field must use the shared feature gate"
+            );
+        }
     }
 }

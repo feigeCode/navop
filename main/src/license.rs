@@ -7,7 +7,7 @@ use std::sync::Arc;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use gpui::{App, Context, ParentElement, Styled, Window, px};
 use gpui_component::{ActiveTheme, Icon, IconName, WindowExt, dialog::DialogButtonProps, v_flex};
-use one_core::license::{Feature, LicenseService, LocalLicenseStorage};
+use one_core::license::{Feature, GlobalLicenseService, LicenseService, LocalLicenseStorage};
 use rust_i18n::t;
 
 // ============================================================================
@@ -15,12 +15,6 @@ use rust_i18n::t;
 // ============================================================================
 
 const OFFLINE_LICENSE_PUBLIC_KEY_BASE64: &str = "";
-
-/// 全局 License 服务包装器
-#[derive(Clone)]
-pub struct GlobalLicenseService(pub Arc<LicenseService>);
-
-impl gpui::Global for GlobalLicenseService {}
 
 /// 初始化全局 License 服务
 ///
@@ -69,11 +63,7 @@ pub fn offline_license_public_key() -> Result<[u8; 32], String> {
 
 /// 便捷方法：检查功能是否已启用
 pub fn is_feature_enabled(feature: Feature, cx: &App) -> bool {
-    if let Some(global) = cx.try_global::<GlobalLicenseService>() {
-        global.0.is_feature_enabled(feature)
-    } else {
-        false
-    }
+    one_core::license::is_feature_enabled(feature, cx)
 }
 
 // ============================================================================

@@ -32,6 +32,10 @@ mod models;
 mod service;
 mod storage;
 
+use std::sync::Arc;
+
+use gpui::App;
+
 pub use error::LicenseError;
 pub use models::{
     Feature, LicenseInfo, OfflineLicenseDocument, OfflineLicensePayload, PlanTier,
@@ -39,3 +43,77 @@ pub use models::{
 };
 pub use service::LicenseService;
 pub use storage::{LicenseStorage, LocalLicenseStorage};
+
+#[derive(Clone)]
+pub struct GlobalLicenseService(pub Arc<LicenseService>);
+
+impl gpui::Global for GlobalLicenseService {}
+
+pub fn global_license_service(cx: &App) -> Option<Arc<LicenseService>> {
+    cx.try_global::<GlobalLicenseService>()
+        .map(|global| global.0.clone())
+}
+
+pub fn is_feature_enabled(feature: Feature, cx: &App) -> bool {
+    global_license_service(cx).is_some_and(|service| service.is_feature_enabled(feature))
+}
+
+#[cfg(test)]
+mod global_tests {
+    use std::sync::Arc;
+
+    use gpui::{AppContext, TestAppContext};
+
+    use super::{
+        Feature, GlobalLicenseService, LicenseError, LicenseInfo, LicenseService, LicenseStorage,
+        SubscriptionInfo, is_feature_enabled,
+    };
+
+    struct MemoryStorage;
+
+    impl LicenseStorage for MemoryStorage {
+        fn name(&self) -> &'static str {
+            "memory"
+        }
+
+        fn save(&self, _: &LicenseInfo) -> Result<(), LicenseError> {
+            Ok(())
+        }
+
+        fn load(&self) -> Option<LicenseInfo> {
+            None
+        }
+
+        fn delete(&self) -> Result<(), LicenseError> {
+            Ok(())
+        }
+
+        fn exists(&self) -> bool {
+            false
+        }
+    }
+
+    #[gpui::test]
+    fn global_feature_gate_tracks_the_current_license(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            assert!(!is_feature_enabled(Feature::TeamManagement, cx));
+
+            let service = Arc::new(LicenseService::new(Arc::new(MemoryStorage)));
+            service
+                .update_from_subscription(
+                    "user-1".to_string(),
+                    Some(SubscriptionInfo {
+                        plan: "pro".to_string(),
+                        status: "active".to_string(),
+                        expires_at: None,
+                    }),
+                )
+                .expect("pro subscription is accepted");
+            cx.set_global(GlobalLicenseService(service.clone()));
+
+            assert!(is_feature_enabled(Feature::TeamManagement, cx));
+            service.set_free();
+            assert!(!is_feature_enabled(Feature::TeamManagement, cx));
+        });
+    }
+}
