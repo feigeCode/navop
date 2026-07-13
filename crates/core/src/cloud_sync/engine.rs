@@ -731,12 +731,14 @@ mod tests {
     };
     use crate::cloud_sync::models::{CloudSyncData, CloudUserConfig, Team, TeamMember, TeamRole};
     use crate::cloud_sync::{CloudAccountScope, CloudSyncService, SyncEngine, TeamKeyLoadStatus};
-    use crate::crypto;
     use crate::storage::connection::SqliteConnection;
     use crate::storage::migration::run_migrations;
     use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
     use async_trait::async_trait;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, RwLock};
+
+    static NEXT_TEST_DB_ID: AtomicU64 = AtomicU64::new(0);
 
     fn team() -> Team {
         Team {
@@ -767,9 +769,10 @@ mod tests {
 
     fn test_storage() -> (StorageManager, TeamKeyCacheRepository) {
         let db_path = std::env::temp_dir().join(format!(
-            "onetcli-refresh-team-key-cache-{}-{}.db",
+            "onetcli-refresh-team-key-cache-{}-{}-{}.db",
             std::process::id(),
-            unique_suffix()
+            unique_suffix(),
+            NEXT_TEST_DB_ID.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_file(&db_path);
         let conn = SqliteConnection::open_with_pool_size(&db_path, 1).expect("open sqlite");
