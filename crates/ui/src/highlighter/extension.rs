@@ -24,7 +24,7 @@ use gpui::SharedString;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::highlighter::LanguageRegistry;
+use crate::highlighter::{LanguageRegistry, WasmLanguageQueries};
 
 /// 单个语言扩展的元数据,对应 `manifest.json`。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -119,9 +119,11 @@ impl InstalledExtension {
             self.wasm_bytes.clone(),
             &self.manifest.file_extensions,
             injections_langs,
-            &self.highlights,
-            &self.injections,
-            &self.locals,
+            WasmLanguageQueries {
+                highlights: &self.highlights,
+                injections: &self.injections,
+                locals: &self.locals,
+            },
         )
     }
 

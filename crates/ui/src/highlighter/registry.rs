@@ -515,6 +515,17 @@ struct LazyWasmExtension {
     source_path: PathBuf,
 }
 
+/// Tree-sitter queries used to configure a WebAssembly language parser.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WasmLanguageQueries<'a> {
+    /// Syntax highlighting query.
+    pub highlights: &'a str,
+    /// Language injection query.
+    pub injections: &'a str,
+    /// Local-variable scope query.
+    pub locals: &'a str,
+}
+
 impl LanguageRegistry {
     fn with_default_languages() -> Self {
         Self {
@@ -568,9 +579,7 @@ impl LanguageRegistry {
         wasm_bytes: impl Into<Arc<[u8]>>,
         file_extensions: &[String],
         injection_languages: Vec<SharedString>,
-        highlights: &str,
-        injections: &str,
-        locals: &str,
+        queries: WasmLanguageQueries<'_>,
     ) -> anyhow::Result<()> {
         let bytes: Arc<[u8]> = wasm_bytes.into();
         let language = wasm_store::with_registry_store(|store| store.load_language(name, &bytes))
@@ -581,9 +590,9 @@ impl LanguageRegistry {
             language,
             bytes,
             injection_languages,
-            highlights,
-            injections,
-            locals,
+            queries.highlights,
+            queries.injections,
+            queries.locals,
         );
 
         self.languages
@@ -724,7 +733,7 @@ fn builtin_language_config(name: &str) -> Option<LanguageConfig> {
 
 #[cfg(test)]
 mod tests {
-    use crate::highlighter::{LanguageConfig, LanguageRegistry};
+    use crate::highlighter::{LanguageConfig, LanguageRegistry, WasmLanguageQueries};
 
     #[test]
     fn test_registry() {
@@ -817,8 +826,13 @@ mod tests {
     fn register_wasm_rejects_invalid_bytes() {
         let registry = LanguageRegistry::with_default_languages();
         let invalid = vec![0u8, 1, 2, 3, 4];
-        let result =
-            registry.register_wasm("__test_invalid_wasm__", invalid, &[], vec![], "", "", "");
+        let result = registry.register_wasm(
+            "__test_invalid_wasm__",
+            invalid,
+            &[],
+            vec![],
+            WasmLanguageQueries::default(),
+        );
 
         assert!(result.is_err(), "expected error for non-wasm bytes");
         assert!(
