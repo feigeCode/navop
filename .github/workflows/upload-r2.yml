@@ -31,11 +31,11 @@ jobs:
       - name: Resolve R2 public base URL
         id: r2_config
         env:
-          ONETCLI_PUBLIC_BASE_URL: ${{ vars.ONETCLI_PUBLIC_BASE_URL }}
+          NAVOP_PUBLIC_BASE_URL: ${{ vars.NAVOP_PUBLIC_BASE_URL }}
         run: |
-          base_url="${ONETCLI_PUBLIC_BASE_URL%/}"
+          base_url="${NAVOP_PUBLIC_BASE_URL%/}"
           if [ -z "$base_url" ]; then
-            echo "::warning::ONETCLI_PUBLIC_BASE_URL repo variable is not set; skipping R2 upload. GitHub Release remains the fallback source."
+            echo "::warning::NAVOP_PUBLIC_BASE_URL repo variable is not set; skipping R2 upload. GitHub Release remains the fallback source."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -161,14 +161,14 @@ jobs:
       - name: Generate R2 update manifest
         if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
         env:
-          ONETCLI_PUBLIC_BASE_URL: ${{ steps.r2_config.outputs.base_url }}
+          NAVOP_PUBLIC_BASE_URL: ${{ steps.r2_config.outputs.base_url }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           node <<'NODE'
           const fs = require("fs");
 
-          const baseUrl = process.env.ONETCLI_PUBLIC_BASE_URL.replace(/\/+$/, "");
+          const baseUrl = process.env.NAVOP_PUBLIC_BASE_URL.replace(/\/+$/, "");
           const releaseTag = process.env.RELEASE_TAG;
           const version = process.env.RELEASE_VERSION;
           const repository = process.env.GITHUB_REPOSITORY;

@@ -4,9 +4,10 @@ fn main() {
     for key in [
         "SUPABASE_URL",
         "SUPABASE_ANON_KEY",
-        "ONETCLI_PUBLIC_BASE_URL",
-        "ONETCLI_UPDATE_URL",
-        "ONETCLI_UPDATE_DOWNLOAD_URL",
+        "NAVOP_PUBLIC_BASE_URL",
+        "NAVOP_WEBSITE_BASE_URL",
+        "NAVOP_UPDATE_URL",
+        "NAVOP_UPDATE_DOWNLOAD_URL",
     ] {
         println!("cargo:rerun-if-env-changed={key}");
         if let Ok(val) = std::env::var(key)

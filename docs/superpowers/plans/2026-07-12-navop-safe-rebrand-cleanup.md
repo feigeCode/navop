@@ -202,7 +202,7 @@ Describe Navop as the current product. Change the built-in provider display refe
 
 - [x] **Step 2: Clarify legacy environment configuration**
 
-Document `ONETCLI_UPDATE_URL` as the current legacy environment variable accepted by the implementation, and state that the identifier is retained for compatibility rather than presenting it as the product name.
+Document `NAVOP_UPDATE_URL` as the current legacy environment variable accepted by the implementation, and state that the identifier is retained for compatibility rather than presenting it as the product name.
 
 - [x] **Step 3: Remove the obsolete icon ignore rule**
 

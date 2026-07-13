@@ -165,7 +165,7 @@ Text input based on Rope (`ropey` crate) with:
 
 - **Environment files**: `.env.local` (priority) → `.env` (fallback), loaded from CWD + exe directory + macOS Resources directory
 - **Build-time config**: `SUPABASE_URL`, `SUPABASE_ANON_KEY` can be baked in at compile time, overridden at runtime
-- **Update URL**: the implementation currently accepts the legacy `ONETCLI_UPDATE_URL` env var for compatibility
+- **Update URL**: the implementation currently accepts the legacy `NAVOP_UPDATE_URL` env var for compatibility
 - **Log level**: `RUST_LOG` env var (default: `info`)
 
 ## Language Convention
