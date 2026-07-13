@@ -27,7 +27,7 @@ use one_core::cloud_sync::{
     CloudApiClient, CloudSyncService, ConflictResolution, SyncConflict, SyncEngine, UserInfo,
     can_edit_connection, get_cached_team_options,
 };
-use one_core::config::{public_base_url, team_management_url_template};
+use one_core::config::{team_management_url_template, website_base_url};
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use one_core::crypto;
 use one_core::key_storage;
@@ -2476,7 +2476,7 @@ impl HomePage {
         let url = build_team_management_url(template, &access_token, &refresh_token);
         Ok(resolve_team_management_url(
             &url,
-            public_base_url().as_deref(),
+            website_base_url().as_deref(),
         ))
     }
 

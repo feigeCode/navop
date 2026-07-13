@@ -48,6 +48,11 @@ pub fn public_base_url() -> Option<String> {
     public_base_url_from_parts(runtime.as_deref(), option_env!("ONETCLI_PUBLIC_BASE_URL"))
 }
 
+pub fn website_base_url() -> Option<String> {
+    let runtime = std::env::var("NAVOP_PUBLIC_BASE_URL").ok();
+    public_base_url_from_parts(runtime.as_deref(), option_env!("NAVOP_PUBLIC_BASE_URL"))
+}
+
 pub fn update_url_from_public_base(base_url: &str) -> String {
     format!(
         "{}/updates/latest.json",
