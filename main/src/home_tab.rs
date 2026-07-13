@@ -541,6 +541,27 @@ mod external_driver_form_tests {
     }
 
     #[test]
+    fn successful_cloud_sync_announces_team_cache_update() {
+        let source = include_str!("home_tab.rs");
+        let trigger_sync = source
+            .rsplit("fn trigger_sync(")
+            .next()
+            .expect("trigger_sync exists")
+            .split("fn log_sync_decrypt_health")
+            .next()
+            .expect("trigger_sync has an end marker");
+
+        let success = trigger_sync
+            .split("Ok(stats) =>")
+            .nth(1)
+            .expect("sync success branch exists")
+            .split("Err(e) =>")
+            .next()
+            .expect("sync success branch has an end marker");
+        assert!(success.contains("ConnectionDataEvent::TeamCacheUpdated"));
+    }
+
+    #[test]
     fn home_render_uses_cached_external_driver_registry() {
         let source = include_str!("home_tab.rs");
         let quick_open = include_str!("home/home_connection_quick_open.rs");
@@ -757,6 +778,7 @@ impl HomePage {
                     ConnectionDataEvent::CloudSyncRequested => {
                         this.trigger_sync(cx);
                     }
+                    ConnectionDataEvent::TeamCacheUpdated => {}
                 },
             )
             .detach();
@@ -987,6 +1009,7 @@ impl HomePage {
 
                         // 刷新首页本地数据，确保部分失败时界面仍与已落库数据一致
                         this.refresh_local_home_data(cx);
+                        emit_connection_event(ConnectionDataEvent::TeamCacheUpdated, cx);
                     }
                     Err(e) => {
                         tracing::error!("同步失败: {}", e);

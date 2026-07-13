@@ -1857,11 +1857,22 @@ fn refresh_team_key_cache_from_settings(window: &mut Window, cx: &mut App) {
     window
         .spawn(cx, async move |cx| {
             let result = engine.refresh_team_key_cache().await;
-            let message = result
-                .map(team_key_refresh_success_message)
-                .unwrap_or_else(|error| error.to_string());
+            let (message, completed_event) = match result {
+                Ok(count) => (
+                    team_key_refresh_success_message(count),
+                    Some(ConnectionDataEvent::TeamCacheUpdated),
+                ),
+                Err(error) => (error.to_string(), None),
+            };
             if let Err(error) = cx.update(|window, cx: &mut App| {
                 window.push_notification(message, cx);
+                if let Some(event) = completed_event
+                    && let Some(notifier) = get_notifier(cx)
+                {
+                    notifier.update(cx, |_, cx| {
+                        cx.emit(event);
+                    });
+                }
                 window.refresh();
             }) {
                 tracing::warn!("团队列表刷新完成后更新窗口失败: {error}");
@@ -3572,6 +3583,43 @@ mod tests {
             "Team list refreshed. 2 teams cached.",
             team_key_refresh_success_message(2)
         );
+    }
+
+    #[test]
+    fn team_key_cache_refresh_only_announces_update_after_success() {
+        let source = include_str!("setting_tab.rs");
+        let refresh = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source exists")
+            .rsplit("fn refresh_team_key_cache_from_settings(")
+            .next()
+            .expect("team key cache refresh exists")
+            .split("fn initialize_team_key_from_settings(")
+            .next()
+            .expect("team key cache refresh has an end marker");
+
+        let result_match = refresh
+            .split("match result")
+            .nth(1)
+            .expect("refresh result is matched");
+        let success = result_match
+            .split("Ok(")
+            .nth(1)
+            .expect("refresh success branch exists")
+            .split("Err(")
+            .next()
+            .expect("refresh success branch has an end marker");
+        assert!(success.contains("ConnectionDataEvent::TeamCacheUpdated"));
+
+        let failure = result_match
+            .split("Err(")
+            .nth(1)
+            .expect("refresh failure branch exists")
+            .split("};")
+            .next()
+            .expect("refresh failure branch has an end marker");
+        assert!(!failure.contains("ConnectionDataEvent::TeamCacheUpdated"));
     }
 
     #[test]

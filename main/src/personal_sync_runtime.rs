@@ -586,7 +586,9 @@ pub(crate) fn personal_sync_event_from_connection_event(
         | ConnectionDataEvent::WorkspaceDeleted { cloud_id: None, .. } => {
             Some(PersonalSyncEvent::FullScan)
         }
-        ConnectionDataEvent::SchemaChanged { .. } | ConnectionDataEvent::CloudSyncRequested => None,
+        ConnectionDataEvent::SchemaChanged { .. }
+        | ConnectionDataEvent::CloudSyncRequested
+        | ConnectionDataEvent::TeamCacheUpdated => None,
     }
 }
 

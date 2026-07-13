@@ -150,6 +150,10 @@ fn personal_sync_ignores_non_data_change_events() {
         None,
         personal_sync_event_from_connection_event(&ConnectionDataEvent::CloudSyncRequested)
     );
+    assert_eq!(
+        None,
+        personal_sync_event_from_connection_event(&ConnectionDataEvent::TeamCacheUpdated)
+    );
 }
 
 #[test]

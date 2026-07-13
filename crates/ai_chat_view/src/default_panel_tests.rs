@@ -129,6 +129,9 @@ fn resource_catalog_refreshes_only_for_connection_list_changes() {
         &ConnectionDataEvent::CloudSyncRequested,
     ));
     assert!(!should_refresh_resource_catalog(
+        &ConnectionDataEvent::TeamCacheUpdated,
+    ));
+    assert!(!should_refresh_resource_catalog(
         &ConnectionDataEvent::WorkspaceCreated { workspace_id: 1 },
     ));
 }

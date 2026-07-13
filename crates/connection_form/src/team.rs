@@ -4,7 +4,7 @@ use one_core::cloud_sync::{
     GlobalCloudUser, TeamKeyCacheStatus, TeamKeyError, TeamOption, ensure_team_key_ready_for_save,
     get_cached_team_options,
 };
-use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event};
+use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use rust_i18n::t;
 
 #[derive(Clone, Default, PartialEq)]
@@ -71,13 +71,33 @@ pub fn create_team_select<T: 'static>(
 ) -> Entity<SelectState<Vec<TeamSelectItem>>> {
     let items = team_select_items(teams);
     let selected = selected_team_id.map(str::to_string);
-    cx.new(|cx| {
+    let select = cx.new(|cx| {
         let mut state = SelectState::new(items, Some(Default::default()), window, cx);
         if selected.is_some() {
             state.set_selected_value(&selected, window, cx);
         }
         state
-    })
+    });
+    if let Some(notifier) = get_notifier(cx) {
+        let select_for_update = select.clone();
+        cx.subscribe_in(
+            &notifier,
+            window,
+            move |_form, _, event: &ConnectionDataEvent, window, cx| {
+                if matches!(event, ConnectionDataEvent::TeamCacheUpdated) {
+                    replace_team_options(
+                        &select_for_update,
+                        &get_cached_team_options(cx),
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+    }
+    select
 }
 
 pub fn replace_team_options<T: 'static>(
@@ -95,12 +115,11 @@ pub fn replace_team_options<T: 'static>(
 }
 
 pub fn refresh_team_options<T: 'static>(
-    select: &Entity<SelectState<Vec<TeamSelectItem>>>,
-    window: &mut Window,
+    _select: &Entity<SelectState<Vec<TeamSelectItem>>>,
+    _window: &mut Window,
     cx: &mut Context<T>,
 ) {
     emit_connection_event(ConnectionDataEvent::CloudSyncRequested, cx);
-    replace_team_options(select, &get_cached_team_options(cx), window, cx);
 }
 
 pub fn selected_team_id(
@@ -171,9 +190,25 @@ pub fn refresh_teams_tooltip() -> String {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{AppContext, Context, Entity, IntoElement, Render, TestAppContext, Window, div};
+    use gpui_component::{Root, Theme, select::SelectState};
     use one_core::cloud_sync::{TeamKeyCacheStatus, TeamOption};
+    use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 
-    use super::{TeamAssignment, TeamSelectItem, apply_team_assignment, team_select_items};
+    use super::{
+        TeamAssignment, TeamSelectItem, apply_team_assignment, create_team_select,
+        team_select_items,
+    };
+
+    struct TeamSelectTestRoot {
+        select: Entity<SelectState<Vec<TeamSelectItem>>>,
+    }
+
+    impl Render for TeamSelectTestRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
 
     fn team(name: &str, key_status: TeamKeyCacheStatus) -> TeamOption {
         TeamOption {
@@ -237,5 +272,71 @@ mod tests {
 
         assert_eq!(None, assignment.team_id);
         assert_eq!(Some("owner-1"), assignment.owner_id.as_deref());
+    }
+
+    #[test]
+    fn refresh_waits_for_team_cache_updated_before_replacing_options() {
+        let source = include_str!("team.rs");
+        let refresh = source
+            .split("pub fn refresh_team_options")
+            .nth(1)
+            .expect("refresh_team_options exists")
+            .split("pub fn selected_team_id")
+            .next()
+            .expect("refresh_team_options has an end marker");
+        let create = source
+            .split("pub fn create_team_select")
+            .nth(1)
+            .expect("create_team_select exists")
+            .split("pub fn replace_team_options")
+            .next()
+            .expect("create_team_select has an end marker");
+
+        assert!(refresh.contains("ConnectionDataEvent::CloudSyncRequested"));
+        assert!(!refresh.contains("replace_team_options("));
+        assert!(!refresh.contains("get_cached_team_options("));
+        assert!(create.contains("subscribe_in("));
+        assert!(create.contains("ConnectionDataEvent::TeamCacheUpdated"));
+        assert!(create.contains("get_cached_team_options(cx)"));
+    }
+
+    #[gpui::test]
+    fn team_cache_updated_reloads_open_team_select(cx: &mut TestAppContext) {
+        let initial_team = team("Alpha", TeamKeyCacheStatus::Missing);
+        let (window, form) = cx.update(|cx| {
+            cx.set_global(Theme::default());
+            one_core::connection_notifier::init(cx);
+            let mut form = None;
+            let window = cx
+                .open_window(Default::default(), |window, cx| {
+                    let entity = cx.new(|cx| TeamSelectTestRoot {
+                        select: create_team_select(
+                            std::slice::from_ref(&initial_team),
+                            Some(initial_team.id.as_str()),
+                            window,
+                            cx,
+                        ),
+                    });
+                    form = Some(entity.clone());
+                    cx.new(|cx| Root::new(entity, window, cx))
+                })
+                .expect("test window opens");
+            (window, form.expect("test form created"))
+        });
+
+        cx.update(|cx| {
+            let notifier = get_notifier(cx).expect("connection notifier initialized");
+            notifier.update(cx, |_, cx| {
+                cx.emit(ConnectionDataEvent::TeamCacheUpdated);
+            });
+        });
+
+        cx.update(|cx| {
+            window
+                .update(cx, |_, _, cx| {
+                    assert_eq!(None, form.read(cx).select.read(cx).selected_value());
+                })
+                .expect("test window updates");
+        });
     }
 }

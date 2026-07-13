@@ -918,7 +918,7 @@ impl DbTreeView {
                     }
                 }
             }
-            ConnectionDataEvent::CloudSyncRequested => {}
+            ConnectionDataEvent::CloudSyncRequested | ConnectionDataEvent::TeamCacheUpdated => {}
         }
     }
 

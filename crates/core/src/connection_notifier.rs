@@ -30,6 +30,8 @@ pub enum ConnectionDataEvent {
     },
     /// 请求执行一次云同步（由表单等非首页入口触发）
     CloudSyncRequested,
+    /// 团队缓存已刷新，打开的表单应重新读取团队选项
+    TeamCacheUpdated,
 }
 
 /// 全局连接数据通知器
