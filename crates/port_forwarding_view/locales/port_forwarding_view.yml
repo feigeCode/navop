@@ -83,3 +83,104 @@ PortForwarding:
   validation_number:
     en: "%{field} must be a valid port number."
     zh-CN: "%{field} 必须是有效端口。"
+
+PortForwardingTab:
+  local_title:
+    en: Local Port Forwarding
+    zh-CN: 本地端口转发
+  dynamic_title:
+    en: Dynamic SOCKS Forwarding
+    zh-CN: 动态 SOCKS 转发
+  route:
+    en: FORWARDING ROUTE
+    zh-CN: 转发链路
+  local_endpoint:
+    en: Local Listener
+    zh-CN: 本机监听
+  ssh_tunnel:
+    en: SSH Tunnel
+    zh-CN: SSH 隧道
+  remote_target:
+    en: Remote Target
+    zh-CN: 远端目标
+  dynamic_target:
+    en: Dynamic Target
+    zh-CN: 动态目标
+  ssh_server:
+    en: SSH SERVER
+    zh-CN: SSH 服务器
+  bind_address:
+    en: BIND ADDRESS
+    zh-CN: 监听地址
+  uptime:
+    en: UPTIME
+    zh-CN: 运行时间
+  status:
+    en: STATUS
+    zh-CN: 状态
+  activity:
+    en: Activity
+    zh-CN: 活动记录
+  starting:
+    en: Starting
+    zh-CN: 正在启动
+  running:
+    en: Running
+    zh-CN: 运行中
+  stopping:
+    en: Stopping
+    zh-CN: 正在停止
+  failed:
+    en: Failed
+    zh-CN: 失败
+  stopped:
+    en: Stopped
+    zh-CN: 已停止
+  stop:
+    en: Stop Forwarding
+    zh-CN: 停止转发
+  retry:
+    en: Retry
+    zh-CN: 重新尝试
+  close_title:
+    en: Stop port forwarding?
+    zh-CN: 停止端口转发？
+  close_warning:
+    en: Connections still using this port will be interrupted immediately.
+    zh-CN: 仍在使用该端口的连接将立即中断。
+  stop_and_close:
+    en: Stop and Close
+    zh-CN: 停止转发并关闭
+  event_starting:
+    en: Starting port forwarding
+    zh-CN: 开始启动端口转发
+  event_started:
+    en: Forwarding started on %{addr}
+    zh-CN: 转发已启动，监听 %{addr}
+  event_start_failed:
+    en: "Start failed: %{error}"
+    zh-CN: "启动失败：%{error}"
+  event_start_finished:
+    en: "Start finished: %{error}"
+    zh-CN: "启动已结束：%{error}"
+  event_retry:
+    en: Retrying port forwarding
+    zh-CN: 重新尝试启动转发
+  event_stopping:
+    en: Stopping port forwarding
+    zh-CN: 正在停止转发
+  event_stopped:
+    en: Port forwarding stopped
+    zh-CN: 转发已停止
+  event_stop_failed:
+    en: "Stop failed: %{error}"
+    zh-CN: "停止失败：%{error}"
+  event_connection_opened:
+    en: "Connection %{source} opened to %{target}"
+    zh-CN: "连接 %{source} 已转发到 %{target}"
+  event_connection_closed:
+    en: "Connection %{source} closed"
+    zh-CN: "连接 %{source} 已关闭"
+  event_connection_failed:
+    en: "Connection %{source} failed: %{error}"
+    zh-CN: "连接 %{source} 失败：%{error}"

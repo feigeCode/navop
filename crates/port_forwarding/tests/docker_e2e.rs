@@ -9,6 +9,7 @@ use one_core::storage::{
 use port_forwarding::{
     PortForwardingRuntime, build_dynamic_forwarding_request, build_local_forwarding_request,
 };
+use ssh::LocalPortForwardActivity;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -34,13 +35,32 @@ async fn docker_local_and_dynamic_forwarding_roundtrip() -> Result<()> {
     let ssh_connection = ssh_connection(ssh_port, ssh_user, ssh_password);
     let mut runtime = PortForwardingRuntime::new();
 
-    let local_addr =
-        start_local_forwarding(&mut runtime, &ssh_connection, &target_host, target_port).await?;
+    let (activity_tx, mut activity_rx) = tokio::sync::mpsc::unbounded_channel();
+    let local_addr = start_local_forwarding(
+        &mut runtime,
+        &ssh_connection,
+        &target_host,
+        target_port,
+        activity_tx,
+    )
+    .await?;
+    tokio::time::sleep(Duration::from_secs(SSH_CONNECT_TIMEOUT_SECS + 1)).await;
     assert_http_response(local_addr, "Welcome to nginx!").await?;
+    assert!(matches!(
+        activity_rx.recv().await,
+        Some(LocalPortForwardActivity::Connected { .. })
+    ));
 
     let dynamic_addr = start_dynamic_forwarding(&mut runtime, &ssh_connection).await?;
     assert_socks_http_response(dynamic_addr, &target_host, target_port, "Welcome to nginx!")
         .await?;
+
+    assert!(runtime.stop(LOCAL_FORWARDING_ID).await?);
+    assert!(runtime.stop(DYNAMIC_FORWARDING_ID).await?);
+    assert!(!runtime.is_running(LOCAL_FORWARDING_ID));
+    assert!(!runtime.is_running(DYNAMIC_FORWARDING_ID));
+    assert_listener_closed(local_addr).await?;
+    assert_listener_closed(dynamic_addr).await?;
 
     Ok(())
 }
@@ -50,6 +70,7 @@ async fn start_local_forwarding(
     ssh_connection: &StoredConnection,
     target_host: &str,
     target_port: u16,
+    activity_tx: tokio::sync::mpsc::UnboundedSender<LocalPortForwardActivity>,
 ) -> Result<SocketAddr> {
     let forwarding = port_forwarding_connection(
         LOCAL_FORWARDING_ID,
@@ -57,7 +78,8 @@ async fn start_local_forwarding(
         target_host.to_string(),
         target_port,
     );
-    let request = build_local_forwarding_request(&forwarding, ssh_connection)?;
+    let mut request = build_local_forwarding_request(&forwarding, ssh_connection)?;
+    request.activity_tx = Some(activity_tx);
     runtime.start_local(LOCAL_FORWARDING_ID, request).await
 }
 
@@ -186,6 +208,16 @@ async fn tcp_connect(addr: SocketAddr) -> Result<TcpStream> {
         .await
         .context("timed out connecting to local forwarded socket")?
         .context("failed to connect to local forwarded socket")
+}
+
+async fn assert_listener_closed(addr: SocketAddr) -> Result<()> {
+    let result = timeout(IO_TIMEOUT, TcpStream::connect(addr))
+        .await
+        .context("timed out checking closed forwarded socket")?;
+    if result.is_ok() {
+        bail!("forwarded socket should be closed: {addr}");
+    }
+    Ok(())
 }
 
 async fn write_http_request(stream: &mut TcpStream, host_header: &str) -> Result<()> {

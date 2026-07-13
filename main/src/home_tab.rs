@@ -42,12 +42,12 @@ use one_core::storage::{
     RemoteDesktopProtocol as StoredRemoteDesktopProtocol, StoredConnection, Workspace,
     WorkspaceRepository,
 };
-use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabOpenMode};
-use port_forwarding::{
-    DynamicForwardingRequest, LocalForwardingRequest, PortForwardingRuntime,
-    build_dynamic_forwarding_request, build_local_forwarding_request,
+use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem, TabOpenMode};
+use port_forwarding::PortForwardingRuntime;
+use port_forwarding_view::{
+    PortForwardingFormWindow, PortForwardingFormWindowConfig, PortForwardingTab,
+    PortForwardingTabConfig,
 };
-use port_forwarding_view::{PortForwardingFormWindow, PortForwardingFormWindowConfig};
 use redis_view::{RedisFormWindow, RedisFormWindowConfig};
 use rust_i18n::t;
 use terminal_view::{SerialFormWindow, SerialFormWindowConfig};
@@ -2152,116 +2152,61 @@ impl HomePage {
         );
     }
 
-    pub(crate) fn open_port_forwarding(
+    pub(crate) fn open_port_forwarding_tab(
         &mut self,
         connection: StoredConnection,
+        mode: TabOpenMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let connection_name = connection.name.clone();
-        let Some(connection_id) = connection.id else {
-            window.push_notification(
-                t!(
+        let (tab_id, config) = match self.port_forwarding_tab_config(connection) {
+            Ok(result) => result,
+            Err(error) => {
+                let message = t!(
                     "Home.port_forwarding_failed",
                     name = connection_name,
-                    error = "missing connection id"
-                )
-                .to_string(),
-                cx,
-            );
-            return;
-        };
-        let params = match connection.to_port_forwarding_params() {
-            Ok(params) => params,
-            Err(error) => {
-                window.push_notification(
-                    t!(
-                        "Home.port_forwarding_failed",
-                        name = connection_name,
-                        error = error.to_string()
-                    )
-                    .to_string(),
-                    cx,
+                    error = error.to_string()
                 );
+                window.push_notification(message.to_string(), cx);
                 return;
             }
         };
-        let Some(ssh_connection) = self
+        self.tab_container.update(cx, |container, cx| {
+            let item_id = tab_id.clone();
+            container.activate_or_add_tab_lazy_with_mode(
+                tab_id,
+                mode,
+                move |_window, cx| {
+                    let tab = cx.new(|cx| PortForwardingTab::new(config, cx));
+                    TabItem::new(item_id, "home", tab)
+                },
+                window,
+                cx,
+            );
+        });
+    }
+
+    fn port_forwarding_tab_config(
+        &self,
+        connection: StoredConnection,
+    ) -> anyhow::Result<(String, PortForwardingTabConfig)> {
+        let connection_id = connection
+            .id
+            .ok_or_else(|| anyhow::anyhow!("missing connection id"))?;
+        let params = connection.to_port_forwarding_params()?;
+        let ssh_connection = self
             .connections
             .iter()
             .find(|conn| conn.id == Some(params.ssh_connection_id))
             .cloned()
-        else {
-            window.push_notification(t!("Home.port_forwarding_missing_ssh").to_string(), cx);
-            return;
-        };
-
-        enum StartRequest {
-            Local(LocalForwardingRequest),
-            Dynamic(DynamicForwardingRequest),
-        }
-
-        let request = match params.kind {
-            one_core::storage::PortForwardingKind::Local => {
-                build_local_forwarding_request(&connection, &ssh_connection)
-                    .map(StartRequest::Local)
-            }
-            one_core::storage::PortForwardingKind::Dynamic => {
-                build_dynamic_forwarding_request(&connection, &ssh_connection)
-                    .map(StartRequest::Dynamic)
-            }
-        };
-        let request = match request {
-            Ok(request) => request,
-            Err(error) => {
-                window.push_notification(
-                    t!(
-                        "Home.port_forwarding_failed",
-                        name = connection_name,
-                        error = error.to_string()
-                    )
-                    .to_string(),
-                    cx,
-                );
-                return;
-            }
-        };
-
-        let runtime = Arc::clone(&self.port_forwarding_runtime);
-        cx.spawn(async move |_this, cx: &mut AsyncApp| {
-            let result = {
-                let mut runtime = runtime.lock().await;
-                match request {
-                    StartRequest::Local(request) => {
-                        runtime.start_local(connection_id, request).await
-                    }
-                    StartRequest::Dynamic(request) => {
-                        runtime.start_dynamic(connection_id, request).await
-                    }
-                }
-            };
-            if result.is_ok() {
-                let _ = cx.update(|cx| {
-                    cx.global_mut::<ActiveConnections>().add(connection_id);
-                });
-            }
-            let message = match result {
-                Ok(local_addr) => t!(
-                    "Home.port_forwarding_started",
-                    name = connection_name,
-                    addr = local_addr.to_string()
-                )
-                .to_string(),
-                Err(error) => t!(
-                    "Home.port_forwarding_failed",
-                    name = connection_name,
-                    error = error.to_string()
-                )
-                .to_string(),
-            };
-            push_notification_on_active_window(message, cx);
-        })
-        .detach();
+            .ok_or_else(|| anyhow::anyhow!("referenced SSH connection is missing"))?;
+        let config = PortForwardingTabConfig::new(
+            connection,
+            ssh_connection,
+            Arc::clone(&self.port_forwarding_runtime),
+        )?;
+        Ok((format!("port-forwarding-{connection_id}"), config))
     }
 
     pub(crate) fn show_remote_desktop_form(
@@ -4580,16 +4525,6 @@ fn port_forwarding_connection_info(params: &one_core::storage::PortForwardingPar
             format!("SOCKS {}:{}", params.bind_host, params.bind_port)
         }
     }
-}
-
-fn push_notification_on_active_window(message: String, cx: &mut AsyncApp) {
-    let _ = cx.update(|cx| {
-        if let Some(window_id) = cx.active_window() {
-            let _ = cx.update_window(window_id, |_, window, cx| {
-                window.push_notification(message.clone(), cx);
-            });
-        }
-    });
 }
 
 /// 生成复制连接的唯一名称

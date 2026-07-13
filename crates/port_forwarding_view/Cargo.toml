@@ -10,7 +10,9 @@ gpui.workspace = true
 gpui-component.workspace = true
 connection-form.workspace = true
 one-core.workspace = true
+port_forwarding.workspace = true
 rust-i18n.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 
 [lints]

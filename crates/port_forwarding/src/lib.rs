@@ -6,3 +6,4 @@ pub use runtime::{
     DynamicForwardingRequest, LocalForwardingRequest, PortForwardingRuntime,
     build_dynamic_forwarding_request, build_local_forwarding_request,
 };
+pub use ssh::LocalPortForwardActivity;
