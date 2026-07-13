@@ -484,6 +484,47 @@ mod tests {
     }
 
     #[test]
+    fn saved_key_restores_new_service_and_decrypts_team_data() {
+        let repo = test_repo();
+        let verification_service = CloudSyncService::new();
+        let team = team(&verification_service, 1);
+        repo.upsert(&TeamKeyCache {
+            scope: test_scope(),
+            team_id: team.id.clone(),
+            team_name: team.name.clone(),
+            key_version: team.key_version,
+            cached_key_version: None,
+            key_verification: team.key_verification.clone(),
+            encrypted_team_key: None,
+            last_verified_at: None,
+            updated_at: team.updated_at,
+            role: Some("member".to_string()),
+        })
+        .expect("team metadata is cached");
+        let (settings_manager, _) = manager(repo.clone());
+        settings_manager
+            .save_key_for_cached_team("team-1", TEAM_PASSPHRASE, "personal-secret")
+            .expect("settings key saves");
+
+        let (runtime_manager, runtime_service) = manager(repo);
+        let status = runtime_manager
+            .load_cached_team_key(&team, "personal-secret")
+            .expect("runtime reloads cached key");
+        let service = runtime_service.read().expect("runtime service lock");
+        let plaintext = r#"{"name":"shared production database"}"#;
+        let encrypted = service
+            .encrypt_blob(plaintext, Some("team-1"))
+            .expect("runtime encrypts team data");
+        let decrypted = service
+            .decrypt_blob(&encrypted, Some("team-1"))
+            .expect("runtime decrypts team data");
+
+        assert_eq!(TeamKeyLoadStatus::Unlocked, status);
+        assert_ne!(plaintext, encrypted);
+        assert_eq!(plaintext, decrypted);
+    }
+
+    #[test]
     fn save_key_for_cached_team_uses_cached_verification() {
         let repo = test_repo();
         let verification_service = CloudSyncService::new();
