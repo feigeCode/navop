@@ -23,10 +23,15 @@ use crate::crypto;
 use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub type SyncFuture<'a> = Pin<Box<dyn Future<Output = Result<SyncResult, SyncError>> + Send + 'a>>;
+
+fn sync_execution_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
 
 pub trait SyncHandler: Send + Sync {
     fn name(&self) -> &'static str;
@@ -160,6 +165,7 @@ impl SyncEngine {
     /// 2. 先同步工作空间（无外键依赖）
     /// 3. 再同步连接（依赖工作空间）
     pub async fn sync(&self) -> Result<SyncResult, SyncError> {
+        let _execution_guard = sync_execution_lock().lock().await;
         tracing::info!("========== 开始云同步 ==========");
 
         self.ensure_unlocked()?;
@@ -725,7 +731,7 @@ fn team_key_error_to_sync_error(error: TeamKeyError) -> SyncError {
 
 #[cfg(test)]
 mod tests {
-    use super::team_key_cache_for_cloud_team;
+    use super::{sync_execution_lock, team_key_cache_for_cloud_team};
     use crate::cloud_sync::client::{
         AuthResponse, CloudApiClient, CloudApiError, OAuthResponse, UserInfo,
     };
@@ -739,6 +745,16 @@ mod tests {
     use std::sync::{Arc, Mutex, RwLock};
 
     static NEXT_TEST_DB_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[tokio::test]
+    async fn full_sync_execution_lock_is_process_wide() {
+        let first = sync_execution_lock().lock().await;
+
+        assert!(sync_execution_lock().try_lock().is_err());
+
+        drop(first);
+        assert!(sync_execution_lock().try_lock().is_ok());
+    }
 
     fn team() -> Team {
         Team {

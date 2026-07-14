@@ -562,11 +562,11 @@ impl SyncEngine {
             match &local_conn.cloud_id {
                 Some(cloud_id) => {
                     if let Some(cloud_data) = cloud_map.get(cloud_id.as_str()) {
-                        let local_updated = local_conn.updated_at.unwrap_or(0);
                         let last_synced = local_conn.last_synced_at.unwrap_or(0);
                         let cloud_updated = cloud_data.updated_at / 1000;
 
-                        let local_changed = local_updated > last_synced;
+                        let local_changed =
+                            Self::connection_has_local_changes(local_conn, cloud_data);
                         let cloud_changed = cloud_updated > last_synced;
 
                         let cloud_name = cloud_name_map
@@ -766,10 +766,31 @@ impl SyncEngine {
             .get::<ConnectionRepository>()
             .ok_or_else(|| SyncError::StorageError("ConnectionRepository not found".to_string()))?;
 
-        repo.insert(&mut local_conn)
-            .map_err(|e| SyncError::StorageError(e.to_string()))?;
+        Self::persist_downloaded_connection(repo.as_ref(), &mut local_conn)?;
 
         Ok(())
+    }
+
+    fn persist_downloaded_connection(
+        repo: &ConnectionRepository,
+        local_conn: &mut StoredConnection,
+    ) -> Result<(), SyncError> {
+        let existing = local_conn
+            .cloud_id
+            .as_deref()
+            .map(|cloud_id| repo.get_by_cloud_id(cloud_id))
+            .transpose()
+            .map_err(|error| SyncError::StorageError(error.to_string()))?
+            .flatten();
+        if let Some(existing) = existing {
+            local_conn.id = existing.id;
+            return repo
+                .update(local_conn)
+                .map_err(|error| SyncError::StorageError(error.to_string()));
+        }
+        repo.insert(local_conn)
+            .map(|_| ())
+            .map_err(|error| SyncError::StorageError(error.to_string()))
     }
 
     async fn update_local_connection(
@@ -903,6 +924,14 @@ impl SyncEngine {
             || snapshot.sync_enabled != current.sync_enabled
             || snapshot.team_id != current.team_id
             || snapshot.owner_id != current.owner_id
+    }
+
+    fn connection_has_local_changes(
+        local_conn: &StoredConnection,
+        cloud_data: &CloudSyncData,
+    ) -> bool {
+        local_conn.updated_at.unwrap_or(0) > local_conn.last_synced_at.unwrap_or(0)
+            || local_conn.team_id != cloud_data.team_id
     }
 
     pub(crate) fn connection_cloud_write_target(
@@ -1140,7 +1169,9 @@ pub struct ResolvedConflictAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::ConnectionType;
+    use crate::storage::connection::SqliteConnection;
+    use crate::storage::migration::run_migrations;
+    use crate::storage::{ConnectionRepository, ConnectionType};
 
     fn stored_connection(updated_at: i64) -> StoredConnection {
         StoredConnection {
@@ -1280,5 +1311,45 @@ mod tests {
             SyncEngine::pending_updated_at_after_cloud_write(&snapshot, &current, 120);
 
         assert_eq!(None, pending_updated_at);
+    }
+
+    #[test]
+    fn team_assignment_mismatch_remains_pending_after_false_success() {
+        let mut local = stored_connection(100);
+        local.updated_at = Some(100);
+        local.last_synced_at = Some(120);
+        local.team_id = Some("team-1".to_string());
+        let cloud = cloud_sync_data(120);
+
+        assert!(SyncEngine::connection_has_local_changes(&local, &cloud));
+    }
+
+    #[test]
+    fn repeated_download_updates_existing_cloud_connection() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let database =
+            SqliteConnection::open(temp.path().join("connections.db")).expect("database opens");
+        database
+            .with_connection(|connection| {
+                run_migrations(connection)?;
+                Ok(())
+            })
+            .expect("migrations run");
+        let repo = ConnectionRepository::new(database);
+        let mut first = stored_connection(100);
+        first.id = None;
+        first.name = "first".to_string();
+        repo.insert(&mut first).expect("first download inserts");
+        let mut repeated = stored_connection(120);
+        repeated.id = None;
+        repeated.name = "updated".to_string();
+
+        SyncEngine::persist_downloaded_connection(&repo, &mut repeated)
+            .expect("repeated download persists");
+
+        let connections = repo.list().expect("connections list");
+        assert_eq!(1, connections.len());
+        assert_eq!("updated", connections[0].name);
+        assert_eq!(first.id, repeated.id);
     }
 }

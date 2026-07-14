@@ -24,8 +24,9 @@ use gpui_component::{
 };
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
 use one_core::cloud_sync::{
-    CloudApiClient, CloudSyncService, ConflictResolution, SyncConflict, SyncEngine, UserInfo,
-    can_edit_connection, get_cached_team_options,
+    CloudAccountScope, CloudApiClient, CloudSyncService, ConflictResolution, SyncConflict,
+    SyncEngine, TeamOption, UserInfo, can_edit_connection, get_cached_team_options,
+    get_cached_team_options_for_scope,
 };
 use one_core::config::{team_management_url_template, website_base_url};
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
@@ -270,6 +271,7 @@ pub struct HomePage {
     /// 防止主密钥对话框被启动提示和用户点击重复打开。
     master_key_dialog_open: bool,
     sidebar_collapsed: bool,
+    team_options: Vec<TeamOption>,
     port_forwarding_runtime: Arc<tokio::sync::Mutex<PortForwardingRuntime>>,
     pub(crate) external_driver_registry: IpcDriverRegistry,
 }
@@ -298,6 +300,14 @@ fn non_empty_name(name: &str) -> Option<&str> {
     if name.is_empty() { None } else { Some(name) }
 }
 
+fn connection_team_name(team_id: Option<&str>, teams: &[TeamOption]) -> Option<String> {
+    let team_id = team_id?;
+    teams
+        .iter()
+        .find(|team| team.id == team_id)
+        .map(|team| team.name.clone())
+}
+
 #[cfg(test)]
 mod external_driver_form_tests {
     use super::*;
@@ -309,6 +319,26 @@ mod external_driver_form_tests {
         assert_eq!("cmd-alt-t", OPEN_LOCAL_TERMINAL_SHORTCUT_MACOS);
         assert_eq!("alt-t", OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER);
         assert_ne!("ctrl-alt-t", OPEN_LOCAL_TERMINAL_SHORTCUT_OTHER);
+    }
+
+    #[test]
+    fn connection_team_badge_uses_cached_team_name() {
+        let teams = vec![TeamOption {
+            id: "team-1".to_string(),
+            name: "Platform".to_string(),
+            key_status: one_core::cloud_sync::TeamKeyCacheStatus::Cached,
+            key_version: 1,
+            key_verification: None,
+            last_verified_at: None,
+            role: Some("member".to_string()),
+        }];
+
+        assert_eq!(
+            Some("Platform".to_string()),
+            connection_team_name(Some("team-1"), &teams)
+        );
+        assert_eq!(None, connection_team_name(Some("missing"), &teams));
+        assert_eq!(None, connection_team_name(None, &teams));
     }
 
     fn stored_external_connection(driver_id: &str) -> StoredConnection {
@@ -687,6 +717,7 @@ impl HomePage {
             master_key_unlock_prompt_pending: false,
             master_key_dialog_open: false,
             sidebar_collapsed: false,
+            team_options: Vec::new(),
             port_forwarding_runtime: Arc::new(
                 tokio::sync::Mutex::new(PortForwardingRuntime::new()),
             ),
@@ -778,7 +809,9 @@ impl HomePage {
                     ConnectionDataEvent::CloudSyncRequested => {
                         this.trigger_sync(cx);
                     }
-                    ConnectionDataEvent::TeamCacheUpdated => {}
+                    ConnectionDataEvent::TeamCacheUpdated => {
+                        this.load_team_options(cx);
+                    }
                 },
             )
             .detach();
@@ -844,6 +877,36 @@ impl HomePage {
                     tracing::error!("Task join error: {}", e);
                 }
             }
+        })
+        .detach();
+    }
+
+    fn load_team_options(&mut self, cx: &mut Context<Self>) {
+        let Some(user) = self.current_user.as_ref() else {
+            self.team_options.clear();
+            cx.notify();
+            return;
+        };
+        let requested_user_id = user.id.clone();
+        let scope = CloudAccountScope::new(
+            self.auth_service.cloud_client().environment_id(),
+            requested_user_id.clone(),
+        );
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let load_task =
+            cx.background_spawn(async move { get_cached_team_options_for_scope(&storage, &scope) });
+
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let teams = load_task.await;
+            _ = this.update(cx, |this, cx| {
+                if this.current_user.as_ref().map(|user| user.id.as_str())
+                    != Some(requested_user_id.as_str())
+                {
+                    return;
+                }
+                this.team_options = teams;
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -1220,6 +1283,7 @@ impl HomePage {
                     this.current_user = Some(user.clone());
                     // 更新全局用户状态
                     GlobalCurrentUser::set_user(Some(user.clone()), cx);
+                    this.load_team_options(cx);
 
                     // 更新 License
                     let license_service = get_license_service(cx);
@@ -1266,6 +1330,7 @@ impl HomePage {
                         this.current_user = Some(user.clone());
                         // 更新全局用户状态
                         GlobalCurrentUser::set_user(Some(user.clone()), cx);
+                        this.load_team_options(cx);
 
                         // 更新 License
                         let license_service = get_license_service(cx);
@@ -2509,7 +2574,7 @@ impl HomePage {
         };
         let has_master_key = crypto::has_master_key();
         let show_team_key_button = is_feature_enabled(Feature::TeamManagement, cx)
-            && should_show_team_key_button(route, get_cached_team_options(cx).len());
+            && should_show_team_key_button(route, self.team_options.len());
         let personal_conflict_count = if route == HomeSyncRoute::Personal {
             crate::personal_sync_conflicts::current_personal_conflict_count(cx)
         } else {
@@ -2911,6 +2976,7 @@ impl HomePage {
         let global_user = GlobalCurrentUser::get_user(cx);
         if global_user.is_none() && self.current_user.is_some() {
             self.current_user = None;
+            self.team_options.clear();
         }
 
         let filter_types = ConnectionType::all();
@@ -3958,7 +4024,7 @@ impl HomePage {
             .map_or(false, |id| cx.global::<ActiveConnections>().is_active(id));
 
         let can_edit = can_edit_connection(&conn, cx);
-        let has_team = conn.team_id.is_some();
+        let team_name = connection_team_name(conn.team_id.as_deref(), &self.team_options);
         let card = v_flex()
             .justify_center()
             .id(SharedString::from(format!(
@@ -4008,6 +4074,34 @@ impl HomePage {
                         .rounded_full()
                         .bg(cx.theme().success)
                         .shadow_lg(),
+                )
+            })
+            .when_some(team_name.clone(), |this, team_name| {
+                let tooltip_text: SharedString = team_name.clone().into();
+                this.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "conn-team-{}",
+                            conn.id.unwrap_or(0)
+                        )))
+                        .absolute()
+                        .top_2()
+                        .right_2()
+                        .max_w(px(112.0))
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded(px(4.0))
+                        .bg(cx.theme().primary)
+                        .text_color(cx.theme().primary_foreground)
+                        .text_xs()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .group_hover("", |style| style.opacity(0.0))
+                        .tooltip(move |window, cx| {
+                            Tooltip::new(tooltip_text.clone()).build(window, cx)
+                        })
+                        .child(team_name),
                 )
             })
             .child(
@@ -4212,40 +4306,23 @@ impl HomePage {
                             .overflow_hidden()
                             .child({
                                 let name_tooltip: SharedString = conn.name.clone().into();
-                                h_flex()
-                                    .gap_1()
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "conn-name-{}",
+                                        conn.id.unwrap_or(0)
+                                    )))
+                                    .w_full()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(cx.theme().foreground)
                                     .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "conn-name-{}",
-                                                conn.id.unwrap_or(0)
-                                            )))
-                                            .text_sm()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(cx.theme().foreground)
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .whitespace_nowrap()
-                                            .flex_shrink(1.0)
-                                            .min_w_0()
-                                            .tooltip(move |window, cx| {
-                                                Tooltip::new(name_tooltip.clone()).build(window, cx)
-                                            })
-                                            .child(conn.name.clone()),
-                                    )
-                                    .when(has_team, |this| {
-                                        this.child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .px_1()
-                                                .rounded(px(3.0))
-                                                .bg(cx.theme().accent.opacity(0.15))
-                                                .text_color(cx.theme().accent)
-                                                .text_xs()
-                                                .child(t!("Home.team_badge").to_string()),
-                                        )
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .min_w_0()
+                                    .tooltip(move |window, cx| {
+                                        Tooltip::new(name_tooltip.clone()).build(window, cx)
                                     })
+                                    .child(conn.name.clone())
                             })
                             .when(conn.connection_type == ConnectionType::Database, |this| {
                                 if let Ok(params) = conn.to_db_connection() {
@@ -4586,6 +4663,7 @@ impl Render for HomePage {
         // 检测会话过期：token 刷新失败时由回调设置静态标志，在此处响应
         if crate::auth::check_and_reset_session_expired() {
             self.current_user = None;
+            self.team_options.clear();
             // 延迟弹出登录对话框，避免在 render 中直接修改窗口
             let view = cx.entity();
             window.defer(cx, move |window, cx| {

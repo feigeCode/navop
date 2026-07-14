@@ -58,7 +58,9 @@ pub use team_key_manager::*;
 pub use team_scope::*;
 
 use crate::crypto;
-use crate::storage::{GlobalStorageState, StoredConnection, TeamKeyCacheRepository};
+use crate::storage::{
+    GlobalStorageState, StorageManager, StoredConnection, TeamKeyCacheRepository,
+};
 
 // ============================================================================
 // 全局用户状态
@@ -138,10 +140,17 @@ pub fn get_cached_team_options(cx: &App) -> Vec<TeamOption> {
     let Some(storage) = cx.try_global::<GlobalStorageState>() else {
         return Vec::new();
     };
-    let Some(repo) = storage.storage.get::<TeamKeyCacheRepository>() else {
+    get_cached_team_options_for_scope(&storage.storage, &scope)
+}
+
+pub fn get_cached_team_options_for_scope(
+    storage: &StorageManager,
+    scope: &CloudAccountScope,
+) -> Vec<TeamOption> {
+    let Some(repo) = storage.get::<TeamKeyCacheRepository>() else {
         return Vec::new();
     };
-    match repo.list(&scope) {
+    match repo.list(scope) {
         Ok(caches) => caches.into_iter().map(team_option_from_cache).collect(),
         Err(_) => Vec::new(),
     }

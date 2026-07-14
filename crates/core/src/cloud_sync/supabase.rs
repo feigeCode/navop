@@ -964,6 +964,43 @@ struct SyncDataRow {
     deleted_at: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct SyncDataUpdatePayload {
+    encrypted_data: String,
+    key_version: i32,
+    checksum: String,
+    team_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deleted_at: Option<String>,
+}
+
+impl From<&CloudSyncData> for SyncDataUpdatePayload {
+    fn from(data: &CloudSyncData) -> Self {
+        Self {
+            encrypted_data: data.encrypted_data.clone(),
+            key_version: data.key_version as i32,
+            checksum: data.checksum.clone(),
+            team_id: data.team_id.clone(),
+            deleted_at: data.deleted_at.and_then(|timestamp| {
+                chrono::DateTime::from_timestamp_millis(timestamp).map(|value| value.to_rfc3339())
+            }),
+        }
+    }
+}
+
+fn validate_sync_data_update(
+    requested: &CloudSyncData,
+    row: SyncDataRow,
+) -> Result<CloudSyncData, CloudApiError> {
+    let updated = CloudSyncData::from(row);
+    if updated.team_id != requested.team_id {
+        return Err(CloudApiError::Conflict(
+            "云端团队归属更新未生效，请刷新后重试".to_string(),
+        ));
+    }
+    Ok(updated)
+}
+
 fn default_key_version() -> i32 {
     1
 }
@@ -1627,23 +1664,7 @@ impl CloudApiClient for SupabaseClient {
             data.version
         );
 
-        #[derive(Serialize)]
-        struct UpdatePayload {
-            encrypted_data: String,
-            key_version: i32,
-            checksum: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            deleted_at: Option<String>,
-        }
-
-        let payload = UpdatePayload {
-            encrypted_data: data.encrypted_data.clone(),
-            key_version: data.key_version as i32,
-            checksum: data.checksum.clone(),
-            deleted_at: data.deleted_at.and_then(|ts| {
-                chrono::DateTime::from_timestamp_millis(ts).map(|dt| dt.to_rfc3339())
-            }),
-        };
+        let payload = SyncDataUpdatePayload::from(data);
 
         let extra_headers = vec![("Prefer", "return=representation".to_string())];
 
@@ -1654,7 +1675,7 @@ impl CloudApiClient for SupabaseClient {
         if status.is_success() {
             let rows = result.map_err(|e| CloudApiError::ParseError(e))?;
             if let Some(row) = rows.into_iter().next() {
-                Ok(row.into())
+                validate_sync_data_update(data, row)
             } else {
                 Err(CloudApiError::Conflict(
                     "版本冲突，数据已被其他客户端修改".to_string(),
@@ -2079,6 +2100,27 @@ mod tests {
         assert!(url.contains("version=eq.7"));
     }
 
+    #[test]
+    fn update_sync_data_payload_includes_team_assignment() {
+        let mut data = test_cloud_sync_data();
+        data.team_id = Some("team-1".to_string());
+
+        let payload = SyncDataUpdatePayload::from(&data);
+        let json = serde_json::to_value(payload).expect("payload serializes");
+
+        assert_eq!(serde_json::json!("team-1"), json["team_id"]);
+    }
+
+    #[test]
+    fn update_sync_data_payload_clears_team_assignment_with_null() {
+        let data = test_cloud_sync_data();
+
+        let payload = SyncDataUpdatePayload::from(&data);
+        let json = serde_json::to_value(payload).expect("payload serializes");
+
+        assert_eq!(serde_json::Value::Null, json["team_id"]);
+    }
+
     #[tokio::test]
     async fn update_sync_data_empty_patch_response_is_conflict() {
         let http = Arc::new(RecordingHttpClient::respond_json(200, "[]"));
@@ -2095,6 +2137,52 @@ mod tests {
             .expect_err("empty response means version filter matched no rows");
 
         assert!(matches!(error, CloudApiError::Conflict(_)));
+    }
+
+    #[tokio::test]
+    async fn update_sync_data_rejects_unchanged_team_assignment() {
+        let http = Arc::new(RecordingHttpClient::respond_json(
+            200,
+            r#"[{"id":"cloud-1","owner_id":"user-1","team_id":null,"data_type":"connection","encrypted_data":"enc","key_version":1,"checksum":"a","version":8,"updated_at":"2026-07-03T00:00:00Z","deleted_at":null}]"#,
+        ));
+        let client = SupabaseClient::new(test_config(), http);
+        client.set_auth(
+            "access".to_string(),
+            "refresh".to_string(),
+            "user-1".to_string(),
+        );
+        let mut data = test_cloud_sync_data();
+        data.team_id = Some("team-1".to_string());
+
+        let error = client
+            .update_sync_data(&data)
+            .await
+            .expect_err("unchanged team assignment must not be reported as success");
+
+        assert!(matches!(error, CloudApiError::Conflict(_)));
+    }
+
+    #[tokio::test]
+    async fn update_sync_data_accepts_changed_team_assignment() {
+        let http = Arc::new(RecordingHttpClient::respond_json(
+            200,
+            r#"[{"id":"cloud-1","owner_id":"user-1","team_id":"team-1","data_type":"connection","encrypted_data":"enc","key_version":1,"checksum":"a","version":8,"updated_at":"2026-07-03T00:00:00Z","deleted_at":null}]"#,
+        ));
+        let client = SupabaseClient::new(test_config(), http);
+        client.set_auth(
+            "access".to_string(),
+            "refresh".to_string(),
+            "user-1".to_string(),
+        );
+        let mut data = test_cloud_sync_data();
+        data.team_id = Some("team-1".to_string());
+
+        let updated = client
+            .update_sync_data(&data)
+            .await
+            .expect("changed team assignment succeeds");
+
+        assert_eq!(Some("team-1".to_string()), updated.team_id);
     }
 
     #[tokio::test]

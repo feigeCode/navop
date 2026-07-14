@@ -322,10 +322,6 @@ Home:
     en: Delete Connection
     zh-CN: 删除连接
     zh-HK: 刪除連線
-  team_badge:
-    en: Team
-    zh-CN: 团队
-    zh-HK: 團隊
   duplicate_name:
     en: "%{name} (Copy)"
     zh-CN: "%{name} (副本)"
