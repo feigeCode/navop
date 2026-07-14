@@ -1497,6 +1497,9 @@ impl DbConnectionForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let selected_ssh_id = self
+            .get_field_value("ssh_connection_id", cx)
+            .and_then(|value| value.parse::<i64>().ok());
         self.ssh_connections = connections
             .into_iter()
             .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
@@ -1510,6 +1513,7 @@ impl DbConnectionForm {
 
         self.ssh_connection_select.update(cx, |select, cx| {
             select.set_items(SearchableVec::new(items), window, cx);
+            select.set_selected_value(&selected_ssh_id, window, cx);
         });
         cx.notify();
     }
@@ -2918,6 +2922,7 @@ impl Render for DbConnectionForm {
 mod tests {
     use super::*;
     use db::plugin_manifest::FormValueCondition;
+    use gpui::{TestAppContext, VisualTestContext, WindowOptions};
     use one_core::storage::{SshAuthMethod, SshParams};
 
     fn field_names(tab_group: &TabGroup) -> Vec<&str> {
@@ -2968,6 +2973,54 @@ mod tests {
         assert_eq!(&Some(42), item.value());
         assert!(item.matches("10.0.0.5"));
         assert!(!item.matches("42"));
+    }
+
+    #[gpui::test]
+    fn editing_connection_restores_referenced_ssh_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let ssh = stored_ssh_connection(42, "Prod SSH", "10.0.0.5");
+        let params = DbConnectionConfig {
+            database_type: DatabaseType::MySQL,
+            name: "App DB".to_string(),
+            host: "db.internal".to_string(),
+            port: 3306,
+            username: "app".to_string(),
+            password: String::new(),
+            database: None,
+            service_name: None,
+            sid: None,
+            workspace_id: None,
+            proxy: None,
+            extra_params: HashMap::from([
+                ("ssh_tunnel_enabled".to_string(), "true".to_string()),
+                ("ssh_connection_id".to_string(), "42".to_string()),
+            ]),
+            id: String::new(),
+        };
+        let connection = StoredConnection::from_db_connection(params);
+        let window = cx.update(|cx| {
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                cx.new(|cx| {
+                    let mut form = DbConnectionForm::new(DbFormConfig::mysql(), window, cx);
+                    form.load_connection(&connection, window, cx);
+                    form.set_ssh_connections(vec![ssh], window, cx);
+                    form
+                })
+            })
+            .expect("form window should open")
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let form = window.root(&mut cx).expect("form should be mounted");
+
+        let selected = form.read_with(&cx, |form, cx| {
+            form.ssh_connection_select
+                .read(cx)
+                .selected_value()
+                .cloned()
+                .flatten()
+        });
+
+        assert_eq!(Some(42), selected);
     }
 
     #[test]
