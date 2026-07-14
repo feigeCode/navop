@@ -32,12 +32,44 @@ use gpui::*;
 
 use gpui_component::Root;
 use gpui_component_assets::Assets;
+use one_core::settings::{AppSettings, MainWindowSize};
 use std::sync::Arc;
 use tracing::{info, warn};
 
 struct AppAssets {
     builtin: Assets,
     driver: db::ipc::DriverAssetSource,
+}
+
+const DEFAULT_MAIN_WINDOW_WIDTH: f32 = 1800.0;
+const DEFAULT_MAIN_WINDOW_HEIGHT: f32 = 1260.0;
+const MAIN_WINDOW_DISPLAY_RATIO: f32 = 0.9;
+
+fn initial_main_window_size(
+    saved: Option<MainWindowSize>,
+    display_size: Option<Size<Pixels>>,
+) -> Size<Pixels> {
+    let mut result = saved
+        .and_then(|saved| MainWindowSize::new(saved.width, saved.height))
+        .map(|saved| size(px(saved.width), px(saved.height)))
+        .unwrap_or_else(|| {
+            size(
+                px(DEFAULT_MAIN_WINDOW_WIDTH),
+                px(DEFAULT_MAIN_WINDOW_HEIGHT),
+            )
+        });
+    if let Some(display_size) = display_size {
+        let maximum = size(
+            px(f32::from(display_size.width) * MAIN_WINDOW_DISPLAY_RATIO),
+            px(f32::from(display_size.height) * MAIN_WINDOW_DISPLAY_RATIO),
+        );
+        if saved.is_none() {
+            result = maximum;
+        }
+        result.width = result.width.min(maximum.width);
+        result.height = result.height.min(maximum.height);
+    }
+    result
 }
 
 impl AppAssets {
@@ -112,12 +144,9 @@ fn main() {
             .expect("main package version must be valid semver");
         extension_runtime::init(cx);
 
-        let mut window_size = size(px(1800.0), px(1260.0));
-        if let Some(display) = cx.primary_display() {
-            let display_size = display.bounds().size;
-            window_size.width = window_size.width.min(display_size.width * 0.92);
-            window_size.height = window_size.height.min(display_size.height * 0.92);
-        }
+        let saved_size = AppSettings::current(cx).main_window_size;
+        let display_size = cx.primary_display().map(|display| display.bounds().size);
+        let window_size = initial_main_window_size(saved_size, display_size);
 
         let window_bounds = Bounds::centered(None, window_size, cx);
         let options = WindowOptions {
@@ -153,6 +182,9 @@ fn main() {
 
 #[cfg(test)]
 mod embedded_cli_removal_tests {
+    use gpui::{px, size};
+    use one_core::settings::MainWindowSize;
+
     #[test]
     fn main_does_not_route_business_cli() {
         let source = include_str!("main.rs");
@@ -160,5 +192,20 @@ mod embedded_cli_removal_tests {
 
         assert!(!source.contains(&handler_name));
         assert!(source.contains("update::handle_update_command()"));
+    }
+
+    #[test]
+    fn first_launch_uses_ninety_percent_of_display() {
+        let actual = super::initial_main_window_size(None, Some(size(px(2000.0), px(1000.0))));
+
+        assert_eq!(size(px(1800.0), px(900.0)), actual);
+    }
+
+    #[test]
+    fn saved_window_size_is_restored_and_capped_to_display() {
+        let saved = MainWindowSize::new(1600.0, 1200.0);
+        let actual = super::initial_main_window_size(saved, Some(size(px(1200.0), px(800.0))));
+
+        assert_eq!(size(px(1080.0), px(720.0)), actual);
     }
 }

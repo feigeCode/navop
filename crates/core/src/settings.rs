@@ -563,6 +563,8 @@ pub struct LocalTerminalProfileSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
+    #[serde(default)]
+    pub main_window_size: Option<MainWindowSize>,
     #[serde(default = "default_locale")]
     pub locale: String,
     #[serde(default)]
@@ -882,6 +884,7 @@ fn default_sql_query_max_rows() -> u32 {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            main_window_size: None,
             locale: default_locale(),
             theme_mode: "light".to_string(),
             auto_switch_theme: false,
@@ -923,6 +926,19 @@ impl Default for AppSettings {
             sql_query_max_rows: default_sql_query_max_rows(),
             custom_keybindings: HashMap::new(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MainWindowSize {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl MainWindowSize {
+    pub fn new(width: f32, height: f32) -> Option<Self> {
+        (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
+            .then_some(Self { width, height })
     }
 }
 

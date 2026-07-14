@@ -139,7 +139,7 @@ use gpui::px;
 use gpui_component::dock::{ClosePanel, ToggleZoom};
 use gpui_component::{ActiveTheme, Root};
 use one_core::llm::manager::GlobalProviderState;
-use one_core::settings::{AppSettings, StartupDefaultPage};
+use one_core::settings::{AppSettings, MainWindowSize, StartupDefaultPage};
 use one_core::split_tab_container::{SplitTabContainer, TabPaneFactory};
 use one_core::storage::manager::get_config_dir;
 use one_core::tab_container::{TabContainer, TabContentRegistry, TabItem};
@@ -953,6 +953,7 @@ impl OnetCliApp {
         let app = app_entity.downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             let _ = app.update(cx, |app, cx| {
+                app.save_main_window_size(window, cx);
                 app.request_quit(window, cx);
             });
             false
@@ -1050,6 +1051,16 @@ impl OnetCliApp {
             split_container,
             quit_state: QuitRequestState::default(),
         }
+    }
+
+    fn save_main_window_size(&self, window: &Window, cx: &mut App) {
+        let bounds = window.window_bounds().get_bounds();
+        let width = f32::from(bounds.size.width);
+        let height = f32::from(bounds.size.height);
+        let Some(size) = MainWindowSize::new(width, height) else {
+            return;
+        };
+        AppSettings::update_and_save(cx, |settings| settings.main_window_size = Some(size));
     }
 
     fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
