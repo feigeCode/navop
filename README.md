@@ -182,7 +182,7 @@ Release artifacts are currently published by platform:
 
 Checksums are published as `sha256sums.txt` in each release.
 
-On Windows, use the `.msi` package for a standard per-user installation. It defaults to `%LOCALAPPDATA%\Programs\Navop`, lets you choose another writable location, and creates desktop and Start menu shortcuts; administrator privileges are not required for the default location. The `.zip` archive remains available for portable use and in-app updates.
+On Windows, use `navop-x86_64-pc-windows-msvc.msi` for the English installer or the `-zh-CN.msi` variant for Simplified Chinese. Both provide a standard per-user installation, default to `%LOCALAPPDATA%\Programs\Navop`, and append the `Navop` subdirectory when you choose another writable parent directory. They also create desktop and Start menu shortcuts; administrator privileges are not required for the default location. The `.zip` archive remains available for portable use and in-app updates.
 
 ### macOS Gatekeeper
 

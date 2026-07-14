@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization
+  Culture="en-US"
+  Codepage="1252"
+  xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String
+    Id="InstallDirDlgDescription"
+    Value="Choose an installation parent folder. Setup creates the Navop subfolder automatically." />
+  <String
+    Id="InstallDirDlgFolderLabel"
+    Value="Installation parent folder:" />
+  <String
+    Id="LicenseAgreementDlgTitle"
+    Value="{\WixUI_Font_Title}Navop Software License Agreement" />
+  <String
+    Id="LicenseAgreementDlgDescription"
+    Value="Please read and accept the following Navop software license terms." />
+  <String
+    Id="LicenseAgreementDlgLicenseAcceptedCheckBox"
+    Value="I have read and accept the Navop Software License Agreement (&amp;A)" />
+  <String
+    Id="ProgressDlgStatusLabel"
+    Value="Current action:" />
+  <String
+    Id="UITextTimeRemaining"
+    Value="Estimated time remaining: {[1] min }{[2] sec}" />
+</WixLocalization>

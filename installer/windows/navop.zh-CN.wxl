@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization
+  Culture="zh-CN"
+  Codepage="936"
+  xmlns="http://wixtoolset.org/schemas/v4/wxl">
+  <String
+    Id="InstallDirDlgDescription"
+    Value="请选择安装父目录，安装程序会自动创建 Navop 子目录。" />
+  <String
+    Id="InstallDirDlgFolderLabel"
+    Value="安装父目录：" />
+  <String
+    Id="LicenseAgreementDlgTitle"
+    Value="{\WixUI_Font_Title}Navop 软件许可协议" />
+  <String
+    Id="LicenseAgreementDlgDescription"
+    Value="请阅读并确认以下 Navop 软件许可条款。" />
+  <String
+    Id="LicenseAgreementDlgLicenseAcceptedCheckBox"
+    Value="我已阅读并同意 Navop 软件许可协议(&amp;A)" />
+  <String
+    Id="ProgressDlgStatusLabel"
+    Value="当前操作：" />
+  <String
+    Id="UITextTimeRemaining"
+    Value="预计剩余时间：{[1] 分钟 }{[2] 秒}" />
+</WixLocalization>
