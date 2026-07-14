@@ -530,6 +530,43 @@ pub struct AgentChatView {
 }
 
 impl AgentChatView {
+    pub fn refresh_models(
+        &mut self,
+        model_options: Vec<ComposerModelOption>,
+        selected_model_id: Option<SharedString>,
+        runtime_factory: Option<AgentRuntimeFactory>,
+        cx: &mut Context<Self>,
+    ) {
+        let previous_id = self.selected_model.as_ref().map(|model| model.id.clone());
+        let (selected, retained) = refreshed_model_selection(
+            previous_id.as_ref(),
+            selected_model_id.as_ref(),
+            &model_options,
+        );
+        self.model_options = model_options;
+        self.runtime_factory = runtime_factory;
+        let model_options = self.model_options.clone();
+        let tool_options = self.tool_options.clone();
+        let task_options = default_task_options();
+        self.input.update(cx, |input, cx| {
+            input.set_menu_options(model_options, tool_options, task_options, cx);
+        });
+        if let Some(retained) = retained {
+            self.selected_model = Some(retained);
+            self.sync_composer(cx);
+            cx.notify();
+            return;
+        }
+        if let Some(selected) = selected {
+            self.select_model(
+                selected.id.as_ref(),
+                selected.provider_id.as_ref(),
+                selected.model.as_ref(),
+                cx,
+            );
+        }
+    }
+
     /// 创建视图实体。
     pub fn view(
         runtime: Arc<Runtime>,
@@ -2920,6 +2957,25 @@ fn selected_model_from_config(config: &AgentChatViewConfig) -> Option<ComposerMo
         .or_else(|| config.model_options.first().cloned())
 }
 
+fn refreshed_model_selection(
+    previous_id: Option<&SharedString>,
+    selected_model_id: Option<&SharedString>,
+    model_options: &[ComposerModelOption],
+) -> (Option<ComposerModelOption>, Option<ComposerModelOption>) {
+    let retained = previous_id
+        .and_then(|id| model_options.iter().find(|model| &model.id == id))
+        .cloned();
+    let selected = retained
+        .clone()
+        .or_else(|| {
+            selected_model_id
+                .and_then(|id| model_options.iter().find(|model| &model.id == id))
+                .cloned()
+        })
+        .or_else(|| model_options.first().cloned());
+    (selected, retained)
+}
+
 fn runtime_specs_from_provider_configs(
     provider_configs: Vec<ProviderConfig>,
     registry: ToolRegistry,
@@ -4777,6 +4833,39 @@ mod tests {
 
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].option.provider_label.as_ref(), "Ollama");
+    }
+
+    #[test]
+    fn refreshed_models_keep_current_selection_when_it_still_exists() {
+        let current = ComposerModelOption::new("p:old", "p", "Provider", "old");
+        let added = ComposerModelOption::new("p:new", "p", "Provider", "new");
+        let previous_id = current.id.clone();
+        let default_id = added.id.clone();
+
+        let (selected, retained) =
+            refreshed_model_selection(Some(&previous_id), Some(&default_id), &[current, added]);
+
+        assert_eq!(
+            selected.as_ref().map(|model| model.id.as_ref()),
+            Some("p:old")
+        );
+        assert!(retained.is_some());
+    }
+
+    #[test]
+    fn refreshed_models_fall_back_when_current_selection_was_removed() {
+        let fallback = ComposerModelOption::new("p:new", "p", "Provider", "new");
+        let removed_id = SharedString::from("p:removed");
+        let default_id = fallback.id.clone();
+
+        let (selected, retained) =
+            refreshed_model_selection(Some(&removed_id), Some(&default_id), &[fallback]);
+
+        assert_eq!(
+            selected.as_ref().map(|model| model.id.as_ref()),
+            Some("p:new")
+        );
+        assert!(retained.is_none());
     }
 
     fn test_runtime(model_name: &str) -> Arc<Runtime> {

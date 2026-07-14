@@ -9,7 +9,10 @@ use gpui_component::{
     dialog::DialogButtonProps,
     h_flex, v_flex,
 };
-use one_core::llm::{storage::ProviderRepository, types::ProviderConfig};
+use one_core::llm::{
+    GlobalProviderState, notifier::emit_provider_config_changed, storage::ProviderRepository,
+    types::ProviderConfig,
+};
 use one_core::storage::{GlobalStorageState, StorageManager, traits::Repository};
 use rust_i18n::t;
 
@@ -25,6 +28,13 @@ pub struct LlmProvidersView {
 }
 
 impl LlmProvidersView {
+    fn notify_provider_configs_changed(cx: &mut App) {
+        if let Some(state) = cx.try_global::<GlobalProviderState>() {
+            state.manager().clear_cache();
+        }
+        emit_provider_config_changed(cx);
+    }
+
     pub fn new(cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let storage_state = cx.global::<GlobalStorageState>();
@@ -151,6 +161,7 @@ impl LlmProvidersView {
 
                     match result {
                         Ok(_) => {
+                            Self::notify_provider_configs_changed(cx);
                             _ = view_clone.update(cx, |view, cx| {
                                 view.load_providers(cx);
                             });
@@ -179,7 +190,10 @@ impl LlmProvidersView {
             .expect("ProviderRepository not found");
 
         match repo.delete(provider_id) {
-            Ok(_) => self.load_providers(cx),
+            Ok(_) => {
+                Self::notify_provider_configs_changed(cx);
+                self.load_providers(cx);
+            }
             Err(e) => tracing::error!("Failed to delete provider: {}", e),
         }
     }
@@ -246,7 +260,10 @@ impl LlmProvidersView {
         updated.is_default = new_default;
 
         match repo.update(&updated) {
-            Ok(_) => self.load_providers(cx),
+            Ok(_) => {
+                Self::notify_provider_configs_changed(cx);
+                self.load_providers(cx);
+            }
             Err(e) => tracing::error!("Failed to toggle default provider: {}", e),
         }
     }
@@ -265,7 +282,10 @@ impl LlmProvidersView {
             .expect("ProviderRepository not found");
 
         match repo.update(&updated) {
-            Ok(_) => self.load_providers(cx),
+            Ok(_) => {
+                Self::notify_provider_configs_changed(cx);
+                self.load_providers(cx);
+            }
             Err(e) => tracing::error!("Failed to toggle provider: {}", e),
         }
     }

@@ -11,7 +11,11 @@ use gpui::{
 use gpui_component::{ActiveTheme, Icon, IconName, Sizable, Size, v_flex};
 use one_core::{
     connection_notifier::{ConnectionDataEvent, get_notifier},
-    llm::{GlobalProviderState, ProviderConfig, storage::ProviderRepository},
+    llm::{
+        GlobalProviderState, ProviderConfig,
+        notifier::{ProviderConfigEvent, get_notifier as get_provider_notifier},
+        storage::ProviderRepository,
+    },
     sidebar_contribution::SidebarPlacement,
     storage::{ConnectionRepository, GlobalStorageState, StoredConnection, traits::Repository},
     tab_container::{TabContent, TabContentEvent},
@@ -69,6 +73,8 @@ pub struct DefaultAgentChatPanel {
     pending_resource_catalog: Option<(Vec<MentionItem>, Vec<agent_runtime::ResourceRef>)>,
     pending_code_block_actions: Vec<CodeBlockAction>,
     connection_subscription: Option<Subscription>,
+    provider_subscription: Option<Subscription>,
+    provider_refresh_generation: u64,
     theme: Option<AgentChatTheme>,
     show_sidebar_header: bool,
     show_sidebar_frame_controls: bool,
@@ -206,6 +212,8 @@ impl DefaultAgentChatPanel {
             pending_resource_catalog: None,
             pending_code_block_actions: Vec::new(),
             connection_subscription: None,
+            provider_subscription: None,
+            provider_refresh_generation: 0,
             theme: None,
             show_sidebar_header: true,
             show_sidebar_frame_controls: false,
@@ -213,8 +221,61 @@ impl DefaultAgentChatPanel {
             error: None,
         };
         panel.subscribe_connection_events(cx);
+        panel.subscribe_provider_events(cx);
         Self::spawn_build_view(resources, mentions, available_resources, mode, window, cx);
         panel
+    }
+
+    fn subscribe_provider_events(&mut self, cx: &mut Context<Self>) {
+        let Some(notifier) = get_provider_notifier(cx) else {
+            return;
+        };
+        self.provider_subscription = Some(
+            cx.subscribe(&notifier, |this, _, _: &ProviderConfigEvent, cx| {
+                this.refresh_provider_models(cx)
+            }),
+        );
+    }
+
+    fn refresh_provider_models(&mut self, cx: &mut Context<Self>) {
+        let Some(view) = self.view.clone() else {
+            return;
+        };
+        self.provider_refresh_generation = self.provider_refresh_generation.wrapping_add(1);
+        let generation = self.provider_refresh_generation;
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
+        let provider_state = cx.global::<GlobalProviderState>().clone();
+        let registry = build_plan_tool_registry(cx).unwrap_or_else(|error| {
+            tracing::warn!(%error, "Failed to rebuild plan tool registry");
+            agent_runtime::ToolRegistry::new()
+        });
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let configs = load_enabled_provider_configs(&storage);
+            let result = AgentChatViewConfig::from_provider_state(
+                agent_runtime::ResourceContext::new(),
+                Vec::new(),
+                configs,
+                registry,
+                provider_state,
+            )
+            .await;
+            let Some(panel) = this.upgrade() else {
+                return;
+            };
+            if cx.read_entity(&panel, |panel, _| panel.provider_refresh_generation) != generation {
+                return;
+            }
+            let _ = view.update(cx, |view, cx| match result {
+                Ok(config) => view.refresh_models(
+                    config.model_options,
+                    config.selected_model_id,
+                    config.runtime_factory,
+                    cx,
+                ),
+                Err(error) => tracing::warn!(%error, "Failed to refresh provider models"),
+            });
+        })
+        .detach();
     }
 
     fn subscribe_connection_events(&mut self, cx: &mut Context<Self>) {

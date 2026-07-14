@@ -1,6 +1,7 @@
 pub mod chat_history;
 pub mod connector;
 pub mod manager;
+pub mod notifier;
 pub mod onet_cli_provider;
 pub mod storage;
 pub mod types;
@@ -65,6 +66,7 @@ pub fn extract_stream_text_parts(response: &StreamingResponse) -> StreamTextPart
 
 pub fn init(cx: &mut App) {
     storage::init(cx);
+    notifier::init(cx);
     let state = GlobalProviderState::new();
     cx.set_global(state);
 }
