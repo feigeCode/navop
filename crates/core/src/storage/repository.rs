@@ -1,6 +1,6 @@
 use anyhow::Result;
 use gpui::{App, SharedString};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::storage::connection::SqliteConnection;
 use crate::storage::manager::{GlobalStorageState, now};
@@ -136,6 +136,49 @@ pub struct ConnectionRepository {
 impl ConnectionRepository {
     pub fn new(conn: SqliteConnection) -> Self {
         Self { conn }
+    }
+
+    pub fn upsert_cloud_connection(&self, item: &mut StoredConnection) -> Result<()> {
+        let cloud_id = item
+            .cloud_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Cloud connection requires cloud_id"))?;
+        let connection_type = item.connection_type.to_string();
+        let encrypted_params = item.encrypt_params();
+        let sync_enabled = i64::from(item.sync_enabled);
+        let ts = now();
+        let id = self.conn.with_connection(|conn| {
+            let tx = rusqlite::Transaction::new_unchecked(
+                conn,
+                TransactionBehavior::Immediate,
+            )?;
+            let existing_id = tx
+                .query_row(
+                    "SELECT id FROM connections WHERE cloud_id = ?1 ORDER BY id LIMIT 1",
+                    params![cloud_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
+            let id = if let Some(id) = existing_id {
+                tx.execute(
+                    "UPDATE connections SET name = ?1, connection_type = ?2, params = ?3, workspace_id = ?4, selected_databases = ?5, remark = ?6, sync_enabled = ?7, cloud_id = ?8, last_synced_at = ?9, team_id = ?10, owner_id = ?11, updated_at = ?12 WHERE id = ?13",
+                    params![item.name, connection_type, encrypted_params, item.workspace_id, item.selected_databases, item.remark, sync_enabled, cloud_id, item.last_synced_at, item.team_id, item.owner_id, ts, id],
+                )?;
+                id
+            } else {
+                tx.execute(
+                    "INSERT INTO connections (name, connection_type, params, workspace_id, selected_databases, remark, sync_enabled, cloud_id, last_synced_at, team_id, owner_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    params![item.name, connection_type, encrypted_params, item.workspace_id, item.selected_databases, item.remark, sync_enabled, cloud_id, item.last_synced_at, item.team_id, item.owner_id, ts, ts],
+                )?;
+                tx.last_insert_rowid()
+            };
+            tx.commit()?;
+            Ok(id)
+        })?;
+        item.id = Some(id);
+        item.created_at.get_or_insert(ts);
+        item.updated_at = Some(ts);
+        Ok(())
     }
 }
 
@@ -736,6 +779,7 @@ mod tests {
     use crate::storage::{StoredConnection, Workspace};
     use rusqlite::params;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Barrier};
 
     static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -900,6 +944,35 @@ mod tests {
         assert_eq!(
             Some(new_id),
             repo.list().unwrap().first().and_then(|c| c.id)
+        );
+    }
+
+    #[test]
+    fn cloud_download_upsert_serializes_duplicate_inserts() {
+        let (_, repo) = test_repository();
+        let barrier = Arc::new(Barrier::new(3));
+        let handles = ["first", "second"].map(|name| {
+            let repo = repo.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let mut connection = ssh_connection(name);
+                connection.cloud_id = Some("shared-cloud-id".to_string());
+                barrier.wait();
+                repo.upsert_cloud_connection(&mut connection)
+                    .expect("cloud download persists");
+            })
+        });
+
+        barrier.wait();
+        for handle in handles {
+            handle.join().expect("download thread joins");
+        }
+
+        assert_eq!(1, repo.count().expect("connection count"));
+        assert!(
+            repo.get_by_cloud_id("shared-cloud-id")
+                .expect("connection read")
+                .is_some()
         );
     }
 }

@@ -14,19 +14,22 @@ use super::sync_type::SyncTypeHandler;
 use super::workspace_sync::WorkspaceSyncType;
 use crate::cloud_sync::CloudAccountScope;
 use crate::cloud_sync::client::CloudApiClient;
-use crate::cloud_sync::models::{ConflictResolution, SyncResult, Team, TeamRole};
+use crate::cloud_sync::models::{ConflictResolution, SyncResult, Team, TeamMember, TeamRole};
 use crate::cloud_sync::queue::OperationQueue;
 use crate::cloud_sync::service::{CloudSyncService, SyncError};
 use crate::cloud_sync::team_key_envelope::TeamKeyKdfParams;
 use crate::cloud_sync::team_key_manager::{TeamKeyError, TeamKeyLoadStatus, TeamKeyManager};
 use crate::crypto;
 use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
+use futures_util::{StreamExt, stream};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub type SyncFuture<'a> = Pin<Box<dyn Future<Output = Result<SyncResult, SyncError>> + Send + 'a>>;
+
+const TEAM_MEMBER_FETCH_CONCURRENCY: usize = 4;
 
 fn sync_execution_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -166,11 +169,15 @@ impl SyncEngine {
     /// 3. 再同步连接（依赖工作空间）
     pub async fn sync(&self) -> Result<SyncResult, SyncError> {
         let _execution_guard = sync_execution_lock().lock().await;
+        self.sync_unlocked().await
+    }
+
+    async fn sync_unlocked(&self) -> Result<SyncResult, SyncError> {
         tracing::info!("========== 开始云同步 ==========");
 
         self.ensure_unlocked()?;
 
-        match self.refresh_team_key_cache().await {
+        match self.refresh_team_key_cache_unlocked().await {
             Ok(count) => {
                 tracing::info!("[同步] 已缓存 {} 个团队", count);
             }
@@ -266,6 +273,11 @@ impl SyncEngine {
     ///
     /// 只同步团队元数据和当前用户角色，不上传或下载连接/工作空间数据。
     pub async fn refresh_team_key_cache(&self) -> Result<usize, SyncError> {
+        let _execution_guard = sync_execution_lock().lock().await;
+        self.refresh_team_key_cache_unlocked().await
+    }
+
+    async fn refresh_team_key_cache_unlocked(&self) -> Result<usize, SyncError> {
         let scope = self.account_scope()?;
         let teams = self
             .cloud_client
@@ -318,28 +330,37 @@ impl SyncEngine {
             Some(repo) => repo,
             None => return 0,
         };
+        let member_results = stream::iter(teams.iter().cloned())
+            .map(|team| async move {
+                let members = self.cloud_client.list_team_members(&team.id).await;
+                (team, members)
+            })
+            .buffer_unordered(TEAM_MEMBER_FETCH_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
         let mut cached_count = 0;
-        for team in teams {
-            if self.cache_team_role(repo.as_ref(), team, scope).await {
-                cached_count += 1;
+        for (team, members) in member_results {
+            match members {
+                Ok(members) => {
+                    if self.cache_team_role(repo.as_ref(), &team, scope, &members) {
+                        cached_count += 1;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!("[同步] 获取团队 {} 成员列表失败: {}", team.id, error);
+                }
             }
         }
         cached_count
     }
 
-    async fn cache_team_role(
+    fn cache_team_role(
         &self,
         repo: &TeamKeyCacheRepository,
         team: &Team,
         scope: &CloudAccountScope,
+        members: &[TeamMember],
     ) -> bool {
-        let members = match self.cloud_client.list_team_members(&team.id).await {
-            Ok(members) => members,
-            Err(e) => {
-                tracing::warn!("[同步] 获取团队 {} 成员列表失败: {}", team.id, e);
-                return false;
-            }
-        };
         let Some(member) = members.iter().find(|m| m.user_id == scope.user_id) else {
             if let Err(error) = repo.delete(scope, &team.id) {
                 tracing::warn!(
@@ -405,6 +426,17 @@ impl SyncEngine {
         old_key: &str,
         new_key: &str,
     ) -> Result<TeamKeyRotationResult, SyncError> {
+        let _execution_guard = sync_execution_lock().lock().await;
+        self.rotate_team_key_unlocked(team_id, old_key, new_key)
+            .await
+    }
+
+    async fn rotate_team_key_unlocked(
+        &self,
+        team_id: &str,
+        old_key: &str,
+        new_key: &str,
+    ) -> Result<TeamKeyRotationResult, SyncError> {
         self.ensure_unlocked()?;
         let teams = self
             .cloud_client
@@ -450,6 +482,17 @@ impl SyncEngine {
         team_key: &str,
         personal_key: &str,
     ) -> Result<TeamKeyLoadStatus, SyncError> {
+        let _execution_guard = sync_execution_lock().lock().await;
+        self.save_or_initialize_team_key_for_cached_team_unlocked(team_id, team_key, personal_key)
+            .await
+    }
+
+    async fn save_or_initialize_team_key_for_cached_team_unlocked(
+        &self,
+        team_id: &str,
+        team_key: &str,
+        personal_key: &str,
+    ) -> Result<TeamKeyLoadStatus, SyncError> {
         let scope = self.account_scope()?;
         let repo = self
             .storage
@@ -485,6 +528,20 @@ impl SyncEngine {
             .map_err(team_key_error_to_sync_error)?;
         self.update_cached_team(initialized)?;
         Ok(status)
+    }
+
+    pub async fn forget_team_key_for_cached_team(&self, team_id: &str) -> Result<(), SyncError> {
+        let _execution_guard = sync_execution_lock().lock().await;
+        let scope = self.account_scope()?;
+        let repo = self
+            .storage
+            .get::<TeamKeyCacheRepository>()
+            .ok_or_else(|| {
+                SyncError::StorageError("TeamKeyCacheRepository not found".to_string())
+            })?;
+        TeamKeyManager::new((*repo).clone(), self.crypto_service.clone(), scope)
+            .forget_team_key(team_id)
+            .map_err(team_key_error_to_sync_error)
     }
 
     fn save_rotated_team_key(&self, team: &Team, new_key: &str) -> Result<(), SyncError> {
@@ -731,7 +788,9 @@ fn team_key_error_to_sync_error(error: TeamKeyError) -> SyncError {
 
 #[cfg(test)]
 mod tests {
-    use super::{sync_execution_lock, team_key_cache_for_cloud_team};
+    use super::{
+        TEAM_MEMBER_FETCH_CONCURRENCY, sync_execution_lock, team_key_cache_for_cloud_team,
+    };
     use crate::cloud_sync::client::{
         AuthResponse, CloudApiClient, CloudApiError, OAuthResponse, UserInfo,
     };
@@ -741,7 +800,7 @@ mod tests {
     use crate::storage::migration::run_migrations;
     use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
     use async_trait::async_trait;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, RwLock};
 
     static NEXT_TEST_DB_ID: AtomicU64 = AtomicU64::new(0);
@@ -811,6 +870,13 @@ mod tests {
         teams: Vec<Team>,
         members: Vec<TeamMember>,
         initialized_team: Arc<Mutex<Option<Team>>>,
+        member_request_probe: Option<Arc<MemberRequestProbe>>,
+    }
+
+    #[derive(Default)]
+    struct MemberRequestProbe {
+        in_flight: AtomicUsize,
+        max_in_flight: AtomicUsize,
     }
 
     #[async_trait]
@@ -916,6 +982,12 @@ mod tests {
             &self,
             _team_id: &str,
         ) -> Result<Vec<TeamMember>, CloudApiError> {
+            if let Some(probe) = &self.member_request_probe {
+                let in_flight = probe.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                probe.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                probe.in_flight.fetch_sub(1, Ordering::SeqCst);
+            }
             Ok(self.members.clone())
         }
 
@@ -1001,6 +1073,7 @@ mod tests {
                 }],
                 members: vec![member(TeamRole::Owner)],
                 initialized_team: Arc::new(Mutex::new(None)),
+                member_request_probe: None,
             }),
             service,
             storage,
@@ -1016,6 +1089,41 @@ mod tests {
         assert_eq!("Platform", cache.team_name);
         assert_eq!(Some("verification".to_string()), cache.key_verification);
         assert_eq!(Some("owner".to_string()), cache.role);
+    }
+
+    #[tokio::test]
+    async fn refresh_team_roles_uses_bounded_concurrency() {
+        let (storage, _) = test_storage();
+        let service = Arc::new(RwLock::new(CloudSyncService::new()));
+        service
+            .write()
+            .expect("service lock")
+            .set_logged_in("user-1".to_string());
+        let teams = (1..=6)
+            .map(|index| Team {
+                id: format!("team-{index}"),
+                name: format!("Team {index}"),
+                ..team()
+            })
+            .collect();
+        let probe = Arc::new(MemberRequestProbe::default());
+        let engine = SyncEngine::new(
+            Arc::new(FakeCloudClient {
+                teams,
+                members: vec![member(TeamRole::Member)],
+                initialized_team: Arc::new(Mutex::new(None)),
+                member_request_probe: Some(probe.clone()),
+            }),
+            service,
+            storage,
+        );
+
+        let refreshed = engine.refresh_team_key_cache().await.expect("refresh");
+        let max_in_flight = probe.max_in_flight.load(Ordering::SeqCst);
+
+        assert_eq!(6, refreshed);
+        assert!(max_in_flight > 1);
+        assert!(max_in_flight <= TEAM_MEMBER_FETCH_CONCURRENCY);
     }
 
     #[tokio::test]
@@ -1048,6 +1156,7 @@ mod tests {
                 teams: Vec::new(),
                 members: Vec::new(),
                 initialized_team: Arc::new(Mutex::new(None)),
+                member_request_probe: None,
             }),
             service.clone(),
             storage,
@@ -1098,6 +1207,7 @@ mod tests {
                 teams: vec![team()],
                 members: Vec::new(),
                 initialized_team: Arc::new(Mutex::new(None)),
+                member_request_probe: None,
             }),
             service.clone(),
             storage,
@@ -1145,6 +1255,7 @@ mod tests {
                 teams: Vec::new(),
                 members: Vec::new(),
                 initialized_team: initialized_team.clone(),
+                member_request_probe: None,
             }),
             service.clone(),
             storage,

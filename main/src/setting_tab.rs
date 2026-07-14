@@ -40,8 +40,7 @@ use gpui_component::{
 };
 use one_core::cloud_sync::{
     CloudSyncService, GlobalCloudUser, SyncEngine, TeamKeyCacheStatus, TeamOption,
-    forget_team_key_for_cached_team, get_cached_team_options, personal::SyncStoreHealth,
-    save_team_key_for_cached_team,
+    get_cached_team_options, personal::SyncStoreHealth,
 };
 use one_core::connection_notifier::{ConnectionDataEvent, get_notifier};
 use one_core::crypto;
@@ -1713,20 +1712,19 @@ fn show_team_key_entry_dialog(team: TeamOption, window: &mut Window, cx: &mut Ap
                         );
                         return false;
                     }
-                    initialize_team_key_from_settings(team_id_ok.clone(), team_key, window, cx);
+                    save_or_initialize_team_key_from_settings(
+                        TeamKeySaveRequest::initialize(team_id_ok.clone(), team_key),
+                        window,
+                        cx,
+                    );
                     return true;
                 }
-                match save_team_key_for_cached_team(&team_id_ok, &team_key, cx) {
-                    Ok(()) => {
-                        window.push_notification(t!("TeamSync.save_success").to_string(), cx);
-                        team_key_change_completed(window, cx);
-                        true
-                    }
-                    Err(error) => {
-                        set_team_key_dialog_error(&error_ok, error.to_string(), cx);
-                        false
-                    }
-                }
+                save_or_initialize_team_key_from_settings(
+                    TeamKeySaveRequest::save(team_id_ok.clone(), team_key),
+                    window,
+                    cx,
+                );
+                true
             })
             .child(
                 v_flex()
@@ -1881,41 +1879,59 @@ fn refresh_team_key_cache_from_settings(window: &mut Window, cx: &mut App) {
         .detach();
 }
 
-fn initialize_team_key_from_settings(
+struct TeamKeySaveRequest {
     team_id: String,
     team_key: String,
+    started_message: Option<String>,
+    success_message: String,
+}
+
+impl TeamKeySaveRequest {
+    fn initialize(team_id: String, team_key: String) -> Self {
+        Self {
+            team_id,
+            team_key,
+            started_message: Some(t!("TeamSync.initialize_started").to_string()),
+            success_message: t!("TeamSync.initialize_success").to_string(),
+        }
+    }
+
+    fn save(team_id: String, team_key: String) -> Self {
+        Self {
+            team_id,
+            team_key,
+            started_message: None,
+            success_message: t!("TeamSync.save_success").to_string(),
+        }
+    }
+}
+
+fn save_or_initialize_team_key_from_settings(
+    request: TeamKeySaveRequest,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let Some(user) = GlobalCloudUser::get_user(cx) else {
-        window.push_notification(t!("Home.cloud_need_login").to_string(), cx);
-        return;
-    };
     let Some(personal_key) = crypto::get_raw_master_key() else {
         window.push_notification(t!("Encryption.key_locked_tooltip").to_string(), cx);
         return;
     };
-    let Some(storage) = cx.try_global::<GlobalStorageState>() else {
-        window.push_notification("GlobalStorageState not found".to_string(), cx);
+    let Some(engine) = team_key_engine_from_settings(window, cx) else {
         return;
     };
-    let sync_service = Arc::new(std::sync::RwLock::new(CloudSyncService::new()));
-    if let Ok(mut service) = sync_service.write() {
-        service.set_logged_in(user.id);
+    if let Some(message) = request.started_message {
+        window.push_notification(message, cx);
     }
-    let engine = SyncEngine::new(
-        get_auth_service(cx).cloud_client(),
-        sync_service,
-        storage.storage.clone(),
-    );
-    window.push_notification(t!("TeamSync.initialize_started").to_string(), cx);
     window
         .spawn(cx, async move |cx| {
             let result = engine
-                .save_or_initialize_team_key_for_cached_team(&team_id, &team_key, &personal_key)
+                .save_or_initialize_team_key_for_cached_team(
+                    &request.team_id,
+                    &request.team_key,
+                    &personal_key,
+                )
                 .await;
             let (message, key_changed) = match result {
-                Ok(_) => (t!("TeamSync.initialize_success").to_string(), true),
+                Ok(_) => (request.success_message, true),
                 Err(error) => (error.to_string(), false),
             };
             if let Err(error) = cx.update(|window, cx: &mut App| {
@@ -1926,20 +1942,55 @@ fn initialize_team_key_from_settings(
                     window.refresh();
                 }
             }) {
-                tracing::warn!("团队密钥初始化完成后更新窗口失败: {error}");
+                tracing::warn!("团队密钥保存完成后更新窗口失败: {error}");
             }
         })
         .detach();
 }
 
 fn forget_team_key_from_settings(team_id: String, window: &mut Window, cx: &mut App) {
-    match forget_team_key_for_cached_team(&team_id, cx) {
-        Ok(()) => {
-            window.push_notification(t!("TeamSync.forget_success").to_string(), cx);
-            team_key_change_completed(window, cx);
-        }
-        Err(error) => window.push_notification(error.to_string(), cx),
+    let Some(engine) = team_key_engine_from_settings(window, cx) else {
+        return;
+    };
+    window
+        .spawn(cx, async move |cx| {
+            let result = engine.forget_team_key_for_cached_team(&team_id).await;
+            let (message, key_changed) = match result {
+                Ok(()) => (t!("TeamSync.forget_success").to_string(), true),
+                Err(error) => (error.to_string(), false),
+            };
+            if let Err(error) = cx.update(|window, cx: &mut App| {
+                window.push_notification(message, cx);
+                if key_changed {
+                    team_key_change_completed(window, cx);
+                } else {
+                    window.refresh();
+                }
+            }) {
+                tracing::warn!("团队密钥移除完成后更新窗口失败: {error}");
+            }
+        })
+        .detach();
+}
+
+fn team_key_engine_from_settings(window: &mut Window, cx: &mut App) -> Option<SyncEngine> {
+    let Some(user) = GlobalCloudUser::get_user(cx) else {
+        window.push_notification(t!("Home.cloud_need_login").to_string(), cx);
+        return None;
+    };
+    let Some(storage) = cx.try_global::<GlobalStorageState>() else {
+        window.push_notification("GlobalStorageState not found".to_string(), cx);
+        return None;
+    };
+    let sync_service = Arc::new(std::sync::RwLock::new(CloudSyncService::new()));
+    if let Ok(mut service) = sync_service.write() {
+        service.set_logged_in(user.id);
     }
+    Some(SyncEngine::new(
+        get_auth_service(cx).cloud_client(),
+        sync_service,
+        storage.storage.clone(),
+    ))
 }
 
 fn rotate_team_key_from_settings(
@@ -3628,11 +3679,15 @@ mod tests {
         for (function, next_function) in [
             (
                 "fn refresh_team_key_cache_from_settings(",
-                "fn initialize_team_key_from_settings(",
+                "struct TeamKeySaveRequest",
             ),
             (
-                "fn initialize_team_key_from_settings(",
+                "fn save_or_initialize_team_key_from_settings(",
                 "fn forget_team_key_from_settings(",
+            ),
+            (
+                "fn forget_team_key_from_settings(",
+                "fn team_key_engine_from_settings(",
             ),
             (
                 "fn rotate_team_key_from_settings(",
@@ -3666,18 +3721,22 @@ mod tests {
 
         assert!(production.contains("fn team_key_change_completed("));
         assert!(production.contains("ConnectionDataEvent::CloudSyncRequested"));
+        let entry_dialog = production
+            .split("fn show_team_key_entry_dialog(")
+            .nth(1)
+            .expect("team key entry dialog exists")
+            .split("fn show_team_key_rotation_dialog(")
+            .next()
+            .expect("team key entry dialog has an end marker");
+        assert!(entry_dialog.contains("save_or_initialize_team_key_from_settings("));
         for (function, next_function) in [
             (
-                "fn show_team_key_entry_dialog(",
-                "fn show_team_key_rotation_dialog(",
-            ),
-            (
-                "fn initialize_team_key_from_settings(",
+                "fn save_or_initialize_team_key_from_settings(",
                 "fn forget_team_key_from_settings(",
             ),
             (
                 "fn forget_team_key_from_settings(",
-                "fn rotate_team_key_from_settings(",
+                "fn team_key_engine_from_settings(",
             ),
             (
                 "fn rotate_team_key_from_settings(",

@@ -341,6 +341,30 @@ mod external_driver_form_tests {
         assert_eq!(None, connection_team_name(None, &teams));
     }
 
+    #[test]
+    fn list_and_card_layouts_render_cached_team_names() {
+        let source = include_str!("home_tab.rs");
+        let list_item = source
+            .rsplit("fn render_connection_list_item(")
+            .next()
+            .expect("render_connection_list_item exists")
+            .split("\n    fn connection_info_text(")
+            .next()
+            .expect("list item render has an end marker");
+        let card = source
+            .rsplit("fn render_connection_card(")
+            .next()
+            .expect("render_connection_card exists")
+            .split("impl Focusable for HomePage")
+            .next()
+            .expect("card render has an end marker");
+
+        assert!(list_item.contains("connection_team_name"));
+        assert!(list_item.contains("conn-list-team-"));
+        assert!(card.contains("connection_team_name"));
+        assert!(card.contains("conn-team-"));
+    }
+
     fn stored_external_connection(driver_id: &str) -> StoredConnection {
         StoredConnection::new_database(
             "demo".to_string(),
@@ -3629,6 +3653,7 @@ impl HomePage {
             .id
             .map_or(false, |id| cx.global::<ActiveConnections>().is_active(id));
         let can_edit = can_edit_connection(&conn, cx);
+        let team_name = connection_team_name(conn.team_id.as_deref(), &self.team_options);
 
         h_flex()
             .id(SharedString::from(format!(
@@ -3752,6 +3777,30 @@ impl HomePage {
                                     .min_w_0()
                                     .child(conn.name.clone()),
                             )
+                            .when_some(team_name, |this, team_name| {
+                                let tooltip_text: SharedString = team_name.clone().into();
+                                this.child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "conn-list-team-{}",
+                                            conn.id.unwrap_or(0)
+                                        )))
+                                        .max_w(px(112.0))
+                                        .px_1p5()
+                                        .py_0p5()
+                                        .rounded(px(4.0))
+                                        .bg(cx.theme().primary)
+                                        .text_color(cx.theme().primary_foreground)
+                                        .text_xs()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .whitespace_nowrap()
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new(tooltip_text.clone()).build(window, cx)
+                                        })
+                                        .child(team_name),
+                                )
+                            })
                             .child({
                                 h_flex()
                                     .gap_1()

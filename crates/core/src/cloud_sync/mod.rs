@@ -173,28 +173,6 @@ pub fn ensure_team_key_ready_for_save(team_id: Option<&str>, cx: &App) -> Result
     }
 }
 
-pub fn save_team_key_for_cached_team(
-    team_id: &str,
-    team_key: &str,
-    cx: &App,
-) -> Result<(), TeamKeyError> {
-    let raw_key = crypto::get_raw_master_key().ok_or(TeamKeyError::MissingPersonalKey)?;
-    let scope = current_cloud_scope(cx).ok_or(TeamKeyError::MissingTeamKey)?;
-    let repo = team_key_cache_repo(cx)?;
-    let service = Arc::new(RwLock::new(CloudSyncService::new()));
-    TeamKeyManager::new((*repo).clone(), service, scope)
-        .save_key_for_cached_team(team_id, team_key, &raw_key)?;
-    Ok(())
-}
-
-pub fn forget_team_key_for_cached_team(team_id: &str, cx: &App) -> Result<(), TeamKeyError> {
-    let scope = current_cloud_scope(cx).ok_or(TeamKeyError::MissingTeamKey)?;
-    let repo = team_key_cache_repo(cx)?;
-    let service = Arc::new(RwLock::new(CloudSyncService::new()));
-    TeamKeyManager::new((*repo).clone(), service, scope).forget_team_key(team_id)?;
-    Ok(())
-}
-
 fn team_key_cache_repo(cx: &App) -> Result<Arc<TeamKeyCacheRepository>, TeamKeyError> {
     let storage = cx
         .try_global::<GlobalStorageState>()

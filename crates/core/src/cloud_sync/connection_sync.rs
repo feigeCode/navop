@@ -100,8 +100,13 @@ impl SyncEngine {
             .collect();
         tracing::info!("[同步] 活跃云端连接数据: {} 个", active_cloud_data.len());
 
-        let plan =
-            self.calculate_sync_plan(&local_connections, &active_cloud_data, &cloud_name_map)?;
+        let readable_team_ids = self.readable_team_ids();
+        let plan = self.calculate_sync_plan(
+            &local_connections,
+            &active_cloud_data,
+            &cloud_name_map,
+            &readable_team_ids,
+        )?;
         tracing::info!(
             "[同步计划] 上传: {}, 更新云端: {}, 下载: {}, 更新本地: {}, 冲突: {}",
             plan.to_upload.len(),
@@ -537,6 +542,7 @@ impl SyncEngine {
         local_connections: &[StoredConnection],
         cloud_data_list: &[CloudSyncData],
         cloud_name_map: &HashMap<String, String>,
+        readable_team_ids: &HashSet<String>,
     ) -> Result<SyncPlan, SyncError> {
         let mut plan = SyncPlan::default();
 
@@ -594,12 +600,18 @@ impl SyncEngine {
                             }
                             (false, false) => {}
                         }
-                    } else {
+                    } else if Self::cloud_absence_is_authoritative(local_conn, readable_team_ids) {
                         plan.conflicts.push(
                             crate::cloud_sync::conflict::ConflictResolver::detect_local_modified_cloud_deleted(
                                 local_conn,
                                 cloud_id,
                             ),
+                        );
+                    } else {
+                        tracing::info!(
+                            "[同步计划] 团队 {} 当前不可读，保留本地连接 {}",
+                            local_conn.team_id.as_deref().unwrap_or_default(),
+                            local_conn.name
                         );
                     }
                 }
@@ -646,6 +658,24 @@ impl SyncEngine {
         }
 
         Ok(plan)
+    }
+
+    fn readable_team_ids(&self) -> HashSet<String> {
+        self.get_cached_teams()
+            .into_iter()
+            .filter(|team| self.is_team_unlocked(&team.id))
+            .map(|team| team.id)
+            .collect()
+    }
+
+    fn cloud_absence_is_authoritative(
+        local_conn: &StoredConnection,
+        readable_team_ids: &HashSet<String>,
+    ) -> bool {
+        local_conn
+            .team_id
+            .as_ref()
+            .is_none_or(|team_id| readable_team_ids.contains(team_id))
     }
 
     fn resolve_conflicts(
@@ -775,21 +805,7 @@ impl SyncEngine {
         repo: &ConnectionRepository,
         local_conn: &mut StoredConnection,
     ) -> Result<(), SyncError> {
-        let existing = local_conn
-            .cloud_id
-            .as_deref()
-            .map(|cloud_id| repo.get_by_cloud_id(cloud_id))
-            .transpose()
-            .map_err(|error| SyncError::StorageError(error.to_string()))?
-            .flatten();
-        if let Some(existing) = existing {
-            local_conn.id = existing.id;
-            return repo
-                .update(local_conn)
-                .map_err(|error| SyncError::StorageError(error.to_string()));
-        }
-        repo.insert(local_conn)
-            .map(|_| ())
+        repo.upsert_cloud_connection(local_conn)
             .map_err(|error| SyncError::StorageError(error.to_string()))
     }
 
@@ -1322,6 +1338,39 @@ mod tests {
         let cloud = cloud_sync_data(120);
 
         assert!(SyncEngine::connection_has_local_changes(&local, &cloud));
+    }
+
+    #[test]
+    fn missing_unreadable_team_record_is_not_treated_as_cloud_deletion() {
+        let mut local = stored_connection(100);
+        local.team_id = Some("departed-team".to_string());
+
+        assert!(!SyncEngine::cloud_absence_is_authoritative(
+            &local,
+            &HashSet::new()
+        ));
+    }
+
+    #[test]
+    fn missing_readable_team_record_can_be_treated_as_cloud_deletion() {
+        let mut local = stored_connection(100);
+        local.team_id = Some("team-1".to_string());
+        let readable_team_ids = HashSet::from(["team-1".to_string()]);
+
+        assert!(SyncEngine::cloud_absence_is_authoritative(
+            &local,
+            &readable_team_ids
+        ));
+    }
+
+    #[test]
+    fn missing_personal_record_can_be_treated_as_cloud_deletion() {
+        let local = stored_connection(100);
+
+        assert!(SyncEngine::cloud_absence_is_authoritative(
+            &local,
+            &HashSet::new()
+        ));
     }
 
     #[test]
