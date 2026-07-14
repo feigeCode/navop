@@ -113,6 +113,16 @@ jobs:
             -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
             -out "navop-x86_64-pc-windows-msvc-zh-CN.msi"
 
+      - name: Validate MSI metadata
+        shell: pwsh
+        run: |
+          ./script/validate-windows-msi.ps1 `
+            -Path "navop-x86_64-pc-windows-msvc.msi" `
+            -ExpectedLanguage 1033
+          ./script/validate-windows-msi.ps1 `
+            -Path "navop-x86_64-pc-windows-msvc-zh-CN.msi" `
+            -ExpectedLanguage 2052
+
       - name: Generate checksum
         shell: pwsh
         run: |

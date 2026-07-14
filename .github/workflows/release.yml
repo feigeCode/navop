@@ -334,6 +334,17 @@ jobs:
             -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
             -out "navop-x86_64-pc-windows-msvc-zh-CN.msi"
 
+      - name: Validate Windows MSI metadata
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./script/validate-windows-msi.ps1 `
+            -Path "navop-x86_64-pc-windows-msvc.msi" `
+            -ExpectedLanguage 1033
+          ./script/validate-windows-msi.ps1 `
+            -Path "navop-x86_64-pc-windows-msvc-zh-CN.msi" `
+            -ExpectedLanguage 2052
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

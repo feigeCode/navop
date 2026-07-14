@@ -151,9 +151,12 @@ test("CI runs release packaging regression checks", () => {
 
 test("manual Windows workflow builds a release MSI with its checksum", () => {
   const workflowPath = ".github/workflows/build-windows-msi.yml";
+  const validatorPath = "script/validate-windows-msi.ps1";
   assert.ok(fs.existsSync(workflowPath), `${workflowPath} must exist`);
+  assert.ok(fs.existsSync(validatorPath), `${validatorPath} must exist`);
 
   const workflow = read(workflowPath);
+  const validator = read(validatorPath);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(
     workflow,
@@ -167,6 +170,11 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
   assert.match(workflow, /navop-x86_64-pc-windows-msvc\.msi/);
   assert.match(workflow, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
   assert.match(workflow, /sha256sums-windows\.txt/);
+  assert.match(workflow, /validate-windows-msi\.ps1/);
+  assert.match(validator, /ProductLanguage/);
+  assert.match(validator, /WIXUI_INSTALLDIR/);
+  assert.match(validator, /DesktopShortcut/);
+  assert.match(validator, /StartMenuShortcut/);
 });
 
 test("application updates prefer navop while accepting legacy package names", () => {
