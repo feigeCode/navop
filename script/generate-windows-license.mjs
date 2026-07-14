@@ -19,11 +19,11 @@ function escapeRtf(text) {
   return escaped;
 }
 
-function writeRtf(path, text, codepage, charset, font) {
-  const output = new URL(path, root);
+function writeRtf(text) {
+  const output = new URL("installer/windows/navop-license.rtf", root);
   const rtf = [
-    `{\\rtf1\\ansi\\ansicpg${codepage}\\deff0\\uc1`,
-    `{\\fonttbl{\\f0\\fnil\\fcharset${charset} ${font};}}`,
+    "{\\rtf1\\ansi\\ansicpg936\\deff0\\uc1",
+    "{\\fonttbl{\\f0\\fnil\\fcharset134 Microsoft YaHei;}}",
     `\\viewkind4\\pard\\f0\\fs20 ${escapeRtf(text)}}`,
     "",
   ].join("\n");
@@ -42,40 +42,26 @@ const chineseSupplementary = supplementary
   .replace(/^The Navop License/, "Navop 补充许可协议");
 const englishSupplementary = supplementary.slice(englishIndex + 2);
 
-const englishLicense = [
-  "Navop Software License Agreement",
+const license = [
+  "Navop Software License Agreement / Navop 软件许可协议",
   "",
-  "Part 1: Navop Supplementary License",
+  "Installing or using Navop means that you accept all terms below.",
+  "安装或使用 Navop 即表示您接受以下全部条款。",
   "",
-  englishSupplementary,
-  "",
-  "Part 2: Apache License 2.0",
-  "",
-  apache,
-].join("\n");
-const chineseLicense = [
-  "Navop 软件许可协议",
-  "",
-  "第一部分：Navop 补充许可协议",
+  "Part 1: Navop Supplementary License (Chinese)",
+  "第一部分：Navop 补充许可协议（中文）",
   "",
   chineseSupplementary,
   "",
-  "第二部分：Apache License 2.0",
+  "Part 2: Navop Supplementary License (English)",
+  "第二部分：Navop 补充许可协议（英文）",
+  "",
+  englishSupplementary,
+  "",
+  "Part 3: Apache License 2.0",
+  "第三部分：Apache License 2.0",
   "",
   apache,
 ].join("\n");
 
-writeRtf(
-  "installer/windows/navop-license-en-US.rtf",
-  englishLicense,
-  1252,
-  0,
-  "Tahoma",
-);
-writeRtf(
-  "installer/windows/navop-license-zh-CN.rtf",
-  chineseLicense,
-  936,
-  134,
-  "Microsoft YaHei",
-);
+writeRtf(license);

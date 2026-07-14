@@ -6,13 +6,11 @@
     Manufacturer="feigeCode"
     Version="$(Version)"
     UpgradeCode="2EAB58E6-27F7-4D97-81A1-7CE4B50FA294"
-    Language="$(Language)"
-    Codepage="$(Codepage)"
+    Language="1033"
+    Codepage="936"
     InstallerVersion="500"
     Scope="perUser">
-    <MajorUpgrade
-      DowngradeErrorMessage="A newer version of Navop is already installed."
-      IgnoreLanguage="yes" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Navop is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="NavopIcon" SourceFile="$(IconPath)" />
@@ -20,7 +18,7 @@
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLROOT" />
     <WixVariable
       Id="WixUILicenseRtf"
-      Value="$(LicensePath)" />
+      Value="$(sys.SOURCEFILEDIR)navop-license.rtf" />
 
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="INSTALLROOT" Name="Programs">

@@ -18,7 +18,7 @@ function Read-MsiValue {
     if ($null -eq $record) {
       throw "MSI query returned no rows: $Query"
     }
-    return $record.StringData(1)
+    return $record.StringData(1).Trim()
   } finally {
     $view.Close()
   }

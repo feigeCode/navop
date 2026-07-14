@@ -182,7 +182,7 @@ Navop 基于 GPUI 原生渲染，并持续优化高负载 UI 路径。近期已�
 
 每个版本会同时发布 `sha256sums.txt` 校验文件。
 
-Windows 提供默认英文版 `navop-x86_64-pc-windows-msvc.msi` 和带 `-zh-CN.msi` 后缀的简体中文版。两者都进行当前用户安装，默认使用 `%LOCALAPPDATA%\Programs\Navop`；选择其他可写父目录时，会自动追加 `Navop` 子目录。安装程序同时创建桌面和开始菜单快捷方式，使用默认目录无需管理员权限。`.zip` 继续用于便携运行和应用内自动更新。
+Windows 使用一个中英双语的 `navop-x86_64-pc-windows-msvc.msi` 进行当前用户安装。安装程序默认使用 `%LOCALAPPDATA%\Programs\Navop`；选择其他可写父目录时，会自动追加 `Navop` 子目录。安装程序同时创建桌面和开始菜单快捷方式，使用默认目录无需管理员权限。`.zip` 继续用于便携运行和应用内自动更新。
 
 ### macOS Gatekeeper
 

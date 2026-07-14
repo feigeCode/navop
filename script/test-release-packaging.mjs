@@ -76,51 +76,41 @@ test("Windows MSI appends Navop to the directory chosen by users", () => {
   assert.doesNotMatch(wix, /InstallDirectory="INSTALLFOLDER"/);
 });
 
-test("Windows MSI builds English and Chinese localized installers", () => {
+test("Windows MSI builds one bilingual localized installer", () => {
   const release = read(".github/workflows/release.yml");
   const manual = read(".github/workflows/build-windows-msi.yml");
   const wix = read("installer/windows/navop.wxs");
-  const englishLocalizationPath = "installer/windows/navop.en-US.wxl";
-  const chineseLocalizationPath = "installer/windows/navop.zh-CN.wxl";
-  const englishLicensePath = "installer/windows/navop-license-en-US.rtf";
-  const chineseLicensePath = "installer/windows/navop-license-zh-CN.rtf";
+  const localizationPath = "installer/windows/navop.wxl";
+  const licensePath = "installer/windows/navop-license.rtf";
 
-  assert.match(wix, /Language="\$\(Language\)"/);
-  assert.match(wix, /Codepage="\$\(Codepage\)"/);
-  assert.match(wix, /WixUILicenseRtf[^]*\$\(LicensePath\)/);
+  assert.match(wix, /Language="1033"/);
+  assert.match(wix, /Codepage="936"/);
+  assert.match(wix, /WixUILicenseRtf[^]*navop-license\.rtf/);
   for (const workflow of [release, manual]) {
     assert.match(workflow, /node script\/generate-windows-license\.mjs/);
     assert.match(workflow, /-culture en-US/);
-    assert.match(workflow, /-loc installer\/windows\/navop\.en-US\.wxl/);
-    assert.match(workflow, /-culture zh-CN/);
-    assert.match(workflow, /-loc installer\/windows\/navop\.zh-CN\.wxl/);
-    assert.match(workflow, /-d Language="?1033"?/);
-    assert.match(workflow, /-d Language="?2052"?/);
-    assert.match(workflow, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
+    assert.match(workflow, /-loc installer\/windows\/navop\.wxl/);
+    assert.equal(
+      (workflow.match(/wix build installer\/windows\/navop\.wxs/g) ?? [])
+        .length,
+      1,
+    );
+    assert.doesNotMatch(workflow, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
   }
 
-  assert.ok(
-    fs.existsSync(englishLocalizationPath),
-    `${englishLocalizationPath} must exist`,
-  );
-  assert.ok(
-    fs.existsSync(chineseLocalizationPath),
-    `${chineseLocalizationPath} must exist`,
-  );
-  const englishLocalization = read(englishLocalizationPath);
-  const chineseLocalization = read(chineseLocalizationPath);
-  assert.match(englishLocalization, /Estimated time remaining/);
-  assert.match(englishLocalization, /I have read and accept/);
-  assert.match(chineseLocalization, /预计剩余时间/);
-  assert.match(chineseLocalization, /我已阅读并同意/);
+  assert.ok(fs.existsSync(localizationPath), `${localizationPath} must exist`);
+  const localization = read(localizationPath);
+  assert.match(localization, /Estimated time remaining/);
+  assert.match(localization, /预计剩余时间/);
+  assert.match(localization, /I have read and accept/);
+  assert.match(localization, /我已阅读并同意/);
 
-  for (const licensePath of [englishLicensePath, chineseLicensePath]) {
-    assert.ok(fs.existsSync(licensePath), `${licensePath} must exist`);
-    const license = read(licensePath);
-    assert.match(license, /Apache License/);
-    assert.match(license, /Navop/);
-    assert.doesNotMatch(license, /Lorem ipsum/);
-  }
+  assert.ok(fs.existsSync(licensePath), `${licensePath} must exist`);
+  const license = read(licensePath);
+  assert.match(license, /Apache License/);
+  assert.match(license, /Navop Software License Agreement/);
+  assert.match(license, /\\u/);
+  assert.doesNotMatch(license, /Lorem ipsum/);
 });
 
 test("Windows MSI creates a desktop shortcut", () => {
@@ -138,9 +128,9 @@ test("release publication and R2 upload include the MSI", () => {
   const upload = read(".github/workflows/upload-r2.yml");
 
   assert.match(release, /artifacts\/navop-\*\.msi/);
-  assert.match(upload, /--pattern "navop-x86_64-pc-windows-msvc\*\.msi"/);
+  assert.match(upload, /--pattern "navop-x86_64-pc-windows-msvc\.msi"/);
   assert.match(upload, /navop-x86_64-pc-windows-msvc\.msi/);
-  assert.match(upload, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
+  assert.doesNotMatch(upload, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
 });
 
 test("CI runs release packaging regression checks", () => {
@@ -168,13 +158,14 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
   assert.match(workflow, /Get-FileHash[^]*SHA256/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
   assert.match(workflow, /navop-x86_64-pc-windows-msvc\.msi/);
-  assert.match(workflow, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
+  assert.doesNotMatch(workflow, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
   assert.match(workflow, /sha256sums-windows\.txt/);
   assert.match(workflow, /validate-windows-msi\.ps1/);
   assert.match(validator, /ProductLanguage/);
   assert.match(validator, /WIXUI_INSTALLDIR/);
   assert.match(validator, /DesktopShortcut/);
   assert.match(validator, /StartMenuShortcut/);
+  assert.match(validator, /\.Trim\(\)/);
 });
 
 test("application updates prefer navop while accepting legacy package names", () => {

@@ -116,7 +116,7 @@ jobs:
             --pattern "navop-x86_64-unknown-linux-gnu.tar.gz" \
             --pattern "navop-aarch64-unknown-linux-gnu.tar.gz" \
             --pattern "navop-x86_64-pc-windows-msvc.zip" \
-            --pattern "navop-x86_64-pc-windows-msvc*.msi" \
+            --pattern "navop-x86_64-pc-windows-msvc.msi" \
             --pattern "navop-aarch64-apple-darwin.dmg" \
             --pattern "navop-x86_64-apple-darwin.dmg" \
             --pattern "sha256sums.txt" \
@@ -157,13 +157,6 @@ jobs:
               exit 1
             fi
           done
-
-          optional_msi="navop-x86_64-pc-windows-msvc-zh-CN.msi"
-          if [ -e "artifacts/${optional_msi}" ] \
-            && ! awk -v file="$optional_msi" '$2 == file && $1 ~ /^[0-9a-f]{64}$/ { found = 1 } END { exit found ? 0 : 1 }' artifacts/sha256sums.txt; then
-            echo "::error::sha256sums.txt is missing checksum for ${optional_msi}"
-            exit 1
-          fi
 
       - name: Generate R2 update manifest
         if: ${{ steps.r2_config.outputs.skip != 'true' && steps.release.outputs.skip != 'true' }}
@@ -288,11 +281,6 @@ jobs:
             navop-x86_64-apple-darwin.dmg \
             sha256sums.txt \
           )
-          optional_msi="navop-x86_64-pc-windows-msvc-zh-CN.msi"
-          if [ -s "artifacts/${optional_msi}" ]; then
-            release_files+=("$optional_msi")
-          fi
-
           for file in "${release_files[@]}"; do
             if [[ "$file" == *.zip ]]; then
               content_type="application/zip"

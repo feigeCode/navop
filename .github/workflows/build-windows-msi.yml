@@ -91,27 +91,12 @@ jobs:
           wix build installer/windows/navop.wxs `
             -ext WixToolset.UI.wixext `
             -culture en-US `
-            -loc installer/windows/navop.en-US.wxl `
+            -loc installer/windows/navop.wxl `
             -arch x64 `
             -d Version="$env:MSI_VERSION" `
-            -d Language="1033" `
-            -d Codepage="1252" `
-            -d LicensePath="${{ github.workspace }}\installer\windows\navop-license-en-US.rtf" `
             -d SourceDir="${{ github.workspace }}\package" `
             -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
             -out "navop-x86_64-pc-windows-msvc.msi"
-          wix build installer/windows/navop.wxs `
-            -ext WixToolset.UI.wixext `
-            -culture zh-CN `
-            -loc installer/windows/navop.zh-CN.wxl `
-            -arch x64 `
-            -d Version="$env:MSI_VERSION" `
-            -d Language="2052" `
-            -d Codepage="936" `
-            -d LicensePath="${{ github.workspace }}\installer\windows\navop-license-zh-CN.rtf" `
-            -d SourceDir="${{ github.workspace }}\package" `
-            -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
-            -out "navop-x86_64-pc-windows-msvc-zh-CN.msi"
 
       - name: Validate MSI metadata
         shell: pwsh
@@ -119,22 +104,13 @@ jobs:
           ./script/validate-windows-msi.ps1 `
             -Path "navop-x86_64-pc-windows-msvc.msi" `
             -ExpectedLanguage 1033
-          ./script/validate-windows-msi.ps1 `
-            -Path "navop-x86_64-pc-windows-msvc-zh-CN.msi" `
-            -ExpectedLanguage 2052
 
       - name: Generate checksum
         shell: pwsh
         run: |
-          $files = @(
-            "navop-x86_64-pc-windows-msvc.msi",
-            "navop-x86_64-pc-windows-msvc-zh-CN.msi"
-          )
-          $lines = foreach ($file in $files) {
-            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $file"
-          }
-          $lines | Set-Content -Path "sha256sums-windows.txt"
+          $file = "navop-x86_64-pc-windows-msvc.msi"
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $file" | Set-Content -Path "sha256sums-windows.txt"
           Get-Content "sha256sums-windows.txt"
 
       - name: Upload Windows MSI
@@ -143,7 +119,6 @@ jobs:
           name: navop-windows-msi-${{ inputs.version }}
           path: |
             navop-x86_64-pc-windows-msvc.msi
-            navop-x86_64-pc-windows-msvc-zh-CN.msi
             sha256sums-windows.txt
           if-no-files-found: error
           retention-days: 7
