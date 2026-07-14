@@ -296,7 +296,9 @@ jobs:
       - name: Install WiX Toolset
         if: runner.os == 'Windows'
         shell: pwsh
-        run: dotnet tool install --global wix --version 6.0.2
+        run: |
+          dotnet tool install --global wix --version 6.0.2
+          wix extension add -g WixToolset.UI.wixext/6.0.2
 
       - name: Build Windows MSI installer
         if: runner.os == 'Windows'
@@ -307,6 +309,7 @@ jobs:
             $msiVersion = '0.0.0'
           }
           wix build installer/windows/navop.wxs `
+            -ext WixToolset.UI.wixext `
             -arch x64 `
             -d Version="$msiVersion" `
             -d SourceDir="${{ github.workspace }}\package" `

@@ -27,6 +27,9 @@ jobs:
     runs-on: ${{ matrix.run_on }}
     steps:
       - uses: actions/checkout@v4
+      - name: Test release packaging
+        if: ${{ matrix.run_on == 'ubuntu-latest' }}
+        run: node --test script/test-release-packaging.mjs
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Install system dependencies
         if: ${{ matrix.run_on != 'windows-latest' }}

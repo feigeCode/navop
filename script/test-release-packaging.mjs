@@ -49,6 +49,38 @@ test("Windows release builds an installable per-user MSI", () => {
   assert.match(wix, /Root="HKCU"/);
 });
 
+test("Windows MSI lets users choose the installation directory", () => {
+  const release = read(".github/workflows/release.yml");
+  const wix = read("installer/windows/navop.wxs");
+
+  assert.match(
+    release,
+    /wix extension add -g WixToolset\.UI\.wixext\/6\.0\.2/,
+  );
+  assert.match(
+    release,
+    /wix build installer\/windows\/navop\.wxs[^]*-ext WixToolset\.UI\.wixext/,
+  );
+  assert.match(
+    wix,
+    /xmlns:ui="http:\/\/wixtoolset\.org\/schemas\/v4\/wxs\/ui"/,
+  );
+  assert.match(
+    wix,
+    /<ui:WixUI[^>]*Id="WixUI_InstallDir"[^>]*InstallDirectory="INSTALLFOLDER"/,
+  );
+});
+
+test("Windows MSI creates a desktop shortcut", () => {
+  const wix = read("installer/windows/navop.wxs");
+
+  assert.match(wix, /<StandardDirectory Id="DesktopFolder"\s*\/>/);
+  assert.match(
+    wix,
+    /<Shortcut[^>]*Id="DesktopShortcut"[^>]*Directory="DesktopFolder"[^>]*Name="Navop"/,
+  );
+});
+
 test("release publication and R2 upload include the MSI", () => {
   const release = read(".github/workflows/release.yml");
   const upload = read(".github/workflows/upload-r2.yml");
@@ -56,6 +88,31 @@ test("release publication and R2 upload include the MSI", () => {
   assert.match(release, /artifacts\/navop-\*\.msi/);
   assert.match(upload, /--pattern "navop-x86_64-pc-windows-msvc\.msi"/);
   assert.match(upload, /navop-x86_64-pc-windows-msvc\.msi/);
+});
+
+test("CI runs release packaging regression checks", () => {
+  const ci = read(".github/workflows/ci.yml");
+
+  assert.match(ci, /node --test script\/test-release-packaging\.mjs/);
+});
+
+test("manual Windows workflow builds a release MSI with its checksum", () => {
+  const workflowPath = ".github/workflows/build-windows-msi.yml";
+  assert.ok(fs.existsSync(workflowPath), `${workflowPath} must exist`);
+
+  const workflow = read(workflowPath);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(
+    workflow,
+    /cargo build --release -p main --target x86_64-pc-windows-msvc/,
+  );
+  assert.match(workflow, /wix --version 6\.0\.2/);
+  assert.match(workflow, /WixToolset\.UI\.wixext\/6\.0\.2/);
+  assert.match(workflow, /-ext WixToolset\.UI\.wixext/);
+  assert.match(workflow, /Get-FileHash[^]*SHA256/);
+  assert.match(workflow, /actions\/upload-artifact@v4/);
+  assert.match(workflow, /navop-x86_64-pc-windows-msvc\.msi/);
+  assert.match(workflow, /sha256sums-windows\.txt/);
 });
 
 test("application updates prefer navop while accepting legacy package names", () => {

@@ -1,0 +1,114 @@
+name: Build Windows MSI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "MSI version to build, for example 0.8.8"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build Windows MSI
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate version
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}".TrimStart("v")
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Version must use x.y.z format: $version"
+          }
+          "ONETCLI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "MSI_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: x86_64-pc-windows-msvc
+
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: windows-msi-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            release-cargo-Windows-x86_64-pc-windows-msvc-${{ hashFiles('**/Cargo.lock') }}-
+            test-cargo-x86_64-windows-msvc-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Verify build secrets
+        shell: pwsh
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SUPABASE_URL)) {
+            throw "SUPABASE_URL secret is empty or not set"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SUPABASE_ANON_KEY)) {
+            throw "SUPABASE_ANON_KEY secret is empty or not set"
+          }
+
+      - name: Build release binary
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          NAVOP_PUBLIC_BASE_URL: ${{ vars.NAVOP_PUBLIC_BASE_URL }}
+          NAVOP_WEBSITE_BASE_URL: ${{ vars.NAVOP_WEBSITE_BASE_URL }}
+          ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE: ${{ vars.ONETCLI_TEAM_MANAGEMENT_URL_TEMPLATE }}
+        run: cargo build --release -p main --target x86_64-pc-windows-msvc
+
+      - name: Stage Windows package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item "target/x86_64-pc-windows-msvc/release/navop.exe" "package/navop.exe"
+
+      - name: Install WiX Toolset
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 6.0.2
+          wix extension add -g WixToolset.UI.wixext/6.0.2
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          wix build installer/windows/navop.wxs `
+            -ext WixToolset.UI.wixext `
+            -arch x64 `
+            -d Version="$env:MSI_VERSION" `
+            -d SourceDir="${{ github.workspace }}\package" `
+            -d IconPath="${{ github.workspace }}\resources\windows\navop.ico" `
+            -out "navop-x86_64-pc-windows-msvc.msi"
+
+      - name: Generate checksum
+        shell: pwsh
+        run: |
+          $file = "navop-x86_64-pc-windows-msvc.msi"
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $file" | Set-Content -Path "sha256sums-windows.txt"
+          Get-Content "sha256sums-windows.txt"
+
+      - name: Upload Windows MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: navop-windows-msi-${{ inputs.version }}
+          path: |
+            navop-x86_64-pc-windows-msvc.msi
+            sha256sums-windows.txt
+          if-no-files-found: error
+          retention-days: 7

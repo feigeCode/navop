@@ -182,7 +182,7 @@ Navop 基于 GPUI 原生渲染，并持续优化高负载 UI 路径。近期已�
 
 每个版本会同时发布 `sha256sums.txt` 校验文件。
 
-Windows 推荐使用 `.msi` 安装到 `%LOCALAPPDATA%\Programs\Navop`，无需管理员权限；`.zip` 继续用于便携运行和应用内自动更新。
+Windows 推荐使用 `.msi` 进行当前用户安装。安装程序默认使用 `%LOCALAPPDATA%\Programs\Navop`，支持选择其他可写目录，并创建桌面和开始菜单快捷方式；使用默认目录无需管理员权限。`.zip` 继续用于便携运行和应用内自动更新。
 
 ### macOS Gatekeeper
 

@@ -1,4 +1,6 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix
+  xmlns="http://wixtoolset.org/schemas/v4/wxs"
+  xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package
     Name="Navop"
     Manufacturer="feigeCode"
@@ -12,6 +14,7 @@
 
     <Icon Id="NavopIcon" SourceFile="$(IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="NavopIcon" />
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
 
     <StandardDirectory Id="LocalAppDataFolder">
       <Directory Id="LocalProgramsFolder" Name="Programs">
@@ -22,6 +25,8 @@
     <StandardDirectory Id="ProgramMenuFolder">
       <Directory Id="ApplicationProgramsFolder" Name="Navop" />
     </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
 
     <Feature Id="ProductFeature" Title="Navop" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
@@ -35,6 +40,14 @@
           <Shortcut
             Id="StartMenuShortcut"
             Directory="ApplicationProgramsFolder"
+            Name="Navop"
+            Description="Navop - Database, SSH, Terminal, AI Tools"
+            WorkingDirectory="INSTALLFOLDER"
+            Icon="NavopIcon"
+            Advertise="no" />
+          <Shortcut
+            Id="DesktopShortcut"
+            Directory="DesktopFolder"
             Name="Navop"
             Description="Navop - Database, SSH, Terminal, AI Tools"
             WorkingDirectory="INSTALLFOLDER"
