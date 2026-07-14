@@ -123,14 +123,24 @@ test("Windows MSI creates a desktop shortcut", () => {
   );
 });
 
-test("release publication and R2 upload include the MSI", () => {
+test("GitHub publishes installers while R2 only uploads updater archives", () => {
   const release = read(".github/workflows/release.yml");
   const upload = read(".github/workflows/upload-r2.yml");
 
   assert.match(release, /artifacts\/navop-\*\.msi/);
-  assert.match(upload, /--pattern "navop-x86_64-pc-windows-msvc\.msi"/);
-  assert.match(upload, /navop-x86_64-pc-windows-msvc\.msi/);
-  assert.doesNotMatch(upload, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
+  assert.match(upload, /navop-x86_64-pc-windows-msvc\.zip/);
+  assert.match(upload, /navop-aarch64-apple-darwin\.tar\.gz/);
+  assert.match(upload, /navop-x86_64-unknown-linux-gnu\.tar\.gz/);
+  assert.doesNotMatch(upload, /\.msi/);
+  assert.doesNotMatch(upload, /\.dmg/);
+  assert.doesNotMatch(upload, /application\/x-msi/);
+  assert.doesNotMatch(upload, /application\/x-apple-diskimage/);
+
+  const uploadList = upload.slice(
+    upload.indexOf("release_files=("),
+    upload.indexOf('for file in "${release_files[@]}"'),
+  );
+  assert.doesNotMatch(uploadList, /sha256sums\.txt/);
 });
 
 test("CI runs release packaging regression checks", () => {
