@@ -1216,6 +1216,7 @@ pub struct DbConnectionForm {
     workspace_select: Entity<SelectState<Vec<WorkspaceSelectItem>>>,
     team_select: Entity<SelectState<Vec<TeamSelectItem>>>,
     ssh_connection_select: Entity<SelectState<SearchableVec<SshConnectionSelectItem>>>,
+    selected_ssh_connection_id: Option<i64>,
     ssh_connections: Vec<StoredConnection>,
     pending_file_path: Entity<Option<(String, String)>>,
     editing_connection: Option<StoredConnection>,
@@ -1342,20 +1343,15 @@ impl DbConnectionForm {
             &ssh_connection_select,
             window,
             move |form,
-                  select,
+                  _select,
                   event: &SelectEvent<SearchableVec<SshConnectionSelectItem>>,
                   window,
                   cx| {
-                if matches!(event, SelectEvent::Confirm(_)) {
-                    let value = select
-                        .read(cx)
-                        .selected_value()
-                        .cloned()
-                        .flatten()
-                        .map(|id| id.to_string())
-                        .unwrap_or_default();
-                    form.set_field_value("ssh_connection_id", &value, window, cx);
-                }
+                let SelectEvent::Confirm(selected_value) = event;
+                let selected_id = selected_value.as_ref().copied().flatten();
+                form.selected_ssh_connection_id = selected_id;
+                let value = selected_id.map(|id| id.to_string()).unwrap_or_default();
+                form.set_field_value("ssh_connection_id", &value, window, cx);
             },
         )
         .detach();
@@ -1380,6 +1376,7 @@ impl DbConnectionForm {
             workspace_select,
             team_select,
             ssh_connection_select,
+            selected_ssh_connection_id: None,
             ssh_connections: Vec::new(),
             pending_file_path,
             editing_connection: None,
@@ -1497,9 +1494,7 @@ impl DbConnectionForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected_ssh_id = self
-            .get_field_value("ssh_connection_id", cx)
-            .and_then(|value| value.parse::<i64>().ok());
+        self.selected_ssh_connection_id = self.current_ssh_connection_id(cx);
         self.ssh_connections = connections
             .into_iter()
             .filter(|connection| connection.connection_type == ConnectionType::SshSftp)
@@ -1513,8 +1508,8 @@ impl DbConnectionForm {
 
         self.ssh_connection_select.update(cx, |select, cx| {
             select.set_items(SearchableVec::new(items), window, cx);
-            select.set_selected_value(&selected_ssh_id, window, cx);
         });
+        self.sync_ssh_connection_selection(window, cx);
         cx.notify();
     }
 
@@ -1525,6 +1520,8 @@ impl DbConnectionForm {
         cx: &mut Context<Self>,
     ) {
         self.editing_connection = Some(connection.clone());
+        self.selected_ssh_connection_id = None;
+        self.set_field_value("ssh_connection_id", "", window, cx);
         self.set_field_value("name", &connection.name, window, cx);
 
         // Load the sync state.
@@ -1534,6 +1531,10 @@ impl DbConnectionForm {
         });
 
         if let Ok(params) = connection.to_db_connection() {
+            self.selected_ssh_connection_id = params
+                .extra_params
+                .get("ssh_connection_id")
+                .and_then(|value| value.parse::<i64>().ok());
             self.set_field_value("host", &params.host, window, cx);
             self.set_field_value("port", &params.port.to_string(), window, cx);
             self.set_field_value("username", &params.username, window, cx);
@@ -1597,11 +1598,20 @@ impl DbConnectionForm {
             });
         }
 
-        let selected_ssh_id = self
-            .get_field_value("ssh_connection_id", cx)
-            .and_then(|value| value.parse::<i64>().ok());
+        self.sync_ssh_connection_selection(window, cx);
+    }
+
+    fn current_ssh_connection_id(&self, cx: &App) -> Option<i64> {
+        self.selected_ssh_connection_id.or_else(|| {
+            self.get_field_value("ssh_connection_id", cx)
+                .and_then(|value| value.parse::<i64>().ok())
+        })
+    }
+
+    fn sync_ssh_connection_selection(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let selected_id = self.current_ssh_connection_id(cx);
         self.ssh_connection_select.update(cx, |select, cx| {
-            select.set_selected_value(&selected_ssh_id, window, cx);
+            select.set_selected_value(&selected_id, window, cx);
         });
     }
 
@@ -1707,16 +1717,7 @@ impl DbConnectionForm {
     }
 
     fn resolve_referenced_ssh_connection(&self, cx: &App) -> Option<&StoredConnection> {
-        let selected_id = self
-            .ssh_connection_select
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .flatten()
-            .or_else(|| {
-                self.get_field_value("ssh_connection_id", cx)
-                    .and_then(|value| value.parse::<i64>().ok())
-            })?;
+        let selected_id = self.current_ssh_connection_id(cx)?;
 
         self.ssh_connections
             .iter()
@@ -2651,13 +2652,7 @@ impl DbConnectionForm {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let ssh_enabled = self.field_bool_value("ssh_tunnel_enabled", cx);
-        let selected_ssh_connection_id = self
-            .ssh_connection_select
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .flatten();
-        let using_ssh_reference = selected_ssh_connection_id.is_some();
+        let using_ssh_reference = self.resolve_referenced_ssh_connection(cx).is_some();
         let ssh_auth_type = self
             .get_field_value("ssh_auth_type", cx)
             .unwrap_or_else(|| "password".to_string());
@@ -2895,8 +2890,16 @@ impl Render for DbConnectionForm {
                         .with_size(Size::Large)
                         .underline()
                         .selected_index(self.active_tab)
-                        .on_click(cx.listener(|this, ix: &usize, _window, cx| {
+                        .on_click(cx.listener(|this, ix: &usize, window, cx| {
                             this.active_tab = *ix;
+                            if this
+                                .config
+                                .tab_groups
+                                .get(*ix)
+                                .is_some_and(|tab| tab.name == "ssh")
+                            {
+                                this.sync_ssh_connection_selection(window, cx);
+                            }
                             cx.notify();
                         }))
                         .children(
@@ -3002,14 +3005,16 @@ mod tests {
             cx.open_window(WindowOptions::default(), |window, cx| {
                 cx.new(|cx| {
                     let mut form = DbConnectionForm::new(DbFormConfig::mysql(), window, cx);
-                    form.load_connection(&connection, window, cx);
                     form.set_ssh_connections(vec![ssh], window, cx);
+                    form.load_connection(&connection, window, cx);
+                    form.active_tab = 3;
                     form
                 })
             })
             .expect("form window should open")
         });
         let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.run_until_parked();
         let form = window.root(&mut cx).expect("form should be mounted");
 
         let selected = form.read_with(&cx, |form, cx| {
@@ -3021,6 +3026,33 @@ mod tests {
         });
 
         assert_eq!(Some(42), selected);
+    }
+
+    #[gpui::test]
+    fn ssh_selection_uses_confirmed_event_value(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let window = cx.update(|cx| {
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                cx.new(|cx| DbConnectionForm::new(DbFormConfig::mysql(), window, cx))
+            })
+            .expect("form window should open")
+        });
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        let form = window.root(&mut cx).expect("form should be mounted");
+        let select = form.read_with(&cx, |form, _| form.ssh_connection_select.clone());
+
+        select.update(&mut cx, |_, cx| {
+            cx.emit(SelectEvent::Confirm(Some(Some(42))));
+        });
+        cx.run_until_parked();
+
+        let state = form.read_with(&cx, |form, cx| {
+            (
+                form.selected_ssh_connection_id,
+                form.get_field_value("ssh_connection_id", cx),
+            )
+        });
+        assert_eq!((Some(42), Some("42".to_string())), state);
     }
 
     #[test]
