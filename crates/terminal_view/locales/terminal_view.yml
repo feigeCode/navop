@@ -207,6 +207,10 @@ SSH:
     en: Please fill in all required fields
     zh-CN: 请填写所有必填字段
     zh-HK: 請填寫所有必填字段
+  local_network_route_hint:
+    en: Check System Settings > Privacy & Security > Local Network and allow Navop. Also verify the VPN or local route and any proxy or jump host settings.
+    zh-CN: 请在“系统设置 > 隐私与安全性 > 本地网络”中允许 Navop，并检查 VPN、局域网路由以及代理或跳板机设置。
+    zh-HK: 請在「系統設定 > 私隱與保安 > 本機網絡」中允許 Navop，並檢查 VPN、本機網絡路由以及代理或跳板機設定。
   test_success:
     en: Connection test successful
     zh-CN: 连接测试成功

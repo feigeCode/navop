@@ -24,6 +24,8 @@
     <string>12.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Navop needs access to devices on your local network for SSH, SFTP, databases, remote desktop, and port forwarding.</string>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
     <key>LSApplicationCategoryType</key>

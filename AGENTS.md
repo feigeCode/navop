@@ -366,6 +366,13 @@
 - **验证方式**：用纯 reload-scope contract 覆盖所有 `ExtensionKind`，并手工重新加载静态 composite，确认日志不再出现 Cranelift/Wasmtime 语言编译且 busy 状态及时清除。
 - **适用范围**：`crates/extension-runtime/src/extension_view_host.rs`、扩展管理页的重新加载、安装与卸载刷新路径。
 
+- **标题**：macOS 局域网 `No route to host` 先检查本地网络权限与 App Bundle 签名
+- **触发信号**：Navop 在 macOS 上可连接公网或正式服务器，但访问 `10.*`、`172.16-31.*`、`192.168.*` 等局域网地址时返回 `No route to host (os error 65)`，而终端或旧版 OnetCli 可以连接。
+- **根因 / 约束**：macOS 本地网络隐私会在 TCP 建连前拒绝未授权应用；若 `Info.plist` 缺少 `NSLocalNetworkUsageDescription`，或只签名 DMG、没有签名 `.app`，系统无法把授权稳定关联到 Bundle。未经 Bundle 签名的程序可能显示基于二进制哈希的临时 Identifier，且 `Info.plist` 不受签名保护。
+- **正确做法**：macOS App 声明 `NSLocalNetworkUsageDescription`，在创建 DMG 前先签名并严格验证 `Navop.app`；生产发布优先使用 Developer ID Application，缺少证书时仅将 ad-hoc 签名作为开发/临时回退。对私网 `HostUnreachable` 错误保留原始信息，并提示检查“系统设置 > 隐私与安全性 > 本地网络”、VPN、路由、代理和跳板机。
+- **验证方式**：用 `nc -vz <private-ip> 22` 与 `route -n get <private-ip>` 区分系统路由和应用权限；检查 `codesign -dv --verbose=4 Navop.app` 显示预期 Bundle Identifier、已绑定 `Info.plist` 和 sealed resources，并运行 macOS bundle 脚本测试及 SSH 错误提示测试。
+- **适用范围**：`resources/macos/Info.plist`、`script/bundle-macos.sh`、macOS Release/DMG 流程，以及 SSH、SFTP、数据库、远程桌面、端口转发等局域网 TCP 连接入口。
+
 - **标题**：macOS GUI 编辑器不要直接依赖 Bundle 内部 executable 处理重复打开
 - **触发信号**：第一次能打开外部编辑器，但编辑器已运行时再次打开远程文件没有反应、产生第二个无效进程，或编辑器随 OnetCli 生命周期收到 `SIGHUP`。
 - **根因 / 约束**：部分 macOS 应用（例如 Notepad--）依赖 LaunchServices 的 `QEvent::FileOpen` 向已有实例交付文件；直接执行 `.app/Contents/MacOS/*` 会绕过该机制。编辑器安装检测仍应检查真实 executable，不能简单把 `/usr/bin/open` 当作可用性候选。

@@ -33,6 +33,7 @@ use ssh::{
     JumpServerConnectConfig, ProxyConnectConfig, ProxyType, RusshClient, SshAuth, SshClient,
     SshConnectConfig, SshSessionManager,
 };
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use terminal::SshBackend;
@@ -223,8 +224,36 @@ fn build_connection_test_signature(params: &SshParams) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn format_connection_error(error: &anyhow::Error) -> String {
-    format!("{error:#}")
+fn format_connection_error(error: &anyhow::Error, host: &str) -> String {
+    format_connection_error_for_platform(error, host, cfg!(target_os = "macos"))
+}
+
+fn format_connection_error_for_platform(
+    error: &anyhow::Error,
+    host: &str,
+    is_macos: bool,
+) -> String {
+    let detail = format!("{error:#}");
+    if is_macos && is_private_network_host(host) && is_host_unreachable(error) {
+        return format!("{detail}\n\n{}", t!("SSH.local_network_route_hint"));
+    }
+    detail
+}
+
+fn is_private_network_host(host: &str) -> bool {
+    match host.trim().parse::<IpAddr>() {
+        Ok(IpAddr::V4(address)) => address.is_private() || address.is_link_local(),
+        Ok(IpAddr::V6(address)) => address.is_unique_local() || address.is_unicast_link_local(),
+        Err(_) => false,
+    }
+}
+
+fn is_host_unreachable(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::HostUnreachable)
+    })
 }
 
 fn validate_save_state(
@@ -992,6 +1021,7 @@ impl SshFormWindow {
         cx.notify();
 
         let signature = build_connection_test_signature(&params);
+        let target_host = params.host.clone();
         let mut config = self.build_ssh_connect_config(&params);
         let jump_mfa_capture = CapturedMfaRequest::default();
         let jump_mfa_responses = self.collect_jump_mfa_responses(cx, &signature);
@@ -1022,7 +1052,7 @@ impl SshFormWindow {
             };
             let test_result: Result<(), String> = match spawn_result {
                 Ok(task) => Ok(task),
-                Err(error) => Err(format_connection_error(&error)),
+                Err(error) => Err(format_connection_error(&error, &target_host)),
             };
 
             let _ = cx.update_window(window_handle, |_, window, cx| {
@@ -1894,10 +1924,11 @@ impl Render for SshFormWindow {
 mod tests {
     use super::{
         AuthMethodSelection, build_connection_test_signature, build_jump_auth_method,
-        format_connection_error, validate_save_state,
+        format_connection_error, format_connection_error_for_platform, validate_save_state,
     };
     use anyhow::Context as _;
     use one_core::storage::{SshAuthMethod, SshParams, StoredConnection};
+    use rust_i18n::t;
     use std::sync::Arc;
 
     fn sample_params() -> SshParams {
@@ -1984,10 +2015,29 @@ mod tests {
         ))
         .context("SSH connection failed")
         .unwrap_err();
-        let message = format_connection_error(&error);
+        let message = format_connection_error(&error, "example.com");
 
         assert!(message.contains("SSH connection failed"));
         assert!(message.contains("denied"));
+    }
+
+    #[test]
+    fn macos_private_network_route_error_includes_recovery_hint() {
+        let error = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::HostUnreachable));
+        let detail = error.to_string();
+        let message = format_connection_error_for_platform(&error, "192.168.9.19", true);
+
+        assert!(message.contains(&detail));
+        assert!(message.contains(t!("SSH.local_network_route_hint").as_ref()));
+    }
+
+    #[test]
+    fn public_host_route_error_keeps_original_message() {
+        let error = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::HostUnreachable));
+        let detail = error.to_string();
+        let message = format_connection_error_for_platform(&error, "203.0.113.10", true);
+
+        assert_eq!(detail, message);
     }
 
     #[test]
