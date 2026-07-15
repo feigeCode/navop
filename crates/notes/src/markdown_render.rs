@@ -1,8 +1,6 @@
 use crate::{MarkdownViewMode, NotesView};
 use cditor_app::{EditorSaveState, MarkdownCompatibility};
-use gpui::{
-    AnyElement, Context, IntoElement, ParentElement, Styled, Window, div, prelude::FluentBuilder,
-};
+use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder};
 use gpui_component::{
     ActiveTheme, Disableable, Sizable,
     button::{Button, ButtonVariants},
@@ -56,8 +54,7 @@ impl NotesView {
             .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(self.markdown_mode_button(document_id, MarkdownViewMode::Source, mode, cx))
-            .child(self.markdown_mode_button(document_id, MarkdownViewMode::Wysiwyg, mode, cx))
+            .child(self.render_source_toggle(document_id, mode, cx))
             .child(
                 div()
                     .flex_1()
@@ -78,11 +75,10 @@ impl NotesView {
             })
     }
 
-    fn markdown_mode_button(
+    fn render_source_toggle(
         &self,
         document_id: &str,
-        target: MarkdownViewMode,
-        current: MarkdownViewMode,
+        mode: MarkdownViewMode,
         cx: &mut Context<Self>,
     ) -> Button {
         let id = document_id.to_owned();
@@ -95,36 +91,14 @@ impl NotesView {
                     crate::markdown_session::MarkdownSyncState::Clean
                 )
             });
-        Button::new(match target {
-            MarkdownViewMode::Source => "markdown-source-mode",
-            MarkdownViewMode::Wysiwyg => "markdown-wysiwyg-mode",
-        })
-        .label(match target {
-            MarkdownViewMode::Source => "源码",
-            MarkdownViewMode::Wysiwyg => "所见即所得",
-        })
-        .small()
-        .disabled(disabled)
-        .when(current == target, |button| button.primary())
-        .on_click(cx.listener(move |view, _, window, cx| {
-            view.set_markdown_mode(id.clone(), target, window, cx)
-        }))
-    }
-
-    fn set_markdown_mode(
-        &mut self,
-        document_id: String,
-        mode: MarkdownViewMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let current = self
-            .markdown_sessions
-            .get(&document_id)
-            .map(|session| session.state.mode);
-        if current != Some(mode) {
-            self.toggle_markdown_mode(document_id, window, cx);
-        }
+        Button::new("markdown-source-mode")
+            .label("源码")
+            .small()
+            .disabled(disabled)
+            .when(mode == MarkdownViewMode::Source, |button| button.primary())
+            .on_click(cx.listener(move |view, _, window, cx| {
+                view.toggle_markdown_mode(id.clone(), window, cx)
+            }))
     }
 }
 

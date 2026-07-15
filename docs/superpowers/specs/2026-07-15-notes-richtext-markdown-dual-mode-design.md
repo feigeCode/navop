@@ -689,7 +689,8 @@ rtk cargo clippy -p notes -p main --all-targets -- -D warnings
 - 已加入 Markdown source editor：`code_editor("markdown")`、行号、多行、搜索、软换行。
 - Markdown source editor 打开或从预览切回时使用 `Window::defer` 聚焦；Enter 由多行 `InputState` 处理。
 - 已加入 generation debounce 自动保存；迟到任务不会清理或覆盖更新一代的修改状态。
-- 已加入 Source / WYSIWYG 切换器，并接入 Cditor strict import/apply/export contract。
+- Markdown 默认打开 WYSIWYG；工具栏只保留一个“源码”切换按钮。按钮选中时显示 Source，再次点击取消选中并返回 WYSIWYG。
+- 已接入 Cditor strict import/apply/export contract。
 - `Editable` Markdown 可直接在 WYSIWYG 编辑；`EditableWithNormalization` 必须点击“允许规范化并编辑”；`SourceOnly` 只提供只读 projection。
 - WYSIWYG 使用 `MarkdownDocumentPersistence` 和 Cditor autosave，通过 Strict export 写回同一个 `.md`；unsupported 内容和外部文件冲突都会阻止覆盖。
 - Markdown view mode 已按稳定 document ID 保存到 `state.json`，内部 rename 后保持。

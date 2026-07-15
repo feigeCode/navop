@@ -40,8 +40,8 @@ pub enum DocumentFormat {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MarkdownViewMode {
-    Wysiwyg,
     #[default]
+    Wysiwyg,
     Source,
 }
 
@@ -79,5 +79,6 @@ mod tests {
                 .unwrap();
         assert!(state.markdown_view_modes.is_empty());
         assert_eq!(DocumentFormat::RichText, state.last_created_format);
+        assert_eq!(MarkdownViewMode::Wysiwyg, MarkdownViewMode::default());
     }
 }

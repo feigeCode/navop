@@ -36,7 +36,7 @@ pub(crate) struct MarkdownSession {
 impl Default for MarkdownSessionState {
     fn default() -> Self {
         Self {
-            mode: MarkdownViewMode::Source,
+            mode: MarkdownViewMode::Wysiwyg,
             source_revision: 0,
             projected_revision: 0,
             persisted_revision: 0,
@@ -124,6 +124,7 @@ mod tests {
     #[test]
     fn switching_projects_latest_source_revision() {
         let mut state = MarkdownSessionState::default();
+        state.mode = MarkdownViewMode::Source;
         state.source_changed();
         assert!(state.begin_switch());
         state.switch_to_wysiwyg();
@@ -134,11 +135,20 @@ mod tests {
     #[test]
     fn failed_save_blocks_mode_switch() {
         let mut state = MarkdownSessionState::default();
+        state.mode = MarkdownViewMode::Source;
         let generation = state.source_changed();
         assert!(state.begin_source_save(generation));
         state.source_save_failed(generation, "disk full".to_owned());
         assert!(!state.begin_switch());
         assert_eq!(MarkdownViewMode::Source, state.mode);
+    }
+
+    #[test]
+    fn default_mode_is_wysiwyg() {
+        assert_eq!(
+            MarkdownViewMode::Wysiwyg,
+            MarkdownSessionState::default().mode
+        );
     }
 }
 use crate::markdown_file_store::MarkdownFileStore;

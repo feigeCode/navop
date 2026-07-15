@@ -21,12 +21,10 @@ impl NotesView {
     ) -> anyhow::Result<()> {
         let document_id = descriptor.document_id.clone();
         if !self.markdown_sessions.contains_key(&document_id) {
-            let mode = self
-                .tree
+            let mode = MarkdownViewMode::Wysiwyg;
+            self.tree
                 .markdown_view_modes
-                .get(&document_id)
-                .copied()
-                .unwrap_or_default();
+                .insert(document_id.clone(), mode);
             let store = MarkdownFileStore::new(descriptor.absolute_path.clone());
             let snapshot = store.load()?;
             let source_editor = create_source_editor(&snapshot.source, window, cx);
@@ -57,6 +55,7 @@ impl NotesView {
                     _subscription: subscription,
                 },
             );
+            self.storage()?.save_state(&self.tree.to_ui_state())?;
         }
         self.active_document_id = Some(document_id.clone());
         self.active_editor = None;
