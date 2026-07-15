@@ -13,14 +13,15 @@ function Read-MsiValue {
 
   $view = $Database.OpenView($Query)
   try {
-    $view.Execute()
+    $null = $view.Execute()
     $record = $view.Fetch()
     if ($null -eq $record) {
       throw "MSI query returned no rows: $Query"
     }
-    return $record.StringData(1).Trim()
+    $value = [string]$record.StringData(1)
+    return $value.Trim()
   } finally {
-    $view.Close()
+    $null = $view.Close()
   }
 }
 

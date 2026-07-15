@@ -167,6 +167,8 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
   assert.match(workflow, /-ext WixToolset\.UI\.wixext/);
   assert.match(workflow, /Get-FileHash[^]*SHA256/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
+  assert.match(workflow, /Compress-Archive[^]*navop-x86_64-pc-windows-msvc\.zip/);
+  assert.match(workflow, /Get-FileHash[^]*navop-x86_64-pc-windows-msvc\.zip/);
   assert.match(workflow, /navop-x86_64-pc-windows-msvc\.msi/);
   assert.doesNotMatch(workflow, /navop-x86_64-pc-windows-msvc-zh-CN\.msi/);
   assert.match(workflow, /sha256sums-windows\.txt/);
@@ -176,6 +178,20 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
   assert.match(validator, /DesktopShortcut/);
   assert.match(validator, /StartMenuShortcut/);
   assert.match(validator, /\.Trim\(\)/);
+  assert.match(validator, /\$null = \$view\.Execute\(\)/);
+  assert.match(validator, /\$null = \$view\.Close\(\)/);
+  assert.match(validator, /\$value = \[string\]\$record\.StringData\(1\)/);
+});
+
+test("release builds use cached-friendly thin LTO", () => {
+  for (const workflowPath of [
+    ".github/workflows/release.yml",
+    ".github/workflows/build-windows-msi.yml",
+  ]) {
+    const workflow = read(workflowPath);
+    assert.match(workflow, /CARGO_PROFILE_RELEASE_LTO: thin/);
+    assert.match(workflow, /CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8/);
+  }
 });
 
 test("application updates prefer navop while accepting legacy package names", () => {

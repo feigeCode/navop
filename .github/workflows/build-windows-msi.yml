@@ -13,6 +13,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_LTO: thin
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 8
 
 jobs:
   build:
@@ -77,6 +79,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
           Copy-Item "target/x86_64-pc-windows-msvc/release/navop.exe" "package/navop.exe"
+          Compress-Archive -Path "package/*" -DestinationPath "navop-x86_64-pc-windows-msvc.zip"
 
       - name: Install WiX Toolset
         shell: pwsh
@@ -108,9 +111,15 @@ jobs:
       - name: Generate checksum
         shell: pwsh
         run: |
-          $file = "navop-x86_64-pc-windows-msvc.msi"
-          $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $file" | Set-Content -Path "sha256sums-windows.txt"
+          $files = @(
+            "navop-x86_64-pc-windows-msvc.zip",
+            "navop-x86_64-pc-windows-msvc.msi"
+          )
+          $checksums = foreach ($file in $files) {
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $file"
+          }
+          $checksums | Set-Content -Path "sha256sums-windows.txt"
           Get-Content "sha256sums-windows.txt"
 
       - name: Upload Windows MSI
@@ -118,6 +127,7 @@ jobs:
         with:
           name: navop-windows-msi-${{ inputs.version }}
           path: |
+            navop-x86_64-pc-windows-msvc.zip
             navop-x86_64-pc-windows-msvc.msi
             sha256sums-windows.txt
           if-no-files-found: error
