@@ -6,6 +6,7 @@ use db_view::database_tab::DatabaseTabView;
 use gpui::{App, AppContext, Context, Entity, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use mongodb_view::MongoTabView;
+use notes::NotesView;
 use one_core::license::Feature;
 use one_core::storage::{ConnectionType, ProxyConfig, ProxyType, StoredConnection, Workspace};
 use one_core::tab_container::{TabContainer, TabItem, TabOpenMode};
@@ -98,6 +99,22 @@ mod tests {
             connections.iter().map(|c| c.id).collect::<Vec<_>>()
         );
         assert!(workspace_for_tab.is_none());
+    }
+
+    #[test]
+    fn notes_tab_uses_stable_identity() {
+        let source = include_str!("home_tabs.rs");
+        assert!(source.contains("fn add_notes_tab"));
+        assert!(source.contains("activate_or_add_tab_lazy(\n                    \"notes\""));
+        assert!(source.contains("TabItem::new(\"notes\", \"home\", notes)"));
+    }
+
+    #[test]
+    fn notes_sidebar_entry_precedes_extensions() {
+        let source = include_str!("../home_tab.rs");
+        let notes = source.find("Button::new(\"open_notes\")").unwrap();
+        let extensions = source.find("Button::new(\"open_extensions\")").unwrap();
+        assert!(notes < extensions);
     }
 
     #[test]
@@ -633,6 +650,23 @@ impl HomePage {
                         let extensions =
                             cx.new(|cx| extension_view::ExtensionManagerView::new(host, win, cx));
                         TabItem::new("extensions", "home", extensions)
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
+    pub(crate) fn add_notes_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_container = self.active_tab_container(cx);
+        window.defer(cx, move |window, cx| {
+            tab_container.update(cx, |tabs, cx| {
+                tabs.activate_or_add_tab_lazy(
+                    "notes",
+                    |window, cx| {
+                        let notes = cx.new(|cx| NotesView::new(window, cx));
+                        TabItem::new("notes", "home", notes)
                     },
                     window,
                     cx,

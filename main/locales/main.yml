@@ -310,6 +310,10 @@ Home:
     en: Extensions
     zh-CN: 扩展
     zh-HK: 擴展
+  notes:
+    en: Notes
+    zh-CN: 笔记
+    zh-HK: 筆記
   edit_connection:
     en: Edit Connection
     zh-CN: 编辑连接

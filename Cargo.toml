@@ -33,6 +33,7 @@ members = [
     "crates/process-util",
     "crates/remote_desktop",
     "crates/remote_desktop_view",
+    "crates/notes",
     "main", "crates/ssh", "crates/sftp", "crates/sftp_view", "crates/one_ui", "crates/redis_view", "crates/license_tool", "crates/mongodb_view", "crates/remote_file_editor", "crates/remote_image_preview"]
 resolver = "2"
 
@@ -117,6 +118,8 @@ mongodb_view = {path = "crates/mongodb_view"}
 onetcli_runtime = { path = "crates/onetcli_runtime" }
 remote_file_editor = { path = "crates/remote_file_editor" }
 remote_image_preview = { path = "crates/remote_image_preview" }
+notes = { path = "crates/notes" }
+cditor-app = { git = "https://github.com/feigeCode/Cditor.git", rev = "a87c5505d8582d2cdfe8d0fef08f80b941dccf49", default-features = false }
 er_flow = { path = "crates/er_flow" }
 extension-protocol = { path = "crates/extension-protocol" }
 extension-host = { path = "crates/extension-host" }
