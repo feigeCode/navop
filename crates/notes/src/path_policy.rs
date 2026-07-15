@@ -51,3 +51,9 @@ pub(crate) fn document_display_name(file_name: &str) -> Option<(&str, crate::Doc
                 .map(|name| (name, crate::DocumentFormat::Markdown))
         })
 }
+
+pub(crate) fn remap_path(path: &Path, old: &Path, new: &Path) -> PathBuf {
+    path.strip_prefix(old)
+        .map(|suffix| new.join(suffix))
+        .unwrap_or_else(|_| path.to_path_buf())
+}

@@ -937,16 +937,17 @@ Navop 已把 Cditor Markdown 依赖收敛到：
 crates/notes/src/markdown_adapter.rs
 ```
 
-当前临时实现只做两件事：
+当前实现已直接消费 strict contract：
 
 ```rust
-build_markdown_preview(source)   // initial_markdown + readonly(true)
-refresh_markdown_preview(source) // set_markdown + set_readonly(true)
+build_markdown_projection(source, store)
+apply_markdown_source(source, normalization_accepted)
+export_markdown_strict(handle)
 ```
 
-该 projection 只用于预览，不能写回 `.md`。Navop 的 Markdown source editor、原子文件保存、fingerprint、稳定 ID、模式持久化、rename/delete/close 门禁均已独立完成，不依赖当前有损 exporter。
+`Editable` projection 可直接编辑；`EditableWithNormalization` 在用户确认前只读；`SourceOnly` 始终只读。WYSIWYG 通过 `MarkdownDocumentPersistence` 调用 Strict export，保存到与 Source editor 共用的 `MarkdownFileStore`，因此不会使用当前有损 exporter 覆盖 `.md`。
 
-Cditor strict API 完成后，adapter 应提供以下宿主语义，而不是把 Cditor 内部类型扩散到 Notes：
+Cditor API 已提供以下宿主语义，并由 adapter 隔离：
 
 ```rust
 pub struct MarkdownProjection {
@@ -960,14 +961,16 @@ pub enum StrictMarkdownExport {
 }
 ```
 
-推荐 adapter 最终职责：
+adapter 当前职责：
 
-1. 通过 `from_markdown_with_report` 或等价 API 创建 projection。
+1. 通过 `from_markdown_with_report` 创建 projection。
 2. 根据 compatibility 设置 Editable、NormalizationRequired 或 SourceOnly。
 3. Source 更新 projection 时使用“不产生 dirty/autosave 回声”的 replace API。
 4. WYSIWYG 保存只调用 Strict export。
 5. Strict export 返回 Unsupported/Blocked 时保留 Cditor dirty，并禁止覆盖 `.md`。
-6. 所有 diagnostics 转换成 Notes 可展示的稳定宿主结构。
+6. diagnostics 以 compatibility 和数量进入 Notes toolbar，后续可扩展详细问题面板。
+
+Navop workspace 直接依赖 Cditor `main` branch，并通过 `cargo update -p cditor-app` 更新。Cditor `main` 已包含 Navop GPUI revision、embedded focus、公开 keymap init 和 `default-features=false` 下可选 SQLite；不再通过独立兼容分支提供 Navop revision。
 
 Navop 不应使用以下兼容 API作为 Markdown persistence：
 

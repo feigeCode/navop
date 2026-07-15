@@ -1,3 +1,4 @@
+use crate::path_policy::remap_path;
 use crate::{DocumentFormat, NotesView, TreeRow};
 use gpui::{AppContext, Context, Entity, ParentElement, SharedString, Styled, Window, div, px};
 use gpui_component::{
@@ -5,7 +6,7 @@ use gpui_component::{
     input::{Input, InputEvent, InputState},
     v_flex,
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Clone, Copy)]
 pub(crate) enum CreateKind {
@@ -171,10 +172,11 @@ impl NotesView {
             .any(|cached| cached.relative_path.starts_with(path) && cached.handle.is_dirty(cx))
             || self.markdown_sessions.values().any(|session| {
                 session.relative_path.starts_with(path)
-                    && !matches!(
-                        session.state.sync_state,
-                        crate::markdown_session::MarkdownSyncState::Clean
-                    )
+                    && (session.preview.is_dirty(cx)
+                        || !matches!(
+                            session.state.sync_state,
+                            crate::markdown_session::MarkdownSyncState::Clean
+                        ))
             })
         {
             self.set_error("包含未保存文档，请等待自动保存完成后再删除");
@@ -291,10 +293,4 @@ fn name_dialog_body(label: &str, input: &Entity<InputState>) -> impl gpui::IntoE
         .gap_3()
         .child(h_flex().child(SharedString::from(label.to_owned())))
         .child(Input::new(input).w_full())
-}
-
-fn remap_path(path: &Path, old: &Path, new: &Path) -> PathBuf {
-    path.strip_prefix(old)
-        .map(|suffix| new.join(suffix))
-        .unwrap_or_else(|_| path.to_path_buf())
 }

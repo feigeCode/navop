@@ -28,7 +28,7 @@ impl TabContent for NotesView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
-        let dirty = dirty_rich_editors(self, cx);
+        let dirty = dirty_editors(self, cx);
         if markdown_close_blocked(self) {
             self.set_error("存在无法保存的 Markdown 修改，请解决冲突后再关闭");
             return Task::ready(false);
@@ -44,11 +44,17 @@ impl TabContent for NotesView {
     }
 }
 
-fn dirty_rich_editors(view: &NotesView, cx: &App) -> Vec<EditorHandle> {
+fn dirty_editors(view: &NotesView, cx: &App) -> Vec<EditorHandle> {
     view.editors
         .values()
         .filter(|cached| cached.handle.is_dirty(cx))
         .map(|cached| cached.handle.clone())
+        .chain(
+            view.markdown_sessions
+                .values()
+                .filter(|session| session.preview.is_dirty(cx))
+                .map(|session| session.preview.clone()),
+        )
         .collect()
 }
 

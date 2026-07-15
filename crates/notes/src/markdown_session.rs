@@ -25,7 +25,9 @@ pub(crate) struct MarkdownSession {
     pub store: MarkdownFileStore,
     pub source_editor: Entity<InputState>,
     pub preview: EditorHandle,
-    pub fingerprint: Option<FileFingerprint>,
+    pub compatibility: MarkdownCompatibility,
+    pub diagnostics: Vec<MarkdownDiagnostic>,
+    pub normalization_accepted: bool,
     pub save_generation: Arc<AtomicU64>,
     pub state: MarkdownSessionState,
     pub _subscription: Subscription,
@@ -139,8 +141,8 @@ mod tests {
         assert_eq!(MarkdownViewMode::Source, state.mode);
     }
 }
-use crate::markdown_file_store::{FileFingerprint, MarkdownFileStore};
-use cditor_app::EditorHandle;
+use crate::markdown_file_store::MarkdownFileStore;
+use cditor_app::{EditorHandle, MarkdownCompatibility, MarkdownDiagnostic};
 use gpui::{Entity, Subscription};
 use gpui_component::input::InputState;
 use std::path::PathBuf;

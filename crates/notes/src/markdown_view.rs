@@ -1,9 +1,12 @@
-use crate::markdown_adapter::{build_markdown_preview, refresh_markdown_preview};
+use crate::markdown_adapter::{
+    apply_markdown_source, build_markdown_projection, export_markdown_strict,
+};
 use crate::markdown_file_store::{MarkdownFileStore, MarkdownSaveOutcome};
 use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyncState};
+use crate::markdown_source::{create_source_editor, subscribe_source_changes};
+use crate::path_policy::remap_path;
 use crate::{DocumentDescriptor, MarkdownViewMode, NotesView};
-use gpui::{AppContext, Context, Entity, Subscription, WeakEntity, Window};
-use gpui_component::input::{InputEvent, InputState};
+use gpui::{AppContext, Context, Window};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -27,7 +30,8 @@ impl NotesView {
             let store = MarkdownFileStore::new(descriptor.absolute_path.clone());
             let snapshot = store.load()?;
             let source_editor = create_source_editor(&snapshot.source, window, cx);
-            let preview = build_markdown_preview(&document_id, &snapshot.source, cx)?;
+            let projection =
+                build_markdown_projection(&document_id, &snapshot.source, store.clone(), cx)?;
             let subscription = subscribe_source_changes(
                 &source_editor,
                 document_id.clone(),
@@ -41,8 +45,10 @@ impl NotesView {
                     relative_path: descriptor.relative_path,
                     store,
                     source_editor,
-                    preview,
-                    fingerprint: Some(snapshot.fingerprint),
+                    preview: projection.handle,
+                    compatibility: projection.compatibility,
+                    diagnostics: projection.diagnostics,
+                    normalization_accepted: false,
                     save_generation: Default::default(),
                     state: MarkdownSessionState {
                         mode,
@@ -78,7 +84,6 @@ impl NotesView {
         session.save_generation.store(generation, Ordering::Release);
         let _ = session.state.begin_source_save(generation);
         let store = session.store.clone();
-        let expected = session.fingerprint.clone();
         let generation_token = session.save_generation.clone();
         let weak = cx.entity().downgrade();
         let id = document_id.to_owned();
@@ -88,7 +93,7 @@ impl NotesView {
             if generation_token.load(Ordering::Acquire) != generation {
                 return Ok(None);
             }
-            store.save(&source, expected.as_ref()).map(Some)
+            store.save(&source).map(Some)
         });
         cx.spawn(async move |_, cx| {
             let result = task.await;
@@ -111,8 +116,7 @@ impl NotesView {
             return;
         };
         match result {
-            Ok(Some(MarkdownSaveOutcome::Saved(fingerprint))) => {
-                session.fingerprint = Some(fingerprint);
+            Ok(Some(MarkdownSaveOutcome::Saved(_))) => {
                 session.state.source_saved(generation);
             }
             Ok(Some(MarkdownSaveOutcome::Conflict(_))) => {
@@ -136,38 +140,63 @@ impl NotesView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(session) = self.markdown_sessions.get_mut(&document_id) else {
+        let Some((mode, source_commit)) = self.switch_markdown_session(&document_id, window, cx)
+        else {
             return;
         };
-        if !session.state.begin_switch() {
-            return;
+        if let Some(source) = source_commit {
+            self.markdown_source_changed(&document_id, source, cx);
         }
-        match session.state.mode {
-            MarkdownViewMode::Source => {
-                let source = session.source_editor.read(cx).value().to_string();
-                if let Err(error) = refresh_markdown_preview(&session.preview, &source, cx) {
-                    session
-                        .state
-                        .source_save_failed(session.state.generation, error.to_string());
-                    self.set_error(error);
-                    return;
-                }
-                session.state.switch_to_wysiwyg();
-            }
-            MarkdownViewMode::Wysiwyg => {
-                session.state.switch_to_source();
-                let input = session.source_editor.clone();
-                window.defer(cx, move |window, cx| {
-                    input.update(cx, |input, cx| input.focus(window, cx))
-                });
-            }
-        }
-        let mode = session.state.mode;
         self.tree.markdown_view_modes.insert(document_id, mode);
         if let Err(error) = self
             .storage()
             .and_then(|storage| storage.save_state(&self.tree.to_ui_state()))
         {
+            self.set_error(error);
+        }
+        cx.notify();
+    }
+
+    fn switch_markdown_session(
+        &mut self,
+        document_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(MarkdownViewMode, Option<String>)> {
+        let session = self.markdown_sessions.get_mut(document_id)?;
+        if !session.state.begin_switch() {
+            return None;
+        }
+        match session.state.mode {
+            MarkdownViewMode::Source => switch_to_wysiwyg(session, cx),
+            MarkdownViewMode::Wysiwyg => switch_to_source(session, window, cx),
+        }
+        .map(|source| (session.state.mode, source))
+        .map_err(|error| {
+            session
+                .state
+                .source_save_failed(session.state.generation, error.to_string());
+            self.error = Some(error.to_string().into());
+        })
+        .ok()
+    }
+
+    pub(crate) fn accept_markdown_normalization(
+        &mut self,
+        document_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.markdown_sessions.get_mut(document_id) else {
+            return;
+        };
+        if !matches!(
+            session.compatibility,
+            cditor_app::MarkdownCompatibility::EditableWithNormalization(_)
+        ) {
+            return;
+        }
+        session.normalization_accepted = true;
+        if let Err(error) = session.preview.set_readonly(false, cx) {
             self.set_error(error);
         }
         cx.notify();
@@ -215,45 +244,36 @@ impl NotesView {
     }
 }
 
-fn create_source_editor(
-    source: &str,
-    window: &mut Window,
+fn switch_to_wysiwyg(
+    session: &mut MarkdownSession,
     cx: &mut Context<NotesView>,
-) -> Entity<InputState> {
-    cx.new(|cx| {
-        InputState::new(window, cx)
-            .code_editor("markdown")
-            .line_number(true)
-            .multi_line(true)
-            .soft_wrap(true)
-            .default_value(source)
-    })
+) -> anyhow::Result<Option<String>> {
+    let source = session.source_editor.read(cx).value().to_string();
+    let imported = apply_markdown_source(
+        &session.preview,
+        &source,
+        session.normalization_accepted,
+        cx,
+    )?;
+    session.compatibility = imported.compatibility;
+    session.diagnostics = imported.diagnostics;
+    session.state.switch_to_wysiwyg();
+    Ok(None)
 }
 
-fn subscribe_source_changes(
-    input: &Entity<InputState>,
-    document_id: String,
-    view: WeakEntity<NotesView>,
+fn switch_to_source(
+    session: &mut MarkdownSession,
     window: &mut Window,
     cx: &mut Context<NotesView>,
-) -> Subscription {
-    cx.subscribe_in(input, window, move |_view, input, event, _window, cx| {
-        if !matches!(event, InputEvent::Change) {
-            return;
-        }
-        let source = input.read(cx).value().to_string();
-        let _ = view.update(cx, |view, cx| {
-            view.markdown_source_changed(&document_id, source, cx);
-        });
-    })
-}
-
-fn remap_path(
-    path: &std::path::Path,
-    old: &std::path::Path,
-    new: &std::path::Path,
-) -> std::path::PathBuf {
-    path.strip_prefix(old)
-        .map(|suffix| new.join(suffix))
-        .unwrap_or_else(|_| path.to_path_buf())
+) -> anyhow::Result<Option<String>> {
+    let markdown = export_markdown_strict(&session.preview, cx)?;
+    session.source_editor.update(cx, |input, cx| {
+        input.set_value(markdown.clone(), window, cx)
+    });
+    session.state.switch_to_source();
+    let input = session.source_editor.clone();
+    window.defer(cx, move |window, cx| {
+        input.update(cx, |input, cx| input.focus(window, cx))
+    });
+    Ok(Some(markdown))
 }

@@ -689,7 +689,9 @@ rtk cargo clippy -p notes -p main --all-targets -- -D warnings
 - 已加入 Markdown source editor：`code_editor("markdown")`、行号、多行、搜索、软换行。
 - Markdown source editor 打开或从预览切回时使用 `Window::defer` 聚焦；Enter 由多行 `InputState` 处理。
 - 已加入 generation debounce 自动保存；迟到任务不会清理或覆盖更新一代的修改状态。
-- 已加入 Source / WYSIWYG 切换器；在 strict Cditor exporter 接入前，WYSIWYG 明确为只读 projection。
+- 已加入 Source / WYSIWYG 切换器，并接入 Cditor strict import/apply/export contract。
+- `Editable` Markdown 可直接在 WYSIWYG 编辑；`EditableWithNormalization` 必须点击“允许规范化并编辑”；`SourceOnly` 只提供只读 projection。
+- WYSIWYG 使用 `MarkdownDocumentPersistence` 和 Cditor autosave，通过 Strict export 写回同一个 `.md`；unsupported 内容和外部文件冲突都会阻止覆盖。
 - Markdown view mode 已按稳定 document ID 保存到 `state.json`，内部 rename 后保持。
 - RichText 和 Markdown session 都已接入 rename、delete 和 tab close 门禁。
 - 工具栏当前使用“富文本 / Markdown / 目录”三个明确入口，避免在 Cditor contract 未完成前扩大 Dialog 状态；后续可无数据迁移地合并为单个带格式选择的 Dialog。
@@ -703,8 +705,10 @@ crates/notes/src/
 ├── storage.rs                NotesStorage 公共操作
 ├── storage_support.rs        扫描、恢复和原子文件辅助
 ├── markdown_file_store.rs    .md I/O、fingerprint 与冲突检测
+├── markdown_persistence.rs   Cditor Strict export persistence
 ├── markdown_adapter.rs       唯一 Cditor Markdown 接缝
 ├── markdown_session.rs       纯同步状态 contract
+├── markdown_source.rs        InputState 创建和 change subscription
 ├── markdown_view.rs          session 生命周期、保存和切换
 ├── markdown_render.rs        Markdown 双模式 UI
 ├── notes_close.rs            RichText/Markdown 关闭门禁
@@ -712,13 +716,14 @@ crates/notes/src/
 └── notes_render.rs           主布局、工具栏和文件树
 ```
 
-### 等待 Cditor strict API 后完成
+### Cditor strict 集成已完成
 
-- `markdown_adapter.rs` 改用带 compatibility report 的 strict import/apply/export API。
-- WYSIWYG 从只读 projection 切换为可编辑，并只允许 strict export 成功时写回 `.md`。
-- 接入 `EditableWithNormalization`、`SourceOnly` 和 diagnostics UI。
-- WYSIWYG dirty/save generation 与 Source revision 合并到完整双向状态机。
-- 增加 WYSIWYG → `.md` round-trip、unsupported gate 和 normalization acceptance 测试。
+- `markdown_adapter.rs` 已使用 `from_markdown_with_report`、`apply_markdown(ReadOnlyPreview)` 和 `export_markdown(Strict)`。
+- Source projection replace 会重置 Cditor baseline，不产生 dirty/autosave 回声。
+- WYSIWYG autosave 通过 `MarkdownDocumentPersistence` 写回 `.md`，并与 Source editor 共用串行化 fingerprint 状态。
+- WYSIWYG → Source 使用 Strict export 更新源码 InputState，再进入 generation debounce 保存。
+- close/delete 同时检查 Source session 状态和 Cditor preview dirty/save state。
+- normalization acceptance、SourceOnly read-only 和 diagnostics 数量已显示在 Markdown toolbar。
 
 Notes 其他模块不得直接调用当前有损的 `EditorHandle::get_markdown()` 或 `EditorDocument::to_markdown()` 保存 `.md`。Cditor 公共 API 变化只应修改 `markdown_adapter.rs` 和必要的状态转换，不应扩散到 storage、file store 或文档索引。
 
@@ -734,4 +739,4 @@ rtk cargo fmt --all
 rtk git diff --check
 ```
 
-结果：Notes 17 个测试通过，Notes 编译和自身 Clippy 通过。工作区依赖仍会报告既有 future-incompatibility 提示；不属于本次 Notes 改动。按用户要求，本阶段未启动 GUI，焦点、Enter、切换和实际交互由用户手工验证。
+最新结果：Notes 20 个测试通过，包含 Source/WYSIWYG 共用文件 store、Cditor Strict persistence 和外部冲突回归测试。Notes 编译和自身 Clippy 通过。工作区依赖仍会报告既有 future-incompatibility 提示；不属于本次 Notes 改动。按用户要求，本阶段未启动 GUI，焦点、Enter、切换和实际交互由用户手工验证。

@@ -4,8 +4,10 @@ mod document_index;
 mod document_persistence;
 mod markdown_adapter;
 mod markdown_file_store;
+mod markdown_persistence;
 mod markdown_render;
 mod markdown_session;
+mod markdown_source;
 mod markdown_view;
 mod model;
 mod notes_actions;
@@ -39,7 +41,7 @@ pub fn init(cx: &mut gpui::App) {
 mod tests {
     use cditor_app::{
         Editor, EditorDocument, EditorHandle, EditorPersistence, EditorPersistenceError,
-        EditorSaveRequest,
+        EditorSaveRequest, MarkdownApplyMode, MarkdownCompatibility, MarkdownExportMode,
     };
 
     struct CompileOnlyPersistence;
@@ -63,8 +65,16 @@ mod tests {
 
         let _ = Editor::builder;
         let _ = EditorDocument::from_json;
+        let imported = EditorDocument::from_markdown_with_report("doc-1", "Body").unwrap();
+        let _ = imported
+            .document
+            .export_markdown(MarkdownExportMode::Strict)
+            .unwrap();
         let _ = cditor_app::init;
         let _ = std::mem::size_of::<EditorHandle>();
+        let _ = MarkdownApplyMode::ReadOnlyPreview;
+        let _ = MarkdownCompatibility::Editable;
+        let _ = MarkdownExportMode::Strict;
         assert_persistence::<CompileOnlyPersistence>();
     }
 }

@@ -119,7 +119,7 @@ onetcli_runtime = { path = "crates/onetcli_runtime" }
 remote_file_editor = { path = "crates/remote_file_editor" }
 remote_image_preview = { path = "crates/remote_image_preview" }
 notes = { path = "crates/notes" }
-cditor-app = { git = "https://github.com/feigeCode/Cditor.git", rev = "4c8f7b959bfe8b655473ab053fb04feaec856898", default-features = false }
+cditor-app = { git = "https://github.com/feigeCode/Cditor.git", branch = "main", default-features = false }
 er_flow = { path = "crates/er_flow" }
 extension-protocol = { path = "crates/extension-protocol" }
 extension-host = { path = "crates/extension-host" }

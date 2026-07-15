@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,54 +27,59 @@ pub(crate) enum MarkdownSaveOutcome {
 
 #[derive(Debug, Clone)]
 pub(crate) struct MarkdownFileStore {
-    path: Arc<RwLock<PathBuf>>,
+    state: Arc<Mutex<MarkdownStoreState>>,
+}
+
+#[derive(Debug)]
+struct MarkdownStoreState {
+    path: PathBuf,
+    fingerprint: Option<FileFingerprint>,
 }
 
 impl MarkdownFileStore {
     pub(crate) fn new(path: PathBuf) -> Self {
         Self {
-            path: Arc::new(RwLock::new(path)),
+            state: Arc::new(Mutex::new(MarkdownStoreState {
+                path,
+                fingerprint: None,
+            })),
         }
     }
 
     pub(crate) fn set_path(&self, path: PathBuf) -> Result<()> {
-        *self
-            .path
-            .write()
-            .map_err(|_| anyhow::anyhow!("Markdown path lock is poisoned"))? = path;
+        self.state()?.path = path;
         Ok(())
     }
 
     pub(crate) fn load(&self) -> Result<MarkdownSnapshot> {
-        let path = self.path()?;
+        let mut state = self.state()?;
+        let path = state.path.clone();
         let source = fs::read_to_string(&path)
             .with_context(|| format!("read Markdown {}", path.display()))?;
-        snapshot(&path, source)
+        let snapshot = snapshot(&path, source)?;
+        state.fingerprint = Some(snapshot.fingerprint.clone());
+        Ok(snapshot)
     }
 
-    pub(crate) fn save(
-        &self,
-        source: &str,
-        expected: Option<&FileFingerprint>,
-    ) -> Result<MarkdownSaveOutcome> {
-        let path = self.path()?;
-        if let Some(expected) = expected {
+    pub(crate) fn save(&self, source: &str) -> Result<MarkdownSaveOutcome> {
+        let mut state = self.state()?;
+        let path = state.path.clone();
+        if let Some(expected) = state.fingerprint.as_ref() {
             let disk = snapshot(&path, fs::read_to_string(&path)?)?;
             if disk.fingerprint != *expected {
                 return Ok(MarkdownSaveOutcome::Conflict(disk));
             }
         }
         write_text_atomic(&path, source)?;
-        Ok(MarkdownSaveOutcome::Saved(
-            snapshot(&path, source.to_owned())?.fingerprint,
-        ))
+        let fingerprint = snapshot(&path, source.to_owned())?.fingerprint;
+        state.fingerprint = Some(fingerprint.clone());
+        Ok(MarkdownSaveOutcome::Saved(fingerprint))
     }
 
-    fn path(&self) -> Result<PathBuf> {
-        self.path
-            .read()
-            .map(|path| path.clone())
-            .map_err(|_| anyhow::anyhow!("Markdown path lock is poisoned"))
+    fn state(&self) -> Result<std::sync::MutexGuard<'_, MarkdownStoreState>> {
+        self.state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Markdown store lock is poisoned"))
     }
 }
 
@@ -101,10 +106,10 @@ mod tests {
         let path = temp.path().join("note.md");
         fs::write(&path, "first")?;
         let store = MarkdownFileStore::new(path.clone());
-        let baseline = store.load()?;
+        store.load()?;
         fs::write(&path, "external")?;
 
-        let outcome = store.save("local", Some(&baseline.fingerprint))?;
+        let outcome = store.save("local")?;
         assert!(matches!(outcome, MarkdownSaveOutcome::Conflict(_)));
         assert_eq!("external", fs::read_to_string(path)?);
         Ok(())
