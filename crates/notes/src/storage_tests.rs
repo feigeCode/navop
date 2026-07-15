@@ -44,6 +44,74 @@ fn markdown_documents_use_md_files_and_stable_index_ids() -> Result<()> {
 }
 
 #[test]
+fn converts_rich_text_to_markdown_without_removing_source() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let storage = NotesStorage::open(temp.path().join("notes"))?;
+    storage.create_notebook("Notes", "")?;
+    let rich_text = storage.create_document(Path::new(""), "Guide")?;
+    let document =
+        cditor_app::EditorDocument::from_markdown(&rich_text.document_id, "# Guide\n\n**bold**")?;
+    std::fs::write(&rich_text.absolute_path, document.to_json()?)?;
+
+    let markdown = storage.convert_rich_text_to_markdown(&rich_text.relative_path)?;
+
+    assert!(rich_text.absolute_path.is_file());
+    assert_eq!(Path::new("Guide.md"), markdown.relative_path);
+    assert_eq!(DocumentFormat::Markdown, markdown.format);
+    assert_ne!(rich_text.document_id, markdown.document_id);
+    let source = std::fs::read_to_string(markdown.absolute_path)?;
+    assert!(source.contains("# Guide"));
+    assert!(source.contains("**bold**"));
+    Ok(())
+}
+
+#[test]
+fn conversion_does_not_overwrite_existing_markdown() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let storage = NotesStorage::open(temp.path().join("notes"))?;
+    storage.create_notebook("Notes", "")?;
+    let rich_text = storage.create_document(Path::new(""), "Guide")?;
+    let markdown =
+        storage.create_document_with_format(Path::new(""), "Guide", DocumentFormat::Markdown)?;
+    std::fs::write(&markdown.absolute_path, "existing")?;
+
+    assert!(
+        storage
+            .convert_rich_text_to_markdown(&rich_text.relative_path)
+            .is_err()
+    );
+    assert_eq!("existing", std::fs::read_to_string(markdown.absolute_path)?);
+    Ok(())
+}
+
+#[test]
+fn conversion_rejects_unsupported_rich_text_without_creating_markdown() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let storage = NotesStorage::open(temp.path().join("notes"))?;
+    storage.create_notebook("Notes", "")?;
+    let rich_text = storage.create_document(Path::new(""), "Underlined")?;
+    let mut document = cditor_app::EditorDocument::from_markdown(&rich_text.document_id, "Body")?;
+    let mut value = serde_json::to_value(&document)?;
+    value["blocks"][0]["payload"]["payload"]["RichText"]["spans"][0]["marks"] =
+        serde_json::json!(["Underline"]);
+    document = cditor_app::EditorDocument::from_json(&serde_json::to_string(&value)?)?;
+    std::fs::write(&rich_text.absolute_path, document.to_json()?)?;
+
+    assert!(
+        storage
+            .convert_rich_text_to_markdown(&rich_text.relative_path)
+            .is_err()
+    );
+    assert!(
+        !rich_text
+            .absolute_path
+            .with_file_name("Underlined.md")
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
 fn scan_discovers_external_markdown_once() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let root = temp.path().join("notes");

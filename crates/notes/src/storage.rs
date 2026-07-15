@@ -182,7 +182,7 @@ impl NotesStorage {
         self.root.join(DOCUMENT_INDEX_FILE)
     }
 
-    fn record_descriptor(&self, descriptor: &DocumentDescriptor) -> Result<()> {
+    pub(crate) fn record_descriptor(&self, descriptor: &DocumentDescriptor) -> Result<()> {
         let mut index = self.load_index()?;
         index.record(
             descriptor.relative_path.clone(),

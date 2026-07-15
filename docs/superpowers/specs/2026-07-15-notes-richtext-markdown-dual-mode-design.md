@@ -37,7 +37,9 @@ pub enum MarkdownViewMode {
 }
 ```
 
-不允许把一个富文本文档仅通过切换按钮变成 Markdown 文档。格式转换是可能丢失表达能力的独立操作，不属于首版。
+不允许把一个富文本文档仅通过视图切换按钮变成 Markdown 文档。格式转换是独立操作：文件树中的富文本文档提供“转 MD”入口，原 `.cditor.json` 保留，并在同目录新增同名 `.md`。
+
+转换必须使用 Cditor `MarkdownExportMode::Strict`。同名 `.md` 已存在、富文本仍处于 dirty 状态，或文档包含 Strict export 无法安全表达的内容时，转换失败且不得创建或覆盖 Markdown 文件。成功后文件树自动选中新建的 Markdown 文档。
 
 ### 内容真源唯一
 
@@ -116,6 +118,8 @@ README.md
 ```
 
 若同一目录同时存在 `README.md` 和 `README.cditor.json`，两者都显示，不按 display name 去重。
+
+富文本文档行显示“转 MD”操作。该操作是复制式转换，不修改或删除源 `.cditor.json`；转换成功后同目录会同时显示原富文本和新 Markdown 文档。
 
 ### Markdown 编辑区
 
@@ -616,6 +620,9 @@ crates/app/src/integration/
 - rename pending operation 的完成、回滚和冲突。
 - Markdown stable ID 在内部 rename 后不变。
 - 路径越界、符号链接和非 UTF-8。
+- RichText Strict 转换保留源文件并创建同名 `.md`。
+- 同名 `.md` 已存在时拒绝转换且不覆盖。
+- Strict exporter 不支持内容时拒绝转换且不创建 `.md`。
 
 ### Markdown session contract
 
@@ -647,6 +654,7 @@ crates/app/src/integration/
 8. 外部修改不会被自动覆盖。
 9. 重启后恢复所选文档、目录展开和 Markdown 视图模式。
 10. 现有富文本笔记无需迁移内容即可继续使用。
+11. 富文本可通过文件树复制转换为同名 Markdown；源文件保留，冲突、dirty 或不兼容内容不会导致覆盖或内容降级。
 
 完成验证至少包括：
 
@@ -697,6 +705,8 @@ rtk cargo clippy -p notes -p main --all-targets -- -D warnings
 - RichText 和 Markdown session 都已接入 rename、delete 和 tab close 门禁。
 - 工具栏当前使用“富文本 / Markdown / 目录”三个明确入口，避免在 Cditor contract 未完成前扩大 Dialog 状态；后续可无数据迁移地合并为单个带格式选择的 Dialog。
 - 文件树用“富 / MD”轻量 badge 区分格式。
+- 富文本文件树行已加入“转 MD”：使用 Strict export，在保留 `.cditor.json` 的同时创建同目录同名 `.md`，成功后自动选中新文档。
+- 转换会拒绝 dirty 富文本、已存在的同名 `.md` 和 Strict export 不支持的结构，不做覆盖或 best-effort 降级。
 
 当前 Notes 侧模块边界以实际代码为准：
 
@@ -704,6 +714,7 @@ rtk cargo clippy -p notes -p main --all-targets -- -D warnings
 crates/notes/src/
 ├── document_index.rs          documents.json 与稳定 ID
 ├── storage.rs                NotesStorage 公共操作
+├── storage_conversion.rs     RichText 到 Markdown 的 Strict 复制转换
 ├── storage_support.rs        扫描、恢复和原子文件辅助
 ├── markdown_file_store.rs    .md I/O、fingerprint 与冲突检测
 ├── markdown_persistence.rs   Cditor Strict export persistence
@@ -714,6 +725,7 @@ crates/notes/src/
 ├── markdown_render.rs        Markdown 双模式 UI
 ├── notes_close.rs            RichText/Markdown 关闭门禁
 ├── notes_actions.rs          创建、重命名和删除联动
+├── notes_conversion.rs       文件树转换入口、dirty 门禁和选中联动
 └── notes_render.rs           主布局、工具栏和文件树
 ```
 
@@ -740,4 +752,4 @@ rtk cargo fmt --all
 rtk git diff --check
 ```
 
-最新结果：Notes 20 个测试通过，包含 Source/WYSIWYG 共用文件 store、Cditor Strict persistence 和外部冲突回归测试。Notes 编译和自身 Clippy 通过。工作区依赖仍会报告既有 future-incompatibility 提示；不属于本次 Notes 改动。按用户要求，本阶段未启动 GUI，焦点、Enter、切换和实际交互由用户手工验证。
+最新结果：Notes 24 个测试通过，包含 Source/WYSIWYG 共用文件 store、Cditor Strict persistence、外部冲突，以及 RichText Strict 转换的保留源文件、禁止覆盖和不兼容拒绝回归测试。Notes 编译和自身 Clippy 通过，`main` 编译通过。工作区依赖仍会报告既有 future-incompatibility 提示；不属于本次 Notes 改动。按用户要求，本阶段未启动 GUI，焦点、Enter、切换和实际交互由用户手工验证。

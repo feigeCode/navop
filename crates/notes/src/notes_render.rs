@@ -234,6 +234,9 @@ impl NotesView {
                         }),
                 )
             })
+            .when(row.format == Some(DocumentFormat::RichText), |this| {
+                this.child(self.render_convert_button(row, cx))
+            })
             .child(self.render_rename_button(row, cx))
             .child(self.render_delete_button(row, cx))
             .into_any_element()

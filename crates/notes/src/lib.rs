@@ -12,10 +12,12 @@ mod markdown_view;
 mod model;
 mod notes_actions;
 mod notes_close;
+mod notes_conversion;
 mod notes_render;
 mod notes_view;
 mod path_policy;
 mod storage;
+mod storage_conversion;
 mod storage_support;
 mod tree_state;
 
