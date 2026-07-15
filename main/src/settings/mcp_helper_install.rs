@@ -242,6 +242,7 @@ fn install_in_progress(state: &AtomicBool) -> bool {
 mod tests {
     use crate::settings::mcp_helper_progress::McpHelperInstallProgressStatus;
     use anyhow::anyhow;
+    #[cfg(unix)]
     use public_mcp::client_config::ClientConfigInstall;
     use rust_i18n::t;
     use std::sync::atomic::AtomicBool;

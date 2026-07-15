@@ -2218,13 +2218,15 @@ impl EventEmitter<TerminalModelEvent> for Terminal {}
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    use super::with_local_terminal_default_env;
     use super::{
         CommandRecordGate, ConnectionState, Terminal, TerminalConnectionKind, TerminalMfaPrompt,
         TerminalMfaRequest, TerminalMfaResponder, build_cd_command, build_ssh_base_init_commands,
         build_ssh_init_commands, clear_screen_remote_redraw_bytes, compose_ssh_init_commands,
         format_connection_error, keyboard_interactive_answers_for_terminal, merge_history_matches,
         normalize_history_matches, resolve_default_windows_shell_from_env,
-        resolve_local_working_dir, shell_escape_arg, with_local_terminal_default_env,
+        resolve_local_working_dir, shell_escape_arg,
     };
     use crate::TerminalEvent;
     use crate::history::{

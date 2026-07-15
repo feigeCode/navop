@@ -125,6 +125,7 @@ fn install_from_staging_generic_rejects_symlinks_in_staging() {
     assert!(!root.join("database_drivers/fake_pg").exists());
 }
 
+#[cfg(unix)]
 fn write_driver_manifest(dir: &std::path::Path, id: &str, name: &str) {
     fs::write(
         dir.join("driver.json"),
