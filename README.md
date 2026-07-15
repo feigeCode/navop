@@ -1,10 +1,3 @@
-> [!IMPORTANT]
-> ### 从 OnetCli 延续而来 / Continued from OnetCli
->
-> **Navop 是 OnetCli 的后续项目。** 截至 2026-07-15，OnetCli 老仓库已有 **519 Stars**。历史代码和现有 Issues 将继续保留；后续功能开发与问题修复均在 Navop 进行。
->
-> **Navop is the successor to OnetCli.** As of July 15, 2026, the legacy OnetCli repository has **519 Stars**. Its historical code and existing issues will remain available, while future development and bug fixes continue in Navop.
->
 > 老仓库 / Legacy repository：<https://github.com/feigeCode/onetcli> · [![OnetCli Stars](https://img.shields.io/github/stars/feigeCode/onetcli?style=flat-square&logo=github&label=OnetCli%20Stars)](https://github.com/feigeCode/onetcli)
 
 <div align="center">
