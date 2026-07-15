@@ -10,11 +10,12 @@ cditor-app.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 gpui.workspace = true
-gpui-component.workspace = true
+gpui-component = { workspace = true, features = ["tree-sitter-markdown"] }
 one-core.workspace = true
 rust-i18n.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 

@@ -1,14 +1,18 @@
 use anyhow::{Result, bail};
 use std::path::{Component, Path, PathBuf};
 
-const DOCUMENT_SUFFIX: &str = ".cditor.json";
+pub(crate) const RICH_TEXT_SUFFIX: &str = ".cditor.json";
+pub(crate) const MARKDOWN_SUFFIX: &str = ".md";
 
 pub fn validate_node_name(name: &str) -> Result<&str> {
     let name = name.trim();
     if name.is_empty() || matches!(name, "." | "..") {
         bail!("name must not be empty, '.' or '..'");
     }
-    if name.contains(['/', '\\', '\0']) || name.ends_with(DOCUMENT_SUFFIX) {
+    if name.contains(['/', '\\', '\0'])
+        || name.ends_with(RICH_TEXT_SUFFIX)
+        || name.ends_with(MARKDOWN_SUFFIX)
+    {
         bail!("name contains a path separator or reserved suffix");
     }
     Ok(name)
@@ -29,10 +33,21 @@ pub(crate) fn validate_relative_path(path: &Path) -> Result<PathBuf> {
     Ok(clean)
 }
 
-pub(crate) fn document_file_name(name: &str) -> Result<String> {
-    Ok(format!("{}{}", validate_node_name(name)?, DOCUMENT_SUFFIX))
+pub(crate) fn document_file_name(name: &str, format: crate::DocumentFormat) -> Result<String> {
+    let suffix = match format {
+        crate::DocumentFormat::RichText => RICH_TEXT_SUFFIX,
+        crate::DocumentFormat::Markdown => MARKDOWN_SUFFIX,
+    };
+    Ok(format!("{}{suffix}", validate_node_name(name)?))
 }
 
-pub(crate) fn document_display_name(file_name: &str) -> Option<&str> {
-    file_name.strip_suffix(DOCUMENT_SUFFIX)
+pub(crate) fn document_display_name(file_name: &str) -> Option<(&str, crate::DocumentFormat)> {
+    file_name
+        .strip_suffix(RICH_TEXT_SUFFIX)
+        .map(|name| (name, crate::DocumentFormat::RichText))
+        .or_else(|| {
+            file_name
+                .strip_suffix(MARKDOWN_SUFFIX)
+                .map(|name| (name, crate::DocumentFormat::Markdown))
+        })
 }

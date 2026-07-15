@@ -1,6 +1,6 @@
 use crate::notes_actions::CreateKind;
 use crate::notes_view::NotesLoadState;
-use crate::{NodeKind, NotesView, TreeRow};
+use crate::{DocumentFormat, NodeKind, NotesView, TreeRow};
 use gpui::{
     Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
@@ -43,7 +43,9 @@ impl NotesView {
                             Button::new("create_notebook")
                                 .label("创建")
                                 .primary()
-                                .on_click(cx.listener(|view, _, _, cx| view.create_notebook(cx))),
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.create_notebook(window, cx)
+                                })),
                         ),
                     )
                     .when_some(self.error.clone(), |this, error| {
@@ -112,16 +114,25 @@ impl NotesView {
             .flex_1()
             .min_w_0()
             .h_full()
+            .when(
+                self.active_document_id
+                    .as_ref()
+                    .is_some_and(|id| self.markdown_sessions.contains_key(id)),
+                |this| this.child(self.render_markdown_editor(cx)),
+            )
             .when_some(self.active_editor.as_ref(), |this, handle| {
                 this.child(handle.entity().clone())
             })
-            .when(self.active_editor.is_none(), |this| {
-                this.flex().items_center().justify_center().child(
-                    div()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("选择或新建一个文档"),
-                )
-            })
+            .when(
+                self.active_editor.is_none() && self.active_document_id.is_none(),
+                |this| {
+                    this.flex().items_center().justify_center().child(
+                        div()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("选择或新建一个文档"),
+                    )
+                },
+            )
             .into_any_element()
     }
 
@@ -144,10 +155,27 @@ impl NotesView {
             .child(
                 Button::new("new_note_document")
                     .icon(IconName::File)
-                    .label("文档")
+                    .label("富文本")
                     .small()
                     .on_click(cx.listener(|view, _, window, cx| {
-                        view.start_create(CreateKind::Document, window, cx)
+                        view.start_create(
+                            CreateKind::Document(DocumentFormat::RichText),
+                            window,
+                            cx,
+                        )
+                    })),
+            )
+            .child(
+                Button::new("new_note_markdown")
+                    .icon(IconName::File)
+                    .label("Markdown")
+                    .small()
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.start_create(
+                            CreateKind::Document(DocumentFormat::Markdown),
+                            window,
+                            cx,
+                        )
                     })),
             )
             .child(
@@ -183,9 +211,9 @@ impl NotesView {
             .rounded_md()
             .cursor_pointer()
             .when(selected, |this| this.bg(cx.theme().primary.opacity(0.12)))
-            .on_click(
-                cx.listener(move |view, _, _, cx| view.select_row(select_path.clone(), kind, cx)),
-            )
+            .on_click(cx.listener(move |view, _, window, cx| {
+                view.select_row(select_path.clone(), kind, window, cx)
+            }))
             .child(div().w(px((row.depth * 14) as f32)))
             .child(Icon::new(icon).small())
             .child(
@@ -195,6 +223,17 @@ impl NotesView {
                     .text_sm()
                     .child(row.display_name.clone()),
             )
+            .when_some(row.format, |this, format| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(match format {
+                            DocumentFormat::RichText => "富",
+                            DocumentFormat::Markdown => "MD",
+                        }),
+                )
+            })
             .child(self.render_rename_button(row, cx))
             .child(self.render_delete_button(row, cx))
             .into_any_element()

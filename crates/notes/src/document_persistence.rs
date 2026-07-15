@@ -1,4 +1,4 @@
-use crate::storage::write_text_atomic;
+use crate::storage_support::write_text_atomic;
 use cditor_app::{EditorDocument, EditorPersistence, EditorPersistenceError, EditorSaveRequest};
 use std::fs;
 use std::path::PathBuf;

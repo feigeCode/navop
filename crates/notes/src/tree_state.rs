@@ -1,5 +1,5 @@
-use crate::{FileNode, NodeKind, NotebookUiState};
-use std::collections::BTreeSet;
+use crate::{DocumentFormat, FileNode, MarkdownViewMode, NodeKind, NotebookUiState};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7,6 +7,7 @@ pub struct TreeRow {
     pub relative_path: PathBuf,
     pub display_name: String,
     pub kind: NodeKind,
+    pub format: Option<DocumentFormat>,
     pub depth: usize,
     pub expanded: bool,
 }
@@ -15,6 +16,8 @@ pub struct TreeRow {
 pub struct TreeState {
     pub selected_document: Option<PathBuf>,
     pub expanded_directories: BTreeSet<PathBuf>,
+    pub markdown_view_modes: BTreeMap<String, MarkdownViewMode>,
+    pub last_created_format: DocumentFormat,
 }
 
 impl TreeState {
@@ -22,6 +25,8 @@ impl TreeState {
         Self {
             selected_document: state.selected_document,
             expanded_directories: state.expanded_directories,
+            markdown_view_modes: state.markdown_view_modes,
+            last_created_format: state.last_created_format,
         }
     }
 
@@ -29,6 +34,8 @@ impl TreeState {
         NotebookUiState {
             selected_document: self.selected_document.clone(),
             expanded_directories: self.expanded_directories.clone(),
+            markdown_view_modes: self.markdown_view_modes.clone(),
+            last_created_format: self.last_created_format,
         }
     }
 
@@ -70,6 +77,7 @@ fn project_nodes(
             relative_path: node.relative_path.clone(),
             display_name: node.display_name.clone(),
             kind: node.kind,
+            format: node.format,
             depth,
             expanded: is_expanded,
         });
@@ -89,10 +97,12 @@ mod tests {
             relative_path: "work".into(),
             display_name: "work".into(),
             kind: NodeKind::Directory,
+            format: None,
             children: vec![FileNode {
                 relative_path: "work/note.cditor.json".into(),
                 display_name: "note".into(),
                 kind: NodeKind::Document,
+                format: Some(DocumentFormat::RichText),
                 children: Vec::new(),
             }],
         }];

@@ -1,12 +1,20 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod document_index;
 mod document_persistence;
+mod markdown_adapter;
+mod markdown_file_store;
+mod markdown_render;
+mod markdown_session;
+mod markdown_view;
 mod model;
 mod notes_actions;
+mod notes_close;
 mod notes_render;
 mod notes_view;
 mod path_policy;
 mod storage;
+mod storage_support;
 mod tree_state;
 
 #[cfg(test)]
@@ -14,7 +22,8 @@ mod storage_tests;
 
 pub use document_persistence::FileDocumentPersistence;
 pub use model::{
-    DeleteSummary, DocumentDescriptor, FileNode, NodeKind, NotebookMetadata, NotebookUiState,
+    DeleteSummary, DocumentDescriptor, DocumentFormat, FileNode, MarkdownViewMode, NodeKind,
+    NotebookMetadata, NotebookUiState,
 };
 pub use notes_view::NotesView;
 pub use path_policy::validate_node_name;

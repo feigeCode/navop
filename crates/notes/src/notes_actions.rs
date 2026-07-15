@@ -1,4 +1,4 @@
-use crate::{NotesView, TreeRow};
+use crate::{DocumentFormat, NotesView, TreeRow};
 use gpui::{AppContext, Context, Entity, ParentElement, SharedString, Styled, Window, div, px};
 use gpui_component::{
     WindowExt, h_flex,
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy)]
 pub(crate) enum CreateKind {
     Directory,
-    Document,
+    Document(DocumentFormat),
 }
 
 impl NotesView {
@@ -22,7 +22,7 @@ impl NotesView {
     ) {
         let placeholder = match kind {
             CreateKind::Directory => "目录名称",
-            CreateKind::Document => "文档名称",
+            CreateKind::Document(_) => "文档名称",
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         self.dialog_subscription = Some(cx.subscribe_in(
@@ -32,7 +32,7 @@ impl NotesView {
                 if matches!(event, InputEvent::PressEnter { .. }) {
                     let name = input.read(cx).value().trim().to_owned();
                     window.close_dialog(cx);
-                    view.apply_create(kind, &name, cx);
+                    view.apply_create(kind, &name, window, cx);
                 }
             },
         ));
@@ -60,7 +60,7 @@ impl NotesView {
                 if matches!(event, InputEvent::PressEnter { .. }) {
                     let name = input.read(cx).value().trim().to_owned();
                     window.close_dialog(cx);
-                    view.apply_rename(&row_for_enter, &name, cx);
+                    view.apply_rename(&row_for_enter, &name, window, cx);
                 }
             },
         ));
@@ -73,9 +73,11 @@ impl NotesView {
                 .title("重命名")
                 .w(px(380.0))
                 .confirm()
-                .on_ok(move |_, _, cx| {
+                .on_ok(move |_, window, cx| {
                     let name = input_for_ok.read(cx).value().trim().to_owned();
-                    view_for_ok.update(cx, |view, cx| view.apply_rename(&row_for_ok, &name, cx));
+                    view_for_ok.update(cx, |view, cx| {
+                        view.apply_rename(&row_for_ok, &name, window, cx)
+                    });
                     true
                 })
                 .child(name_dialog_body("输入新的名称", &input))
@@ -97,8 +99,8 @@ impl NotesView {
                 .title("删除")
                 .w(px(380.0))
                 .confirm()
-                .on_ok(move |_, _, cx| {
-                    view_for_ok.update(cx, |view, cx| view.apply_delete(&row_for_ok, cx));
+                .on_ok(move |_, window, cx| {
+                    view_for_ok.update(cx, |view, cx| view.apply_delete(&row_for_ok, window, cx));
                     true
                 })
                 .child(div().text_sm().child(format!(
@@ -108,7 +110,13 @@ impl NotesView {
         });
     }
 
-    fn apply_create(&mut self, kind: CreateKind, name: &str, cx: &mut Context<Self>) {
+    fn apply_create(
+        &mut self,
+        kind: CreateKind,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let result = match kind {
             CreateKind::Directory => self
                 .storage()
@@ -116,17 +124,26 @@ impl NotesView {
                 .map(|path| {
                     self.tree.expanded_directories.insert(path);
                 }),
-            CreateKind::Document => self
+            CreateKind::Document(format) => self
                 .storage()
-                .and_then(|storage| storage.create_document(&self.current_directory, name))
+                .and_then(|storage| {
+                    storage.create_document_with_format(&self.current_directory, name, format)
+                })
                 .map(|descriptor| {
+                    self.tree.last_created_format = format;
                     self.tree.selected_document = Some(descriptor.relative_path);
                 }),
         };
-        self.finish_file_operation(result, cx);
+        self.finish_file_operation(result, window, cx);
     }
 
-    fn apply_rename(&mut self, row: &TreeRow, name: &str, cx: &mut Context<Self>) {
+    fn apply_rename(
+        &mut self,
+        row: &TreeRow,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let old_path = row.relative_path.clone();
         let result = self
             .storage()
@@ -140,15 +157,25 @@ impl NotesView {
         if let Err(error) = self.remap_cached_editors(&old_path, &new_path) {
             self.set_error(error);
         }
-        self.finish_file_operation(Ok(()), cx);
+        if let Err(error) = self.remap_markdown_sessions(&old_path, &new_path) {
+            self.set_error(error);
+        }
+        self.finish_file_operation(Ok(()), window, cx);
     }
 
-    fn apply_delete(&mut self, row: &TreeRow, cx: &mut Context<Self>) {
+    fn apply_delete(&mut self, row: &TreeRow, window: &mut Window, cx: &mut Context<Self>) {
         let path = &row.relative_path;
         if self
             .editors
             .values()
             .any(|cached| cached.relative_path.starts_with(path) && cached.handle.is_dirty(cx))
+            || self.markdown_sessions.values().any(|session| {
+                session.relative_path.starts_with(path)
+                    && !matches!(
+                        session.state.sync_state,
+                        crate::markdown_session::MarkdownSyncState::Clean
+                    )
+            })
         {
             self.set_error("包含未保存文档，请等待自动保存完成后再删除");
             cx.notify();
@@ -158,6 +185,7 @@ impl NotesView {
         if result.is_ok() {
             self.editors
                 .retain(|_, cached| !cached.relative_path.starts_with(path));
+            self.remove_markdown_sessions_under(path);
             if self
                 .tree
                 .selected_document
@@ -173,11 +201,16 @@ impl NotesView {
                 self.current_directory = path.parent().unwrap_or(Path::new("")).to_path_buf();
             }
         }
-        self.finish_file_operation(result.map(|_| ()), cx);
+        self.finish_file_operation(result.map(|_| ()), window, cx);
     }
 
-    fn finish_file_operation(&mut self, result: anyhow::Result<()>, cx: &mut Context<Self>) {
-        match result.and_then(|_| self.refresh_tree(cx)) {
+    fn finish_file_operation(
+        &mut self,
+        result: anyhow::Result<()>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match result.and_then(|_| self.refresh_tree(window, cx)) {
             Ok(()) => self.error = None,
             Err(error) => self.set_error(error),
         }
@@ -226,7 +259,8 @@ fn open_name_dialog(
 ) {
     let title = match kind {
         CreateKind::Directory => "新建目录",
-        CreateKind::Document => "新建文档",
+        CreateKind::Document(DocumentFormat::RichText) => "新建富文本",
+        CreateKind::Document(DocumentFormat::Markdown) => "新建 Markdown",
     };
     let input_for_focus = input.clone();
     window.open_dialog(cx, move |dialog, _window, _cx| {
@@ -236,9 +270,9 @@ fn open_name_dialog(
             .title(title)
             .w(px(380.0))
             .confirm()
-            .on_ok(move |_, _, cx| {
+            .on_ok(move |_, window, cx| {
                 let name = input_for_ok.read(cx).value().trim().to_owned();
-                view_for_ok.update(cx, |view, cx| view.apply_create(kind, &name, cx));
+                view_for_ok.update(cx, |view, cx| view.apply_create(kind, &name, window, cx));
                 true
             })
             .child(name_dialog_body("请输入名称", &input))
