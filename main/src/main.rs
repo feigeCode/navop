@@ -107,6 +107,7 @@ fn main() {
         .with_quit_mode(QuitMode::LastWindowClosed);
 
     app.run(move |cx| {
+        notes::init(cx);
         onetcli_app::init(cx);
         extension_runtime::set_current_host_version(env!("CARGO_PKG_VERSION"))
             .expect("main package version must be valid semver");

@@ -21,6 +21,11 @@ pub use path_policy::validate_node_name;
 pub use storage::NotesStorage;
 pub use tree_state::{TreeRow, TreeState};
 
+/// Installs the Cditor keymap required by embedded Notes editors.
+pub fn init(cx: &mut gpui::App) {
+    cditor_app::init(cx);
+}
+
 #[cfg(test)]
 mod tests {
     use cditor_app::{
@@ -49,6 +54,7 @@ mod tests {
 
         let _ = Editor::builder;
         let _ = EditorDocument::from_json;
+        let _ = cditor_app::init;
         let _ = std::mem::size_of::<EditorHandle>();
         assert_persistence::<CompileOnlyPersistence>();
     }
