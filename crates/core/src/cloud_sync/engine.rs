@@ -13,7 +13,7 @@ use super::generic_sync::generic_sync;
 use super::sync_type::SyncTypeHandler;
 use super::workspace_sync::WorkspaceSyncType;
 use crate::cloud_sync::CloudAccountScope;
-use crate::cloud_sync::client::CloudApiClient;
+use crate::cloud_sync::client::{CloudApiClient, CloudApiError};
 use crate::cloud_sync::models::{ConflictResolution, SyncResult, Team, TeamMember, TeamRole};
 use crate::cloud_sync::queue::OperationQueue;
 use crate::cloud_sync::service::{CloudSyncService, SyncError};
@@ -21,7 +21,9 @@ use crate::cloud_sync::team_key_envelope::TeamKeyKdfParams;
 use crate::cloud_sync::team_key_manager::{TeamKeyError, TeamKeyLoadStatus, TeamKeyManager};
 use crate::crypto;
 use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
+use crate::storage::{TeamMembershipCache, TeamMembershipCacheRepository, TeamMembershipState};
 use futures_util::{StreamExt, stream};
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
@@ -30,6 +32,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub type SyncFuture<'a> = Pin<Box<dyn Future<Output = Result<SyncResult, SyncError>> + Send + 'a>>;
 
 const TEAM_MEMBER_FETCH_CONCURRENCY: usize = 4;
+
+type TeamRoleLookup = (Team, Result<Option<TeamRole>, CloudApiError>);
 
 fn sync_execution_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -286,7 +290,7 @@ impl SyncEngine {
             .map_err(|e| SyncError::NetworkError(e.to_string()))?;
         tracing::info!("[同步] 获取到 {} 个团队", teams.len());
         let cached_count = self.cache_team_roles(&teams, &scope).await;
-        self.remove_departed_team_keys(&teams, &scope)?;
+        self.mark_departed_teams(&teams, &scope)?;
         self.restore_cached_team_keys(&teams, &scope);
         self.cached_teams
             .write()
@@ -295,12 +299,12 @@ impl SyncEngine {
         Ok(cached_count)
     }
 
-    fn remove_departed_team_keys(
+    fn mark_departed_teams(
         &self,
         teams: &[Team],
         scope: &CloudAccountScope,
     ) -> Result<(), SyncError> {
-        let Some(repo) = self.storage.get::<TeamKeyCacheRepository>() else {
+        let Some(repo) = self.storage.get::<TeamMembershipCacheRepository>() else {
             return Ok(());
         };
         let remote_ids = teams
@@ -314,67 +318,149 @@ impl SyncEngine {
             if remote_ids.contains(cache.team_id.as_str()) {
                 continue;
             }
-            repo.delete(scope, &cache.team_id)
+            let departed = TeamMembershipCache {
+                role: None,
+                state: TeamMembershipState::Departed,
+                ..cache
+            };
+            repo.upsert(&departed)
                 .map_err(|error| SyncError::StorageError(error.to_string()))?;
-            self.crypto_service
-                .write()
-                .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?
-                .remove_team_key(&cache.team_id);
+            self.clear_team_key(scope, &departed.team_id)?;
         }
         Ok(())
     }
 
-    /// 缓存团队角色信息到 team_key_cache 表
+    /// 缓存团队成员关系，并为确认有效的成员更新团队密钥元数据。
     async fn cache_team_roles(&self, teams: &[Team], scope: &CloudAccountScope) -> usize {
-        let repo = match self.storage.get::<TeamKeyCacheRepository>() {
+        let key_repo = match self.storage.get::<TeamKeyCacheRepository>() {
             Some(repo) => repo,
             None => return 0,
         };
-        let member_results = stream::iter(teams.iter().cloned())
-            .map(|team| async move {
-                let members = self.cloud_client.list_team_members(&team.id).await;
-                (team, members)
-            })
-            .buffer_unordered(TEAM_MEMBER_FETCH_CONCURRENCY)
-            .collect::<Vec<_>>()
-            .await;
+        let membership_repo = match self.storage.get::<TeamMembershipCacheRepository>() {
+            Some(repo) => repo,
+            None => return 0,
+        };
+        let role_results = self.load_team_role_results(teams, scope).await;
         let mut cached_count = 0;
-        for (team, members) in member_results {
-            match members {
-                Ok(members) => {
-                    if self.cache_team_role(repo.as_ref(), &team, scope, &members) {
+        for (team, role) in role_results {
+            match role {
+                Ok(Some(role)) => {
+                    let membership = team_membership_for_cloud_team(
+                        scope,
+                        &team,
+                        Some(role),
+                        TeamMembershipState::Active,
+                        membership_repo.get(scope, &team.id).ok().flatten(),
+                    );
+                    let membership_saved = membership_repo.upsert(&membership).is_ok();
+                    if membership_saved
+                        && self.cache_active_team_key(key_repo.as_ref(), &team, scope, role)
+                    {
                         cached_count += 1;
+                    }
+                }
+                Ok(None) => {
+                    self.mark_team_membership(
+                        membership_repo.as_ref(),
+                        scope,
+                        &team,
+                        TeamMembershipState::Departed,
+                    );
+                    if let Err(error) = self.clear_team_key(scope, &team.id) {
+                        tracing::warn!("[同步] 清除已退出团队 {} 密钥失败: {}", team.id, error);
                     }
                 }
                 Err(error) => {
                     tracing::warn!("[同步] 获取团队 {} 成员列表失败: {}", team.id, error);
+                    self.mark_team_membership(
+                        membership_repo.as_ref(),
+                        scope,
+                        &team,
+                        TeamMembershipState::Unknown,
+                    );
                 }
             }
         }
         cached_count
     }
 
-    fn cache_team_role(
+    async fn load_team_role_results(
+        &self,
+        teams: &[Team],
+        scope: &CloudAccountScope,
+    ) -> Vec<TeamRoleLookup> {
+        if teams.is_empty() {
+            return Vec::new();
+        }
+        match self.cloud_client.list_current_user_team_members().await {
+            Ok(members) if !members.is_empty() => {
+                tracing::info!("[同步] 使用聚合接口获取到 {} 个团队角色", members.len());
+                Self::match_team_roles(teams, &members, &scope.user_id)
+            }
+            Ok(_) => {
+                tracing::warn!("[同步] 聚合团队角色为空，回退逐团队查询");
+                self.load_team_role_results_fallback(teams, &scope.user_id)
+                    .await
+            }
+            Err(error) => {
+                tracing::info!("[同步] 聚合团队角色不可用，回退逐团队查询: {}", error);
+                self.load_team_role_results_fallback(teams, &scope.user_id)
+                    .await
+            }
+        }
+    }
+
+    fn match_team_roles(
+        teams: &[Team],
+        members: &[TeamMember],
+        user_id: &str,
+    ) -> Vec<TeamRoleLookup> {
+        let roles = members
+            .iter()
+            .filter(|member| member.user_id == user_id)
+            .map(|member| (member.team_id.as_str(), member.role))
+            .collect::<HashMap<_, _>>();
+        teams
+            .iter()
+            .cloned()
+            .map(|team| {
+                let role = roles.get(team.id.as_str()).copied();
+                (team, Ok(role))
+            })
+            .collect()
+    }
+
+    async fn load_team_role_results_fallback(
+        &self,
+        teams: &[Team],
+        user_id: &str,
+    ) -> Vec<TeamRoleLookup> {
+        stream::iter(teams.iter().cloned())
+            .map(|team| async move {
+                let role = self
+                    .cloud_client
+                    .list_team_members(&team.id)
+                    .await
+                    .map(|members| {
+                        members
+                            .into_iter()
+                            .find(|member| member.user_id == user_id)
+                            .map(|member| member.role)
+                    });
+                (team, role)
+            })
+            .buffer_unordered(TEAM_MEMBER_FETCH_CONCURRENCY)
+            .collect()
+            .await
+    }
+
+    fn cache_active_team_key(
         &self,
         repo: &TeamKeyCacheRepository,
         team: &Team,
         scope: &CloudAccountScope,
-        members: &[TeamMember],
+        role: TeamRole,
     ) -> bool {
-        let Some(member) = members.iter().find(|m| m.user_id == scope.user_id) else {
-            if let Err(error) = repo.delete(scope, &team.id) {
-                tracing::warn!(
-                    "[同步] 删除已失去成员资格的团队 {} 缓存失败: {}",
-                    team.id,
-                    error
-                );
-                return false;
-            }
-            if let Ok(mut service) = self.crypto_service.write() {
-                service.remove_team_key(&team.id);
-            }
-            return false;
-        };
         let existing_cache = match repo.get(scope, &team.id) {
             Ok(cache) => cache,
             Err(e) => {
@@ -382,7 +468,7 @@ impl SyncEngine {
                 None
             }
         };
-        let cache = team_key_cache_for_cloud_team(scope, team, member.role, existing_cache);
+        let cache = team_key_cache_for_cloud_team(scope, team, role, existing_cache);
         match repo.upsert(&cache) {
             Ok(()) => true,
             Err(e) => {
@@ -390,6 +476,37 @@ impl SyncEngine {
                 false
             }
         }
+    }
+
+    fn mark_team_membership(
+        &self,
+        repo: &TeamMembershipCacheRepository,
+        scope: &CloudAccountScope,
+        team: &Team,
+        state: TeamMembershipState,
+    ) {
+        let membership = team_membership_for_cloud_team(
+            scope,
+            team,
+            None,
+            state,
+            repo.get(scope, &team.id).ok().flatten(),
+        );
+        if let Err(error) = repo.upsert(&membership) {
+            tracing::warn!("[同步] 更新团队 {} 成员状态失败: {}", team.id, error);
+        }
+    }
+
+    fn clear_team_key(&self, scope: &CloudAccountScope, team_id: &str) -> Result<(), SyncError> {
+        if let Some(repo) = self.storage.get::<TeamKeyCacheRepository>() {
+            repo.delete(scope, team_id)
+                .map_err(|error| SyncError::StorageError(error.to_string()))?;
+        }
+        self.crypto_service
+            .write()
+            .map_err(|_| SyncError::StorageError("同步服务锁获取失败".to_string()))?
+            .remove_team_key(team_id);
+        Ok(())
     }
 
     fn restore_cached_team_keys(&self, teams: &[Team], scope: &CloudAccountScope) {
@@ -667,8 +784,10 @@ impl SyncEngine {
                 drop(service);
                 updated.id = resolved.conflict.local.id;
                 updated.cloud_id = Some(resolved.conflict.cloud.id.clone());
-                updated.workspace_id =
-                    self.local_workspace_id_for_cloud_id(workspace_cloud_id.as_deref())?;
+                updated.workspace_id = self.local_workspace_id_for_connection(
+                    resolved.conflict.cloud.team_id.as_deref(),
+                    workspace_cloud_id.as_deref(),
+                )?;
                 updated.last_synced_at = Some(Self::current_timestamp());
 
                 let repo = self.storage.get::<ConnectionRepository>().ok_or_else(|| {
@@ -714,8 +833,10 @@ impl SyncEngine {
                 drop(service);
                 updated.id = resolved.conflict.local.id;
                 updated.cloud_id = Some(resolved.conflict.cloud.id.clone());
-                updated.workspace_id =
-                    self.local_workspace_id_for_cloud_id(workspace_cloud_id.as_deref())?;
+                updated.workspace_id = self.local_workspace_id_for_connection(
+                    resolved.conflict.cloud.team_id.as_deref(),
+                    workspace_cloud_id.as_deref(),
+                )?;
                 updated.last_synced_at = Some(Self::current_timestamp());
 
                 let repo = self.storage.get::<ConnectionRepository>().ok_or_else(|| {
@@ -765,6 +886,29 @@ fn team_key_cache_for_cloud_team(
     }
 }
 
+fn team_membership_for_cloud_team(
+    scope: &CloudAccountScope,
+    team: &Team,
+    role: Option<TeamRole>,
+    state: TeamMembershipState,
+    existing: Option<TeamMembershipCache>,
+) -> TeamMembershipCache {
+    let last_seen_at = if state == TeamMembershipState::Active {
+        Some(SyncEngine::current_timestamp())
+    } else {
+        existing.and_then(|cache| cache.last_seen_at)
+    };
+    TeamMembershipCache {
+        scope: scope.clone(),
+        team_id: team.id.clone(),
+        team_name: team.name.clone(),
+        role: role.map(|role| role.to_string()),
+        state,
+        last_seen_at,
+        updated_at: team.updated_at,
+    }
+}
+
 fn initial_team_key_team_from_cache(cache: &TeamKeyCache) -> Team {
     Team {
         id: cache.team_id.clone(),
@@ -798,7 +942,10 @@ mod tests {
     use crate::cloud_sync::{CloudAccountScope, CloudSyncService, SyncEngine, TeamKeyLoadStatus};
     use crate::storage::connection::SqliteConnection;
     use crate::storage::migration::run_migrations;
-    use crate::storage::{StorageManager, TeamKeyCache, TeamKeyCacheRepository};
+    use crate::storage::{
+        StorageManager, TeamKeyCache, TeamKeyCacheRepository, TeamMembershipCache,
+        TeamMembershipCacheRepository, TeamMembershipState,
+    };
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, RwLock};
@@ -842,7 +989,11 @@ mod tests {
         }
     }
 
-    fn test_storage() -> (StorageManager, TeamKeyCacheRepository) {
+    fn test_storage() -> (
+        StorageManager,
+        TeamKeyCacheRepository,
+        TeamMembershipCacheRepository,
+    ) {
         let db_path = std::env::temp_dir().join(format!(
             "onetcli-refresh-team-key-cache-{}-{}-{}.db",
             std::process::id(),
@@ -854,9 +1005,11 @@ mod tests {
         conn.with_connection(|conn| run_migrations(conn))
             .expect("run migrations");
         let storage = StorageManager::new_with_connection(conn.clone());
-        let repo = TeamKeyCacheRepository::new(conn);
-        storage.register(repo.clone());
-        (storage, repo)
+        let key_repo = TeamKeyCacheRepository::new(conn.clone());
+        let membership_repo = TeamMembershipCacheRepository::new(conn);
+        storage.register(key_repo.clone());
+        storage.register(membership_repo.clone());
+        (storage, key_repo, membership_repo)
     }
 
     fn unique_suffix() -> u128 {
@@ -869,6 +1022,8 @@ mod tests {
     struct FakeCloudClient {
         teams: Vec<Team>,
         members: Vec<TeamMember>,
+        aggregated_members: Option<Vec<TeamMember>>,
+        fail_member_requests: bool,
         initialized_team: Arc<Mutex<Option<Team>>>,
         member_request_probe: Option<Arc<MemberRequestProbe>>,
     }
@@ -982,6 +1137,11 @@ mod tests {
             &self,
             _team_id: &str,
         ) -> Result<Vec<TeamMember>, CloudApiError> {
+            if self.fail_member_requests {
+                return Err(CloudApiError::NetworkError(
+                    "team members unavailable".to_string(),
+                ));
+            }
             if let Some(probe) = &self.member_request_probe {
                 let in_flight = probe.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 probe.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
@@ -989,6 +1149,12 @@ mod tests {
                 probe.in_flight.fetch_sub(1, Ordering::SeqCst);
             }
             Ok(self.members.clone())
+        }
+
+        async fn list_current_user_team_members(&self) -> Result<Vec<TeamMember>, CloudApiError> {
+            self.aggregated_members.clone().ok_or_else(|| {
+                CloudApiError::NotFound("aggregate members not configured".to_string())
+            })
         }
 
         async fn rotate_team_key(
@@ -1059,7 +1225,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_team_key_cache_loads_cloud_team_metadata() {
-        let (storage, repo) = test_storage();
+        let (storage, repo, membership_repo) = test_storage();
         let service = Arc::new(RwLock::new(CloudSyncService::new()));
         service
             .write()
@@ -1072,6 +1238,8 @@ mod tests {
                     ..team()
                 }],
                 members: vec![member(TeamRole::Owner)],
+                aggregated_members: None,
+                fail_member_requests: false,
                 initialized_team: Arc::new(Mutex::new(None)),
                 member_request_probe: None,
             }),
@@ -1089,11 +1257,17 @@ mod tests {
         assert_eq!("Platform", cache.team_name);
         assert_eq!(Some("verification".to_string()), cache.key_verification);
         assert_eq!(Some("owner".to_string()), cache.role);
+        let membership = membership_repo
+            .get(&test_scope(), "team-1")
+            .expect("membership read")
+            .expect("membership exists");
+        assert_eq!(TeamMembershipState::Active, membership.state);
+        assert_eq!(Some("owner".to_string()), membership.role);
     }
 
     #[tokio::test]
     async fn refresh_team_roles_uses_bounded_concurrency() {
-        let (storage, _) = test_storage();
+        let (storage, _, _) = test_storage();
         let service = Arc::new(RwLock::new(CloudSyncService::new()));
         service
             .write()
@@ -1111,6 +1285,8 @@ mod tests {
             Arc::new(FakeCloudClient {
                 teams,
                 members: vec![member(TeamRole::Member)],
+                aggregated_members: None,
+                fail_member_requests: false,
                 initialized_team: Arc::new(Mutex::new(None)),
                 member_request_probe: Some(probe.clone()),
             }),
@@ -1127,8 +1303,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_team_roles_prefers_aggregate_membership_query() {
+        let (storage, _, _) = test_storage();
+        let service = Arc::new(RwLock::new(CloudSyncService::new()));
+        service
+            .write()
+            .expect("service lock")
+            .set_logged_in("user-1".to_string());
+        let teams = (1..=3)
+            .map(|index| Team {
+                id: format!("team-{index}"),
+                name: format!("Team {index}"),
+                ..team()
+            })
+            .collect::<Vec<_>>();
+        let aggregated_members = teams
+            .iter()
+            .map(|team| TeamMember {
+                team_id: team.id.clone(),
+                ..member(TeamRole::Admin)
+            })
+            .collect();
+        let probe = Arc::new(MemberRequestProbe::default());
+        let engine = SyncEngine::new(
+            Arc::new(FakeCloudClient {
+                teams,
+                members: Vec::new(),
+                aggregated_members: Some(aggregated_members),
+                fail_member_requests: false,
+                initialized_team: Arc::new(Mutex::new(None)),
+                member_request_probe: Some(probe.clone()),
+            }),
+            service,
+            storage,
+        );
+
+        let refreshed = engine.refresh_team_key_cache().await.expect("refresh");
+
+        assert_eq!(3, refreshed);
+        assert_eq!(0, probe.max_in_flight.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
     async fn refresh_removes_departed_team_cache_and_runtime_key() {
-        let (storage, repo) = test_storage();
+        let (storage, repo, membership_repo) = test_storage();
+        membership_repo
+            .upsert(&TeamMembershipCache {
+                scope: test_scope(),
+                team_id: "departed-team".to_string(),
+                team_name: "Departed".to_string(),
+                role: Some("admin".to_string()),
+                state: TeamMembershipState::Active,
+                last_seen_at: Some(123),
+                updated_at: 200,
+            })
+            .expect("seed departed membership");
         repo.upsert(&TeamKeyCache {
             scope: test_scope(),
             team_id: "departed-team".to_string(),
@@ -1155,6 +1384,8 @@ mod tests {
             Arc::new(FakeCloudClient {
                 teams: Vec::new(),
                 members: Vec::new(),
+                aggregated_members: None,
+                fail_member_requests: false,
                 initialized_team: Arc::new(Mutex::new(None)),
                 member_request_probe: None,
             }),
@@ -1169,6 +1400,13 @@ mod tests {
                 .expect("read departed team")
                 .is_none()
         );
+        let membership = membership_repo
+            .get(&test_scope(), "departed-team")
+            .expect("read departed membership")
+            .expect("departed membership retained");
+        assert_eq!(TeamMembershipState::Departed, membership.state);
+        assert_eq!("Departed", membership.team_name);
+        assert_eq!(None, membership.role);
         assert!(
             !service
                 .read()
@@ -1179,7 +1417,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_removes_team_when_membership_is_confirmed_absent() {
-        let (storage, repo) = test_storage();
+        let (storage, repo, membership_repo) = test_storage();
         repo.upsert(&TeamKeyCache {
             scope: test_scope(),
             team_id: "team-1".to_string(),
@@ -1206,6 +1444,8 @@ mod tests {
             Arc::new(FakeCloudClient {
                 teams: vec![team()],
                 members: Vec::new(),
+                aggregated_members: None,
+                fail_member_requests: false,
                 initialized_team: Arc::new(Mutex::new(None)),
                 member_request_probe: None,
             }),
@@ -1220,6 +1460,12 @@ mod tests {
                 .expect("read team")
                 .is_none()
         );
+        let membership = membership_repo
+            .get(&test_scope(), "team-1")
+            .expect("read membership")
+            .expect("membership retained");
+        assert_eq!(TeamMembershipState::Departed, membership.state);
+        assert_eq!(None, membership.role);
         assert!(
             !service
                 .read()
@@ -1229,8 +1475,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_failure_marks_membership_unknown_without_clearing_key() {
+        let (storage, repo, membership_repo) = test_storage();
+        membership_repo
+            .upsert(&TeamMembershipCache {
+                scope: test_scope(),
+                team_id: "team-1".to_string(),
+                team_name: "Platform".to_string(),
+                role: Some("admin".to_string()),
+                state: TeamMembershipState::Active,
+                last_seen_at: Some(123),
+                updated_at: 200,
+            })
+            .expect("seed membership");
+        repo.upsert(&TeamKeyCache {
+            scope: test_scope(),
+            team_id: "team-1".to_string(),
+            team_name: "Platform".to_string(),
+            key_version: 7,
+            cached_key_version: Some(7),
+            key_verification: Some("TEAMKEY2:cached".to_string()),
+            encrypted_team_key: Some("encrypted".to_string()),
+            last_verified_at: Some(123),
+            updated_at: 200,
+            role: Some("admin".to_string()),
+        })
+        .expect("seed key");
+        let service = Arc::new(RwLock::new(CloudSyncService::new()));
+        service
+            .write()
+            .expect("service lock")
+            .set_logged_in("user-1".to_string());
+        service
+            .write()
+            .expect("service lock")
+            .set_team_key("team-1", "runtime-key".to_string());
+        let engine = SyncEngine::new(
+            Arc::new(FakeCloudClient {
+                teams: vec![team()],
+                members: Vec::new(),
+                aggregated_members: None,
+                fail_member_requests: true,
+                initialized_team: Arc::new(Mutex::new(None)),
+                member_request_probe: None,
+            }),
+            service.clone(),
+            storage,
+        );
+
+        let refreshed = engine.refresh_team_key_cache().await.expect("refresh");
+        let membership = membership_repo
+            .get(&test_scope(), "team-1")
+            .expect("read membership")
+            .expect("membership retained");
+
+        assert_eq!(0, refreshed);
+        assert_eq!(TeamMembershipState::Unknown, membership.state);
+        assert_eq!(None, membership.role);
+        assert!(
+            repo.get(&test_scope(), "team-1")
+                .expect("read key")
+                .is_some()
+        );
+        assert!(
+            service
+                .read()
+                .expect("service lock")
+                .is_team_unlocked("team-1")
+        );
+    }
+
+    #[tokio::test]
     async fn save_or_initialize_team_key_initializes_missing_verification() {
-        let (storage, repo) = test_storage();
+        let (storage, repo, _) = test_storage();
         repo.upsert(&TeamKeyCache {
             scope: test_scope(),
             team_id: "team-1".to_string(),
@@ -1254,6 +1571,8 @@ mod tests {
             Arc::new(FakeCloudClient {
                 teams: Vec::new(),
                 members: Vec::new(),
+                aggregated_members: None,
+                fail_member_requests: false,
                 initialized_team: initialized_team.clone(),
                 member_request_probe: None,
             }),

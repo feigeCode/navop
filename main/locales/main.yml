@@ -347,6 +347,14 @@ TeamSync:
     en: No edit permission
     zh-CN: 无编辑权限
     zh-HK: 無編輯權限
+  membership_departed:
+    en: No longer a team member
+    zh-CN: 已退出团队或访问权限已移除
+    zh-HK: 已退出團隊或存取權限已移除
+  membership_unknown:
+    en: Team membership could not be refreshed
+    zh-CN: 团队成员状态暂时无法确认
+    zh-HK: 團隊成員狀態暫時無法確認
   manage_keys:
     en: Team keys
     zh-CN: 团队密钥

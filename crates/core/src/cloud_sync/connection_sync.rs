@@ -722,7 +722,7 @@ impl SyncEngine {
 
     async fn upload_connection(&self, conn: &StoredConnection) -> Result<CloudSyncData, SyncError> {
         let teams = self.get_cached_teams();
-        let workspace_cloud_id = self.workspace_cloud_id_for_local_id(conn.workspace_id)?;
+        let workspace_cloud_id = self.workspace_cloud_id_for_connection(conn)?;
         let cloud_data = {
             let service = self
                 .crypto_service
@@ -750,7 +750,7 @@ impl SyncEngine {
         cloud_data: &CloudSyncData,
     ) -> Result<CloudSyncData, SyncError> {
         let teams = self.get_cached_teams();
-        let workspace_cloud_id = self.workspace_cloud_id_for_local_id(local_conn.workspace_id)?;
+        let workspace_cloud_id = self.workspace_cloud_id_for_connection(local_conn)?;
         let updated_data = {
             let service = self
                 .crypto_service
@@ -787,8 +787,10 @@ impl SyncEngine {
         drop(service);
         local_conn.id = None;
         local_conn.cloud_id = Some(cloud_data.id.clone());
-        local_conn.workspace_id =
-            self.local_workspace_id_for_cloud_id(workspace_cloud_id.as_deref())?;
+        local_conn.workspace_id = self.local_workspace_id_for_connection(
+            cloud_data.team_id.as_deref(),
+            workspace_cloud_id.as_deref(),
+        )?;
         local_conn.last_synced_at = Some(Self::current_timestamp());
 
         let repo = self
@@ -824,8 +826,10 @@ impl SyncEngine {
         drop(service);
         updated.id = local_conn.id;
         updated.cloud_id = Some(cloud_data.id.clone());
-        updated.workspace_id =
-            self.local_workspace_id_for_cloud_id(workspace_cloud_id.as_deref())?;
+        updated.workspace_id = self.local_workspace_id_for_connection(
+            cloud_data.team_id.as_deref(),
+            workspace_cloud_id.as_deref(),
+        )?;
         updated.last_synced_at = Some(Self::current_timestamp());
 
         let repo = self
@@ -1153,6 +1157,31 @@ impl SyncEngine {
         Ok(workspace.and_then(|workspace| workspace.cloud_id))
     }
 
+    fn workspace_cloud_id_for_connection(
+        &self,
+        connection: &StoredConnection,
+    ) -> Result<Option<String>, SyncError> {
+        if !Self::shares_personal_workspace(connection.team_id.as_deref()) {
+            return Ok(None);
+        }
+        self.workspace_cloud_id_for_local_id(connection.workspace_id)
+    }
+
+    pub(crate) fn local_workspace_id_for_connection(
+        &self,
+        team_id: Option<&str>,
+        workspace_cloud_id: Option<&str>,
+    ) -> Result<Option<i64>, SyncError> {
+        if !Self::shares_personal_workspace(team_id) {
+            return Ok(None);
+        }
+        self.local_workspace_id_for_cloud_id(workspace_cloud_id)
+    }
+
+    fn shares_personal_workspace(team_id: Option<&str>) -> bool {
+        team_id.is_none()
+    }
+
     pub(crate) fn local_workspace_id_for_cloud_id(
         &self,
         workspace_cloud_id: Option<&str>,
@@ -1371,6 +1400,12 @@ mod tests {
             &local,
             &HashSet::new()
         ));
+    }
+
+    #[test]
+    fn team_connection_does_not_share_personal_workspace() {
+        assert!(!SyncEngine::shares_personal_workspace(Some("team-1")));
+        assert!(SyncEngine::shares_personal_workspace(None));
     }
 
     #[test]

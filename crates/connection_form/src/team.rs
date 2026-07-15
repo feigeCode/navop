@@ -60,7 +60,12 @@ impl SelectItem for TeamSelectItem {
 
 pub fn team_select_items(teams: &[TeamOption]) -> Vec<TeamSelectItem> {
     std::iter::once(TeamSelectItem::personal())
-        .chain(teams.iter().map(TeamSelectItem::from_team))
+        .chain(
+            teams
+                .iter()
+                .filter(|team| matches!(team.role.as_deref(), Some("owner" | "admin")))
+                .map(TeamSelectItem::from_team),
+        )
         .collect()
 }
 
@@ -223,7 +228,8 @@ mod tests {
             key_version: 1,
             key_verification: None,
             last_verified_at: None,
-            role: None,
+            role: Some("admin".to_string()),
+            membership_state: one_core::storage::TeamMembershipState::Active,
         }
     }
 
@@ -239,6 +245,17 @@ mod tests {
         assert_eq!(None, items[0].team_id());
         assert_eq!(Some("Alpha-id"), items[1].team_id());
         assert_eq!(Some("Beta-id"), items[2].team_id());
+    }
+
+    #[test]
+    fn member_teams_are_read_only_and_not_assignable() {
+        let mut member_team = team("Member", TeamKeyCacheStatus::Cached);
+        member_team.role = Some("member".to_string());
+
+        let items = team_select_items(&[member_team]);
+
+        assert_eq!(1, items.len());
+        assert_eq!(None, items[0].team_id());
     }
 
     #[test]

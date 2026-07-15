@@ -54,6 +54,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "20260711000001",
         include_str!("../../migrations/20260711000001_scoped_team_key_cache.sql"),
     ),
+    (
+        "20260714000001",
+        include_str!("../../migrations/20260714000001_team_membership_cache.sql"),
+    ),
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {

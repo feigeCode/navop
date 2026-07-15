@@ -9,6 +9,7 @@ use crate::storage::quick_command::QuickCommandRepository;
 use crate::storage::row_mapping::FromSqliteRow;
 use crate::storage::sftp_favorite_path::SftpFavoritePathRepository;
 use crate::storage::team_key_cache::TeamKeyCacheRepository;
+use crate::storage::team_membership_cache::TeamMembershipCacheRepository;
 use crate::storage::terminal_command_history::TerminalCommandHistoryRepository;
 use crate::storage::traits::Repository;
 use crate::storage::{ConnectionType, StoredConnection, Workspace};
@@ -989,6 +990,7 @@ pub fn init(cx: &mut App) {
     let terminal_command_history_repo = TerminalCommandHistoryRepository::new(conn.clone());
     let pending_deletion_repo = PendingCloudDeletionRepository::new(conn.clone());
     let team_key_cache_repo = TeamKeyCacheRepository::new(conn.clone());
+    let team_membership_cache_repo = TeamMembershipCacheRepository::new(conn.clone());
     let personal_conflict_repo =
         crate::cloud_sync::personal::PersonalSyncConflictRepository::new(conn.clone());
     let personal_status_repo =
@@ -1001,6 +1003,7 @@ pub fn init(cx: &mut App) {
     storage.register(terminal_command_history_repo);
     storage.register(pending_deletion_repo);
     storage.register(team_key_cache_repo);
+    storage.register(team_membership_cache_repo);
     storage.register(personal_conflict_repo);
     storage.register(personal_status_repo);
 }

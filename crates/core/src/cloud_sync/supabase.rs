@@ -1763,6 +1763,32 @@ impl CloudApiClient for SupabaseClient {
         }
     }
 
+    async fn list_current_user_team_members(&self) -> Result<Vec<TeamMember>, CloudApiError> {
+        let user_id = self.get_user_id().ok_or(CloudApiError::NotAuthenticated)?;
+        let url = format!(
+            "{}?user_id=eq.{}&order=joined_at.asc",
+            self.rest_url("team_members"),
+            user_id
+        );
+        let (status, result) = self.get_json_with_retry::<Vec<TeamMemberRow>>(&url).await?;
+
+        if status.is_success() {
+            let rows = result.map_err(CloudApiError::ParseError)?;
+            Ok(rows.into_iter().map(Into::into).collect())
+        } else {
+            let error_body = Self::format_error_summary(&result);
+            warn!(
+                status = status.as_u16(),
+                url = %url,
+                error_body = %error_body,
+                "获取当前用户团队角色失败"
+            );
+            Err(CloudApiError::ServerError(
+                "获取当前用户团队角色失败".to_string(),
+            ))
+        }
+    }
+
     async fn initialize_team_key(&self, team: &Team) -> Result<Team, CloudApiError> {
         let key_verification = team
             .key_verification

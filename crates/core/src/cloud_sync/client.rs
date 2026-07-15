@@ -164,6 +164,15 @@ pub trait CloudApiClient: Send + Sync {
     /// 获取团队成员列表
     async fn list_team_members(&self, team_id: &str) -> Result<Vec<TeamMember>, CloudApiError>;
 
+    /// 一次获取当前用户在所有团队中的成员记录。
+    ///
+    /// 旧后端可以不实现，调用方会回退到逐团队成员查询。
+    async fn list_current_user_team_members(&self) -> Result<Vec<TeamMember>, CloudApiError> {
+        Err(CloudApiError::NotFound(
+            "当前后端不支持聚合团队角色查询".to_string(),
+        ))
+    }
+
     /// 初始化尚未设置验证数据的团队密钥。
     async fn initialize_team_key(&self, team: &Team) -> Result<Team, CloudApiError>;
 

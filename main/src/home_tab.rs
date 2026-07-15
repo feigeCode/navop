@@ -25,8 +25,8 @@ use gpui_component::{
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
 use one_core::cloud_sync::{
     CloudAccountScope, CloudApiClient, CloudSyncService, ConflictResolution, SyncConflict,
-    SyncEngine, TeamOption, UserInfo, can_edit_connection, get_cached_team_options,
-    get_cached_team_options_for_scope,
+    SyncEngine, TeamOption, UserInfo, can_edit_connection,
+    get_cached_team_display_options_for_scope, get_cached_team_options,
 };
 use one_core::config::{team_management_url_template, website_base_url};
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
@@ -40,8 +40,8 @@ use one_core::storage::traits::Repository;
 use one_core::storage::{
     ActiveConnections, ConnectionRepository, ConnectionType, DatabaseType, GlobalStorageState,
     PendingCloudDeletionRepository, RedisMode, RemoteDesktopParams,
-    RemoteDesktopProtocol as StoredRemoteDesktopProtocol, StoredConnection, Workspace,
-    WorkspaceRepository,
+    RemoteDesktopProtocol as StoredRemoteDesktopProtocol, StoredConnection, TeamMembershipState,
+    Workspace, WorkspaceRepository,
 };
 use one_core::tab_container::{TabContainer, TabContent, TabContentEvent, TabItem, TabOpenMode};
 use port_forwarding::PortForwardingRuntime;
@@ -300,12 +300,37 @@ fn non_empty_name(name: &str) -> Option<&str> {
     if name.is_empty() { None } else { Some(name) }
 }
 
-fn connection_team_name(team_id: Option<&str>, teams: &[TeamOption]) -> Option<String> {
+#[derive(Clone)]
+struct ConnectionTeamBadge {
+    name: String,
+    tooltip: String,
+    active: bool,
+}
+
+fn connection_team_badge(
+    team_id: Option<&str>,
+    teams: &[TeamOption],
+) -> Option<ConnectionTeamBadge> {
     let team_id = team_id?;
-    teams
-        .iter()
-        .find(|team| team.id == team_id)
-        .map(|team| team.name.clone())
+    teams.iter().find(|team| team.id == team_id).map(|team| {
+        let (status, active) = match team.membership_state {
+            TeamMembershipState::Active => (None, true),
+            TeamMembershipState::Departed => {
+                (Some(t!("TeamSync.membership_departed").to_string()), false)
+            }
+            TeamMembershipState::Unknown => {
+                (Some(t!("TeamSync.membership_unknown").to_string()), false)
+            }
+        };
+        let tooltip = status
+            .map(|status| format!("{} · {status}", team.name))
+            .unwrap_or_else(|| team.name.clone());
+        ConnectionTeamBadge {
+            name: team.name.clone(),
+            tooltip,
+            active,
+        }
+    })
 }
 
 #[cfg(test)]
@@ -331,18 +356,19 @@ mod external_driver_form_tests {
             key_verification: None,
             last_verified_at: None,
             role: Some("member".to_string()),
+            membership_state: one_core::storage::TeamMembershipState::Active,
         }];
 
         assert_eq!(
             Some("Platform".to_string()),
-            connection_team_name(Some("team-1"), &teams)
+            connection_team_badge(Some("team-1"), &teams).map(|badge| badge.name)
         );
-        assert_eq!(None, connection_team_name(Some("missing"), &teams));
-        assert_eq!(None, connection_team_name(None, &teams));
+        assert!(connection_team_badge(Some("missing"), &teams).is_none());
+        assert!(connection_team_badge(None, &teams).is_none());
     }
 
     #[test]
-    fn list_and_card_layouts_render_cached_team_names() {
+    fn list_and_card_layouts_render_cached_team_badges() {
         let source = include_str!("home_tab.rs");
         let list_item = source
             .rsplit("fn render_connection_list_item(")
@@ -359,9 +385,9 @@ mod external_driver_form_tests {
             .next()
             .expect("card render has an end marker");
 
-        assert!(list_item.contains("connection_team_name"));
+        assert!(list_item.contains("connection_team_badge"));
         assert!(list_item.contains("conn-list-team-"));
-        assert!(card.contains("connection_team_name"));
+        assert!(card.contains("connection_team_badge"));
         assert!(card.contains("conn-team-"));
     }
 
@@ -917,8 +943,9 @@ impl HomePage {
             requested_user_id.clone(),
         );
         let storage = cx.global::<GlobalStorageState>().storage.clone();
-        let load_task =
-            cx.background_spawn(async move { get_cached_team_options_for_scope(&storage, &scope) });
+        let load_task = cx.background_spawn(async move {
+            get_cached_team_display_options_for_scope(&storage, &scope)
+        });
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
             let teams = load_task.await;
@@ -1299,23 +1326,11 @@ impl HomePage {
         let auth = self.auth_service.clone();
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             if let Some(user) = auth.try_restore_session().await {
-                // 同步 License 信息
-                let cloud_client = auth.cloud_client();
-                let subscription = cloud_client.get_subscription().await.ok().flatten();
-
                 _ = this.update(cx, |this, cx| {
                     this.current_user = Some(user.clone());
                     // 更新全局用户状态
                     GlobalCurrentUser::set_user(Some(user.clone()), cx);
                     this.load_team_options(cx);
-
-                    // 更新 License
-                    let license_service = get_license_service(cx);
-                    if let Err(e) = license_service.update_from_subscription(user.id, subscription)
-                    {
-                        tracing::warn!("更新 License 失败: {}", e);
-                    }
-
                     cx.notify();
 
                     // 如果密钥已解锁，自动触发同步
@@ -1323,6 +1338,25 @@ impl HomePage {
                         tracing::info!("会话已恢复且密钥已解锁，自动触发云同步");
                         this.trigger_sync(cx);
                     }
+                });
+
+                let subscription = auth.cloud_client().get_subscription().await.ok().flatten();
+                _ = this.update(cx, |this, cx| {
+                    if this
+                        .current_user
+                        .as_ref()
+                        .map(|current| current.id.as_str())
+                        != Some(user.id.as_str())
+                    {
+                        return;
+                    }
+                    let license_service = get_license_service(cx);
+                    if let Err(error) =
+                        license_service.update_from_subscription(user.id, subscription)
+                    {
+                        tracing::warn!("更新 License 失败: {}", error);
+                    }
+                    cx.notify();
                 });
             }
         })
@@ -3653,7 +3687,7 @@ impl HomePage {
             .id
             .map_or(false, |id| cx.global::<ActiveConnections>().is_active(id));
         let can_edit = can_edit_connection(&conn, cx);
-        let team_name = connection_team_name(conn.team_id.as_deref(), &self.team_options);
+        let team_badge = connection_team_badge(conn.team_id.as_deref(), &self.team_options);
 
         h_flex()
             .id(SharedString::from(format!(
@@ -3777,8 +3811,18 @@ impl HomePage {
                                     .min_w_0()
                                     .child(conn.name.clone()),
                             )
-                            .when_some(team_name, |this, team_name| {
-                                let tooltip_text: SharedString = team_name.clone().into();
+                            .when_some(team_badge, |this, badge| {
+                                let tooltip_text: SharedString = badge.tooltip.into();
+                                let background = if badge.active {
+                                    cx.theme().primary
+                                } else {
+                                    cx.theme().muted
+                                };
+                                let foreground = if badge.active {
+                                    cx.theme().primary_foreground
+                                } else {
+                                    cx.theme().muted_foreground
+                                };
                                 this.child(
                                     div()
                                         .id(SharedString::from(format!(
@@ -3789,8 +3833,8 @@ impl HomePage {
                                         .px_1p5()
                                         .py_0p5()
                                         .rounded(px(4.0))
-                                        .bg(cx.theme().primary)
-                                        .text_color(cx.theme().primary_foreground)
+                                        .bg(background)
+                                        .text_color(foreground)
                                         .text_xs()
                                         .overflow_hidden()
                                         .text_ellipsis()
@@ -3798,7 +3842,7 @@ impl HomePage {
                                         .tooltip(move |window, cx| {
                                             Tooltip::new(tooltip_text.clone()).build(window, cx)
                                         })
-                                        .child(team_name),
+                                        .child(badge.name),
                                 )
                             })
                             .child({
@@ -4073,7 +4117,7 @@ impl HomePage {
             .map_or(false, |id| cx.global::<ActiveConnections>().is_active(id));
 
         let can_edit = can_edit_connection(&conn, cx);
-        let team_name = connection_team_name(conn.team_id.as_deref(), &self.team_options);
+        let team_badge = connection_team_badge(conn.team_id.as_deref(), &self.team_options);
         let card = v_flex()
             .justify_center()
             .id(SharedString::from(format!(
@@ -4125,8 +4169,18 @@ impl HomePage {
                         .shadow_lg(),
                 )
             })
-            .when_some(team_name.clone(), |this, team_name| {
-                let tooltip_text: SharedString = team_name.clone().into();
+            .when_some(team_badge, |this, badge| {
+                let tooltip_text: SharedString = badge.tooltip.into();
+                let background = if badge.active {
+                    cx.theme().primary
+                } else {
+                    cx.theme().muted
+                };
+                let foreground = if badge.active {
+                    cx.theme().primary_foreground
+                } else {
+                    cx.theme().muted_foreground
+                };
                 this.child(
                     div()
                         .id(SharedString::from(format!(
@@ -4140,8 +4194,8 @@ impl HomePage {
                         .px_1p5()
                         .py_0p5()
                         .rounded(px(4.0))
-                        .bg(cx.theme().primary)
-                        .text_color(cx.theme().primary_foreground)
+                        .bg(background)
+                        .text_color(foreground)
                         .text_xs()
                         .overflow_hidden()
                         .text_ellipsis()
@@ -4150,7 +4204,7 @@ impl HomePage {
                         .tooltip(move |window, cx| {
                             Tooltip::new(tooltip_text.clone()).build(window, cx)
                         })
-                        .child(team_name),
+                        .child(badge.name),
                 )
             })
             .child(
