@@ -6,6 +6,7 @@
 //! - AI 聊天面板
 //! - 文件管理器面板（仅 SSH 终端）
 
+mod broadcast_input_panel;
 pub mod file_manager_panel;
 mod history_command_panel;
 mod quick_command_panel;
@@ -14,6 +15,7 @@ mod server_monitor_panel;
 mod settings_panel;
 pub(crate) mod tool_dock;
 
+use broadcast_input_panel::{BroadcastInputPanel, BroadcastInputPanelConfig};
 pub use file_manager_panel::{FileManagerPanel, FileManagerPanelEvent};
 pub use history_command_panel::{HistoryCommandPanel, HistoryCommandPanelEvent};
 pub use quick_command_panel::QuickCommandPanel;
@@ -25,6 +27,7 @@ pub use settings_panel::SettingsPanel;
 
 use crate::{
     TerminalHighlightRule,
+    broadcast_registry::{broadcast_input_registry, init_broadcast_input_registry},
     theme::{TerminalColors, TerminalTheme},
 };
 use ai_chat_view::{
@@ -155,6 +158,8 @@ pub enum SidebarPanel {
     RichInput,
     /// AI 聊天面板
     AiChat,
+    /// SSH 广播输入面板
+    BroadcastInput,
     /// 文件管理器面板（仅 SSH 终端）
     FileManager,
     /// 服务器监控面板（仅 SSH 终端）
@@ -162,12 +167,13 @@ pub enum SidebarPanel {
 }
 
 impl SidebarPanel {
-    pub const ALL: [SidebarPanel; 7] = [
+    pub const ALL: [SidebarPanel; 8] = [
         SidebarPanel::Settings,
         SidebarPanel::QuickCommand,
         SidebarPanel::HistoryCommand,
         SidebarPanel::RichInput,
         SidebarPanel::AiChat,
+        SidebarPanel::BroadcastInput,
         SidebarPanel::FileManager,
         SidebarPanel::ServerMonitor,
     ];
@@ -183,6 +189,7 @@ impl SidebarPanel {
             SidebarPanel::HistoryCommand => "terminal.history-command",
             SidebarPanel::RichInput => "terminal.rich-input",
             SidebarPanel::AiChat => "terminal.ai-chat",
+            SidebarPanel::BroadcastInput => "terminal.broadcast-input",
             SidebarPanel::FileManager => "terminal.file-manager",
             SidebarPanel::ServerMonitor => "terminal.server-monitor",
         }
@@ -195,6 +202,7 @@ impl SidebarPanel {
             SidebarPanel::HistoryCommand => IconName::TerminalHistoryColor,
             SidebarPanel::RichInput => IconName::Edit,
             SidebarPanel::AiChat => IconName::AI,
+            SidebarPanel::BroadcastInput => IconName::TerminalBroadcastColor,
             SidebarPanel::FileManager => IconName::TerminalFileManagerColor,
             SidebarPanel::ServerMonitor => IconName::TerminalServerMonitorColor,
         }
@@ -208,6 +216,7 @@ impl SidebarPanel {
             SidebarPanel::HistoryCommand => IconName::TerminalHistoryColor.color(),
             SidebarPanel::RichInput => IconName::RichInputColor.color(),
             SidebarPanel::AiChat => IconName::AI.color(),
+            SidebarPanel::BroadcastInput => IconName::TerminalBroadcastColor.color(),
             SidebarPanel::FileManager => IconName::TerminalFileManagerColor.color(),
             SidebarPanel::ServerMonitor => IconName::TerminalServerMonitorColor.color(),
         }
@@ -221,6 +230,7 @@ impl SidebarPanel {
             SidebarPanel::HistoryCommand => "History Commands",
             SidebarPanel::RichInput => "Rich Input",
             SidebarPanel::AiChat => "AI Chat",
+            SidebarPanel::BroadcastInput => "Broadcast Input",
             SidebarPanel::FileManager => "File Manager",
             SidebarPanel::ServerMonitor => "Server Monitor",
         }
@@ -235,8 +245,12 @@ fn terminal_sidebar_available_panels(
     has_file_manager: bool,
     has_server_monitor: bool,
     history_supported: bool,
+    broadcast_supported: bool,
 ) -> Vec<SidebarPanel> {
     let mut panels = vec![SidebarPanel::Settings, SidebarPanel::AiChat];
+    if broadcast_supported {
+        panels.push(SidebarPanel::BroadcastInput);
+    }
     if has_file_manager {
         panels.push(SidebarPanel::FileManager);
     }
@@ -440,8 +454,6 @@ pub enum TerminalSidebarEvent {
     PasteImageUploadChanged(bool),
     /// vim/TUI 滚轮转方向键开关
     VimScrollToArrowKeysChanged(bool),
-    /// SSH 多窗口同步输入开关
-    BroadcastInputChanged(bool),
     /// 路径与终端同步开关
     SyncPathChanged(bool),
     /// 自定义高亮规则变更
@@ -466,6 +478,8 @@ pub struct TerminalSidebar {
     rich_input_panel: Entity<RichInputPanel>,
     /// AI 聊天面板
     ai_chat_panel: Entity<DefaultAgentChatPanel>,
+    /// SSH 广播输入面板
+    broadcast_input_panel: Option<Entity<BroadcastInputPanel>>,
     /// 文件管理器面板（仅 SSH 终端时创建）
     file_manager_panel: Option<Entity<FileManagerPanel>>,
     /// 服务器监控面板（仅 SSH 终端时创建）
@@ -490,13 +504,16 @@ impl TerminalSidebar {
         initial_font_size: Pixels,
         initial_font_family: SharedString,
         sync_path_enabled: bool,
-        broadcast_input_enabled: bool,
         history_scope: Option<TerminalHistoryScope>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let colors = initial_theme.colors();
         let has_file_manager = stored_connection.is_some();
+        let broadcast_supported = ssh_config.is_some();
+        if broadcast_supported {
+            init_broadcast_input_registry(cx);
+        }
         let history_user = ssh_config
             .as_ref()
             .map(|config| config.ssh_config.username.clone())
@@ -515,11 +532,20 @@ impl TerminalSidebar {
                 true,
                 sync_path_enabled,
                 true,
-                broadcast_input_enabled,
                 window,
                 cx,
             )
         });
+        let broadcast_input_panel = broadcast_supported
+            .then(|| broadcast_input_registry(cx))
+            .flatten()
+            .map(|registry| {
+                let config = BroadcastInputPanelConfig {
+                    registry,
+                    colors: colors.clone(),
+                };
+                cx.new(|cx| BroadcastInputPanel::new(config, window, cx))
+            });
         let quick_command_panel =
             cx.new(|cx| QuickCommandPanel::new(connection_id, colors.clone(), window, cx));
         let history_command_panel = history_scope.map(|scope| {
@@ -644,9 +670,6 @@ impl TerminalSidebar {
                 settings_panel::SettingsPanelEvent::VimScrollToArrowKeysChanged(enabled) => {
                     cx.emit(TerminalSidebarEvent::VimScrollToArrowKeysChanged(*enabled));
                 }
-                settings_panel::SettingsPanelEvent::BroadcastInputChanged(enabled) => {
-                    cx.emit(TerminalSidebarEvent::BroadcastInputChanged(*enabled));
-                }
                 settings_panel::SettingsPanelEvent::SyncPathChanged(enabled) => {
                     this.sync_path_enabled = *enabled;
                     cx.emit(TerminalSidebarEvent::SyncPathChanged(*enabled));
@@ -747,6 +770,7 @@ impl TerminalSidebar {
             file_manager_panel.is_some(),
             server_monitor_panel.is_some(),
             history_command_panel.is_some(),
+            broadcast_input_panel.is_some(),
         );
         Self {
             tool_dock: TerminalToolDockState::new(available_panels),
@@ -755,6 +779,7 @@ impl TerminalSidebar {
             history_command_panel,
             rich_input_panel,
             ai_chat_panel,
+            broadcast_input_panel,
             file_manager_panel,
             server_monitor_panel,
             sync_path_enabled,
@@ -825,6 +850,10 @@ impl TerminalSidebar {
                 .map(|panel| panel.clone().into()),
             SidebarPanel::RichInput => Some(self.rich_input_panel.clone().into()),
             SidebarPanel::AiChat => Some(self.ai_chat_panel.clone().into()),
+            SidebarPanel::BroadcastInput => self
+                .broadcast_input_panel
+                .as_ref()
+                .map(|panel| panel.clone().into()),
             SidebarPanel::FileManager => self
                 .file_manager_panel
                 .as_ref()
@@ -952,6 +981,11 @@ impl TerminalSidebar {
         self.ai_chat_panel.update(cx, |panel, cx| {
             panel.set_theme(Some(agent_theme_from_terminal_theme(theme)), cx);
         });
+        if let Some(ref broadcast_panel) = self.broadcast_input_panel {
+            broadcast_panel.update(cx, |panel, cx| {
+                panel.set_colors(self.colors.clone(), cx);
+            });
+        }
         if let Some(ref fm_panel) = self.file_manager_panel {
             fm_panel.update(cx, |panel, cx| {
                 panel.set_colors(self.colors.clone(), cx);
@@ -1024,12 +1058,6 @@ impl TerminalSidebar {
     pub fn set_vim_scroll_to_arrow_keys(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.settings_panel.update(cx, |panel, cx| {
             panel.set_vim_scroll_to_arrow_keys(enabled, cx);
-        });
-    }
-
-    pub fn set_broadcast_input_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        self.settings_panel.update(cx, |panel, cx| {
-            panel.set_broadcast_input(enabled, cx);
         });
     }
 
@@ -1217,6 +1245,7 @@ impl TerminalSidebar {
                 | SidebarPanel::QuickCommand
                 | SidebarPanel::HistoryCommand
                 | SidebarPanel::RichInput
+                | SidebarPanel::BroadcastInput
                 | SidebarPanel::ServerMonitor
         );
         if !needs_embedded_header {
@@ -1467,27 +1496,30 @@ mod tests {
 
     #[test]
     fn history_command_panel_is_available_for_local_terminals() {
-        let panels = terminal_sidebar_available_panels(false, false, true);
+        let panels = terminal_sidebar_available_panels(false, false, true, false);
 
         assert!(panels.contains(&SidebarPanel::HistoryCommand));
+        assert!(!panels.contains(&SidebarPanel::BroadcastInput));
         assert!(!panels.contains(&SidebarPanel::FileManager));
         assert!(!panels.contains(&SidebarPanel::ServerMonitor));
     }
 
     #[test]
     fn history_command_panel_is_available_for_ssh_terminals() {
-        let panels = terminal_sidebar_available_panels(true, true, true);
+        let panels = terminal_sidebar_available_panels(true, true, true, true);
 
         assert!(panels.contains(&SidebarPanel::HistoryCommand));
+        assert!(panels.contains(&SidebarPanel::BroadcastInput));
         assert!(panels.contains(&SidebarPanel::FileManager));
         assert!(panels.contains(&SidebarPanel::ServerMonitor));
     }
 
     #[test]
     fn history_command_panel_is_not_available_for_serial_terminals() {
-        let panels = terminal_sidebar_available_panels(false, false, false);
+        let panels = terminal_sidebar_available_panels(false, false, false, false);
 
         assert!(!panels.contains(&SidebarPanel::HistoryCommand));
+        assert!(!panels.contains(&SidebarPanel::BroadcastInput));
         assert!(!panels.contains(&SidebarPanel::FileManager));
         assert!(!panels.contains(&SidebarPanel::ServerMonitor));
     }

@@ -26,7 +26,6 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(crate) mod block_selection;
-mod broadcast;
 mod history_prompt_rules;
 mod mouse_input;
 mod paste_safety;
@@ -36,6 +35,7 @@ use crate::addon::{
     TerminalAddonMouseContext, register_default_addons,
 };
 use crate::broadcast_input::BroadcastClientId;
+use crate::broadcast_registry::{broadcast_input_registry, init_broadcast_input_registry};
 use crate::cd_completion::{
     CdCompletionQuery, build_cd_completion_suggestions, parse_cd_completion_query,
 };
@@ -60,7 +60,6 @@ use crate::theme::{
 use crate::view::block_selection::{
     BlockSelection, block_selection_text_from_rows, should_start_block_selection,
 };
-use broadcast::{BroadcastInputRegistry, init_broadcast_input_registry};
 #[cfg(test)]
 use history_prompt_rules::should_refresh_history_commands_for_terminal_event;
 use history_prompt_rules::{
@@ -699,8 +698,6 @@ pub struct TerminalView {
     paste_image_upload: bool,
     /// 在 vim/less/man 等 alt-screen TUI 中,把鼠标滚轮转为方向键发送到 PTY
     vim_scroll_to_arrow_keys: bool,
-    /// SSH 多窗口同步输入开关，按同一连接 ID 分组。
-    broadcast_input_enabled: bool,
     broadcast_client_id: Option<BroadcastClientId>,
 
     /// 侧边栏面板大小
@@ -1051,7 +1048,6 @@ impl TerminalView {
                 default_font_size,
                 default_font_family.clone(),
                 sync_path_enabled,
-                false,
                 history_scope,
                 window,
                 cx,
@@ -1172,7 +1168,6 @@ impl TerminalView {
             right_click_paste: false,
             paste_image_upload: true,
             vim_scroll_to_arrow_keys: true,
-            broadcast_input_enabled: false,
             broadcast_client_id: None,
             sidebar_panel_size: SIDEBAR_DEFAULT_WIDTH,
             resizing: None,
@@ -1201,22 +1196,27 @@ impl TerminalView {
             return;
         }
 
-        let connection_id = {
+        let label = {
             let terminal = self.terminal.read(cx);
             if terminal.connection_kind() != TerminalConnectionKind::Ssh {
                 return;
             }
-            let Some(connection_id) = terminal.connection_id() else {
-                return;
-            };
-            connection_id
+            let base = terminal
+                .connection_name()
+                .filter(|name| !name.is_empty())
+                .or_else(|| (!terminal.title().is_empty()).then(|| terminal.title()))
+                .unwrap_or("SSH Terminal");
+            self.tab_index
+                .map(|index| format!("{base}({index})"))
+                .unwrap_or_else(|| base.to_string())
         };
 
         init_broadcast_input_registry(cx);
         let view = cx.entity().downgrade();
-        let client_id = cx
-            .global_mut::<BroadcastInputRegistry>()
-            .register(connection_id, view);
+        let Some(registry) = broadcast_input_registry(cx) else {
+            return;
+        };
+        let client_id = registry.update(cx, |registry, cx| registry.register(label, view, cx));
         self.broadcast_client_id = Some(client_id);
     }
 
@@ -1224,41 +1224,19 @@ impl TerminalView {
         let Some(client_id) = self.broadcast_client_id.take() else {
             return;
         };
-        if cx.try_global::<BroadcastInputRegistry>().is_some() {
-            cx.global_mut::<BroadcastInputRegistry>()
-                .unregister(client_id);
+        if let Some(registry) = broadcast_input_registry(cx) {
+            registry.update(cx, |registry, cx| registry.unregister(client_id, cx));
         }
-        self.broadcast_input_enabled = false;
-    }
-
-    fn apply_broadcast_input_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        if self.terminal.read(cx).connection_kind() != TerminalConnectionKind::Ssh {
-            return;
-        }
-        self.register_broadcast_input(cx);
-        let Some(client_id) = self.broadcast_client_id else {
-            return;
-        };
-        init_broadcast_input_registry(cx);
-        cx.global_mut::<BroadcastInputRegistry>()
-            .set_enabled(client_id, enabled);
-        self.broadcast_input_enabled = cx
-            .try_global::<BroadcastInputRegistry>()
-            .is_some_and(|registry| registry.is_enabled(client_id));
-        self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.set_broadcast_input_enabled(self.broadcast_input_enabled, cx);
-        });
-        cx.notify();
     }
 
     fn broadcast_user_input(&self, data: &[u8], cx: &mut Context<Self>) {
         let Some(client_id) = self.broadcast_client_id else {
             return;
         };
-        let Some(registry) = cx.try_global::<BroadcastInputRegistry>() else {
+        let Some(registry) = broadcast_input_registry(cx) else {
             return;
         };
-        let deliveries = registry.deliveries_from(client_id, data);
+        let deliveries = registry.read(cx).deliveries_from(client_id, data);
         for (view, data) in deliveries {
             let _ = view.update(cx, |view, cx| {
                 view.write_broadcast_input(data, cx);
@@ -1383,9 +1361,6 @@ impl TerminalView {
             }
             TerminalSidebarEvent::VimScrollToArrowKeysChanged(enabled) => {
                 self.set_vim_scroll_to_arrow_keys(*enabled, cx);
-            }
-            TerminalSidebarEvent::BroadcastInputChanged(enabled) => {
-                self.apply_broadcast_input_enabled(*enabled, cx);
             }
             TerminalSidebarEvent::SyncPathChanged(enabled) => {
                 let enabled = *enabled;
