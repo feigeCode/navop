@@ -31,13 +31,8 @@ impl NotesView {
             let projection =
                 build_markdown_projection(&document_id, &snapshot.source, store.clone(), cx)?;
             self.observe_markdown_events(projection.events, window, cx);
-            let subscription = subscribe_source_changes(
-                &source_editor,
-                document_id.clone(),
-                cx.entity().downgrade(),
-                window,
-                cx,
-            );
+            let subscription =
+                subscribe_source_changes(&source_editor, document_id.clone(), window, cx);
             self.markdown_sessions.insert(
                 document_id.clone(),
                 MarkdownSession {
