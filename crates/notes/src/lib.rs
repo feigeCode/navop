@@ -1,5 +1,7 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod ai_model_catalog;
+mod ai_provider;
 mod document_index;
 mod document_persistence;
 mod markdown_adapter;

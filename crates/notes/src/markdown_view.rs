@@ -1,5 +1,6 @@
 use crate::markdown_adapter::{
-    apply_markdown_source, build_markdown_projection, export_markdown_strict,
+    MarkdownProjectionConfig, apply_markdown_source, build_markdown_projection,
+    export_markdown_strict,
 };
 use crate::markdown_file_store::MarkdownFileStore;
 use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyncState};
@@ -8,6 +9,7 @@ use crate::notes_notifications::notify_operation_error;
 use crate::path_policy::remap_path;
 use crate::{DocumentDescriptor, MarkdownViewMode, NotesView};
 use gpui::{AppContext, AsyncApp, Context, Window};
+use one_core::settings::AppSettings;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -29,8 +31,17 @@ impl NotesView {
             let store = MarkdownFileStore::new(descriptor.absolute_path.clone());
             let snapshot = store.load()?;
             let source_editor = create_source_editor(&snapshot.source, window, cx);
-            let projection =
-                build_markdown_projection(&document_id, &snapshot.source, store.clone(), cx)?;
+            let ai_model_id = AppSettings::global(cx).ai_chat.notes_model_id.clone();
+            let projection = build_markdown_projection(
+                MarkdownProjectionConfig {
+                    document_id: &document_id,
+                    source: &snapshot.source,
+                    store: store.clone(),
+                    ai_provider: self.ai_provider.clone(),
+                    ai_model_id: ai_model_id.as_deref(),
+                },
+                cx,
+            )?;
             self.observe_editor_events(projection.events, window, cx);
             let subscription =
                 subscribe_source_changes(&source_editor, document_id.clone(), window, cx);

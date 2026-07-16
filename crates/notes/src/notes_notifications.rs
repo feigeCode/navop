@@ -3,6 +3,7 @@ use crate::markdown_file_store::MarkdownSaveOutcome;
 use cditor_app::EditorEvent;
 use gpui::{AppContext, AsyncApp, Context, Window};
 use gpui_component::{WindowExt, notification::Notification};
+use one_core::settings::AppSettings;
 use rust_i18n::t;
 
 pub(crate) fn notify_operation_error<T>(
@@ -73,13 +74,25 @@ impl NotesView {
         let window_handle = window.window_handle();
         cx.spawn(async move |_, cx: &mut AsyncApp| {
             while let Ok(event) = events.recv().await {
-                let EditorEvent::SaveFailed { message, .. } = event else {
-                    continue;
-                };
-                let message = t!("Notes.markdown_save_failed", error = message).to_string();
-                let _ = cx.update_window(window_handle, |_, window, cx| {
-                    window.push_notification(Notification::error(message).autohide(false), cx);
-                });
+                match event {
+                    EditorEvent::SaveFailed { message, .. } => {
+                        let message = t!("Notes.markdown_save_failed", error = message).to_string();
+                        let _ = cx.update_window(window_handle, |_, window, cx| {
+                            window.push_notification(
+                                Notification::error(message).autohide(false),
+                                cx,
+                            );
+                        });
+                    }
+                    EditorEvent::AiModelChanged { model } => {
+                        let _ = cx.update(|cx| {
+                            AppSettings::update_and_save(cx, |settings| {
+                                settings.ai_chat.notes_model_id = Some(model.id.clone());
+                            });
+                        });
+                    }
+                    _ => {}
+                }
             }
         })
         .detach();

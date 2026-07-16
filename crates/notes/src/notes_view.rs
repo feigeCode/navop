@@ -1,15 +1,17 @@
 use crate::notes_notifications::notify_operation_error;
 use crate::{DocumentFormat, FileDocumentPersistence, NodeKind, NotesStorage, TreeRow, TreeState};
-use cditor_app::{Editor, EditorHandle};
+use cditor_app::{AiProvider, Editor, EditorHandle};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
     Subscription, Window,
 };
 use gpui_component::input::InputState;
+use one_core::settings::AppSettings;
 use one_core::tab_container::TabContentEvent;
 use rust_i18n::t;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(1);
@@ -36,6 +38,7 @@ pub struct NotesView {
     pub(crate) active_document_id: Option<String>,
     pub(crate) current_directory: PathBuf,
     pub(crate) notebook_name: SharedString,
+    pub(crate) ai_provider: Option<Arc<dyn AiProvider>>,
     pub(crate) setup_path: Entity<InputState>,
     pub(crate) dialog_subscription: Option<Subscription>,
     pub(crate) focus_handle: FocusHandle,
@@ -50,6 +53,13 @@ impl NotesView {
                 .placeholder(t!("Notes.notebook_path_placeholder").to_string())
                 .default_value(initial_root.to_string_lossy())
         });
+        let ai_provider = match crate::ai_provider::build_provider(cx) {
+            Ok(provider) => provider,
+            Err(error) => {
+                notify_operation_error(window, cx, error);
+                None
+            }
+        };
         let mut view = Self {
             storage: None,
             load_state: NotesLoadState::NeedsLocation,
@@ -61,6 +71,7 @@ impl NotesView {
             active_document_id: None,
             current_directory: PathBuf::new(),
             notebook_name: "Notes".into(),
+            ai_provider,
             setup_path: setup_path.clone(),
             dialog_subscription: None,
             focus_handle: cx.focus_handle(),
@@ -112,14 +123,19 @@ impl NotesView {
         } else {
             let persistence = FileDocumentPersistence::new(descriptor.absolute_path);
             let (event_sender, events) = smol::channel::unbounded();
-            let handle = Editor::builder()
+            let mut builder = Editor::builder()
                 .document_id(descriptor.document_id.clone())
                 .persistence(persistence.clone())
                 .autosave(AUTOSAVE_INTERVAL)
                 .on_event(move |event| {
                     let _ = event_sender.try_send(event);
-                })
-                .build(cx)?;
+                });
+            builder = match self.ai_provider.clone() {
+                Some(provider) => builder.ai_provider_arc(provider),
+                None => builder.without_ai(),
+            };
+            let handle = builder.build(cx)?;
+            self.restore_ai_model(&handle, cx);
             self.observe_editor_events(events, window, cx);
             self.editors.insert(
                 descriptor.document_id,
@@ -163,6 +179,15 @@ impl NotesView {
         self.storage
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("notes storage is unavailable"))
+    }
+
+    pub(crate) fn restore_ai_model(&self, handle: &EditorHandle, cx: &mut App) {
+        let Some(model_id) = AppSettings::global(cx).ai_chat.notes_model_id.clone() else {
+            return;
+        };
+        if let Err(error) = handle.select_ai_model(&model_id, cx) {
+            tracing::debug!(%error, model_id, "saved Notes AI model is unavailable");
+        }
     }
 }
 

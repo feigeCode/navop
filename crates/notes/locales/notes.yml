@@ -93,3 +93,15 @@ Notes:
     en: Set location
     zh-CN: 设置路径
     zh-HK: 設定路徑
+  ai_provider_unavailable:
+    en: AI provider state is unavailable
+    zh-CN: AI 提供方状态不可用
+    zh-HK: AI 提供方狀態不可用
+  ai_model_not_selected:
+    en: No AI model is selected
+    zh-CN: 尚未选择 AI 模型
+    zh-HK: 尚未選擇 AI 模型
+  ai_model_unavailable:
+    en: The selected AI model is no longer available
+    zh-CN: 选择的 AI 模型已不可用
+    zh-HK: 選擇的 AI 模型已不可用
