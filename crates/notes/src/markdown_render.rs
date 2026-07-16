@@ -69,8 +69,8 @@ impl NotesView {
                     Button::new("accept-markdown-normalization")
                         .label(t!("Notes.markdown_confirm_adjustment").to_string())
                         .small()
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.accept_markdown_normalization(&id, cx)
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.accept_markdown_normalization(&id, window, cx)
                         })),
                 )
             })

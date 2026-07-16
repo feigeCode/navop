@@ -47,10 +47,7 @@ impl NotesView {
                                     view.create_notebook(window, cx)
                                 })),
                         ),
-                    )
-                    .when_some(self.error.clone(), |this, error| {
-                        this.child(div().text_sm().text_color(cx.theme().danger).child(error))
-                    }),
+                    ),
             )
             .into_any_element()
     }
@@ -60,9 +57,6 @@ impl NotesView {
             .size_full()
             .min_h_0()
             .overflow_hidden()
-            .when_some(self.error.clone(), |this, error| {
-                this.child(self.render_error_banner(error, cx))
-            })
             .child(
                 h_flex()
                     .flex_1()
@@ -134,15 +128,6 @@ impl NotesView {
                 },
             )
             .into_any_element()
-    }
-
-    fn render_error_banner(&self, error: SharedString, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .w_full()
-            .p_2()
-            .bg(cx.theme().danger.opacity(0.08))
-            .text_color(cx.theme().danger)
-            .child(error)
     }
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {

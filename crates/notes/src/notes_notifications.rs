@@ -5,6 +5,26 @@ use gpui::{AppContext, AsyncApp, Context, Window};
 use gpui_component::{WindowExt, notification::Notification};
 use rust_i18n::t;
 
+pub(crate) fn notify_operation_error<T>(
+    window: &mut Window,
+    cx: &mut Context<T>,
+    error: impl std::fmt::Display,
+) {
+    notify_error_message(
+        window,
+        cx,
+        t!("Notes.operation_failed", error = error.to_string()),
+    );
+}
+
+pub(crate) fn notify_error_message<T>(
+    window: &mut Window,
+    cx: &mut Context<T>,
+    message: impl Into<String>,
+) {
+    window.push_notification(Notification::error(message.into()).autohide(false), cx);
+}
+
 impl NotesView {
     pub(crate) fn finish_markdown_save(
         &mut self,
@@ -44,7 +64,7 @@ impl NotesView {
         cx.notify();
     }
 
-    pub(crate) fn observe_markdown_events(
+    pub(crate) fn observe_editor_events(
         &self,
         events: smol::channel::Receiver<EditorEvent>,
         window: &mut Window,

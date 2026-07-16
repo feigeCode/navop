@@ -1,3 +1,4 @@
+use crate::notes_notifications::{notify_error_message, notify_operation_error};
 use crate::{DocumentFormat, NotesView, TreeRow};
 use gpui::{Context, Window};
 use gpui_component::{
@@ -27,7 +28,11 @@ impl NotesView {
             .values()
             .any(|cached| cached.relative_path == row.relative_path && cached.handle.is_dirty(cx))
         {
-            self.set_error("富文本文档尚未保存，请等待自动保存完成后再转换");
+            notify_error_message(
+                window,
+                cx,
+                rust_i18n::t!("Notes.unsaved_rich_text_conversion").to_string(),
+            );
             cx.notify();
             return;
         }
@@ -38,12 +43,10 @@ impl NotesView {
             Ok(descriptor) => {
                 self.tree.selected_document = Some(descriptor.relative_path);
                 if let Err(error) = self.refresh_tree(window, cx) {
-                    self.set_error(error);
-                } else {
-                    self.error = None;
+                    notify_operation_error(window, cx, error);
                 }
             }
-            Err(error) => self.set_error(error),
+            Err(error) => notify_operation_error(window, cx, error),
         }
         cx.notify();
     }

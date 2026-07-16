@@ -1,3 +1,4 @@
+use crate::notes_notifications::{notify_error_message, notify_operation_error};
 use crate::path_policy::remap_path;
 use crate::{DocumentFormat, NotesView, TreeRow};
 use gpui::{AppContext, Context, Entity, ParentElement, SharedString, Styled, Window, div, px};
@@ -150,16 +151,16 @@ impl NotesView {
             .storage()
             .and_then(|storage| storage.rename_node(&old_path, name));
         let Ok(new_path) = result else {
-            self.set_error(result.unwrap_err());
+            notify_operation_error(window, cx, result.unwrap_err());
             cx.notify();
             return;
         };
         self.remap_tree_paths(&old_path, &new_path);
         if let Err(error) = self.remap_cached_editors(&old_path, &new_path) {
-            self.set_error(error);
+            notify_operation_error(window, cx, error);
         }
         if let Err(error) = self.remap_markdown_sessions(&old_path, &new_path) {
-            self.set_error(error);
+            notify_operation_error(window, cx, error);
         }
         self.finish_file_operation(Ok(()), window, cx);
     }
@@ -179,7 +180,11 @@ impl NotesView {
                         ))
             })
         {
-            self.set_error("包含未保存文档，请等待自动保存完成后再删除");
+            notify_error_message(
+                window,
+                cx,
+                rust_i18n::t!("Notes.unsaved_documents_delete").to_string(),
+            );
             cx.notify();
             return;
         }
@@ -213,12 +218,11 @@ impl NotesView {
         cx: &mut Context<Self>,
     ) {
         match result.and_then(|_| self.refresh_tree(window, cx)) {
-            Ok(()) => self.error = None,
-            Err(error) => self.set_error(error),
+            Ok(()) => {}
+            Err(error) => notify_operation_error(window, cx, error),
         }
         cx.notify();
     }
-
     fn remap_tree_paths(&mut self, old: &Path, new: &Path) {
         self.tree.selected_document = self
             .tree
@@ -233,7 +237,6 @@ impl NotesView {
             .collect();
         self.current_directory = remap_path(&self.current_directory, old, new);
     }
-
     fn remap_cached_editors(&mut self, old: &Path, new: &Path) -> anyhow::Result<()> {
         let updates = self
             .editors

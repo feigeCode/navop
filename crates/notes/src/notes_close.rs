@@ -1,5 +1,6 @@
 use crate::NotesView;
 use crate::markdown_session::MarkdownSyncState;
+use crate::notes_notifications::{notify_error_message, notify_operation_error};
 use cditor_app::{EditorHandle, EditorSaveState};
 use gpui::{App, Context, SharedString, Task, Window};
 use gpui_component::{Icon, IconName, Sizable, Size};
@@ -25,19 +26,23 @@ impl TabContent for NotesView {
     fn try_close(
         &mut self,
         _tab_id: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
         let dirty = dirty_editors(self, cx);
         if markdown_close_blocked(self) {
-            self.set_error("存在无法保存的 Markdown 修改，请解决冲突后再关闭");
+            notify_error_message(
+                window,
+                cx,
+                rust_i18n::t!("Notes.unsaved_markdown_close").to_string(),
+            );
             return Task::ready(false);
         }
         if dirty.is_empty() && !self.markdown_has_blocking_state() {
             return Task::ready(true);
         }
         if let Err(error) = save_rich_editors(&dirty, cx) {
-            self.set_error(error);
+            notify_operation_error(window, cx, error);
             return Task::ready(false);
         }
         poll_until_saved(dirty, cx)

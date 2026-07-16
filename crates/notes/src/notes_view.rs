@@ -1,3 +1,4 @@
+use crate::notes_notifications::notify_operation_error;
 use crate::{DocumentFormat, FileDocumentPersistence, NodeKind, NotesStorage, TreeRow, TreeState};
 use cditor_app::{Editor, EditorHandle};
 use gpui::{
@@ -37,7 +38,6 @@ pub struct NotesView {
     pub(crate) notebook_name: SharedString,
     pub(crate) setup_name: Entity<InputState>,
     pub(crate) setup_description: Entity<InputState>,
-    pub(crate) error: Option<SharedString>,
     pub(crate) dialog_subscription: Option<Subscription>,
     pub(crate) focus_handle: FocusHandle,
 }
@@ -67,7 +67,6 @@ impl NotesView {
             notebook_name: "Notes".into(),
             setup_name,
             setup_description,
-            error: None,
             dialog_subscription: None,
             focus_handle: cx.focus_handle(),
         };
@@ -103,10 +102,10 @@ impl NotesView {
                 self.notebook_name = name.into();
                 self.load_state = NotesLoadState::Ready;
                 if let Err(error) = self.refresh_tree(window, cx) {
-                    self.set_error(error);
+                    notify_operation_error(window, cx, error);
                 }
             }
-            Err(error) => self.set_error(error),
+            Err(error) => notify_operation_error(window, cx, error),
         }
         cx.notify();
     }
@@ -144,11 +143,16 @@ impl NotesView {
             cached.handle.clone()
         } else {
             let persistence = FileDocumentPersistence::new(descriptor.absolute_path);
+            let (event_sender, events) = smol::channel::unbounded();
             let handle = Editor::builder()
                 .document_id(descriptor.document_id.clone())
                 .persistence(persistence.clone())
                 .autosave(AUTOSAVE_INTERVAL)
+                .on_event(move |event| {
+                    let _ = event_sender.try_send(event);
+                })
                 .build(cx)?;
+            self.observe_editor_events(events, window, cx);
             self.editors.insert(
                 descriptor.document_id,
                 CachedEditor {
@@ -182,7 +186,7 @@ impl NotesView {
                 .and_then(|_| self.storage()?.save_state(&self.tree.to_ui_state()))
         };
         if let Err(error) = result {
-            self.set_error(error);
+            notify_operation_error(window, cx, error);
         }
         cx.notify();
     }
@@ -191,10 +195,6 @@ impl NotesView {
         self.storage
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("notes storage is unavailable"))
-    }
-
-    pub(crate) fn set_error(&mut self, error: impl std::fmt::Display) {
-        self.error = Some(error.to_string().into());
     }
 }
 

@@ -37,3 +37,19 @@ Notes:
     en: The file was changed by another program and was not overwritten
     zh-CN: 文件已被其他程序修改，未覆盖
     zh-HK: 文件已被其他程式修改，未覆蓋
+  operation_failed:
+    en: "Operation failed: %{error}"
+    zh-CN: 操作失败：%{error}
+    zh-HK: 操作失敗：%{error}
+  unsaved_documents_delete:
+    en: Wait for all documents to finish saving before deleting
+    zh-CN: 包含未保存文档，请等待自动保存完成后再删除
+    zh-HK: 包含未保存文件，請等待自動保存完成後再刪除
+  unsaved_markdown_close:
+    en: Some changes could not be saved. Resolve the conflict before closing
+    zh-CN: 存在无法保存的 Markdown 修改，请解决冲突后再关闭
+    zh-HK: 存在無法保存的 Markdown 修改，請解決衝突後再關閉
+  unsaved_rich_text_conversion:
+    en: Wait for the rich text document to finish saving before converting
+    zh-CN: 富文本文档尚未保存，请等待自动保存完成后再转换
+    zh-HK: 富文字文件尚未保存，請等待自動保存完成後再轉換

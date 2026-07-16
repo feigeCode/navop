@@ -4,6 +4,7 @@ use crate::markdown_adapter::{
 use crate::markdown_file_store::MarkdownFileStore;
 use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyncState};
 use crate::markdown_source::{create_source_editor, subscribe_source_changes};
+use crate::notes_notifications::notify_operation_error;
 use crate::path_policy::remap_path;
 use crate::{DocumentDescriptor, MarkdownViewMode, NotesView};
 use gpui::{AppContext, AsyncApp, Context, Window};
@@ -30,7 +31,7 @@ impl NotesView {
             let source_editor = create_source_editor(&snapshot.source, window, cx);
             let projection =
                 build_markdown_projection(&document_id, &snapshot.source, store.clone(), cx)?;
-            self.observe_markdown_events(projection.events, window, cx);
+            self.observe_editor_events(projection.events, window, cx);
             let subscription =
                 subscribe_source_changes(&source_editor, document_id.clone(), window, cx);
             self.markdown_sessions.insert(
@@ -122,7 +123,7 @@ impl NotesView {
             .storage()
             .and_then(|storage| storage.save_state(&self.tree.to_ui_state()))
         {
-            self.set_error(error);
+            notify_operation_error(window, cx, error);
         }
         cx.notify();
     }
@@ -137,23 +138,26 @@ impl NotesView {
         if !session.state.begin_switch() {
             return None;
         }
-        match session.state.mode {
+        let result = match session.state.mode {
             MarkdownViewMode::Source => switch_to_wysiwyg(session, cx),
             MarkdownViewMode::Wysiwyg => switch_to_source(session, window, cx),
+        };
+        match result {
+            Ok(source) => Some((session.state.mode, source)),
+            Err(error) => {
+                session
+                    .state
+                    .source_save_failed(session.state.generation, error.to_string());
+                notify_operation_error(window, cx, error);
+                None
+            }
         }
-        .map(|source| (session.state.mode, source))
-        .map_err(|error| {
-            session
-                .state
-                .source_save_failed(session.state.generation, error.to_string());
-            self.error = Some(error.to_string().into());
-        })
-        .ok()
     }
 
     pub(crate) fn accept_markdown_normalization(
         &mut self,
         document_id: &str,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(session) = self.markdown_sessions.get_mut(document_id) else {
@@ -167,7 +171,7 @@ impl NotesView {
         }
         session.normalization_accepted = true;
         if let Err(error) = session.preview.set_readonly(false, cx) {
-            self.set_error(error);
+            notify_operation_error(window, cx, error);
         }
         cx.notify();
     }
