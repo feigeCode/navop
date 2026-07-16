@@ -63,6 +63,7 @@ pub(crate) fn render_internal_tool_panel_frame(
 
     v_flex()
         .debug_selector(move || format!("terminal-internal-tool-panel-{}", panel.local_id()))
+        .relative()
         .size_full()
         .min_w_0()
         .min_h_0()
@@ -79,6 +80,7 @@ pub(crate) fn render_internal_tool_panel_frame(
             div()
                 .debug_selector(|| "terminal-tool-panel-content".to_string())
                 .flex_1()
+                .when(needs_header, |this| this.pt(px(34.0)))
                 .min_h_0()
                 .min_w_0()
                 .overflow_hidden()
@@ -95,8 +97,13 @@ fn render_internal_tool_panel_header(
 ) -> AnyElement {
     let title: SharedString = panel.title().into();
     h_flex()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
         .h(px(34.0))
-        .w_full()
+        .min_h(px(34.0))
+        .max_h(px(34.0))
         .flex_shrink_0()
         .items_center()
         .gap_2()
@@ -107,6 +114,7 @@ fn render_internal_tool_panel_header(
         .child(
             Icon::new(panel.icon_name())
                 .with_size(Size::Small)
+                .flex_shrink_0()
                 .text_color(colors.foreground),
         )
         .child(
@@ -117,8 +125,12 @@ fn render_internal_tool_panel_header(
                 .text_color(colors.foreground)
                 .child(title),
         )
-        .child(options_button(sidebar.clone(), panel, placement))
-        .child(close_button(sidebar, panel))
+        .child(
+            div()
+                .flex_shrink_0()
+                .child(options_button(sidebar.clone(), panel, placement)),
+        )
+        .child(div().flex_shrink_0().child(close_button(sidebar, panel)))
         .into_any_element()
 }
 

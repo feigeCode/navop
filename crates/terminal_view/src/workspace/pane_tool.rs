@@ -6,6 +6,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement as _, Styled as _, div, px, relative,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::tooltip::Tooltip;
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, Size, h_flex};
 use one_core::tab_container::DragTab;
 use rust_i18n::t;
@@ -50,7 +51,11 @@ impl TerminalWorkspace {
             .border_color(border)
             .text_color(cx.theme().foreground)
             .when(cx.theme().shadow, |this| this.shadow_md())
-            .child(Icon::new(IconName::TerminalColor).with_size(Size::XSmall))
+            .child(
+                Icon::new(IconName::TerminalColor)
+                    .color()
+                    .with_size(Size::XSmall),
+            )
             .child(self.render_drag_title(pane_id, title, drag_source, cx))
             .child(self.render_cancel_split_button(pane_id, workspace.clone()))
             .child(self.render_close_button(pane_id, workspace))
@@ -65,12 +70,14 @@ impl TerminalWorkspace {
         _cx: &mut Context<Self>,
     ) -> AnyElement {
         let drag_title = title.clone();
+        let tooltip_title = title.clone();
         div()
             .id(("terminal-pane-drag-title", pane_id.value()))
             .flex_1()
-            .min_w(px(80.0))
+            .min_w(px(60.0))
             .truncate()
             .text_xs()
+            .tooltip(move |window, cx| Tooltip::new(tooltip_title.clone()).build(window, cx))
             .when_some(drag_source, |this, source| {
                 this.cursor_grab().on_drag(
                     DragTab::from_external(drag_title, source),
