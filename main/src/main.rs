@@ -140,6 +140,7 @@ fn main() {
 
     app.run(move |cx| {
         onetcli_app::init(cx);
+        notes::init(cx);
         extension_runtime::set_current_host_version(env!("CARGO_PKG_VERSION"))
             .expect("main package version must be valid semver");
         extension_runtime::init(cx);

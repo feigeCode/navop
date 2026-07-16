@@ -310,6 +310,10 @@ Home:
     en: Extensions
     zh-CN: 扩展
     zh-HK: 擴展
+  notes:
+    en: Notes
+    zh-CN: 笔记
+    zh-HK: 筆記
   edit_connection:
     en: Edit Connection
     zh-CN: 编辑连接
@@ -959,6 +963,33 @@ Settings:
         en: AI Workbench
         zh-CN: AI 工作台
         zh-HK: AI 工作台
+
+    # 笔记设置
+    Notes:
+      group_title:
+        en: Notes
+        zh-CN: 笔记
+        zh-HK: 筆記
+      path:
+        en: Notes Location
+        zh-CN: 笔记路径
+        zh-HK: 筆記路徑
+      path_desc:
+        en: Choose the local folder used to store notes. Reopen Notes after changing it.
+        zh-CN: 选择用于保存笔记的本地目录。修改后重新打开笔记即可生效。
+        zh-HK: 選擇用於儲存筆記的本機目錄。修改後重新開啟筆記即可生效。
+      select_directory:
+        en: Choose
+        zh-CN: 选择目录
+        zh-HK: 選擇目錄
+      path_saved:
+        en: Notes location updated. Reopen Notes to apply it.
+        zh-CN: 笔记路径已更新，重新打开笔记后生效。
+        zh-HK: 筆記路徑已更新，重新開啟筆記後生效。
+      path_save_failed:
+        en: "Failed to update notes location: %{error}"
+        zh-CN: 更新笔记路径失败：%{error}
+        zh-HK: 更新筆記路徑失敗：%{error}
 
     # 外观设置
     Appearance:
@@ -1871,6 +1902,146 @@ Settings:
       en: Redis CLI
       zh-CN: Redis CLI
       zh-HK: Redis CLI
+    notes_editor:
+      en: Notes Editor
+      zh-CN: 笔记编辑器
+      zh-HK: 筆記編輯器
+    notes_undo:
+      en: Undo
+      zh-CN: 撤销
+      zh-HK: 復原
+    notes_redo:
+      en: Redo
+      zh-CN: 重做
+      zh-HK: 重做
+    notes_select_all:
+      en: Select All
+      zh-CN: 全选
+      zh-HK: 全選
+    notes_delete_selection:
+      en: Delete Selection
+      zh-CN: 删除选中内容
+      zh-HK: 刪除選取內容
+    notes_bold:
+      en: Toggle Bold
+      zh-CN: 切换粗体
+      zh-HK: 切換粗體
+    notes_italic:
+      en: Toggle Italic
+      zh-CN: 切换斜体
+      zh-HK: 切換斜體
+    notes_underline:
+      en: Toggle Underline
+      zh-CN: 切换下划线
+      zh-HK: 切換底線
+    notes_strike:
+      en: Toggle Strikethrough
+      zh-CN: 切换删除线
+      zh-HK: 切換刪除線
+    notes_inline_code:
+      en: Toggle Inline Code
+      zh-CN: 切换行内代码
+      zh-HK: 切換行內程式碼
+    notes_paragraph:
+      en: Paragraph
+      zh-CN: 正文段落
+      zh-HK: 正文段落
+    notes_heading_1:
+      en: Heading 1
+      zh-CN: 一级标题
+      zh-HK: 一級標題
+    notes_heading_2:
+      en: Heading 2
+      zh-CN: 二级标题
+      zh-HK: 二級標題
+    notes_heading_3:
+      en: Heading 3
+      zh-CN: 三级标题
+      zh-HK: 三級標題
+    notes_heading_4:
+      en: Heading 4
+      zh-CN: 四级标题
+      zh-HK: 四級標題
+    notes_heading_5:
+      en: Heading 5
+      zh-CN: 五级标题
+      zh-HK: 五級標題
+    notes_heading_6:
+      en: Heading 6
+      zh-CN: 六级标题
+      zh-HK: 六級標題
+    notes_bullet_list:
+      en: Toggle Bullet List
+      zh-CN: 切换项目符号列表
+      zh-HK: 切換項目符號清單
+    notes_ordered_list:
+      en: Toggle Ordered List
+      zh-CN: 切换有序列表
+      zh-HK: 切換有序清單
+    notes_task_list:
+      en: Toggle Task List
+      zh-CN: 切换待办列表
+      zh-HK: 切換待辦清單
+    notes_quote:
+      en: Toggle Quote
+      zh-CN: 切换引用块
+      zh-HK: 切換引用區塊
+    notes_callout:
+      en: Toggle Callout
+      zh-CN: 切换提示块
+      zh-HK: 切換提示區塊
+    notes_toggle:
+      en: Toggle Collapsible Block
+      zh-CN: 切换折叠块
+      zh-HK: 切換摺疊區塊
+    notes_code_block:
+      en: Toggle Code Block
+      zh-CN: 切换代码块
+      zh-HK: 切換程式碼區塊
+    notes_math_block:
+      en: Toggle Math Block
+      zh-CN: 切换公式块
+      zh-HK: 切換公式區塊
+    notes_mermaid:
+      en: Toggle Mermaid Block
+      zh-CN: 切换 Mermaid 块
+      zh-HK: 切換 Mermaid 區塊
+    notes_todo_checked:
+      en: Toggle Task Checked
+      zh-CN: 切换待办完成状态
+      zh-HK: 切換待辦完成狀態
+    notes_insert_below:
+      en: Insert Paragraph Below
+      zh-CN: 在下方插入段落
+      zh-HK: 在下方插入段落
+    notes_indent:
+      en: Indent Block
+      zh-CN: 增加块缩进
+      zh-HK: 增加區塊縮排
+    notes_outdent:
+      en: Outdent Block
+      zh-CN: 减少块缩进
+      zh-HK: 減少區塊縮排
+    notes_delete_block:
+      en: Delete Current Block
+      zh-CN: 删除当前块
+      zh-HK: 刪除目前區塊
+    notes_delete_blocks:
+      en: Delete Selected Blocks
+      zh-CN: 删除选中的块
+      zh-HK: 刪除選取的區塊
+    notes_duplicate_blocks:
+      en: Duplicate Selected Blocks
+      zh-CN: 复制选中的块
+      zh-HK: 複製選取的區塊
+    notes_fold_heading:
+      en: Fold Heading
+      zh-CN: 折叠标题
+      zh-HK: 摺疊標題
+    notes_unfold_heading:
+      en: Unfold Heading
+      zh-CN: 展开标题
+      zh-HK: 展開標題
     minimize_window:
       en: Minimize / Activate Window
       zh-CN: 最小化 / 激活窗口

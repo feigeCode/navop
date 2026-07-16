@@ -30,6 +30,7 @@ smol = { workspace = true }
 db_view = { workspace = true }
 extension-runtime = { workspace = true, features = ["wasm-components"] }
 extension_view = { workspace = true }
+notes = { workspace = true }
 terminal = { workspace = true }
 terminal_view = { workspace = true }
 agent_runtime = { workspace = true }

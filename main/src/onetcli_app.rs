@@ -672,6 +672,7 @@ pub fn refresh_keybindings(cx: &mut App) {
     remote_desktop_view::refresh_keybindings(cx);
     one_ui::refresh_keybindings(cx);
     remote_file_editor::refresh_keybindings(cx);
+    notes::refresh_keybindings(cx);
 }
 
 fn init_keybindings(cx: &App) -> Vec<KeyBinding> {

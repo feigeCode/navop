@@ -1,0 +1,200 @@
+use crate::notes_notifications::notify_operation_error;
+use crate::{DocumentFormat, FileDocumentPersistence, NodeKind, NotesStorage, TreeRow, TreeState};
+use cditor_app::{AiProvider, Editor, EditorHandle};
+use gpui::{
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
+    Subscription, Window,
+};
+use gpui_component::input::InputState;
+use one_core::settings::AppSettings;
+use one_core::tab_container::TabContentEvent;
+use rust_i18n::t;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(1);
+
+pub(crate) enum NotesLoadState {
+    NeedsLocation,
+    Ready,
+}
+
+pub(crate) struct CachedEditor {
+    pub relative_path: PathBuf,
+    pub handle: EditorHandle,
+    pub persistence: FileDocumentPersistence,
+}
+
+pub struct NotesView {
+    pub(crate) storage: Option<NotesStorage>,
+    pub(crate) load_state: NotesLoadState,
+    pub(crate) tree: TreeState,
+    pub(crate) rows: Vec<TreeRow>,
+    pub(crate) editors: HashMap<String, CachedEditor>,
+    pub(crate) markdown_sessions: HashMap<String, crate::markdown_session::MarkdownSession>,
+    pub(crate) active_editor: Option<EditorHandle>,
+    pub(crate) active_document_id: Option<String>,
+    pub(crate) current_directory: PathBuf,
+    pub(crate) notebook_name: SharedString,
+    pub(crate) ai_provider: Option<Arc<dyn AiProvider>>,
+    pub(crate) setup_path: Entity<InputState>,
+    pub(crate) dialog_subscription: Option<Subscription>,
+    pub(crate) focus_handle: FocusHandle,
+}
+
+impl NotesView {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let default_root = NotesStorage::default_root().unwrap_or_default();
+        let initial_root = NotesStorage::configured_root().unwrap_or(default_root);
+        let setup_path = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("Notes.notebook_path_placeholder").to_string())
+                .default_value(initial_root.to_string_lossy())
+        });
+        let ai_provider = match crate::ai_provider::build_provider(cx) {
+            Ok(provider) => provider,
+            Err(error) => {
+                notify_operation_error(window, cx, error);
+                None
+            }
+        };
+        let mut view = Self {
+            storage: None,
+            load_state: NotesLoadState::NeedsLocation,
+            tree: TreeState::default(),
+            rows: Vec::new(),
+            editors: HashMap::new(),
+            markdown_sessions: HashMap::new(),
+            active_editor: None,
+            active_document_id: None,
+            current_directory: PathBuf::new(),
+            notebook_name: "Notes".into(),
+            ai_provider,
+            setup_path: setup_path.clone(),
+            dialog_subscription: None,
+            focus_handle: cx.focus_handle(),
+        };
+        let should_prompt = match view.initialize_configured_notes(window, cx) {
+            Ok(configured) => !configured,
+            Err(error) => {
+                notify_operation_error(window, cx, error);
+                true
+            }
+        };
+        if should_prompt {
+            crate::notes_setup::defer_location_dialog(setup_path, window, cx);
+        }
+        view
+    }
+
+    pub(crate) fn refresh_tree(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        let nodes = self.storage()?.scan_tree()?;
+        self.rows = self.tree.project(&nodes);
+        self.tree.select_fallback(&self.rows);
+        self.storage()?.save_state(&self.tree.to_ui_state())?;
+        if let Some(path) = self.tree.selected_document.clone() {
+            self.open_document(&path, window, cx)?;
+        } else {
+            self.active_editor = None;
+            self.active_document_id = None;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn open_document(
+        &mut self,
+        path: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> anyhow::Result<()> {
+        let descriptor = self.storage()?.descriptor(path)?;
+        if descriptor.format == DocumentFormat::Markdown {
+            return self.open_markdown_document(descriptor, window, cx);
+        }
+        let document_id = descriptor.document_id.clone();
+        let handle = if let Some(cached) = self.editors.get(&descriptor.document_id) {
+            cached.handle.clone()
+        } else {
+            let persistence = FileDocumentPersistence::new(descriptor.absolute_path);
+            let (event_sender, events) = smol::channel::unbounded();
+            let mut builder = Editor::builder()
+                .document_id(descriptor.document_id.clone())
+                .persistence(persistence.clone())
+                .autosave(AUTOSAVE_INTERVAL)
+                .on_event(move |event| {
+                    let _ = event_sender.try_send(event);
+                });
+            builder = match self.ai_provider.clone() {
+                Some(provider) => builder.ai_provider_arc(provider),
+                None => builder.without_ai(),
+            };
+            let handle = builder.build(cx)?;
+            self.restore_ai_model(&handle, cx);
+            self.observe_editor_events(events, window, cx);
+            self.editors.insert(
+                descriptor.document_id,
+                CachedEditor {
+                    relative_path: descriptor.relative_path,
+                    handle: handle.clone(),
+                    persistence,
+                },
+            );
+            handle
+        };
+        self.active_document_id = Some(document_id);
+        self.active_editor = Some(handle);
+        Ok(())
+    }
+
+    pub(crate) fn select_row(
+        &mut self,
+        path: PathBuf,
+        kind: NodeKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = if kind == NodeKind::Directory {
+            self.current_directory = path.clone();
+            self.tree.toggle_directory(&path);
+            self.refresh_tree(window, cx)
+        } else {
+            self.current_directory = path.parent().unwrap_or(Path::new("")).to_path_buf();
+            self.tree.selected_document = Some(path.clone());
+            self.open_document(&path, window, cx)
+                .and_then(|_| self.storage()?.save_state(&self.tree.to_ui_state()))
+        };
+        if let Err(error) = result {
+            notify_operation_error(window, cx, error);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn storage(&self) -> anyhow::Result<&NotesStorage> {
+        self.storage
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("notes storage is unavailable"))
+    }
+
+    pub(crate) fn restore_ai_model(&self, handle: &EditorHandle, cx: &mut App) {
+        let Some(model_id) = AppSettings::global(cx).ai_chat.notes_model_id.clone() else {
+            return;
+        };
+        if let Err(error) = handle.select_ai_model(&model_id, cx) {
+            tracing::debug!(%error, model_id, "saved Notes AI model is unavailable");
+        }
+    }
+}
+
+impl EventEmitter<TabContentEvent> for NotesView {}
+
+impl Focusable for NotesView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
