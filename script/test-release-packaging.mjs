@@ -119,8 +119,55 @@ test("Windows MSI creates a desktop shortcut", () => {
   assert.match(wix, /<StandardDirectory Id="DesktopFolder"\s*\/>/);
   assert.match(
     wix,
-    /<Shortcut[^>]*Id="DesktopShortcut"[^>]*Directory="DesktopFolder"[^>]*Name="Navop"/,
+    /<Shortcut[^>]*Id="DesktopShortcut"[^>]*Name="Navop"/,
   );
+});
+
+test("Windows MSI shortcuts use dedicated HKCU-keyed components", () => {
+  const wix = read("installer/windows/navop.wxs");
+  const component = (id) => {
+    const match = wix.match(
+      new RegExp(`<Component\\s+Id="${id}"[^>]*>([\\s\\S]*?)<\\/Component>`),
+    );
+    assert.ok(match, `missing ${id} component`);
+    return match[0];
+  };
+
+  const executable = component("ApplicationExecutable");
+  assert.doesNotMatch(executable, /<Shortcut\b/);
+
+  for (const [componentId, directory, shortcutId, registryName] of [
+    [
+      "StartMenuShortcutComponent",
+      "ApplicationProgramsFolder",
+      "StartMenuShortcut",
+      "StartMenuShortcutInstalled",
+    ],
+    [
+      "DesktopShortcutComponent",
+      "DesktopFolder",
+      "DesktopShortcut",
+      "DesktopShortcutInstalled",
+    ],
+  ]) {
+    const shortcutComponent = component(componentId);
+    assert.match(
+      shortcutComponent,
+      new RegExp(`<Component[^>]*Directory="${directory}"`),
+    );
+    assert.match(
+      shortcutComponent,
+      new RegExp(
+        `<Shortcut[^>]*Id="${shortcutId}"[^>]*Target="\\[#NavopExecutable\\]"[^>]*Advertise="no"`,
+      ),
+    );
+    assert.match(
+      shortcutComponent,
+      new RegExp(
+        `<RegistryValue[^>]*Root="HKCU"[^>]*Name="${registryName}"[^>]*KeyPath="yes"`,
+      ),
+    );
+  }
 });
 
 test("GitHub publishes installers while R2 only uploads updater archives", () => {
@@ -177,6 +224,13 @@ test("manual Windows workflow builds a release MSI with its checksum", () => {
   assert.match(validator, /WIXUI_INSTALLDIR/);
   assert.match(validator, /DesktopShortcut/);
   assert.match(validator, /StartMenuShortcut/);
+  assert.match(validator, /DesktopShortcutComponent/);
+  assert.match(validator, /StartMenuShortcutComponent/);
+  assert.match(validator, /DesktopShortcutRegistry/);
+  assert.match(validator, /StartMenuShortcutRegistry/);
+  assert.match(validator, /SELECT Component_ FROM Shortcut/);
+  assert.match(validator, /SELECT KeyPath FROM Component/);
+  assert.match(validator, /SELECT Root FROM Registry/);
   assert.match(validator, /\.Trim\(\)/);
   assert.match(validator, /\$null = \$view\.Execute\(\)/);
   assert.match(validator, /\$null = \$view\.Close\(\)/);

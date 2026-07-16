@@ -53,6 +53,22 @@ Assert-MsiValue $database "DesktopFolder" `
   "SELECT Directory_ FROM Shortcut WHERE Shortcut = 'DesktopShortcut'"
 Assert-MsiValue $database "ApplicationProgramsFolder" `
   "SELECT Directory_ FROM Shortcut WHERE Shortcut = 'StartMenuShortcut'"
+Assert-MsiValue $database "DesktopShortcutComponent" `
+  "SELECT Component_ FROM Shortcut WHERE Shortcut = 'DesktopShortcut'"
+Assert-MsiValue $database "StartMenuShortcutComponent" `
+  "SELECT Component_ FROM Shortcut WHERE Shortcut = 'StartMenuShortcut'"
+Assert-MsiValue $database "[#NavopExecutable]" `
+  "SELECT Target FROM Shortcut WHERE Shortcut = 'DesktopShortcut'"
+Assert-MsiValue $database "[#NavopExecutable]" `
+  "SELECT Target FROM Shortcut WHERE Shortcut = 'StartMenuShortcut'"
+Assert-MsiValue $database "DesktopShortcutRegistry" `
+  "SELECT KeyPath FROM Component WHERE Component = 'DesktopShortcutComponent'"
+Assert-MsiValue $database "StartMenuShortcutRegistry" `
+  "SELECT KeyPath FROM Component WHERE Component = 'StartMenuShortcutComponent'"
+Assert-MsiValue $database "1" `
+  "SELECT Root FROM Registry WHERE Registry = 'DesktopShortcutRegistry'"
+Assert-MsiValue $database "1" `
+  "SELECT Root FROM Registry WHERE Registry = 'StartMenuShortcutRegistry'"
 Assert-MsiValue $database "InstallDirDlg" `
   "SELECT Dialog FROM Dialog WHERE Dialog = 'InstallDirDlg'"
 

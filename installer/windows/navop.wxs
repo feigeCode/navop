@@ -40,31 +40,41 @@
   <Fragment>
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
       <Component Id="ApplicationExecutable" Guid="*">
-        <File Id="NavopExecutable" Source="$(SourceDir)\navop.exe" KeyPath="yes">
-          <Shortcut
-            Id="StartMenuShortcut"
-            Directory="ApplicationProgramsFolder"
-            Name="Navop"
-            Description="Navop - Database, SSH, Terminal, AI Tools"
-            WorkingDirectory="INSTALLFOLDER"
-            Icon="NavopIcon"
-            Advertise="no" />
-          <Shortcut
-            Id="DesktopShortcut"
-            Directory="DesktopFolder"
-            Name="Navop"
-            Description="Navop - Database, SSH, Terminal, AI Tools"
-            WorkingDirectory="INSTALLFOLDER"
-            Icon="NavopIcon"
-            Advertise="no" />
-        </File>
+        <File Id="NavopExecutable" Source="$(SourceDir)\navop.exe" KeyPath="yes" />
       </Component>
-      <Component Id="StartMenuFolderCleanup" Directory="ApplicationProgramsFolder" Guid="*">
+      <Component Id="StartMenuShortcutComponent" Directory="ApplicationProgramsFolder" Guid="*">
+        <Shortcut
+          Id="StartMenuShortcut"
+          Name="Navop"
+          Description="Navop - Database, SSH, Terminal, AI Tools"
+          Target="[#NavopExecutable]"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="NavopIcon"
+          Advertise="no" />
         <RemoveFolder Id="RemoveApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
         <RegistryValue
+          Id="StartMenuShortcutRegistry"
           Root="HKCU"
           Key="Software\Navop"
-          Name="Installed"
+          Name="StartMenuShortcutInstalled"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+      <Component Id="DesktopShortcutComponent" Directory="DesktopFolder" Guid="*">
+        <Shortcut
+          Id="DesktopShortcut"
+          Name="Navop"
+          Description="Navop - Database, SSH, Terminal, AI Tools"
+          Target="[#NavopExecutable]"
+          WorkingDirectory="INSTALLFOLDER"
+          Icon="NavopIcon"
+          Advertise="no" />
+        <RegistryValue
+          Id="DesktopShortcutRegistry"
+          Root="HKCU"
+          Key="Software\Navop"
+          Name="DesktopShortcutInstalled"
           Type="integer"
           Value="1"
           KeyPath="yes" />
