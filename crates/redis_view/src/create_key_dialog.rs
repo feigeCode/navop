@@ -57,9 +57,19 @@ pub struct CreateKeyDialog {
 }
 
 impl CreateKeyDialog {
-    pub fn new(db_index: u8, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new_with_initial_key(
+        db_index: u8,
+        initial_key: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let key_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t!("CreateKey.key_placeholder").to_string())
+            let mut state = InputState::new(window, cx)
+                .placeholder(t!("CreateKey.key_placeholder").to_string());
+            if let Some(initial_key) = initial_key {
+                state.set_value(initial_key, window, cx);
+            }
+            state
         });
         let ttl_input = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
