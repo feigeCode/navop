@@ -67,12 +67,12 @@ use crate::view::block_selection::{
 #[cfg(test)]
 use history_prompt_rules::should_refresh_history_commands_for_terminal_event;
 use history_prompt_rules::{
-    HISTORY_PROMPT_DROPDOWN_MAX_WIDTH, HISTORY_PROMPT_DROPDOWN_MIN_WIDTH, history_prompt_available,
-    history_prompt_dropdown_background, history_prompt_dropdown_origin,
-    history_prompt_overlay_bounds, should_confirm_local_terminal_close,
-    should_dismiss_history_prompt_for_keystroke, should_dismiss_history_prompt_for_mouse,
-    should_dismiss_history_prompt_for_scroll, should_reset_history_prompt_for_terminal_event,
-    terminal_history_scope,
+    HISTORY_PROMPT_DROPDOWN_MAX_WIDTH, HISTORY_PROMPT_DROPDOWN_MIN_WIDTH,
+    history_prompt_active_background, history_prompt_available, history_prompt_dropdown_background,
+    history_prompt_dropdown_origin, history_prompt_overlay_bounds,
+    should_confirm_local_terminal_close, should_dismiss_history_prompt_for_keystroke,
+    should_dismiss_history_prompt_for_mouse, should_dismiss_history_prompt_for_scroll,
+    should_reset_history_prompt_for_terminal_event, terminal_history_scope,
 };
 use mouse_input::{
     encode_mouse_modifiers, mouse_button_code, sgr_mouse_button_report, sgr_mouse_mode_enabled,
@@ -1939,7 +1939,7 @@ impl TerminalView {
                                 .py_1p5()
                                 .rounded_sm()
                                 .bg(if active {
-                                    self.current_theme.foreground.opacity(0.18)
+                                    history_prompt_active_background(self.current_theme.foreground)
                                 } else {
                                     transparent_black()
                                 })

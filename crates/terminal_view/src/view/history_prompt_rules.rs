@@ -111,7 +111,8 @@ pub(super) fn should_confirm_local_terminal_close(
 
 pub(super) const HISTORY_PROMPT_DROPDOWN_MIN_WIDTH: f32 = 300.0;
 pub(super) const HISTORY_PROMPT_DROPDOWN_MAX_WIDTH: f32 = 500.0;
-const HISTORY_PROMPT_DROPDOWN_BACKGROUND_OPACITY: f32 = 0.88;
+const HISTORY_PROMPT_DROPDOWN_BACKGROUND_OPACITY: f32 = 0.72;
+const HISTORY_PROMPT_ACTIVE_BACKGROUND_OPACITY: f32 = 0.32;
 const HISTORY_PROMPT_DROPDOWN_GAP_Y: f32 = 6.0;
 const HISTORY_PROMPT_DROPDOWN_EDGE_PADDING: f32 = 8.0;
 const HISTORY_PROMPT_DROPDOWN_ROW_PADDING_Y: f32 = 12.0;
@@ -120,6 +121,10 @@ const HISTORY_PROMPT_DROPDOWN_SEARCH_HEADER_HEIGHT: f32 = 20.0;
 
 pub(super) fn history_prompt_dropdown_background(background: Hsla) -> Hsla {
     background.opacity(HISTORY_PROMPT_DROPDOWN_BACKGROUND_OPACITY)
+}
+
+pub(super) fn history_prompt_active_background(foreground: Hsla) -> Hsla {
+    foreground.opacity(HISTORY_PROMPT_ACTIVE_BACKGROUND_OPACITY)
 }
 
 fn estimate_history_prompt_dropdown_height(
@@ -178,7 +183,7 @@ pub(super) fn history_prompt_overlay_bounds(terminal_bounds: Bounds<Pixels>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::history_prompt_dropdown_background;
+    use super::{history_prompt_active_background, history_prompt_dropdown_background};
     use gpui::{Hsla, rgb};
 
     #[test]
@@ -190,6 +195,18 @@ mod tests {
         assert_eq!(background.h, dropdown.h);
         assert_eq!(background.s, dropdown.s);
         assert_eq!(background.l, dropdown.l);
-        assert!((dropdown.a - 0.88).abs() < f32::EPSILON);
+        assert!((dropdown.a - 0.72).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn history_prompt_active_row_remains_distinct_over_translucent_content() {
+        let foreground: Hsla = rgb(0xE4E4E4).into();
+
+        let active = history_prompt_active_background(foreground);
+
+        assert_eq!(foreground.h, active.h);
+        assert_eq!(foreground.s, active.s);
+        assert_eq!(foreground.l, active.l);
+        assert!((active.a - 0.32).abs() < f32::EPSILON);
     }
 }

@@ -11,7 +11,7 @@ use crate::addon::{AddonManager, CellDecoration, DecorationSpan};
 use crate::view::block_selection::BlockSelectionBounds;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::selection::SelectionRange;
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{RenderableContent, Term, TermDamage};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Rgb};
@@ -422,6 +422,7 @@ struct CachedCursor {
     column: usize,
     line: usize,
     shape: CursorShape,
+    glyph: Option<BlockCursorGlyph>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -433,24 +434,25 @@ struct BlockCursorGlyph {
     cell_width_cols: usize,
 }
 
-fn block_cursor_glyph_at(line: &CachedLine, column: usize) -> Option<BlockCursorGlyph> {
-    line.text_runs.iter().find_map(|run| {
-        let offset = column.checked_sub(run.start_col)?;
-        if run.cell_width_cols == 0
-            || offset >= run.column_count
-            || offset % run.cell_width_cols != 0
-        {
-            return None;
-        }
+fn block_cursor_glyph_from_cell(cell: &Cell) -> Option<BlockCursorGlyph> {
+    if matches!(cell.c, '\0' | ' ')
+        || cell
+            .flags
+            .intersects(Flags::HIDDEN | Flags::WIDE_CHAR_SPACER)
+    {
+        return None;
+    }
 
-        let character = run.text.chars().nth(offset / run.cell_width_cols)?;
-        Some(BlockCursorGlyph {
-            character,
-            font_role: run.font_role,
-            bold: run.bold,
-            italic: run.italic,
-            cell_width_cols: run.cell_width_cols,
-        })
+    Some(BlockCursorGlyph {
+        character: cell.c,
+        font_role: terminal_text_font_role(cell.c),
+        bold: cell.flags.contains(Flags::BOLD),
+        italic: cell.flags.contains(Flags::ITALIC),
+        cell_width_cols: if cell.flags.contains(Flags::WIDE_CHAR) {
+            2
+        } else {
+            1
+        },
     })
 }
 
@@ -689,7 +691,7 @@ impl RenderCache {
 
         // Update cursor from a fresh content
         let content = term.renderable_content();
-        self.update_cursor_from_content(&content);
+        self.update_cursor_from_content(term, &content);
     }
 
     /// Rebuild specified lines
@@ -751,7 +753,7 @@ impl RenderCache {
 
         // Update cursor from fresh content
         let content = term.renderable_content();
-        self.update_cursor_from_content(&content);
+        self.update_cursor_from_content(term, &content);
     }
 
     /// Compute which screen lines are affected by a selection change
@@ -947,11 +949,20 @@ impl RenderCache {
                 fg.a *= 0.7;
             }
 
+            if !cell.is_selected && cell.flags.contains(Flags::INVERSE) {
+                if matches!(cell.bg, Color::Named(NamedColor::Background)) && hsla_eq(bg, base_bg) {
+                    bg = self.custom_background;
+                }
+                std::mem::swap(&mut fg, &mut bg);
+            }
+
             // 对比度保证：确保非装饰字符的文字可读性
             // 关键：当单元格使用默认背景时，应该用 custom_background（来自 TerminalTheme）
             // 而不是 alacritty 的 NamedColor::Background，因为实际渲染的背景是 custom_background
             if !cell.is_selected && !is_decorative_character(cell.c) {
-                let actual_bg = if matches!(cell.bg, Color::Named(NamedColor::Background)) {
+                let actual_bg = if cell.flags.contains(Flags::INVERSE) {
+                    bg
+                } else if matches!(cell.bg, Color::Named(NamedColor::Background)) {
                     self.custom_background
                 } else {
                     bg
@@ -1091,10 +1102,14 @@ impl RenderCache {
 
     fn update_cursor(&mut self, term: &Term<GpuiEventProxy>) {
         let content = term.renderable_content();
-        self.update_cursor_from_content(&content);
+        self.update_cursor_from_content(term, &content);
     }
 
-    fn update_cursor_from_content(&mut self, content: &RenderableContent<'_>) {
+    fn update_cursor_from_content(
+        &mut self,
+        term: &Term<GpuiEventProxy>,
+        content: &RenderableContent<'_>,
+    ) {
         if content.cursor.shape != CursorShape::Hidden {
             let cursor_line = content.cursor.point.line.0 + content.display_offset as i32;
             if cursor_line >= 0 && (cursor_line as usize) < self.num_lines {
@@ -1102,6 +1117,7 @@ impl RenderCache {
                     column: content.cursor.point.column.0,
                     line: cursor_line as usize,
                     shape: content.cursor.shape,
+                    glyph: block_cursor_glyph_from_cell(&term.grid()[content.cursor.point]),
                 });
                 return;
             }
@@ -1440,8 +1456,7 @@ impl Element for TerminalElementImpl {
 
                     match cursor.shape {
                         CursorShape::Block => {
-                            let glyph =
-                                block_cursor_glyph_at(&self.lines[cursor.line], cursor.column);
+                            let glyph = cursor.glyph;
                             let cursor_width_cols = glyph.map_or(1, |glyph| glyph.cell_width_cols);
                             let block_bounds = Bounds::new(
                                 cursor_bounds.origin,
@@ -1726,10 +1741,10 @@ fn indexed_color_to_hsla(idx: u8) -> Hsla {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlockRect, CachedLine, CachedTextRun, CellData, RenderCache, TextRunFontRole,
-        block_cursor_glyph_at, block_element_geometry, terminal_text_font_role,
+        BlockRect, CellData, RenderCache, TextRunFontRole, block_cursor_glyph_from_cell,
+        block_element_geometry, terminal_text_font_role,
     };
-    use alacritty_terminal::term::cell::Flags;
+    use alacritty_terminal::term::cell::{Cell, Flags};
     use alacritty_terminal::term::color::Colors;
     use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
@@ -1809,6 +1824,19 @@ mod tests {
     }
 
     #[test]
+    fn inverse_cells_swap_the_resolved_terminal_theme_colors() {
+        let mut cache = RenderCache::new(1, 8, Colors::default());
+        cache.build_line_cache(0, vec![plain_cell(0, 'Q', Flags::INVERSE)]);
+
+        let line = &cache.lines[0];
+        assert_eq!(1, line.text_runs.len());
+        assert_eq!(cache.custom_background, line.text_runs[0].color);
+        assert_eq!(1, line.background_rects.len());
+        assert_eq!(0, line.background_rects[0].0);
+        assert_eq!(cache.custom_foreground, line.background_rects[0].2);
+    }
+
+    #[test]
     fn terminal_text_font_role_routes_cjk_to_fallback_font() {
         assert_eq!(TextRunFontRole::Primary, terminal_text_font_role('A'));
         assert_eq!(TextRunFontRole::CjkFallback, terminal_text_font_role('协'));
@@ -1817,56 +1845,40 @@ mod tests {
     }
 
     #[test]
-    fn block_cursor_glyph_keeps_the_character_under_the_cursor() {
-        let line = CachedLine {
-            background_rects: Vec::new(),
-            underline_rects: Vec::new(),
-            text_runs: vec![CachedTextRun {
-                start_col: 0,
-                text: "vim".to_string(),
-                color: gpui::Hsla::white(),
-                bold: false,
-                italic: false,
-                underline: false,
-                cell_width_cols: 1,
-                column_count: 3,
-                font_role: TextRunFontRole::Primary,
-            }],
-            block_glyphs: Vec::new(),
+    fn block_cursor_glyph_uses_the_terminal_cursor_cell() {
+        let cell = Cell {
+            c: 'l',
+            flags: Flags::BOLD,
+            ..Cell::default()
         };
 
-        let glyph = block_cursor_glyph_at(&line, 1).expect("cursor glyph");
+        let glyph = block_cursor_glyph_from_cell(&cell).expect("cursor glyph");
 
-        assert_eq!('i', glyph.character);
+        assert_eq!('l', glyph.character);
         assert_eq!(1, glyph.cell_width_cols);
+        assert!(glyph.bold);
         assert_eq!(TextRunFontRole::Primary, glyph.font_role);
     }
 
     #[test]
-    fn block_cursor_glyph_preserves_wide_character_width() {
-        let line = CachedLine {
-            background_rects: Vec::new(),
-            underline_rects: Vec::new(),
-            text_runs: vec![CachedTextRun {
-                start_col: 2,
-                text: "协同".to_string(),
-                color: gpui::Hsla::white(),
-                bold: true,
-                italic: false,
-                underline: false,
-                cell_width_cols: 2,
-                column_count: 4,
-                font_role: TextRunFontRole::CjkFallback,
-            }],
-            block_glyphs: Vec::new(),
+    fn block_cursor_glyph_preserves_wide_terminal_cells() {
+        let cell = Cell {
+            c: '同',
+            flags: Flags::WIDE_CHAR | Flags::ITALIC,
+            ..Cell::default()
         };
 
-        let glyph = block_cursor_glyph_at(&line, 4).expect("wide cursor glyph");
+        let glyph = block_cursor_glyph_from_cell(&cell).expect("wide cursor glyph");
 
         assert_eq!('同', glyph.character);
         assert_eq!(2, glyph.cell_width_cols);
-        assert!(glyph.bold);
+        assert!(glyph.italic);
         assert_eq!(TextRunFontRole::CjkFallback, glyph.font_role);
+    }
+
+    #[test]
+    fn block_cursor_glyph_ignores_blank_terminal_cells() {
+        assert!(block_cursor_glyph_from_cell(&Cell::default()).is_none());
     }
 
     #[test]
