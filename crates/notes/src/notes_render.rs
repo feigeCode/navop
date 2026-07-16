@@ -6,52 +6,14 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, StyledExt,
+    ActiveTheme, Icon, IconName, Sizable,
     button::{Button, ButtonVariants},
     h_flex,
-    input::Input,
     scroll::ScrollableElement,
     v_flex,
 };
 
 impl NotesView {
-    fn render_setup(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .child(
-                v_flex()
-                    .w(px(440.0))
-                    .gap_4()
-                    .p_6()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().background)
-                    .child(div().text_xl().font_semibold().child("创建本地笔记本"))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("笔记仅保存在此设备，不会同步到云端。"),
-                    )
-                    .child(Input::new(&self.setup_name).w_full())
-                    .child(Input::new(&self.setup_description).w_full())
-                    .child(
-                        h_flex().justify_end().child(
-                            Button::new("create_notebook")
-                                .label("创建")
-                                .primary()
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    view.create_notebook(window, cx)
-                                })),
-                        ),
-                    ),
-            )
-            .into_any_element()
-    }
-
     fn render_ready(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         v_flex()
             .size_full()
@@ -263,16 +225,8 @@ fn row_action_id(action: &str, row: &TreeRow) -> SharedString {
 impl Render for NotesView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match &self.load_state {
-            NotesLoadState::NeedsSetup => self.render_setup(cx),
+            NotesLoadState::NeedsLocation => self.render_location_setup(cx),
             NotesLoadState::Ready => self.render_ready(cx),
-            NotesLoadState::Failed(error) => v_flex()
-                .size_full()
-                .items_center()
-                .justify_center()
-                .gap_2()
-                .child(Icon::new(IconName::TriangleAlert))
-                .child(div().text_color(cx.theme().danger).child(error.clone()))
-                .into_any_element(),
         };
         div()
             .track_focus(&self.focus_handle)

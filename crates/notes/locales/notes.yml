@@ -53,3 +53,43 @@ Notes:
     en: Wait for the rich text document to finish saving before converting
     zh-CN: 富文本文档尚未保存，请等待自动保存完成后再转换
     zh-HK: 富文字文件尚未保存，請等待自動保存完成後再轉換
+  notebook_path:
+    en: Notes location
+    zh-CN: 笔记路径
+    zh-HK: 筆記路徑
+  notebook_path_placeholder:
+    en: Select a notes location
+    zh-CN: 请选择笔记路径
+    zh-HK: 請選擇筆記路徑
+  select_path:
+    en: Choose
+    zh-CN: 选择路径
+    zh-HK: 選擇路徑
+  select_notebook_directory:
+    en: Select the notes directory
+    zh-CN: 选择笔记目录
+    zh-HK: 選擇筆記目錄
+  notebook_path_required:
+    en: Select a notes location first
+    zh-CN: 请先选择笔记路径
+    zh-HK: 請先選擇筆記路徑
+  location_dialog_title:
+    en: Set notes location
+    zh-CN: 设置笔记路径
+    zh-HK: 設定筆記路徑
+  location_dialog_description:
+    en: Notes are stored locally in this folder. You can use the default or choose another folder.
+    zh-CN: 笔记将保存在此文件夹中。你可以直接使用默认路径，也可以选择其他目录。
+    zh-HK: 筆記將儲存在此資料夾中。你可以直接使用預設路徑，也可以選擇其他目錄。
+  location_not_configured:
+    en: Notes location is not configured
+    zh-CN: 尚未设置笔记路径
+    zh-HK: 尚未設定筆記路徑
+  location_setup_description:
+    en: Choose a local folder before using Notes.
+    zh-CN: 使用笔记前，请先选择一个本地目录。
+    zh-HK: 使用筆記前，請先選擇一個本機目錄。
+  configure_location:
+    en: Set location
+    zh-CN: 设置路径
+    zh-HK: 設定路徑

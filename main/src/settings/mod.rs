@@ -5,6 +5,7 @@ mod mcp_helper_install;
 mod mcp_helper_progress;
 pub mod mcp_settings;
 pub mod mcp_status;
+pub mod notes_settings;
 pub mod provider_form_dialog;
 pub mod remote_file_editor_settings;
 pub mod tool_exposure_settings;

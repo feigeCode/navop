@@ -26,6 +26,40 @@ fn creates_and_manages_notebook_tree() -> Result<()> {
 }
 
 #[test]
+fn configured_root_defaults_and_persists_custom_location() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = temp.path().join("config/notes-location.json");
+    let default = temp.path().join("default-notes");
+    assert!(!NotesStorage::has_configured_root_at(&config)?);
+    assert_eq!(
+        default,
+        NotesStorage::configured_root_from(&config, &default)?
+    );
+
+    let custom = temp.path().join("custom-notes");
+    std::fs::create_dir_all(&custom)?;
+    NotesStorage::save_configured_root_to(&config, &custom)?;
+
+    assert!(NotesStorage::has_configured_root_at(&config)?);
+    assert_eq!(
+        custom.canonicalize()?,
+        NotesStorage::configured_root_from(&config, &default)?
+    );
+    Ok(())
+}
+
+#[test]
+fn creating_notebook_does_not_overwrite_existing_notebook() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let storage = NotesStorage::open(temp.path().join("notes"))?;
+    let created = storage.create_notebook("Original", "kept")?;
+
+    assert!(storage.create_notebook("Replacement", "lost").is_err());
+    assert_eq!(Some(created), storage.load_notebook()?);
+    Ok(())
+}
+
+#[test]
 fn markdown_documents_use_md_files_and_stable_index_ids() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let storage = NotesStorage::open(temp.path().join("notes"))?;

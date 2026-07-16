@@ -960,6 +960,33 @@ Settings:
         zh-CN: AI 工作台
         zh-HK: AI 工作台
 
+    # 笔记设置
+    Notes:
+      group_title:
+        en: Notes
+        zh-CN: 笔记
+        zh-HK: 筆記
+      path:
+        en: Notes Location
+        zh-CN: 笔记路径
+        zh-HK: 筆記路徑
+      path_desc:
+        en: Choose the local folder used to store notes. Reopen Notes after changing it.
+        zh-CN: 选择用于保存笔记的本地目录。修改后重新打开笔记即可生效。
+        zh-HK: 選擇用於儲存筆記的本機目錄。修改後重新開啟筆記即可生效。
+      select_directory:
+        en: Choose
+        zh-CN: 选择目录
+        zh-HK: 選擇目錄
+      path_saved:
+        en: Notes location updated. Reopen Notes to apply it.
+        zh-CN: 笔记路径已更新，重新打开笔记后生效。
+        zh-HK: 筆記路徑已更新，重新開啟筆記後生效。
+      path_save_failed:
+        en: "Failed to update notes location: %{error}"
+        zh-CN: 更新笔记路径失败：%{error}
+        zh-HK: 更新筆記路徑失敗：%{error}
+
     # 外观设置
     Appearance:
       group_title:

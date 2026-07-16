@@ -15,10 +15,13 @@ mod notes_close;
 mod notes_conversion;
 mod notes_notifications;
 mod notes_render;
+mod notes_setup;
+mod notes_setup_render;
 mod notes_view;
 mod path_policy;
 mod storage;
 mod storage_conversion;
+mod storage_location;
 mod storage_support;
 mod tree_state;
 

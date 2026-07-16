@@ -7,6 +7,7 @@ use crate::auth::get_auth_service;
 use crate::license::{get_license_service, is_feature_enabled, offline_license_public_key};
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::mcp_settings::mcp_setting_group;
+use crate::settings::notes_settings::notes_setting_group;
 use crate::settings::remote_file_editor_settings::remote_file_editor_setting_group;
 use crate::settings::tool_exposure_settings::{
     agent_tool_exposure_setting_group, mcp_tool_exposure_setting_group,
@@ -500,6 +501,7 @@ impl SettingsPanel {
                                 t!("Settings.General.Startup.default_page_desc").to_string(),
                             ),
                         ]),
+                    notes_setting_group(),
                     SettingGroup::new()
                         .title(t!("Settings.General.Appearance.group_title"))
                         .items(vec![

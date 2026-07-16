@@ -28,12 +28,10 @@ impl NotesStorage {
         Ok(Self { root })
     }
 
-    pub fn default_root() -> Result<PathBuf> {
-        let base = dirs::data_local_dir().context("local data directory is unavailable")?;
-        Ok(base.join("navop").join("notes"))
-    }
-
     pub fn create_notebook(&self, name: &str, description: &str) -> Result<NotebookMetadata> {
+        if self.load_notebook()?.is_some() {
+            bail!("notebook already exists: {}", self.root.display());
+        }
         let name = validate_node_name(name)?;
         let now = chrono::Utc::now();
         let metadata = NotebookMetadata {

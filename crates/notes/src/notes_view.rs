@@ -7,6 +7,7 @@ use gpui::{
 };
 use gpui_component::input::InputState;
 use one_core::tab_container::TabContentEvent;
+use rust_i18n::t;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -14,9 +15,8 @@ use std::time::Duration;
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) enum NotesLoadState {
-    NeedsSetup,
+    NeedsLocation,
     Ready,
-    Failed(SharedString),
 }
 
 pub(crate) struct CachedEditor {
@@ -36,27 +36,23 @@ pub struct NotesView {
     pub(crate) active_document_id: Option<String>,
     pub(crate) current_directory: PathBuf,
     pub(crate) notebook_name: SharedString,
-    pub(crate) setup_name: Entity<InputState>,
-    pub(crate) setup_description: Entity<InputState>,
+    pub(crate) setup_path: Entity<InputState>,
     pub(crate) dialog_subscription: Option<Subscription>,
     pub(crate) focus_handle: FocusHandle,
 }
 
 impl NotesView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let setup_name = cx.new(|cx| {
+        let default_root = NotesStorage::default_root().unwrap_or_default();
+        let initial_root = NotesStorage::configured_root().unwrap_or(default_root);
+        let setup_path = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("笔记本名称")
-                .default_value("我的笔记")
-        });
-        let setup_description = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("描述（可选）")
-                .default_value("Navop 本地笔记")
+                .placeholder(t!("Notes.notebook_path_placeholder").to_string())
+                .default_value(initial_root.to_string_lossy())
         });
         let mut view = Self {
             storage: None,
-            load_state: NotesLoadState::NeedsSetup,
+            load_state: NotesLoadState::NeedsLocation,
             tree: TreeState::default(),
             rows: Vec::new(),
             editors: HashMap::new(),
@@ -65,49 +61,21 @@ impl NotesView {
             active_document_id: None,
             current_directory: PathBuf::new(),
             notebook_name: "Notes".into(),
-            setup_name,
-            setup_description,
+            setup_path: setup_path.clone(),
             dialog_subscription: None,
             focus_handle: cx.focus_handle(),
         };
-        if let Err(error) = view.initialize(window, cx) {
-            view.load_state = NotesLoadState::Failed(error.to_string().into());
+        let should_prompt = match view.initialize_configured_notes(window, cx) {
+            Ok(configured) => !configured,
+            Err(error) => {
+                notify_operation_error(window, cx, error);
+                true
+            }
+        };
+        if should_prompt {
+            crate::notes_setup::defer_location_dialog(setup_path, window, cx);
         }
         view
-    }
-
-    fn initialize(&mut self, window: &mut Window, cx: &mut Context<Self>) -> anyhow::Result<()> {
-        let storage = NotesStorage::open(NotesStorage::default_root()?)?;
-        let metadata = storage.load_notebook()?;
-        self.storage = Some(storage);
-        let Some(metadata) = metadata else {
-            return Ok(());
-        };
-        self.notebook_name = metadata.name.into();
-        self.load_state = NotesLoadState::Ready;
-        self.tree = TreeState::from_ui_state(self.storage()?.load_state()?);
-        self.refresh_tree(window, cx)
-    }
-
-    pub(crate) fn create_notebook(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let name = self.setup_name.read(cx).value().trim().to_owned();
-        let description = self.setup_description.read(cx).value().trim().to_owned();
-        let result = self.storage().and_then(|storage| {
-            storage
-                .create_notebook(&name, &description)
-                .map(|metadata| metadata.name)
-        });
-        match result {
-            Ok(name) => {
-                self.notebook_name = name.into();
-                self.load_state = NotesLoadState::Ready;
-                if let Err(error) = self.refresh_tree(window, cx) {
-                    notify_operation_error(window, cx, error);
-                }
-            }
-            Err(error) => notify_operation_error(window, cx, error),
-        }
-        cx.notify();
     }
 
     pub(crate) fn refresh_tree(
@@ -201,11 +169,7 @@ impl NotesView {
 impl EventEmitter<TabContentEvent> for NotesView {}
 
 impl Focusable for NotesView {
-    fn focus_handle(&self, cx: &App) -> FocusHandle {
-        match &self.load_state {
-            NotesLoadState::NeedsSetup => self.setup_name.read(cx).focus_handle(cx),
-            NotesLoadState::Ready => self.focus_handle.clone(),
-            NotesLoadState::Failed(_) => self.focus_handle.clone(),
-        }
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
