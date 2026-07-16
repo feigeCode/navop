@@ -3010,7 +3010,7 @@ impl HomePage {
                     })
                     .child(
                         Button::new("open_notes")
-                            .icon(IconName::BookOpen)
+                            .icon(IconName::NotesColor.color())
                             .tooltip(t!("Home.notes").to_string())
                             .when(collapsed, |button| button.ghost().small())
                             .when(!collapsed, |button| {

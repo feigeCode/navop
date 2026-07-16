@@ -139,7 +139,7 @@ impl NotesView {
             .border_color(cx.theme().border)
             .child(
                 Button::new("new_note_document")
-                    .icon(IconName::File)
+                    .icon(IconName::RichTextColor.color())
                     .label("富文本")
                     .small()
                     .on_click(cx.listener(|view, _, window, cx| {
@@ -152,7 +152,7 @@ impl NotesView {
             )
             .child(
                 Button::new("new_note_markdown")
-                    .icon(IconName::File)
+                    .icon(IconName::MarkdownColor.color())
                     .label("Markdown")
                     .small()
                     .on_click(cx.listener(|view, _, window, cx| {
@@ -179,10 +179,16 @@ impl NotesView {
         let kind = row.kind;
         let selected = self.tree.selected_document.as_ref() == Some(&row.relative_path)
             || (kind == NodeKind::Directory && self.current_directory == row.relative_path);
-        let icon = match (kind, row.expanded) {
-            (NodeKind::Directory, true) => IconName::FolderOpen,
-            (NodeKind::Directory, false) => IconName::Folder,
-            (NodeKind::Document, _) => IconName::File,
+        let icon = match (kind, row.expanded, row.format) {
+            (NodeKind::Directory, true, _) => Icon::new(IconName::FolderOpen),
+            (NodeKind::Directory, false, _) => Icon::new(IconName::Folder),
+            (NodeKind::Document, _, Some(DocumentFormat::RichText)) => {
+                IconName::RichTextColor.color()
+            }
+            (NodeKind::Document, _, Some(DocumentFormat::Markdown)) => {
+                IconName::MarkdownColor.color()
+            }
+            (NodeKind::Document, _, None) => Icon::new(IconName::File),
         };
         h_flex()
             .id(SharedString::from(format!(
@@ -200,7 +206,7 @@ impl NotesView {
                 view.select_row(select_path.clone(), kind, window, cx)
             }))
             .child(div().w(px((row.depth * 14) as f32)))
-            .child(Icon::new(icon).small())
+            .child(icon.small())
             .child(
                 div()
                     .flex_1()

@@ -20,7 +20,7 @@ impl TabContent for NotesView {
     }
 
     fn icon(&self, _cx: &App) -> Option<Icon> {
-        Some(IconName::BookOpen.color().with_size(Size::Medium))
+        Some(IconName::NotesColor.color().with_size(Size::Medium))
     }
 
     fn try_close(
