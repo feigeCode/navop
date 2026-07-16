@@ -16,7 +16,7 @@ use rust_i18n::t;
 use sftp_view::{SftpView, SftpViewEvent};
 use terminal::local_config_from_settings;
 use terminal_view::{
-    TerminalConnectionKind, TerminalView, current_settings as current_terminal_settings,
+    TerminalConnectionKind, TerminalWorkspace, current_settings as current_terminal_settings,
 };
 
 fn redis_tab_open_context(
@@ -160,7 +160,7 @@ mod tests {
         let lines = source.lines().collect::<Vec<_>>();
 
         for (index, line) in lines.iter().enumerate() {
-            if !line.contains("TerminalView::new") {
+            if !line.contains("TerminalWorkspace::new") {
                 continue;
             }
             let end = (index + 8).min(lines.len());
@@ -175,7 +175,10 @@ mod tests {
     #[test]
     fn local_terminal_entry_points_use_profile_settings() {
         let source = include_str!("home_tabs.rs");
-        let legacy_default = concat!("TerminalView::new_with_index(", "LocalConfig::default()");
+        let legacy_default = concat!(
+            "TerminalWorkspace::new_with_index(",
+            "LocalConfig::default()"
+        );
 
         assert!(source.matches("local_config_from_settings").count() >= 2);
         assert!(!source.contains(legacy_default));
@@ -234,7 +237,7 @@ impl HomePage {
         let sync_path = Self::terminal_sync_path_enabled(cx);
 
         let terminal_view = cx.new(|cx| {
-            TerminalView::new_ssh_with_index(conn, tab_index, window, cx, None, sync_path)
+            TerminalWorkspace::new_ssh_with_index(conn, tab_index, window, cx, None, sync_path)
         });
         tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, "ssh", terminal_view);
@@ -280,7 +283,7 @@ impl HomePage {
         };
 
         let terminal_view =
-            cx.new(|cx| TerminalView::new_serial_with_index(conn, tab_index, window, cx));
+            cx.new(|cx| TerminalWorkspace::new_serial_with_index(conn, tab_index, window, cx));
         tab_container.update(cx, |tc, cx| {
             let tab = TabItem::new(tab_id, "serial", terminal_view);
             tc.add_tab_with_mode(tab, mode, window, cx);
@@ -358,7 +361,7 @@ impl HomePage {
                             None
                         };
                         let terminal_view =
-                            cx.new(|cx| TerminalView::new_with_index(config, idx, window, cx));
+                            cx.new(|cx| TerminalWorkspace::new_with_index(config, idx, window, cx));
                         event_tab_container.update(cx, |tc, cx| {
                             let tab = TabItem::new(tab_id, "terminal", terminal_view);
                             tc.add_and_activate_tab_with_focus(tab, window, cx);
@@ -391,7 +394,7 @@ impl HomePage {
                         };
                         let sync_path = HomePage::terminal_sync_path_enabled(cx);
                         let terminal_view = cx.new(|cx| {
-                            TerminalView::new_ssh_with_index(
+                            TerminalWorkspace::new_ssh_with_index(
                                 conn,
                                 idx,
                                 window,
@@ -674,7 +677,7 @@ impl HomePage {
         window.defer(cx, move |window, cx| {
             home.update(cx, |_this, cx| {
                 let terminal_view =
-                    cx.new(|cx| TerminalView::new_with_index(config, tab_index, window, cx));
+                    cx.new(|cx| TerminalWorkspace::new_with_index(config, tab_index, window, cx));
                 tab_container.update(cx, |tc, cx| {
                     let tab = TabItem::new(tab_id, "home", terminal_view);
                     tc.add_and_activate_tab_with_focus(tab, window, cx);
@@ -790,7 +793,7 @@ impl HomePage {
             "Terminal" => {
                 // 获取终端视图的连接信息
                 let view = active_tab.content().view();
-                let Ok(terminal_view) = view.downcast::<TerminalView>() else {
+                let Ok(terminal_view) = view.downcast::<TerminalWorkspace>() else {
                     return;
                 };
 

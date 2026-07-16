@@ -162,6 +162,7 @@ fn main() {
             #[cfg(target_os = "linux")]
             window_decorations: Some(gpui::WindowDecorations::Client),
             kind: WindowKind::Normal,
+            app_owns_titlebar_drag: true,
             ..Default::default()
         };
 
@@ -207,5 +208,13 @@ mod embedded_cli_removal_tests {
         let actual = super::initial_main_window_size(saved, Some(size(px(1200.0), px(800.0))));
 
         assert_eq!(size(px(1080.0), px(720.0)), actual);
+    }
+
+    #[test]
+    fn custom_titlebar_drag_is_owned_by_the_application() {
+        let source = include_str!("main.rs");
+        let option = ["app_owns_titlebar", "_drag: true"].concat();
+
+        assert!(source.contains(&option));
     }
 }

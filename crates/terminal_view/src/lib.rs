@@ -17,6 +17,7 @@ pub mod ssh_form_window;
 pub mod terminal_element;
 pub mod theme;
 pub mod view;
+pub mod workspace;
 
 pub use addon::{AddonManager, HoveredLink, SearchAddon, TerminalAddon, WebLinksAddon};
 pub use one_core::layout::{
@@ -35,3 +36,4 @@ pub use theme::{
     DEFAULT_LINE_HEIGHT_SCALE, MAX_FONT_SIZE, MIN_FONT_SIZE, TerminalTheme, default_font_fallbacks,
 };
 pub use view::{TerminalView, init, refresh_keybindings};
+pub use workspace::TerminalWorkspace;

@@ -415,6 +415,20 @@
 - **验证方式**：覆盖 Auto 的 High、Critical、同轮多个 High 直接执行且无 `NeedUserInput`；覆盖 Manual 非 Read 仍审批、ReadOnly 仍过滤写工具；验证 Agent Auto permission policy 的 `mode=Auto` 且 `high_risk_policy=Allow`。
 - **适用范围**：`crates/agent_runtime/src/tasks/agent.rs`、`crates/agent_runtime/src/tools/runtime_adapter.rs`、Agent 工具模式 UI 与相关审批测试。
 
+- **标题**：macOS 自定义标题栏中的可拖元素必须由应用显式接管标题栏拖动
+- **触发信号**：透明标题栏或 tab 栏中，按钮、输入框或 tab 的拖动被解释为窗口移动；为了规避问题出现 `allow_tab_drag = !is_macos` 一类平台禁用逻辑。
+- **根因 / 约束**：GPUI 的 `stop_propagation()` 和 `prevent_default()` 只影响 GPUI 事件传播，不能阻止 AppKit 把透明标题栏视为系统 window-move region。把 `NSWindow.isMovable` 设为 false 虽能规避抢事件，但会禁用 macOS Window 菜单的平铺与窗口管理快捷键。
+- **正确做法**：使用包含 Zed/GPUI #60620 的提交或更新版本，主窗口保持 `is_movable: true` 并设置 `app_owns_titlebar_drag: true`；空白标题栏通过 `Window::start_window_move()` 显式拖窗，可交互子元素在 GPUI 层阻止冒泡并保留自身 `on_drag`。不要用 macOS 条件整体禁用 tab drag。
+- **验证方式**：结构测试保证不存在 `allow_tab_drag = !is_macos` 且窗口启用 `app_owns_titlebar_drag`；macOS 手工验证空白区拖窗、tab 排序、终端 tab 拖动分屏、标题栏按钮点击和 Window 菜单 tiling 均可用。
+- **适用范围**：`main/src/main.rs`、`crates/core/src/tab_container.rs`，以及任何放在 macOS 透明自定义标题栏内的可点击、可选择或可拖拽 GPUI 元素。
+
+- **标题**：GPUI 拖放解析源 Entity 时必须在 `read` 前排除当前更新 Entity
+- **触发信号**：拖动 tab、pane 或其他实体到自身内容区时出现 `cannot read <Entity> while it is already being updated`，macOS 上随后因 panic 穿过原生回调边界触发 `SIGABRT`。
+- **根因 / 约束**：`Context<T>` 回调已经持有当前 `Entity<T>` 的可变更新权限；若源解析先 downcast 得到同一个 entity，再调用 `read(cx)` 检查其状态，就会形成 update 中读取自身的重入。事后比较源/目标是否相同已经太晚。
+- **正确做法**：源解析函数显式接收目标 entity handle；downcast 后先只比较 `Entity`/`EntityId`，相同立即返回，确认是外部 entity 后才允许 `read(cx)`。不要通过捕获 panic 或延迟通知掩盖重入。
+- **验证方式**：补 contract 测试保证同实体 guard 在首次 `read(cx)` 之前；手工把当前 tab 拖回自己的内容区，确认无 drop overlay、无 panic，再验证拖到另一个 workspace 仍可正常转移。
+- **适用范围**：`crates/terminal_view/src/workspace/tab_drag.rs`，以及所有从 GPUI drag payload、AnyView downcast 或 registry handle 解析实体并读取状态的事件回调。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

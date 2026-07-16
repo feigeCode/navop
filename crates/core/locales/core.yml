@@ -23,18 +23,6 @@ TabContextMenu:
     en: "Duplicate Tab"
     zh-CN: "复制标签页"
     zh-HK: "複製標籤頁"
-  split_right:
-    en: "Split Right"
-    zh-CN: "向右分屏"
-    zh-HK: "向右分屏"
-  split_down:
-    en: "Split Down"
-    zh-CN: "向下分屏"
-    zh-HK: "向下分屏"
-  move_to_primary:
-    en: "Move to Main Split"
-    zh-CN: "回到主分屏"
-    zh-HK: "回到主分屏"
   close_tab:
     en: "Close Tab"
     zh-CN: "关闭标签页"
@@ -59,6 +47,38 @@ TabContextMenu:
     en: "Tab name"
     zh-CN: "标签页名称"
     zh-HK: "標籤頁名稱"
+  split_help:
+    en: "Terminal Split Guide"
+    zh-CN: "终端分屏说明"
+    zh-HK: "終端分屏說明"
+  split_supported:
+    en: "This Terminal tab supports splitting"
+    zh-CN: "当前终端标签页支持分屏"
+    zh-HK: "目前終端標籤頁支援分屏"
+  split_not_supported:
+    en: "This tab does not support splitting"
+    zh-CN: "当前标签页不支持分屏"
+    zh-HK: "目前標籤頁不支援分屏"
+  split_only_terminal:
+    en: "Only Terminal tabs support splitting"
+    zh-CN: "仅终端标签页支持分屏"
+    zh-HK: "僅終端標籤頁支援分屏"
+  split_drag:
+    en: "Drag a single Terminal tab onto a terminal pane"
+    zh-CN: "将单终端标签页拖到目标终端区域"
+    zh-HK: "將單終端標籤頁拖到目標終端區域"
+  split_directions:
+    en: "Drop position chooses left, right, top, or bottom"
+    zh-CN: "根据落点自动选择左、右、上或下分屏"
+    zh-HK: "根據落點自動選擇左、右、上或下分屏"
+  split_limit:
+    en: "A tab that already contains splits cannot be dragged into another pane"
+    zh-CN: "已包含分屏的标签页不能再次拖入其他终端"
+    zh-HK: "已包含分屏的標籤頁不能再次拖入其他終端"
+  split_cancel:
+    en: "Use Cancel Split or drag the floating title back to the tab bar"
+    zh-CN: "点击取消分屏，或将浮动标题拖回标签栏"
+    zh-HK: "點擊取消分屏，或將浮動標題拖回標籤列"
 
 AiChat:
   title:

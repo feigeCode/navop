@@ -832,10 +832,6 @@ impl TabContent for DatabaseTabView {
         true
     }
 
-    fn can_split(&self, _cx: &App) -> bool {
-        true
-    }
-
     fn sidebar_contributions(&self, _cx: &App) -> Vec<SidebarContribution> {
         if self.sidebar_render_mode != DatabaseSidebarRenderMode::External {
             return Vec::new();

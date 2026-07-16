@@ -1,5 +1,19 @@
 _version: 2
 
+TerminalWorkspace:
+  cancel_split:
+    en: Cancel Split and Return to Tab Bar
+    zh-CN: 取消分屏并返回标签栏
+    zh-HK: 取消分屏並返回標籤列
+  close_title:
+    en: Close Terminal Workspace?
+    zh-CN: 关闭终端工作区？
+    zh-HK: 關閉終端工作區？
+  close_message:
+    en: This workspace contains %{count} terminal panes. Closing it will disconnect all sessions.
+    zh-CN: 当前工作区包含 %{count} 个终端分屏，关闭后将断开所有会话。
+    zh-HK: 當前工作區包含 %{count} 個終端分屏，關閉後將斷開所有會話。
+
 # 主题
 Theme:
   midnight:

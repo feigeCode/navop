@@ -29,6 +29,10 @@ pub(crate) mod block_selection;
 mod history_prompt_rules;
 mod mouse_input;
 mod paste_safety;
+mod workspace_support;
+
+use workspace_support::TerminalRenderMode;
+pub(crate) use workspace_support::{TerminalPaneEvent, TerminalWorkspaceSidebarSnapshot};
 
 use crate::addon::{
     AddonManager, CustomHighlightAddon, SearchAddon, TerminalAddonFrameContext,
@@ -568,7 +572,7 @@ struct SshMfaInput {
 }
 
 #[derive(Clone)]
-enum TerminalDuplicateSource {
+pub(crate) enum TerminalDuplicateSource {
     Local(LocalConfig),
     Ssh {
         connection: StoredConnection,
@@ -710,6 +714,7 @@ pub struct TerminalView {
     scrollbar_metrics: Rc<RefCell<TerminalScrollbarMetrics>>,
     scrollbar_handle: TerminalScrollbarHandle,
     public_mcp_registration: Option<TerminalPublicMcpRegistration>,
+    render_mode: TerminalRenderMode,
 }
 
 /// Mouse interaction state
@@ -1085,6 +1090,7 @@ impl TerminalView {
             if this.cursor_blink_enabled {
                 this.blink_manager.update(cx, BlinkCursor::start);
             }
+            cx.emit(TerminalPaneEvent::Focused);
         });
         let blur_subscription = cx.on_blur(&focus_handle, window, |this, _window, cx| {
             if this.cursor_blink_enabled {
@@ -1175,6 +1181,7 @@ impl TerminalView {
             scrollbar_metrics,
             scrollbar_handle,
             public_mcp_registration: None,
+            render_mode: TerminalRenderMode::Embedded,
         };
         let initial_settings = current_settings(cx);
         this.apply_settings_snapshot(&initial_settings, window, cx);
@@ -4559,35 +4566,8 @@ impl TabContent for TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Arc<dyn TabContentView>> {
-        let current_working_dir = self
-            .terminal
-            .read(cx)
-            .current_working_dir()
-            .map(str::to_string);
-        let source = terminal_duplicate_source_with_cwd(
-            self.duplicate_source.clone(),
-            current_working_dir.as_deref(),
-        );
-        let duplicate = cx.new(|cx| match source {
-            TerminalDuplicateSource::Local(config) => {
-                TerminalView::new_with_index(config, None, window, cx)
-            }
-            TerminalDuplicateSource::Serial(connection) => {
-                TerminalView::new_serial_with_index(connection, None, window, cx)
-            }
-            TerminalDuplicateSource::Ssh {
-                connection,
-                working_dir,
-                sync_path_with_terminal,
-            } => TerminalView::new_ssh_with_index(
-                connection,
-                None,
-                window,
-                cx,
-                working_dir.as_deref(),
-                sync_path_with_terminal,
-            ),
-        });
+        let source = self.duplicate_source_snapshot(cx);
+        let duplicate = cx.new(|cx| Self::new_from_duplicate_source(source, window, cx));
         Some(Arc::new(duplicate))
     }
 
@@ -4597,17 +4577,7 @@ impl TabContent for TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<bool> {
-        let should_confirm = {
-            let terminal = self.terminal.read(cx);
-            should_confirm_local_terminal_close(
-                terminal.connection_kind(),
-                self.local_command_running,
-                terminal.mode(),
-                terminal.child_exited(),
-            )
-        };
-
-        if should_confirm {
+        if self.requires_close_confirmation(cx) {
             return self.confirm_local_terminal_close(window, cx);
         }
 
@@ -4617,10 +4587,6 @@ impl TabContent for TerminalView {
 
     fn sidebar_contributions(&self, _cx: &App) -> Vec<SidebarContribution> {
         Vec::new()
-    }
-
-    fn can_split(&self, _cx: &App) -> bool {
-        true
     }
 }
 
@@ -4661,8 +4627,17 @@ impl Render for TerminalView {
         let terminal_mode = self.terminal.read(cx).mode();
         let history_size = self.terminal.read(cx).term().lock().history_size();
         let show_scrollbar = !terminal_mode.contains(TermMode::ALT_SCREEN) && history_size > 0;
-        let tool_layout = self.terminal_tool_layout(cx);
-        let right_tool_width = right_tool_region_width(&tool_layout, sidebar_panel_size);
+        let render_internal_dock = self.render_mode == TerminalRenderMode::Embedded;
+        let tool_layout = if render_internal_dock {
+            self.terminal_tool_layout(cx)
+        } else {
+            TerminalToolDockLayout::default()
+        };
+        let right_tool_width = if render_internal_dock {
+            right_tool_region_width(&tool_layout, sidebar_panel_size)
+        } else {
+            px(0.0)
+        };
         let left_tool_panel = tool_layout
             .left
             .map(|panel| self.render_internal_tool_panel(panel, SidebarPlacement::Left, cx));
@@ -4933,46 +4908,48 @@ impl Render for TerminalView {
                         )
                     }),
             )
-            .child(
-                h_flex()
-                    .debug_selector(|| "terminal-tool-dock-right".to_string())
-                    .h_full()
-                    .w(right_tool_width)
-                    .min_w(right_tool_width)
-                    .max_w(right_tool_width)
-                    .flex_shrink_0()
-                    .overflow_hidden()
-                    .when_some(right_tool_panel, |this, panel| {
-                        this.child(
-                            div()
-                                .relative()
-                                .h_full()
-                                .w(sidebar_panel_size)
-                                .min_w(sidebar_panel_size)
-                                .max_w(sidebar_panel_size)
-                                .flex_shrink_0()
-                                .overflow_hidden()
-                                .child(
-                                    self.render_sidebar_resize_handle(
+            .when(render_internal_dock, |this| {
+                this.child(
+                    h_flex()
+                        .debug_selector(|| "terminal-tool-dock-right".to_string())
+                        .h_full()
+                        .w(right_tool_width)
+                        .min_w(right_tool_width)
+                        .max_w(right_tool_width)
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .when_some(right_tool_panel, |this, panel| {
+                            this.child(
+                                div()
+                                    .relative()
+                                    .h_full()
+                                    .w(sidebar_panel_size)
+                                    .min_w(sidebar_panel_size)
+                                    .max_w(sidebar_panel_size)
+                                    .flex_shrink_0()
+                                    .overflow_hidden()
+                                    .child(self.render_sidebar_resize_handle(
                                         ResizingPanel::RightSidebar,
                                         cx,
-                                    ),
-                                )
-                                .child(panel),
-                        )
-                    })
-                    .child(
-                        div()
-                            .debug_selector(|| "terminal-tool-dock-toolbar".to_string())
-                            .h_full()
-                            .w(TOOLBAR_WIDTH)
-                            .min_w(TOOLBAR_WIDTH)
-                            .max_w(TOOLBAR_WIDTH)
-                            .flex_shrink_0()
-                            .child(self.sidebar_toolbar.clone()),
-                    ),
-            )
-            .child(ResizeEventHandler { view })
+                                    ))
+                                    .child(panel),
+                            )
+                        })
+                        .child(
+                            div()
+                                .debug_selector(|| "terminal-tool-dock-toolbar".to_string())
+                                .h_full()
+                                .w(TOOLBAR_WIDTH)
+                                .min_w(TOOLBAR_WIDTH)
+                                .max_w(TOOLBAR_WIDTH)
+                                .flex_shrink_0()
+                                .child(self.sidebar_toolbar.clone()),
+                        ),
+                )
+            })
+            .when(render_internal_dock, |this| {
+                this.child(ResizeEventHandler { view })
+            })
     }
 }
 

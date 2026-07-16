@@ -12,19 +12,19 @@ use crate::tab_switcher::{TabSwitcherEntry, open_tab_switcher_dialog};
 use gpui::KeyBinding;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AnyView, App, AppContext as _, Bounds, Context, Decorations, DragMoveEvent,
-    Element, ElementId, Entity, EntityId, EventEmitter, FocusHandle, Focusable, GlobalElementId,
-    InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, Point, Render, SharedString, Style, Styled, Subscription,
-    Task, Window, WindowControlArea, div, px, relative,
+    AnyElement, AnyView, App, AppContext as _, Bounds, Context, Decorations, Element, ElementId,
+    Entity, EntityId, EventEmitter, FocusHandle, Focusable, GlobalElementId, InspectorElementId,
+    InteractiveElement, IntoElement, LayoutId, MouseButton, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Point, Render, SharedString, Style, Styled, Subscription, Task, Window,
+    WindowControlArea, div, px,
 };
 use gpui::{ScrollHandle, StatefulInteractiveElement as _};
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt as _, Placement, Sizable, Size,
-    h_flex, v_flex,
+    ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt as _, Sizable, Size, h_flex,
+    v_flex,
 };
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
@@ -72,33 +72,6 @@ pub fn init(cx: &mut App) {
 // ============================================================================
 // TabContainer Events
 // ============================================================================
-
-pub(crate) fn split_command_enabled(
-    container_split_enabled: bool,
-    tab_can_split: bool,
-    source_tab_count: usize,
-) -> bool {
-    container_split_enabled && tab_can_split && source_tab_count > 1
-}
-
-pub(crate) fn move_to_primary_command_visible(
-    container_split_enabled: bool,
-    is_primary_pane: bool,
-) -> bool {
-    container_split_enabled && !is_primary_pane
-}
-
-pub(crate) fn active_content_can_split_for_layout(
-    pinned_tab_active: bool,
-    pinned_tab_can_split: Option<bool>,
-    active_tab_can_split: Option<bool>,
-) -> bool {
-    if pinned_tab_active {
-        pinned_tab_can_split.unwrap_or(false)
-    } else {
-        active_tab_can_split.unwrap_or(false)
-    }
-}
 
 fn tab_display_number(slot: ActiveTabSlot, pinned_tab_count: usize) -> usize {
     match slot {
@@ -169,12 +142,28 @@ pub(crate) fn sidebar_panel_blocks_exclusive_target(
 }
 
 /// Events emitted by TabContent
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum TabContentEvent {
     /// Tab state changed
     StateChanged,
     /// Tab content changed while it may be inactive.
     ContentChanged,
+    /// Insert a tab created by the current content into this container.
+    OpenTab { tab: TabItem, mode: TabOpenMode },
+}
+
+impl std::fmt::Debug for TabContentEvent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StateChanged => formatter.write_str("StateChanged"),
+            Self::ContentChanged => formatter.write_str("ContentChanged"),
+            Self::OpenTab { tab, mode } => formatter
+                .debug_struct("OpenTab")
+                .field("tab_id", &tab.id())
+                .field("mode", mode)
+                .finish(),
+        }
+    }
 }
 
 /// Events emitted by TabContainer
@@ -186,17 +175,6 @@ pub enum TabContainerEvent {
     TabActivated { index: usize, id: String },
     /// A tab was closed
     TabClosed { id: String },
-    /// 请求分屏：将 `source` pane 中 `tab_index` 处的 tab
-    /// 移动到当前 pane 的 `placement` 方向新建的 pane 中（由上层 SplitTabContainer 处理）
-    SplitRequested {
-        placement: Placement,
-        source: Entity<TabContainer>,
-        tab_index: usize,
-    },
-    MoveToPrimaryRequested {
-        source: Entity<TabContainer>,
-        tab_index: usize,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -377,11 +355,6 @@ pub trait TabContent: EventEmitter<TabContentEvent> + Render + Focusable {
     fn sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution> {
         Vec::new()
     }
-
-    /// Whether this tab may be split into a new pane.
-    fn can_split(&self, cx: &App) -> bool {
-        false
-    }
 }
 
 // ============================================================================
@@ -409,7 +382,6 @@ pub trait TabContentView: 'static + Send + Sync {
     fn view(&self) -> AnyView;
     fn dump(&self, cx: &App) -> serde_json::Value;
     fn sidebar_contributions(&self, cx: &App) -> Vec<SidebarContribution>;
-    fn can_split(&self, cx: &App) -> bool;
     fn subscribe_events(&self, window: &mut Window, cx: &mut Context<TabContainer>)
     -> Subscription;
 }
@@ -485,10 +457,6 @@ impl<T: TabContent> TabContentView for Entity<T> {
         self.read(cx).sidebar_contributions(cx)
     }
 
-    fn can_split(&self, cx: &App) -> bool {
-        self.read(cx).can_split(cx)
-    }
-
     fn subscribe_events(
         &self,
         window: &mut Window,
@@ -497,8 +465,8 @@ impl<T: TabContent> TabContentView for Entity<T> {
         cx.subscribe_in(
             self,
             window,
-            |container, content, event: &TabContentEvent, _window, cx| {
-                container.handle_tab_content_event(content.entity_id(), event, cx);
+            |container, content, event: &TabContentEvent, window, cx| {
+                container.handle_tab_content_event(content.entity_id(), event, window, cx);
             },
         )
     }
@@ -520,6 +488,7 @@ impl PartialEq for dyn TabContentView {
 // TabItem - Represents a single tab with its content
 // ============================================================================
 
+#[derive(Clone)]
 pub struct TabItem {
     id: SharedString,
     from: SharedString,
@@ -704,12 +673,17 @@ impl Render for TabBarDragState {
 // ============================================================================
 
 /// Represents a tab being dragged, used for visual feedback
+pub trait ExternalTabDragSource {
+    fn take_tab(&self, window: &mut Window, cx: &mut App) -> Option<TabItem>;
+}
+
 #[derive(Clone)]
 pub struct DragTab {
     pub tab_index: usize,
     pub title: SharedString,
     /// 拖拽来源 pane（split 场景下用于跨 pane 移动 tab）
     pub source_pane: Option<Entity<TabContainer>>,
+    external_source: Option<Arc<dyn ExternalTabDragSource>>,
 }
 
 impl DragTab {
@@ -718,12 +692,30 @@ impl DragTab {
             tab_index,
             title,
             source_pane: None,
+            external_source: None,
         }
     }
 
     pub fn with_source_pane(mut self, pane: Entity<TabContainer>) -> Self {
         self.source_pane = Some(pane);
         self
+    }
+
+    pub fn from_external(title: SharedString, source: Arc<dyn ExternalTabDragSource>) -> Self {
+        Self {
+            tab_index: usize::MAX,
+            title,
+            source_pane: None,
+            external_source: Some(source),
+        }
+    }
+
+    fn is_external(&self) -> bool {
+        self.external_source.is_some()
+    }
+
+    fn take_external_tab(&self, window: &mut Window, cx: &mut App) -> Option<TabItem> {
+        self.external_source.as_ref()?.take_tab(window, cx)
     }
 }
 
@@ -787,9 +779,6 @@ pub struct TabContainer {
     pinned_tabs: Vec<TabItem>,
     /// Active pinned tab index. When `None`, a regular tab is active.
     active_pinned_index: Option<usize>,
-    split_enabled: bool,
-    is_primary_pane: bool,
-    will_split_placement: Option<Placement>,
     sidebar_overrides: HashMap<SidebarPanelId, SidebarPanelOverride>,
     sidebar_size_overrides: HashMap<SidebarPanelId, SidebarPanelSizeOverride>,
     sidebar_resizing: Option<SidebarResizeTarget>,
@@ -829,9 +818,6 @@ impl TabContainer {
             on_close_window: None,
             pinned_tabs: Vec::new(),
             active_pinned_index: None,
-            split_enabled: false,
-            is_primary_pane: true,
-            will_split_placement: None,
             sidebar_overrides: HashMap::new(),
             sidebar_size_overrides: HashMap::new(),
             sidebar_resizing: None,
@@ -894,16 +880,6 @@ impl TabContainer {
         on_close_window: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>,
     ) -> Self {
         self.on_close_window = Some(on_close_window);
-        self
-    }
-
-    pub fn with_split_enabled(mut self, enabled: bool) -> Self {
-        self.split_enabled = enabled;
-        self
-    }
-
-    pub fn with_primary_pane(mut self, primary: bool) -> Self {
-        self.is_primary_pane = primary;
         self
     }
 
@@ -1052,6 +1028,7 @@ impl TabContainer {
         &mut self,
         content_id: EntityId,
         event: &TabContentEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
@@ -1063,6 +1040,9 @@ impl TabContainer {
                 if self.mark_content_activity(content_id, cx) {
                     cx.notify();
                 }
+            }
+            TabContentEvent::OpenTab { tab, mode } => {
+                self.add_tab_with_mode(tab.clone(), *mode, window, cx);
             }
         }
     }
@@ -1595,15 +1575,6 @@ impl TabContainer {
     /// Get the active tab
     pub fn active_tab(&self) -> Option<&TabItem> {
         self.tabs.get(self.active_index)
-    }
-
-    pub fn active_content_can_split(&self, cx: &App) -> bool {
-        let active_pinned_tab = self.active_pinned_tab();
-        active_content_can_split_for_layout(
-            active_pinned_tab.is_some(),
-            active_pinned_tab.map(|tab| tab.content().can_split(cx)),
-            self.active_tab().map(|tab| tab.content().can_split(cx)),
-        )
     }
 
     pub fn set_size(&mut self, size: Size, cx: &mut Context<Self>) {
@@ -2804,14 +2775,11 @@ impl TabContainer {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let active_tab = self.active_pinned_tab().or_else(|| self.active_tab());
-        let split_enabled = self.split_enabled
-            && active_tab
-                .map(|tab| tab.content().can_split(cx))
-                .unwrap_or(false);
         let sidebar_panels = self.resolved_sidebar_panels(cx);
         let has_sidebar_layout = sidebar_panels
             .iter()
             .any(|panel| panel.visible || (!panel.visible && panel.contribution.policy.hideable));
+        let active_view = active_tab.map(|tab| tab.content().view());
 
         div()
             .id("tab-content")
@@ -2819,130 +2787,16 @@ impl TabContainer {
             .w_full()
             .overflow_hidden()
             .when(!has_sidebar_layout, |el| {
-                let active_view = active_tab.map(|tab| tab.content().view());
-                el.when_some(active_view, |el, view| el.child(view))
-                    .when(split_enabled, |el| {
-                        el.relative()
-                            .on_drag_move(cx.listener(Self::on_tab_content_drag_move))
-                            .child(
-                                div()
-                                    .invisible()
-                                    .absolute()
-                                    .bg(cx.theme().drop_target)
-                                    .map(|this| match self.will_split_placement {
-                                        Some(Placement::Right) => {
-                                            this.right_0().top_0().bottom_0().w(relative(0.5))
-                                        }
-                                        Some(Placement::Bottom) => {
-                                            this.bottom_0().left_0().right_0().h(relative(0.5))
-                                        }
-                                        _ => this.top_0().left_0().size_full(),
-                                    })
-                                    .group_drag_over::<DragTab>("", |this| this.visible())
-                                    .on_drop(cx.listener(|this, drag: &DragTab, window, cx| {
-                                        this.drop_tab_on_content(drag, window, cx);
-                                    })),
-                            )
-                    })
+                el.when_some(active_view.clone(), |el, view| el.child(view))
             })
             .when(has_sidebar_layout, |el| {
-                let active_view = active_tab.map(|tab| tab.content().view());
                 let content = div()
                     .size_full()
                     .overflow_hidden()
                     .when_some(active_view, |el, view| el.child(view))
-                    .when(split_enabled, |el| {
-                        el.relative()
-                            .on_drag_move(cx.listener(Self::on_tab_content_drag_move))
-                            .child(
-                                div()
-                                    .invisible()
-                                    .absolute()
-                                    .bg(cx.theme().drop_target)
-                                    .map(|this| match self.will_split_placement {
-                                        Some(Placement::Right) => {
-                                            this.right_0().top_0().bottom_0().w(relative(0.5))
-                                        }
-                                        Some(Placement::Bottom) => {
-                                            this.bottom_0().left_0().right_0().h(relative(0.5))
-                                        }
-                                        _ => this.top_0().left_0().size_full(),
-                                    })
-                                    .group_drag_over::<DragTab>("", |this| this.visible())
-                                    .on_drop(cx.listener(|this, drag: &DragTab, window, cx| {
-                                        this.drop_tab_on_content(drag, window, cx);
-                                    })),
-                            )
-                    })
                     .into_any_element();
                 el.child(self.render_content_with_sidebars(content, cx))
             })
-    }
-
-    fn on_tab_content_drag_move(
-        &mut self,
-        drag: &DragMoveEvent<DragTab>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let bounds = drag.bounds;
-        let position = drag.event.position;
-
-        self.will_split_placement = if position.x > bounds.left() + bounds.size.width * 0.75 {
-            Some(Placement::Right)
-        } else if position.y > bounds.top() + bounds.size.height * 0.75 {
-            Some(Placement::Bottom)
-        } else {
-            None
-        };
-        cx.notify();
-    }
-
-    fn drop_tab_on_content(&mut self, drag: &DragTab, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(source) = drag.source_pane.clone() else {
-            return;
-        };
-        let Some(placement) = self.will_split_placement.take() else {
-            self.move_dragged_tab_into_pane(drag, window, cx);
-            return;
-        };
-        if !matches!(placement, Placement::Right | Placement::Bottom) {
-            return;
-        }
-        let tab_can_split = source
-            .read(cx)
-            .tabs()
-            .get(drag.tab_index)
-            .map(|tab| tab.content().can_split(cx))
-            .unwrap_or(false);
-        let source_tab_count = source.read(cx).tabs().len();
-        if !split_command_enabled(self.split_enabled, tab_can_split, source_tab_count) {
-            return;
-        }
-        cx.emit(TabContainerEvent::SplitRequested {
-            placement,
-            source,
-            tab_index: drag.tab_index,
-        });
-    }
-
-    fn move_dragged_tab_into_pane(
-        &mut self,
-        drag: &DragTab,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(source) = drag.source_pane.clone() else {
-            return;
-        };
-        if source == cx.entity() {
-            self.set_active_index(drag.tab_index, window, cx);
-            return;
-        }
-        let moved = source.update(cx, |source, cx| source.take_tab(drag.tab_index, window, cx));
-        if let Some(tab) = moved {
-            self.insert_tab_at_end_and_activate(tab, window, cx);
-        }
     }
 
     fn tab_switcher_entries(&self, cx: &App) -> Vec<TabSwitcherEntry> {
@@ -3012,7 +2866,6 @@ impl TabContainer {
         let is_client_decorated = matches!(window.window_decorations(), Decorations::Client { .. });
         let show_window_controls = self.show_window_controls;
         let enable_titlebar_interactions = show_window_controls || is_macos;
-        let allow_tab_drag = !is_macos;
 
         // 使用状态管理窗口拖动
         let drag_state = window.use_state(cx, |_, _| TabBarDragState { should_move: false });
@@ -3175,6 +3028,18 @@ impl TabContainer {
                     .pr_2()
                     .gap_1()
                     .track_scroll(&self.tab_bar_scroll_handle)
+                    .drag_over::<DragTab>(move |el, drag, _, _| {
+                        if drag.is_external() {
+                            el.border_b_2().border_color(drag_border_color)
+                        } else {
+                            el
+                        }
+                    })
+                    .on_drop(cx.listener(|this, drag: &DragTab, window, cx| {
+                        if let Some(tab) = drag.take_external_tab(window, cx) {
+                            this.add_and_activate_tab_with_focus(tab, window, cx);
+                        }
+                    }))
                     // Linux 客户端装饰模式下，右键显示窗口菜单
                     .when(
                         is_linux && is_client_decorated && show_window_controls,
@@ -3241,7 +3106,7 @@ impl TabContainer {
                                         .bg(gpui::rgb(0x22c55e)),
                                 )
                             })
-                            .when(allow_tab_drag, |el| {
+                            .map(|el| {
                                 el.cursor_grab()
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -3268,6 +3133,16 @@ impl TabContainer {
                                     })
                                     .on_drop(cx.listener(
                                         move |this, drag: &DragTab, window, cx| {
+                                            if drag.is_external() {
+                                                if let Some(tab) =
+                                                    drag.take_external_tab(window, cx)
+                                                {
+                                                    this.add_and_activate_tab_with_focus(
+                                                        tab, window, cx,
+                                                    );
+                                                }
+                                                return;
+                                            }
                                             let from_idx = drag.tab_index;
                                             let to_idx = idx;
                                             let source = drag
@@ -3363,30 +3238,16 @@ impl TabContainer {
                                     .get(idx)
                                     .map(|tab| tab.content().can_duplicate(cx))
                                     .unwrap_or(false);
-                                let can_split = view_for_menu
-                                    .read(cx)
-                                    .tabs
-                                    .get(idx)
-                                    .map(|tab| tab.content().can_split(cx))
-                                    .unwrap_or(false);
-                                let split_enabled = split_command_enabled(
-                                    view_for_menu.read(cx).split_enabled,
-                                    can_split,
-                                    tab_count,
-                                );
-                                let move_to_primary_visible = {
-                                    let container = view_for_menu.read(cx);
-                                    move_to_primary_command_visible(
-                                        container.split_enabled,
-                                        container.is_primary_pane,
-                                    )
-                                };
                                 let closeable = view_for_menu
                                     .read(cx)
                                     .tabs
                                     .get(idx)
                                     .map(|tab| tab.content().closeable(cx))
                                     .unwrap_or(false);
+                                let terminal_split_supported =
+                                    view_for_menu.read(cx).tabs.get(idx).is_some_and(|tab| {
+                                        tab.content().content_key(cx) == "Terminal"
+                                    });
 
                                 menu.item(
                                     PopupMenuItem::new(t!("TabContextMenu.rename_tab").to_string())
@@ -3412,58 +3273,6 @@ impl TabContainer {
                                         ),
                                     ),
                                 )
-                                .item(
-                                    PopupMenuItem::new(
-                                        t!("TabContextMenu.split_right").to_string(),
-                                    )
-                                    .disabled(!split_enabled)
-                                    .on_click(
-                                        window.listener_for(
-                                            &view_for_menu,
-                                            move |_this, _, _window, cx| {
-                                                cx.emit(TabContainerEvent::SplitRequested {
-                                                    placement: Placement::Right,
-                                                    source: cx.entity(),
-                                                    tab_index: idx,
-                                                });
-                                            },
-                                        ),
-                                    ),
-                                )
-                                .item(
-                                    PopupMenuItem::new(t!("TabContextMenu.split_down").to_string())
-                                        .disabled(!split_enabled)
-                                        .on_click(window.listener_for(
-                                            &view_for_menu,
-                                            move |_this, _, _window, cx| {
-                                                cx.emit(TabContainerEvent::SplitRequested {
-                                                    placement: Placement::Bottom,
-                                                    source: cx.entity(),
-                                                    tab_index: idx,
-                                                });
-                                            },
-                                        )),
-                                )
-                                .when(move_to_primary_visible, |menu| {
-                                    menu.item(
-                                        PopupMenuItem::new(
-                                            t!("TabContextMenu.move_to_primary").to_string(),
-                                        )
-                                        .on_click(
-                                            window.listener_for(
-                                                &view_for_menu,
-                                                move |_this, _, _window, cx| {
-                                                    cx.emit(
-                                                        TabContainerEvent::MoveToPrimaryRequested {
-                                                            source: cx.entity(),
-                                                            tab_index: idx,
-                                                        },
-                                                    );
-                                                },
-                                            ),
-                                        ),
-                                    )
-                                })
                                 .item(
                                     PopupMenuItem::new(t!("TabContextMenu.close_tab").to_string())
                                         .disabled(!closeable)
@@ -3529,6 +3338,13 @@ impl TabContainer {
                                         ),
                                     ),
                                 )
+                                .separator()
+                                .map(|menu| {
+                                    crate::tab_split_help::TerminalSplitHelp::new(
+                                        terminal_split_supported,
+                                    )
+                                    .append(menu, window, cx)
+                                })
                             })
                     })),
             )

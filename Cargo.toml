@@ -45,11 +45,11 @@ gpui-component = { path = "crates/ui", version = "0.5.2" }
 gpui-component-macros = { path = "crates/macros", version = "0.5.1" }
 gpui-component-assets = { path = "crates/assets", version = "0.5.1" }
 
-gpui = { git = "https://github.com/zed-industries/zed", rev = "76c93968da5b8b8809bdd72e4ad9e7d0e946bad0", version = "=0.2.2" }
-gpui_tokio = { git = "https://github.com/zed-industries/zed", rev = "76c93968da5b8b8809bdd72e4ad9e7d0e946bad0" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "76c93968da5b8b8809bdd72e4ad9e7d0e946bad0", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "76c93968da5b8b8809bdd72e4ad9e7d0e946bad0" }
-util = { git = "https://github.com/zed-industries/zed", rev = "76c93968da5b8b8809bdd72e4ad9e7d0e946bad0" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "23bb2fc135a69492847c3aa68444a7d14cc282f6", version = "=0.2.2" }
+gpui_tokio = { git = "https://github.com/zed-industries/zed", rev = "23bb2fc135a69492847c3aa68444a7d14cc282f6" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "23bb2fc135a69492847c3aa68444a7d14cc282f6", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui_macros = { git = "https://github.com/zed-industries/zed", rev = "23bb2fc135a69492847c3aa68444a7d14cc282f6" }
+util = { git = "https://github.com/zed-industries/zed", rev = "23bb2fc135a69492847c3aa68444a7d14cc282f6" }
 
 
 sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
@@ -200,7 +200,7 @@ ferrum-flow = { git = "https://github.com/tu6ge/ferrum-flow.git", branch = "mast
 errno = { version = "0.3.14", default-features = false }
 
 [patch.crates-io]
-gpui = { git = "https://github.com/zed-industries/zed", rev = "76c93968da5b8b8809bdd72e4ad9e7d0e946bad0", version = "=0.2.2" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "23bb2fc135a69492847c3aa68444a7d14cc282f6", version = "=0.2.2" }
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
 

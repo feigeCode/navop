@@ -17,11 +17,11 @@ pub mod license;
 pub mod llm;
 pub mod popup_window;
 pub mod sidebar_contribution;
-pub mod split_tab_container;
 pub mod storage;
 pub mod tab_actions;
 pub mod tab_container;
 pub mod tab_navigation;
+mod tab_split_help;
 pub mod tab_switcher;
 // pub mod tab_persistence;
 pub mod settings;
@@ -34,7 +34,9 @@ mod extension_core_contract_tests;
 #[cfg(test)]
 mod sidebar_contribution_tests;
 #[cfg(test)]
-mod tab_container_split_tests;
+mod tab_container_drag_contract_tests;
+#[cfg(test)]
+mod tab_container_external_drag_contract_tests;
 #[cfg(test)]
 mod tab_content_contract_tests;
 
