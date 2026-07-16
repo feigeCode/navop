@@ -10,13 +10,12 @@ use db::{DbNode, DbNodeType, GlobalDbState, ObjectView, ObjectViewColumn};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ListSizingBehavior, MouseButton, MouseDownEvent,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    WeakEntity, Window, div, px, uniform_list,
+    HighlightStyle, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
+    MouseDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    StyledText, Subscription, WeakEntity, Window, div, px, uniform_list,
 };
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::label::Label;
 use gpui_component::notification::Notification;
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, Size, h_flex, table::Column, tooltip::Tooltip, v_flex,
@@ -43,6 +42,52 @@ fn format_timestamp(ts: i64) -> String {
     } else {
         "".to_string()
     }
+}
+
+pub(crate) fn object_name_highlight_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let text_lower = text.to_lowercase();
+    let query_lower = query.to_lowercase();
+    let mut ranges = Vec::new();
+    let mut search_start = 0;
+
+    while let Some(offset) = text_lower[search_start..].find(&query_lower) {
+        let start = search_start + offset;
+        let end = start + query_lower.len();
+        if text.is_char_boundary(start) && text.is_char_boundary(end) {
+            ranges.push(start..end);
+        }
+        search_start = end;
+    }
+
+    ranges
+}
+
+fn render_object_name_text(cell_value: String, search_query: &str, cx: &App) -> AnyElement {
+    if search_query.is_empty() {
+        return div().child(cell_value).into_any_element();
+    }
+
+    let text = SharedString::from(cell_value);
+    let highlights = object_name_highlight_ranges(&text, search_query)
+        .into_iter()
+        .map(|range| {
+            (
+                range,
+                HighlightStyle {
+                    color: Some(cx.theme().blue),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+
+    div()
+        .child(StyledText::new(&text).with_highlights(highlights))
+        .into_any_element()
 }
 
 /// 数据库对象面板事件 - 统一的表格交互事件
@@ -818,16 +863,11 @@ impl DatabaseObjects {
             let tooltip_text = cell_value.clone();
             let cell = if col_ix == 0 {
                 let icon = get_icon_for_node_type(&args.db_node_type, cx.theme()).color();
-                let label = if args.search_query.is_empty() {
-                    Label::new(cell_value)
-                } else {
-                    Label::new(cell_value).highlights(args.search_query.to_string())
-                };
                 h_flex()
                     .gap_2()
                     .items_center()
                     .child(icon)
-                    .child(label)
+                    .child(render_object_name_text(cell_value, args.search_query, cx))
                     .into_any_element()
             } else {
                 div().child(cell_value).into_any_element()

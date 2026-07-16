@@ -1501,6 +1501,18 @@ ORDER BY name;"#
         )
     }
 
+    fn drop_view(&self, database: &str, view: &str) -> String {
+        let view = self.quote_identifier(view);
+        if database.trim().is_empty() {
+            return format!("DROP VIEW IF EXISTS {view}");
+        }
+
+        format!(
+            "DROP VIEW IF EXISTS {}.{view}",
+            self.quote_identifier(database)
+        )
+    }
+
     fn build_backup_table_sql(
         &self,
         database: &str,
@@ -1839,8 +1851,7 @@ mod tests {
     fn test_drop_view() {
         let plugin = create_plugin();
         let sql = plugin.drop_view("test_db", "my_view");
-        assert!(sql.contains("DROP VIEW"));
-        assert!(sql.contains("`my_view`"));
+        assert_eq!("DROP VIEW IF EXISTS `test_db`.`my_view`", sql);
     }
 
     #[test]
