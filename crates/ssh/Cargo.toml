@@ -17,5 +17,8 @@ russh.workspace = true
 # Proxy support
 tokio-socks.workspace = true
 
+[dev-dependencies]
+rand_010 = { package = "rand", version = "0.10" }
+
 [lints]
 workspace = true

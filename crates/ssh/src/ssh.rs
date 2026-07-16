@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,6 +23,38 @@ pub mod defaults {
     pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
     /// 连续 N 次 keepalive 无响应才认为断开，总等待 = INTERVAL * MAX。
     pub const KEEPALIVE_MAX: usize = 6;
+}
+
+/// 保留 russh 的现代算法优先级，并在扩展标记前追加必要的透明兼容回退。
+///
+/// `group1-sha1` 与 `group-exchange-sha1` 风险更高，不应随兼容回退一起开放。
+fn build_client_preferred_algorithms() -> Preferred {
+    let mut preferred = Preferred::default();
+    let mut kex = preferred.kex.into_owned();
+    let extension_start = kex
+        .iter()
+        .position(|name| {
+            matches!(
+                *name,
+                kex::EXTENSION_SUPPORT_AS_CLIENT
+                    | kex::EXTENSION_SUPPORT_AS_SERVER
+                    | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT
+                    | kex::EXTENSION_OPENSSH_STRICT_KEX_AS_SERVER
+            )
+        })
+        .unwrap_or(kex.len());
+
+    kex.splice(
+        extension_start..extension_start,
+        [
+            kex::ECDH_SHA2_NISTP256,
+            kex::ECDH_SHA2_NISTP384,
+            kex::ECDH_SHA2_NISTP521,
+            kex::DH_G14_SHA1,
+        ],
+    );
+    preferred.kex = Cow::Owned(kex);
+    preferred
 }
 
 /// 远端 shell integration 安装后采集的"会话信息"。
@@ -1311,6 +1344,7 @@ impl SshClient for RusshClient {
     async fn connect(config: SshConnectConfig) -> Result<Self> {
         let connect_timeout = config.timeout;
         let russh_config = Arc::new(client::Config {
+            preferred: build_client_preferred_algorithms(),
             inactivity_timeout: Some(defaults::INACTIVITY_TIMEOUT),
             keepalive_interval: config
                 .keepalive_interval
@@ -1483,7 +1517,128 @@ fn normalize_disconnect_result(
 
 #[cfg(test)]
 mod port_forward_tests {
-    use super::{build_local_forward_bind_addr, normalize_disconnect_result};
+    use std::borrow::Cow;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use russh::server::{Auth, Server as _};
+    use tokio::net::TcpListener;
+
+    use super::{
+        Algorithm, Preferred, PrivateKey, RusshClient, SshAuth, SshClient, SshConnectConfig,
+        build_client_preferred_algorithms, build_local_forward_bind_addr,
+        normalize_disconnect_result,
+    };
+
+    #[derive(Clone)]
+    struct CompatibilityTestServer;
+
+    impl russh::server::Server for CompatibilityTestServer {
+        type Handler = Self;
+
+        fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self::Handler {
+            self.clone()
+        }
+    }
+
+    impl russh::server::Handler for CompatibilityTestServer {
+        type Error = anyhow::Error;
+
+        async fn auth_password(&mut self, _: &str, _: &str) -> Result<Auth, Self::Error> {
+            Ok(Auth::Accept)
+        }
+    }
+
+    fn kex_names() -> Vec<String> {
+        build_client_preferred_algorithms()
+            .kex
+            .iter()
+            .map(|name| name.as_ref().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn client_kex_keeps_modern_algorithms_ahead_of_compatibility_fallbacks() {
+        let names = kex_names();
+        let curve25519 = names
+            .iter()
+            .position(|name| name == "curve25519-sha256")
+            .expect("modern curve25519 KEX should remain enabled");
+        let nistp256 = names
+            .iter()
+            .position(|name| name == "ecdh-sha2-nistp256")
+            .expect("NIST ECDH compatibility KEX should be enabled");
+        let group14_sha1 = names
+            .iter()
+            .position(|name| name == "diffie-hellman-group14-sha1")
+            .expect("group14 SHA-1 fallback should be enabled");
+
+        assert!(curve25519 < nistp256);
+        assert!(nistp256 < group14_sha1);
+    }
+
+    #[test]
+    fn client_kex_does_not_enable_high_risk_group1_sha1() {
+        assert!(
+            !kex_names()
+                .iter()
+                .any(|name| name == "diffie-hellman-group1-sha1")
+        );
+    }
+
+    async fn assert_client_connects_to_server_with_only(kex: russh::kex::Name) {
+        let socket = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("compatibility test server should bind");
+        let address = socket
+            .local_addr()
+            .expect("compatibility test server should have an address");
+        let server_config = Arc::new(russh::server::Config {
+            auth_rejection_time: Duration::ZERO,
+            auth_rejection_time_initial: Some(Duration::ZERO),
+            keys: vec![
+                PrivateKey::random(&mut rand_010::rng(), Algorithm::Ed25519)
+                    .expect("test host key should be generated"),
+            ],
+            preferred: Preferred {
+                kex: Cow::Owned(vec![kex]),
+                ..Preferred::default()
+            },
+            ..Default::default()
+        });
+
+        let server_task = tokio::spawn(async move {
+            let mut server = CompatibilityTestServer;
+            server.run_on_socket(server_config, &socket).await
+        });
+        let config = SshConnectConfig {
+            host: address.ip().to_string(),
+            port: address.port(),
+            username: "tester".to_string(),
+            auth: SshAuth::Password("password".to_string()),
+            timeout: Some(Duration::from_secs(5)),
+            keepalive_interval: None,
+            keepalive_max: None,
+            jump_server: None,
+            proxy: None,
+            keyboard_interactive_responder: None,
+        };
+
+        let result = RusshClient::connect(config).await;
+        server_task.abort();
+
+        result.expect("client should negotiate the server's compatibility KEX");
+    }
+
+    #[tokio::test]
+    async fn client_negotiates_nist_ecdh_compatibility_kex() {
+        assert_client_connects_to_server_with_only(russh::kex::ECDH_SHA2_NISTP256).await;
+    }
+
+    #[tokio::test]
+    async fn client_falls_back_to_group14_sha1_when_it_is_the_only_server_kex() {
+        assert_client_connects_to_server_with_only(russh::kex::DH_G14_SHA1).await;
+    }
 
     #[test]
     fn local_forward_bind_addr_uses_requested_host_and_port() {
