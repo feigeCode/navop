@@ -279,6 +279,24 @@ pub fn can_edit_connection(conn: &StoredConnection, cx: &App) -> bool {
     false
 }
 
+/// 使用已加载到 UI 状态中的团队缓存判断连接编辑权限。
+pub fn can_edit_connection_with_cached_teams(
+    team_id: Option<&str>,
+    teams: &[TeamOption],
+    current_user_present: bool,
+) -> bool {
+    let Some(team_id) = team_id else {
+        return true;
+    };
+    if !current_user_present {
+        return false;
+    }
+    teams
+        .iter()
+        .find(|team| team.id == team_id)
+        .is_some_and(|team| team_membership_can_edit(team.membership_state, team.role.as_deref()))
+}
+
 fn role_can_edit_team_connection(role: Option<&str>) -> bool {
     matches!(role, Some("owner" | "admin"))
 }
@@ -290,8 +308,9 @@ fn team_membership_can_edit(state: TeamMembershipState, role: Option<&str>) -> b
 #[cfg(test)]
 mod tests {
     use super::{
-        get_cached_team_display_options_for_scope, get_cached_team_options_for_scope,
-        role_can_edit_team_connection, team_membership_can_edit, team_option_from_cache,
+        can_edit_connection_with_cached_teams, get_cached_team_display_options_for_scope,
+        get_cached_team_options_for_scope, role_can_edit_team_connection, team_membership_can_edit,
+        team_option_from_cache,
     };
     use crate::cloud_sync::team_key_envelope::{TeamKeyKdfParams, create_team_key_envelope};
     use crate::cloud_sync::{CloudAccountScope, TeamKeyCacheStatus};
@@ -362,6 +381,45 @@ mod tests {
         assert!(!team_membership_can_edit(
             TeamMembershipState::Unknown,
             Some("owner")
+        ));
+    }
+
+    #[test]
+    fn cached_team_options_drive_connection_edit_permissions() {
+        let admin_team = team_option_from_cache(membership(), None);
+        let mut member_team = admin_team.clone();
+        member_team.id = "team-2".to_string();
+        member_team.role = Some("member".to_string());
+        let mut departed_team = admin_team.clone();
+        departed_team.id = "team-3".to_string();
+        departed_team.membership_state = TeamMembershipState::Departed;
+        let teams = vec![admin_team, member_team, departed_team];
+
+        assert!(can_edit_connection_with_cached_teams(None, &teams, false));
+        assert!(can_edit_connection_with_cached_teams(
+            Some("team-1"),
+            &teams,
+            true
+        ));
+        assert!(!can_edit_connection_with_cached_teams(
+            Some("team-1"),
+            &teams,
+            false
+        ));
+        assert!(!can_edit_connection_with_cached_teams(
+            Some("team-2"),
+            &teams,
+            true
+        ));
+        assert!(!can_edit_connection_with_cached_teams(
+            Some("team-3"),
+            &teams,
+            true
+        ));
+        assert!(!can_edit_connection_with_cached_teams(
+            Some("missing"),
+            &teams,
+            true
         ));
     }
 

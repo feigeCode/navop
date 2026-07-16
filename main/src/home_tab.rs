@@ -25,12 +25,13 @@ use gpui_component::{
 use mongodb_view::{MongoFormWindow, MongoFormWindowConfig};
 use one_core::cloud_sync::{
     CloudAccountScope, CloudApiClient, CloudSyncService, ConflictResolution, SyncConflict,
-    SyncEngine, TeamOption, UserInfo, can_edit_connection,
+    SyncEngine, TeamOption, UserInfo, can_edit_connection_with_cached_teams,
     get_cached_team_display_options_for_scope, get_cached_team_options,
 };
 use one_core::config::{team_management_url_template, website_base_url};
 use one_core::connection_notifier::{ConnectionDataEvent, emit_connection_event, get_notifier};
 use one_core::crypto;
+use one_core::gpui_tokio::Tokio;
 use one_core::key_storage;
 use one_core::keybindings::{action_id, rebind_keybindings, shortcuts_for};
 use one_core::license::Feature;
@@ -391,6 +392,74 @@ mod external_driver_form_tests {
         assert!(card.contains("conn-team-"));
     }
 
+    #[test]
+    fn connection_hover_actions_have_stable_ids() {
+        let source = include_str!("home_tab.rs");
+        let list_item = source
+            .rsplit("fn render_connection_list_item(")
+            .next()
+            .expect("render_connection_list_item exists")
+            .split("\n    fn connection_info_text(")
+            .next()
+            .expect("list item render has an end marker");
+        let card = source
+            .rsplit("fn render_connection_card(")
+            .next()
+            .expect("render_connection_card exists")
+            .split("impl Focusable for HomePage")
+            .next()
+            .expect("card render has an end marker");
+
+        assert!(list_item.contains("conn-list-actions-{}"));
+        assert!(card.contains("conn-card-actions-{}"));
+    }
+
+    #[test]
+    fn home_blocking_work_is_dispatched_off_the_gpui_foreground() {
+        let source = include_str!("home_tab.rs");
+        let load_workspaces = source
+            .rsplit("fn load_workspaces(")
+            .next()
+            .expect("load_workspaces exists")
+            .split("fn load_connections(")
+            .next()
+            .expect("load_workspaces has an end marker");
+        let trigger_sync = source
+            .rsplit("fn trigger_sync(")
+            .next()
+            .expect("trigger_sync exists")
+            .split("fn show_conflict_dialog(")
+            .next()
+            .expect("trigger_sync has an end marker");
+        let resolve_conflicts = source
+            .rsplit("fn resolve_conflicts_individually(")
+            .next()
+            .expect("resolve_conflicts_individually exists")
+            .split("fn try_restore_session(")
+            .next()
+            .expect("resolve_conflicts_individually has an end marker");
+
+        assert!(load_workspaces.contains("cx.background_spawn"));
+        assert!(trigger_sync.contains("Tokio::spawn"));
+        assert!(resolve_conflicts.contains("Tokio::spawn"));
+        assert!(!trigger_sync.contains("self.log_sync_decrypt_health"));
+    }
+
+    #[test]
+    fn connection_render_uses_cached_team_permissions() {
+        let source = include_str!("home_tab.rs");
+        let render_functions = source
+            .rsplit("fn render_connection_list_item(")
+            .next()
+            .expect("render_connection_list_item exists")
+            .split("impl Focusable for HomePage")
+            .next()
+            .expect("connection render functions have an end marker");
+
+        assert!(render_functions.contains("can_edit_connection_with_cached_teams"));
+        assert!(!render_functions.contains("can_edit_connection(&conn, cx)"));
+    }
+
     fn stored_external_connection(driver_id: &str) -> StoredConnection {
         StoredConnection::new_database(
             "demo".to_string(),
@@ -627,7 +696,7 @@ mod external_driver_form_tests {
             .rsplit("fn trigger_sync(")
             .next()
             .expect("trigger_sync exists")
-            .split("fn log_sync_decrypt_health")
+            .split("fn show_conflict_dialog")
             .next()
             .expect("trigger_sync has an end marker");
 
@@ -872,24 +941,24 @@ impl HomePage {
 
     fn load_workspaces(&mut self, cx: &mut Context<Self>) {
         let storage = cx.global::<GlobalStorageState>().storage.clone();
-        cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let result = (|| {
+        let load_task = cx.background_spawn(async move {
+            (|| {
                 let repo = storage
                     .get::<WorkspaceRepository>()
                     .ok_or_else(|| anyhow::anyhow!("WorkspaceRepository not found"))?;
                 repo.list()
-            })();
+            })()
+        });
 
-            match result {
-                Ok(workspaces) => {
-                    _ = this.update(cx, |this, cx| {
-                        this.workspaces = workspaces;
-                        cx.notify();
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("Task join error: {}", e);
-                }
+        cx.spawn(async move |this, cx: &mut AsyncApp| match load_task.await {
+            Ok(workspaces) => {
+                _ = this.update(cx, |this, cx| {
+                    this.workspaces = workspaces;
+                    cx.notify();
+                });
+            }
+            Err(e) => {
+                tracing::error!("Task join error: {}", e);
             }
         })
         .detach();
@@ -1064,9 +1133,6 @@ impl HomePage {
             return;
         }
 
-        let storage = cx.global::<GlobalStorageState>().storage.clone();
-        self.log_sync_decrypt_health(&storage, "常规同步");
-
         if self.syncing {
             self.sync_requested = true;
             return;
@@ -1079,6 +1145,7 @@ impl HomePage {
 
         let cloud_client = self.auth_service.cloud_client();
         let sync_service = self.cloud_sync_service.clone();
+        let storage = cx.global::<GlobalStorageState>().storage.clone();
 
         if let Some(user) = &self.current_user {
             if let Ok(mut service) = sync_service.write() {
@@ -1090,9 +1157,13 @@ impl HomePage {
 
         // 创建同步引擎
         let engine = SyncEngine::new(cloud_client, sync_service, storage);
+        let sync_task = Tokio::spawn(cx, async move { engine.sync().await });
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
-            let result = engine.sync().await;
+            let result = match sync_task.await {
+                Ok(result) => result.map_err(|error| error.to_string()),
+                Err(error) => Err(format!("云同步任务执行失败: {error}")),
+            };
 
             _ = this.update(cx, |this, cx| {
                 this.syncing = false;
@@ -1127,7 +1198,7 @@ impl HomePage {
                     }
                     Err(e) => {
                         tracing::error!("同步失败: {}", e);
-                        this.cloud_error = Some(e.to_string());
+                        this.cloud_error = Some(e);
                     }
                 }
                 if sync_requested && this.pending_conflicts.is_empty() && this.cloud_error.is_none()
@@ -1141,37 +1212,6 @@ impl HomePage {
             });
         })
         .detach();
-    }
-
-    /// 同步前记录本地连接解密状态，用于提示哪些连接会被引擎按连接粒度跳过。
-    fn log_sync_decrypt_health(&self, storage: &one_core::storage::StorageManager, scene: &str) {
-        if let Some(repo) = storage.get::<ConnectionRepository>() {
-            match repo.list_sync_decrypt_failures() {
-                Ok(failures) if !failures.is_empty() => {
-                    let preview = failures
-                        .iter()
-                        .take(5)
-                        .map(|(id, name)| format!("{}:{}", id, name))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    tracing::warn!(
-                        "{}检测到 {} 个连接解密失败：将由同步引擎跳过这些连接，其它连接继续同步和拉取。失败连接: {}",
-                        scene,
-                        failures.len(),
-                        preview
-                    );
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!("{}前解密状态检查失败，将继续执行同步流程: {}", scene, e);
-                }
-            }
-        } else {
-            tracing::warn!(
-                "{}前解密状态检查失败：ConnectionRepository 不存在，将继续执行同步流程",
-                scene
-            );
-        }
     }
 
     /// 显示冲突解决对话框
@@ -1270,7 +1310,6 @@ impl HomePage {
         }
 
         let storage = cx.global::<GlobalStorageState>().storage.clone();
-        self.log_sync_decrypt_health(&storage, "单独冲突解决");
         self.syncing = true;
         self.sync_requested = false;
         self.cloud_error = None;
@@ -1278,12 +1317,17 @@ impl HomePage {
 
         // 创建同步引擎
         let engine = SyncEngine::new(cloud_client, sync_service, storage);
+        let resolution_task = Tokio::spawn(cx, async move {
+            engine
+                .apply_conflict_resolutions(conflicts, strategies)
+                .await
+        });
 
         cx.spawn(async move |this, cx: &mut AsyncApp| {
-            // 使用策略映射应用冲突解决方案
-            let result = engine
-                .apply_conflict_resolutions(conflicts, strategies)
-                .await;
+            let result = match resolution_task.await {
+                Ok(result) => result.map_err(|error| error.to_string()),
+                Err(error) => Err(format!("冲突解决任务执行失败: {error}")),
+            };
 
             _ = this.update(cx, |this, cx| {
                 this.syncing = false;
@@ -1301,7 +1345,7 @@ impl HomePage {
                     }
                     Err(e) => {
                         tracing::error!("冲突解决失败: {}", e);
-                        this.cloud_error = Some(e.to_string());
+                        this.cloud_error = Some(e);
                     }
                 }
                 if sync_requested && this.pending_conflicts.is_empty() && this.cloud_error.is_none()
@@ -3686,7 +3730,11 @@ impl HomePage {
         let is_active = conn
             .id
             .map_or(false, |id| cx.global::<ActiveConnections>().is_active(id));
-        let can_edit = can_edit_connection(&conn, cx);
+        let can_edit = can_edit_connection_with_cached_teams(
+            conn.team_id.as_deref(),
+            &self.team_options,
+            self.current_user.is_some(),
+        );
         let team_badge = connection_team_badge(conn.team_id.as_deref(), &self.team_options);
 
         h_flex()
@@ -3847,6 +3895,10 @@ impl HomePage {
                             })
                             .child({
                                 h_flex()
+                                    .id(SharedString::from(format!(
+                                        "conn-list-actions-{}",
+                                        conn.id.unwrap_or(0)
+                                    )))
                                     .gap_1()
                                     .w(HOME_CONNECTION_LIST_ACTIONS_WIDTH)
                                     .flex_shrink_0()
@@ -4116,7 +4168,11 @@ impl HomePage {
             .id
             .map_or(false, |id| cx.global::<ActiveConnections>().is_active(id));
 
-        let can_edit = can_edit_connection(&conn, cx);
+        let can_edit = can_edit_connection_with_cached_teams(
+            conn.team_id.as_deref(),
+            &self.team_options,
+            self.current_user.is_some(),
+        );
         let team_badge = connection_team_badge(conn.team_id.as_deref(), &self.team_options);
         let card = v_flex()
             .justify_center()
@@ -4210,6 +4266,10 @@ impl HomePage {
             .child(
                 // hover时显示的编辑和删除按钮
                 h_flex()
+                    .id(SharedString::from(format!(
+                        "conn-card-actions-{}",
+                        conn.id.unwrap_or(0)
+                    )))
                     .absolute()
                     .top_2()
                     .right_2()
