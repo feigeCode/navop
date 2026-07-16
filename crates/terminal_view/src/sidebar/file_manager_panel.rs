@@ -575,6 +575,10 @@ fn build_rename_target_path(old_path: &str, new_name: &str) -> String {
     join_remote_path(&parent, new_name)
 }
 
+fn build_new_file_target_path(current_path: &str, file_name: &str) -> String {
+    join_remote_path(current_path, file_name)
+}
+
 fn build_remote_extract_command(
     path: &str,
     name: &str,
@@ -2782,6 +2786,89 @@ impl FileManagerPanel {
         });
     }
 
+    fn show_new_file_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("FileManager.new_file_placeholder"))
+        });
+        let view = cx.entity().downgrade();
+
+        input.update(cx, |state, cx| {
+            state.focus(window, cx);
+        });
+
+        window.open_dialog(cx, move |dialog, _window, _cx| {
+            let view_clone = view.clone();
+            let input_for_callback = input.clone();
+
+            dialog
+                .title(t!("FileManager.new_file").to_string())
+                .w(px(360.))
+                .child(Input::new(&input))
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(t!("Common.create").to_string())
+                        .cancel_text(t!("Common.cancel").to_string()),
+                )
+                .on_ok(move |_, window, cx| {
+                    let file_name = input_for_callback.read(cx).text().to_string();
+                    let file_name = file_name.trim().to_string();
+                    if file_name.is_empty() {
+                        return false;
+                    }
+                    if !is_valid_entry_name(&file_name) {
+                        window.push_notification(
+                            Notification::error(t!("FileManager.invalid_name")),
+                            cx,
+                        );
+                        return false;
+                    }
+
+                    let _ = view_clone.update(cx, |this, cx| {
+                        let Some(client) = this.sftp_client.clone() else {
+                            return;
+                        };
+
+                        let remote_path =
+                            build_new_file_target_path(&this.current_path, &file_name);
+                        let task = Tokio::spawn(cx, async move {
+                            let mut client = client.lock().await;
+                            client.write_file(&remote_path, &[]).await
+                        });
+
+                        let view = cx.entity().clone();
+                        window
+                            .spawn(cx, async move |cx| match task.await {
+                                Ok(Ok(_)) => {
+                                    let _ = view.update_in(cx, |this, window, cx| {
+                                        window.close_dialog(cx);
+                                        this.refresh_dir(cx);
+                                    });
+                                }
+                                Ok(Err(error)) => {
+                                    let message =
+                                        t!("FileManager.create_file_failed", error = error)
+                                            .to_string();
+                                    let _ = view.update_in(cx, |_this, window, cx| {
+                                        window.push_notification(Notification::error(message), cx);
+                                    });
+                                }
+                                Err(error) => {
+                                    let message =
+                                        t!("FileManager.create_file_failed", error = error)
+                                            .to_string();
+                                    let _ = view.update_in(cx, |_this, window, cx| {
+                                        window.push_notification(Notification::error(message), cx);
+                                    });
+                                }
+                            })
+                            .detach();
+                    });
+                    false
+                })
+        });
+    }
+
     fn rename_item(
         &mut self,
         name: String,
@@ -3434,6 +3521,16 @@ impl FileManagerPanel {
                             .tooltip(t!("FileManager.upload_file"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.select_and_upload_files(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("fm-new-file")
+                            .ghost()
+                            .small()
+                            .icon(IconName::File)
+                            .tooltip(t!("FileManager.new_file"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.show_new_file_dialog(window, cx);
                             })),
                     )
                     .child(
@@ -4822,8 +4919,8 @@ impl Render for FileManagerPanel {
 mod tests {
     use super::{
         ConnectionState, NavigationRecoveryPlan, build_navigation_recovery_plan,
-        build_retry_reset_plan, clear_remote_listing_state, frame_move_options,
-        should_apply_directory_result, should_refresh_after_upload,
+        build_new_file_target_path, build_retry_reset_plan, clear_remote_listing_state,
+        frame_move_options, should_apply_directory_result, should_refresh_after_upload,
     };
     use one_core::sidebar_contribution::SidebarPlacement;
     use std::collections::HashSet;
@@ -5076,6 +5173,26 @@ mod tests {
             "/renamed.log",
             super::build_rename_target_path("/old.log", "renamed.log")
         );
+    }
+
+    #[test]
+    fn build_new_file_target_path_keeps_current_directory() {
+        assert_eq!(
+            "/srv/app/new.log",
+            super::build_new_file_target_path("/srv/app", "new.log")
+        );
+        assert_eq!(
+            "/new.log",
+            super::build_new_file_target_path("/", "new.log")
+        );
+    }
+
+    #[test]
+    fn new_file_names_reject_path_traversal_and_special_entries() {
+        assert!(super::is_valid_entry_name("notes.txt"));
+        assert!(!super::is_valid_entry_name("../notes.txt"));
+        assert!(!super::is_valid_entry_name("."));
+        assert!(!super::is_valid_entry_name(""));
     }
 
     #[test]

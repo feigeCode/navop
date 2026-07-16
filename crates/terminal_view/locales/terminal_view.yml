@@ -1381,6 +1381,10 @@ FileManager:
     en: New Folder
     zh-CN: 新建文件夹
     zh-HK: 新建文件夾
+  new_file:
+    en: New File
+    zh-CN: 新建文件
+    zh-HK: 新建文件
   upload_folder:
     en: Upload Folder
     zh-CN: 上传文件夹
@@ -1389,6 +1393,10 @@ FileManager:
     en: Enter folder name
     zh-CN: 输入文件夹名称
     zh-HK: 輸入文件夾名稱
+  new_file_placeholder:
+    en: Enter file name
+    zh-CN: 输入文件名称
+    zh-HK: 輸入文件名稱
   select_upload_files:
     en: Select files to upload
     zh-CN: 选择要上传的文件
@@ -1437,6 +1445,10 @@ FileManager:
     en: "Failed to create folder: %{error}"
     zh-CN: "创建文件夹失败: %{error}"
     zh-HK: "建立文件夾失敗: %{error}"
+  create_file_failed:
+    en: "Failed to create file: %{error}"
+    zh-CN: "创建文件失败: %{error}"
+    zh-HK: "建立文件失敗: %{error}"
 
 Dialog:
   file_conflict:

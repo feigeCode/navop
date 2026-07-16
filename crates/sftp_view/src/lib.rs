@@ -4677,6 +4677,16 @@ impl SftpView {
                                     })),
                             )
                             .child(
+                                Button::new("local_new_file")
+                                    .icon(IconName::File)
+                                    .ghost()
+                                    .small()
+                                    .tooltip(t!("File.new_file"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.create_new_file(PanelSide::Local, window, cx);
+                                    })),
+                            )
+                            .child(
                                 Button::new("local_new_folder")
                                     .icon(IconName::NewFolder)
                                     .ghost()
@@ -4850,6 +4860,17 @@ impl SftpView {
                                     .disabled(!has_selection || !is_connected)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.download_selected(window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("remote_new_file")
+                                    .icon(IconName::File)
+                                    .ghost()
+                                    .small()
+                                    .tooltip(t!("File.new_file"))
+                                    .disabled(!is_connected)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.create_new_file(PanelSide::Remote, window, cx);
                                     })),
                             )
                             .child(
@@ -5129,7 +5150,10 @@ impl Render for SftpView {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_apply_local_listing, should_apply_remote_listing};
+    use super::{
+        is_valid_entry_name, join_remote_path, should_apply_local_listing,
+        should_apply_remote_listing,
+    };
     use std::path::Path;
 
     #[test]
@@ -5148,6 +5172,20 @@ mod tests {
             Path::new("/tmp/b"),
             Path::new("/tmp/a")
         ));
+    }
+
+    #[test]
+    fn new_file_target_path_keeps_current_directory() {
+        assert_eq!("/srv/app/new.log", join_remote_path("/srv/app", "new.log"));
+        assert_eq!("/new.log", join_remote_path("/", "new.log"));
+    }
+
+    #[test]
+    fn new_file_names_reject_path_traversal_and_special_entries() {
+        assert!(is_valid_entry_name("notes.txt"));
+        assert!(!is_valid_entry_name("../notes.txt"));
+        assert!(!is_valid_entry_name("."));
+        assert!(!is_valid_entry_name(""));
     }
 
     #[test]
