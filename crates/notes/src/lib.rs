@@ -4,6 +4,7 @@ mod document_index;
 mod document_persistence;
 mod markdown_adapter;
 mod markdown_file_store;
+mod markdown_notifications;
 mod markdown_persistence;
 mod markdown_render;
 mod markdown_session;

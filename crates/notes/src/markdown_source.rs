@@ -24,13 +24,13 @@ pub(crate) fn subscribe_source_changes(
     window: &mut Window,
     cx: &mut Context<NotesView>,
 ) -> Subscription {
-    cx.subscribe_in(input, window, move |_view, input, event, _window, cx| {
+    cx.subscribe_in(input, window, move |_view, input, event, window, cx| {
         if !matches!(event, InputEvent::Change) {
             return;
         }
         let source = input.read(cx).value().to_string();
         let _ = view.update(cx, |view, cx| {
-            view.markdown_source_changed(&document_id, source, cx);
+            view.markdown_source_changed(&document_id, source, window, cx);
         });
     })
 }

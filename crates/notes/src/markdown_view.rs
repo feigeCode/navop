@@ -1,12 +1,12 @@
 use crate::markdown_adapter::{
     apply_markdown_source, build_markdown_projection, export_markdown_strict,
 };
-use crate::markdown_file_store::{MarkdownFileStore, MarkdownSaveOutcome};
+use crate::markdown_file_store::MarkdownFileStore;
 use crate::markdown_session::{MarkdownSession, MarkdownSessionState, MarkdownSyncState};
 use crate::markdown_source::{create_source_editor, subscribe_source_changes};
 use crate::path_policy::remap_path;
 use crate::{DocumentDescriptor, MarkdownViewMode, NotesView};
-use gpui::{AppContext, Context, Window};
+use gpui::{AppContext, AsyncApp, Context, Window};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -30,6 +30,7 @@ impl NotesView {
             let source_editor = create_source_editor(&snapshot.source, window, cx);
             let projection =
                 build_markdown_projection(&document_id, &snapshot.source, store.clone(), cx)?;
+            self.observe_markdown_events(projection.events, window, cx);
             let subscription = subscribe_source_changes(
                 &source_editor,
                 document_id.clone(),
@@ -74,6 +75,7 @@ impl NotesView {
         &mut self,
         document_id: &str,
         source: String,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(session) = self.markdown_sessions.get_mut(document_id) else {
@@ -85,6 +87,7 @@ impl NotesView {
         let store = session.store.clone();
         let generation_token = session.save_generation.clone();
         let weak = cx.entity().downgrade();
+        let window_handle = window.window_handle();
         let id = document_id.to_owned();
         let executor = cx.background_executor().clone();
         let task = cx.background_spawn(async move {
@@ -94,42 +97,15 @@ impl NotesView {
             }
             store.save(&source).map(Some)
         });
-        cx.spawn(async move |_, cx| {
+        cx.spawn(async move |_, cx: &mut AsyncApp| {
             let result = task.await;
-            let _ = weak.update(cx, |view, cx| {
-                view.finish_markdown_save(&id, generation, result, cx)
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+                let _ = weak.update(cx, |view, cx| {
+                    view.finish_markdown_save(&id, generation, result, window, cx)
+                });
             });
         })
         .detach();
-        cx.notify();
-    }
-
-    fn finish_markdown_save(
-        &mut self,
-        document_id: &str,
-        generation: u64,
-        result: anyhow::Result<Option<MarkdownSaveOutcome>>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(session) = self.markdown_sessions.get_mut(document_id) else {
-            return;
-        };
-        match result {
-            Ok(Some(MarkdownSaveOutcome::Saved(_))) => {
-                session.state.source_saved(generation);
-            }
-            Ok(Some(MarkdownSaveOutcome::Conflict(_))) => {
-                session.state.conflict();
-                self.error = Some("Markdown 文件已被外部修改，请重新加载后再保存".into());
-            }
-            Ok(None) => {}
-            Err(error) => {
-                session
-                    .state
-                    .source_save_failed(generation, error.to_string());
-                self.error = Some(format!("保存 Markdown 失败：{error}").into());
-            }
-        }
         cx.notify();
     }
 
@@ -144,7 +120,7 @@ impl NotesView {
             return;
         };
         if let Some(source) = source_commit {
-            self.markdown_source_changed(&document_id, source, cx);
+            self.markdown_source_changed(&document_id, source, window, cx);
         }
         self.tree.markdown_view_modes.insert(document_id, mode);
         if let Err(error) = self

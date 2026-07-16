@@ -5,3 +5,35 @@ Notes:
     en: Notes
     zh-CN: 笔记
     zh-HK: 筆記
+  markdown_source:
+    en: Source
+    zh-CN: 源码
+    zh-HK: 原始碼
+  markdown_confirm_adjustment:
+    en: Confirm changes and edit
+    zh-CN: 确认调整并编辑
+    zh-HK: 確認調整並編輯
+  markdown_waiting_autosave:
+    en: Waiting to save...
+    zh-CN: 等待自动保存…
+    zh-HK: 等待自動保存…
+  markdown_saving:
+    en: Saving…
+    zh-CN: 正在保存…
+    zh-HK: 正在保存…
+  markdown_adjustment_required:
+    en: Confirm formatting changes before editing (%{count} notice(s))
+    zh-CN: 切换编辑前需要确认格式调整（%{count} 项提示）
+    zh-HK: 切換編輯前需要確認格式調整（%{count} 項提示）
+  markdown_source_only:
+    en: This content can only be edited in Source mode (%{count} issue(s))
+    zh-CN: 当前内容只能在源码中编辑（%{count} 项问题）
+    zh-HK: 當前內容只能在原始碼中編輯（%{count} 項問題）
+  markdown_save_failed:
+    en: "Failed to save note: %{error}"
+    zh-CN: 保存笔记失败：%{error}
+    zh-HK: 保存筆記失敗：%{error}
+  markdown_external_change:
+    en: The file was changed by another program and was not overwritten
+    zh-CN: 文件已被其他程序修改，未覆盖
+    zh-HK: 文件已被其他程式修改，未覆蓋

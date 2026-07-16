@@ -8,6 +8,7 @@ use gpui_component::{
     input::Input,
     v_flex,
 };
+use rust_i18n::t;
 
 impl NotesView {
     pub(crate) fn render_markdown_editor(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -48,6 +49,7 @@ impl NotesView {
                 )
         });
         let save_state = session.map(|session| session.preview.save_state(cx));
+        let status = markdown_status(session, mode, save_state.as_ref());
         h_flex()
             .h_9()
             .px_2()
@@ -55,18 +57,17 @@ impl NotesView {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(self.render_source_toggle(document_id, mode, cx))
-            .child(
-                div()
-                    .flex_1()
+            .child(div().flex_1().when_some(status, |status_view, status| {
+                status_view
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(markdown_status(session, mode, save_state.as_ref())),
-            )
+                    .child(status)
+            }))
             .when(needs_acceptance, |toolbar| {
                 let id = document_id.to_owned();
                 toolbar.child(
                     Button::new("accept-markdown-normalization")
-                        .label("允许规范化并编辑")
+                        .label(t!("Notes.markdown_confirm_adjustment").to_string())
                         .small()
                         .on_click(cx.listener(move |view, _, _, cx| {
                             view.accept_markdown_normalization(&id, cx)
@@ -92,7 +93,7 @@ impl NotesView {
                 )
             });
         Button::new("markdown-source-mode")
-            .label("源码")
+            .label(t!("Notes.markdown_source").to_string())
             .small()
             .disabled(disabled)
             .when(mode == MarkdownViewMode::Source, |button| button.primary())
@@ -106,43 +107,50 @@ fn markdown_status(
     session: Option<&crate::markdown_session::MarkdownSession>,
     mode: MarkdownViewMode,
     save_state: Option<&EditorSaveState>,
-) -> String {
+) -> Option<String> {
     if mode == MarkdownViewMode::Source {
         return source_status(session);
     }
-    let Some(session) = session else {
-        return "Markdown projection 不可用".to_owned();
-    };
+    let session = session?;
     match save_state {
-        Some(EditorSaveState::Dirty) => return "等待自动保存…".to_owned(),
-        Some(EditorSaveState::Saving) => return "正在保存 Markdown…".to_owned(),
-        Some(EditorSaveState::SaveFailed { message }) => {
-            return format!("保存失败：{message}");
+        Some(EditorSaveState::Dirty) => {
+            return Some(t!("Notes.markdown_waiting_autosave").to_string());
         }
+        Some(EditorSaveState::Saving) => {
+            return Some(t!("Notes.markdown_saving").to_string());
+        }
+        Some(EditorSaveState::SaveFailed { .. }) => return None,
         _ => {}
     }
     match &session.compatibility {
-        MarkdownCompatibility::Editable => "所见即所得编辑已启用".to_owned(),
+        MarkdownCompatibility::Editable => None,
         MarkdownCompatibility::EditableWithNormalization(_) if session.normalization_accepted => {
-            "已允许规范化，所见即所得编辑已启用".to_owned()
+            None
         }
-        MarkdownCompatibility::EditableWithNormalization(_) => {
-            format!("需确认规范化（{} 项提示）", session.diagnostics.len())
-        }
-        MarkdownCompatibility::SourceOnly(_) => {
-            format!("源码专用，只读预览（{} 项问题）", session.diagnostics.len())
-        }
+        MarkdownCompatibility::EditableWithNormalization(_) => Some(
+            t!(
+                "Notes.markdown_adjustment_required",
+                count = session.diagnostics.len()
+            )
+            .to_string(),
+        ),
+        MarkdownCompatibility::SourceOnly(_) => Some(
+            t!(
+                "Notes.markdown_source_only",
+                count = session.diagnostics.len()
+            )
+            .to_string(),
+        ),
     }
 }
 
-fn source_status(session: Option<&crate::markdown_session::MarkdownSession>) -> String {
+fn source_status(session: Option<&crate::markdown_session::MarkdownSession>) -> Option<String> {
     use crate::markdown_session::MarkdownSyncState;
     match session.map(|session| &session.state.sync_state) {
         Some(MarkdownSyncState::SourceDirty | MarkdownSyncState::SavingSource) => {
-            "正在保存 Markdown…".to_owned()
+            Some(t!("Notes.markdown_saving").to_string())
         }
-        Some(MarkdownSyncState::Conflict) => "外部文件已修改，未覆盖".to_owned(),
-        Some(MarkdownSyncState::Failed(message)) => format!("保存失败：{message}"),
-        _ => "Markdown 文件为唯一真源".to_owned(),
+        Some(MarkdownSyncState::Conflict | MarkdownSyncState::Failed(_)) => None,
+        _ => None,
     }
 }
