@@ -85,7 +85,15 @@ fn render_messages_with_layout(
     let theme = resolve_agent_chat_theme(theme, cx);
     let items: Vec<AnyElement> = message_render_items(messages)
         .into_iter()
-        .map(|item| render_item(item, code_actions, &theme, window, cx))
+        .map(|item| {
+            div()
+                .debug_selector(|| "ai-chat-message-slot".to_string())
+                .min_w_0()
+                .self_stretch()
+                .flex_shrink_0()
+                .child(render_item(item, code_actions, &theme, window, cx))
+                .into_any_element()
+        })
         .collect();
 
     div()
@@ -124,7 +132,8 @@ fn message_column(layout: MessageListLayout) -> Div {
     let column = v_flex()
         .debug_selector(|| "ai-chat-message-column".to_string())
         .w_full()
-        .min_w_0();
+        .min_w_0()
+        .items_stretch();
     match layout {
         MessageListLayout::Centered => column.max_w(px(920.0)).mx_auto(),
         MessageListLayout::EdgeToEdge => column,
