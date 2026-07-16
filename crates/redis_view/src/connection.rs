@@ -17,6 +17,10 @@ const MAX_COLLECTION_ELEMENTS: i64 = 1000;
 const DEFAULT_CONNECTION_TIMEOUT_SECONDS: u64 = 10;
 const DEFAULT_SSH_TIMEOUT_SECONDS: u64 = 30;
 
+fn string_content_from_bytes(value: Option<Vec<u8>>) -> KeyValueContent {
+    KeyValueContent::String(value.unwrap_or_default())
+}
+
 struct ResolvedRedisConnectionTarget {
     host: String,
     port: u16,
@@ -885,7 +889,7 @@ impl RedisConnectionImpl {
             RedisKeyType::String => {
                 let value = redis_client::cmd("GET")
                     .arg(key)
-                    .query_async::<Option<String>>(&mut *conn)
+                    .query_async::<Option<Vec<u8>>>(&mut *conn)
                     .await
                     .map_err(|e| {
                         RedisError::command_with_source(
@@ -893,7 +897,7 @@ impl RedisConnectionImpl {
                             e,
                         )
                     })?;
-                KeyValueContent::String(value.unwrap_or_default())
+                string_content_from_bytes(value)
             }
             RedisKeyType::List => {
                 let value = conn
@@ -1877,6 +1881,15 @@ pub(crate) mod tests {
             "counter".to_string()
         ]));
         assert!(!RedisConnectionImpl::can_retry_raw_command(&[]));
+    }
+
+    #[test]
+    fn string_content_preserves_java_serialized_bytes() {
+        let bytes = vec![0xac, 0xed, 0x00, 0x05, b's', b'r'];
+
+        let content = string_content_from_bytes(Some(bytes.clone()));
+
+        assert!(matches!(content, KeyValueContent::String(value) if value == bytes));
     }
 }
 

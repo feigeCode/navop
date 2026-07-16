@@ -415,6 +415,13 @@
 - **验证方式**：补 contract 测试保证同实体 guard 在首次 `read(cx)` 之前；手工把当前 tab 拖回自己的内容区，确认无 drop overlay、无 panic，再验证拖到另一个 workspace 仍可正常转移。
 - **适用范围**：`crates/terminal_view/src/workspace/tab_drag.rs`，以及所有从 GPUI drag payload、AnyView downcast 或 registry handle 解析实体并读取状态的事件回调。
 
+- **标题**：Redis String 读取链路必须保留原始字节，不能默认按 UTF-8 解码
+- **触发信号**：查看 Java 序列化、Protobuf、MessagePack、压缩内容等 Redis String 值时出现 `Cannot convert from UTF-8`，或为了消除错误而考虑使用 `String::from_utf8_lossy`。
+- **根因 / 约束**：Redis 的 String/Bulk String 是二进制安全字节串，不保证 UTF-8；`query_async::<String>` / `Option<String>` 会在 redis-rs 转换层提前失败，而 lossy 转换会丢失原始字节并可能在保存时破坏数据。
+- **正确做法**：值详情读取使用 `Vec<u8>` 保留原始内容；合法 UTF-8 继续按文本展示和编辑，非法 UTF-8 使用转义 Raw、Hex 或 Binary 展示，并在没有字节安全编辑/写回 contract 时保持只读。原始命令结果同样应映射为显式 Binary 类型。
+- **验证方式**：用 Java 序列化头 `AC ED 00 05` 覆盖连接层原始字节保留、Raw/Hex/Binary 格式化和非 UTF-8 只读保护；同时验证普通中文/JSON 文本仍可正常显示编辑。
+- **适用范围**：`crates/redis_view/src/connection.rs`、`key_value_view.rs`、`types.rs`，以及 Redis String、集合成员、Hash/Stream 字段等所有可能承载二进制 bulk string 的读取链路。
+
 ### 执行原则
 
 1. 先澄清，再实现；先缩小边界，再扩展范围。

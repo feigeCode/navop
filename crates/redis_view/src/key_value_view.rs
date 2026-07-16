@@ -86,6 +86,49 @@ impl SelectItem for ViewFormat {
     }
 }
 
+fn format_redis_string_value(value: &[u8], format: ViewFormat) -> String {
+    match format {
+        ViewFormat::Raw => match std::str::from_utf8(value) {
+            Ok(value) => value.to_string(),
+            Err(_) => escape_binary_redis_string(value),
+        },
+        ViewFormat::Json => match std::str::from_utf8(value) {
+            Ok(value) => match serde_json::from_str::<serde_json::Value>(value) {
+                Ok(value) => {
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string())
+                }
+                Err(_) => value.to_string(),
+            },
+            Err(_) => escape_binary_redis_string(value),
+        },
+        ViewFormat::Hex => value
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+        ViewFormat::Binary => value
+            .iter()
+            .map(|byte| format!("{byte:08b}"))
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
+fn escape_binary_redis_string(value: &[u8]) -> String {
+    value
+        .iter()
+        .map(|byte| match byte {
+            b'\\' => r"\\".to_string(),
+            b' '..=b'~' => char::from(*byte).to_string(),
+            _ => format!("\\x{byte:02x}"),
+        })
+        .collect()
+}
+
+fn is_binary_redis_string(value: &[u8]) -> bool {
+    std::str::from_utf8(value).is_err()
+}
+
 fn large_text_preview_title(label: &str, context: Option<&str>) -> String {
     match context.map(str::trim).filter(|context| !context.is_empty()) {
         Some(context) => format!("{label} {context}"),
@@ -260,7 +303,9 @@ impl KeyValueView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let InputEvent::Change = event {
+        if let InputEvent::Change = event
+            && self.string_value_is_editable()
+        {
             self.is_dirty = true;
             cx.notify();
         }
@@ -449,24 +494,15 @@ impl KeyValueView {
     }
 
     /// 格式化值
-    fn format_value(&self, value: &str) -> String {
-        match self.view_format {
-            ViewFormat::Raw => value.to_string(),
-            ViewFormat::Json => match serde_json::from_str::<serde_json::Value>(value) {
-                Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| value.to_string()),
-                Err(_) => value.to_string(),
-            },
-            ViewFormat::Hex => value
-                .bytes()
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join(" "),
-            ViewFormat::Binary => value
-                .bytes()
-                .map(|b| format!("{:08b}", b))
-                .collect::<Vec<_>>()
-                .join(" "),
-        }
+    fn format_value(&self, value: &[u8]) -> String {
+        format_redis_string_value(value, self.view_format)
+    }
+
+    fn string_value_is_editable(&self) -> bool {
+        matches!(
+            &self.value_content,
+            Some(KeyValueContent::String(value)) if !is_binary_redis_string(value)
+        )
     }
 
     /// 加载键
@@ -502,7 +538,7 @@ impl KeyValueView {
                 match result {
                     Ok(detail) => {
                         if let KeyValueContent::String(ref value) = detail.value {
-                            view.pending_editor_value = Some(value.clone());
+                            view.pending_editor_value = Some(view.format_value(value));
                         }
                         view.key_info = Some(detail.key_info);
                         view.value_content = Some(detail.value);
@@ -521,9 +557,8 @@ impl KeyValueView {
     /// 在 render 中应用待设置的编辑器值
     fn apply_pending_editor_value(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(value) = self.pending_editor_value.take() {
-            let formatted = self.format_value(&value);
             self.string_editor.update(cx, |state, cx| {
-                state.set_value(formatted, window, cx);
+                state.set_value(value, window, cx);
             });
         }
     }
@@ -569,6 +604,7 @@ impl KeyValueView {
             RedisKeyType::List | RedisKeyType::Set | RedisKeyType::ZSet | RedisKeyType::Hash
         );
         let is_string = matches!(key_type, RedisKeyType::String);
+        let is_string_editable = self.string_value_is_editable();
         let is_zset = matches!(key_type, RedisKeyType::ZSet);
         let zset_sort_label = match self.zset_sort_by {
             ZSetSortBy::Score => t!("KeyValueView.sort_by_score"),
@@ -828,7 +864,7 @@ impl KeyValueView {
                                     }),
                             )
                             // 保存按钮（仅 String 类型显示）
-                            .when(is_string && self.is_dirty, |this| {
+                            .when(is_string_editable && self.is_dirty, |this| {
                                 this.child(
                                     Button::new("save-value")
                                         .icon(IconName::Check)
@@ -1999,6 +2035,10 @@ impl KeyValueView {
 
     /// 保存 String 值
     fn save_string_value(&mut self, cx: &mut Context<Self>) {
+        if !self.string_value_is_editable() {
+            return;
+        }
+
         let Some(connection_id) = self.connection_id.clone() else {
             return;
         };
@@ -2299,7 +2339,10 @@ impl KeyValueView {
 
     /// 渲染 String 编辑器（使用 Input 组件）
     fn render_string_editor(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        Input::new(&self.string_editor).size_full().cleanable(false)
+        Input::new(&self.string_editor)
+            .size_full()
+            .cleanable(false)
+            .disabled(!self.string_value_is_editable())
     }
 
     /// 渲染底部状态栏
@@ -3230,7 +3273,48 @@ impl EventEmitter<TabContentEvent> for KeyValueView {}
 
 #[cfg(test)]
 mod tests {
-    use super::{large_text_preview_title, should_replace_set_member};
+    use super::{
+        ViewFormat, format_redis_string_value, is_binary_redis_string, large_text_preview_title,
+        should_replace_set_member,
+    };
+
+    #[test]
+    fn redis_string_format_preserves_utf8_text() {
+        let value = "你好，Redis".as_bytes();
+
+        assert_eq!(
+            "你好，Redis",
+            format_redis_string_value(value, ViewFormat::Raw)
+        );
+    }
+
+    #[test]
+    fn redis_string_format_displays_java_serialized_bytes_losslessly() {
+        let value = [0xac, 0xed, 0x00, 0x05, b's', b'r'];
+
+        assert_eq!(
+            "\\xac\\xed\\x00\\x05sr",
+            format_redis_string_value(&value, ViewFormat::Raw)
+        );
+        assert_eq!(
+            "ac ed 00 05 73 72",
+            format_redis_string_value(&value, ViewFormat::Hex)
+        );
+        assert_eq!(
+            "10101100 11101101 00000000 00000101 01110011 01110010",
+            format_redis_string_value(&value, ViewFormat::Binary)
+        );
+        assert_eq!(
+            r"\\\xac",
+            format_redis_string_value(&[b'\\', 0xac], ViewFormat::Raw)
+        );
+    }
+
+    #[test]
+    fn redis_string_binary_detection_protects_non_utf8_values_from_text_editing() {
+        assert!(!is_binary_redis_string("普通文本".as_bytes()));
+        assert!(is_binary_redis_string(&[0xac, 0xed, 0x00, 0x05]));
+    }
 
     #[test]
     fn large_text_preview_title_formats_context() {

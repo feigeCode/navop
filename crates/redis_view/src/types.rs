@@ -560,8 +560,8 @@ pub struct KeyValueDetail {
 /// 键值内容
 #[derive(Clone, Debug)]
 pub enum KeyValueContent {
-    /// String 类型
-    String(String),
+    /// String 类型（Redis String 是二进制安全的，因此保留原始字节）
+    String(Vec<u8>),
     /// List 类型
     List(Vec<String>),
     /// Set 类型
