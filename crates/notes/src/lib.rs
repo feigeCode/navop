@@ -19,6 +19,7 @@ mod notes_setup;
 mod notes_setup_render;
 mod notes_view;
 mod path_policy;
+mod shortcuts;
 mod storage;
 mod storage_conversion;
 mod storage_location;
@@ -35,12 +36,23 @@ pub use model::{
 };
 pub use notes_view::NotesView;
 pub use path_policy::validate_node_name;
+pub use shortcuts::NotesShortcutDescriptor;
 pub use storage::NotesStorage;
 pub use tree_state::{TreeRow, TreeState};
 
 /// Installs the Cditor keymap required by embedded Notes editors.
 pub fn init(cx: &mut gpui::App) {
-    cditor_app::init(cx);
+    shortcuts::init(cx);
+}
+
+/// Rebinds host-configured Cditor commands after shortcut settings change.
+pub fn refresh_keybindings(cx: &mut gpui::App) {
+    shortcuts::refresh(cx);
+}
+
+/// Returns the stable Cditor command catalog with Navop defaults.
+pub fn shortcut_descriptors() -> Vec<NotesShortcutDescriptor> {
+    shortcuts::descriptors()
 }
 
 #[cfg(test)]
@@ -76,11 +88,14 @@ mod tests {
             .document
             .export_markdown(MarkdownExportMode::Strict)
             .unwrap();
-        let _ = cditor_app::init;
+        let _ = cditor_app::init_for_external_keymap;
         let _ = std::mem::size_of::<EditorHandle>();
         let _ = MarkdownApplyMode::ReadOnlyPreview;
         let _ = MarkdownCompatibility::Editable;
         let _ = MarkdownExportMode::Strict;
+        let _ = |cx: &mut gpui::App, bindings: Vec<cditor_app::CditorKeyBinding>| {
+            cditor_app::bind_command_keys(cx, bindings)
+        };
         assert_persistence::<CompileOnlyPersistence>();
     }
 }

@@ -8,6 +8,9 @@ use crate::license::{get_license_service, is_feature_enabled, offline_license_pu
 use crate::settings::llm_providers_view::LlmProvidersView;
 use crate::settings::mcp_settings::mcp_setting_group;
 use crate::settings::notes_settings::notes_setting_group;
+use crate::settings::notes_shortcuts::{
+    render_group as render_notes_shortcuts_group, search_texts as notes_shortcut_search_texts,
+};
 use crate::settings::remote_file_editor_settings::remote_file_editor_setting_group;
 use crate::settings::tool_exposure_settings::{
     agent_tool_exposure_setting_group, mcp_tool_exposure_setting_group,
@@ -2742,6 +2745,8 @@ fn shortcut_search_texts() -> Vec<String> {
         }
     }
 
+    texts.extend(notes_shortcut_search_texts());
+
     texts
 }
 
@@ -3503,6 +3508,8 @@ fn render_shortcuts_section(
         group_container = group_container.child(list);
         container = container.child(group_container);
     }
+
+    container = container.child(render_notes_shortcuts_group(window, cx));
 
     container.into_any_element()
 }
