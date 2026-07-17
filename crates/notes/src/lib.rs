@@ -4,6 +4,7 @@ mod ai_model_catalog;
 mod ai_provider;
 mod document_index;
 mod document_persistence;
+mod document_rendering;
 mod markdown_adapter;
 mod markdown_file_store;
 mod markdown_persistence;

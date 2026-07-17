@@ -2,9 +2,9 @@ use crate::markdown_file_store::MarkdownFileStore;
 use crate::markdown_persistence::MarkdownDocumentPersistence;
 use anyhow::Result;
 use cditor_app::{
-    AiProvider, Editor, EditorDocument, EditorEvent, EditorHandle, MarkdownApplyMode,
-    MarkdownCompatibility, MarkdownDiagnostic, MarkdownExportMode, MarkdownImportResult,
-    SyntaxHighlightProvider,
+    AiProvider, DocumentRendererProvider, Editor, EditorDocument, EditorEvent, EditorHandle,
+    MarkdownApplyMode, MarkdownCompatibility, MarkdownDiagnostic, MarkdownExportMode,
+    MarkdownImportResult, SyntaxHighlightProvider,
 };
 use gpui::AppContext;
 use smol::channel::{Receiver, unbounded};
@@ -27,6 +27,7 @@ pub(crate) struct MarkdownProjectionConfig<'a> {
     pub ai_provider: Option<Arc<dyn AiProvider>>,
     pub ai_model_id: Option<&'a str>,
     pub syntax_highlight_provider: Arc<dyn SyntaxHighlightProvider>,
+    pub document_renderer_provider: Option<Arc<dyn DocumentRendererProvider>>,
 }
 
 pub(crate) fn build_markdown_projection<C: AppContext>(
@@ -50,6 +51,9 @@ pub(crate) fn build_markdown_projection<C: AppContext>(
         None => builder.without_ai(),
     };
     builder = builder.syntax_highlight_provider_arc(config.syntax_highlight_provider);
+    if let Some(provider) = config.document_renderer_provider {
+        builder = builder.document_renderer_provider_arc(provider);
+    }
     let handle = builder.build(cx)?;
     if let Some(model_id) = config.ai_model_id {
         let _ = handle.select_ai_model(model_id, cx);

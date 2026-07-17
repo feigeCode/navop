@@ -10,6 +10,8 @@ cditor-app.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 futures.workspace = true
+extension-runtime = { workspace = true, features = ["wasm-components"] }
+extension-wasm.workspace = true
 gpui.workspace = true
 gpui-component = { workspace = true, features = ["tree-sitter-markdown"] }
 one-core.workspace = true

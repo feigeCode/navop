@@ -1,3 +1,4 @@
+use crate::document_rendering::NavopDocumentRendererProvider;
 use crate::notes_notifications::notify_operation_error;
 use crate::syntax_highlighting::NavopSyntaxHighlightProvider;
 use crate::{
@@ -46,6 +47,7 @@ pub struct NotesView {
     pub(crate) notebook_name: SharedString,
     pub(crate) ai_provider: Option<Arc<dyn AiProvider>>,
     pub(crate) syntax_highlight_provider: Arc<NavopSyntaxHighlightProvider>,
+    pub(crate) document_renderer_provider: Option<Arc<NavopDocumentRendererProvider>>,
     pub(crate) setup_path: Entity<InputState>,
     pub(crate) dialog_subscription: Option<Subscription>,
     pub(crate) focus_handle: FocusHandle,
@@ -121,6 +123,11 @@ impl NotesView {
             cx.theme().background,
             cx.theme().foreground,
         ));
+        let document_renderer_provider = cx
+            .try_global::<extension_runtime::GlobalExtensionRuntimeCatalog>()
+            .cloned()
+            .map(NavopDocumentRendererProvider::new)
+            .map(Arc::new);
         Self {
             storage: None,
             load_state,
@@ -134,6 +141,7 @@ impl NotesView {
             notebook_name,
             ai_provider,
             syntax_highlight_provider,
+            document_renderer_provider,
             setup_path: setup_path.clone(),
             dialog_subscription: None,
             focus_handle: cx.focus_handle(),
@@ -187,6 +195,9 @@ impl NotesView {
                 None => builder.without_ai(),
             };
             builder = builder.syntax_highlight_provider_arc(self.syntax_highlight_provider.clone());
+            if let Some(provider) = self.document_renderer_provider.clone() {
+                builder = builder.document_renderer_provider_arc(provider);
+            }
             let handle = builder.build(cx)?;
             self.restore_ai_model(&handle, cx);
             self.observe_editor_events(events, window, cx);

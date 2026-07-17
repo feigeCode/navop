@@ -4,6 +4,8 @@ mod component_host;
 mod config;
 mod connection_import;
 pub mod connection_import_bindings;
+mod document_renderer;
+pub mod document_renderer_bindings;
 mod error;
 mod host_conversions;
 pub mod html_preview_bindings;
@@ -12,6 +14,9 @@ mod html_preview_transform;
 pub use component::{ComponentHostState, ComponentRuntime};
 pub use config::WasmRuntimeConfig;
 pub use connection_import::{ConnectionImportComponentRuntime, ConnectionImportHostState};
+pub use document_renderer::{
+    DocumentRenderArtifact, DocumentRenderRequest, DocumentRenderTheme, DocumentRendererRuntime,
+};
 pub use error::{WasmError, WasmResult};
 pub use html_preview_transform::HtmlPreviewTransformRuntime;
 
@@ -33,6 +38,9 @@ mod component_ui_import_tests;
 #[cfg(test)]
 #[path = "connection_import_tests.rs"]
 mod connection_import_tests;
+#[cfg(test)]
+#[path = "document_renderer_tests.rs"]
+mod document_renderer_tests;
 #[cfg(test)]
 #[path = "html_preview_transform_tests.rs"]
 mod html_preview_transform_tests;

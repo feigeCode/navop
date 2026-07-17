@@ -40,6 +40,10 @@ impl NotesView {
                     ai_provider: self.ai_provider.clone(),
                     ai_model_id: ai_model_id.as_deref(),
                     syntax_highlight_provider: self.syntax_highlight_provider.clone(),
+                    document_renderer_provider: self
+                        .document_renderer_provider
+                        .clone()
+                        .map(|provider| provider as Arc<dyn cditor_app::DocumentRendererProvider>),
                 },
                 cx,
             )?;
@@ -264,3 +268,4 @@ fn switch_to_source(
     });
     Ok(Some(markdown))
 }
+use std::sync::Arc;

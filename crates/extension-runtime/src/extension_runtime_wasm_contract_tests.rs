@@ -104,6 +104,39 @@ fn html_preview_transform_runs_registered_wasm_component() {
 }
 
 #[test]
+fn installed_mermaid_extension_registers_and_renders_when_fixture_is_provided() {
+    let Ok(dir) = std::env::var("NAVOP_INSTALLED_MERMAID_EXTENSION") else {
+        return;
+    };
+    let manifest = crate::extension::manifest::load_from_dir(std::path::Path::new(&dir)).unwrap();
+    let catalog = ExtensionRuntimeCatalog::from_manifests(vec![manifest]).unwrap();
+    let renderer = catalog.document_renderer_for_kind("mermaid").unwrap();
+    assert_eq!("Mermaid", renderer.display_name);
+    let output = futures::executor::block_on(catalog.render_document(
+        extension_wasm::DocumentRenderRequest {
+            renderer: "mermaid".to_owned(),
+            source: "flowchart TD\n A --> B".to_owned(),
+            theme: extension_wasm::DocumentRenderTheme {
+                dark: false,
+                background: 0xf7f6f3,
+                foreground: 0x37352f,
+                border: 0xd8d8d6,
+                muted: 0x9b9a97,
+                accent: 0x2383e2,
+                danger: 0xeb5757,
+                font_family: "Inter, sans-serif".to_owned(),
+            },
+            available_width: 720.0,
+            scale_factor: 1.0,
+        },
+    ))
+    .unwrap()
+    .unwrap();
+    assert_eq!("image/svg+xml", output.media_type);
+    assert!(String::from_utf8(output.bytes).unwrap().contains("<svg"));
+}
+
+#[test]
 fn wasm_open_view_output_builds_extension_widget_event() {
     let mut state = ComponentHostState::new("com.example.tools", NoopDbHost);
     state.set_action_context(extension_component::ActionContext {
